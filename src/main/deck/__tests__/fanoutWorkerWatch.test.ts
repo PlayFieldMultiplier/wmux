@@ -104,6 +104,11 @@ describe('fan-out worker watch — exits', () => {
     await settle();
     expect(ledger.get('wtask-1')!.status).toBe('review_requested');
     expect(ledger.get('wtask-1')!.rev).toBe(2);
+    await ledger.closeTask('wtask-2');
+    daemon.emit('session:died', { sessionId: 'pty-w2' });
+    await settle();
+    expect(ledger.get('wtask-2')!.status).toBe('cancelled');
+    expect(ledger.get('wtask-2')!.rev).toBe(2);
   });
 
   it('ignores an unknown PTY and a PTY that is not the worker pane', async () => {
