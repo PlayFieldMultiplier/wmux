@@ -40,6 +40,14 @@ describe('withDaemonCreateRollback', () => {
     warn.mockRestore();
   });
 
+  it('leaves a colliding id alone when createSession refuses it as a duplicate', async () => {
+    const d = deps();
+    const original = new Error("Session 'daemon-abc' already exists");
+    await expect(withDaemonCreateRollback('daemon-abc', d, async () => { throw original; })).rejects.toBe(original);
+    expect(d.rpc).not.toHaveBeenCalled();
+    expect(d.undoLocal).not.toHaveBeenCalled();
+  });
+
   it('makes no destroy call on the happy path', async () => {
     const d = deps();
     await expect(withDaemonCreateRollback('daemon-abc', d, async () => 42)).resolves.toBe(42);

@@ -26,6 +26,9 @@ export async function withDaemonCreateRollback<T>(
   try {
     return await run();
   } catch (err) {
+    // The id is short enough to collide: a create refused as a duplicate means
+    // the id belongs to another live session, which must not be touched.
+    if (err instanceof Error && /Session '.*' already exists/.test(err.message)) throw err;
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
