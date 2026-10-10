@@ -32,8 +32,9 @@ export const FANOUT_WORKER_IDLE_MINUTES = 15;
 const IDLE_MS = FANOUT_WORKER_IDLE_MINUTES * 60_000;
 /** How long an agent exit waits before it counts (relaunch guard). */
 export const FANOUT_WORKER_EXIT_GRACE_MS = 20_000;
-/** How long a PTY end waits for a supervised restart (its backoff caps at 30 s). */
-export const FANOUT_WORKER_DIED_GRACE_MS = 35_000;
+/** How long a PTY end waits for a supervised restart (its backoff caps at 30 s,
+ *  plus the time the restart itself takes on a loaded machine). */
+export const FANOUT_WORKER_DIED_GRACE_MS = 60_000;
 
 export const WORKER_EXIT_SUMMARY = 'worker agent exited';
 export const WORKER_PTY_ENDED_SUMMARY = 'worker PTY ended';
@@ -125,7 +126,20 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
     const known = workerPty.get(ptyId);
     if (known) {
       const e = l.get(known);
-      return e && e.status === 'working' ? { id: e.id, rev: e.rev } : null;
+      if (!e || e.status !== 'working') return null;
+      // A pane moved to another workspace is no longer this task's worker. A
+      // pane the renderer already dropped (it died) resolves to nothing.
+      let owner: string | null = null;
+      try {
+        owner = await ports.resolveWorkspace(ptyId);
+      } catch {
+        owner = null;
+      }
+      if (owner && owner !== e.taskWorkspaceId) {
+        workerPty.delete(ptyId);
+        return null;
+      }
+      return { id: e.id, rev: e.rev };
     }
     let ws: string | null = null;
     try {
@@ -157,6 +171,9 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
     // A supervised pane is re-created under the same id after a backoff:
     // listen for that from the moment it died.
     if (kind === 'died') diedRestarted.set(ptyId, false);
+    // A running status left over from the killed turn (the exit edge does not
+    // always settle it) is not a relaunch; only one that starts in the grace is.
+    const runningAtEnd = ports.isRunning(ptyId);
     try {
       const task = await taskOfPty(ptyId);
       if (!task || exitWoken.has(task.id) || inFlight.has(task.id)) return;
@@ -167,7 +184,7 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
           await wait(exitGraceMs);
           if (disposed) return;
           if ((await ports.agentRunning?.(ptyId).catch(() => undefined)) === true) return;
-          if (ports.isRunning(ptyId)) return;
+          if (!runningAtEnd && ports.isRunning(ptyId)) return;
         } else {
           await wait(diedGraceMs);
           if (disposed || diedRestarted.get(ptyId) === true) return;

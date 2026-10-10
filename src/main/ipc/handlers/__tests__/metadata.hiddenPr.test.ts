@@ -116,6 +116,18 @@ describe('hidden-window PR routers', () => {
     expect(reviewNote).not.toHaveBeenCalled();
   });
 
+  it('hidden: a merged PR is routed once, then not read again until the window is shown', async () => {
+    updateCwd('pty-h1', '/repo');
+    updateBranch('pty-h1', 'feat/d');
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.clearAllMocks();
+    prGet.mockResolvedValue({ ...PR, state: 'merged' });
+    visible = false;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(prGet).toHaveBeenCalledTimes(1);
+    expect(ciNote).toHaveBeenCalledTimes(1);
+  });
+
   it('does no work at all when no pane has a known PR', async () => {
     updateCwd('pty-h1', '/repo');
     updateBranch('pty-h1', 'feat/b'); // never polled visible: its PR is not known

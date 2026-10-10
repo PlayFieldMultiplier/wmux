@@ -331,6 +331,9 @@ export const HIDDEN_PR_TICK_MS = 60_000;
 export const HIDDEN_PR_REVIEW_MS = 5 * 60_000;
 let lastHiddenPrTickAt = Number.NEGATIVE_INFINITY;
 let lastHiddenReviewAt = Number.NEGATIVE_INFINITY;
+/** Panes whose PR this hidden stretch saw merged or closed: nothing left to
+ *  route, so no more PR reads for them until the window is shown again. */
+const hiddenPrSettled = new Set<string>();
 
 /**
  * While the window is hidden: keep only the PR routers going, so a CI result,
@@ -345,6 +348,7 @@ export async function runHiddenPrTick(now: number = Date.now()): Promise<void> {
   const feedReview = now - lastHiddenReviewAt >= HIDDEN_PR_REVIEW_MS;
   if (feedReview) lastHiddenReviewAt = now;
   for (const ptyId of [...prByPty.keys()]) {
+    if (hiddenPrSettled.has(ptyId)) continue;
     const cwd = cwdMap.get(ptyId);
     const branch = branchMap.get(ptyId);
     if (!cwd || !branch) continue;
@@ -353,6 +357,7 @@ export async function runHiddenPrTick(now: number = Date.now()): Promise<void> {
     // pane's PR proof, and the owner nudge can only address the PR it shows.
     const known = prByPty.get(ptyId);
     if (!pr || !known || pr.number !== known.number || pr.url !== known.url) continue;
+    if (pr.state === 'merged' || pr.state === 'closed') hiddenPrSettled.add(ptyId);
     void prCiRouter?.note(ptyId, pr);
     if (feedReview) void prReviewRouter?.note(ptyId, cwd, pr);
   }
@@ -546,7 +551,10 @@ export function registerMetadataHandlers(
     if (!visible && win.webContents.isLoading()) return;
     pollRunning = true;
     try {
-      if (visible) await runMetadataPollTick(ptyManager, win, localPtyOwnership);
+      if (visible) {
+        hiddenPrSettled.clear();
+        await runMetadataPollTick(ptyManager, win, localPtyOwnership);
+      }
       else await runHiddenPrTick();
     } finally {
       pollRunning = false;

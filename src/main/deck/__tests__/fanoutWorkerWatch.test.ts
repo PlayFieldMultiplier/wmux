@@ -164,10 +164,32 @@ describe('fan-out worker watch — exits', () => {
     expect(ledger.get('wtask-1')!.summary).toBe(WORKER_PTY_ENDED_SUMMARY);
   });
 
-  it('an agent exit whose pane shows a running turn after the grace is not an exit', async () => {
+  it('an agent exit whose pane starts a running turn during the grace is not an exit', async () => {
+    let release!: () => void;
+    const gate = new Promise<boolean | undefined>((r) => { release = () => r(undefined); });
+    start({ agentRunning: () => gate });
+    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
+    await settle();
+    running.add('pty-w1'); // a relaunched agent took a turn
+    release();
+    await settle();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
+  });
+
+  it('a running status left over from the killed turn does not hide the exit', async () => {
     running.add('pty-w1');
     start();
     daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
+    await settle();
+    expect(ledger.get('wtask-1')!.summary).toBe(WORKER_EXIT_SUMMARY);
+  });
+
+  it('a worker pane moved to another workspace no longer speaks for its task', async () => {
+    let owner = 'ws-task1';
+    start({ resolveWorkspace: async () => owner });
+    watch!.noteLifecycle({ workspaceId: 'ws-task1', ptyId: 'pty-w1', kind: 'agent.stop', source: 'hook' });
+    owner = 'ws-elsewhere';
+    daemon.emit('session:died', { sessionId: 'pty-w1' });
     await settle();
     expect(ledger.get('wtask-1')!.status).toBe('working');
   });
