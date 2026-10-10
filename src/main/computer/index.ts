@@ -18,7 +18,7 @@ import { isPermissionOp, requestHelperPermissions, resetHelperPermissions, revea
 import { ComputerService, computerUseShutDown, markComputerUseShutDown, type ConsentRequester, type HelperLike } from './ComputerService';
 import { HelperProcess } from './HelperProcess';
 import { StopKey } from './stopKey';
-import { createHelperVerifier } from './verifyHelper';
+import { createHelperVerifier, createWindowsPinCheck } from './verifyHelper';
 import { WINDOWS_HELPER_PIN, effectiveHelperStatus, helperUnsignedNotice } from './helperPin';
 import { isSelfElevated } from './selfElevation';
 import { helperAppBundlePath, permissionMissingHelp, resolveHelperPathFor, type HelperSpec } from './helperPath';
@@ -161,6 +161,24 @@ function helperStatus(helperPath: string | null): ComputerHelperStatus {
   });
 }
 
+/** The spawn's Windows pin check for Settings, with its own verdict cache. */
+const windowsPinCheck = createWindowsPinCheck({ windowsPin: WINDOWS_HELPER_PIN });
+
+/**
+ * helperStatus, plus the pin check a packaged Windows build runs before every
+ * spawn: a helper whose bytes do not match reads `damaged`, not `ready`, so
+ * Settings does not offer a switch every call would fail behind. For Settings
+ * only; agent calls keep the cheap synchronous status, and the spawn's own
+ * uncached check stays the one that decides.
+ */
+async function checkedHelperStatus(helperPath: string | null): Promise<ComputerHelperStatus> {
+  const status = helperStatus(helperPath);
+  if (status !== 'ready' || !helperPath || process.platform !== 'win32' || !app.isPackaged) return status;
+  const verdict = await windowsPinCheck(helperPath);
+  if (verdict === 'ok') return 'ready';
+  return verdict === 'mismatch' || verdict === 'changed' ? 'damaged' : 'missing';
+}
+
 /** The helper's own refusal to run elevated (native/computer-use-windows, exit 72). */
 const ELEVATED_EXIT = /\bexit code 72\b|refusing to run elevated/;
 
@@ -300,9 +318,11 @@ export function registerComputerUseIpc(
 ): void {
   const isMac = platform === 'darwin';
   const snapshot = async (error?: string): Promise<ComputerUseSettingsPayload> => {
-    const enabled = readComputerUseEnabled();
     const helperPath = resolveHelperPath();
-    const helper = helperStatus(helperPath);
+    const helper = await checkedHelperStatus(helperPath);
+    // Read after the pin check: a switch turned off while it hashed must not
+    // take the key back below.
+    const enabled = readComputerUseEnabled();
     // The key is held exactly while the switch is on and a helper exists.
     // Taking it here (Settings is open, so the app is ready) lets the tab say
     // whether the chord is free before any agent calls; turning the switch off
@@ -343,7 +363,7 @@ export function registerComputerUseIpc(
     // Settings disables the switch too; this covers any other caller, which
     // sees `enabled: false` with the helper status that explains it. Turning
     // it off is always allowed.
-    if (patch.enabled && helperStatus(resolveHelperPath()) !== 'ready') delete patch.enabled;
+    if (patch.enabled && (await checkedHelperStatus(resolveHelperPath())) !== 'ready') delete patch.enabled;
     const overlayBefore = readComputerUseOverlay();
     try {
       if (Object.keys(patch).length > 0) writeComputerUseSettings(patch);

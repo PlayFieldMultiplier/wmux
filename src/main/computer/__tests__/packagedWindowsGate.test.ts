@@ -13,12 +13,13 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   enabled: { value: false },
   helperPath: { value: '' },
+  packaged: { value: true },
   pin: { sha256: '', releaseSigned: false },
   spawned: { count: 0 },
 }));
 
 vi.mock('electron', () => ({
-  app: { isPackaged: true, getAppPath: () => 'C:/wmux/resources/app.asar', getAppMetrics: () => [] },
+  app: { get isPackaged() { return h.packaged.value; }, getAppPath: () => 'C:/wmux/resources/app.asar', getAppMetrics: () => [] },
   globalShortcut: { register: () => true, unregister: () => undefined },
   ipcMain: {
     removeHandler: (channel: string) => { h.handlers.delete(channel); },
@@ -74,6 +75,7 @@ beforeEach(async () => {
   h.handlers.clear();
   h.enabled.value = false;
   h.spawned.count = 0;
+  h.packaged.value = true;
   h.helperPath.value = path.join(dir, 'wmux-computer-use.exe');
   await fs.writeFile(h.helperPath.value, 'helper bytes');
   h.pin.sha256 = createHash('sha256').update('helper bytes').digest('hex');
@@ -117,5 +119,49 @@ describe('packaged Windows build, helper without a release signature', () => {
     const { get } = await load();
     expect((await get()).helper).toBe('ready');
     expect((await get()).helperUnsigned).toBeUndefined();
+  });
+});
+
+describe('packaged Windows build, helper that fails its pin', () => {
+  it('reads damaged in Settings, not ready, and the switch does not turn on', async () => {
+    const { get, set } = await load();
+    await fs.appendFile(h.helperPath.value, 'x');
+    expect(await get()).toMatchObject({ helper: 'damaged', stopKeyStatus: 'off' });
+    expect((await get()).helperUnsigned).toBeUndefined();
+    expect(await set(true)).toMatchObject({ enabled: false, helper: 'damaged', stopKeyStatus: 'off' });
+    expect(h.enabled.value).toBe(false);
+  });
+
+  it('gives the stop key back when the helper is damaged while the switch is on', async () => {
+    const { get, set } = await load();
+    expect(await set(true)).toMatchObject({ helper: 'ready', stopKeyStatus: 'held' });
+    await fs.writeFile(h.helperPath.value, 'other bytes');
+    expect(await get()).toMatchObject({ enabled: true, helper: 'damaged', stopKeyStatus: 'off' });
+  });
+
+  it('reads ready again once the bytes are restored', async () => {
+    const { get } = await load();
+    await fs.appendFile(h.helperPath.value, 'x');
+    expect((await get()).helper).toBe('damaged');
+    await fs.writeFile(h.helperPath.value, 'helper bytes');
+    expect((await get()).helper).toBe('ready');
+  });
+
+  it('leaves dev builds alone: they run whatever helper the developer built', async () => {
+    h.packaged.value = false;
+    const { get } = await load();
+    await fs.appendFile(h.helperPath.value, 'x');
+    expect((await get()).helper).toBe('ready');
+  });
+
+  it('leaves other platforms alone: the pin is a Windows check', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const { get } = await load();
+      await fs.appendFile(h.helperPath.value, 'x');
+      expect((await get()).helper).toBe('ready');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+    }
   });
 });

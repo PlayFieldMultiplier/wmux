@@ -87,7 +87,11 @@ API token secret is not set, so in practice the helper ships **unsigned**.
   packaged wmux refuse its own helper.
 - **A release signature is not required.** A packaged Windows wmux runs the
   helper whenever its bytes match the SHA-256 pin baked into the build; a
-  helper that does not match is refused. The release job marks the helper
+  helper that does not match is refused. Settings runs the same check and
+  shows such a helper as "Damaged: reinstall wmux", and the switch does not
+  turn on. Its verdict is cached by file identity (device, inode, size,
+  ctime), so the helper is hashed once per binary, not on every read; the
+  check before each spawn is never cached. The release job marks the helper
   release-signed only when the policy is `release-signing` and
   `Get-AuthenticodeSignature` says `Valid` and the signer's thumbprint equals
   the repo variable `SIGNPATH_RELEASE_SIGNER_THUMBPRINT`. Without that mark,

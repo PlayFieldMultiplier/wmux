@@ -111,6 +111,23 @@ describe('Settings › Computer use', () => {
     expect(el.textContent).toContain('does not include the helper for this OS yet');
   });
 
+  it('shows a helper that fails its pin as damaged, says to reinstall, and does not turn on', async () => {
+    const damaged: ComputerUseSettingsPayload = { ...base, helper: 'damaged' };
+    const set = vi.fn(async () => damaged);
+    const el = await render({ get: async () => damaged, set });
+    const sw = el.querySelector('[role="switch"]') as HTMLButtonElement;
+    expect(sw.disabled).toBe(true);
+    await act(async () => { sw.click(); });
+    expect(set).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('Damaged: reinstall wmux');
+    expect(el.textContent).toContain('does not match this wmux build');
+    expect(el.textContent).not.toContain('Ready');
+    // Already on: still the reinstall note, and it can be turned off.
+    const on = await render({ get: async () => ({ ...damaged, enabled: true }), set });
+    expect(on.textContent).toContain('Reinstall wmux to fix it');
+    expect((on.querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('does not advertise a stop key that is not held', async () => {
     const el = await render({ get: async () => base, set: async () => base });
     expect(el.textContent).toContain('Not held: this build has no helper');

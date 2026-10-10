@@ -89,6 +89,7 @@ export function TabComputerUse() {
   const helperBadge = state && (
     state.helper === 'ready'
       ? <Badge tone="success">{t('settings.computerUseHelperReady')}</Badge>
+      : state.helper === 'damaged' ? <Badge tone="danger">{t('settings.computerUseHelperDamaged')}</Badge>
       : <Badge>{t(state.helper === 'missing' ? 'settings.computerUseHelperMissing'
         : state.helper === 'elevated' ? 'settings.computerUseHelperElevated' : 'settings.computerUseHelperUnsupported')}</Badge>
   );
@@ -155,7 +156,8 @@ export function TabComputerUse() {
       </SettingsSection>
       {noHelper && state && (
         <SettingNote>
-          {t(state.enabled ? 'settings.computerUseOnWithoutHelperNote'
+          {t(state.helper === 'damaged' ? 'settings.computerUseDamagedNote'
+            : state.enabled ? 'settings.computerUseOnWithoutHelperNote'
             : state.helper === 'missing' ? 'settings.computerUseNoHelperNote'
               : state.helper === 'elevated' ? 'settings.computerUseElevatedNote' : 'settings.computerUseUnsupportedNote')}
         </SettingNote>

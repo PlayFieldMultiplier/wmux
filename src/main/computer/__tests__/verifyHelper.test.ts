@@ -6,6 +6,7 @@ import { ComputerError } from '../../../shared/computer/errors';
 import {
   HELPER_REQUIREMENT,
   createHelperVerifier,
+  createWindowsPinCheck,
   helperBundlePath,
   type CodesignResult,
   type RunCodesign,
@@ -249,5 +250,93 @@ describe('Windows helper pin', () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Windows pin check for Settings', () => {
+  const WIN_EXE = 'C:\\wmux\\resources\\computer-use-windows\\wmux-computer-use.exe';
+  const GOOD = 'a'.repeat(64);
+  const BAD = `${'a'.repeat(63)}b`;
+
+  // The helper on disk: its identity and digest change together, as a write does.
+  const disk = () => {
+    const file = { identity: 'dev:ino:1:100', digest: GOOD as string | null };
+    const hashFile = vi.fn(async () => {
+      if (file.digest === null) throw new Error('ENOENT');
+      return file.digest;
+    });
+    const fileIdentity = vi.fn(async () => {
+      if (file.digest === null) throw new Error('ENOENT');
+      return file.identity;
+    });
+    const check = createWindowsPinCheck({ windowsPin: { sha256: GOOD, releaseSigned: false }, hashFile, fileIdentity });
+    return { file, hashFile, check };
+  };
+
+  it('hashes a helper once per file identity, not on every Settings read', async () => {
+    const { check, hashFile } = disk();
+    expect(await check(WIN_EXE)).toBe('ok');
+    expect(await check(WIN_EXE)).toBe('ok');
+    expect(await check(WIN_EXE)).toBe('ok');
+    expect(hashFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a tampered helper as a mismatch, and a restored one as ok again', async () => {
+    const { check, file, hashFile } = disk();
+    expect(await check(WIN_EXE)).toBe('ok');
+    Object.assign(file, { identity: 'dev:ino:1:200', digest: BAD });
+    expect(await check(WIN_EXE)).toBe('mismatch');
+    expect(await check(WIN_EXE)).toBe('mismatch');
+    Object.assign(file, { identity: 'dev:ino:1:300', digest: GOOD });
+    expect(await check(WIN_EXE)).toBe('ok');
+    expect(hashFile).toHaveBeenCalledTimes(3);
+  });
+
+  it('re-hashes when only the ctime part of the identity moves (same size, mtime set back)', async () => {
+    const { check, file, hashFile } = disk();
+    expect(await check(WIN_EXE)).toBe('ok');
+    Object.assign(file, { identity: 'dev:ino:1:101', digest: BAD });
+    expect(await check(WIN_EXE)).toBe('mismatch');
+    expect(hashFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache a helper that is gone, or one that changed while it was hashed', async () => {
+    const { check, file, hashFile } = disk();
+    file.digest = null;
+    expect(await check(WIN_EXE)).toBe('unreadable');
+    file.digest = GOOD;
+    hashFile.mockImplementationOnce(async () => {
+      file.identity = 'dev:ino:1:400';
+      return GOOD;
+    });
+    expect(await check(WIN_EXE)).toBe('changed');
+    expect(await check(WIN_EXE)).toBe('ok');
+    expect(await check(WIN_EXE)).toBe('ok');
+    // The changed read and the first ok one; the gone file was never hashed.
+    expect(hashFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a build with no pin without reading the helper', async () => {
+    const hashFile = vi.fn(async () => GOOD);
+    const check = createWindowsPinCheck({ windowsPin: { sha256: '', releaseSigned: false }, hashFile, fileIdentity: async () => 'x' });
+    expect(await check(WIN_EXE)).toBe('no_pin');
+    expect(hashFile).not.toHaveBeenCalled();
+  });
+
+  it('leaves the spawn check uncached: a cached ok does not let a changed helper start', async () => {
+    const { check, file } = disk();
+    const verify = createHelperVerifier({
+      platform: 'win32',
+      isPackaged: true,
+      windowsPin: { sha256: GOOD, releaseSigned: false },
+      hashFile: async () => file.digest ?? '',
+      fileIdentity: async () => file.identity,
+    });
+    expect(await check(WIN_EXE)).toBe('ok');
+    // Same identity (a same-user edit that also restored the ctime): Settings
+    // keeps its verdict, the spawn hashes again and refuses.
+    file.digest = BAD;
+    expect(await check(WIN_EXE)).toBe('ok');
+    expect((await refusal(verify(WIN_EXE))).message).toContain('does not match');
   });
 });

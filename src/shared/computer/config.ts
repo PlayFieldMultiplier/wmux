@@ -77,9 +77,10 @@ export interface ComputerUseSettingsPayload {
   /**
    * `missing`: this build has no helper binary yet; `unsupported`: no helper
    * exists for this OS; `elevated`: wmux runs as administrator and the helper
-   * refuses to (Windows).
+   * refuses to (Windows); `damaged`: the helper's bytes do not match this
+   * build's pin, so every spawn would be refused (packaged Windows).
    */
-  helper: 'ready' | 'missing' | 'unsupported' | 'elevated';
+  helper: 'ready' | 'missing' | 'unsupported' | 'elevated' | 'damaged';
   /**
    * A packaged Windows build whose helper is not code-signed. It still runs
    * (its SHA-256 pin is checked); Settings only notes that Defender or
