@@ -38,3 +38,32 @@ export function checkUserDataIsolation(
       `production state.`,
   };
 }
+
+export const PORTABLE_DATA_SUFFIX = '-portable';
+
+/**
+ * darwin: should a PACKAGED app use isolated data because it is not installed?
+ * A copy run from a DMG mount, AppTranslocation, an electron-forge `out/` dir,
+ * or ~/Downloads would otherwise share production data, sockets, token and the
+ * launchd label — and, if newer, replace the production daemon and repoint the
+ * CLI shim at itself.
+ *
+ * `realExecPath` is the realpath of process.execPath (the caller does that one
+ * syscall; this stays pure). Installed = the .app bundle sits anywhere under
+ * /Applications or ~/Applications. Any depth on purpose: misreading a real
+ * install (e.g. /Applications/Utilities, a Setapp folder, Homebrew's default
+ * cask dir) as portable would open an empty app, the worse failure. Case-
+ * insensitive because APFS is by default. A path with no recognisable .app
+ * bundle is treated as installed for the same reason.
+ *
+ * Never overrides an explicit WMUX_DATA_SUFFIX; WMUX_ALLOW_PRODUCTION_DATA=1
+ * keeps the old behaviour (a custom Homebrew --appdir, for one).
+ */
+export function shouldUsePortableData(realExecPath: string, home: string, env: NodeJS.ProcessEnv): boolean {
+  if (env.WMUX_DATA_SUFFIX || env.WMUX_ALLOW_PRODUCTION_DATA === '1') return false;
+  const bundle = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/i.exec(realExecPath)?.[1];
+  if (!bundle) return false;
+  const lower = bundle.toLowerCase();
+  const roots = ['/Applications/', ...(home ? [`${home.replace(/\/+$/, '')}/Applications/`] : [])];
+  return !roots.some((root) => lower.startsWith(root.toLowerCase()));
+}
