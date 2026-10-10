@@ -89,6 +89,24 @@ processes, and browser profiles (§3), so it is not confined by this boundary.
 Like §1.3, this is a guarantee for callers that use the documented surfaces —
 agents and the tools they are given — not a defence against same-user code.
 
+### 1.3.2 Protected Chrome panes
+
+**Guarantee.** A pane bound to its own Chrome profile can be protected. Its
+agent's browser calls then reach only the hosts on that pane's allowed list,
+and the pane's Chrome itself runs behind a main-owned filtering proxy.
+Downloads are refused. A missing or unreadable
+policy keeps every previously protected pane blocked until the operator
+confirms it again. The policy is set only from the main window; no tool
+argument or CLI flag can change it.
+
+**Out of scope.** As in §1.3.1, this confines the documented surfaces: the
+wmux browser tools, MCP and CLI an agent is given. It does not confine code
+that runs as the same OS user outside those surfaces, including a shell an
+agent runs in a pane. Such code can reach a Chrome profile's files and its
+debugging endpoint directly (§3). Use a protected pane to keep an agent's
+browser tools on the sites you chose, not as a sandbox for an agent with a
+shell.
+
 ### 1.4 Packaging fuse posture
 
 The shipped Electron build sets these fuses (`forge.config.ts`), recorded here so the disabled ones are on the record and not mistaken for oversights:
@@ -219,3 +237,4 @@ What we do not consider a wmux security issue:
 | 2026-08-11 | §1.2 rewritten for the PowerShell-free token ACL rebuild. The `powershell.exe -ExecutionPolicy Bypass -EncodedCommand` .NET rebuild was removed: under Constrained Language Mode (AppLocker/WDAC, standard on managed fleets) it could not run at all and every attempt degraded silently to the weaker `icacls` strip — measured 22/22 failures on a real corporate machine, meaning that installed base ran with looser token ACLs than this section stated. Norton also flagged the argument shape as `IDP.HELU.PSE85` (GHSA-8fj2-47w9-jxq3). Replaced by a fresh-inode rewrite staged inside a pre-hardened staging directory, with an in-place repair plus `icacls /save` read-back verification when the target is locked. |
 | 2026-09-28 | §3: documented the process-scoped `-ExecutionPolicy RemoteSigned` that Windows PowerShell 5.1 panes and exec units now get on a factory-default Windows client, and only there (#1620). `RemoteSigned`, not `Bypass`, because the `Bypass` argument shape is what Norton flagged (GHSA-8fj2-47w9-jxq3); explicit policies and Group Policy are never overridden. |
 | 2026-10-09 | §1.5: documented the `--allow-git-write` ceiling for phone push, PR create and merge, and what it does and does not guard against. |
+| 2026-10-11 | §1.3.2: documented protected Chrome panes and their scope: they confine the agent's browser tools, not same-user code such as a pane's shell. |
