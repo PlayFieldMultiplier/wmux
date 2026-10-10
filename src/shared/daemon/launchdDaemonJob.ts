@@ -226,7 +226,7 @@ function tryCreateStartLock(lock: string, token: string): boolean {
  * win, and deleted only if the moved file still holds the content judged dead;
  * a fresh lock moved by mistake is linked back.
  */
-function reclaimDeadStartLock(lock: string, rt: LaunchdRuntime): void {
+function reclaimDeadStartLock(lock: string, rt: LaunchdRuntime, staleAfterMs: number): void {
   let content: string;
   let mtimeMs: number;
   try {
@@ -234,7 +234,8 @@ function reclaimDeadStartLock(lock: string, rt: LaunchdRuntime): void {
     mtimeMs = fs.statSync(lock).mtimeMs;
   } catch { return; }
   const owner = parseInt(content, 10);
-  const dead = owner > 0 ? !rt.isPidAlive(owner) : Date.now() - mtimeMs > START_LOCK_OWNERLESS_MS;
+  const age = Date.now() - mtimeMs;
+  const dead = age > staleAfterMs || (owner > 0 ? !rt.isPidAlive(owner) : age > START_LOCK_OWNERLESS_MS);
   if (!dead) return;
   const aside = `${lock}.${randomUUID()}`;
   try { fs.renameSync(lock, aside); } catch { return; }
@@ -254,13 +255,16 @@ function releaseStartLock(lock: string, token: string): void {
 
 /**
  * Run fn while holding `<plistDir>/start.lock` (O_EXCL create, owner
- * `<pid>:<uuid>`). Only a lock whose owner pid is dead is taken over.
+ * `<pid>:<uuid>`). A lock is taken over when its owner pid is dead, or when it
+ * is older than `staleAfterMs` (an owner pid reused by another process would
+ * otherwise block every start).
  */
 export async function withDaemonStartLock<T>(
   plistDir: string,
   rt: LaunchdRuntime,
   fn: () => Promise<T>,
-  waitMs: number = START_LOCK_WAIT_MS,
+  waitMs = START_LOCK_WAIT_MS,
+  staleAfterMs = Infinity,
 ): Promise<T> {
   const lock = path.join(plistDir, START_LOCK_NAME);
   try {
@@ -271,7 +275,7 @@ export async function withDaemonStartLock<T>(
   const token = `${process.pid}:${randomUUID()}`;
   const deadline = Date.now() + waitMs;
   while (!tryCreateStartLock(lock, token)) {
-    reclaimDeadStartLock(lock, rt);
+    reclaimDeadStartLock(lock, rt, staleAfterMs);
     if (Date.now() >= deadline) throw new LaunchdUnavailableError(`timed out waiting for ${lock}`);
     await rt.sleep(START_LOCK_POLL_MS);
   }

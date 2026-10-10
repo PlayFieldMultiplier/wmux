@@ -129,6 +129,8 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     expect(info).toMatchObject({ pid: owner.pid, spawned: false });
     expect(fs.readFileSync(path.join(wmuxDir, 'daemon.lock'), 'utf8')).toBe(String(owner.pid));
     expect(fs.existsSync(path.join(wmuxDir, 'daemon-pipe'))).toBe(true);
+    // Restored, so a later wedge of this daemon goes through the verified path.
+    expect(livePidFile()).toBe(owner.pid);
   }, 30_000);
 
   it('still cleans truly stale files and starts a fresh daemon', async () => {

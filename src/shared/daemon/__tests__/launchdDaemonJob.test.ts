@@ -308,6 +308,17 @@ describe('startDaemonViaLaunchd / pruneStaleDaemonJobs', () => {
     expect(waits).toBe(2);
   });
 
+  it('takes over a lock older than staleAfterMs even when its owner pid is alive (pid reuse)', async () => {
+    const lock = path.join(dir, 'start.lock');
+    fs.writeFileSync(lock, `${process.pid}:crashed-holder`);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const { rt } = fakeLaunchd();
+    // A young live lock is still respected under the same limit.
+    await expect(withDaemonStartLock(dir, rt, async () => 'ran', 50, 120_000)).rejects.toThrow(/timed out/);
+    await expect(withDaemonStartLock(dir, rt, async () => 'ran', 5_000, 30_000)).resolves.toBe('ran');
+  });
+
   it('releases only a lock it still owns', async () => {
     const lock = path.join(dir, 'start.lock');
     await withDaemonStartLock(dir, fakeLaunchd().rt, async () => {

@@ -1110,9 +1110,10 @@ export function liveDaemonFileOwner(wmuxDir: string, judgedPid: number | null): 
   return null;
 }
 
-/** Outer launcher lock wait: a holder may wait out a recovering daemon, then
- *  spawn and wait for readiness — each up to DAEMON_READY_HARD_CEILING_MS. */
-const LAUNCHER_LOCK_WAIT_MS = 2 * DAEMON_READY_HARD_CEILING_MS + 60_000;
+/** Longest a launcher holds its lock: it may wait out a recovering daemon,
+ *  then spawn and wait for readiness — each up to DAEMON_READY_HARD_CEILING_MS.
+ *  An older lock is taken over; waiters give up a little later. */
+const LAUNCHER_LOCK_HOLD_MS = 2 * DAEMON_READY_HARD_CEILING_MS + 60_000;
 
 export async function ensureDaemon(deps: DaemonLauncherDeps): Promise<DaemonInfo> {
   if (process.platform === 'win32') return ensureDaemonUnlocked(deps);
@@ -1126,7 +1127,8 @@ export async function ensureDaemon(deps: DaemonLauncherDeps): Promise<DaemonInfo
     path.join(wmuxDir, 'launcher'),
     defaultLaunchdRuntime(deps.log ?? console.log),
     () => ensureDaemonUnlocked(deps),
-    LAUNCHER_LOCK_WAIT_MS,
+    LAUNCHER_LOCK_HOLD_MS + 10_000,
+    LAUNCHER_LOCK_HOLD_MS,
   );
 }
 
@@ -1485,17 +1487,14 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
   // crashed mid-recovery must not outlive it into the fresh spawn.
   const liveOwner = process.platform === 'win32' ? null : liveDaemonFileOwner(wmuxDir, existingPid);
   if (liveOwner !== null) {
-    // A live daemon holds these files (its pid file was lost, or a starter
-    // outside the launcher lock ran it). Keep them; reuse it if it answers.
-    // Otherwise the spawn below is refused by that daemon's lock.
+    // A live process holds these files (the daemon's pid file was lost, or a
+    // starter outside the launcher lock ran it). Keep them, point daemon.pid
+    // at it, and run detection again: the reuse / boot-wait / verified-kill
+    // path above then judges that pid like any other, and this branch cannot
+    // repeat for it (it becomes the judged pid).
     (deps.warn ?? console.warn)(`[launcher] daemon files name live PID ${liveOwner} — not cleaning them`);
-    const token = readDaemonAuthToken();
-    const pipeName = readPipeNameFromFile(wmuxDir) || getDaemonPipeName();
-    const pong = token ? await daemonPing(pipeName, token) : null;
-    if (pong) {
-      const pid = typeof pong.pid === 'number' && pong.pid > 0 ? pong.pid : liveOwner;
-      return { pid, authToken: token, pipeName, spawned: false };
-    }
+    fs.writeFileSync(pidFile, String(liveOwner), { encoding: 'utf-8', mode: 0o600 });
+    return ensureDaemonUnlocked(deps);
   } else {
     const staleFiles = ['daemon.lock', 'daemon.pid', 'daemon-pipe', 'daemon-booting'];
     for (const name of staleFiles) {
