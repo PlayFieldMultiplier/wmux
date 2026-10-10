@@ -63,6 +63,6 @@ describe('withDaemonCreateRollback', () => {
     const region = source.slice(wrapAt, source.indexOf('scheduleInitialCommand(', wrapAt));
     expect(region).toContain("daemonClient.rpc('daemon.createSession'");
     expect(region).toContain("daemonClient.rpc('daemon.attachSession'");
-    expect(region).toContain('await daemonClient.connectSessionPipe(sessionId);\n      });');
+    expect(region).toMatch(/await daemonClient\.connectSessionPipe\(sessionId\);\r?\n {6}\}\);/);
   });
 });
