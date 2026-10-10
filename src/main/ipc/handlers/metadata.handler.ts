@@ -324,6 +324,36 @@ export async function runMetadataPollTick(
   lastPolledPayloads = nextPayloads;
 }
 
+/** PR router cadence while the window is hidden (the full poll is paused). */
+export const HIDDEN_PR_TICK_MS = 60_000;
+/** The review router reads gh on every call it is not throttled for, so while
+ *  hidden it is fed only once per PrStatusCache TTL. */
+export const HIDDEN_PR_REVIEW_MS = 5 * 60_000;
+let lastHiddenPrTickAt = Number.NEGATIVE_INFINITY;
+let lastHiddenReviewAt = Number.NEGATIVE_INFINITY;
+
+/**
+ * While the window is hidden: keep only the PR routers going, so a CI result,
+ * a review or a conflict still reaches the pane that owns the PR. Only panes
+ * whose PR is already known; the PR status comes through PrStatusCache (a gh
+ * call only past its 5 min TTL), with no branch lookup, ports or broadcast.
+ * Nothing at all when no pane has a PR. Exported for unit tests.
+ */
+export async function runHiddenPrTick(now: number = Date.now()): Promise<void> {
+  if (prByPty.size === 0 || now - lastHiddenPrTickAt < HIDDEN_PR_TICK_MS) return;
+  lastHiddenPrTickAt = now;
+  const feedReview = now - lastHiddenReviewAt >= HIDDEN_PR_REVIEW_MS;
+  if (feedReview) lastHiddenReviewAt = now;
+  for (const ptyId of [...prByPty.keys()]) {
+    const cwd = cwdMap.get(ptyId);
+    const branch = branchMap.get(ptyId);
+    if (!cwd || !branch) continue;
+    const pr = await prStatusCache.get(cwd, branch);
+    void prCiRouter?.note(ptyId, pr);
+    if (feedReview) void prReviewRouter?.note(ptyId, cwd, pr);
+  }
+}
+
 export function registerMetadataHandlers(
   ptyManager: PTYManager,
   getWindow: () => BrowserWindow | null,
@@ -506,10 +536,14 @@ export function registerMetadataHandlers(
   const pollingInterval = setInterval(async () => {
     if (pollRunning) return;
     const win = getWindow();
-    if (!win || !shouldPollMetadata(win)) return;
+    if (!win || win.isDestroyed()) return;
+    const visible = shouldPollMetadata(win);
+    // Hidden (and loaded): only the PR routers, at their own slow cadence.
+    if (!visible && win.webContents.isLoading()) return;
     pollRunning = true;
     try {
-      await runMetadataPollTick(ptyManager, win, localPtyOwnership);
+      if (visible) await runMetadataPollTick(ptyManager, win, localPtyOwnership);
+      else await runHiddenPrTick();
     } finally {
       pollRunning = false;
     }
