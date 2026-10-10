@@ -3933,6 +3933,12 @@ export const en = {
   'remote.mirrorDescription': 'Mirror a workspace from another wmux',
   'remote.labelOptional': 'Label (optional)',
   'remote.paneCount': '{count} panes',
+  // #1323 — a mirror-grid session opened as a tab in one of your workspaces.
+  'remote.openAsTab': 'Open as tab',
+  'remote.openAsTabLabel': 'Open {session} as a tab',
+  'remote.openAsTabDescription': 'Add {session} to one of your workspaces as a tab. It keeps running on {host}: closing the tab only stops showing it there.',
+  'remote.openAsTabFailed': 'Could not open {session} as a tab in that workspace',
+  'remote.goToTab': 'Go to tab',
 
   // ─── Remote Workspace Attach: pair-with-code ──────────────────────────────
   'remote.pairTab': 'Pair with code',

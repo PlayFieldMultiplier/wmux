@@ -3893,6 +3893,11 @@ export const pl = {
   'remote.mirrorDescription': 'Lustrzane odbicie obszaru roboczego z innego wmuxa',
   'remote.labelOptional': 'Etykieta (opcjonalna)',
   'remote.paneCount': 'Panele: {count}',
+  'remote.openAsTab': 'Otwórz jako kartę',
+  'remote.openAsTabLabel': 'Otwórz {session} jako kartę',
+  'remote.openAsTabDescription': 'Dodaj {session} jako kartę do jednego ze swoich obszarów roboczych. Sesja dalej działa na {host}: zamknięcie karty tylko przestaje ją tam pokazywać.',
+  'remote.openAsTabFailed': 'Nie udało się otworzyć {session} jako karty w tym obszarze roboczym',
+  'remote.goToTab': 'Przejdź do karty',
 
   // ─── Remote Workspace Attach: pair-with-code ──────────────────────────────
   'remote.pairTab': 'Sparuj kodem',
