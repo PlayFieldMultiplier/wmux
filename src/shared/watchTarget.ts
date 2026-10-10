@@ -36,7 +36,9 @@ import fs from 'node:fs';
  * symlinks there (macOS `/var` → `/private/var`) is not this helper's business.
  */
 export function watchTarget(dir: string): string {
-  if (process.platform !== 'win32') return dir;
+  // EXPERIMENT (#984, reverted before merge): workaround off, so CI proves
+  // Node >= 24.21.0's libuv alone keeps every vitest fork alive.
+  if (process.platform !== 'win32' || process.env.CI) return dir;
   try {
     return fs.realpathSync.native(dir);
   } catch {
