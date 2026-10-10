@@ -44,12 +44,6 @@ setTimeout(() => {
 }, 150);
 `;
 
-const startMock = vi.fn();
-vi.mock('../launchdDaemonJob', async () => {
-  const actual = await vi.importActual<typeof import('../launchdDaemonJob')>('../launchdDaemonJob');
-  return { ...actual, startDaemonViaLaunchd: (...a: unknown[]) => startMock(...a) };
-});
-
 import { ensureDaemon, liveDaemonFileOwner, type DaemonLauncherDeps } from '../daemonLauncherCore';
 import { getDaemonAuthTokenPath, getDaemonSocketPath } from '../../constants';
 
@@ -79,7 +73,6 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     fs.writeFileSync(getDaemonAuthTokenPath(), 'test-token', { mode: 0o600 });
     process.env.FAKE_WMUX_DIR = wmuxDir;
     process.env.FAKE_WMUX_SOCK = sock;
-    startMock.mockReset();
   });
 
   afterEach(async () => {
@@ -94,13 +87,13 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     fs.rmSync(wmuxDir, { recursive: true, force: true });
   });
 
-  function deps(launchd = false): DaemonLauncherDeps {
+  function deps(): DaemonLauncherDeps {
     return {
       resolveDaemonScriptCandidates: () => [scriptPath],
       resolveSpawnedByVersion: () => '9.9.9-test',
       askUserToRecoverFromStalePid: async () => false,
       isElectronHost: () => false,
-      launchViaLaunchdOnDarwin: launchd,
+      launchViaLaunchdOnDarwin: false,
       log: noop,
       warn: noop,
     };
@@ -148,21 +141,24 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
   }, 30_000);
 
   it('reports the daemon that answered readiness, not a spawned pid that lost', async () => {
-    // The launched job (pid 777) never answers; a different live daemon
-    // (pid 999) owns the socket by the time readiness pings.
-    startMock.mockImplementation(async () => {
-      const server = net.createServer((s) => {
-        s.on('data', (d) => {
-          const id = JSON.parse(String(d).split('\n')[0]).id;
-          s.write(JSON.stringify({ id, ok: true, result: { status: 'ok', pid: 999 } }) + '\n');
-        });
+    // Another live daemon (pid 999) owns the socket; the spawned process never
+    // answers and only points the pipe hint at that socket.
+    const server = net.createServer((s) => {
+      s.on('data', (d) => {
+        const id = JSON.parse(String(d).split('\n')[0]).id;
+        s.write(JSON.stringify({ id, ok: true, result: { status: 'ok', pid: 999 } }) + '\n');
       });
-      servers.push(server);
-      await new Promise<void>((r) => server.listen(sock, () => r()));
-      fs.writeFileSync(path.join(wmuxDir, 'daemon-pipe'), sock);
-      return { label: 'x', pid: 777, isAlive: () => true, onExit: noop, dispose: noop };
     });
-    const info = await ensureDaemon(deps(true));
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(sock, () => r()));
+    fs.writeFileSync(
+      scriptPath,
+      `require('fs').writeFileSync(${JSON.stringify(path.join(wmuxDir, 'loser.pid'))}, String(process.pid));\n` +
+        `require('fs').writeFileSync(${JSON.stringify(path.join(wmuxDir, 'daemon-pipe'))}, ${JSON.stringify(sock)});\n` +
+        'setTimeout(() => {}, 30000);\n',
+    );
+    const info = await ensureDaemon(deps());
+    try { launched.push(parseInt(fs.readFileSync(path.join(wmuxDir, 'loser.pid'), 'utf8'), 10)); } catch { /* not started */ }
     expect(info).toMatchObject({ pid: 999, spawned: false });
     expect(livePidFile()).toBe(999);
   }, 30_000);
