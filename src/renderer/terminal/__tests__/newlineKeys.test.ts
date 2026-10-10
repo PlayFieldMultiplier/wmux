@@ -410,6 +410,12 @@ describe('end-of-Codex latch (#1694)', () => {
     expect(wantsAltEnterNewline(scope({ codexEndedAt: s.endedAt, now: T0 + CODEX_END_GRACE_MS }))).toBe(true);
   });
 
+  it('#1754: a longer graceMs (a remote mirror) holds the latch for that long', () => {
+    const graceMs = CODEX_END_GRACE_MS + 10_000;
+    expect(wantsAltEnterNewline(scope({ codexEndedAt: T0, now: T0 + graceMs - 1, graceMs }))).toBe(false);
+    expect(wantsAltEnterNewline(scope({ codexEndedAt: T0, now: T0 + graceMs, graceMs }))).toBe(true);
+  });
+
   it('a cleared latch (slug dropped, then Codex detected again) arms at once', () => {
     expect(wantsAltEnterNewline(scope({ codexEndedAt: null, now: T0 + 1 }))).toBe(true);
   });

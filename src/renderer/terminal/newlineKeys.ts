@@ -170,6 +170,11 @@ export interface AltEnterNewlineScope {
   codexEndedAt?: number | null;
   /** Clock for `codexEndedAt`; defaults to `Date.now()`. */
   now?: number;
+  /**
+   * How long `codexEndedAt` holds; defaults to `CODEX_END_GRACE_MS`. A remote
+   * mirror learns the slug through a slower poll and passes a longer one.
+   */
+  graceMs?: number;
 }
 
 /**
@@ -196,7 +201,7 @@ export const CODEX_END_GRACE_MS = 16_000;
  */
 export function wantsAltEnterNewline(scope: AltEnterNewlineScope): boolean {
   const endedRecently = scope.codexEndedAt != null
-    && (scope.now ?? Date.now()) - scope.codexEndedAt < CODEX_END_GRACE_MS;
+    && (scope.now ?? Date.now()) - scope.codexEndedAt < (scope.graceMs ?? CODEX_END_GRACE_MS);
   return scope.hostPlatform === 'win32'
     && scope.isWsl === false
     && scope.agentSlug === 'codex'

@@ -76,6 +76,18 @@ export interface RemotePaneSummary {
   surfaceTitle?: string;
   /** Epoch ms of the session's last output on the host, from its ISO stamp. Same rule. */
   lastActivityAt?: number;
+  /**
+   * #1754 — the inputs a mirror's `wantsAltEnterNewline` needs, the same ones
+   * a local pane reads. All additive-optional: an older host omits them, and a
+   * mirror without `hostPlatform` keeps the plain newline bytes.
+   *
+   * `hostPlatform` is the host's `process.platform`. `wsl` says the pane's
+   * shell enters WSL. `agentSlug` is the host's canonical agent for the pane
+   * (`codex`, `claude`, …), never a role label, and absent once it exits.
+   */
+  hostPlatform?: string;
+  wsl?: boolean;
+  agentSlug?: string;
 }
 
 /**

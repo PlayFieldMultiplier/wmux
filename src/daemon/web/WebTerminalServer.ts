@@ -109,6 +109,8 @@ import {
   type WebTlsConfig,
 } from '../../shared/web';
 import type { RemotePaneSummary, RemoteResumeInfo } from '../../shared/remoteHosts';
+import { agentDisplayToSlug } from '../../shared/agentIdentity';
+import { isWslShell } from '../../shared/imagePaste';
 import { normalizeResumeCwd, type ResumeBinding } from '../../shared/agentResume';
 import { assistantPreview } from '../../shared/assistantPreview';
 import { capSnapshot } from './snapshotWindow';
@@ -3413,12 +3415,22 @@ export class WebTerminalServer {
         ...(() => {
           const state = this.deps.agentState?.(s.id);
           const agentName = s.agent?.displayName ?? state?.agentName ?? null;
-          if (!agentName) return {};
+          // #1754 — the canonical answer as a slug, never the role label (and
+          // never hidden by an empty one): a mirror keys native Windows
+          // Codex's newline on it, and it drops when the agent exits.
+          const agentSlug = agentDisplayToSlug(state?.agentName ?? '');
+          if (!agentName) return agentSlug ? { agentSlug } : {};
           return {
             agentName,
             ...(state && isRemoteAgentStatus(state.agentStatus) ? { agentStatus: state.agentStatus } : {}),
+            ...(agentSlug ? { agentSlug } : {}),
           };
         })(),
+        // #1754 — the other two facts that newline needs, as the local pane
+        // reads them: the PTY's OS, and whether its shell enters WSL (the
+        // local pane's predicate, over the same `cmd`). Additive-optional.
+        hostPlatform: process.platform,
+        wsl: s.wslTarget !== undefined || isWslShell(s.cmd),
       });
       byId.set(id, entry);
     }

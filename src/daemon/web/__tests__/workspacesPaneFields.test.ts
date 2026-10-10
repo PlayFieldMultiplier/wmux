@@ -11,7 +11,10 @@ import type { DesktopPhoneBridge } from '../../phone/DesktopPhoneBridge';
  * name and tab title. All three are additive: a pane never loses a key.
  */
 
-type Meta = { id: string; env: Record<string, string>; cwd: string; state: string; cols: number; rows: number; lastActivity: string };
+type Meta = {
+  id: string; env: Record<string, string>; cwd: string; state: string; cols: number; rows: number; lastActivity: string;
+  cmd?: string; agent?: { role: string; teamId: string; displayName: string };
+};
 
 function live(id: string, env: Record<string, string>): Meta {
   return { id, env, cwd: '/tmp', state: 'detached', cols: 80, rows: 24, lastActivity: '2026-10-01T00:00:00.000Z' };
@@ -21,6 +24,7 @@ describe('GET /api/workspaces pane fields', () => {
   let sessions: Meta[];
   let sidebar: unknown;
   let desktopAvailable: boolean;
+  let agentNames: Record<string, string | null>;
   let server: WebTerminalServer;
 
   beforeEach(() => {
@@ -41,6 +45,7 @@ describe('GET /api/workspaces pane fields', () => {
       panes: [],
     };
     desktopAvailable = true;
+    agentNames = {};
     const devices: WebDeviceResolver = {
       async mint() { throw new Error('unused'); },
       async resolve() { return { ok: false, reason: 'unknown' }; },
@@ -58,6 +63,7 @@ describe('GET /api/workspaces pane fields', () => {
       sessionManager,
       devices,
       desktop: () => desktop,
+      agentState: (id) => (id in agentNames ? { agentName: agentNames[id], agentStatus: 'running' } : undefined),
       log: () => { /* silent */ },
       assetsDir: os.tmpdir(),
     });
@@ -90,9 +96,36 @@ describe('GET /api/workspaces pane fields', () => {
     expect(pane).not.toHaveProperty('paneId');
   });
 
-  it('keeps lastActivity and adds nothing else without a desktop', async () => {
+  it('keeps lastActivity and the daemon\'s own newline facts, and adds nothing else without a desktop', async () => {
     desktopAvailable = false;
     const pane = ((await list()).workspaces[0].panes as Array<Record<string, unknown>>)[0];
-    expect(Object.keys(pane).sort()).toEqual(['cwd', 'lastActivity', 'sessionId']);
+    expect(Object.keys(pane).sort()).toEqual(['cwd', 'hostPlatform', 'lastActivity', 'sessionId', 'wsl']);
+  });
+
+  it('#1754: carries the host platform, the WSL verdict and the canonical agent slug', async () => {
+    sessions = [
+      { ...live('s1', { WMUX_WORKSPACE_ID: 'ws-live' }), cmd: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
+      { ...live('s2', { WMUX_WORKSPACE_ID: 'ws-live' }), cmd: 'C:\\Windows\\System32\\wsl.exe' },
+    ];
+    agentNames = { s1: 'Codex CLI' };
+    const panes = (await list()).workspaces[0].panes as Array<Record<string, unknown>>;
+    expect(panes[0]).toMatchObject({ sessionId: 's1', hostPlatform: process.platform, wsl: false, agentName: 'Codex CLI', agentSlug: 'codex' });
+    expect(panes[1]).toMatchObject({ sessionId: 's2', hostPlatform: process.platform, wsl: true });
+    expect(panes[1]).not.toHaveProperty('agentSlug');
+  });
+
+  it('#1754: never derives the slug from a role label, and drops it once the agent exits', async () => {
+    sessions = [{ ...live('s1', { WMUX_WORKSPACE_ID: 'ws-live' }), agent: { role: 'r', teamId: 't', displayName: 'Codex CLI' } }];
+    agentNames = { s1: null };
+    const pane = ((await list()).workspaces[0].panes as Array<Record<string, unknown>>)[0];
+    expect(pane).toMatchObject({ agentName: 'Codex CLI' });
+    expect(pane).not.toHaveProperty('agentSlug');
+  });
+
+  it('#1754: an empty role label does not hide the canonical slug', async () => {
+    sessions = [{ ...live('s1', { WMUX_WORKSPACE_ID: 'ws-live' }), agent: { role: 'r', teamId: 't', displayName: '' } }];
+    agentNames = { s1: 'Codex CLI' };
+    const pane = ((await list()).workspaces[0].panes as Array<Record<string, unknown>>)[0];
+    expect(pane).toMatchObject({ agentSlug: 'codex' });
   });
 });

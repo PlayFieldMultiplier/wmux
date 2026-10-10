@@ -92,6 +92,38 @@ describe('decideMirrorKey — the four conveniences #895 asked for', () => {
   });
 });
 
+// #1754: a remote native Windows Codex reads LF as Ctrl+Enter (ConPTY) and a
+// bare CR as submit. Alt+Enter is its newline, as on a local pane (#1694).
+describe('decideMirrorKey — native Windows Codex on the host', () => {
+  const newlineKeys = [
+    ['Shift+Enter', key({ key: 'Enter', code: 'Enter', shiftKey: true })],
+    ['Ctrl+Enter', key({ key: 'Enter', code: 'Enter', ctrlKey: true })],
+    ['Ctrl+J', key({ key: 'j', code: 'KeyJ', ctrlKey: true })],
+  ] as const;
+
+  it.each(newlineKeys)('sends Alt+Enter for %s', (_name, e) => {
+    expect(decideMirrorKey(e, opts({ altEnterNewline: true }))).toEqual({ kind: 'write', data: '\x1b\r' });
+  });
+
+  it('wins over a negotiated win32-input-mode Shift+Enter', () => {
+    const d = decideMirrorKey(
+      key({ key: 'Enter', code: 'Enter', shiftKey: true }),
+      opts({ altEnterNewline: true, protocol: { win32Input: true } }),
+    );
+    expect(d).toEqual({ kind: 'write', data: '\x1b\r' });
+  });
+
+  it.each(newlineKeys)('still swallows %s on a read-only host', (_name, e) => {
+    expect(decideMirrorKey(e, opts({ altEnterNewline: true, readOnly: true }))).toEqual({ kind: 'swallow' });
+  });
+
+  it('keeps the old bytes when the mapping is off (a host without the pane facts)', () => {
+    expect(decideMirrorKey(newlineKeys[0][1], opts({ altEnterNewline: false }))).toEqual({ kind: 'pass' });
+    expect(decideMirrorKey(newlineKeys[1][1], opts({ altEnterNewline: false }))).toEqual({ kind: 'write', data: '\n' });
+    expect(decideMirrorKey(newlineKeys[2][1], opts({ altEnterNewline: false }))).toEqual({ kind: 'write', data: '\n' });
+  });
+});
+
 describe('decideMirrorKey — what must NOT be taken away', () => {
   it('lets Ctrl+C through as SIGINT when nothing is selected', () => {
     const d = decideMirrorKey(key({ key: 'c', code: 'KeyC', ctrlKey: true }), opts({ hasSelection: false }));

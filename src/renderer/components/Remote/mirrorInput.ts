@@ -46,6 +46,12 @@ export interface MirrorKeyOptions {
    * conservative side: Shift+Enter is handed back to xterm.
    */
   protocol?: KeyboardProtocolHint;
+  /**
+   * The remote pane runs native Windows Codex (#1754): Shift+Enter, Ctrl+Enter
+   * and Ctrl+J send Alt+Enter. Decided by `wantsAltEnterNewline` over the
+   * host's pane facts, as a local pane decides it (#1694).
+   */
+  altEnterNewline?: boolean;
 }
 
 export type MirrorKeyDecision =
@@ -93,6 +99,7 @@ export function decideMirrorKey(
     // A mirror never negotiated with the app it is watching. CSI-u is
     // Escape + garbage there unless the app asked for kitty (or win32).
     shiftEnterFallback: 'xterm',
+    altEnterNewline: opts.altEnterNewline,
   });
   if (newlineByte !== null) {
     if (opts.readOnly) return { kind: 'swallow' };

@@ -104,6 +104,7 @@ function PaneCell({ hostId, hostLabel, pane, readOnly, attachEpoch }: {
           readOnly={readOnly}
           hostLabel={hostLabel}
           hostId={hostId}
+          sessionId={pane.sessionId}
         />
       </div>
     </div>
