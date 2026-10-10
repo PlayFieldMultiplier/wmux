@@ -125,6 +125,7 @@ export function TabComputerUse() {
           label={t('settings.computerUseStopKey')}
           description={t(
             stopKeyUnavailable ? 'settings.computerUseStopKeyUnavailableDesc'
+              : state?.helper === 'damaged' ? 'settings.computerUseStopKeyDamagedDesc'
               : noHelper ? 'settings.computerUseStopKeyNoHelperDesc'
                 : state?.stopKeyStatus === 'held' ? 'settings.computerUseStopKeyDesc'
                   : 'settings.computerUseStopKeyOffDesc',

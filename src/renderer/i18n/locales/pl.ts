@@ -1338,6 +1338,7 @@ export const pl = {
   'settings.computerUseDamagedNote': 'Program pomocniczy nie pasuje do tej wersji wmux (jest uszkodzony, częściowo zaktualizowany lub zmieniony przez program antywirusowy), więc agenci nie mogą go używać. Zainstaluj wmux ponownie.',
   'settings.computerUseHelperUnsignedNote': 'Ten program pomocniczy nie ma podpisu kodu; Windows Defender lub SmartScreen mogą o nim ostrzegać.',
   'settings.computerUseStopKeyNoHelperDesc': 'Nieaktywny: ta wersja nie ma programu pomocniczego, więc nie ma czego zatrzymywać.',
+  'settings.computerUseStopKeyDamagedDesc': 'Nieaktywny: program pomocniczy jest uszkodzony, więc nie ma czego zatrzymywać.',
   'settings.computerUseStopKeyOffDesc': 'Aktywny tylko, gdy sterowanie komputerem jest włączone; wtedy naciśnięcie go w dowolnym miejscu zatrzymuje wszystkich agentów naraz.',
   'settings.computerUseOnWithoutHelperNote': 'Sterowanie komputerem jest włączone, ale ta wersja nie ma programu pomocniczego: agenci nadal widzą to narzędzie, a każde wywołanie kończy się błędem. Na razie je wyłącz.',
   'settings.computerUseSaveFailed': 'Nie udało się zapisać ustawienia: {error}',

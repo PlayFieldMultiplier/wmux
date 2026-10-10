@@ -851,6 +851,7 @@ export const ko = {
   'settings.computerUseDamagedNote': '헬퍼가 이 wmux 빌드와 일치하지 않아(손상, 일부만 업데이트됨, 또는 백신 프로그램이 변경함) 에이전트가 사용할 수 없습니다. wmux를 다시 설치하세요.',
   'settings.computerUseHelperUnsignedNote': '이 헬퍼는 코드 서명되지 않아 Windows Defender나 SmartScreen이 경고할 수 있습니다.',
   'settings.computerUseStopKeyNoHelperDesc': '잡혀 있지 않음: 이 빌드에는 헬퍼가 없어 멈출 대상이 없습니다.',
+  'settings.computerUseStopKeyDamagedDesc': '잡혀 있지 않음: 헬퍼가 손상되어 멈출 대상이 없습니다.',
   'settings.computerUseStopKeyOffDesc': '컴퓨터 사용이 켜져 있을 때만 잡습니다. 그때 어디서든 누르면 모든 에이전트가 한 번에 멈춥니다.',
   'settings.computerUseOnWithoutHelperNote': '컴퓨터 사용이 켜져 있지만 이 빌드에는 헬퍼가 없습니다. 에이전트에게 도구는 보이지만 모든 호출이 실패하니 지금은 꺼 두세요.',
   'settings.computerUseSaveFailed': '설정을 저장하지 못했습니다: {error}',

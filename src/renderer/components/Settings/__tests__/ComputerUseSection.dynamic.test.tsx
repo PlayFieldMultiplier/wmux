@@ -122,6 +122,8 @@ describe('Settings › Computer use', () => {
     expect(el.textContent).toContain('Damaged: reinstall wmux');
     expect(el.textContent).toContain('does not match this wmux build');
     expect(el.textContent).not.toContain('Ready');
+    expect(el.textContent).toContain('the helper is damaged');
+    expect(el.textContent).not.toContain('this build has no helper');
     // Already on: still the reinstall note, and it can be turned off.
     const on = await render({ get: async () => ({ ...damaged, enabled: true }), set });
     expect(on.textContent).toContain('Reinstall wmux to fix it');

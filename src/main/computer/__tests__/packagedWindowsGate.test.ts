@@ -147,6 +147,28 @@ describe('packaged Windows build, helper that fails its pin', () => {
     expect((await get()).helper).toBe('ready');
   });
 
+  it('applies an "on" then an "off" in order, though the "on" waits for the pin check', async () => {
+    const { set } = await load();
+    const on = set(true);
+    const off = set(false);
+    await Promise.all([on, off]);
+    expect(h.enabled.value).toBe(false);
+    expect(await off).toMatchObject({ enabled: false, stopKeyStatus: 'off' });
+  });
+
+  // chmod does not stop reads on Windows.
+  it.skipIf(realPlatform === 'win32')('keeps a helper it could not read ready: only a definite mismatch reads damaged', async () => {
+    const { get, set } = await load();
+    expect(await set(true)).toMatchObject({ helper: 'ready', stopKeyStatus: 'held' });
+    await fs.writeFile(h.helperPath.value, 'other bytes');
+    await fs.chmod(h.helperPath.value, 0o000);
+    try {
+      expect(await get()).toMatchObject({ helper: 'ready', stopKeyStatus: 'held' });
+    } finally {
+      await fs.chmod(h.helperPath.value, 0o644);
+    }
+  });
+
   it('leaves dev builds alone: they run whatever helper the developer built', async () => {
     h.packaged.value = false;
     const { get } = await load();

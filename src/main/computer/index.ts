@@ -167,16 +167,17 @@ const windowsPinCheck = createWindowsPinCheck({ windowsPin: WINDOWS_HELPER_PIN }
 /**
  * helperStatus, plus the pin check a packaged Windows build runs before every
  * spawn: a helper whose bytes do not match reads `damaged`, not `ready`, so
- * Settings does not offer a switch every call would fail behind. For Settings
- * only; agent calls keep the cheap synchronous status, and the spawn's own
- * uncached check stays the one that decides.
+ * Settings does not offer a switch every call would fail behind. Only a
+ * definite mismatch counts: a helper that could not be read or changed while
+ * it was hashed (antivirus holding it, an update in progress) keeps its
+ * status, so opening Settings never stops agents over a passing state. For
+ * Settings only; agent calls keep the cheap synchronous status, and the
+ * spawn's own uncached check stays the one that decides.
  */
 async function checkedHelperStatus(helperPath: string | null): Promise<ComputerHelperStatus> {
   const status = helperStatus(helperPath);
   if (status !== 'ready' || !helperPath || process.platform !== 'win32' || !app.isPackaged) return status;
-  const verdict = await windowsPinCheck(helperPath);
-  if (verdict === 'ok') return 'ready';
-  return verdict === 'mismatch' || verdict === 'changed' ? 'damaged' : 'missing';
+  return (await windowsPinCheck(helperPath)) === 'mismatch' ? 'damaged' : status;
 }
 
 /** The helper's own refusal to run elevated (native/computer-use-windows, exit 72). */
@@ -357,8 +358,16 @@ export function registerComputerUseIpc(
   ipcMain.removeHandler(IPC.COMPUTER_USE_GET);
   ipcMain.handle(IPC.COMPUTER_USE_GET, () => snapshot());
 
+  // One write at a time, in the order they came: the pin check below awaits,
+  // and an earlier "on" must not land after a later "off".
+  let setQueue: Promise<unknown> = Promise.resolve();
   ipcMain.removeHandler(IPC.COMPUTER_USE_SET);
-  ipcMain.handle(IPC.COMPUTER_USE_SET, async (_event, value: unknown) => {
+  ipcMain.handle(IPC.COMPUTER_USE_SET, (_event, value: unknown) => {
+    const run = setQueue.then(() => applySet(value));
+    setQueue = run.catch(() => undefined);
+    return run;
+  });
+  const applySet = async (value: unknown): Promise<ComputerUseSettingsPayload> => {
     const patch = patchFrom(value);
     // Settings disables the switch too; this covers any other caller, which
     // sees `enabled: false` with the helper status that explains it. Turning
@@ -377,7 +386,7 @@ export function registerComputerUseIpc(
       await getExistingService()?.reconfigure().catch(() => undefined);
     }
     return snapshot();
-  });
+  };
 
   ipcMain.removeHandler(IPC.COMPUTER_USE_PERMISSIONS);
   ipcMain.handle(IPC.COMPUTER_USE_PERMISSIONS, async (_event, request: unknown) => {

@@ -1357,6 +1357,7 @@ export const en = {
   'settings.computerUseDamagedNote': 'The helper does not match this wmux build (damaged, partly updated or changed by antivirus), so agents cannot use it. Reinstall wmux to fix it.',
   'settings.computerUseHelperUnsignedNote': 'This helper is not code-signed; Windows Defender or SmartScreen may warn about it.',
   'settings.computerUseStopKeyNoHelperDesc': 'Not held: this build has no helper, so there is nothing for it to stop.',
+  'settings.computerUseStopKeyDamagedDesc': 'Not held: the helper is damaged, so there is nothing for it to stop.',
   'settings.computerUseStopKeyOffDesc': 'Held only while computer use is on; then pressing it anywhere stops all agents at once.',
   'settings.computerUseOnWithoutHelperNote': 'Computer use is on, but this build has no helper: agents still see the tool and every call fails. Turn it off for now.',
   'settings.computerUseSaveFailed': 'Could not save the setting: {error}',
