@@ -190,6 +190,16 @@ describe('Git page Worktrees: who acts next', () => {
     expect(diff.status).toHaveBeenCalledWith(wt('done'));
   });
 
+  it('a failed status read on a merged worktree whose diff saw nothing is unknown, not clean; with diff changes the row keeps its counts', async () => {
+    statusFails = new Set([wt('done'), wt('feat')]);
+    dirty = { [wt('wip')]: 2, [wt('feat')]: 1 };
+    await mount();
+    expect(section('cleanup')).toBeNull();
+    const row = (b: string) => [...container.querySelectorAll('[data-git-worktree-row]')].find((el) => el.querySelector('.wmux-git-branch')?.textContent === b)!;
+    expect(row('done').querySelector('.wmux-git-stat')!.textContent).toBe('—');
+    expect(row('feat').querySelector('.wmux-git-stat')!.textContent).toBe('+1');
+  });
+
   it('an agent working in a background tab keeps a merged, clean worktree out of Cleanup', async () => {
     const d = workspace('d', wt('done'), { metadata: { pr: { number: 9, state: 'merged', checks: null, url: 'https://github.com/o/alpha/pull/9' } } } as Partial<Workspace>);
     const leaf = d.rootPane as Extract<Workspace['rootPane'], { type: 'leaf' }>;
