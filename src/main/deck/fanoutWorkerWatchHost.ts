@@ -1,8 +1,10 @@
 // Production wiring for the fan-out worker watch (fanoutWorkerWatch.ts): the
-// daemon client, the pane → workspace lookup, the running dot and the launch
-// probe. Kept out of deck.handler so its install stays one line.
+// daemon client, the pane → workspace lookup, the running dot, the launch
+// probe and the worker turn ends. Kept out of deck.handler so its install
+// stays one line.
 
 import type { BrowserWindow } from 'electron';
+import { eventBus } from '../events/EventBus';
 import { resolvePtyOwnerWorkspace } from '../workspace/ptyOwnership';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
@@ -15,7 +17,7 @@ export function startFanoutWorkerWatch(
   hasBrain: (ownerWorkspaceId: string) => boolean,
 ): FanoutWorkerWatch {
   const probe = createDaemonLaunchProbe(() => (getDaemonClient() as LaunchProbeDaemon | null) ?? null);
-  return installFanoutWorkerWatch({
+  const watch = installFanoutWorkerWatch({
     getDaemonClient: () => (getDaemonClient() as WorkerWatchDaemon | null) ?? null,
     resolveWorkspace: (ptyId) => resolvePtyOwnerWorkspace(getWindow, ptyId),
     // Pane membership is structural, which the renderer pushes at once, so
@@ -26,4 +28,15 @@ export function startFanoutWorkerWatch(
     agentRunning: (ptyId) => probe.agentRunning(ptyId),
     hasBrain,
   });
+  // Its own subscription, not the deck's: that one only runs while Moa is on.
+  const offBus = eventBus.subscribe((ev) => {
+    if (ev.type === 'agent.lifecycle') watch.noteLifecycle(ev);
+  });
+  return {
+    ...watch,
+    dispose: () => {
+      offBus();
+      watch.dispose();
+    },
+  };
 }

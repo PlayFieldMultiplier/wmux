@@ -2471,7 +2471,6 @@ export function registerDeckHandler(
     if (!isTaskWorkspace(ev.workspaceId) && !(hq !== null && ev.workspaceId === hq)) {
       coalescer?.push(lifecycleInput);
     }
-    workerWatch.noteLifecycle({ ...lifecycleInput, ...(ev.decision ? { decision: ev.decision } : {}) });
     routeWorkerEventToOwner(lifecycleInput, {
       hasBrain: ownerHasBrain,
       push: (copy) => coalescer?.push(copy),

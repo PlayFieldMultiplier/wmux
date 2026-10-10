@@ -448,7 +448,8 @@ describe('master switch (moaEnabled)', () => {
     const listenersBefore = mirrorListeners();
     reregister({ production: true });
     expect(vi.getTimerCount()).toBe(1); // only the always-on task-ledger reconcile (fan-out bookkeeping)
-    expect(busSubscribers()).toBe(subsBefore);
+    // Only the always-on fan-out worker watch (fan-out bookkeeping, like the ledger reconcile).
+    expect(busSubscribers()).toBe(subsBefore + 1);
     expect(mirrorListeners()).toBe(listenersBefore);
     expect(heartbeats.at(-1)!.starts).toBe(0);
     expect(schedulers.at(-1)!.starts).toBe(0);
@@ -490,14 +491,15 @@ describe('master switch (moaEnabled)', () => {
     reregister({ reconcileDelayMs: 1234 });
 
     await invoke(IPC.DECK_MOA_SET, { enabled: true });
-    expect(busSubscribers()).toBe(subsBefore + 1);
+    // The deck's own subscription, beside the always-on fan-out worker watch.
+    expect(busSubscribers()).toBe(subsBefore + 2);
     expect(mirrorListeners()).toBe(1);
     const armed = vi.getTimerCount(); // always-on ledger reconcile + orphan reconcile + one-shot reconcile
     expect(armed).toBe(3);
 
     await invoke(IPC.DECK_MOA_SET, { enabled: false });
     expect(vi.getTimerCount()).toBe(1); // the ledger reconcile stays
-    expect(busSubscribers()).toBe(subsBefore);
+    expect(busSubscribers()).toBe(subsBefore + 1);
     expect(mirrorListeners()).toBe(0);
 
     // Not fired yet → re-armed by the next on; once fired → never again.

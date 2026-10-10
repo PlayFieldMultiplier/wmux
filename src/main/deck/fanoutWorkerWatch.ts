@@ -64,7 +64,7 @@ export interface FanoutWorkerWatchPorts {
 }
 
 export interface FanoutWorkerWatch {
-  /** Feed a worker lifecycle event (the deck's agent.lifecycle path). */
+  /** Feed a worker lifecycle event (the EventBus agent.lifecycle stream). */
   noteLifecycle(ev: { workspaceId: string; ptyId: string; kind: string; source?: string; decision?: string }): void;
   /** One idle pass (and daemon client re-attach). The host runs it once a
    *  minute, on the ledger reconcile timer. */
