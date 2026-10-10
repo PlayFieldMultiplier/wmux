@@ -33,6 +33,7 @@ function start(overrides: Partial<FanoutWorkerWatchPorts> = {}): FanoutWorkerWat
     ledger,
     now: () => clock,
     exitGraceMs: 0,
+    diedGraceMs: 0,
     ...overrides,
   });
   return watch;
@@ -144,6 +145,28 @@ describe('fan-out worker watch — exits', () => {
     expect(ledger.get('wtask-1')!.status).toBe('working');
   });
 
+  it('a PTY that a supervised restart brings back within the grace is not an end', async () => {
+    start({ diedGraceMs: 30 });
+    daemon.emit('session:died', { sessionId: 'pty-w1' });
+    daemon.emit('session:restarted', { sessionId: 'pty-w1' });
+    await new Promise((r) => setTimeout(r, 60));
+    await settle();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
+    // Not restarted: the end counts.
+    daemon.emit('session:died', { sessionId: 'pty-w1' });
+    await new Promise((r) => setTimeout(r, 60));
+    await settle();
+    expect(ledger.get('wtask-1')!.summary).toBe(WORKER_PTY_ENDED_SUMMARY);
+  });
+
+  it('an agent exit whose pane shows a running turn after the grace is not an exit', async () => {
+    running.add('pty-w1');
+    start();
+    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
+    await settle();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
+  });
+
   it('follows a daemon client that connects later, and detaches on dispose', async () => {
     let client: EventEmitter | null = null;
     const w = start({ getDaemonClient: () => client });
@@ -221,6 +244,20 @@ describe('fan-out worker watch — idle', () => {
     await watch!.tick();
     expect(ledger.get('wtask-1')!.status).toBe('working');
     expect(ledger.get('wtask-2')!.status).toBe('review_requested');
+  });
+
+  it('a second agent pane in the task workspace never takes the worker binding over', async () => {
+    start({ workspacePtyIds: () => ['pty-w1', 'pty-x'] });
+    stop('pty-w1');
+    watch!.noteLifecycle({ workspaceId: 'ws-task1', ptyId: 'pty-x', kind: 'agent.stop', source: 'hook' });
+    daemon.emit('session:died', { sessionId: 'pty-x' });
+    await settle();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
+    // The worker is busy while the other pane idles: no idle wake either.
+    running.add('pty-x');
+    clock += IDLE_MS;
+    await watch!.tick();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
   });
 
   it('a pane seen ending a turn counts as the worker even beside other terminals', async () => {

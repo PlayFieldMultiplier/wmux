@@ -51,8 +51,11 @@ const win = {
 
 describe('hidden-window PR routers', () => {
   let dispose: () => void;
+  // The hidden cadence is module state: each test starts a day later.
+  let day = 0;
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2030, 0, 1) + ++day * 86_400_000);
     vi.clearAllMocks();
     prGet.mockResolvedValue(PR);
     visible = true;
@@ -98,6 +101,19 @@ describe('hidden-window PR routers', () => {
     expect(syncGet).toHaveBeenCalledTimes(1);
     expect(ciNote).toHaveBeenCalledTimes(1);
     expect(reviewNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('hidden: a PR that changed since the last visible poll is left alone', async () => {
+    updateCwd('pty-h1', '/repo');
+    updateBranch('pty-h1', 'feat/c');
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.clearAllMocks();
+    prGet.mockResolvedValue({ ...PR, number: 8, url: 'https://github.com/o/r/pull/8' });
+    visible = false;
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(prGet).toHaveBeenCalled();
+    expect(ciNote).not.toHaveBeenCalled();
+    expect(reviewNote).not.toHaveBeenCalled();
   });
 
   it('does no work at all when no pane has a known PR', async () => {

@@ -349,6 +349,10 @@ export async function runHiddenPrTick(now: number = Date.now()): Promise<void> {
     const branch = branchMap.get(ptyId);
     if (!cwd || !branch) continue;
     const pr = await prStatusCache.get(cwd, branch);
+    // A PR that changed or vanished is left to the visible poll: it owns the
+    // pane's PR proof, and the owner nudge can only address the PR it shows.
+    const known = prByPty.get(ptyId);
+    if (!pr || !known || pr.number !== known.number || pr.url !== known.url) continue;
     void prCiRouter?.note(ptyId, pr);
     if (feedReview) void prReviewRouter?.note(ptyId, cwd, pr);
   }
