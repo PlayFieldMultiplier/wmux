@@ -256,7 +256,12 @@ function releaseStartLock(lock: string, token: string): void {
  * Run fn while holding `<plistDir>/start.lock` (O_EXCL create, owner
  * `<pid>:<uuid>`). Only a lock whose owner pid is dead is taken over.
  */
-export async function withDaemonStartLock<T>(plistDir: string, rt: LaunchdRuntime, fn: () => Promise<T>): Promise<T> {
+export async function withDaemonStartLock<T>(
+  plistDir: string,
+  rt: LaunchdRuntime,
+  fn: () => Promise<T>,
+  waitMs: number = START_LOCK_WAIT_MS,
+): Promise<T> {
   const lock = path.join(plistDir, START_LOCK_NAME);
   try {
     fs.mkdirSync(plistDir, { recursive: true });
@@ -264,7 +269,7 @@ export async function withDaemonStartLock<T>(plistDir: string, rt: LaunchdRuntim
     throw new LaunchdUnavailableError(`could not create ${plistDir}: ${e instanceof Error ? e.message : String(e)}`);
   }
   const token = `${process.pid}:${randomUUID()}`;
-  const deadline = Date.now() + START_LOCK_WAIT_MS;
+  const deadline = Date.now() + waitMs;
   while (!tryCreateStartLock(lock, token)) {
     reclaimDeadStartLock(lock, rt);
     if (Date.now() >= deadline) throw new LaunchdUnavailableError(`timed out waiting for ${lock}`);
@@ -310,7 +315,11 @@ export function parseLaunchctlPrint(stdout: string): Extract<DaemonJobState, { k
     const m = new RegExp(`^\\t${name} = (.*)$`, 'm').exec(stdout);
     return m ? m[1].trim() : null;
   };
-  const num = (v: string | null): number | null => (v !== null && /^-?\d+$/.test(v) ? Number(v) : null);
+  // A sysexits code is printed with its name (`last exit code = 75: EX_TEMPFAIL`).
+  const num = (v: string | null): number | null => {
+    const m = v === null ? null : /^(-?\d+)(?::|$)/.exec(v);
+    return m ? Number(m[1]) : null;
+  };
   return { kind: 'loaded', pid: num(field('pid')), runs: num(field('runs')) ?? 0, lastExit: num(field('last exit code')) };
 }
 

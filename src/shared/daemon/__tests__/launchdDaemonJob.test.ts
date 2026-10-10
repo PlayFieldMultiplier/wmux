@@ -165,6 +165,11 @@ describe('parseLaunchctlPrint', () => {
     expect(parseLaunchctlPrint('\tstate = not running\n\truns = 1\n\tlast exit code = 0\n'))
       .toEqual({ kind: 'loaded', pid: null, runs: 1, lastExit: 0 });
   });
+
+  it('reads a sysexits code printed with its name (captured from macOS launchctl)', () => {
+    expect(parseLaunchctlPrint('\tstate = not running\n\truns = 1\n\tlast exit code = 75: EX_TEMPFAIL\n'))
+      .toEqual({ kind: 'loaded', pid: null, runs: 1, lastExit: 75 });
+  });
 });
 
 describe('startDaemonViaLaunchd / pruneStaleDaemonJobs', () => {
