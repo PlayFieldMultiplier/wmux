@@ -185,6 +185,11 @@ export interface AltEnterNewlineScope {
  */
 export const CODEX_END_GRACE_MS = 16_000;
 
+/** The pane's agent is the one Alt+Enter is for. The only place the slug is named. */
+function isCodex(agentSlug: string | undefined): boolean {
+  return agentSlug === 'codex';
+}
+
 /**
  * Whether a pane gets `altEnterNewline` (#1694): Codex running natively on a
  * Windows host, while its command is still running.
@@ -204,7 +209,7 @@ export function wantsAltEnterNewline(scope: AltEnterNewlineScope): boolean {
     && (scope.now ?? Date.now()) - scope.codexEndedAt < (scope.graceMs ?? CODEX_END_GRACE_MS);
   return scope.hostPlatform === 'win32'
     && scope.isWsl === false
-    && scope.agentSlug === 'codex'
+    && isCodex(scope.agentSlug)
     && !scope.atPrompt
     && !endedRecently;
 }
@@ -221,7 +226,16 @@ export function noteCodexEndedByPrompt(
   agentSlug: string | undefined,
   now: number,
 ): number | null {
-  return !wasAtPrompt && atPrompt && agentSlug === 'codex' ? now : prev;
+  return !wasAtPrompt && atPrompt && isCodex(agentSlug) ? now : prev;
+}
+
+/**
+ * The end-of-Codex latch after a fresh slug: cleared once the slug stops being
+ * `codex`, since the stale window it guards is over and a fresh detection
+ * should arm the mapping straight away. Otherwise keeps `prev`.
+ */
+export function clearCodexEndedOnSlug(prev: number | null, agentSlug: string | undefined): number | null {
+  return prev !== null && !isCodex(agentSlug) ? null : prev;
 }
 
 const PROMPT_START_MARK = '\x1b]133;A';

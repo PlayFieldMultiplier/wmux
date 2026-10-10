@@ -87,7 +87,7 @@
     "src/renderer/stores/slices/channelsSlice.ts": 1,
     "src/renderer/stores/slices/workspaceSlice.ts": 1,
     "src/renderer/terminal/imeAnchor.ts": 1,
-    "src/renderer/terminal/newlineKeys.ts": 2,
+    "src/renderer/terminal/newlineKeys.ts": 1,
     "src/renderer/utils/accountLogin.ts": 2,
     "src/shared/agentResume.ts": 3,
     "src/shared/fanoutPreset.ts": 2,

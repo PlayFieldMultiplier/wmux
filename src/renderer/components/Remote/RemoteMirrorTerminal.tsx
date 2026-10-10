@@ -11,7 +11,7 @@ import {
 } from './mirrorFit';
 import { createMirrorGestureTracker, decideMirrorKeyWithRepeat, shouldHonorMirrorClipboardWrite } from './mirrorInput';
 import { foldRemoteKeyboardState, INITIAL_REMOTE_KEYBOARD_STATE } from './keyboardProtocol';
-import { CODEX_END_GRACE_MS, foldAtPromptCarry, noteCodexEndedByPrompt, wantsAltEnterNewline } from '../../terminal/newlineKeys';
+import { clearCodexEndedOnSlug, CODEX_END_GRACE_MS, foldAtPromptCarry, noteCodexEndedByPrompt, wantsAltEnterNewline } from '../../terminal/newlineKeys';
 import { REMOTE_POLL_INTERVAL_MS, type RemotePaneSummary } from '../../../shared/remoteHosts';
 import { useStore, type StoreState } from '../../stores';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
@@ -1005,9 +1005,7 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       if (state.remoteWorkspaces === prev.remoteWorkspaces) return;
       const pane = findRemotePane(state, hostIdRef.current, sessionIdRef.current);
       remotePaneRef.current = pane;
-      if (codexEndedAtRef.current !== null && pane && pane.agentSlug !== 'codex') {
-        codexEndedAtRef.current = null;
-      }
+      if (pane) codexEndedAtRef.current = clearCodexEndedOnSlug(codexEndedAtRef.current, pane.agentSlug);
     });
     const offMeta = remote.onPaneMeta((e) => {
       if (e.attachId !== attachId) return;

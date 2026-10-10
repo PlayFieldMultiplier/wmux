@@ -14,6 +14,7 @@ import {
   foldAtPrompt,
   foldAtPromptCarry,
   noteCodexEndedByPrompt,
+  clearCodexEndedOnSlug,
   CODEX_END_GRACE_MS,
   ALT_ENTER,
   type AltEnterNewlineScope,
@@ -429,6 +430,13 @@ describe('end-of-Codex latch (#1694)', () => {
     expect(noteCodexEndedByPrompt(null, true, false, 'codex', T0)).toBeNull();
     // The stamp survives later chunks until the caller clears it.
     expect(noteCodexEndedByPrompt(T0, false, false, 'codex', T0 + 5)).toBe(T0);
+  });
+
+  it('the latch clears once the slug stops being codex, and only then', () => {
+    expect(clearCodexEndedOnSlug(T0, undefined)).toBeNull();
+    expect(clearCodexEndedOnSlug(T0, 'claude')).toBeNull();
+    expect(clearCodexEndedOnSlug(T0, 'codex')).toBe(T0);
+    expect(clearCodexEndedOnSlug(null, 'codex')).toBeNull();
   });
 
   it('a pane where Codex starts from a prompt is armed as before', () => {
