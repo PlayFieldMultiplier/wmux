@@ -16,6 +16,8 @@ import {
   DESKTOP_PRESENCE_STALE_CAP_MS,
 } from '../push/presence';
 import type { DaemonConfig } from '../types';
+import { GATE_POWERSHELL_MIGRATION } from '../approvals/gateConfig';
+import { handleGate } from '../../cli/commands/gate';
 
 /** Use a temp directory instead of the real ~/.wmux */
 let originalHomedir: typeof os.homedir;
@@ -601,5 +603,88 @@ describe('readPushPresenceSuppression', () => {
     delete withoutSlice.pushPresenceSuppression;
     writeRawConfig(withoutSlice);
     expect(readPushPresenceSuppression().enabled).toBe(true);
+  });
+});
+
+describe('loadConfig — one-time PowerShell gate migration (#1939)', () => {
+  /** A config.json written before the migration existed. */
+  function preMigrationConfig(gate: unknown): Record<string, unknown> {
+    const old: Record<string, unknown> = { ...createDefaultConfig(), gate };
+    delete old.appliedMigrations;
+    return old;
+  }
+  function readDisk(): Record<string, unknown> {
+    return JSON.parse(fs.readFileSync(path.join(getWmuxDir(), 'config.json'), 'utf-8'));
+  }
+
+  it('a fresh config already carries the migration id', () => {
+    expect(createDefaultConfig().appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+    expect(createDefaultConfig().gate?.gatedTools).toContain('PowerShell');
+  });
+
+  it('adds PowerShell where Bash is gated, and persists it with the marker', () => {
+    writeRawConfig(preMigrationConfig({ gatedTools: ['Bash', 'Write'] }));
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash', 'PowerShell', 'Write']);
+    const disk = readDisk();
+    expect(disk.gate).toEqual({ gatedTools: ['Bash', 'PowerShell', 'Write'] });
+    expect(disk.appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+  });
+
+  it('does not add PowerShell where Bash is not gated, but still records the marker', () => {
+    writeRawConfig(preMigrationConfig({ gatedTools: ['Write'] }));
+    expect(loadConfig().gate?.gatedTools).toEqual(['Write']);
+    expect(readDisk().appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+    // A gate the user turned off stays off.
+    writeRawConfig(preMigrationConfig({ gatedTools: [] }));
+    expect(loadConfig().gate?.gatedTools).toEqual([]);
+  });
+
+  it('runs once: a PowerShell removed afterwards with `wmux gate --remove` stays removed', () => {
+    writeRawConfig(preMigrationConfig({ gatedTools: ['Bash'] }));
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash', 'PowerShell']);
+
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      handleGate('--remove', ['PowerShell'], true);
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash']);
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash']);
+    expect(readDisk().appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+  });
+
+  it('leaves an absent gate slice absent on disk, so it keeps tracking the defaults', () => {
+    const old = preMigrationConfig(undefined);
+    delete old.gate;
+    writeRawConfig(old);
+    expect(loadConfig().gate?.gatedTools).toContain('PowerShell');
+    const disk = readDisk();
+    expect('gate' in disk).toBe(false);
+    expect(disk.appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+  });
+
+  it('a malformed gate slice still degrades to the defaults (gate stays on)', () => {
+    writeRawConfig(preMigrationConfig('garbage'));
+    expect(loadConfig().gate?.gatedTools).toContain('PowerShell');
+  });
+
+  it('a malformed ledger is repaired, keeping the string ids it had', () => {
+    writeRawConfig({ ...preMigrationConfig({ gatedTools: ['Bash'] }), appliedMigrations: ['other', 7] });
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash', 'PowerShell']);
+    expect(readDisk().appliedMigrations).toEqual(['other', GATE_POWERSHELL_MIGRATION]);
+
+    writeRawConfig({ ...preMigrationConfig({ gatedTools: ['Bash'] }), appliedMigrations: 'nope' });
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash', 'PowerShell']);
+    expect(readDisk().appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+  });
+
+  it('does not touch a list once the marker is there', () => {
+    writeRawConfig({
+      ...preMigrationConfig({ gatedTools: ['Bash'] }),
+      appliedMigrations: [GATE_POWERSHELL_MIGRATION],
+    });
+    expect(loadConfig().gate?.gatedTools).toEqual(['Bash']);
   });
 });

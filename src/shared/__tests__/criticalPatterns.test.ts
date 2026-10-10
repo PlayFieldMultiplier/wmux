@@ -53,3 +53,47 @@ describe('hasElevatedRisk — the lock-screen question', () => {
     expect(hasElevatedRisk('Proceed?', 'yes', 'DROP TABLE users')).toBe(true);
   });
 });
+
+describe('Windows tree deletes (#1939)', () => {
+  it('flags Remove-Item with -Recurse and -Force, in full, abbreviated, or by alias', () => {
+    for (const cmd of [
+      'Remove-Item -Recurse -Force C:\\work\\build',
+      'Remove-Item -Path .\\dist -Force -Recurse',
+      'remove-item .\\out -recurse -force',
+      'rm -r -fo node_modules',
+      'ri -Recurse -Force .\\tmp',
+      'rmdir build -Recurse -Force',
+      'rd -r -force .\\cache',
+      'del -Recurse -Force .\\logs',
+      'erase -Recurse -Force .\\logs',
+      'Remove-Item -Recurse:$true -Force .\\x',
+      'Get-ChildItem .\\a | Remove-Item -Recurse -Force',
+      'Remove-Item .\\big `\n  -Recurse `\n  -Force',
+    ]) {
+      expect(hasCriticalRisk(cmd), cmd).toBe(true);
+    }
+  });
+
+  it("flags cmd's rd /s like rmdir /S, in any case", () => {
+    expect(hasCriticalRisk('cmd /c rd /s /q build')).toBe(true);
+    expect(hasCriticalRisk('RMDIR /S /Q build')).toBe(true);
+  });
+
+  it('leaves non-destructive or non-forced PowerShell alone', () => {
+    for (const cmd of [
+      // -Recurse alone is not flagged, the same way `rm -r` is not.
+      'Remove-Item -Recurse .\\build',
+      'Remove-Item -Force .\\a.txt',
+      'Get-ChildItem -Recurse -Force',
+      // The flags belong to another statement or pipeline segment.
+      'Remove-Item a.txt; Get-ChildItem -Recurse -Force',
+      'Get-ChildItem -Recurse -Force | Select-Object Name',
+      // The verb is part of another word or flag.
+      'Remove-ItemProperty -Path HKCU:\\x -Name y -Recurse -Force',
+      'docker run --rm -it -e RUN=1 image -r -format json',
+      'Set-Content -Path a.txt -Value key-test',
+    ]) {
+      expect(hasCriticalRisk(cmd), cmd).toBe(false);
+    }
+  });
+});

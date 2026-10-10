@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { BrowserCdpConfig, ChannelRetentionConfig, DaemonConfig } from './types';
-import { coerceGate, createDefaultGateConfig } from './approvals/gateConfig';
+import {
+  coerceGate,
+  createDefaultGateConfig,
+  GATE_POWERSHELL_MIGRATION,
+  migrateGateForPowerShell,
+} from './approvals/gateConfig';
 import { coerceNotifySinks, type NotifySinkConfig } from './push/WebhookSink';
 import type { GateConfig } from './approvals/gateConfig';
 import {
@@ -148,6 +153,8 @@ export function createDefaultConfig(): DaemonConfig {
     browser: { cdp: { enabled: true } },
     // #783 — PreToolUse permission gate. Defaults to high-risk tools only.
     gate: createDefaultGateConfig(),
+    // A fresh config already has every migration's result in its defaults.
+    appliedMigrations: [GATE_POWERSHELL_MIGRATION],
     // Outbound webhook/ntfy notifications. Empty = off; written out so a fresh
     // config.json shows operators the key exists without turning anything on.
     notifySinks: [],
@@ -394,6 +401,23 @@ export function loadConfig(): DaemonConfig {
     // 여기서는 다음 데몬 부팅부터 새 경로로 바인드되게만 하면 된다.
     if (process.platform !== 'win32' && config.daemon.pipeName === getLegacyDaemonSocketPath()) {
       config.daemon.pipeName = getDaemonSocketPath();
+      saveConfig(config);
+    }
+
+    // #1939 — one-time gate migration: PowerShell joins a stored gatedTools
+    // array wherever Bash is gated (coerceGate uses a stored array as is, so the
+    // new default would never reach it). Like P7 above it runs on the RAW parsed
+    // file, before any backfill, so the save below writes back only what the
+    // user had plus this change — an absent gate slice stays absent and keeps
+    // tracking the defaults. The id is persisted even when nothing changed:
+    // from then on the list is the user's, and a PowerShell they remove stays
+    // removed.
+    const appliedMigrations = Array.isArray(config.appliedMigrations)
+      ? config.appliedMigrations.filter((m): m is string => typeof m === 'string')
+      : [];
+    if (!appliedMigrations.includes(GATE_POWERSHELL_MIGRATION)) {
+      config.gate = migrateGateForPowerShell(config.gate) as DaemonConfig['gate'];
+      config.appliedMigrations = [...appliedMigrations, GATE_POWERSHELL_MIGRATION];
       saveConfig(config);
     }
 

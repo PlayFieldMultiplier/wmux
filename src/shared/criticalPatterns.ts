@@ -22,7 +22,20 @@ export const CRITICAL_PATTERNS: CriticalPattern[] = [
   { regex: /git\s+reset\s+--hard\b/i,                   riskLevel: 'critical', label: 'git reset --hard' },
   { regex: /git\s+clean\s+.*-f\b/i,                     riskLevel: 'critical', label: 'git clean -f' },
   { regex: /\brm\s+(?:.*-r.*-f|-f.*-r|-rf|-fr)\s+/i,   riskLevel: 'critical', label: 'rm -rf' },
-  { regex: /\brmdir\s+\/[sS]\s+/,                       riskLevel: 'critical', label: 'rmdir /S' },
+  // cmd is case-insensitive and `rd` is its short name for rmdir (#1939).
+  { regex: /\b(?:rmdir|rd)\s+\/s\s+/i,                  riskLevel: 'critical', label: 'rmdir /S' },
+  // #1939 — PowerShell's tree delete: Remove-Item or one of its aliases with a
+  // -Recurse and a -Force in either order, written in full or abbreviated
+  // (`rm -r -fo`; `-f` alone is ambiguous with -Filter, so PowerShell rejects
+  // it). Both flags must sit in the same pipeline segment as the verb (a
+  // backtick line continuation stays in it), and the verb must not be part of
+  // another word (`--rm`, `git-rm`). `-Recurse` alone is not flagged, the same
+  // way `rm -r` without `-f` is not.
+  {
+    regex: /(?<![\w-])(?:Remove-Item|ri|rm|rmdir|rd|del|erase)(?=\s)(?=(?:[^|;\r\n]|`\r?\n)*\s-r[a-z]*\b)(?=(?:[^|;\r\n]|`\r?\n)*\s-fo[a-z]*\b)/i,
+    riskLevel: 'critical',
+    label: 'Remove-Item -Recurse -Force',
+  },
   { regex: /\bDROP\s+(?:TABLE|DATABASE|SCHEMA)\b/i,     riskLevel: 'critical', label: 'DROP TABLE/DATABASE' },
   { regex: /\bDELETE\s+FROM\b/i,                        riskLevel: 'review',   label: 'DELETE FROM' },
   { regex: /\bTRUNCATE\s+TABLE\b/i,                     riskLevel: 'critical', label: 'TRUNCATE TABLE' },
