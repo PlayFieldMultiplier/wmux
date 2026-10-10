@@ -616,6 +616,21 @@ describe('a2a.resolve.identity — scheduled runs with a browser identity', () =
     expect(claim).not.toHaveProperty('browserOnly');
   });
 
+  it("a run's terminal opened in a pane keeps the run claim: the run wins over its own pane anchor", async () => {
+    const { noteRunForIdentity, resetIdentityRuns } = await import('../../../automation/runIdentity');
+    noteRunForIdentity({ ptyId: 'auto-r1', state: 'running', hasBrowserIdentity: true } as never);
+    try {
+      // The opened terminal anchors the run's shell in a new workspace.
+      fs.writeFileSync(path.join(dirRef.current, '49076'), 'auto-r1');
+      sendToRendererMock.mockResolvedValue({ workspaceId: 'ws-opened' });
+      const res = await router(new Map<number, number>([[39876, 25020], [25020, 49076], [49076, 1]]));
+      expect(res.resolved).toEqual({ workspaceId: 'ws-1', ptyId: 'auto-r1' });
+      expect(lookupWorkspaceClaim(res.workspaceToken)).toEqual({ kind: 'bound', workspaceId: 'ws-1', ptyId: 'auto-r1', browserOnly: true });
+    } finally {
+      resetIdentityRuns([]);
+    }
+  });
+
   async function router(ppidByPid: Map<number, number>, callerPid = 39876) {
     const r = setupRouterWithSnapshot(ppidByPid);
     const res = await r.dispatch({ id: 'rp', method: 'a2a.resolve.identity', params: { callerPid } });

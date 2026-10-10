@@ -527,6 +527,28 @@ describe('scheduled runs acting as a protected pane', () => {
     expect(notes.at(-1)).toEqual({ runId: 'r-auto-r1', detail: 'browser_needs_consent' });
   });
 
+  it("a run whose terminal was opened in another workspace is refused there, and the run records it", async () => {
+    await protectPaneA();
+    await grantRun('auto-r1');
+    const { noteRunForIdentity, resetIdentityRuns } = await import('../../../automation/runIdentity');
+    const { claimTokenForPane } = await import('../../../workspace/workspaceClaimTrust');
+    noteRunForIdentity({ ptyId: 'auto-r1', state: 'running', hasBrowserIdentity: true } as never);
+    try {
+      const router = register(profiles, policy);
+      // "Open terminal" binds the run's PTY to a pane in a new workspace.
+      const token = claimTokenForPane('ws-2', 'auto-r1');
+      const response = await router.dispatch(
+        { id: '1', method: 'browser.open', params: { workspaceId: 'ws-2', url: 'https://a.test/' }, workspaceToken: token, callerPtyId: 'auto-r1' } as never,
+        { externalWire: true } as never,
+      );
+      expect(response.ok).toBe(false);
+      expect(String((response as { error?: unknown }).error)).toContain('policy_denied');
+      expect(notes).toEqual([{ runId: 'r-auto-r1', detail: 'browser_policy_denied' }]);
+    } finally {
+      resetIdentityRuns([]);
+    }
+  });
+
   it('a run claim may call the browser and nothing else of wmux', async () => {
     await protectPaneA();
     await grantRun('auto-r1');

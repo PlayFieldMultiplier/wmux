@@ -18,7 +18,7 @@ import { GATED_DELIVERY_DEADLINE_MARGIN_MS, GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS,
 import { flagOrphanedTask, isPagedTaskQuery, pagedTaskId, shapeTaskQueryResult, summarizeTask } from '../../../shared/a2aTaskQueryView';
 import { defaultSnapshot } from '../../pty/portWatch';
 import { claimTokenForPane, claimTokenForRun } from '../../workspace/workspaceClaimTrust';
-import { liveIdentityRunAnchors } from '../../automation/runIdentity';
+import { isIdentityRunPty, liveIdentityRunAnchors } from '../../automation/runIdentity';
 import type { PortSnapshot, SnapshotFn } from '../../pty/portWatch';
 import { walkToOwningAnchor } from '../../pty/serverSidePidWalk';
 import { tryProcessCreatedAt } from '../../pty/winSnapshotNative';
@@ -679,9 +679,17 @@ export function registerA2aRpc(
     // ones with their shell pid and the same walk is tried against those. A
     // hit gets a browser-only claim on the identity's workspace.
     let runClaim: string | null = null;
-    if (!resolved && callerPid != null) {
+    // The same holds when the walk hit a pane whose PTY IS such a run: the
+    // operator opened the run's terminal, which anchors it in whatever
+    // workspace it opened in. The run still acts under its granted identity,
+    // so its own claim wins over the pane one.
+    if (callerPid != null && (!resolved || isIdentityRunPty(resolved.ptyId))) {
       const runs = await liveIdentityRunAnchors();
-      if (runs.length > 0) {
+      const own = resolved ? runs.find((r) => r.ptyId === resolved?.ptyId) : undefined;
+      if (own) {
+        runClaim = claimTokenForRun(own.workspaceId, own.ptyId);
+        if (runClaim) resolved = { workspaceId: own.workspaceId, ptyId: own.ptyId };
+      } else if (!resolved && runs.length > 0) {
         const snapshot = await withDeadline(
           snapshotPromise,
           RPC_SNAPSHOT_DEADLINE_MS - (Date.now() - startedAt),

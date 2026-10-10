@@ -1080,6 +1080,13 @@ export function registerBrowserRpc(
       }
       run = found;
       paneId = run && run.identity.workspaceId === workspaceId ? run.identity.paneId : null;
+      if (run && !paneId) {
+        // A run claim always names its identity's workspace; this one does not
+        // (a pane claim on the run's opened terminal elsewhere). Refused, and
+        // the run says so.
+        noteRunBrowserRefusal(run.runId, 'browser_policy_denied');
+        throw new Error(policyDeniedMessage(method, "the call did not come from this schedule's browser identity workspace"));
+      }
     } else if (ptyId) {
       try {
         paneId = await resolvePaneForPty(getWindow, ptyId, workspaceId);
