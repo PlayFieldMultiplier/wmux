@@ -55,45 +55,72 @@ describe('hasElevatedRisk — the lock-screen question', () => {
 });
 
 describe('Windows tree deletes (#1939)', () => {
-  it('flags Remove-Item with -Recurse and -Force, in full, abbreviated, or by alias', () => {
+  it('flags Remove-Item -Recurse, in full, abbreviated, or by alias, with or without -Force', () => {
     for (const cmd of [
       'Remove-Item -Recurse -Force C:\\work\\build',
       'Remove-Item -Path .\\dist -Force -Recurse',
-      'remove-item .\\out -recurse -force',
-      'rm -r -fo node_modules',
-      'ri -Recurse -Force .\\tmp',
-      'rmdir build -Recurse -Force',
-      'rd -r -force .\\cache',
-      'del -Recurse -Force .\\logs',
+      'Remove-Item -Recurse .\\build',
+      'remove-item .\\out -recurse',
+      'ri -r .\\tmp',
+      'rmdir build -Recurse',
+      'rd -re .\\cache',
+      'del -Recurse .\\logs',
       'erase -Recurse -Force .\\logs',
-      'Remove-Item -Recurse:$true -Force .\\x',
+      'Remove-Item -Recurse:$true .\\x',
       'Get-ChildItem .\\a | Remove-Item -Recurse -Force',
+      'if (Test-Path x) { Remove-Item x -Recurse -Force }',
       'Remove-Item .\\big `\n  -Recurse `\n  -Force',
+      // `rm` needs a PowerShell -Force too.
+      'rm -r -fo node_modules',
+      'rm -Recurse -Force .\\dist',
     ]) {
       expect(hasCriticalRisk(cmd), cmd).toBe(true);
     }
   });
 
-  it("flags cmd's rd /s like rmdir /S, in any case", () => {
-    expect(hasCriticalRisk('cmd /c rd /s /q build')).toBe(true);
-    expect(hasCriticalRisk('RMDIR /S /Q build')).toBe(true);
+  it("flags cmd's rd /s and del /s, wherever the switch sits, in any case", () => {
+    for (const cmd of [
+      'cmd /c rd /s /q build',
+      'cmd /c rd /q /s build',
+      'RMDIR /S/Q C:\\x',
+      'rmdir build /s /q',
+      'del /s /q *.*',
+      'erase /q /s *.tmp',
+    ]) {
+      expect(hasCriticalRisk(cmd), cmd).toBe(true);
+    }
   });
 
-  it('leaves non-destructive or non-forced PowerShell alone', () => {
+  it('leaves non-recursive deletes and lookalikes alone', () => {
     for (const cmd of [
-      // -Recurse alone is not flagged, the same way `rm -r` is not.
-      'Remove-Item -Recurse .\\build',
       'Remove-Item -Force .\\a.txt',
       'Get-ChildItem -Recurse -Force',
-      // The flags belong to another statement or pipeline segment.
+      // `rm -r` without -f stays unflagged, as on Unix.
+      'rm -r build',
+      'rm -r .\\build',
+      // The flag belongs to another statement or pipeline segment.
       'Remove-Item a.txt; Get-ChildItem -Recurse -Force',
+      'rm .\\a.txt && Get-ChildItem -Recurse -Force',
       'Get-ChildItem -Recurse -Force | Select-Object Name',
       // The verb is part of another word or flag.
-      'Remove-ItemProperty -Path HKCU:\\x -Name y -Recurse -Force',
-      'docker run --rm -it -e RUN=1 image -r -format json',
+      'Remove-ItemProperty -Path HKCU:\\x -Name y -Recurse',
+      'docker run --rm -it image -r -format json',
       'Set-Content -Path a.txt -Value key-test',
+      // A `/s` glued to a word is not a switch.
+      'la velocidad del cohete es 3 km/s',
+      'rd C:\\tools /q',
+      'del /q a.txt',
     ]) {
       expect(hasCriticalRisk(cmd), cmd).toBe(false);
     }
+  });
+
+  it('stays linear on a long line full of verb-like words', () => {
+    // 100 KB: a few ms with the capped segment; an uncapped lookahead rescans
+    // to the end of the line from every `del` and takes seconds.
+    const text = 'del '.repeat(25_000);
+    const started = Date.now();
+    expect(hasCriticalRisk(text)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });

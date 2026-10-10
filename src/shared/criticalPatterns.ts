@@ -17,25 +17,39 @@ export interface CriticalPattern {
   label: string;
 }
 
+// The rest of one PowerShell pipeline segment after a verb: it stops at `|`,
+// `;`, `&&` and a newline (a backtick line continuation stays in it). Capped,
+// so a long line with many verb-like words (`del` is common Spanish) costs
+// linear time, not quadratic.
+const PS_SEGMENT = '(?:[^|;&\\r\\n]|(?<!&)&(?!&)|`\\r?\\n){0,256}';
+const PS_RECURSE = `(?=${PS_SEGMENT}\\s-r[a-z]*\\b)`;
+const PS_FORCE = `(?=${PS_SEGMENT}\\s-fo[a-z]*\\b)`;
+
+/** A PowerShell delete verb that is not part of another word (`--rm`,
+ *  `git-rm`, `Remove-ItemProperty`), followed by the required flags. */
+function psDelete(verb: string, flags: string): RegExp {
+  return new RegExp(`(?<![\\w-])${verb}(?=\\s)${flags}`, 'i');
+}
+
 export const CRITICAL_PATTERNS: CriticalPattern[] = [
   { regex: /git\s+push\s+(?:.*--force|-f)\b/i,          riskLevel: 'critical', label: 'git push --force' },
   { regex: /git\s+reset\s+--hard\b/i,                   riskLevel: 'critical', label: 'git reset --hard' },
   { regex: /git\s+clean\s+.*-f\b/i,                     riskLevel: 'critical', label: 'git clean -f' },
   { regex: /\brm\s+(?:.*-r.*-f|-f.*-r|-rf|-fr)\s+/i,   riskLevel: 'critical', label: 'rm -rf' },
-  // cmd is case-insensitive and `rd` is its short name for rmdir (#1939).
-  { regex: /\b(?:rmdir|rd)\s+\/s\s+/i,                  riskLevel: 'critical', label: 'rmdir /S' },
-  // #1939 — PowerShell's tree delete: Remove-Item or one of its aliases with a
-  // -Recurse and a -Force in either order, written in full or abbreviated
-  // (`rm -r -fo`; `-f` alone is ambiguous with -Filter, so PowerShell rejects
-  // it). Both flags must sit in the same pipeline segment as the verb (a
-  // backtick line continuation stays in it), and the verb must not be part of
-  // another word (`--rm`, `git-rm`). `-Recurse` alone is not flagged, the same
-  // way `rm -r` without `-f` is not.
-  {
-    regex: /(?<![\w-])(?:Remove-Item|ri|rm|rmdir|rd|del|erase)(?=\s)(?=(?:[^|;\r\n]|`\r?\n)*\s-r[a-z]*\b)(?=(?:[^|;\r\n]|`\r?\n)*\s-fo[a-z]*\b)/i,
-    riskLevel: 'critical',
-    label: 'Remove-Item -Recurse -Force',
-  },
+  // cmd's tree and recursive deletes (#1939): `/s` anywhere in the switches or
+  // after the path (`rd /q /s x`, `rmdir x /s/q`), in any case. A `/s` glued to
+  // a word (`km/s`) does not count.
+  { regex: /\b(?:rmdir|rd)(?=\s)(?=[^|&\r\n]{0,256}(?:\s|\/\w)\/s\b)/i,  riskLevel: 'critical', label: 'rmdir /S' },
+  { regex: /\b(?:del|erase)(?=\s)(?=[^|&\r\n]{0,256}(?:\s|\/\w)\/s\b)/i, riskLevel: 'critical', label: 'del /S' },
+  // #1939 — PowerShell's tree delete. Remove-Item -Recurse deletes a whole
+  // tree without asking (-Force only adds hidden and read-only files), so the
+  // verb or one of its aliases plus a -Recurse, in full or abbreviated (`-r`),
+  // is enough. `rm` is the exception: `rm -r` is also the Unix spelling, which
+  // the `rm -rf` row above deliberately leaves alone, so `rm` also needs a
+  // PowerShell -Force (`-fo`…; `-f` alone is ambiguous with -Filter and
+  // PowerShell rejects it).
+  { regex: psDelete('(?:Remove-Item|ri|rmdir|rd|del|erase)', PS_RECURSE), riskLevel: 'critical', label: 'Remove-Item -Recurse' },
+  { regex: psDelete('rm', PS_RECURSE + PS_FORCE),                         riskLevel: 'critical', label: 'Remove-Item -Recurse' },
   { regex: /\bDROP\s+(?:TABLE|DATABASE|SCHEMA)\b/i,     riskLevel: 'critical', label: 'DROP TABLE/DATABASE' },
   { regex: /\bDELETE\s+FROM\b/i,                        riskLevel: 'review',   label: 'DELETE FROM' },
   { regex: /\bTRUNCATE\s+TABLE\b/i,                     riskLevel: 'critical', label: 'TRUNCATE TABLE' },
