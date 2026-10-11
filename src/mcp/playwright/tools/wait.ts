@@ -146,8 +146,9 @@ export function createWaitToolCatalog(deps: BrowserToolDeps) {
     inputSchema: BROWSER_WAIT_SHAPE,
     profiles: ['full'],
     invoke: async ({ url, selector, text, fn, timeout, surfaceId }) => withAutomationLease(deps, surfaceId, async (scope) => {
-      // A `fn` predicate is agent-authored page code, held to browser_evaluate's
-      // rule on a protected pane: refused until the consent grant (PR B).
+      // A `fn` predicate is agent-authored page code, and on a protected pane it
+      // stays refused: the ask-once consent covers browser_evaluate, not a wait
+      // predicate, so no grant unlocks it here.
       if (fn && isProtectedScope(scope)) {
         return {
           content: [{

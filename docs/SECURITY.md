@@ -94,14 +94,21 @@ agents and the tools they are given — not a defence against same-user code.
 **Guarantee.** A pane bound to its own Chrome profile can be protected. Its
 agent's browser calls then reach only the hosts on that pane's allowed list,
 and the pane's Chrome itself runs behind a main-owned filtering proxy.
-Downloads are refused. The wmux tools that run caller-supplied code,
-`browser_repl` and `repl_run`, are refused on a protected pane, and also
-wherever wmux cannot confirm that the calling pane is unprotected. Desktop
-computer use (the `computer` tool) is refused from a protected pane, and from
-any caller wmux cannot identify while a pane is protected. A missing or
-unreadable policy keeps every previously protected pane blocked until the
-operator confirms it again. The policy is set only from the main window; no
-tool argument or CLI flag can change it.
+A page script (`browser_evaluate`), a download, and reading or changing a
+sensitive site's sign-in data each run only with the operator's consent, asked
+when the agent tries it: Allow once, Always on this pane (revocable in the
+pane's protection editor, cleared when the pane is rebound or moved), or Deny.
+An unanswered question is denied after a minute, a scheduled run nobody is
+watching is refused at once, and an approved download is the only one let
+through, from the tab it was approved for. The agent's own `allowDangerous`
+and `allowSensitiveDomains` flags unlock nothing here. The wmux tools that
+run caller-supplied code, `browser_repl` and `repl_run`, are refused on a
+protected pane, and also wherever wmux cannot confirm that the calling pane is
+unprotected. Desktop computer use (the `computer` tool) is refused from a
+protected pane, and from any caller wmux cannot identify while a pane is
+protected. A missing or unreadable policy keeps every previously protected
+pane blocked until the operator confirms it again. The policy is set only from
+the main window; no tool argument or CLI flag can change it.
 
 **Out of scope.** As in §1.3.1, this confines the documented surfaces: the
 wmux browser tools, MCP and CLI an agent is given. It does not confine code
@@ -248,3 +255,4 @@ What we do not consider a wmux security issue:
 | 2026-10-11 | §1.3.2: documented protected Chrome panes and their scope: they confine the agent's browser tools, not same-user code such as a pane's shell. |
 | 2026-10-11 | §1.3.2: `browser_repl` and `repl_run` are refused on a protected pane (and when protection cannot be confirmed); stated that a protected pane does not confine other panes. |
 | 2026-10-11 | §1.3.2: computer use is refused from a protected pane and from an unidentified caller while a pane is protected; an unprotected pane's computer use is not confined. |
+| 2026-10-11 | §1.3.2: page scripts, downloads and sensitive-site sign-in data on a protected pane ask the operator once instead of being refused (#2046). |
