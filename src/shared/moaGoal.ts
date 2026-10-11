@@ -49,6 +49,7 @@
 // worker push and open a PR it was asked for. Nothing here changes that for
 // fan-outs outside an active goal (owner decision, 2026-09-24).
 
+import type { SecretFinding } from './secretGuard';
 import type { MoaLevel } from './moa';
 import type { FanoutWorkerPermissionMode } from './workerLaunch';
 
@@ -113,6 +114,9 @@ export interface MoaGoalDeliveryItem {
   merged?: boolean;
   /** Why this item stopped short (push or PR failed). */
   error?: string;
+  /** Set when delivery was refused because the change carries secrets
+   *  (shared/secretGuard.ts): where, and what kind — never the value. */
+  secrets?: SecretFinding[];
 }
 
 /** What Moa delivered for a completed goal, and how to undo it. */

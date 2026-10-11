@@ -32,6 +32,8 @@ import {
   type MoaGoalVerification,
 } from '../../shared/moaGoal';
 import type { GoalTaskRef } from './moaGoalVerifier';
+import { describeSecretFindings } from '../../shared/secretGuard';
+import { scanGitRange } from '../git/secretScan';
 
 export interface ExecResult {
   code: number;
@@ -136,6 +138,17 @@ export async function deliverGoal(
     const head = await ports.git(['rev-parse', 'HEAD'], wt);
     if (head.code !== 0 || head.stdout.trim() !== gate.headSha) {
       item.error = `the branch moved after verification (${head.stdout.trim().slice(0, 12) || 'unknown'} ≠ ${gate.headSha.slice(0, 12)}); complete the goal again`;
+      continue;
+    }
+    // Never deliver a secret: a .env file, a private key, a key-shaped value.
+    // Compared with the remote's base branch (what the PR would show).
+    const secrets = await scanGitRange(async (args) => {
+      const r = await ports.git(args, wt);
+      return r.code === 0 ? r.stdout : null;
+    }, [`refs/remotes/origin/${base}...${gate.headSha}`]);
+    if (secrets.length) {
+      item.error = `not delivered: ${describeSecretFindings(secrets, 'pushed')}`;
+      item.secrets = secrets;
       continue;
     }
     // Exactly the verified commit, by sha, to the same-named branch: a plain

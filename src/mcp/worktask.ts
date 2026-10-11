@@ -60,6 +60,7 @@ const ADOPT_REFUSAL: RefusalCopy = {
     conflict: 'the parent was left untouched; rebase the task branch on the parent, then adopt again',
     needs_rebase: 'the two share no commit; rebase the task branch onto the parent, then adopt again',
     empty: 'the task produced no changes; read its mission channel before closing it',
+    secret: 'the task added a secret file or key; remove it from the task branch (or add it to .gitignore), then adopt again',
   },
   fallback: 'read `reason` and `error` below, fix that, then call task_adopt again',
 };

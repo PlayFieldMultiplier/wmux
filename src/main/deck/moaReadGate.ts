@@ -34,6 +34,7 @@
 // `allow` skips the prompt; no output + exit 0 falls through to it; a
 // settings-level `deny` still wins over a hook `allow`.
 
+import { SECRET_DIR_SEGMENTS, SECRET_FILE_NAMES, SECRET_FILE_PAIRS } from '../../shared/secretGuard';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -69,13 +70,10 @@ const path = require('path');
 const crypto = require('crypto');
 const WIN = process.platform === 'win32';
 const TIMEOUT_MS = ${READ_GATE_TIMEOUT_MS};
-const SEGMENTS = new Set(['.git', '.ssh', '.gnupg', '.aws']);
-const SECRET_NAMES = [
-  /^\\.env(\\..*)?$/i, /\\.(pem|key|p12|pfx|kdbx|keystore|jks|gpg|asc)$/i,
-  /^id_(rsa|dsa|ecdsa|ed25519)/i, /^\\.git-credentials$/i, /^\\.pgpass$/i, /^\\.npmrc$/i, /^\\.netrc$/i, /^credentials/i,
-];
+const SEGMENTS = new Set(${JSON.stringify(SECRET_DIR_SEGMENTS)});
+const SECRET_NAMES = [${SECRET_FILE_NAMES.map((re) => re.toString()).join(', ')}];
 // A file whose name is only secret under one folder.
-const SECRET_PAIRS = [['.docker', 'config.json'], ['gh', 'hosts.yml']];
+const SECRET_PAIRS = ${JSON.stringify(SECRET_FILE_PAIRS)};
 // Names a Glob pattern must not be able to match (one per secret rule).
 const SECRET_SAMPLES = ['.env', '.env.local', 'x.pem', 'x.key', 'x.p12', 'x.pfx', 'x.kdbx', 'x.keystore', 'x.jks', 'x.gpg', 'x.asc',
   'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'id_ed25519.pub', '.git-credentials', '.pgpass', '.npmrc', '.netrc', 'credentials',

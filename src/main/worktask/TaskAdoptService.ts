@@ -49,6 +49,7 @@
 //   are separated by several git invocations; two concurrent adopts would both
 //   see a clean tree and the second would apply onto the first's output.
 
+import { describeSecretFindings, scanUnifiedDiff, type SecretFinding } from '../../shared/secretGuard';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -121,6 +122,9 @@ export type AdoptFailureReason =
   /** The patch applied and the commit did not (a hook refused it, no author
    *  identity, an index lock). The applied paths were restored. */
   | 'commit-failed'
+  /** The task's changes carry a secret file or a key-shaped value
+   *  (shared/secretGuard.ts). Nothing was written. */
+  | 'secret'
   | 'error';
 
 /** Longest commit SUBJECT this service will build from a task title, in CODE
@@ -178,6 +182,8 @@ export type AdoptTaskResult =
       error: string;
       /** For `conflict`: the paths that could not be applied. */
       files?: string[];
+      /** For `secret`: where, and what kind — never the value. */
+      secrets?: SecretFinding[];
     };
 
 /** `--porcelain=v1 -z` output → entries. NUL-framed because a path may contain
@@ -389,6 +395,12 @@ export class TaskAdoptService {
         };
       }
       patch = diff.stdout;
+      // A task never brings a secret into its parent: a .env file, a private
+      // key, a key-shaped value. Refused before anything is written.
+      const secrets = scanUnifiedDiff(patch);
+      if (secrets.length) {
+        return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeSecretFindings(secrets, 'adopted')}`, secrets };
+      }
       const names = await this.git(['diff', '--name-only', '-z', base], worktreePath, env);
       files = names.stdout.split('\0').map((l) => l.trim()).filter((l) => l.length > 0);
     } finally {
