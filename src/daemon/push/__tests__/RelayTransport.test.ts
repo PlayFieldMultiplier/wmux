@@ -55,3 +55,76 @@ describe('RelayTransport URL safety', () => {
     }
   });
 });
+
+describe('RelayTransport refusal detail', () => {
+  const STAGE = 'x-wmux-relay-stage';
+  function refusal(status: number, body: string, stage?: string): Response {
+    return new Response(body, { status, headers: stage ? { [STAGE]: stage } : {} });
+  }
+  function harness(replies: Response[]) {
+    const log = vi.fn();
+    let i = 0;
+    const fetchImpl = vi.fn(async () => replies[Math.min(i++, replies.length - 1)]);
+    const transport = new RelayTransport({ relayUrl: 'https://relay.example', relaySecret: 'secret', fetchImpl, sleep: async () => undefined, log });
+    const warns = () => log.mock.calls.filter(([level]) => level === 'warn').map(([, m]) => m as string);
+    return { transport, warns };
+  }
+  async function refuse(h: ReturnType<typeof harness>, subject = 'dev-1'): Promise<number | null> {
+    const status = await h.transport.post('/push', { apnsDeviceToken: 'tok-secret' });
+    h.transport.noteFailure(subject, status);
+    return status;
+  }
+
+  it('logs the reason and the stage that refused', async () => {
+    const h = harness([refusal(403, JSON.stringify({ ok: false, apnsStatus: 403, reason: 'InvalidProviderToken' }), 'apns')]);
+    expect(await refuse(h)).toBe(403);
+    expect(h.warns()).toEqual(['[push] relay answered 403 (apns: InvalidProviderToken) for dev-1']);
+    expect(h.warns().join('')).not.toContain('tok-secret');
+  });
+
+  it('logs a relay-side reason and drops an unknown stage', async () => {
+    const h = harness([refusal(400, JSON.stringify({ ok: false, reason: 'bad-json' }), 'elsewhere')]);
+    await refuse(h);
+    expect(h.warns()).toEqual(['[push] relay answered 400 (bad-json) for dev-1']);
+  });
+
+  it('never echoes a reason of the wrong shape', async () => {
+    for (const reason of ['Bad Device', 'Bad\nInjected line', 'A'.repeat(65), '-leading', 42]) {
+      const h = harness([refusal(403, JSON.stringify({ ok: false, reason }), 'apns')]);
+      await refuse(h);
+      expect(h.warns()).toEqual(['[push] relay answered 403 (apns) for dev-1']);
+    }
+  });
+
+  it('logs the status alone for a body that is not JSON, too long, or absent', async () => {
+    for (const body of ['<html>nope</html>', JSON.stringify({ reason: 'BadDeviceToken', pad: 'x'.repeat(2000) }), '']) {
+      const h = harness([refusal(403, body)]);
+      expect(await refuse(h)).toBe(403);
+      expect(h.warns()).toEqual(['[push] relay answered 403 for dev-1']);
+    }
+  });
+
+  it('logs again when the status repeats with a new reason, but not for a repeat of both', async () => {
+    const h = harness([
+      refusal(403, JSON.stringify({ reason: 'BadDeviceToken' }), 'apns'),
+      refusal(403, JSON.stringify({ reason: 'BadDeviceToken' }), 'apns'),
+      refusal(403, JSON.stringify({ reason: 'ExpiredProviderToken' }), 'apns'),
+    ]);
+    await refuse(h);
+    await refuse(h);
+    await refuse(h);
+    expect(h.warns()).toEqual([
+      '[push] relay answered 403 (apns: BadDeviceToken) for dev-1',
+      '[push] relay answered 403 (apns: ExpiredProviderToken) for dev-1',
+    ]);
+  });
+
+  it('keeps the detail of the attempt that was returned after a 5xx retry', async () => {
+    const h = harness([
+      refusal(502, JSON.stringify({ reason: 'apns-timeout' }), 'relay'),
+      refusal(403, JSON.stringify({ reason: 'BadDeviceToken' }), 'apns'),
+    ]);
+    expect(await refuse(h)).toBe(403);
+    expect(h.warns()).toEqual(['[push] relay answered 403 (apns: BadDeviceToken) for dev-1']);
+  });
+});
