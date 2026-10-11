@@ -533,6 +533,7 @@ export const es = {
   'remotePage.connect.pasteScope': "Si la invitación comparte espacios de trabajo, este equipo puede leer y buscar todos los espacios de trabajo de ese PC, incluidos los que se abran después. Mientras estén emparejados, wmux lo comprueba cada pocos segundos, mantiene una conexión abierta para sus alertas y muestra sus notificaciones; puedes silenciarlas desde el menú de equipos en el título de la barra lateral.",
   'pcSwitcher.open': "Cambiar de equipo",
   'pcSwitcher.manage': "Ajustes de {name}",
+  'app.portableData.notice': "Esta copia de wmux se está ejecutando fuera de Aplicaciones, así que usa datos independientes. Muévela a Aplicaciones para ver tus sesiones existentes.",
   'pcSwitcher.othersNeedYou': "{count} te necesitan en otros equipos",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "¿Salir de wmux y detener todas las sesiones?",

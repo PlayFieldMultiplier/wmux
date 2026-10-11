@@ -533,6 +533,7 @@ export const tr = {
   'remotePage.connect.pasteScope': "Davet çalışma alanlarını paylaşıyorsa bu bilgisayar o PC'deki her çalışma alanını okuyabilir ve arayabilir; sonradan açılanlar dahil. Eşleşik kaldığı sürece wmux onu birkaç saniyede bir denetler, uyarıları için bir bağlantı açık tutar ve bildirimlerini gösterir; kenar çubuğu başlığındaki bilgisayar menüsünden sessize alın.",
   'pcSwitcher.open': "Bilgisayar değiştir",
   'pcSwitcher.manage': "{name} ayarları",
+  'app.portableData.notice': "Bu wmux kopyası Uygulamalar klasörünün dışında çalışıyor, bu yüzden ayrı veriler kullanıyor. Mevcut oturumlarınızı görmek için onu Uygulamalar klasörüne taşıyın.",
   'pcSwitcher.othersNeedYou': "Diğer bilgisayarlarda {count} öğe sizi bekliyor",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "wmux'tan çıkıp tüm oturumlar durdurulsun mu?",

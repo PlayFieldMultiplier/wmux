@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { checkUserDataIsolation, shouldUsePortableData } from '../dataIsolation';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { checkUserDataIsolation, claimPortableDataNotice, shouldUsePortableData } from '../dataIsolation';
 
 const PROD = 'C:\\Users\\x\\AppData\\Roaming\\wmux';
 
@@ -72,5 +75,17 @@ describe('shouldUsePortableData (darwin packaged copy outside an install locatio
 
   it('treats an unrecognisable exec path as installed', () => {
     expect(portable('/usr/local/bin/wmux')).toBe(false);
+  });
+});
+
+describe('claimPortableDataNotice (one-time notice for a forced portable copy)', () => {
+  it('shows only when portable data was forced, and only once per data dir', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-portable-notice-'));
+    const marker = path.join(dir, 'home', 'portable-notice-shown');
+    expect(claimPortableDataNotice(false, marker)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false); // not forced: nothing recorded
+    expect(claimPortableDataNotice(true, marker)).toBe(true);
+    expect(claimPortableDataNotice(true, marker)).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

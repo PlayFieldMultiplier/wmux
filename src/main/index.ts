@@ -48,7 +48,7 @@ import { markBoot, emitBootSummary } from './util/bootTrace';
 import * as path from 'path';
 import * as os from 'os';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor } from 'electron';
-import { checkUserDataIsolation, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
+import { checkUserDataIsolation, claimPortableDataNotice, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
 import { createWindow, loadMainRenderer } from './window/createWindow';
 import { attachDesktopPresenceReporter, reportDesktopPresence } from './window/desktopPresence';
 import { PTYManager } from './pty/PTYManager';
@@ -382,10 +382,12 @@ if (!app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
 // A packaged copy run outside /Applications (DMG, AppTranslocation, forge out/,
 // Downloads) gets its own data too, so it cannot take over the installed app's
 // daemon, socket, token or CLI shim. One realpath; see shouldUsePortableData.
+let portableDataForced = false;
 if (process.platform === 'darwin' && app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
   let realExecPath = process.execPath;
   try { realExecPath = require('fs').realpathSync(process.execPath); } catch { /* keep execPath */ }
   if (shouldUsePortableData(realExecPath, os.homedir(), process.env)) {
+    portableDataForced = true;
     process.env.WMUX_DATA_SUFFIX = PORTABLE_DATA_SUFFIX;
     console.log(
       `[Main] packaged copy outside /Applications (${realExecPath}) → isolated data ` +
@@ -1819,6 +1821,20 @@ app.on('ready', async () => {
       });
   }, 5000);
   staleGateTimer.unref();
+
+  // Tell the user once (per portable data dir) why a portable copy opens empty.
+  // Deferred like the notice above so the window exists before the marker is
+  // claimed; a send before the renderer subscribes would be lost for good.
+  if (portableDataForced) {
+    const portableNoticeTimer = setTimeout(() => {
+      const wc = mainWindow?.webContents;
+      if (!wc || wc.isDestroyed()) return;
+      if (!claimPortableDataNotice(portableDataForced, path.join(getWmuxHomeDir(), 'portable-notice-shown'))) return;
+      if (wc.isLoading()) wc.once('did-finish-load', () => wc.send(IPC.PORTABLE_DATA_NOTICE));
+      else wc.send(IPC.PORTABLE_DATA_NOTICE);
+    }, 3000);
+    portableNoticeTimer.unref();
+  }
 
   // Dev Dock 아이콘: dev에선 패키징 안 된 제네릭 Electron 바이너리로 실행돼
   // macOS Dock에 기본 원자 아이콘이 뜬다. 패키지 빌드는 packagerConfig.icon으로

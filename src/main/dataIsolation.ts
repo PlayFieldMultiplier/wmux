@@ -2,6 +2,9 @@
 // it is unit-testable without booting Electron (main/index.ts runs at module
 // top-level and pulls in `app`).
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 export type IsolationCheck = { ok: true } | { ok: false; error: string };
 
 /**
@@ -66,4 +69,21 @@ export function shouldUsePortableData(realExecPath: string, home: string, env: N
   const lower = bundle.toLowerCase();
   const roots = ['/Applications/', ...(home ? [`${home.replace(/\/+$/, '')}/Applications/`] : [])];
   return !roots.some((root) => lower.startsWith(root.toLowerCase()));
+}
+
+/**
+ * Whether to tell the user, once per portable data dir, that this copy uses
+ * separate data. Only when the portable suffix was FORCED. The marker is
+ * created exclusively, so a later launch, or a marker that cannot be written,
+ * never shows it again.
+ */
+export function claimPortableDataNotice(forced: boolean, markerPath: string): boolean {
+  if (!forced) return false;
+  try {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, new Date().toISOString(), { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
 }

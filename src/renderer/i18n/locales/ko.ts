@@ -3821,6 +3821,7 @@ export const ko = {
   'remotePage.connect.pasteScope': "초대에 워크스페이스 공유가 포함되면 이 컴퓨터는 그 PC의 모든 워크스페이스(나중에 여는 것 포함)를 읽고 검색할 수 있습니다. 페어링된 동안 wmux는 몇 초마다 상태를 확인하고, 알림용 연결을 열어 두며, 그 알림을 표시합니다. 알림은 사이드바 제목의 컴퓨터 메뉴에서 끌 수 있습니다.",
   'pcSwitcher.open': "컴퓨터 전환",
   'pcSwitcher.manage': "{name} 설정",
+  'app.portableData.notice': "이 wmux 사본은 응용 프로그램 폴더 밖에서 실행 중이라 별도의 데이터를 사용합니다. 기존 세션을 보려면 응용 프로그램 폴더로 옮기세요.",
   'pcSwitcher.othersNeedYou': "다른 컴퓨터에서 {count}개가 기다리는 중",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "wmux를 종료하고 모든 세션을 멈출까요?",

@@ -532,6 +532,7 @@ export const nb = {
   'remotePage.connect.pasteScope': "Hvis invitasjonen deler arbeidsområder, kan denne datamaskinen lese og søke i alle arbeidsområder på den PC-en, også de som åpnes senere. Mens de er paret, sjekker wmux den med noen sekunders mellomrom, holder en tilkobling åpen for varslene og viser varslingene; demp dem fra datamaskinmenyen i sidepanelets tittel.",
   'pcSwitcher.open': "Bytt datamaskin",
   'pcSwitcher.manage': "Innstillinger for {name}",
+  'app.portableData.notice': "Denne kopien av wmux kjører utenfor Programmer, så den bruker egne data. Flytt den til Programmer for å se de eksisterende øktene dine.",
   'pcSwitcher.othersNeedYou': "{count} venter på deg på andre datamaskiner",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Avslutt wmux og stopp alle økter?",

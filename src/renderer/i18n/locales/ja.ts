@@ -581,6 +581,7 @@ export const ja = {
   'remotePage.connect.pasteScope': "招待でワークスペースを共有する場合、このコンピュータは相手の PC のすべてのワークスペース（後で開くものを含む）を読み取り、検索できます。ペアリング中、wmux は数秒ごとに確認し、通知用の接続を開いたままにしてその通知を表示します。通知はサイドバーのタイトルにあるコンピュータメニューからミュートできます。",
   'pcSwitcher.open': "コンピュータを切り替え",
   'pcSwitcher.manage': "{name} の設定",
+  'app.portableData.notice': "この wmux のコピーはアプリケーションフォルダの外で実行されているため、別のデータを使用しています。既存のセッションを表示するには、アプリケーションフォルダに移動してください。",
   'pcSwitcher.othersNeedYou': "他のコンピュータで {count} 件が対応待ち",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "wmux を終了してすべてのセッションを停止しますか？",

@@ -568,6 +568,7 @@ export const zhTW = {
   'remotePage.connect.pasteScope': "如果邀請分享了工作區，這台電腦可以讀取和搜尋那台電腦上的所有工作區，包括之後開啟的。配對期間，wmux 每隔幾秒檢查一次，保持連線以接收提醒並顯示其通知；可在側邊欄標題的電腦選單中將其靜音。",
   'pcSwitcher.open': "切換電腦",
   'pcSwitcher.manage': "{name} 設定",
+  'app.portableData.notice': "這個 wmux 副本在「應用程式」資料夾外執行，因此使用獨立的資料。將它移到「應用程式」資料夾即可看到現有的工作階段。",
   'pcSwitcher.othersNeedYou': "其他電腦上有 {count} 個需要你",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "結束 wmux 並停止所有工作階段？",

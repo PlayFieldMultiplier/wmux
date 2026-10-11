@@ -527,6 +527,7 @@ export const vi = {
   'remotePage.connect.pasteScope': "Nếu lời mời chia sẻ không gian làm việc, máy này có thể đọc và tìm kiếm mọi không gian làm việc trên PC đó, kể cả những cái mở sau. Trong khi ghép, wmux kiểm tra nó vài giây một lần, giữ kết nối để nhận cảnh báo và hiển thị thông báo của nó; tắt tiếng từ menu máy tính ở tiêu đề thanh bên.",
   'pcSwitcher.open': "Đổi máy tính",
   'pcSwitcher.manage': "Cài đặt {name}",
+  'app.portableData.notice': "Bản sao wmux này đang chạy bên ngoài thư mục Ứng dụng nên dùng dữ liệu riêng. Hãy chuyển nó vào Ứng dụng để thấy các phiên hiện có.",
   'pcSwitcher.othersNeedYou': "{count} đang chờ bạn trên máy tính khác",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Thoát wmux và dừng tất cả phiên?",

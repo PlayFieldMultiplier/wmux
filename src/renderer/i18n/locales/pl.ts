@@ -4339,6 +4339,7 @@ export const pl = {
   'remotePage.connect.pasteScope': "Jeśli zaproszenie udostępnia obszary robocze, ten komputer może czytać i przeszukiwać każdy obszar roboczy na tamtym komputerze, także otwarte później. Po sparowaniu wmux sprawdza go co kilka sekund, utrzymuje połączenie dla alertów i pokazuje jego powiadomienia; wycisz je z menu komputerów w tytule paska bocznego.",
   'pcSwitcher.open': "Przełącz komputer",
   'pcSwitcher.manage': "Ustawienia: {name}",
+  'app.portableData.notice': "Ta kopia wmux działa poza folderem Aplikacje, więc używa osobnych danych. Przenieś ją do folderu Aplikacje, aby zobaczyć istniejące sesje.",
   'pcSwitcher.othersNeedYou': "{count} czeka na Ciebie na innych komputerach",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Zamknąć wmux i zatrzymać wszystkie sesje?",

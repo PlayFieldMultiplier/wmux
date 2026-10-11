@@ -532,6 +532,7 @@ export const bs = {
   'remotePage.connect.pasteScope': "Ako pozivnica dijeli radne prostore, ovaj računar može čitati i pretraživati svaki radni prostor na tom računaru, uključujući one otvorene kasnije. Dok je uparen, wmux ga provjerava svakih nekoliko sekundi, drži vezu otvorenom za upozorenja i prikazuje njegova obavještenja; utišajte ih iz menija računara u naslovu bočne trake.",
   'pcSwitcher.open': "Promijeni računar",
   'pcSwitcher.manage': "Postavke: {name}",
+  'app.portableData.notice': "Ova kopija wmuxa radi izvan mape Aplikacije, pa koristi zasebne podatke. Premjestite je u Aplikacije da vidite postojeće sesije.",
   'pcSwitcher.othersNeedYou': "{count} čeka na vas na drugim računarima",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Zatvoriti wmux i zaustaviti sve sesije?",

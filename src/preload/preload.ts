@@ -1991,6 +1991,14 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 };
 
+(electronAPI as Record<string, unknown>).onPortableDataNotice = (callback: () => void) => {
+  const listener = () => callback();
+  ipcRenderer.on(IPC.PORTABLE_DATA_NOTICE, listener);
+  return () => {
+    ipcRenderer.removeListener(IPC.PORTABLE_DATA_NOTICE, listener);
+  };
+};
+
 // Main fires PERMISSION_PROMPT_OPEN with the ApprovalPromptInfo payload
 // when an unconfirmed plugin needs the user's approval; the renderer's
 // PermissionApprovalDialog renders it and sends the decision back via

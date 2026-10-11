@@ -3510,6 +3510,7 @@ export const zh = {
   'remotePage.connect.pasteScope': "如果邀请共享了工作区，这台电脑可以读取和搜索那台电脑上的所有工作区，包括之后打开的。配对期间，wmux 每隔几秒检查一次，保持连接以接收提醒并显示其通知；可在侧边栏标题的电脑菜单中将其静音。",
   'pcSwitcher.open': "切换电脑",
   'pcSwitcher.manage': "{name} 设置",
+  'app.portableData.notice': "此 wmux 副本在“应用程序”文件夹之外运行，因此使用单独的数据。将其移到“应用程序”文件夹即可看到现有会话。",
   'pcSwitcher.othersNeedYou': "其他电脑上有 {count} 个需要你",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "退出 wmux 并停止所有会话？",
