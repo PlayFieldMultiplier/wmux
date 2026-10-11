@@ -88,13 +88,22 @@ export async function deliverChatPrompt(
 /** The rule under Claude's prompt row (and over it, unlabeled). */
 const claudeRule = (row: string | undefined): boolean => !!row && /^─{8,}$/.test(row);
 /**
- * The rule over Claude's prompt row. Once a session is named (`/rename`, or a
- * title Claude gives it), Claude draws the name into this rule near its right
- * end: `───…─── workspace-identity-card-plan ─` (captured 2026-10-11, Claude
- * Code 2.1, fullscreen renderer). Only a label set off by spaces between dash
- * runs counts, so a text row cannot pass for the rule.
+ * The rule over Claude's prompt row (`rows` raw, `at` the prompt row, `below`
+ * the rule under it). Once a session is named (`/rename`, or a title Claude
+ * gives it), Claude draws the name into this rule near its right end:
+ * `───…─── workspace-identity-card-plan ─` (captured 2026-10-11, Claude Code
+ * 2.1, fullscreen renderer). A labeled rule counts only as Claude draws it:
+ * from column 0 with the prompt row, the label set off by spaces between dash
+ * runs, and as wide as the plain rule under the prompt. So neither a text row
+ * nor a rule-like block indented inside a draft or the output passes for it.
  */
-const claudeTopRule = (row: string | undefined): boolean => !!row && /^─{8,}(?: \S(?:.*\S)? ─+)?$/.test(row);
+function claudeTopRule(rows: readonly string[], at: number, below: number): boolean {
+  const row = rows[at - 1];
+  if (row === undefined) return false;
+  if (claudeRule(row.trim())) return true;
+  const top = row.trimEnd();
+  return /^─{8,} \S(?:.*\S)? ─+$/.test(top) && /^❯/.test(rows[at]) && top.length === rows[below]?.trim().length;
+}
 
 /** Claude Code 2.1 TUI: the prompt row between the two rules, with nothing typed.
  *  After a turn Claude dims a suggested next prompt into the empty composer;
@@ -106,7 +115,7 @@ export function claudeComposerEmpty(rows: ChatScreenRows | null): boolean {
   tail.forEach((row, index) => { if (/^❯(?:\s|$)/.test(row)) at = index; });
   // A fresh session dims a suggestion into the empty prompt: `❯ Try "…"`.
   const empty = /^❯(?: Try "[^"]*")?$/.test(tail[at] ?? '') || /^❯$/.test(rows.undimmed?.[at]?.trim() ?? '');
-  return at > 0 && empty && claudeTopRule(tail[at - 1]) && claudeRule(tail[at + 1]);
+  return at > 0 && empty && claudeTopRule(rows, at, at + 1) && claudeRule(tail[at + 1]);
 }
 
 /** The Claude composer is on screen (prompt row between two rules), empty or not. */
@@ -115,7 +124,7 @@ export function claudeComposerVisible(rows: ChatScreenRows | null): boolean {
   const tail = rows.map(row => row.trim());
   let at = -1;
   tail.forEach((row, index) => { if (/^❯(?:\s|$)/.test(row)) at = index; });
-  return at > 0 && claudeTopRule(tail[at - 1]) && claudeRule(tail[at + 1]);
+  return at > 0 && claudeTopRule(rows, at, at + 1) && claudeRule(tail[at + 1]);
 }
 
 /**
@@ -128,10 +137,10 @@ export function claudeComposerRows(rows: ChatScreenRows | null): { rows: string[
   const tail = rows.map(row => row.trim());
   let at = -1;
   tail.forEach((row, index) => { if (/^❯(?:\s|$)/.test(row)) at = index; });
-  if (at <= 0 || !claudeTopRule(tail[at - 1])) return null;
+  if (at <= 0) return null;
   const end = tail.findIndex((row, index) => index > at && claudeRule(row));
   // Continuation rows are indented under the `❯`; anything else is not the composer.
-  if (end < 0 || rows.slice(at + 1, end).some(row => !/^\s{2}/.test(row) && row.trim())) return null;
+  if (end < 0 || !claudeTopRule(rows, at, end) || rows.slice(at + 1, end).some(row => !/^\s{2}/.test(row) && row.trim())) return null;
   const width = tail[at - 1].length;
   if (claudeComposerEmpty(rows)) return { rows: [], width };
   // Claude draws a no-break space after the `❯` (Claude Code 2.1, captured live).

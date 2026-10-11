@@ -192,12 +192,19 @@ describe('a named Claude session (the name drawn into the composer\'s top rule)'
     expect(await deliverChatPrompt('conversation-1', 'how many lines?', { ...f.deps, idleOnly: true, onScreenHold: (why) => holds.push(why) })).toBe('sent');
     expect(holds).toEqual([]);
   });
-  it('accepts a label only between dash runs, never a text row', () => {
+  it('accepts a label only as Claude draws it: between dash runs, from column 0, as wide as the rule under the prompt', () => {
     const RULE = '─'.repeat(40);
-    expect(claudeComposerVisible([`${'─'.repeat(20)} my-session ─`, '❯ ', RULE])).toBe(true);
-    for (const top of [`${'─'.repeat(20)} my-session`, `notes ${'─'.repeat(20)}`, `${'─'.repeat(20)}x─`, `${'─'.repeat(4)} short ─`]) {
+    const labeled = `${'─'.repeat(27)} my-session ─`;
+    expect(labeled.length).toBe(40);
+    expect(claudeComposerVisible([labeled, '❯ ', RULE])).toBe(true);
+    for (const top of [`${'─'.repeat(27)} my-session`, `notes ${'─'.repeat(34)}`, `${'─'.repeat(38)}x─`, `${'─'.repeat(4)} short ─`,
+      `${'─'.repeat(20)} my-session ─`, `  ${'─'.repeat(25)} my-session ─`]) {
       expect(claudeComposerVisible([top, '❯ ', RULE])).toBe(false);
     }
+    // A rule-like block typed into a draft (indented continuation rows) is not the composer.
+    const draft = [RULE, '❯ look at this:', `  ${'─'.repeat(25)} Example ─`, '  ❯', `  ${RULE.slice(2)}`, RULE];
+    expect(claudeComposerEmpty(draft)).toBe(false);
+    expect(claudeComposerRows(draft)).toBeNull();
     // The bottom rule stays plain.
     expect(claudeComposerVisible([RULE, '❯ ', `${'─'.repeat(20)} my-session ─`])).toBe(false);
   });

@@ -2314,7 +2314,7 @@ describe('steer and passive input (a send into a running Claude turn)', () => {
     // The turn ends; Claude waits on its background agents at an empty prompt,
     // the session name run through the composer's top rule (captured 2026-10-11).
     f.state.agent = { ...f.state.agent, inputQuiet: true, agentStatus: 'idle', turn: { id: 't1:n.1', state: 'idle', startedAt: 1 } };
-    f.state.screen = ['✻ Waiting for 3 background agents to finish', '', `${'─'.repeat(30)} workspace-identity-card-plan ─`, '❯ ', RULE,
+    f.state.screen = ['✻ Waiting for 3 background agents to finish', '', `${'─'.repeat(9)} workspace-identity-card-plan ─`, '❯ ', RULE,
       '  ⏵⏵ bypass permissions on · 2 shells · ← 2 agents'];
     await q.bridge.kickQueue('pane');
     expect(pastes(f)).toEqual(['\x1b[200~how many lines?\x1b[201~']);
