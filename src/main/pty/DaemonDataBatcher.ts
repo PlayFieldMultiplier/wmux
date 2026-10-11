@@ -124,6 +124,12 @@ export class DaemonDataBatcher {
     this.lastSentAt.delete(sessionId);
   }
 
+  /** Preserve final output, then release all per-session bookkeeping. */
+  finishSession(sessionId: string): void {
+    this.flushSession(sessionId);
+    this.drop(sessionId);
+  }
+
   /** Flush every session (handler swap / shutdown) and stop accepting timers. */
   dispose(): void {
     for (const sessionId of [...this.pending.keys()]) {
@@ -131,6 +137,7 @@ export class DaemonDataBatcher {
     }
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    this.lastSentAt.clear();
     this.disposed = true;
   }
 }

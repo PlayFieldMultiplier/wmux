@@ -303,7 +303,7 @@ export function registerPTYHandlers(
   function clearSessionDataListener(sessionId: string): void {
     if (!sessionDataDispatcher) return;
     if (!sessionDataDispatcher.has(sessionId)) return;
-    dataBatcher.flushSession(sessionId); // P1-3: no bytes stranded in the batch
+    dataBatcher.finishSession(sessionId); // Preserve final output, release its timestamp too.
     sessionDataDispatcher.delete(sessionId);
   }
 
@@ -1477,7 +1477,7 @@ export function registerPTYHandlers(
       // P1-3 ordering rule: drain buffered output before the exit marker so
       // the shell's final lines land ahead of "[Process exited...]" (same
       // drain-before-exit contract as local-mode PTYBridge).
-      dataBatcher.flushSession(payload.sessionId);
+      dataBatcher.finishSession(payload.sessionId);
       const win = getWindow?.();
       if (win && !win.isDestroyed()) {
         win.webContents.send(IPC.PTY_EXIT, payload.sessionId, payload.exitCode ?? -1, payload.signal ?? null);
@@ -1529,7 +1529,7 @@ export function registerPTYHandlers(
       forgetGoalWorkerSession(payload.sessionId);
       // P1-3 ordering rule: the old PTY's trailing output must precede the
       // restart marker (the renderer re-attaches on it).
-      dataBatcher.flushSession(payload.sessionId);
+      dataBatcher.finishSession(payload.sessionId);
       const win = getWindow?.();
       if (win && !win.isDestroyed()) {
         win.webContents.send(IPC.PTY_RESTARTED, {
