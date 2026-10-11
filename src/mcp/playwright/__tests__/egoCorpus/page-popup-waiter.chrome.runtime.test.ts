@@ -204,6 +204,10 @@ for (const mode of MODES) {
         const next = await nextPopup.afterClick();
         await next.waitForURL(/popup-waiter=next/, { timeout: 3_000 });
         expect(next.url()).toContain('popup-waiter=next');
+        // One press per click: a click that timed out after opening its popup
+        // used to be retried by browser_click, opening the same popup twice.
+        expect(opened.filter((p) => p.url().includes('popup-waiter=old'))).toHaveLength(1);
+        expect(opened.filter((p) => p.url().includes('popup-waiter=next'))).toHaveLength(1);
       } finally {
         for (const p of opened) await p.close().catch(() => undefined);
         await source.close();
