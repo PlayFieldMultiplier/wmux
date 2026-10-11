@@ -2193,6 +2193,28 @@ requests with one id make one item.
 An `uncertain` item's receipt reads `uncertain` too, and its replay carries
 `effect:"uncertain"`: check the transcript before sending it again.
 
+**Why it waits (`holdReason`).** A `queued` item the daemon has tried and held
+carries `holdReason`, the hold its last try met (closed set; memory-only like
+`preview`, absent after a restart, before the item's first try, and on every
+other state). The daemon retries a held item at least every 5 seconds while
+anything waits in the queue, and sooner when the agent's status changes or
+its transcript grows; the hold is not final, and a later try may meet
+another one.
+
+| `holdReason` | The item waits because |
+| --- | --- |
+| `turn-running` | the turn runs (a `next-turn` item waits for its end) |
+| `turn-starting` | the turn the previous delivery started has not been seen yet (30 seconds at most) |
+| `busy` | another send is being typed into the pane, or someone is typing in it |
+| `cancel-check` | a Stop's check of the prompt Claude put back in its box runs first |
+| `approval` | an approval is pending on the pane (the item fails as `prompt-active` if its time runs out) |
+| `dialog` | a dialog owns the screen (fails as `blocked`) |
+| `no-composer` | the screen shows no composer to type into, such as a usage view (fails as `blocked`) |
+| `unavailable` | the agent or its conversation cannot be read right now |
+| `retry` | the daemon could not save the item's next state; it tries again shortly |
+
+Unknown values may appear in later daemons: show them as a generic wait.
+
 **Authorization at delivery.** The daemon re-checks the owner right before
 the first write and again before Enter: the device must still be paired and
 hold input, the server must still run with `--allow-input` and
@@ -2210,7 +2232,7 @@ item `uncertain` (`restart-uncertain`); nothing is delivered.
 
 **`/turns`.** For a `chat-queue` caller on a daemon whose queue loaded, the
 chat object carries `queue: [{clientMessageId, state, reason?, deliver?, queuedAt, at,
-preview?}]`: the caller's own items on the pane, most recent kept, in enqueue
+preview?, holdReason?}]`: the caller's own items on the pane, most recent kept, in enqueue
 order. `preview` is the first 80 characters, held in memory only (absent after
 a restart). `capabilities.queue` is `true` for a live Claude, Codex or
 OpenCode agent, and `capabilities.send` stays `true` while a turn runs. User
@@ -2236,9 +2258,10 @@ back. Needs the input grant (403 otherwise); only the owner's items are found.
 A 404 without one of these two `error` values means the route is missing (an
 older daemon).
 
-**SSE `chat.queue`.** `{sessionId, clientMessageId, state, reason?, deliver?, at}` on
+**SSE `chat.queue`.** `{sessionId, clientMessageId, state, reason?, deliver?, holdReason?, at}` on
 every state change, and once more (same `state`) when an item switches to
-`steer`. `delivering` is sent only once the first write
+`steer` or a `queued` item's `holdReason` changes (a try held for the same
+reason as the last one sends nothing). `delivering` is sent only once the first write
 is about to happen; an item the daemon holds back before that never shows
 `delivering` then `queued`. Live-only like `chat.blocked` (no `id:`, never replayed),
 and only to the item's owner among the pane's `/turns` watchers. `/turns` is

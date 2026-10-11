@@ -1386,6 +1386,7 @@ describe('cancel outcome (Esc path)', () => {
       f.end();
       await f.bridge.kickQueue?.('pane');
       expect(f.written).toEqual([]);
+      expect(f.bridge.queue?.('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'cancel-check' });
       await vi.advanceTimersByTimeAsync(1_000);
       expect(f.outcome()).toMatchObject({ promptRestored: true, inputCleared: true });
       expect(f.written[0]).toBe('\x15');
@@ -1782,7 +1783,9 @@ describe('daemon queue (chat-queue)', () => {
     expect(q.bridge.queue('device:a', 'pane').map((item) => [item.preview, item.state]))
       .toEqual([['one', 'delivered'], ['two', 'delivered'], ['three', 'delivered']]);
     const first = answers[0].clientMessageId;
-    expect(q.events.filter((e) => e.clientMessageId === first).map((e) => e.state)).toEqual(['queued', 'delivering', 'delivered']);
+    // Held once for the running turn (a same-state event naming why), then delivered.
+    expect(q.events.filter((e) => e.clientMessageId === first).map((e) => [e.state, e.holdReason]))
+      .toEqual([['queued', undefined], ['queued', 'turn-running'], ['delivering', undefined], ['delivered', undefined]]);
     // The delivered message has a v1 send receipt; a re-post replays the queue's state.
     expect(q.bridge.receipt('device:a', 'pane', first)).toMatchObject({ state: 'submitted', result: 'sent', queue: { state: 'delivered' } });
     expect(await q.bridge.send(phoneSend('one', { clientMessageId: first }))).toMatchObject({ replayed: true, queueState: 'delivered' });
@@ -1948,10 +1951,94 @@ describe('daemon queue (chat-queue)', () => {
     f.state.agent = { ...f.state.agent, inputQuiet: false };
     await q.bridge.kickQueue('pane');
     const states = () => q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => e.state);
-    expect(states()).toEqual(['queued']);
+    // Only `queued` events (the second and third name the hold: the turn, then the typing).
+    expect(states()).toEqual(['queued', 'queued', 'queued']);
+    expect(q.events.map((e) => e.holdReason)).toEqual([undefined, 'turn-running', 'busy']);
     f.state.agent = { ...f.state.agent, inputQuiet: true };
     await q.bridge.kickQueue('pane');
-    expect(states()).toEqual(['queued', 'delivering', 'delivered']);
+    expect(states()).toEqual(['queued', 'queued', 'queued', 'delivering', 'delivered']);
+  });
+
+  it('names every hold on the item (holdReason), and drops it once the item is final', async () => {
+    const f = fixture(); f.liveClaude(); runningTurn(f, 1);
+    const q = queued(f);
+    const { clientMessageId } = await q.send('one');
+    const item = () => q.bridge.queue('device:a', 'pane')[0];
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ clientMessageId, state: 'queued', holdReason: 'turn-running' });
+    idleTurn(f, 1);
+    f.state.pendingApproval = 'apr_1';
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'approval' });
+    f.state.pendingApproval = undefined;
+    f.state.screen = ['Select model', '❯ 1. Sonnet', '  2. Opus', 'Esc to cancel'];
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'dialog' });
+    f.state.screen = ['  Total cost: $0.12', '  Press any key to continue'];
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'no-composer' });
+    f.state.screen = IDLE;
+    f.state.agent = { ...f.state.agent, inputQuiet: false };
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'busy' });
+    f.state.agent = { ...f.state.agent, inputQuiet: true };
+    const projector = f.state.projector;
+    f.state.projector = { available: false, reason: 'no-hook' };
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'unavailable' });
+    // The same hold again on the next tick is silent on the live events.
+    const before = q.events.length;
+    await q.bridge.kickQueue('pane');
+    expect(q.events).toHaveLength(before);
+    f.state.projector = projector;
+    await q.send('two');
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'delivered' });
+    expect(item()).not.toHaveProperty('holdReason');
+    // The next item waits for the turn the delivery opened to be seen.
+    expect(q.bridge.queue('device:a', 'pane')[1]).toMatchObject({ state: 'queued', holdReason: 'turn-starting' });
+    expect(q.events.slice(before).map((e) => [e.state, e.holdReason]))
+      .toEqual([['queued', undefined], ['delivering', undefined], ['delivered', undefined], ['queued', 'turn-starting']]);
+    expect(q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => e.holdReason).filter(Boolean))
+      .toEqual(['turn-running', 'approval', 'dialog', 'no-composer', 'busy', 'unavailable']);
+  });
+
+  it('a failed durable write holds the item as retry', async () => {
+    const f = fixture(); f.liveClaude(); runningTurn(f, 1);
+    let failDelivering = false;
+    const store = new ChatQueueStore(f.dir, { write: (file, data) => {
+      const entries = (data as { entries: Array<{ state: string }> }).entries;
+      if (failDelivering && entries.some((row) => row.state === 'delivering')) throw new Error('disk full');
+      fs.writeFileSync(file, JSON.stringify(data));
+    } });
+    const bridge = createChatBridge({ ...f.deps, queue: store, queueTickMs: 3_600_000 });
+    await bridge.send(phoneSend('one', { queue: { authorized: allow } }));
+    idleTurn(f, 1);
+    failDelivering = true;
+    await bridge.kickQueue('pane');
+    expect(f.written).toEqual([]);
+    expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'retry' });
+  });
+
+  it('a held item drains on the backup tick once its hold clears, with no hook, and the tick stops with the queue empty', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(); f.liveClaude(); runningTurn(f, 1);
+      const bridge = createChatBridge({ ...f.deps, queue: new ChatQueueStore(f.dir), queueTickMs: 5_000 });
+      await bridge.send(phoneSend('one', { queue: { authorized: allow } }));
+      idleTurn(f, 1);
+      f.state.screen = ['Select model', '❯ 1. Sonnet', '  2. Opus', 'Esc to cancel'];
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'dialog' });
+      // The dialog closes; nothing kicks the queue but its own tick.
+      f.state.screen = IDLE;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pastes(f)).toEqual(['\x1b[200~one\x1b[201~']);
+      expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'delivered' });
+      // Nothing active: the next tick clears itself and none is left.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 
   it('OpenCode: the queue watches the plugin while an item waits, and ignores the daemon detector', async () => {
@@ -2192,8 +2279,9 @@ describe('steer and passive input (a send into a running Claude turn)', () => {
     await q.bridge.kickQueue('pane');
     expect(pastes(f)).toEqual(['\x1b[200~now\x1b[201~']);
     expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ clientMessageId, state: 'delivered', deliver: 'steer' });
-    expect(q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => [e.state, e.deliver]))
-      .toEqual([['queued', 'steer'], ['delivering', 'steer'], ['delivered', 'steer']]);
+    expect(q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => [e.state, e.deliver, e.holdReason]))
+      .toEqual([['queued', 'steer', undefined], ['queued', 'steer', 'dialog'],
+        ['delivering', 'steer', undefined], ['delivered', 'steer', undefined]]);
     // The other owner's next-turn item still waits for the turn's end.
     expect(q.bridge.queue('device:b', 'pane')[0]).toMatchObject({ state: 'queued', deliver: 'next-turn' });
   });
@@ -2213,6 +2301,25 @@ describe('steer and passive input (a send into a running Claude turn)', () => {
     expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'delivered', deliver: 'steer' });
     expect(q.bridge.steer('device:a', 'pane', clientMessageId)).toEqual({ ok: false, error: 'already-delivered', state: 'delivered' });
     expect(await q.bridge.send(phoneSend('mine', { clientMessageId }))).toMatchObject({ replayed: true, queueState: 'delivered', queueDeliver: 'steer' });
+  });
+
+  it('a steer item for a turn that ended with background agents still running goes in as a normal send', async () => {
+    const f = fixture(); f.liveClaude(); running(f);
+    const q = withQueue(f);
+    // Someone types in Terminal through the rest of the turn: the steer waits.
+    f.state.agent = { ...f.state.agent, inputQuiet: false };
+    const { clientMessageId } = await q.send('how many lines?', { queue: { authorized: allow, deliver: 'steer' } });
+    await q.bridge.kickQueue('pane');
+    expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'busy' });
+    // The turn ends; Claude waits on its background agents at an empty prompt,
+    // the session name run through the composer's top rule (captured 2026-10-11).
+    f.state.agent = { ...f.state.agent, inputQuiet: true, agentStatus: 'idle', turn: { id: 't1:n.1', state: 'idle', startedAt: 1 } };
+    f.state.screen = ['✻ Waiting for 3 background agents to finish', '', `${'─'.repeat(30)} workspace-identity-card-plan ─`, '❯ ', RULE,
+      '  ⏵⏵ bypass permissions on · 2 shells · ← 2 agents'];
+    await q.bridge.kickQueue('pane');
+    expect(pastes(f)).toEqual(['\x1b[200~how many lines?\x1b[201~']);
+    expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ clientMessageId, state: 'delivered', deliver: 'steer' });
+    expect(q.bridge.receipt('device:a', 'pane', clientMessageId)).not.toMatchObject({ queued: true });
   });
 
   it('Codex: steer falls back to next-turn', async () => {

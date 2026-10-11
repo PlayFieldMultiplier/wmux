@@ -8833,7 +8833,8 @@ export class WebTerminalServer {
   emitChatQueue(event: ChatQueueEvent): void {
     if (!this.server || this.opts?.allowTranscript !== true) return;
     const body = JSON.stringify({ sessionId: event.sessionId, clientMessageId: event.clientMessageId, state: event.state,
-      ...(event.reason ? { reason: event.reason } : {}), ...(event.deliver ? { deliver: event.deliver } : {}), at: event.at });
+      ...(event.reason ? { reason: event.reason } : {}), ...(event.deliver ? { deliver: event.deliver } : {}),
+      ...(event.holdReason ? { holdReason: event.holdReason } : {}), at: event.at });
     this.deliverChatEvent(event.sessionId, () => ({ event: 'chat.queue', body }), (principal) => chatOwner(principal) === event.owner);
   }
 

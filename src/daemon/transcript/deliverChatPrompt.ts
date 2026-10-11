@@ -13,6 +13,8 @@ export interface ChatDeliveryDeps extends ScheduledPromptDeliveryDeps {
   readScreen: () => Promise<ChatScreenRows | null>;
   /** Never type into a running turn (the daemon queue delivers after the turn ends). */
   idleOnly?: boolean;
+  /** Why a `blocked` answer came from the screen: a dialog on it, or no composer at all. */
+  onScreenHold?: (why: 'dialog' | 'no-composer') => void;
 }
 
 /** Keep transcript identity and approval checks inside the daemon, including
@@ -33,7 +35,7 @@ export async function deliverChatPrompt(
   // Ahead of the idle refusal so the user is told about the prompt, not a draft.
   let rows: ChatScreenRows | null = null;
   try { rows = await deps.readScreen(); } catch { /* unreadable = refuse */ }
-  if (screenBlocksChatSend(rows)) return 'blocked';
+  if (screenBlocksChatSend(rows)) { deps.onScreenHold?.('dialog'); return 'blocked'; }
   // Claude restores the submitted draft after an interrupted turn. Idle alone
   // cannot prove its input is empty; pasting here could concatenate two tasks.
   // Mid-turn, a draft typed in Terminal would be joined the same way. Only the
@@ -44,7 +46,9 @@ export async function deliverChatPrompt(
   // a visible composer is `unconfirmed`; no composer at all (a usage screen,
   // a picker the screen gate does not know) is a dialog to wait out.
   if (deps.idleOnly && (initial.slug === 'claude' ? !claudeEmpty : !codexComposerEmpty(rows))) {
-    return (initial.slug === 'claude' ? claudeComposerVisible(rows) : codexComposerVisible(rows)) ? 'unconfirmed' : 'blocked';
+    if (initial.slug === 'claude' ? claudeComposerVisible(rows) : codexComposerVisible(rows)) return 'unconfirmed';
+    deps.onScreenHold?.('no-composer');
+    return 'blocked';
   }
   if (initial.slug === 'claude' && initial.status === 'idle' && !claudeEmpty) return 'unconfirmed';
   // Image paths become attachments only in Claude's composer, and only an
@@ -81,28 +85,37 @@ export async function deliverChatPrompt(
   });
 }
 
+/** The rule under Claude's prompt row (and over it, unlabeled). */
+const claudeRule = (row: string | undefined): boolean => !!row && /^─{8,}$/.test(row);
+/**
+ * The rule over Claude's prompt row. Once a session is named (`/rename`, or a
+ * title Claude gives it), Claude draws the name into this rule near its right
+ * end: `───…─── workspace-identity-card-plan ─` (captured 2026-10-11, Claude
+ * Code 2.1, fullscreen renderer). Only a label set off by spaces between dash
+ * runs counts, so a text row cannot pass for the rule.
+ */
+const claudeTopRule = (row: string | undefined): boolean => !!row && /^─{8,}(?: \S(?:.*\S)? ─+)?$/.test(row);
+
 /** Claude Code 2.1 TUI: the prompt row between the two rules, with nothing typed.
  *  After a turn Claude dims a suggested next prompt into the empty composer;
  *  with `undimmed` rows that suggestion reads as empty, typed text never does. */
 export function claudeComposerEmpty(rows: ChatScreenRows | null): boolean {
   if (!rows || screenBlocksChatSend(rows)) return false;
   const tail = rows.map(row => row.trim());
-  const rule = (row: string | undefined) => !!row && /^─{8,}$/.test(row);
   let at = -1;
   tail.forEach((row, index) => { if (/^❯(?:\s|$)/.test(row)) at = index; });
   // A fresh session dims a suggestion into the empty prompt: `❯ Try "…"`.
   const empty = /^❯(?: Try "[^"]*")?$/.test(tail[at] ?? '') || /^❯$/.test(rows.undimmed?.[at]?.trim() ?? '');
-  return at > 0 && empty && rule(tail[at - 1]) && rule(tail[at + 1]);
+  return at > 0 && empty && claudeTopRule(tail[at - 1]) && claudeRule(tail[at + 1]);
 }
 
 /** The Claude composer is on screen (prompt row between two rules), empty or not. */
 export function claudeComposerVisible(rows: ChatScreenRows | null): boolean {
   if (!rows || screenBlocksChatSend(rows)) return false;
   const tail = rows.map(row => row.trim());
-  const rule = (row: string | undefined) => !!row && /^─{8,}$/.test(row);
   let at = -1;
   tail.forEach((row, index) => { if (/^❯(?:\s|$)/.test(row)) at = index; });
-  return at > 0 && rule(tail[at - 1]) && rule(tail[at + 1]);
+  return at > 0 && claudeTopRule(tail[at - 1]) && claudeRule(tail[at + 1]);
 }
 
 /**
@@ -113,11 +126,10 @@ export function claudeComposerVisible(rows: ChatScreenRows | null): boolean {
 export function claudeComposerRows(rows: ChatScreenRows | null): { rows: string[]; width: number } | null {
   if (!rows || screenBlocksChatSend(rows)) return null;
   const tail = rows.map(row => row.trim());
-  const rule = (row: string | undefined) => !!row && /^─{8,}$/.test(row);
   let at = -1;
   tail.forEach((row, index) => { if (/^❯(?:\s|$)/.test(row)) at = index; });
-  if (at <= 0 || !rule(tail[at - 1])) return null;
-  const end = tail.findIndex((row, index) => index > at && rule(row));
+  if (at <= 0 || !claudeTopRule(tail[at - 1])) return null;
+  const end = tail.findIndex((row, index) => index > at && claudeRule(row));
   // Continuation rows are indented under the `❯`; anything else is not the composer.
   if (end < 0 || rows.slice(at + 1, end).some(row => !/^\s{2}/.test(row) && row.trim())) return null;
   const width = tail[at - 1].length;
