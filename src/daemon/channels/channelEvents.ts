@@ -22,6 +22,8 @@
 import {
   CHANNEL_IDEMPOTENCY_CAP,
   CHANNEL_MESSAGES_MAX,
+  HUMAN_MEMBER_ID,
+  HUMAN_WORKSPACE_ID,
   type Channel,
   type ChannelMember,
   type ChannelMessage,
@@ -176,6 +178,13 @@ export type ChannelEventPayload =
       message: ChannelMessage;
     }
   | {
+      /** #1318 — advance the human's observer cursor (ChannelState.observerCursors). */
+      kind: 'observer-ack';
+      channelId: string;
+      /** Already clamped to the head and above the previous cursor by the live path. */
+      lastReadSeq: number;
+    }
+  | {
       /** §6.4c reseed 마커(migrateToEventLog가 append). 상태는 스냅샷이 운반 — replay 무동작. */
       kind: 'legacy-reseed';
       reseedNumber: number;
@@ -192,6 +201,23 @@ function idemKey(workspaceId: string, clientMsgId: string): string {
  * 부트 replay 적용기(§5). state를 제자리 변형한다. 이벤트 방출 없음(재구성은 무성).
  * 모든 분기가 멱등 — 파일 헤더의 불변식 참조.
  */
+/**
+ * #1318 — the human took or gave up its seat: carry the seat's cursor over to
+ * the observer cursor. On a join the seat starts at the head (joining reads),
+ * so a mention from before the join does not count again after a later leave;
+ * on a leave the seat's reads while seated carry over, so the seatless row
+ * does not report a cursor far behind what the human read. A derived effect of
+ * the row the record already carries (join/operator-join) or removes
+ * (leave/kick/purge) — no new payload field — and advance-only, so re-applying
+ * it is a no-op.
+ */
+export function noteHumanSeatCursor(state: ChannelState, channelId: string, member: ChannelMember): void {
+  if (member.workspaceId !== HUMAN_WORKSPACE_ID || member.memberId !== HUMAN_MEMBER_ID) return;
+  if (typeof member.lastReadSeq !== 'number') return;
+  if (member.lastReadSeq <= (state.observerCursors?.[channelId] ?? 0)) return;
+  (state.observerCursors ??= {})[channelId] = member.lastReadSeq;
+}
+
 export function applyChannelEvent(state: ChannelState, payload: unknown): void {
   if (payload === null || typeof payload !== 'object') return;
   const p = payload as ChannelEventPayload;
@@ -242,6 +268,7 @@ export function applyChannelEvent(state: ChannelState, payload: unknown): void {
       delete state.members[p.channelId];
       delete state.messages[p.channelId];
       delete state.idempotency[p.channelId];
+      if (state.observerCursors) delete state.observerCursors[p.channelId];
       return;
     }
     case 'join':
@@ -261,6 +288,7 @@ export function applyChannelEvent(state: ChannelState, payload: unknown): void {
       state.members[p.channelId] = members;
       // 라이브 경로는 join/invite 시 emptySince를 무조건 해제한다.
       delete ch.emptySince;
+      noteHumanSeatCursor(state, p.channelId, p.member);
       return;
     }
     case 'leave':
@@ -288,6 +316,7 @@ export function applyChannelEvent(state: ChannelState, payload: unknown): void {
       };
       const survivors = members.filter((m) => !matches(m));
       if (survivors.length === members.length) return; // 멱등: 이미 제거됨
+      for (const m of members) if (matches(m)) noteHumanSeatCursor(state, p.channelId, m);
       state.members[p.channelId] = survivors;
       if (
         p.emptySince !== undefined &&
@@ -424,6 +453,7 @@ export function applyChannelEvent(state: ChannelState, payload: unknown): void {
         state.members[p.channelId] = members;
         // operatorJoin은 leave 후 재진입도 "새 좌석" → join과 동일하게 emptySince 해제.
         delete ch.emptySince;
+        noteHumanSeatCursor(state, p.channelId, p.member);
       }
       // 2) 시스템 메시지 append — seq 존재/trim된 과거 seq 가드(post 적용기와 동형).
       //    clientMsgId·cursorRide·nameRefresh 없음(시스템 마커).
@@ -436,6 +466,13 @@ export function applyChannelEvent(state: ChannelState, payload: unknown): void {
           state.messages[p.channelId] = msgs.slice(msgs.length - CHANNEL_MESSAGES_MAX);
         }
       }
+      return;
+    }
+    case 'observer-ack': {
+      if (!state.channels.some((c) => c.id === p.channelId)) return;
+      // Advance-only, so a re-applied (or out-of-order older) record is a no-op.
+      const cursors = (state.observerCursors ??= {});
+      if ((cursors[p.channelId] ?? 0) < p.lastReadSeq) cursors[p.channelId] = p.lastReadSeq;
       return;
     }
     case 'legacy-reseed':

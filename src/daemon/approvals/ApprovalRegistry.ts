@@ -70,6 +70,7 @@ import {
   parsePlanPrompt,
   parseTerminalPrompt,
   terminalPromptAnswerability,
+  titleSaysUnsandboxed,
   toolOfDialog,
   webSearchDetail,
   type ParsedTerminalPrompt,
@@ -327,7 +328,7 @@ interface TerminalPromptIdentity {
    * The tool call the record was bound to, with its whole input's hash: by
    * its transcript id, or (no id) by the PermissionRequest hook's evidence.
    */
-  call?: { id?: string; name: string; command: string; description?: string; inputHash: string; promptId?: string };
+  call?: { id?: string; name: string; command: string; description?: string; unsandboxed?: true; inputHash: string; promptId?: string };
   /** The dialog read at creation spelled exactly that call's command. */
   matched: boolean;
   /** Matched with its top scrolled off (see buildTerminalPrompt). */
@@ -1561,8 +1562,11 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       ?? (parsed ? boundRecordText(parsed.commandText, TERMINAL_PROMPT_SUMMARY_MAX) : undefined)
       ?? note.summary;
     // The summary is capped for display; the binding takes the WHOLE command.
+    // A call that asked to run outside the sandbox: only that one may bind a
+    // dialog titled `(unsandboxed)` (dialogMatchesToolCall).
+    const unsandboxed = binding?.input['dangerouslyDisableSandbox'] === true;
     const call = binding && command && !binding.unbindable && webSearch !== null
-      ? { name: binding.name, command, ...(description ? { description } : {}) }
+      ? { name: binding.name, command, ...(description ? { description } : {}), ...(unsandboxed ? { unsandboxed: true as const } : {}) }
       : null;
     const topCut = !!parsed && !parsed.topRuleFound;
     const mark = read?.mark ?? this.deps.promptScreenMark?.(note.sessionId) ?? null;
@@ -1590,7 +1594,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     );
     const answer = bound ? terminalPromptAnswerability(parsed) : null;
     const answerable = !!answer?.answerable;
-    const risky = terminalPromptTextRisk(command, summary, parsed?.reason);
+    // The phone card shows no title: a dialog that runs the call outside the
+    // sandbox is flagged critical, so the approver gets the louder treatment
+    // the terminal's "(unsandboxed)" title gives the person at the desk.
+    const risky = terminalPromptTextRisk(command, summary, parsed?.reason) || titleSaysUnsandboxed(parsed?.title);
     const inputHash = binding && !binding.unbindable ? toolInputHash(binding.input) : undefined;
     const record: WithIdentity = {
       id: this.newId(),

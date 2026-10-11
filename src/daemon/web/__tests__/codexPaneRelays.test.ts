@@ -6,11 +6,11 @@ const owner=(id='pane')=>({meta:{id,state:'attached'}} as ManagedSession);
 function relay() {
   // `active`: the running turn the pane's stream reported; `complete` plays
   // that stream's `turn/completed`.
-  const state = {retired:false,disconnected:false,selected:true,active:undefined as string|undefined,ended:new Map<string,string>(),
+  const state = {retired:false,disconnected:false,linked:true,selected:true,active:undefined as string|undefined,ended:new Map<string,string>(),
     waiters:new Set<{turnId:string;resolve:(status:string|undefined)=>void}>()};
   return {url:'unix:///private/socket',state,
     current:()=>state.selected ? {threadId:'thread',cwd:'/repo',generation:1} : undefined,
-    retired:()=>state.retired,disconnected:()=>state.disconnected,close:vi.fn(async()=> { /* noop */ }),
+    retired:()=>state.retired,disconnected:()=>state.disconnected,linked:()=>state.linked,close:vi.fn(async()=> { /* noop */ }),
     answer:vi.fn(async(_threadId:string,_requestId:string,_decision:'accept'|'cancel'):Promise<'ok'|'not-found'|'unavailable'>=>'ok'),
     activeTurn:(_threadId:string)=>state.active,
     turnEnded:(_threadId:string,turnId:string)=>state.ended.get(turnId),
@@ -63,6 +63,26 @@ describe('Codex pane relay lifetime',()=>{
     // A foreign owner retires the entry, and a retired entry stays non-live.
     expect(registry.liveSelection('pane',owner())).toEqual({live:false});
     expect(registry.liveSelection('pane',pane)).toEqual({live:false});
+    await registry.shutdown();
+  });
+  it('reads a committed relay whose TUI never linked as not live, so the pane keeps its own binding',async()=>{
+    // A phone launch commits the relay before typing the command; that Codex
+    // exited (its self-update prompt) before connecting, and a Codex typed by
+    // hand runs without the relay. Read as live with no selection, the relay
+    // hid the pane's persisted binding from /turns for as long as the pane lived.
+    const connection=relay();connection.state.linked=false;connection.state.selected=false;
+    const registry=new CodexPaneRelays(async()=>connection);
+    const lease=await registry.prepare('pane','/h/.codex');const pane=owner();
+    expect(lease.commit(pane)).toBe(true);
+    expect(registry.liveSelection('pane',pane)).toEqual({live:false});
+    expect(registry.accountHome('pane',pane)).toBeUndefined();
+    expect(registry.liveIds()).toEqual([]);
+    // Once its TUI links, the relay is the authority again, selection or not.
+    connection.state.linked=true;
+    expect(registry.liveSelection('pane',pane)).toEqual({live:true});
+    expect(registry.liveIds()).toEqual(['pane']);
+    connection.state.selected=true;
+    expect(registry.liveSelection('pane',pane)).toEqual({live:true,selection:{threadId:'thread',cwd:'/repo',generation:1}});
     await registry.shutdown();
   });
   it('names the account home only for a live, committed relay (account status)',async()=>{

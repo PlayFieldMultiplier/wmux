@@ -17,13 +17,17 @@ on:
   push:
     branches:
       - main
+  # Drafts skip the job; marking the PR ready runs it (see ci.yml).
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
   workflow_dispatch:
 
 concurrency:
-  group: baseline-${{ github.ref }}
+  # A draft PR's run (skipped by the jobs' draft check) gets its own group, so a
+  # late synchronize event from before `gh pr ready` cannot cancel the ready run.
+  group: baseline-${{ github.ref }}${{ github.event.pull_request.draft && '-draft' || '' }}
   # Safe to cancel anywhere: this workflow is informational and writes nothing
   # (unlike perf.yml, whose main runs append to the history file at the end).
   cancel-in-progress: true
@@ -31,6 +35,7 @@ concurrency:
 jobs:
   baseline:
     name: Baseline (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
     # The slowest leg (windows) takes ~13 min; a hung test must not hold a
     # runner for the 6 h default.
@@ -50,10 +55,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node.js 22.x + npm 11
+      - name: Setup Node.js + npm 11
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          # Windows takes the ci.yml floor (see the comment there, #984). The
+          # libuv bug is Windows-only, so the other legs stay on 22: on Node 24
+          # macOS rejects the >104-byte unix socket paths the SessionPipe and
+          # DaemonClient tests build under its long $TMPDIR (EINVAL), where
+          # Node 22 truncated them silently. That is its own follow-up.
+          node-version: ${{ runner.os == 'Windows' && '>=24.21.0 <25' || '22' }}
           cache: npm
 
       - name: Use npm 11

@@ -26,6 +26,39 @@ function stripControls(s: string): string {
   return s.replace(CONTROL_CHARS_RE, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * How long one pane stays quiet about a critical line it already reported. A
+ * TUI redraws the same rows over and over, and a last-line dedup re-fired every
+ * time two or three such rows took turns on screen.
+ */
+export const CRITICAL_REPEAT_WINDOW_MS = 10 * 60_000;
+/** Lines remembered per pane for that window; the oldest go first. */
+export const CRITICAL_SEEN_MAX = 256;
+/** How much of a line its dedup key keeps. */
+const CRITICAL_KEY_MAX = 512;
+
+/**
+ * A line that IS a grep/rg/echo/printf command: the command is the first word,
+ * after nothing but a `$`/`%` prompt sign or Claude's own `⏺ Bash(` row prefix.
+ * A wrapper in front (`docker exec echo …`, `sudo`, `ssh`) is not this.
+ */
+const SEARCH_OR_PRINT_LINE_RE = /^(?:[$%]\s*|([⏺●])\s*Bash\()?(?:grep|egrep|fgrep|rg|echo|printf)\s/;
+/** Anything that could run another command on the same line (`(` covers `$(`, `<(`, `=(`). */
+const SHELL_CONTROL_RE = /[;&|`<>(\n]/;
+
+/**
+ * The whole line is one search or print command whose arguments name the
+ * action (`grep -rn "rm -rf" src`), and nothing on it could run anything else.
+ * Any `;`, `&`, `|`, backquote, redirect or `(` after the command word and the
+ * line is judged as before. A `⏺ Bash(` row counts only when it ends with its
+ * `)`: Claude wraps a long call onto the next row, where a `| sh` may follow.
+ */
+function isSearchOrPrintLine(line: string): boolean {
+  const m = SEARCH_OR_PRINT_LINE_RE.exec(line);
+  if (!m || (m[1] !== undefined && !line.endsWith(')'))) return false;
+  return !SHELL_CONTROL_RE.test(line.slice(m[0].length));
+}
+
 // Agent event status uses the same enum as WorkspaceMetadata.agentStatus so
 // downstream consumers can route the status straight to the renderer store
 // without translation. 'idle' is reserved for the absence of an agent and is
@@ -734,11 +767,15 @@ export class AgentDetector {
   private usageLimitCallbacks: UsageLimitLineCallback[] = [];
   private readonly codexLimitScanner = new CodexUsageLimitLineScanner();
   private lineBuffer = '';
-  // Per (agent:status) and (critical:label) dedup: stores the last matched
-  // string for each key. Same key + same match = skip emit. New active cycle
-  // calls resetEmissionState() to clear, so turn N+1 can emit again even when
-  // the prompt text is identical to turn N.
+  // Per (agent:status) dedup: stores the last matched string for each key.
+  // Same key + same match = skip emit. New active cycle calls
+  // resetEmissionState() to clear, so turn N+1 can emit again even when the
+  // prompt text is identical to turn N.
   private lastEmittedFor = new Map<string, string>();
+  // Critical lines this pane reported, by label + matched line → when. Not
+  // cleared by resetEmissionState(): a redraw starts a new activity cycle too.
+  // Insertion order is emit order (a re-emit moves its key to the end).
+  private criticalSeen = new Map<string, number>();
   // Track which agents have been "gated" (confirmed active) in this session
   private activeAgents = new Set<string>();
   // Most recently emitted agent name. PTYBridge consults this when forwarding
@@ -787,9 +824,9 @@ export class AgentDetector {
    *
    * These fire on PTY OUTPUT, not on a pending action: nothing is blocked,
    * nothing is waiting, and there is no addressee for an answer — a keystroke
-   * sent "in reply" would type into whatever is currently running. Repeats
-   * within a cycle are also dropped by the dedup below, so a consumer cannot
-   * even count them reliably.
+   * sent "in reply" would type into whatever is currently running. A line the
+   * pane already reported is dropped for CRITICAL_REPEAT_WINDOW_MS, so a
+   * consumer cannot even count them reliably.
    *
    * Anything a human ANSWERS gates on the hook-sourced `awaiting_input`
    * signal instead (`src/daemon/approvals/` — real request identity, a
@@ -833,6 +870,26 @@ export class AgentDetector {
    */
   resetEmissionState(): void {
     this.lastEmittedFor.clear();
+  }
+
+  /**
+   * Whether a critical line may fire now: not reported by this pane within
+   * CRITICAL_REPEAT_WINDOW_MS. Records it when it may. Expired entries are
+   * dropped from the front, and past CRITICAL_SEEN_MAX the oldest go too.
+   */
+  private admitCritical(key: string): boolean {
+    const now = Date.now();
+    // A time ahead of the clock (it was set back) counts as expired.
+    const fresh = (at: number): boolean => at <= now && now - at < CRITICAL_REPEAT_WINDOW_MS;
+    const last = this.criticalSeen.get(key);
+    if (last !== undefined && fresh(last)) return false;
+    this.criticalSeen.delete(key);
+    this.criticalSeen.set(key, now);
+    for (const [k, at] of this.criticalSeen) {
+      if (this.criticalSeen.size <= CRITICAL_SEEN_MAX && fresh(at)) break;
+      this.criticalSeen.delete(k);
+    }
+    return true;
   }
 
   feed(data: string): void {
@@ -1162,26 +1219,31 @@ export class AgentDetector {
     }
 
     // Check critical patterns first
+    const searchOrPrint = isSearchOrPrintLine(clean);
+    let criticalMatched = false;
     for (const cp of CRITICAL_PATTERNS) {
       if (cp.regex.test(clean)) {
-        const key = `critical:${cp.label}`;
+        criticalMatched = true;
+        // The match is that command's argument: no other pattern on this line can run either.
+        if (searchOrPrint) break;
         // Normalize ONCE, then cap: stripControls drops the C0 bytes that
         // survived ANSI_STRIP and collapses whitespace, and only the result is
-        // sliced to 80. That single value is the dedup key AND the payload, so
-        // what a surface shows is exactly what the dedup judged — two lines
-        // that differ only by a tab or other control byte now collapse to one
-        // emission instead of both firing. Normalizing before the cap also
-        // means the 80-char limit counts visible characters, not control
-        // bytes. This string ends up in notification bodies and on a phone.
-        const value = stripControls(clean).slice(0, 80);
-        if (this.lastEmittedFor.get(key) === value) return;
-        this.lastEmittedFor.set(key, value);
+        // sliced to 80 for the payload. Two lines that differ only by a tab or
+        // other control byte collapse to one emission instead of both firing.
+        // Normalizing before the cap also means the 80-char limit counts
+        // visible characters, not control bytes. This string ends up in
+        // notification bodies and on a phone. The dedup key takes the line
+        // past 80 (bounded), so two long commands that differ late both fire.
+        const line = stripControls(clean);
+        const value = line.slice(0, 80);
+        if (!this.admitCritical(`${cp.label}\n${line.slice(0, CRITICAL_KEY_MAX)}`)) return;
         for (const cb of this.criticalCallbacks) {
           cb({ action: cp.label, riskLevel: cp.riskLevel, matchedLine: value });
         }
         return;
       }
     }
+    if (criticalMatched) return;
 
     // Check agent gates — activate agents when their gate pattern matches.
     // gate가 처음 매칭되는 순간 'running'으로 한 번 emit한다(checkGates). idle

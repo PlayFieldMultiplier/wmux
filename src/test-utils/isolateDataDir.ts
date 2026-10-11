@@ -12,7 +12,15 @@ if (!process.env.WMUX_TEST_REAL_HOME) {
 // realpath: on macOS os.tmpdir() is under /var, a symlink to /private/var. Code that
 // resolves paths (resolveBrowserExportPath) returns the /private form, so a HOME
 // left in the symlinked form would never compare equal to what it computes.
-const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-test-')));
+//
+// POSIX roots it at /tmp, not os.tmpdir(): unix socket paths live under this
+// HOME (~/.wmux-vitest/session-<id>.sock) and sun_path holds 104 bytes on macOS.
+// macOS's os.tmpdir() is /private/var/folders/<2>/<28>/T, which pushed
+// `session-modepre-<8 hex>.sock` to 116 bytes; the kernel kept the first 103,
+// cutting the unique part off, so two pipes bound at once got the same address
+// (EADDRINUSE, SessionPipe.modePreamble / attachSnapshot on macos-14).
+const tempRoot = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(tempRoot, 'wmux-test-')));
 process.env.HOME = tempDir;
 // USERPROFILE only exists on Windows. getWmuxHomeDir() prefers USERPROFILE over
 // HOME, so defining it on POSIX would shadow a test's own HOME override (a test

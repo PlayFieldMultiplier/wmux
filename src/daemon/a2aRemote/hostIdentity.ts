@@ -263,6 +263,21 @@ export function readIssueLockState(lock: string): IssueLockState | null {
 const isStaleLock = (s: IssueLockState): boolean => Date.now() - s.mtimeMs > ISSUE_LOCK_STALE_MS;
 
 /**
+ * Windows: a lock or takeover marker another process just unlinked stays
+ * "delete pending" while any handle to it is still open (a waiter's
+ * readIssueLockState, the holder's release read). Until the last handle
+ * closes, opening or exclusive-creating that name fails EPERM (EACCES/EBUSY
+ * from some filters) instead of ENOENT or EEXIST. That is the lock changing
+ * hands, not a fault: callers treat it as "held right now" and retry within
+ * their deadline. POSIX has no such state, so there it stays an error.
+ */
+export function isLockInTransition(err: unknown, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'win32') return false;
+  const code = errCode(err);
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+}
+
+/**
  * Remove the stale lock a waiter observed (`seenKey`), at most once across all
  * waiters, and never a lock that replaced it. Every waiter that saw the same
  * stale lock races to exclusive-create a marker named after its key; exactly
@@ -277,6 +292,8 @@ export function breakStaleIssueLock(lock: string, seenKey: string): boolean {
   try {
     fs.writeFileSync(marker, '', { flag: 'wx' });
   } catch (err) {
+    // Another breaker's marker for this key is being removed: it already ran.
+    if (isLockInTransition(err)) return false;
     if (errCode(err) !== 'EEXIST') throw err;
     // A breaker that crashed between claim and release must not block this key forever.
     try {
@@ -287,7 +304,13 @@ export function breakStaleIssueLock(lock: string, seenKey: string): boolean {
     return false;
   }
   try {
-    const current = readIssueLockState(lock);
+    let current: IssueLockState | null;
+    try {
+      current = readIssueLockState(lock);
+    } catch (err) {
+      if (isLockInTransition(err)) return false; // the stale lock is already being removed
+      throw err;
+    }
     if (!current || current.key !== seenKey || !isStaleLock(current)) return false;
     try {
       fs.unlinkSync(lock);
@@ -301,31 +324,57 @@ export function breakStaleIssueLock(lock: string, seenKey: string): boolean {
   }
 }
 
+/** readIssueLockState, with a Windows delete-pending lock read as absent. */
+function readLockUnlessInTransition(lock: string): IssueLockState | null {
+  try {
+    return readIssueLockState(lock);
+  } catch (err) {
+    if (isLockInTransition(err)) return null;
+    throw err;
+  }
+}
+
 /** Cross-process mutex around (re-)issuing: exclusive-create lock file with race-free stale takeover. */
 function withIssueLock<T>(dir: string, fn: () => T): T {
   const lock = path.join(dir, LOCK_FILE);
   const token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
   const deadline = Date.now() + ISSUE_LOCK_WAIT_MS;
+  const waitOrGiveUp = (): void => {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for the A2A certificate lock: ${lock}`);
+    sleepSync(20);
+  };
   for (;;) {
     try {
       fs.writeFileSync(lock, token, { flag: 'wx' });
       break;
     } catch (err) {
+      // Windows: the previous holder's lock is still delete-pending. Held, for our purposes.
+      if (isLockInTransition(err)) {
+        waitOrGiveUp();
+        continue;
+      }
       if (errCode(err) !== 'EEXIST') throw err;
     }
-    const seen = readIssueLockState(lock);
+    let seen: IssueLockState | null;
+    try {
+      seen = readIssueLockState(lock);
+    } catch (err) {
+      if (!isLockInTransition(err)) throw err;
+      waitOrGiveUp(); // being released right now; the next create decides
+      continue;
+    }
     if (!seen) continue; // released between our attempts
     // Holder crashed mid-issue: the one waiter that breaks it retries the
     // exclusive create at once; everyone else keeps waiting.
     if (isStaleLock(seen) && breakStaleIssueLock(lock, seen.key)) continue;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for the A2A certificate lock: ${lock}`);
-    sleepSync(20);
+    waitOrGiveUp();
   }
   try {
     return fn();
   } finally {
-    // Release only our own lock, never one that replaced it.
-    if (readIssueLockState(lock)?.key === lockKey(Buffer.from(token))) unlinkQuietly(lock);
+    // Release only our own lock, never one that replaced it. A lock we cannot
+    // read because it is delete-pending is not ours any more: leave it.
+    if (readLockUnlessInTransition(lock)?.key === lockKey(Buffer.from(token))) unlinkQuietly(lock);
   }
 }
 

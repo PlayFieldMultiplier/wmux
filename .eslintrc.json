@@ -13,6 +13,24 @@
     "plugin:import/typescript"
   ],
   "parser": "@typescript-eslint/parser",
+  "settings": {
+    "import/resolver": {
+      "node": {
+        "extensions": [
+          ".ts",
+          ".cts",
+          ".mts",
+          ".tsx",
+          ".d.ts",
+          ".js",
+          ".jsx",
+          ".mjs",
+          ".cjs",
+          ".json"
+        ]
+      }
+    }
+  },
   "overrides": [
     {
       "files": [

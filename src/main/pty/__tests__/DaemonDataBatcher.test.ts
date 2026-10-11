@@ -102,6 +102,19 @@ describe('DaemonDataBatcher', () => {
     expect(sent).toEqual([['s1', 'lead']]);
   });
 
+  it('finishing preserves trailing output before exit and forgets a reused session id', () => {
+    const b = new DaemonDataBatcher(send, 8);
+    b.push('s1', 'lead');
+    b.push('s1', 'tail');
+    b.finishSession('s1');
+    sent.push(['s1', '<EXIT>']);
+    b.push('s1', 'new process');
+    // A new incarnation must not inherit the old timestamp and wait 8 ms.
+    expect(sent).toEqual([['s1', 'lead'], ['s1', 'tail'], ['s1', '<EXIT>'], ['s1', 'new process']]);
+    vi.advanceTimersByTime(20);
+    expect(sent).toHaveLength(4);
+  });
+
   it('dispose flushes everything pending, and late pushes are DROPPED (old generation)', () => {
     const b = new DaemonDataBatcher(send, 8);
     b.push('s1', 'tail');

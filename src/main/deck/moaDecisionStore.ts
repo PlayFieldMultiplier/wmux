@@ -438,6 +438,18 @@ export class MoaDecisionStore {
     for (const [key, row] of this.rows) if (row.createdAt <= cutoff) this.rows.delete(key);
   }
 
+  /** Resolve once every write queued so far (and any queued while waiting)
+   *  is on disk or has failed. The in-memory map changes before the file
+   *  does, so a caller that is about to read the file, or remove the
+   *  directory (shutdown, tests), awaits this first. */
+  async flush(): Promise<void> {
+    let seen: Promise<unknown>;
+    do {
+      seen = this.writes;
+      await seen;
+    } while (seen !== this.writes);
+  }
+
   private save(): Promise<void> {
     const run = this.writes.then(() =>
       atomicWriteJSON(this.file, { version: 1, decisions: [...this.rows.values()] }));

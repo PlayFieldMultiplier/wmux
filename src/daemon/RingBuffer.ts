@@ -273,6 +273,12 @@ export class RingBuffer {
     return this.physical;
   }
 
+  /** Whether replay needs resize-aware parsing, without copying the byte buffer. */
+  get hasGeometryChanges(): boolean {
+    this.pruneGeometry();
+    return this.geometry.length > 1;
+  }
+
   /**
    * Dump the buffer contents to a file atomically (write to tmp + rename).
    *

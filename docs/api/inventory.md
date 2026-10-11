@@ -31,6 +31,13 @@ Transport (see `src/shared/constants.ts` `getPipeName`/`getAuthTokenPath`/`getTc
 
 The MCP host hosts these as tools (see [MCP tools](#mcp-tools) below). An *in-pane* plugin (spawned inside a wmux PTY) reads the token and endpoint from the injected env vars `WMUX_AUTH_TOKEN` / `WMUX_SOCKET_PATH` instead of the file. An *external-terminal* plugin reads `~/.wmux-auth-token` and derives the pipe name itself. Wire framing, rate limits, and the full security model are in [`../PROTOCOL.md`](../PROTOCOL.md) §5.
 
+### Performance diagnostics
+
+| Method | Params | Tier | Notes |
+|---|---|---|---|
+| `perf.status` | `{ includeMemory?: boolean }` | internal | Reveal counters; explicit `includeMemory: true` additionally returns Electron process IDs, types and working-set byte counters. |
+| `daemon.ping` | `{ includeMemory?: boolean }` | internal | Daemon control pipe only. Explicit `includeMemory: true` adds process memory and per-session ring/output queue counters. Ordinary health probes retain the existing lightweight response. See [memory diagnostics](../performance.md#memory-diagnostics). |
+
 ### Workspace surface
 
 | Method | Params | Tier | Notes |
