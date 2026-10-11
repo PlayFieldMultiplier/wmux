@@ -54,7 +54,7 @@ export function rewritePastedPrompts<P extends { at: number; text: string }>(
   prompts: readonly P[],
   assigned: Map<string, P> = new Map(),
 ): TurnEvent[] {
-  if (prompts.length === 0) return [...events];
+  if (prompts.length === 0 && assigned.size === 0) return [...events];
   const keyOf = (p: P) => `${p.at}\u0000${p.text}`;
   const used = new Set<string>([...assigned.values()].map(keyOf));
   return events.map((e) => {

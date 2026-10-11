@@ -39,5 +39,7 @@ describe('moaPhoneRows — the Moa transcript as the phone reads it', () => {
     const second = rewritePastedPrompts([{ id: 'u2', kind: 'user_text', ts: T + 5_000, text: pasted('ctx only') }], read(), assigned);
     expect(first[0]).toMatchObject({ text: '뭐하냐' });
     expect(second[0]).toMatchObject({ text: pasted('ctx only') });
+    // A read that finds no prompts still shows what an entry was already matched to.
+    expect(rewritePastedPrompts([{ id: 'u1', kind: 'user_text', ts: T, text: pasted('ctx 뭐하냐') }], [], assigned)[0]).toMatchObject({ text: '뭐하냐' });
   });
 });

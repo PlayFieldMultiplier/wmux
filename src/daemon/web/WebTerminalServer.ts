@@ -1446,8 +1446,8 @@ export class WebTerminalServer {
   /** The chat-v2 host whose pushes nudge phone watchers, subscribed on first use. */
   private chatV2PushHost: ChatV2PhoneHost | null = null;
   private chatV2PushOff: (() => void) | null = null;
-  /** The Moa pane's entry → prompt matches (see moaPhoneEvents), for one brain session. */
-  private moaRowMatches: { sessionId: string; assigned: Map<string, NotedPrompt> } | null = null;
+  /** The Moa pane's entry → prompt matches (see moaPhoneEvents), for one brain conversation. */
+  private moaRowMatches: { key: string; assigned: Map<string, NotedPrompt> } | null = null;
   /** Per-pane coalescing timers for the non-recording liveness event. */
   private readonly livenessTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
@@ -4767,7 +4767,9 @@ export class WebTerminalServer {
   private moaPhoneEvents(sessionId: string, events: unknown): unknown {
     const fact = this.deps.moaPane?.() ?? null;
     if (!Array.isArray(events) || fact?.sessionId !== sessionId) return events;
-    if (this.moaRowMatches?.sessionId !== sessionId) this.moaRowMatches = { sessionId, assigned: new Map() };
+    // Per conversation too: a new one in the same pane can reuse fallback row ids.
+    const key = `${sessionId}\u0000${fact.binding?.sessionId ?? ''}`;
+    if (this.moaRowMatches?.key !== key) this.moaRowMatches = { key, assigned: new Map() };
     let prompts: NotedPrompt[] = [];
     try {
       prompts = (this.deps.moaPrompts?.() ?? []).filter((p) => p.hq === fact.workspaceId);
