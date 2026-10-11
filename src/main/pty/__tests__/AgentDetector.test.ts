@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentDetector, CRITICAL_REPEAT_WINDOW_MS, CRITICAL_SEEN_MAX } from '../AgentDetector';
+import { hasElevatedRisk } from '../../../shared/criticalPatterns';
 
 describe('AgentDetector', () => {
   // Helper: feed both banner AND prompt to open the Claude compound gate (#850).
@@ -762,10 +763,11 @@ describe('AgentDetector', () => {
 
     it.each([
       '⏺ Bash(grep -rn "git push --force" src)',
-      '  ⎿  $ rg \'rm -rf\' docs',
+      '$ rg \'rm -rf /tmp\' docs',
       '$ echo DROP TABLE users',
       '$ printf "%s\\n" "npm publish"',
     ])('a search or print argument does not fire: %s', (line) => {
+      expect(hasElevatedRisk(line)).toBe(true); // the line does name an action
       const det = new AgentDetector();
       const cb = vi.fn();
       det.onCritical(cb);
@@ -782,6 +784,10 @@ describe('AgentDetector', () => {
       '⏺ Bash(docker exec echo rm -rf /data)',
       '⏺ Bash(rm -rf /tmp/victim && echo "git push --force")',
       '$ grep foo =(rm -rf /build)',
+      // Claude wraps a long call: the next row may carry `| sh"`.
+      '⏺ Bash(echo "rm -rf /tmp/x and a long argument that wraps',
+      // Its result rows wrap the same way, with no closing mark to tell.
+      '  ⎿  $ rg \'rm -rf /tmp\' docs',
     ])('…but a line that can still run the action does: %s', (line) => {
       const det = new AgentDetector();
       const cb = vi.fn();

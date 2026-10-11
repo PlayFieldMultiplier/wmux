@@ -39,10 +39,10 @@ const CRITICAL_KEY_MAX = 512;
 
 /**
  * A line that IS a grep/rg/echo/printf command: the command is the first word,
- * after nothing but a shell prompt sign or Claude's own `⏺ Bash(` / `⎿ $` row
- * prefix. A wrapper in front (`docker exec echo …`, `sudo`, `ssh`) is not this.
+ * after nothing but a `$`/`%` prompt sign or Claude's own `⏺ Bash(` row prefix.
+ * A wrapper in front (`docker exec echo …`, `sudo`, `ssh`) is not this.
  */
-const SEARCH_OR_PRINT_LINE_RE = /^(?:(?:[$%>❯]|[⏺●]\s*Bash\(|⎿\s*\$?)\s*)?(?:grep|egrep|fgrep|rg|echo|printf)\s/;
+const SEARCH_OR_PRINT_LINE_RE = /^(?:[$%]\s*|([⏺●])\s*Bash\()?(?:grep|egrep|fgrep|rg|echo|printf)\s/;
 /** Anything that could run another command on the same line (`(` covers `$(`, `<(`, `=(`). */
 const SHELL_CONTROL_RE = /[;&|`<>(\n]/;
 
@@ -50,11 +50,13 @@ const SHELL_CONTROL_RE = /[;&|`<>(\n]/;
  * The whole line is one search or print command whose arguments name the
  * action (`grep -rn "rm -rf" src`), and nothing on it could run anything else.
  * Any `;`, `&`, `|`, backquote, redirect or `(` after the command word and the
- * line is judged as before.
+ * line is judged as before. A `⏺ Bash(` row counts only when it ends with its
+ * `)`: Claude wraps a long call onto the next row, where a `| sh` may follow.
  */
 function isSearchOrPrintLine(line: string): boolean {
   const m = SEARCH_OR_PRINT_LINE_RE.exec(line);
-  return !!m && !SHELL_CONTROL_RE.test(line.slice(m[0].length));
+  if (!m || (m[1] !== undefined && !line.endsWith(')'))) return false;
+  return !SHELL_CONTROL_RE.test(line.slice(m[0].length));
 }
 
 // Agent event status uses the same enum as WorkspaceMetadata.agentStatus so
