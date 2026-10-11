@@ -744,6 +744,22 @@ within the page budget. Daemons before this could answer the newest row alone
 with `hasMore: true` (most visibly right after `/clear`); paging back with
 `dir=back` recovered the rest.
 
+**An entry larger than the read window still arrives as its rows.** A
+screenshot or an image `Read` result is one transcript line of hundreds of KB
+(the image's base64), often more than one read window. Such an entry (up to
+8 MB) is read whole, so its `tool_result` reaches the page or delta and pairs
+with its `tool_use`. Daemons before this could leave such a `tool_use` with no
+`tool_result`, so the row spun forever. The forward delta answered a `meta`
+row instead (`subtype: 'unknown'`, label `oversized entry skipped`), and a
+page that started inside the entry dropped it without a row. That `meta` row
+can still appear, but now only when the entry could not be read back.
+
+**An image in a tool result is a placeholder.** A result whose content holds
+image blocks (alone or between text) carries its text parts in order with each
+image as the literal line `[image]` in the tool body; `bytes` counts that body,
+not the image. The image data is never on the wire. The same holds for a Codex
+tool output that returns an image. No wire field changed.
+
 `503` is different from all of these: the daemon has no projector wired at all
 (nothing to read from, on any pane). `404` is the same contract as the other
 `/api/sessions/<id>/*` routes — the pane is gone, which is not the same as its
@@ -784,8 +800,9 @@ letting someone copy a shortened body out believing it is whole.
 did not resolve, and there are two reasons it might not. Usually the ref is
 stale — the file rotated, or the offset no longer starts a line — and re-fetching
 the turn page fixes it. But the daemon also reads one transcript line up to a
-fixed ceiling, so a block inside an unusually large entry (roughly half a
-megabyte of JSON) cannot be parsed at all and answers 404 permanently. Re-fetch
+fixed ceiling, so a block inside an unusually large entry (more than 8 MB of
+JSON; roughly half a megabyte on daemons before the image-result fix) cannot be
+parsed at all and answers 404 permanently. Re-fetch
 once; if the fresh chip 404s again, show the block as unavailable rather than
 retrying, and keep the chip's `lines`/`lang` visible so the user still sees what
 is there.

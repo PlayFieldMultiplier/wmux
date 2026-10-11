@@ -566,14 +566,11 @@ describe('TranscriptProjector — draining a burst (D3) and stalling on an overs
     expect(harness.appends).toHaveLength(1);
     expect(harness.appends[0].data.cursor.tailOffset).toBe(settled);
 
-    // The newline releases it, and the skipped row is VISIBLE rather than a hole.
+    // The newline releases it, and the record arrives as the row it is.
     fs.appendFileSync(file, '\n', 'utf8');
     harness.projector.nudge('pty-1', 'agent.stop');
     await waitFor(() => harness.appends.length === 2);
-    const labels = harness.appends[1].data.events
-      .filter((e) => e.kind === 'meta')
-      .map((e) => (e.kind === 'meta' ? e.label : ''));
-    expect(labels).toContain('oversized entry skipped');
+    expect(harness.appends[1].data.events.map((e) => [e.id, e.kind])).toEqual([['huge-1', 'user_text']]);
   });
 });
 
@@ -946,7 +943,9 @@ describe('snapshot — a huge non-conversation line before the answer (after /cl
     harness.bindings.set('pane', binding({ transcriptPath: file }));
     const page = harness.projector.snapshot('pane')!;
     expect(page.events.map((e) => e.kind)).toEqual(['assistant_text']);
-    // Nothing older was found: the head stays where the first window put it.
-    expect(page.cursor.headOffset).toBe(Buffer.byteLength(big) + 1);
+    // The oversized line is read whole (it yields no rows), so the head moves
+    // to its start, which is the start of the file.
+    expect(page.cursor.headOffset).toBe(0);
+    expect(page.hasMore).toBe(false);
   });
 });
