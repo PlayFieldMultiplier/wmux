@@ -126,6 +126,8 @@ describe('the auto-deny countdown on screen', () => {
       ' Permission rule Bash(rm *) requires confirmation for this command.']],
     ['indented past the prose', (t: string) => [
       `   ⚠ Claude Code will automatically deny this request in ${t}, to avoid blocking progress on an`, '   unattended session']],
+    ['behind a column-0 box edge (stripped before the parse)', (t: string) => [
+      `│  ⚠ Claude Code will automatically deny this request in ${t}, to avoid blocking progress on an`, '│  unattended session']],
   ])('a row %s stays in the reason and the hash', (_label, rows) => {
     const a = parseTerminalPrompt(withCountdown(WHOLE, rows('1:58')), { cols: WHOLE.cols })!;
     const b = parseTerminalPrompt(withCountdown(WHOLE, rows('1:41')), { cols: WHOLE.cols })!;
@@ -156,7 +158,7 @@ afterEach(() => {
   }
 });
 
-function makeRegistry(first: Fixture, opts: { transcriptCall?: boolean } = {}) {
+function makeRegistry(first: Fixture, opts: { transcriptCall?: boolean; renderMs?: number } = {}) {
   const writes: string[] = [];
   const clock = { now: 1_800_000_000_000 };
   const mark = { bytes: 1, keyInputRevision: 3, incarnation: 'inc-1' };
@@ -166,7 +168,12 @@ function makeRegistry(first: Fixture, opts: { transcriptCall?: boolean } = {}) {
     wmuxDir: tmpDir,
     readScreenTail: async () => null,
     writeToSession: (_id, data) => { writes.push(data); return true; },
-    readPromptScreen: async () => ({ rows: screen.fx.screen, cols: screen.fx.cols, mark: { ...mark } }),
+    // The ring is captured at the call; a render queued behind others ends later.
+    readPromptScreen: async () => {
+      const rows = screen.fx.screen;
+      clock.now += opts.renderMs ?? 0;
+      return { rows, cols: screen.fx.cols, mark: { ...mark } };
+    },
     promptScreenMark: () => ({ ...mark }),
     // Measured: no tool_use in the transcript while the dialog is up. A
     // transcript call (an older build, or written late) binds by its id.
@@ -179,8 +186,8 @@ function makeRegistry(first: Fixture, opts: { transcriptCall?: boolean } = {}) {
   return { registry, writes, clock, mark, screen };
 }
 
-async function create(h: ReturnType<typeof makeRegistry>): Promise<ApprovalRequest> {
-  await h.registry.noteTerminalPrompt({ sessionId: 'pty-a', agent: 'claude', ...HOOK });
+async function create(h: ReturnType<typeof makeRegistry>, note: Partial<typeof HOOK> = {}): Promise<ApprovalRequest> {
+  await h.registry.noteTerminalPrompt({ sessionId: 'pty-a', agent: 'claude', ...HOOK, ...note });
   const [record] = h.registry.list().pending;
   if (!record) throw new Error('no record');
   return record;
@@ -207,6 +214,19 @@ describe('auto-deny records', () => {
       choices: [{ key: '1', label: 'Yes' }, { key: '2', label: 'No' }],
       autoDenyAt: new Date(1_800_000_000_000 + 118_000).toISOString(),
     });
+  });
+
+  it('the deadline counts from when the screen was read, not from when a queued render finished', async () => {
+    const h = makeRegistry(WHOLE, { renderMs: 10_000 });
+    const record = await create(h);
+    expect(record.autoDenyAt).toBe(new Date(1_800_000_000_000 + 118_000).toISOString());
+  });
+
+  it('an informational record carries no deadline (nothing refreshes it once a key stops the countdown)', async () => {
+    const h = makeRegistry(WHOLE);
+    const record = await create(h, { toolInput: { command: 'rm -r "$OTHER"/*', description: DESCRIPTION } });
+    expect(record).not.toHaveProperty('promptFingerprint');
+    expect(record).not.toHaveProperty('autoDenyAt');
   });
 
   it('a dialog with no countdown has no deadline', async () => {

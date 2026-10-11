@@ -259,6 +259,12 @@ interface DialogRead {
   /** The grid's width and height at the read, when known. */
   cols?: number;
   height?: number;
+  /**
+   * When the read began: the ring is captured before the render's first
+   * await, so this is when the screen showed what was parsed, however long
+   * the render then queued.
+   */
+  readAt?: number;
 }
 
 /** The tool call a dialog is bound to (transcript, or the PermissionRequest hook). */
@@ -383,14 +389,15 @@ function copyRequest(r: ApprovalRequest): ApprovalRequest {
 export const AUTO_DENY_JITTER_MS = 5_000;
 
 /**
- * A record replacing another for the same dialog keeps the auto-deny deadline
- * the phone was already shown: each read lands up to a second apart (the
- * screen shows whole seconds), and a deadline that moved on every refresh
- * would make the card's countdown jump. A read more than AUTO_DENY_JITTER_MS
- * off is another countdown (a new dialog) and keeps its own value.
+ * A record replacing another for the same dialog (the same `dialogKey`: screen
+ * hash and bound call) keeps the auto-deny deadline the phone was already
+ * shown: each read lands up to a second apart (the screen shows whole
+ * seconds), and a deadline that moved on every refresh would make the card's
+ * countdown jump. A read more than AUTO_DENY_JITTER_MS off is another
+ * countdown and keeps its own value.
  */
 function keepAutoDenyAt(fresh: ApprovalRequest, previous: ApprovalRequest): void {
-  if (!fresh.autoDenyAt || !previous.autoDenyAt) return;
+  if (!fresh.autoDenyAt || !previous.autoDenyAt || fresh.dialogKey !== previous.dialogKey) return;
   if (Math.abs(Date.parse(fresh.autoDenyAt) - Date.parse(previous.autoDenyAt)) <= AUTO_DENY_JITTER_MS) {
     fresh.autoDenyAt = previous.autoDenyAt;
   }
@@ -1317,7 +1324,6 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       await this.mutate(() => {
         const stale = stillStale();
         if (!stale) return [];
-        keepAutoDenyAt(fresh, stale);
         stale.state = 'superseded';
         stale.resolvedAt = this.now();
         fresh.createdAt = this.now();
@@ -1509,8 +1515,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
 
   /** One screen read, parsed. Outside the mutation chain: a render can take seconds. */
   private async readActiveDialog(sessionId: string): Promise<DialogRead | null> {
+    const readAt = this.now();
     const screen = await this.readPromptScreenSafely(sessionId);
-    return screen ? this.parseActiveDialog(screen) : null;
+    const read = screen ? this.parseActiveDialog(screen) : null;
+    return read ? { ...read, readAt } : null;
   }
 
   /**
@@ -1626,11 +1634,13 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       ...(toolName ? { toolName } : {}),
       ...(summary ? { summary } : {}),
       ...(risky ? { risk: 'critical' as const } : {}),
-      ...(parsed?.autoDenyRemainingMs !== undefined
-        ? { autoDenyAt: new Date(this.now() + parsed.autoDenyRemainingMs).toISOString() }
-        : {}),
       ...(answerable && parsed && read
         ? {
+            // Only on a record a key at the desk refreshes (noteFenceInput):
+            // that key stops Claude's countdown, and the refresh drops it.
+            ...(parsed.autoDenyRemainingMs !== undefined
+              ? { autoDenyAt: new Date((read.readAt ?? this.now()) + parsed.autoDenyRemainingMs).toISOString() }
+              : {}),
             question: parsed.question,
             ...(parsed.reason ? { reason: parsed.reason } : {}),
             choices: answer!.choices,

@@ -1148,7 +1148,7 @@ What `/api/approvals` carries for this kind:
 | `id`, `sessionId`, `agent`, `kind`, `state`, `createdAt`, `workspaceId?` | yes | yes |
 | `toolName` (when known), `summary` (the command, ≤200 chars + `…`, display only — the full command is at `/detail`) | yes | yes |
 | `risk` (`critical` when the command or rule reads as destructive — `rm -rf`, `sudo`, …) | yes | yes |
-| `autoDenyAt` (ISO 8601 UTC: when Claude Code denies the dialog by itself, see below) | while pending, when the dialog draws the countdown | same |
+| `autoDenyAt` (ISO 8601 UTC: when Claude Code denies the dialog by itself, see below) | only when the record is answerable and pending | same |
 | `question`, `reason` | never | only when the record is answerable |
 | `choices`, `promptFingerprint` | never | only when the record is answerable, pending and not yet answered |
 | `hasDetail: true` (`GET /api/approvals/<id>/detail` has the full command) | never | with `choices`, on a server started with `--allow-transcript` |
@@ -1251,8 +1251,8 @@ classifier denials — draws, as the last rows of its reason, `⚠ Claude Code
 will automatically deny this request in 1:58, to avoid blocking progress on an
 unattended session`, redrawn every second. That sentence is neither in
 `reason` nor in `promptFingerprint`, so the fingerprint you were shown stays
-valid while it ticks. The record carries `autoDenyAt` instead: the shown time
-added to the daemon's clock when the record was made (good to about a second:
+valid while it ticks. An answerable record carries `autoDenyAt` instead: the
+shown time added to the moment the daemon read the screen (good to about a second:
 the screen shows whole seconds). A record that replaces this one for the same dialog keeps
 the same `autoDenyAt` unless its own read is more than 5 s off (a new
 countdown). Absent when there is no countdown, after a key at the computer

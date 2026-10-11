@@ -198,9 +198,11 @@ export interface ApprovalRequest {
   /**
    * When Claude Code will deny a `terminal_prompt` dialog by itself (ISO 8601,
    * UTC): its unattended-session countdown ("will automatically deny this
-   * request in 1:58") read at creation and added to the clock. Present only
-   * while the dialog draws that countdown. A record that replaces this one for
-   * the same dialog keeps the value unless the new read is more than 5 s off.
+   * request in 1:58") read at creation and added to the time of that screen
+   * read. Present only on an answerable record whose dialog draws that
+   * countdown (a key at the desk refreshes such a record, and stops the
+   * countdown). A record that replaces this one for the same dialog keeps the
+   * value unless the new read is more than 5 s off.
    * Display only: nothing is decided from it.
    */
   autoDenyAt?: string;
