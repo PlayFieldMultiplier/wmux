@@ -96,10 +96,12 @@ agent's browser calls then reach only the hosts on that pane's allowed list,
 and the pane's Chrome itself runs behind a main-owned filtering proxy.
 Downloads are refused. The wmux tools that run caller-supplied code,
 `browser_repl` and `repl_run`, are refused on a protected pane, and also
-wherever wmux cannot confirm that the calling pane is unprotected. A missing
-or unreadable policy keeps every previously protected pane blocked until the
-operator confirms it again. The policy is set only from the main window; no tool
-argument or CLI flag can change it.
+wherever wmux cannot confirm that the calling pane is unprotected. Desktop
+computer use (the `computer` tool) is refused from a protected pane, and from
+any caller wmux cannot identify while a pane is protected. A missing or
+unreadable policy keeps every previously protected pane blocked until the
+operator confirms it again. The policy is set only from the main window; no
+tool argument or CLI flag can change it.
 
 **Out of scope.** As in §1.3.1, this confines the documented surfaces: the
 wmux browser tools, MCP and CLI an agent is given. It does not confine code
@@ -109,7 +111,9 @@ debugging endpoint directly (§3). Use a protected pane to keep an agent's
 browser tools on the sites you chose, not as a sandbox for an agent with a
 shell. Protection also does not confine what other panes do: a tool that acts
 through another pane (`terminal_send`, `send_message`, `a2a_*`, `fanout_start`)
-runs under that pane's own scope, not this one's.
+runs under that pane's own scope, not this one's, and an unprotected pane's
+agent with computer use can operate a protected pane's Chrome window like any
+other desktop app.
 
 ### 1.4 Packaging fuse posture
 
@@ -243,3 +247,4 @@ What we do not consider a wmux security issue:
 | 2026-10-09 | §1.5: documented the `--allow-git-write` ceiling for phone push, PR create and merge, and what it does and does not guard against. |
 | 2026-10-11 | §1.3.2: documented protected Chrome panes and their scope: they confine the agent's browser tools, not same-user code such as a pane's shell. |
 | 2026-10-11 | §1.3.2: `browser_repl` and `repl_run` are refused on a protected pane (and when protection cannot be confirmed); stated that a protected pane does not confine other panes. |
+| 2026-10-11 | §1.3.2: computer use is refused from a protected pane and from an unidentified caller while a pane is protected; an unprotected pane's computer use is not confined. |
