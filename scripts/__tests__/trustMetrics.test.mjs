@@ -47,9 +47,17 @@ describe('analyze', () => {
         { sha: sha('2'), at: day(10), subject: 'feat: lives (#2)' },
         { sha: sha('3'), at: day(9), subject: 'feat: dies on day 2 (#3)' },
         { sha: sha('4'), at: day(7), subject: 'Revert "feat: dies on day 2 (#3)"', body: `This reverts commit ${sha('3').slice(0, 12)}.` },
-      ]),
+        { sha: sha('5'), at: day(12), subject: 'feat: reverted and re-applied in one second (#5)' },
+      ]).concat(
+        // Same second: git prints the re-apply (newer on main) before the revert.
+        '\n',
+        log([{ sha: sha('0'), at: day(10), subject: 'Reapply "feat: x (#5)"', body: `This reverts commit ${sha('6')}.` }]),
+        '\n',
+        log([{ sha: sha('6'), at: day(10), subject: 'Revert "feat: x (#5)"', body: `This reverts commit ${sha('5')}.` }]),
+      ),
     );
     const r = analyze(commits, { since: day(30), now: NOW });
-    expect(r.totals).toMatchObject({ merged: 2, revertPrs: 0, eligible7d: 2, survived7d: 1, survivalRate7d: 0.5 });
+    expect(r.totals).toMatchObject({ merged: 3, revertPrs: 0, eligible7d: 3, survived7d: 2 });
+    expect(r.reverted.find((p) => p.pr === 5)?.inMainNow).toBe(true);
   });
 });

@@ -68,13 +68,16 @@ function median(xs) {
 
 /**
  * Rows and totals for the PRs merged at or after `since`.
- * `commits`: every first-parent commit from `since` to now (any order).
+ * `commits`: every first-parent commit from `since` to now, newest first as
+ * `git log --first-parent` prints them; that order breaks same-second ties.
  * `prOf(sha)`: optional resolver for a commit whose subject names no PR.
  */
 export function analyze(commits, { since, now, prOf = () => null }) {
   const bySha = new Map();
   const byPr = new Map();
-  const ordered = [...commits].sort((a, b) => a.at - b.at);
+  // Oldest first; `seq` keeps main's own order when two commits share a second.
+  const byOrder = (a, b) => a.at - b.at || a.seq - b.seq;
+  const ordered = commits.map((c, i) => ({ ...c, seq: commits.length - i })).sort(byOrder);
   for (const c of ordered) {
     const pr = prNumberOf(c.subject) ?? prOf(c.sha);
     const row = { ...c, pr, target: revertTarget(c) };
@@ -103,13 +106,13 @@ export function analyze(commits, { since, now, prOf = () => null }) {
     }
     if (!node || node.target) continue; // points outside the log, or a cycle
     const list = events.get(node.sha) ?? [];
-    list.push({ at: c.at, reverted: depth % 2 === 1, by: c.sha });
+    list.push({ at: c.at, seq: c.seq, reverted: depth % 2 === 1, by: c.sha });
     events.set(node.sha, list);
   }
 
   const revertedAt = (sha, until) => {
     let state = false;
-    for (const e of (events.get(sha) ?? []).filter((x) => x.at <= until).sort((a, b) => a.at - b.at)) state = e.reverted;
+    for (const e of (events.get(sha) ?? []).filter((x) => x.at <= until).sort(byOrder)) state = e.reverted;
     return state;
   };
 
@@ -121,7 +124,7 @@ export function analyze(commits, { since, now, prOf = () => null }) {
       revertPrs.push({ pr: c.pr, sha: c.sha, mergedAt: c.at, subject: c.subject });
       continue;
     }
-    const evs = (events.get(c.sha) ?? []).sort((a, b) => a.at - b.at);
+    const evs = (events.get(c.sha) ?? []).sort(byOrder);
     const first = evs.find((e) => e.reverted) ?? null;
     const eligible = c.at <= now - SURVIVAL_DAYS * DAY_MS;
     prs.push({

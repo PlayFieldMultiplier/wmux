@@ -214,11 +214,13 @@ describe('track record feed', () => {
       // The Git page's hand-off link on the same task workspace.
       h.setLink(link('l6', 'running', { owner: { workspaceId: 'task-ws-1' }, decisionIds: ['d8'] }));
       h.setDecisions({ 'ws-hq': { id: 'd8', question: 'q', options: [], context: '', status: 'resolved', resolvedBy: 'human', raisedAt: NOW } });
-      expect(h.store.read().open['fan:wtask-abc123'].touches?.decisions).toBe(1);
+      // A linkless decision raised in the task's own workspace is about that task.
+      h.setDecisions({ 'task-ws-1': { id: 'd9', question: 'q', options: [], context: '', status: 'resolved', resolvedBy: 'human', raisedAt: NOW } });
+      expect(h.store.read().open['fan:wtask-abc123'].touches?.decisions).toBe(2);
       h.setLink(link('l6', 'done', { owner: { workspaceId: 'task-ws-1' }, decisionIds: ['d8'] }));
       h.ledger({ from: 'review_requested', to: 'completed' });
       h.store.mutate((d) => moveItem(d, 'link:old', 'done', NOW));
-      expect(h.store.read().weeks[0].doneTouches).toEqual([1]);
+      expect(h.store.read().weeks[0].doneTouches).toEqual([2]);
     });
 
     it('makes the retro card on schedule and records a quiet week without one', () => {

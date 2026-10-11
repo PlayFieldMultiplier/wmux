@@ -40,6 +40,19 @@ function repoSlug() {
 
 const now = Date.now();
 const since = parseSince(SINCE_ARG, now);
+
+// A shallow clone may hold only part of the window, and the counts would look
+// complete: refuse unless its oldest commit predates the window.
+if (run('git', ['rev-parse', '--is-shallow-repository']).trim() === 'true') {
+  const oldest = Number(run('git', ['log', '--first-parent', REF, '--format=%ct']).trim().split('\n').pop()) * 1000;
+  if (!(oldest < since)) {
+    console.error(
+      `trust-metrics: this clone is shallow and starts ${new Date(oldest).toISOString().slice(0, 10)}, inside the window. ` +
+        'Run `git fetch --unshallow origin` (or a deeper fetch) first.',
+    );
+    process.exit(1);
+  }
+}
 const commits = parseGitLog(
   run('git', ['log', '--first-parent', REF, `--since=${Math.floor(since / 1000)}`, `--format=${GIT_LOG_FORMAT}`]),
 );

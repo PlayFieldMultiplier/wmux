@@ -224,8 +224,10 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
             (k) => k.startsWith('link:') && ports.workLinks.get(k.slice(5))?.decisionIds.includes(decision.id),
           );
           const link = linkKey ? ports.workLinks.get(linkKey.slice(5)) : null;
-          if (linkKey && link && markSeen((d.seen.resolvedDecisions ??= []), decision.id)) {
-            noteOwnerTouch(d, fanTwinOf(d, link.owner.workspaceId) ?? linkKey, 'decisions');
+          // With no link, a decision raised in a fan-out task's own workspace is about that task.
+          const key = link ? (fanTwinOf(d, link.owner.workspaceId) ?? linkKey) : fanTwinOf(d, workspaceId);
+          if (key && markSeen((d.seen.resolvedDecisions ??= []), decision.id)) {
+            noteOwnerTouch(d, key, 'decisions');
             changed = true;
           }
         }
