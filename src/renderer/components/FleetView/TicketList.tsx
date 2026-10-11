@@ -111,7 +111,11 @@ function readQueryReply(reply: unknown): { task?: Task; gone: boolean } {
  * neither: it is tried again the next time the ticket opens.
  */
 function useTicketResult(ticket: FleetTicket): { result: FleetTicket['result']; gone: boolean } {
-  const [loaded, setLoaded] = useState<{ id: string; result: FleetTicket['result']; gone: boolean } | null>(null);
+  const [loaded, setLoaded] = useState<{ revision: string; result: FleetTicket['result']; gone: boolean } | null>(null);
+  // Reading the previous report must never acknowledge the next one. Key
+  // both cached replies and in-flight reads by the report version, including
+  // its query target; a WorkLink id alone survives all of those changes.
+  const revision = JSON.stringify([ticket.id, ticket.workspaceId, ticket.a2aTaskId, ticket.updatedAt, ticket.state]);
   const ended = ticket.state === 'done' || ticket.state === 'failed';
   const need = ended && !ticket.result && !!ticket.a2aTaskId;
   useEffect(() => {
@@ -124,12 +128,13 @@ function useTicketResult(ticket: FleetTicket): { result: FleetTicket['result']; 
         if (cancelled) return;
         const { task, gone } = readQueryReply(reply);
         const result = ticketResultOf(task);
-        if (result || gone) setLoaded({ id: ticket.id, result, gone: !result && gone });
+        if (result || gone) setLoaded({ revision, result, gone: !result && gone });
       }, () => undefined);
     return () => { cancelled = true; };
-  }, [need, ticket.id, ticket.a2aTaskId, ticket.workspaceId]);
+  }, [need, revision, ticket.a2aTaskId, ticket.workspaceId]);
+  if (!ended) return { result: undefined, gone: false };
   if (ticket.result) return { result: ticket.result, gone: false };
-  return loaded?.id === ticket.id ? { result: loaded.result, gone: loaded.gone } : { result: undefined, gone: false };
+  return loaded?.revision === revision ? { result: loaded.result, gone: loaded.gone } : { result: undefined, gone: false };
 }
 
 export function TicketDetail({ ticket, assignee, decisions, onJump, onOpenDecision, onResultShown, t }: TicketDetailProps) {
