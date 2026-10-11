@@ -1865,7 +1865,8 @@ form describes: the answer is 409 `prompt-changed` with nothing typed.
   for two options) makes it answerable again.
 - A question dismissed with Esc at the computer sends Claude Code no hook;
   its record expires (`prompt-gone`) a couple of seconds later, once the
-  screen shows the question gone and no picker up.
+  screen shows Claude's "User declined to answer questions", the question
+  gone and no picker up.
 - 200 `{state: 'resolved', effect: 'complete'}` only once the screen confirms
   the answer: this prompt's picker is gone and a new "User answered Claude's
   questions" block lists every question with exactly the answer given. When every key

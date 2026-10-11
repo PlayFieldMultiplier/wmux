@@ -143,6 +143,16 @@ const ANSWERED_ENTRY = /^(?:⎿\s+)?·\s+(.*)$/;
 const CHAT_ROW_LABEL = 'Chat about this';
 /** The key hint under a question view (its rows joined with one space). */
 const HINT = /^Enter to select · .+ · Esc to cancel$/;
+/**
+ * The hint of a picker for ONE question: Claude draws `↑/↓ to navigate` then,
+ * and `Tab/Arrow keys to navigate` for several (measured in the 2.1.296 binary).
+ */
+const ONE_QUESTION_HINT = /· ↑\/↓ to navigate ·/;
+/** Rows the hint may take once a narrow pane wraps it. */
+const HINT_MAX_ROWS = 4;
+/** The review screen's own rows: a picker is up even with no hint drawn. */
+const REVIEW_ROWS: ReadonlySet<string> = new Set(['Review your answers', 'Ready to submit your answers?']);
+const DECLINED_HEADER = 'User declined to answer questions';
 
 export const ASK_KEY_DOWN = '\x1b[B';
 export const ASK_KEY_ENTER = '\r';
@@ -217,7 +227,13 @@ function parseTabBar(row: string): AskPickerTabs | null {
   return tabs.length > 0 ? { tabs, submitTab } : null;
 }
 
-function parseQuestionView(rows: readonly string[], start: number, bar: AskPickerTabs): AskPickerQuestionView | null {
+/** `seen.hint` receives the key hint under the view, its rows joined. */
+function parseQuestionView(
+  rows: readonly string[],
+  start: number,
+  bar: AskPickerTabs,
+  seen: { hint?: string } = {},
+): AskPickerQuestionView | null {
   const text: string[] = [];
   let i = start;
   for (; i < rows.length && !OPTION_ROW.test(rows[i]!); i++) {
@@ -270,7 +286,9 @@ function parseQuestionView(rows: readonly string[], start: number, bar: AskPicke
   }
   // No bottom rule: not a whole picker.
   if (i >= rows.length || options.length === 0) return null;
-  if (!onlyHintBelow(rows, i + 1, String(options.length + 1))) return null;
+  const hint = hintBelow(rows, i + 1, String(options.length + 1));
+  if (hint === null) return null;
+  seen.hint = hint;
   if (options.filter((o) => o.cursor).length + (submitRow?.cursor ? 1 : 0) > 1) return null;
   return {
     view: 'question',
@@ -285,9 +303,9 @@ function parseQuestionView(rows: readonly string[], start: number, bar: AskPicke
 /**
  * Under a question view's bottom rule Claude draws its `N. Chat about this`
  * row and the key hint, nothing else. Any other row (another menu, an input
- * prompt) means this is not the question that is up.
+ * prompt) means this is not the question that is up. The hint, or null.
  */
-function onlyHintBelow(rows: readonly string[], from: number, chatKey: string): boolean {
+function hintBelow(rows: readonly string[], from: number, chatKey: string): string | null {
   const hint: string[] = [];
   let chat = false;
   for (let i = from; i < rows.length; i++) {
@@ -300,7 +318,8 @@ function onlyHintBelow(rows: readonly string[], from: number, chatKey: string): 
     }
     hint.push(text);
   }
-  return HINT.test(normalize(hint.join(' ')));
+  const text = normalize(hint.join(' '));
+  return HINT.test(text) ? text : null;
 }
 
 function parseReviewView(rows: readonly string[], start: number, bar: AskPickerTabs): AskPickerReviewView | null {
@@ -385,18 +404,37 @@ export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | nu
       : parseQuestionView(rows, i, tabs);
   }
   const first = rows.findIndex((row) => row.trim().length > 0);
-  if (first < 0 || rows[first]!.trim() === 'Review your answers') return null;
-  return parseQuestionView(rows, first, { tabs: [], submitTab: false, topCut: true });
+  if (first < 0 || REVIEW_ROWS.has(rows[first]!.trim())) return null;
+  const seen: { hint?: string } = {};
+  const view = parseQuestionView(rows, first, { tabs: [], submitTab: false, topCut: true }, seen);
+  // Without the bar, only the hint says how many questions the picker holds.
+  return view && ONE_QUESTION_HINT.test(seen.hint ?? '') ? view : null;
 }
 
 /**
- * Claude's picker hint (`Enter to select · … · Esc to cancel`, wrapped over two
- * rows or not) is on the grid: some question is still up, even when too little
- * of it is drawn to read (a short pane scrolls its rows).
+ * Some AskUserQuestion picker is still up, even when too little of it is drawn
+ * to read (a short pane scrolls its rows): Claude's key hint (`Enter to select
+ * · … · Esc to cancel`, however many rows a narrow pane wraps it over) among
+ * the grid's last rows, a picker the parse reads, or a review screen's own
+ * rows. Biased to "up": a record is never retired on a live picker.
  */
-export function askPickerHintShown(rawRows: readonly string[]): boolean {
+export function askPickerOnScreen(rawRows: readonly string[]): boolean {
+  if (parseAskPicker(rawRows)) return true;
   const rows = rawRows.map((row) => normalize(row)).filter((row) => row.length > 0);
-  return rows.some((row, i) => HINT.test(row) || (i + 1 < rows.length && HINT.test(`${row} ${rows[i + 1]}`)));
+  if (rows.some((row) => REVIEW_ROWS.has(row))) return true;
+  const tail = rows.slice(-HINT_MAX_ROWS);
+  for (let i = 0; i < tail.length; i++) {
+    if (HINT.test(tail.slice(i).join(' '))) return true;
+  }
+  return false;
+}
+
+/**
+ * The grid shows Claude's own report that the question was declined (Esc at
+ * the picker: `⏺ User declined to answer questions`, measured on 2.1.296).
+ */
+export function askDeclinedOnScreen(rawRows: readonly string[]): boolean {
+  return rawRows.some((row) => normalize(row.replace(/^⏺\s*/, '')) === DECLINED_HEADER);
 }
 
 /** How many "User answered Claude's questions:" blocks the grid shows. */
@@ -623,7 +661,11 @@ export function answersConfirmed(
   answers: readonly AskAnswer[],
 ): boolean {
   const picker = parseAskPicker(rows);
-  if (picker && tabsMatch(picker, questions)) return false;
+  // A bar-less picker is this prompt's only when it shows this question: a
+  // follow-up question can be up at once.
+  const ours = !!picker && tabsMatch(picker, questions)
+    && (!picker.topCut || (picker.view === 'question' && sameQuestionText(picker.question, questions[0]!.text)));
+  if (ours) return false;
   const from = afterAnchor(rows, baseline.anchor);
   if (from < 0 && countAnsweredBlocks(rows) <= baseline.blocks) return false;
   const block = lastAnsweredBlock(from < 0 ? rows : rows.slice(from));

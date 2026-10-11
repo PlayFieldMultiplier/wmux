@@ -12,7 +12,7 @@ import os from 'node:os';
 import { ApprovalRegistry, QUESTION_DISMISS_CHECK_MS, TERMINAL_PROMPT_MIN_ANSWER_AGE_MS } from '../ApprovalRegistry';
 import { DECISION_V2_WEB_ANSWER, type ApprovalRequest } from '../types';
 import { claudeQuestionsForm, extractAskUserQuestion } from '../askUserQuestion';
-import { askPickerHintShown, askPickerUntouched, parseAskPicker } from '../askPicker';
+import { askPickerOnScreen, askPickerUntouched, parseAskPicker } from '../askPicker';
 
 const DIR = path.join(__dirname, 'fixtures', 'terminal-prompts', 'claude-2.1.296');
 const screen = (name: string): string[] =>
@@ -26,6 +26,13 @@ const SCROLLED = screen('claude-ask-short-05-options-scrolled-44x13-2.1.296.json
 const QUESTION_CUT = screen('claude-ask-short-06-question-cut-44x12-2.1.296.json');
 const FULL = screen('claude-ask-single-01-whole-100x30-2.1.296.json');
 const DISMISSED = screen('claude-ask-dismissed-01-esc-80x24-2.1.296.json');
+/** Claude Code 2.1.283's review screen of a two-question prompt (no hint row). */
+const REVIEW = (JSON.parse(fs.readFileSync(path.join(DIR, '..', 'claude-ask-multi-09-review.json'), 'utf8')) as { screen: string[] }).screen;
+/** The same question answered at the desk with a digit: Claude reports it answered, not declined. */
+const ANSWERED_AT_DESK = DISMISSED.map((r) => r
+  .replace('User declined to answer questions', "User answered Claude's questions")
+  .replace('· The build failed on the lint step, how should I proceed? (Fix the lint', '· The build failed on the lint step, how should I proceed? → Fix the lint')
+  .replace('     errors / Skip lint for now)', '     errors'));
 
 const QUESTION = {
   question: 'The build failed on the lint step, how should I proceed?',
@@ -58,9 +65,18 @@ describe('the picker in a short pane', () => {
   it.each([
     ['the option list scrolled (44x13: "↓ 2.", no free-text row)', SCROLLED],
     ['the question\'s first row scrolled off too (44x12)', QUESTION_CUT],
-  ])('%s: not read as the picker, but the hint says one is up', (_label, rows) => {
+  ])('%s: not read as the picker, but a picker is known to be up', (_label, rows) => {
     expect(askPickerUntouched(parseAskPicker(rows), questionsOf(PAYLOAD))).toBe(false);
-    expect(askPickerHintShown(rows)).toBe(true);
+    expect(askPickerOnScreen(rows)).toBe(true);
+  });
+
+  it('a hint a narrow pane wraps over three rows, and a review screen with no hint, still count as a picker up', () => {
+    const narrow = [...QUESTION_CUT.slice(0, -4), 'Enter to select ·', '↑/↓ to navigate ·', 'Esc to cancel', ''];
+    expect(askPickerOnScreen(narrow)).toBe(true);
+    expect(askPickerOnScreen(REVIEW)).toBe(true);
+    // The hint quoted in the scrollback, with Claude's prompt box under it, is no picker.
+    const quoted = ['  Enter to select · ↑/↓ to navigate · Esc to cancel', '', ...DISMISSED.slice(-6)];
+    expect(askPickerOnScreen(quoted)).toBe(false);
   });
 
   it('without its tab bar it matches only one single-select question', () => {
@@ -72,6 +88,9 @@ describe('the picker in a short pane', () => {
     expect(askPickerUntouched(picker, questionsOf(payload([{ ...QUESTION, multiSelect: true }])))).toBe(false);
     // With the bar on screen, the same two-question form is still told apart by its tabs.
     expect(askPickerUntouched(parseAskPicker(RULE_CUT), questionsOf(two))).toBe(false);
+    // A bar-less picker holding several questions says so in its hint: not read at all.
+    const severalHint = QUESTION_FIRST.map((r) => r.replace('↑/↓ to navigate', 'Tab/Arrow keys to navigate'));
+    expect(parseAskPicker(severalHint)).toBeNull();
   });
 
   it('rows above a bar-less view are read as its question, so anything else there fails the match', () => {
@@ -81,9 +100,9 @@ describe('the picker in a short pane', () => {
     expect(askPickerUntouched(parseAskPicker(otherQuestion), questionsOf(PAYLOAD))).toBe(false);
   });
 
-  it('a dismissed question shows no hint', () => {
+  it('a dismissed question shows no picker', () => {
     expect(parseAskPicker(DISMISSED)).toBeNull();
-    expect(askPickerHintShown(DISMISSED)).toBe(false);
+    expect(askPickerOnScreen(DISMISSED)).toBe(false);
   });
 });
 
@@ -202,13 +221,39 @@ describe('a question dismissed at the desk', () => {
     expect(h.registry.list().recentlyResolved.find((r) => r.id === record.id)).toMatchObject({ state: 'expired' });
   });
 
-  it('stays while any picker is still up, even one a short pane scrolled', async () => {
+  it.each([
+    ['a picker a short pane scrolled', QUESTION_CUT],
+    ['a review screen (several questions answered at the desk, not submitted yet)', REVIEW],
+    ['an answer at the desk (its PostToolUse settles it)', ANSWERED_AT_DESK],
+  ])('stays while the screen shows %s', async (_label, rows) => {
     const h = makeRegistry(FULL);
     const record = await create(h);
-    h.pane.rows = QUESTION_CUT;
+    h.pane.rows = rows;
     h.registry.noteDialogKey('pty-a');
     await h.scheduled[0]!.fn();
     expect(h.registry.list().pending.map((r) => r.id)).toEqual([record.id]);
+  });
+
+  it('a phone answer started meanwhile owns the record', async () => {
+    const h = makeRegistry(QUESTION_FIRST);
+    const record = await create(h);
+    h.registry.noteDialogKey('pty-a');
+    h.drawAfterKey(DISMISSED);
+    // The driver types its digit; the screen then reads as dismissed (it is not).
+    await answer(h, record);
+    await h.scheduled[0]!.fn();
+    expect(h.registry.list().recentlyResolved.find((r) => r.id === record.id)?.state).not.toBe('expired');
+  });
+
+  it('only the question pending when the key arrived: a newer one is left alone', async () => {
+    const h = makeRegistry(FULL);
+    const first = await create(h);
+    h.registry.noteDialogKey('pty-a');
+    const second = await create(h);
+    expect(second.id).not.toBe(first.id);
+    h.pane.rows = DISMISSED;
+    await h.scheduled[0]!.fn();
+    expect(h.registry.list().pending.map((r) => r.id)).toEqual([second.id]);
   });
 
   it('nothing is scheduled for a pane with no pending question', () => {
