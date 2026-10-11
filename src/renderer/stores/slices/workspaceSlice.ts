@@ -31,6 +31,7 @@ import {
   shadowBinding,
   shadowsToEvict,
 } from '../shadowWorkspace';
+import { clampFileTreeWidth } from '../../utils/fileTreeLayout';
 import { clampSidebarWidth, dropOwnerFoldKeys, movePinned, pinnedFirst, pruneTaskGroupExpanded, resolveSidebarSortMode, sortModeMigratedToAttention, unpinNestedTasks } from '../../utils/sidebarLayout';
 import {
   collectLeafIds,
@@ -1599,6 +1600,8 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       }
       state.sidebarAttentionFirst = state.sidebarSortMode === 'attention';
       if (data.sidebarWidth !== undefined) state.sidebarWidth = clampSidebarWidth(data.sidebarWidth);
+      if (typeof data.fileTreeVisible === 'boolean') state.fileTreeVisible = data.fileTreeVisible;
+      if (data.fileTreeWidth !== undefined) state.fileTreeWidth = clampFileTreeWidth(data.fileTreeWidth);
       // Dismissed pending questions, kept only for ptyIds this session still
       // binds (a hand-edited or stale entry is dropped, never trusted).
       const dismissed: Record<string, string> = {};

@@ -8,6 +8,7 @@ import { fleetRow, type FleetPane } from '../../../stores/selectors/fleet';
 import { fleetTitle } from '../fleetPresentation';
 import type { WorkTask } from '../../../../shared/workTask';
 import type { EvidenceItem, Task } from '../../../../shared/types';
+import { getLocale, setLocale } from '../../../i18n';
 
 const noop = () => undefined;
 
@@ -270,32 +271,70 @@ describe('FleetCard — NB3 completion-evidence badge', () => {
     expect(renderBadge(undefined)).toBe('');
   });
 
-  it('renders nothing when the completed task carries no evidence items', () => {
-    // A well-formed completed task always has ≥1 item, but the badge must be
-    // defensive: an empty items array is not a badge.
-    expect(renderBadge(taskWithEvidence([]))).toBe('');
+  it('makes missing verification explicit without a success mark', () => {
+    const task = taskWithEvidence([]);
+    for (const candidate of [task, { ...task, status: { ...task.status, evidence: undefined } }]) {
+      const html = renderBadge(candidate);
+      expect(html).toContain('No verification reported');
+      expect(html).toContain('data-evidence-state="missing"');
+      expect(html).not.toContain('var(--accent-green)');
+    }
   });
 
-  it('shows ✓ evidence verified/total from the evidence items', () => {
+  it('shows failed checks even when other checks passed', () => {
     const html = renderBadge(taskWithEvidence([passed, failed, verified]));
     expect(html).toContain('data-fleet-evidence');
     expect(html).toContain('data-evidence-verified="2"');
     expect(html).toContain('data-evidence-total="3"');
-    expect(html).toContain('evidence 2/3');
+    expect(html).toContain('Failed checks: 1');
+    expect(html).toContain('data-evidence-state="failed"');
+    expect(html).toContain('var(--accent-red)');
+    expect(html).not.toContain('var(--accent-green)');
+    expect(html).toContain('Failed: eslint .');
     // Detail (title + summary) lives in the tooltip, not on-card micro-text.
     expect(html).toContain('Refactor auth');
     expect(html).toContain('shipped the fix');
   });
 
-  it('paints the check green when at least one item is verified', () => {
+  it('keeps partially verified work neutral and explicitly incomplete', () => {
     const html = renderBadge(taskWithEvidence([passed, unverified]));
-    expect(html).toContain('var(--accent-green)');
+    expect(html).toContain('1/2 verified · incomplete');
+    expect(html).toContain('data-evidence-state="partial"');
+    expect(html).not.toContain('var(--accent-green)');
   });
 
-  it('mutes the check (no green) when nothing is verified — verified is a grade, not a claim', () => {
-    const html = renderBadge(taskWithEvidence([failed, unverified]));
+  it('does not present unverified artifacts as successful checks', () => {
+    const html = renderBadge(taskWithEvidence([unverified]));
     expect(html).toContain('data-evidence-verified="0"');
+    expect(html).toContain('Not verified');
+    expect(html).toContain('data-evidence-state="unverified"');
     expect(html).not.toContain('var(--accent-green)');
+  });
+
+  it('reserves a green check for a fully verified set and names its source', () => {
+    const html = renderBadge(taskWithEvidence([passed, verified]));
+    expect(html).toContain('2/2 verified');
+    expect(html).toContain('data-evidence-state="verified"');
+    expect(html).toContain('var(--accent-green)');
+    expect(html).toContain('Agent-reported checks');
+  });
+
+  it('never shows a completion badge on an unfinished or failed task', () => {
+    const task = taskWithEvidence([passed]);
+    for (const state of ['working', 'failed', 'canceled'] as const) {
+      expect(renderBadge({ ...task, status: { ...task.status, state } })).toBe('');
+    }
+  });
+
+  it('localizes the verification result and failed command detail in Korean', () => {
+    const locale = getLocale();
+    try {
+      setLocale('ko');
+      const html = renderBadge(taskWithEvidence([passed, failed]));
+      expect(html).toContain('검증 1개 실패');
+      expect(html).toContain('실패: eslint .');
+      expect(html).toContain('에이전트가 보고한 검증');
+    } finally { setLocale(locale); }
   });
 
   it('the full card has no evidence badge when the store holds no matching task', () => {

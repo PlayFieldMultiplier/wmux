@@ -13,6 +13,8 @@
  *   - External logging library integration.
  */
 
+import { maskInlineCredentials } from '../../shared/redactSecrets';
+
 export type IpcErrorCode =
   | 'DAEMON_DISCONNECTED'
   | 'VALIDATION_ERROR'
@@ -102,11 +104,8 @@ function redactUrlToken(s: string): string {
  * they appear, whether or not the string parses as one URL (a pasted link
  * with a space, an error message quoting a URL, a JSON-serialized payload).
  */
-const INLINE_CREDENTIAL = /([?&#](?:token|code|wmux-desktop-code)=)(?!%5Bredacted%5D|\[redacted\])[^&#\s"'\\]+/gi;
-
-export function maskInlineCredentials(s: string): string {
-  return s.replace(INLINE_CREDENTIAL, '$1[redacted]');
-}
+// Moved to shared/redactSecrets.ts so the daemon and CLI mask the same way.
+export { maskInlineCredentials };
 
 /**
  * Channels whose arguments are never summarized at all: clipboard text is

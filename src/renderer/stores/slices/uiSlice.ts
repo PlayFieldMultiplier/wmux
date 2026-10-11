@@ -14,6 +14,7 @@ import { markRetentionMigrationDone } from '../retentionMigration';
 import { DEFAULT_BROWSER_BACKEND, isBrowserBackend, type BrowserBackend } from '../../../shared/browserBackend';
 import { CHROME_PRESET_VALUES } from '../../../shared/chromePresets';
 import { sanitizeShortcutOverrides, type ShortcutActionId, type ShortcutOverrides } from '../../../shared/keymap';
+import { FILE_TREE_DEFAULT_WIDTH, clampFileTreeWidth } from '../../utils/fileTreeLayout';
 import { SIDEBAR_DEFAULT_WIDTH, clampSidebarWidth, isNestedTask, togglePinned, type SidebarSortMode } from '../../utils/sidebarLayout';
 
 /**
@@ -897,6 +898,9 @@ export interface UISlice {
   fileTreeVisible: boolean;
   toggleFileTree: () => void;
   setFileTreeVisible: (visible: boolean) => void;
+  /** File tree column width in px (fileTreeLayout.ts). Clamped on set. */
+  fileTreeWidth: number;
+  setFileTreeWidth: (width: number) => void;
 
   // ─── Company mode ──────────────────────────────────────────────────────
   sidebarMode: 'workspaces' | 'company';
@@ -2126,6 +2130,12 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setFileTreeVisible: (visible) => set((state) => {
     state.fileTreeVisible = visible;
+  }),
+
+  fileTreeWidth: FILE_TREE_DEFAULT_WIDTH,
+
+  setFileTreeWidth: (width) => set((state) => {
+    state.fileTreeWidth = clampFileTreeWidth(width);
   }),
 
   // ─── Company mode ──────────────────────────────────────────────────────

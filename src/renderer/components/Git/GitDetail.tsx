@@ -18,6 +18,8 @@ import { DetailError, useDetail } from './useDetail';
 import { PrChecks, usePrChecks } from './PrChecks';
 import { PrReviewActions } from './PrReviewActions';
 import { PrFiles } from './PrFiles';
+import { PrReviewGuide, PrReviewGuideUnverified, approveBlock, guideKey } from './PrReviewGuide';
+import type { ReviewGuide } from '../../../shared/prReviewGuide';
 import type { PrPin } from './prReviewState';
 import { WhoActsNext } from './WhoActsNext';
 import { PrStepText, getGithubBridge } from './PrSection';
@@ -108,12 +110,17 @@ function DetailHeader({ title, number, repo, url, state, author, handoff, repoCo
 
 function PrBody({ repoPath, pr, refreshKey }: { repoPath: string; pr: PrSummary; refreshKey: number }): React.ReactElement {
   const t = useT();
-  const detail = useDetail<PrComment[]>(async () => {
+  const detail = useDetail<{ comments: PrComment[]; guide: ReviewGuide | null; unverified: boolean }>(async () => {
     const bridge = getGithubBridge();
     if (!bridge) return { ok: false, message: t('git.bridgeUnavailable') };
     const res = await bridge.prDetail(repoPath, pr.number, pr.updatedAt);
-    return res.ok ? { ok: true, value: res.detail.comments } : { ok: false, message: res.message };
+    return res.ok
+      ? { ok: true, value: { comments: res.detail.comments, guide: res.detail.reviewGuide ?? null, unverified: res.detail.reviewGuideUnverified === true } }
+      : { ok: false, message: res.message };
   }, `${pr.updatedAt}\0${refreshKey}`);
+  const [, guideChanged] = useState(0);
+  const comments = detail.value?.comments;
+  const guide = detail.value?.guide ?? null;
   const checks = usePrChecks(repoPath, pr, refreshKey);
   // The head this detail is pinned to: the first one read, until Reload.
   const latest = checks.data?.head.headRefOid ?? null;
@@ -133,6 +140,7 @@ function PrBody({ repoPath, pr, refreshKey }: { repoPath: string; pr: PrSummary;
     checks.reload(true);
   };
   const reread = () => checks.reload(true);
+  const gKey = pin ? guideKey(repoPath, pr.number, pin.head) : '';
   return (
     <div className="wmux-git-detail-body" data-pr-detail>
       <div className="wmux-git-detail-facts">
@@ -151,16 +159,23 @@ function PrBody({ repoPath, pr, refreshKey }: { repoPath: string; pr: PrSummary;
               </button>
             </div>
           )}
-          <PrReviewActions repoPath={repoPath} prUrl={pr.url} number={pr.number} head={checks.data.head} checks={checks.data.checks} pin={pin} onMoved={reread} />
+          {guide && (
+            <PrReviewGuide key={gKey} guide={guide} guideKey={gKey} head={pin.head} checks={checks.data.checks} onChange={() => guideChanged((n) => n + 1)} />
+          )}
+          {!guide && detail.value?.unverified && <PrReviewGuideUnverified />}
+          <PrReviewActions
+            repoPath={repoPath} prUrl={pr.url} number={pr.number} head={checks.data.head} checks={checks.data.checks} pin={pin} onMoved={reread}
+            approveReady={!!guide && approveBlock(gKey, guide, pin.head, checks.data.checks) === null}
+          />
           <PrFiles repoPath={repoPath} prUrl={pr.url} number={pr.number} pin={pin} readKey={`${refreshKey}\0${reloads}`} onMoved={reread} />
         </>
       )}
       {detail.loading && <div className="wmux-git-note">{t('git.loading')}</div>}
       {!detail.loading && detail.error && <DetailError label={t('git.commentsFailed')} error={detail.error} retry={detail.retry} />}
-      {!detail.loading && detail.value?.length === 0 && <div className="wmux-git-note">{t('git.noComments')}</div>}
-      {detail.value && detail.value.length > 0 && (
-        <ol className="wmux-git-issue-timeline" aria-label={t('git.issues.comments', { count: detail.value.length })}>
-          {detail.value.map((c, i) => (
+      {!detail.loading && comments?.length === 0 && <div className="wmux-git-note">{t('git.noComments')}</div>}
+      {comments && comments.length > 0 && (
+        <ol className="wmux-git-issue-timeline" aria-label={t('git.issues.comments', { count: comments.length })}>
+          {comments.map((c, i) => (
             <li key={i} className="wmux-git-issue-comment">
               <div className="wmux-git-issue-byline">
                 <span className="font-medium">@{c.author}</span>

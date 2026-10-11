@@ -34,7 +34,7 @@ const REVIEW_LABEL: Record<ReviewEvent, string> = {
   COMMENT: 'git.review.comment',
 };
 
-export function PrReviewActions({ repoPath, prUrl, number, head, checks, pin, onMoved }: {
+export function PrReviewActions({ repoPath, prUrl, number, head, checks, pin, onMoved, approveReady = false }: {
   repoPath: string;
   prUrl: string;
   number: number;
@@ -45,6 +45,8 @@ export function PrReviewActions({ repoPath, prUrl, number, head, checks, pin, on
   checks: readonly PrCheck[];
   /** The PR moved or changed: read its head and checks again. */
   onMoved: () => void;
+  /** Every step of the PR's review order guide is checked: highlight Approve. */
+  approveReady?: boolean;
 }): React.ReactElement | null {
   const t = useT();
   const key = draftKey(repoPath, number);
@@ -138,8 +140,9 @@ export function PrReviewActions({ repoPath, prUrl, number, head, checks, pin, on
           <button
             key={ev}
             type="button"
-            className={`wmux-git-button ${FOCUS_RING}`}
+            className={ev === 'APPROVE' && approveReady ? `wmux-git-primary wmux-git-approve-ready ${FOCUS_RING}` : `wmux-git-button ${FOCUS_RING}`}
             disabled={busy !== null || locked || (ev !== 'APPROVE' && !review.trim())}
+            data-pr-approve-ready={ev === 'APPROVE' && approveReady ? '' : undefined}
             onClick={() => void submitReview(ev)}
             data-pr-review-event={ev}
           >

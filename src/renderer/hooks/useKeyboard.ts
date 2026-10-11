@@ -21,6 +21,7 @@ import { mentionKeyClaim } from '../utils/agentMention';
 import { OPEN_MENTION_PICKER_EVENT } from '../utils/agentMentionInsert';
 import { isChatV2Covering } from '../components/ChatV2/coverage';
 import { showWorkspaces } from '../utils/showWorkspaces';
+import { toggleFileTreePanel } from '../components/FileTree/fileTreeToggle';
 import { listedWorkspaces, moaHqId, refuseWorkspaceClose } from '../components/Moa/moaHqGuard';
 import {
   openMultiTask,
@@ -568,6 +569,7 @@ export function useKeyboard() {
         showBookmarkToast();
       },
       toggleMessageFeed: () => { store.getState().toggleMessageFeed(); },
+      toggleFileTree: () => { toggleFileTreePanel(store.getState()); },
       zoomIn: () => zoomFont(FONT_SIZE_STEP),
       zoomOut: () => zoomFont(-FONT_SIZE_STEP),
       zoomReset: () => {

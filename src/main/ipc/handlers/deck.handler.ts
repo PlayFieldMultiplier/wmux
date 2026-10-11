@@ -164,6 +164,8 @@ import { createMoaWakeHandler, setMoaWakeHandler } from '../../deck/moaWake';
 import { createMoaHandoffService } from '../../deck/moaHandoffHost';
 import { renderGoalBlock, setMoaGoalService } from '../../deck/moaGoalContract';
 import { createMoaGoalService, installMoaLevelGate } from '../../deck/moaGoalHost';
+import { reviewGuide } from '../../deck/moaGoalDelivery';
+import { ghPrService } from '../../github/GhPrService';
 import { setMoaLevelGate } from '../../deck/moaLevelGate';
 import { HANDOFF_NOTICE_OPTION, HANDOFF_OPTIONS, type MoaHandoffResolveResult } from '../../../shared/moaHandoff';
 import { MoaTranscript, type MoaTranscriptHint } from '../../deck/moaTranscript';
@@ -840,6 +842,11 @@ export function registerDeckHandler(
     getDaemonClient: () => (opts.getDaemonClient?.() ?? null) as { rpc(method: string, params?: unknown): Promise<unknown> } | null,
   });
   setMoaGoalService(moaGoals);
+  // The Git page's review guide: only for PRs this computer's Moa delivered.
+  ghPrService.setMoaReviewGuideLookup((url) => {
+    const r = moaGoals.deliveredPr(url);
+    return r ? reviewGuide(r.contract, r.verification, r.item) : null;
+  });
   installMoaLevelGate(moaGoals, { getWindow, getDaemonClient: () => opts.getDaemonClient?.() ?? null });
 
   const moaHandoffs = opts.invokeOperatorRpc

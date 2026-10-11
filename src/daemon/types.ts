@@ -359,6 +359,17 @@ export interface DaemonConfig {
    * approval sends it regardless. See `daemon/push/presence.ts`.
    */
   pushPresenceSuppression?: PushPresenceSuppressionConfig;
+  /**
+   * Local diagnostics. OPTIONAL and off when absent; `validateConfig` ignores
+   * it and only a literal `true` turns anything on, so a garbage value can
+   * neither reset the file nor enable a log by accident.
+   *
+   * `detectionAgreement`: record where the screen detector and the hook
+   * disagree to `<wmuxDir>/diagnostics/detection.ndjson`, for
+   * `wmux doctor detect --stats`. Read once at daemon start. Never sent
+   * anywhere. See `daemon/diagnostics/detectionAgreementLog.ts`.
+   */
+  diagnostics?: { detectionAgreement?: boolean };
 }
 
 /**

@@ -43,6 +43,7 @@ import {
   type PhaseDef,
 } from '../../shared/bootPhases';
 import type { RpcResponse } from '../../shared/rpc';
+import { handleDoctorDetect } from './doctorDetect';
 import {
   isAppMemoryDiagnostics, isDaemonMemoryDiagnostics,
   type AppMemoryDiagnostics, type DaemonMemoryDiagnostics,
@@ -751,6 +752,10 @@ export function renderReport(report: DoctorReport): string {
 // --- CLI entry point ---------------------------------------------------------
 
 export async function handleDoctor(args: string[], jsonMode: boolean): Promise<void> {
+  if (args[0] === 'detect') {
+    await handleDoctorDetect(args.slice(1), jsonMode);
+    return;
+  }
   const performanceMode = args.includes('--performance');
   const date = todayUtc();
 

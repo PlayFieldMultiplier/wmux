@@ -175,8 +175,9 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   More menu lists it so it stays discoverable.
 - **Right:** Fleet vitals as appearing chips (`N running`, `N need you`; only
   when nonzero, and dropped while Fleet is the page), the account usage when
-  it matters, then Moa's icon, the right panel's only toggle, while Moa is
-  on. With Moa off there is no right panel and no toggle (see Tools panel).
+  it matters, then the **file tree toggle** (a bare icon like the sidebar's,
+  ⌘⇧E / Ctrl+Shift+E), then Moa's icon, the dock's only toggle, while Moa is
+  on. With Moa off there is no dock and no Moa toggle (see Tools panel).
   Settings is not here: it lives in the rail's More menu (and ⌘,).
 - **Windows:** the native window controls sit at the right edge in the
   `titleBarOverlay` strip, drawn in the colour the frame actually paints
@@ -691,14 +692,33 @@ leaves the page.
 ## Tools panel (Workspaces page)
 
 The dock opposite the sidebar is **Moa's**, and exists only while Moa is on.
-With Moa off nothing is drawn on that edge, the terminals take the full width
-(one refit), and the titlebar has no panel toggle; the panel's saved open
+With Moa off the dock is not drawn, the terminals take its width (one
+refit), and the titlebar has no Moa toggle; the panel's saved open
 state is kept, so turning Moa back on restores it as it was left. With Moa on,
 Moa's titlebar icon is the only toggle, and the first time Moa is ever turned
 on the panel opens once on Moa's conversation. Turning Moa on lives in
 Settings › Moa and the rail's More menu. With Moa off, task status and fan-out
 work are read in Fleet (the sidebar's Tasks line opens Fleet). Git is not here:
 it is a page on the rail.
+
+**File tree column.** A separate, opt-in column on the same edge, between
+the panes and Moa's dock, present whether Moa is on or off. Its titlebar
+toggle (or ⌘⇧E / Ctrl+Shift+E, or the palette) shows it; open state and
+width (200–480px, drag the inner seam) persist. It is Workspaces-page
+chrome: a rail page covers it with the panes, and the toggle pressed from a
+rail page brings Workspaces forward. It lists the focused pane's folder, or
+that folder's git repository root when it is inside one. One seam on its
+pane side, a 40px header on the dock header's line, 24px rows with a chevron
+and a line icon; a selected row is a `--selection` fill. Click opens a file
+in an editor tab of the focused pane; drag drops its path into a terminal;
+the row menu has Open, Insert path into terminal, Copy path, Copy relative
+path, and Open in Finder / File Explorer.
+The header's search button opens a name filter field under it (the field
+exists only while open, and folds away on Escape or when it loses focus
+empty). Typing walks the folders below the root (up to 5,000 entries,
+symlinked folders not followed) and shows only the matching files and
+folders with the folders leading to them; the matched part of a name is
+emphasised by weight, not a wash.
 
 ## The one-boundary rule
 
@@ -1029,6 +1049,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-10 | Owner decision (PC rail): the frame is one 48px rail plus a conditional 48px computer column left of it, hidden with 0 web-paired hosts. Amends the one-rail frame | A computer is a scope and a page is a destination; folding computers into the page rail collides with the collapsed sidebar's workspace list, and single-PC users must see no change |
 | 2026-10-10 | Owner decision (PC rail, same day): no computer column. The frame is one rail again; the sidebar title is the PC switcher ("Workspaces · <PC> ▾", a dropdown with each computer's state, needs-you count and settings), one badge beside it sums the unselected computers' needs-you, and the collapsed sidebar gets one switcher item. Supersedes the row above | A 48px column took width from every window for a scope most sessions never change; the title already names what the list shows |
 | 2026-10-10 | Owner direction (#1987 PR3): the Worktrees tab takes the who-acts-next grammar — In use · Uncommitted changes · No open PR · Cleanup candidates (a merged PR counts) · No workspace — with a summary line, plus snooze (1 hour / 1 day / 1 week / until it changes; any change of state ends it early) kept per viewer. Headers stay neutral; the PR knowledge is only what the page already read, so a repo whose list is not held shows no No open PR | Three groups said where a workspace sat but not what each worktree wanted. Uncommitted work nobody is on, unshipped branches and merged leftovers are the three things a worktree asks of the owner; snooze lets a known one stop asking without deleting it. Reading every repo's PR list for this tab would cost gh calls the page otherwise never makes |
+| 2026-10-11 | Owner decision: bring back the file tree as an opt-in column opposite the sidebar, independent of Moa, between the panes and the dock, with its own bare titlebar toggle before Moa's. Amends "the dock opposite the sidebar is Moa's" and "Moa's icon, the right panel's only toggle" | #1440 dropped the toggle with the old right panel, which left the tree mounted but unreachable. A file tree answers "what is in this project" without leaving the terminals, a different job from Moa's conversation, so it gets its own column rather than a dock tab; placing it inside the dock edge keeps rail pages covering it with the panes |
 
 ### Desktop conversation view
 
@@ -1281,6 +1302,15 @@ differently in the two places, and in the order `fleet_triage` returns.
   shows its last reply; a question shows in quotes and wraps to two lines;
   an error row shows the last `Error:` / stderr-shaped line of its terminal
   (mono), else its label; stopped and unconfirmed rows keep their label.
+- **Completion checks:** a finished pane's evidence badge reads its most
+  recently updated delegated task, only when that task completed. A newer
+  working, failed or canceled task suppresses older success evidence. Missing
+  evidence says "No verification reported"; failed checks use a red cross,
+  partial or unverified evidence stays neutral, and only an entirely verified
+  set gets a green check. Text names each state independently of colour. The
+  tooltip and accessible description identify the agent as the source and
+  list the reported checks, including failed commands. This does not change
+  the task completion gate or claim that wmux independently ran those checks.
 - **Filters and summary:** the line under the title leads with the filter
   chips — Needs you, Running, Finished, Idle, Tickets — each with its count,
   hidden at zero; pressing the pressed chip shows everything again. Then
