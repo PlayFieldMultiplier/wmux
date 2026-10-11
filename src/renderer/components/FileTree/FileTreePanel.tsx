@@ -115,11 +115,20 @@ function activePtyId(ws: Workspace | null | undefined): string | undefined {
   return anchorSurface(findLeaf(ws.rootPane, ws.activePaneId))?.ptyId || undefined;
 }
 
-/** Whether `target` is `base` itself or a path below it. */
-function isAtOrUnder(base: string | undefined, target: string): boolean {
+/**
+ * Whether `target` is `base` itself or a path below it. Separators are unified
+ * and drive paths compared case-insensitively, since on Windows git reports
+ * `C:/repo` for a pane whose cwd reads `c:\repo\sub`.
+ */
+export function isAtOrUnder(base: string | undefined, target: string): boolean {
   if (!base) return false;
-  const sep = separatorOf(target);
-  return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep);
+  const norm = (p: string) => {
+    const unified = p.replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[a-z]:/i.test(unified) ? unified.toLowerCase() : unified;
+  };
+  const b = norm(base);
+  const t = norm(target);
+  return t === b || t.startsWith(b + '/');
 }
 
 /** The OS's own word for its file manager (same vocabulary as the sidebar's menu). */

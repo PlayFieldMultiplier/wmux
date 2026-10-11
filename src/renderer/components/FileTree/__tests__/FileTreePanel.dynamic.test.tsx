@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import FileTreePanel, { fileTreeCwd, relativeTo } from '../FileTreePanel';
+import FileTreePanel, { fileTreeCwd, isAtOrUnder, relativeTo } from '../FileTreePanel';
 import { toggleFileTreePanel } from '../fileTreeToggle';
 import { filterTree } from '../fileTreeFilter';
 import { fileTreeWidthForDrag } from '../FileTreeResizeHandle';
@@ -93,6 +93,17 @@ describe('relativeTo', () => {
     expect(relativeTo('/code/two', '/code/two/src/a.ts')).toBe('src/a.ts');
     expect(relativeTo('/code/two/', '/code/two/a.ts')).toBe('a.ts');
     expect(relativeTo('/code/two', '/elsewhere/a.ts')).toBe('/elsewhere/a.ts');
+  });
+});
+
+describe('isAtOrUnder', () => {
+  it('matches the root and paths below it, across Windows separator and drive-case differences', () => {
+    expect(isAtOrUnder('/code/two', '/code/two')).toBe(true);
+    expect(isAtOrUnder('/code/two', '/code/two/src')).toBe(true);
+    expect(isAtOrUnder('/code/two', '/code/twofold')).toBe(false);
+    expect(isAtOrUnder('C:/code/two', 'c:\\code\\two\\src')).toBe(true);
+    expect(isAtOrUnder('/', '/code')).toBe(true);
+    expect(isAtOrUnder(undefined, '/code')).toBe(false);
   });
 });
 
