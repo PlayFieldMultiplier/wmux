@@ -152,6 +152,7 @@ import type { ChatCancelEvent } from '../chat/chatCancelObserver';
 import {
   ChatV2Cancels,
   buildChatObject,
+  chatV2AgentAlive,
   buildChatV2Object,
   cancelResponse,
   chatV2Identity,
@@ -3151,7 +3152,8 @@ export class WebTerminalServer {
      * Codex transcript binding's `/turns` `agentAlive` is built on. `/turns`
      * also requires the live agent to own the bound conversation, so row false
      * implies `/turns` false and `/turns` true implies row true, never the
-     * reverse. Map reads only: no process scan per poll.
+     * reverse. A live chat-v2 record answers from its driver instead, as its
+     * `/turns` does (see agentAliveRow). Map reads only: no process scan.
      *
      * `true`: a live, attributed process of the pane's agent. `false`: the
      * daemon names no agent for the pane (shell back at its prompt, agent
@@ -3228,10 +3230,7 @@ export class WebTerminalServer {
         agent: s.agent?.displayName ?? s.lastDetectedAgent ?? null,
         lastActivity: s.lastActivity,
         ...(s.lastDetectedAgent ? { lastDetectedAgent: s.lastDetectedAgent } : {}),
-        ...(() => {
-          const agentAlive = agentAliveVerdict(this.deps.agentState?.(s.id));
-          return agentAlive === undefined ? {} : { agentAlive };
-        })(),
+        ...this.agentAliveRow(s.id),
         ...cwdLeafOf(s.cwd),
         ...workspaceLabelOf(s.env),
         ...workspaceIdOf(s.env),
@@ -3268,6 +3267,17 @@ export class WebTerminalServer {
     for (const id of this.lastAssistantReads) {
       if (!liveIds.has(id)) this.lastAssistantReads.delete(id);
     }
+  }
+
+  /**
+   * The list row's `agentAlive`, or nothing. A live chat-v2 record answers
+   * `/turns` from its driver (a daemon child, not the pane shell's), so the row
+   * reads that record too; every other pane reads the canonical agent state.
+   */
+  private agentAliveRow(sessionId: string): { agentAlive?: boolean } {
+    const agentAlive = chatV2AgentAlive(this.deps.chatV2?.()?.bindingForPane(sessionId))
+      ?? agentAliveVerdict(this.deps.agentState?.(sessionId));
+    return agentAlive === undefined ? {} : { agentAlive };
   }
 
   /** The list row's `lastFailure`, without `message` unless the transcript grant is held. */

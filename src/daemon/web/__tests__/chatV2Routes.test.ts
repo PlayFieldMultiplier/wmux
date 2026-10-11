@@ -79,9 +79,11 @@ describe('phone chat routes for a chat-v2 record', () => {
   let bridge: { resolve: ReturnType<typeof vi.fn>; managedSnapshot: ReturnType<typeof vi.fn>; blocked: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; launch: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> };
   let approvals: ApprovalRequest[];
   let pane: ReturnType<typeof mkPane>;
+  let liveRows: Array<Record<string, unknown>>;
 
   beforeEach(() => {
     box = { binding: binding(), session: conversation(), interrupted: true };
+    liveRows = [];
     pushListeners = [];
     host = {
       bindingForPane: (id: string) => (id === 's1' ? box.binding : null),
@@ -108,7 +110,7 @@ describe('phone chat routes for a chat-v2 record', () => {
     const panes = new Map([['s1', pane]]);
     const sessionManager = Object.assign(new EventEmitter(), {
       getSession: (id: string) => panes.get(id),
-      listLiveSessions: () => [],
+      listLiveSessions: () => liveRows,
     }) as unknown as DaemonSessionManager;
     server = new WebTerminalServer({
       sessionManager,
@@ -330,6 +332,25 @@ describe('phone chat routes for a chat-v2 record', () => {
     await Promise.race([read, new Promise((r) => setTimeout(r, 3000))]);
     ac.abort();
     expect(wire).toContain('event: transcript.nudge');
+  });
+
+  it('lists a v2 pane\'s agentAlive from its record, as its /turns reads it', async () => {
+    // The anchor shell sits at its prompt and the driver is a daemon child, so
+    // the canonical state names no agent: the record must answer instead.
+    liveRows = [{ id: 's1', cwd: '/tmp', cols: 80, rows: 24, state: 'detached', agent: undefined,
+      lastDetectedAgent: 'claude', lastActivity: '2020-01-01T00:00:00.000Z', env: {}, cmd: '/bin/zsh' }];
+    const token = await start();
+    const row = async () => ((await (await fetch(`${base()}/api/sessions`, { headers: auth(token) })).json()) as {
+      sessions: Array<Record<string, unknown>> }).sessions[0];
+    for (const status of ['running', 'idle', 'stopped', 'failed'] as const) {
+      box.binding = binding({ status });
+      expect((await row()).agentAlive).toBe((await turns(token)).body.chat.agentAlive);
+    }
+    expect((await row()).agentAlive).toBe(false);
+    // Handed off or no record: the TUI owns the pane, and with no agent state
+    // wired here the row cannot tell.
+    box.binding = binding({ status: 'handed-off' });
+    expect('agentAlive' in await row()).toBe(false);
   });
 
   it('hands a handed-off record back to the bridge (the TUI now owns the pane)', async () => {
