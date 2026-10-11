@@ -11,9 +11,11 @@
 //   4. active DECSTBM margins → fail-open raw (HeadlessSnapshot refuses)
 //   5. live bytes written DURING the parse arrive after the snapshot (delta
 //      re-read), before FLUSH_DONE — no gap, no reorder
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, vi } from 'vitest';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { SessionPipe, createSessionPipeMarkers, ATTACH_SNAPSHOT_MIN_BYTES } from '../SessionPipe';
@@ -121,6 +123,15 @@ const ROWS = 24;
 
 const pipes: SessionPipe[] = [];
 const clients: Client[] = [];
+// macOS's isolated HOME can already consume most of sockaddr_un.sun_path.
+// Concurrent sockets then collide when their unique suffix is truncated.
+// Keep this suite's real sockets in a private short directory; other tests
+// continue to exercise the production path, and Windows keeps named pipes.
+const socketDir = process.platform === 'darwin' ? fs.mkdtempSync('/tmp/wmux-as-') : null;
+
+afterAll(() => {
+  if (socketDir) fs.rmSync(socketDir, { recursive: true, force: true });
+});
 
 afterEach(async () => {
   for (const c of clients.splice(0)) c.socket.destroy();
@@ -133,6 +144,7 @@ async function startPipe(
   dims?: () => { cols: number; rows: number },
 ): Promise<SessionPipe> {
   const pipe = new SessionPipe(id, ring, TOKEN, dims);
+  if (socketDir) vi.spyOn(pipe, 'getPipeName').mockReturnValue(path.join(socketDir, `${id}.sock`));
   pipes.push(pipe);
   await pipe.start();
   return pipe;
