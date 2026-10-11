@@ -86,6 +86,19 @@ describe('assertCodeToolAllowed', () => {
     expect((refusal as Error).message).not.toContain('is not available on a protected pane');
   });
 
+  it("refuses a scheduled run acting as a protected pane's browser whose identity main has not confirmed", async () => {
+    // The run's MCP keeps every wmux tool, but its claim admits browser calls
+    // only; repl_run asked main nothing before, so it ran unconfined code.
+    acquireAnswers(() =>
+      Promise.reject(
+        new Error(
+          "browser.lease.acquire: needs_consent: this schedule's browser identity is not confirmed; grant the schedule again in wmux",
+        ),
+      ),
+    );
+    await expect(gate('repl_run')).rejects.toMatchObject({ paneProtected: true });
+  });
+
   it.each(UNKNOWN_ANSWERS)('refuses on %s', async (_label, acquire) => {
     acquireAnswers(acquire);
     const refusal = await gate('repl_run').catch((e: unknown) => e);
