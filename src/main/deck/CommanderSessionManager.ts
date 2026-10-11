@@ -22,6 +22,7 @@ import type {
   BrainSendOptions,
   BrainStartOptions,
 } from './BrainAdapter';
+import type { FleetLocalAnswer } from '../../shared/fleetLocalAnswer';
 
 export type CommanderStatus = 'idle' | 'busy' | 'disposed';
 
@@ -49,14 +50,14 @@ export interface CommanderSendResult {
   code?: 'busy' | 'disposed' | 'empty' | 'invalid_workspace' | 'moa_off' | 'mode_off' | 'task_workspace' | 'not_hq' | 'hq_missing' | 'hq_unknown' | 'errored';
   /** A deterministic read-only answer handled without starting the adapter.
    *  The renderer may retain this alongside a provider-owned transcript. */
-  localAnswer?: { text: string };
+  localAnswer?: { fleet: FleetLocalAnswer };
 }
 
 /** Optional read-only fast path inside the manager's one-turn reservation.
  *  A miss or failure falls through to the original adapter turn. Callers must
  *  observe the signal before doing anything after an asynchronous lookup. */
 export type CommanderLocalFirst = (signal: AbortSignal) => Promise<
-  { text: string } | { fallbackText: string | (() => string) } | null
+  { fleet: FleetLocalAnswer } | { fallbackText: string | (() => string) } | null
 >;
 
 export interface CommanderStatusSnapshot {
@@ -141,11 +142,21 @@ export class CommanderSessionManager {
     return this._turnOrigin;
   }
 
+  private _turnRemoteMoa = false;
+
+  /** The latest accepted turn was a wake carrying another PC's Moa's work
+   *  (a2a.received). Same lifetime as turnOrigin. Under an approved goal,
+   *  fan-out refuses such a turn (fanout.rpc.ts), in code, not in the prompt. */
+  get turnWokenByRemoteMoa(): boolean {
+    return this._turnRemoteMoa;
+  }
+
   /** The human typed a turn into the embedded TUI (it did not go through send). */
   notifyForeignTurnStart(): void {
     if (this._status === 'disposed') return;
     this.foreignTurnGeneration++;
     this._turnOrigin = 'human';
+    this._turnRemoteMoa = false;
   }
 
   getStatus(): CommanderStatusSnapshot {
@@ -186,7 +197,10 @@ export class CommanderSessionManager {
     // Origin grants authority to the provider's live work. A local read only
     // reserves the turn slot; it must not promote earlier autonomous work to
     // operator-authorized work while looking up or showing a status answer.
-    if (!localFirst) this._turnOrigin = opts.origin === 'automation' ? 'automation' : 'human';
+    if (!localFirst) {
+      this._turnOrigin = opts.origin === 'automation' ? 'automation' : 'human';
+      this._turnRemoteMoa = opts.origin === 'automation' && opts.remoteMoa === true;
+    }
     // Round-5 review P1: production adapters (ClaudeSdkAdapter, AcpBrainAdapter)
     // report failures by YIELDING a BrainEvent{type:'error'} — or by ending the
     // stream without a turn-end — rather than throwing, so an exception-only
@@ -237,12 +251,13 @@ export class CommanderSessionManager {
           this.sink({ type: 'error', message: 'a terminal turn ran during this lookup — ask again' });
           return { ok: true, code: 'errored' };
         }
-        if (answer && 'text' in answer && answer.text.trim()) {
-          this.sink({ type: 'text-delta', text: answer.text });
-          this.sink({ type: 'turn-end', sessionId: this.adapter.sessionId, localAnswer: { prompt: text, text: answer.text } });
+        if (answer && 'fleet' in answer && answer.fleet) {
+          // No text-delta: main does not know the UI language, so the renderer
+          // words the answer from the data on turn-end.
+          this.sink({ type: 'turn-end', sessionId: this.adapter.sessionId, localAnswer: { prompt: text, fleet: answer.fleet } });
           // No provider turn ran, so neither its session nor persistence hook
           // is changed by this answer.
-          return { ok: true, localAnswer: { text: answer.text } };
+          return { ok: true, localAnswer: { fleet: answer.fleet } };
         }
         if (answer && 'fallbackText' in answer) {
           // Context preparation may mutate bookkeeping. Keep it after every
@@ -251,6 +266,7 @@ export class CommanderSessionManager {
           trimmed = (typeof fallback === 'function' ? fallback() : fallback).trim();
         }
         this._turnOrigin = opts.origin === 'automation' ? 'automation' : 'human';
+        this._turnRemoteMoa = opts.origin === 'automation' && opts.remoteMoa === true;
         if (!this._started) {
           this.adapter.start(this.startOptions);
           this._started = true;
