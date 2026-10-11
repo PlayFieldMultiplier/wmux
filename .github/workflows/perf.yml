@@ -8,7 +8,9 @@ on:
     # lands on main and nothing here can re-trigger this workflow (#602).
     paths-ignore:
       - '**/*.md'
+  # Drafts skip the bench; marking the PR ready runs it (see ci.yml).
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/**'
       # Every perf harness module, not an explicit allow-list: perf-bench.mjs
@@ -30,6 +32,7 @@ concurrency:
 
 jobs:
   bench:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
@@ -335,7 +338,9 @@ jobs:
   # it to force a run would break the contract it exists to protect.
   artifact-contract:
     needs: bench
-    if: always()
+    # always() so a red bench still proves the round trip; never on a draft,
+    # where bench was skipped and there is no artifact to download.
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-latest
     timeout-minutes: 10
     steps:

@@ -20,5 +20,9 @@ export default defineConfig({
       'relay/__tests__/**/*.test.ts',
     ],
     environment: 'node',
+    // CI only: retry a failed test once, so one flake no longer costs a full
+    // rerun. Vitest's github-actions reporter (on by default in Actions) lists
+    // every test that passed only on retry in the job summary.
+    retry: process.env.CI ? 1 : 0,
   },
 });
