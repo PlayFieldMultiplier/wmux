@@ -94,9 +94,11 @@ agents and the tools they are given — not a defence against same-user code.
 **Guarantee.** A pane bound to its own Chrome profile can be protected. Its
 agent's browser calls then reach only the hosts on that pane's allowed list,
 and the pane's Chrome itself runs behind a main-owned filtering proxy.
-Downloads are refused. A missing or unreadable
-policy keeps every previously protected pane blocked until the operator
-confirms it again. The policy is set only from the main window; no tool
+Downloads are refused. The wmux tools that run caller-supplied code,
+`browser_repl` and `repl_run`, are refused on a protected pane, and also
+wherever wmux cannot confirm that the calling pane is unprotected. A missing
+or unreadable policy keeps every previously protected pane blocked until the
+operator confirms it again. The policy is set only from the main window; no tool
 argument or CLI flag can change it.
 
 **Out of scope.** As in §1.3.1, this confines the documented surfaces: the
@@ -105,7 +107,9 @@ that runs as the same OS user outside those surfaces, including a shell an
 agent runs in a pane. Such code can reach a Chrome profile's files and its
 debugging endpoint directly (§3). Use a protected pane to keep an agent's
 browser tools on the sites you chose, not as a sandbox for an agent with a
-shell.
+shell. Protection also does not confine what other panes do: a tool that acts
+through another pane (`terminal_send`, `send_message`, `a2a_*`, `fanout_start`)
+runs under that pane's own scope, not this one's.
 
 ### 1.4 Packaging fuse posture
 
@@ -238,3 +242,4 @@ What we do not consider a wmux security issue:
 | 2026-09-28 | §3: documented the process-scoped `-ExecutionPolicy RemoteSigned` that Windows PowerShell 5.1 panes and exec units now get on a factory-default Windows client, and only there (#1620). `RemoteSigned`, not `Bypass`, because the `Bypass` argument shape is what Norton flagged (GHSA-8fj2-47w9-jxq3); explicit policies and Group Policy are never overridden. |
 | 2026-10-09 | §1.5: documented the `--allow-git-write` ceiling for phone push, PR create and merge, and what it does and does not guard against. |
 | 2026-10-11 | §1.3.2: documented protected Chrome panes and their scope: they confine the agent's browser tools, not same-user code such as a pane's shell. |
+| 2026-10-11 | §1.3.2: `browser_repl` and `repl_run` are refused on a protected pane (and when protection cannot be confirmed); stated that a protected pane does not confine other panes. |
