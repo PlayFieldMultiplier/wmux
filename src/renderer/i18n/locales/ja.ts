@@ -684,5 +684,6 @@ export const ja = {
   'moa.fleetAnswer.omitted': "一部の行を省略しています。全体は Fleet で確認してください。",
   'git.secret.file': "{path}: このファイルにはパスワードやキーが含まれているため、アップロードしませんでした。変更から外す(または .gitignore に追加する)と再試行できます。",
   'git.secret.value': "{path} の {line} 行目がパスワードや API キーのように見えるため、アップロードしませんでした。コードから外して再試行してください。",
+  'git.secret.scanFailed': "この変更にパスワードやキーが含まれていないか確認できなかったため、アップロードしませんでした。もう一度試し、失敗が続く場合はファイルを分けてコミットしてください。",
   'git.secret.more': "(ほか {count} 件)",
 } as const;

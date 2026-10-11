@@ -635,5 +635,6 @@ export const nb = {
   'moa.fleetAnswer.omitted': "Noen rader er utelatt. Åpne Fleet for hele oversikten.",
   'git.secret.file': "{path}: filen inneholder passord eller nøkler, så den ble ikke lastet opp. Fjern den fra endringen (eller legg den i .gitignore) og prøv igjen.",
   'git.secret.value': "{path} linje {line} ser ut som et passord eller en API-nøkkel, så den ble ikke lastet opp. Fjern den fra koden og prøv igjen.",
+  'git.secret.scanFailed': "wmux kunne ikke sjekke endringen for passord og nøkler, så den ble ikke lastet opp. Prøv igjen; hvis det fortsetter å feile, commit færre filer om gangen.",
   'git.secret.more': "(og {count} til)",
 } as const;

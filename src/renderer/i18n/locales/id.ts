@@ -635,5 +635,6 @@ export const id = {
   'moa.fleetAnswer.omitted': "Beberapa baris dihilangkan. Buka Fleet untuk melihat papan lengkap.",
   'git.secret.file': "{path}: file ini berisi kata sandi atau kunci, jadi tidak diunggah. Keluarkan dari perubahan (atau tambahkan ke .gitignore) lalu coba lagi.",
   'git.secret.value': "{path} baris {line} tampak seperti kata sandi atau kunci API, jadi tidak diunggah. Keluarkan dari kode lalu coba lagi.",
+  'git.secret.scanFailed': "wmux tidak dapat memeriksa perubahan ini untuk kata sandi dan kunci, jadi tidak diunggah. Coba lagi; jika terus gagal, commit lebih sedikit file sekaligus.",
   'git.secret.more': "(dan {count} lainnya)",
 } as const;

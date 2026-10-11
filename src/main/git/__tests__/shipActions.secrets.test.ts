@@ -15,6 +15,8 @@ let dir: string;
 let repo: string;
 let gh: ReturnType<typeof vi.fn<(args: string[]) => Promise<{ stdout: string }>>>;
 let svc: ShipActions;
+/** Makes every `git diff` fail, as a broken or overloaded check would. */
+let diffFails = false;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-ship-secrets-'));
@@ -32,14 +34,16 @@ beforeEach(() => {
   git(['checkout', '-q', '-b', 'feat/x'], repo);
   git(['push', '-q', '-u', 'origin', 'feat/x'], repo);
   gh = vi.fn(async (_args: string[]) => ({ stdout: 'https://github.com/o/r/pull/1\n' }));
-  const exec = (cmd: string, args: string[], opts: { cwd: string }) => {
+  const exec = (cmd: string, args: string[], opts: { cwd: string; env?: NodeJS.ProcessEnv }) => {
     if (cmd.startsWith('gh')) return gh(args);
+    if (diffFails && args[0] === 'diff') return Promise.reject(new Error('maxBuffer exceeded'));
     try {
-      return Promise.resolve({ stdout: execFileSync(cmd, args, { cwd: opts.cwd, encoding: 'utf8', maxBuffer: 1 << 24 }) });
+      return Promise.resolve({ stdout: execFileSync(cmd, args, { cwd: opts.cwd, env: opts.env, encoding: 'utf8', maxBuffer: 1 << 24 }) });
     } catch (e) {
       return Promise.reject(e);
     }
   };
+  diffFails = false;
   svc = new ShipActions(exec as never, async () => null, () => undefined, () => 1000, () => false);
 });
 
@@ -59,6 +63,39 @@ describe('ShipActions secret guard', () => {
     expect(res.error).toContain('.env holds passwords and keys, so it was not committed');
     expect(git(['rev-parse', 'HEAD'], repo)).toBe(before);
     expect(git(['diff', '--cached', '--name-only'], repo)).toBe('');
+  });
+
+  it('a refused commit leaves the index exactly as the user staged it', async () => {
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a2\n');
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
+    git(['add', 'b.txt'], repo); // b staged, a modified but unstaged
+    fs.writeFileSync(path.join(repo, '.env'), 'X=1\n'); // untracked
+    const index = () => [git(['ls-files', '-s'], repo), git(['diff', '--cached', '--name-status'], repo), git(['status', '--porcelain'], repo)];
+    const before = index();
+    const res = await svc.commit(repo, 'add', pin());
+    expect(res).toMatchObject({ ok: false, secrets: [{ path: '.env' }] });
+    expect(index()).toEqual(before);
+    expect(git(['diff', '--cached', '--name-only'], repo)).toBe('b.txt');
+  });
+
+  it('fails closed: when the check cannot run, commit, push and PR are refused with a plain reason', async () => {
+    const before = pin().head;
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
+    git(['add', 'b.txt'], repo);
+    const staged = git(['ls-files', '-s'], repo);
+    diffFails = true;
+    const commit = await svc.commit(repo, 'add', pin());
+    expect(commit).toMatchObject({ ok: false, secretScanFailed: true });
+    expect(!commit.ok && commit.error).toContain('could not check this change for passwords and keys, so it was not committed');
+    expect(git(['rev-parse', 'HEAD'], repo)).toBe(before);
+    expect(git(['ls-files', '-s'], repo)).toBe(staged);
+    diffFails = false;
+    git(['commit', '-q', '-m', 'b'], repo);
+    diffFails = true;
+    expect(await svc.push(repo, pin())).toMatchObject({ ok: false, secretScanFailed: true });
+    expect(git(['ls-remote', 'origin', 'feat/x'], repo)).not.toContain(pin().head);
+    expect(await svc.createPr(repo, 't', pin())).toMatchObject({ ok: false, secretScanFailed: true });
+    expect(gh).not.toHaveBeenCalled();
   });
 
   it('commit refuses a key-shaped value and never echoes it', async () => {

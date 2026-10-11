@@ -102,8 +102,11 @@ describe('ShipActions writes', () => {
   it('commit stages everything and commits with the message as one argv, pinned to branch + HEAD', async () => {
     const { svc, calls } = make(onBranch());
     expect(await svc.commit('/repo', '  fix: a "quoted"; rm -rf x  ', EXPECT)).toEqual({ ok: true });
-    const writes = calls.filter((c) => c.args[0] === 'add' || c.args[0] === 'commit').map((c) => c.args);
-    expect(writes).toEqual([['add', '-A'], ['commit', '-m', 'fix: a "quoted"; rm -rf x']]);
+    // The first add is the secret check's, into a throwaway index copy.
+    const writes = calls.filter((c) => c.args[0] === 'add' || c.args[0] === 'commit');
+    expect(writes.map((c) => c.args)).toEqual([['add', '-A'], ['add', '-A'], ['commit', '-m', 'fix: a "quoted"; rm -rf x']]);
+    expect(writes[0].env.GIT_INDEX_FILE).toMatch(/wmux-secret-index-.*index$/);
+    expect(writes[1].env.GIT_INDEX_FILE).toBeUndefined();
     expect(await svc.commit('/repo', '   ', EXPECT)).toEqual({ ok: false, error: 'a commit message is required' });
   });
 

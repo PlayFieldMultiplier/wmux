@@ -636,5 +636,6 @@ export const es = {
   'moa.fleetAnswer.omitted': "Se omitieron algunas filas. Abre Fleet para ver el tablero completo.",
   'git.secret.file': "{path}: este archivo contiene contraseñas o claves, así que no se subió. Quítalo del cambio (o añádelo a .gitignore) e inténtalo de nuevo.",
   'git.secret.value': "{path}, línea {line}, parece una contraseña o clave de API, así que no se subió. Sácala del código e inténtalo de nuevo.",
+  'git.secret.scanFailed': "wmux no pudo comprobar si este cambio contiene contraseñas o claves, así que no se subió. Inténtalo de nuevo; si sigue fallando, haz commit de menos archivos a la vez.",
   'git.secret.more': "(y {count} más)",
 } as const;

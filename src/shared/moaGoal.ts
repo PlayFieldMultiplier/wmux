@@ -117,6 +117,8 @@ export interface MoaGoalDeliveryItem {
   /** Set when delivery was refused because the change carries secrets
    *  (shared/secretGuard.ts): where, and what kind — never the value. */
   secrets?: SecretFinding[];
+  /** Set when delivery was refused because the secret check could not run. */
+  secretScanFailed?: boolean;
 }
 
 /** What Moa delivered for a completed goal, and how to undo it. */

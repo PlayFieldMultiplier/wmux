@@ -138,7 +138,7 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
     if (repoRef.current !== repo) return;
     setBusy(null);
     if (!res.ok) {
-      const why = res.secrets?.length ? secretRefusalText(res.secrets, t) : res.error;
+      const why = res.secretScanFailed ? t('git.secret.scanFailed') : res.secrets?.length ? secretRefusalText(res.secrets, t) : res.error;
       if (dialog) setDialogError(why);
       else pushToast({ level: 'warn', message: `${t(`git.ship.failed.${action}`)}: ${why}` });
       return;

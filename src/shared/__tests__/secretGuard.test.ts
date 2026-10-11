@@ -14,7 +14,15 @@ describe('secretFileKind', () => {
 describe('secretValueKind', () => {
   it.each([
     [`OPENAI_API_KEY=sk-proj-${'A1b2'.repeat(8)}`, 'openai'],
-    [`const k = "sk-ant-api03-${'x9Y8'.repeat(8)}"`, 'openai'],
+    [`const k = "sk-ant-api03-${'x9Y8'.repeat(8)}"`, 'anthropic'],
+    [`GOOGLE_KEY=AIza${'Sy0b'.repeat(8)}abc`, 'google'],
+    [`stripe: sk_live_${'4eC3'.repeat(6)}`, 'stripe'],
+    [`rk_live_${'4eC3'.repeat(6)}`, 'stripe'],
+    ['SLACK_APP=xapp-1-A0123456789-0123456789-abcdef', 'slack'],
+    [`//registry.npmjs.org/:_authToken=npm_${'a1B2'.repeat(9)}`, 'npm'],
+    [`GITLAB=glpat-${'x1Y2'.repeat(5)}`, 'gitlab'],
+    [`auth: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.${'dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'}`, 'jwt'],
+    [`TWILIO=SK${'0123456789abcdef'.repeat(2)}`, 'twilio'],
     [`token: ghp_${'a1B2'.repeat(9)}`, 'github'],
     ['aws_access_key_id = AKIAIOSFODNN7EXAMPLE', 'aws'],
     ['SLACK=xoxb-123456789012-abcdefghij', 'slack'],
@@ -54,5 +62,18 @@ describe('scanUnifiedDiff', () => {
     expect(text).toContain('.env holds passwords and keys, so it was not pushed');
     expect(text).toContain('(and 2 more)');
     expect(text).not.toContain('ghp_');
+  });
+});
+
+describe('one rule set for blocking and log redaction', () => {
+  it.each([
+    `sk-ant-api03-${'x9Y8'.repeat(8)}`, `sk-proj-${'A1b2'.repeat(8)}`, `AIza${'Sy0b'.repeat(8)}abc`, `sk_live_${'4eC3'.repeat(6)}`,
+    `rk_live_${'4eC3'.repeat(6)}`, 'xapp-1-A0123456789-0123456789-abcdef', `npm_${'a1B2'.repeat(9)}`, `glpat-${'x1Y2'.repeat(5)}`,
+    `SK${'0123456789abcdef'.repeat(2)}`, `ghp_${'a1B2'.repeat(9)}`, 'AKIAIOSFODNN7EXAMPLE', 'xoxb-123456789012-abcdefghij',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+  ])('%s is both blocked and masked', async (key) => {
+    const { redactSecrets } = await import('../redactSecrets');
+    expect(secretValueKind(`x ${key} y`)).not.toBeNull();
+    expect(redactSecrets(`x ${key} y`)).not.toContain(key);
   });
 });

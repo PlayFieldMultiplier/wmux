@@ -49,7 +49,7 @@
 //   are separated by several git invocations; two concurrent adopts would both
 //   see a clean tree and the second would apply onto the first's output.
 
-import { describeSecretFindings, scanUnifiedDiff, type SecretFinding } from '../../shared/secretGuard';
+import { describeScanFailure, describeSecretFindings, scanUnifiedDiff, type SecretFinding } from '../../shared/secretGuard';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -397,7 +397,13 @@ export class TaskAdoptService {
       patch = diff.stdout;
       // A task never brings a secret into its parent: a .env file, a private
       // key, a key-shaped value. Refused before anything is written.
-      const secrets = scanUnifiedDiff(patch);
+      let secrets: SecretFinding[];
+      try {
+        secrets = scanUnifiedDiff(patch);
+      } catch {
+        // Fail closed: a patch nobody could check is not adopted.
+        return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeScanFailure('adopted')}` };
+      }
       if (secrets.length) {
         return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeSecretFindings(secrets, 'adopted')}`, secrets };
       }

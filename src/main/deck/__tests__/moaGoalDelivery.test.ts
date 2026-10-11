@@ -124,6 +124,18 @@ describe('deliverGoal — push the verified commit, open the PR', () => {
     expect(reviewGuide(contract(), failed, { taskId: 't1', headSha: head }).gate).toBe('failed');
   });
 
+  it('fails closed: when the secret check cannot run, nothing is pushed and the reason is recorded', async () => {
+    const { p, gh, git: gitMock } = ports();
+    const real = gitMock.getMockImplementation()!;
+    gitMock.mockImplementation(async (args: string[], cwd: string) =>
+      args[0] === 'diff' ? { code: 128, stdout: '', stderr: 'fatal: bad revision' } : real(args, cwd));
+    const d = await deliverGoal(contract(), verification(), p);
+    expect(d.items[0]).toMatchObject({ pushed: false, secretScanFailed: true });
+    expect(d.items[0].error).toMatch(/^not delivered: wmux could not check this change for passwords and keys/);
+    expect(gh).not.toHaveBeenCalled();
+    expect(() => git(['rev-parse', 'refs/heads/wtask/fix-a'], remote)).toThrow();
+  });
+
   it('never force-pushes: a remote that moved ahead rejects the push, and the item says so', async () => {
     const other = path.join(dir, 'other');
     git(['clone', '-q', remote, other], dir);

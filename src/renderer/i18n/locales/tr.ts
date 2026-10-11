@@ -636,5 +636,6 @@ export const tr = {
   'moa.fleetAnswer.omitted': "Bazı satırlar atlandı. Panonun tamamı için Fleet'i açın.",
   'git.secret.file': "{path}: bu dosya parola veya anahtar içerdiği için yüklenmedi. Değişiklikten çıkarın (veya .gitignore'a ekleyin) ve tekrar deneyin.",
   'git.secret.value': "{path}, {line}. satır parola veya API anahtarına benziyor, bu yüzden yüklenmedi. Koddan çıkarıp tekrar deneyin.",
+  'git.secret.scanFailed': "wmux bu değişikliği parola ve anahtar için kontrol edemedi, bu yüzden yüklenmedi. Tekrar deneyin; sürerse daha az dosyayı birlikte commit edin.",
   'git.secret.more': "(ve {count} tane daha)",
 } as const;

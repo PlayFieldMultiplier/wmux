@@ -635,5 +635,6 @@ export const fr = {
   'moa.fleetAnswer.omitted': "Certaines lignes sont omises. Ouvrez Fleet pour voir le tableau complet.",
   'git.secret.file': "{path} : ce fichier contient des mots de passe ou des clés, il n'a donc pas été envoyé. Retirez-le de la modification (ou ajoutez-le à .gitignore) et réessayez.",
   'git.secret.value': "{path}, ligne {line}, ressemble à un mot de passe ou une clé d'API, il n'a donc pas été envoyé. Retirez-le du code et réessayez.",
+  'git.secret.scanFailed': "wmux n'a pas pu vérifier si cette modification contient des mots de passe ou des clés, elle n'a donc pas été envoyée. Réessayez ; si l'échec persiste, validez moins de fichiers à la fois.",
   'git.secret.more': "(et {count} de plus)",
 } as const;

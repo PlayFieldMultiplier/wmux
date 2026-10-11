@@ -636,5 +636,6 @@ export const ms = {
   'moa.fleetAnswer.omitted': "Sesetengah baris diketepikan. Buka Fleet untuk melihat papan penuh.",
   'git.secret.file': "{path}: fail ini mengandungi kata laluan atau kunci, jadi tidak dimuat naik. Keluarkan daripada perubahan (atau tambah ke .gitignore) dan cuba lagi.",
   'git.secret.value': "{path} baris {line} kelihatan seperti kata laluan atau kunci API, jadi tidak dimuat naik. Keluarkan daripada kod dan cuba lagi.",
+  'git.secret.scanFailed': "wmux tidak dapat menyemak perubahan ini untuk kata laluan dan kunci, jadi tidak dimuat naik. Cuba lagi; jika terus gagal, commit lebih sedikit fail sekali gus.",
   'git.secret.more': "(dan {count} lagi)",
 } as const;

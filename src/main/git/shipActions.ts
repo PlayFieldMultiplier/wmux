@@ -8,10 +8,11 @@
 // refspec, so push.default / remote.*.push cannot publish other branches.
 // Each write is pinned to the branch and HEAD the user saw: it is refused if
 // either moved, checked again right before the write.
-import { describeSecretFindings, type SecretFinding } from '../../shared/secretGuard';
+import { describeScanFailure, describeSecretFindings, type SecretFinding } from '../../shared/secretGuard';
 import { scanGitRange } from './secretScan';
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
@@ -54,7 +55,12 @@ export type ShipActionResult =
   | { ok: true; url?: string }
   /** `secrets`: refused because the change carries secret files or key-shaped
    *  values (shared/secretGuard.ts); the UI words it from these. */
-  | { ok: false; error: string; secrets?: SecretFinding[] };
+  | { ok: false; error: string; secrets?: SecretFinding[]; secretScanFailed?: true };
+
+/** The empty tree: the base for a branch with nothing to compare against. */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+/** A secret check reads the whole diff; a big change must be read, not refused. */
+const SECRET_SCAN_MAX_BUFFER = 256 * 1024 * 1024;
 
 /** Longest commit message / PR title accepted. */
 export const SHIP_TEXT_MAX = 10_000;
@@ -100,10 +106,10 @@ export function parseSymrefHead(raw: string): string | null {
   return m ? m[1] : null;
 }
 
-type Run = (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }) => Promise<{ stdout: string }>;
+type Run = (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; maxBuffer?: number }) => Promise<{ stdout: string }>;
 
 const defaultRun: Run = (cmd, args, opts) =>
-  execFileAsync(cmd, args, { ...opts, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+  execFileAsync(cmd, args, { maxBuffer: 4 * 1024 * 1024, ...opts, windowsHide: true });
 
 function failure(err: unknown): string {
   const e = err as { stderr?: string; message?: string };
@@ -144,13 +150,18 @@ export class ShipActions {
     return value;
   }
 
-  /** Secret files or key-shaped values `git diff <range>` adds. */
-  private secretsIn(cwd: string, range: string[]): Promise<SecretFinding[]> {
-    return scanGitRange((args) => this.git(args, cwd, 60_000).then(({ stdout }) => stdout, () => null), range);
-  }
-
-  private refuseSecrets(found: SecretFinding[], action: string): ShipActionResult {
-    return { ok: false, error: describeSecretFindings(found, action), secrets: found };
+  /** Secret files or key-shaped values `git diff <range>` adds; a refusal
+   *  when there are any or the check could not run (fail closed). The diff
+   *  read gets a large buffer so a big change is checked, not refused. */
+  private async secretRefusal(cwd: string, range: string[], action: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<ShipActionResult | null> {
+    const scan = await scanGitRange(
+      (args) => this.run('git', args, { cwd, env: { ...getExecEnv(), ...extraEnv }, timeout: 120_000, maxBuffer: SECRET_SCAN_MAX_BUFFER })
+        .then(({ stdout }) => stdout, () => null),
+      range,
+    );
+    if (!scan.ok) return { ok: false, error: describeScanFailure(action), secretScanFailed: true };
+    if (scan.findings.length) return { ok: false, error: describeSecretFindings(scan.findings, action), secrets: scan.findings };
+    return null;
   }
 
   /** A merge or cherry-pick in progress in the worktree at `cwd`. */
@@ -182,6 +193,21 @@ export class ShipActions {
     };
   }
 
+  /** Runs `work` with GIT_INDEX_FILE pointing at a throwaway copy of the
+   *  worktree's index; the real index is never written. */
+  private async withIndexCopy<T>(cwd: string, work: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+    const { stdout } = await this.git(['rev-parse', '--git-path', 'index'], cwd);
+    const real = path.resolve(cwd, stdout.trim());
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'wmux-secret-index-'));
+    const copy = path.join(dir, 'index');
+    try {
+      if (existsSync(real)) copyFileSync(real, copy);
+      return await work({ GIT_INDEX_FILE: copy });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   /** What a push is compared against: the remote branch it updates, else the
    *  remote's default branch (a new branch), else the empty tree. */
   private async pushBase(cwd: string, remote: string, merge: string): Promise<string> {
@@ -190,7 +216,7 @@ export class ShipActions {
     if (await ok(tracking)) return tracking;
     const def = await this.defaultBranch(cwd);
     if (def && await ok(`refs/remotes/${remote}/${def}`)) return `refs/remotes/${remote}/${def}`;
-    return '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+    return EMPTY_TREE;
   }
 
   /** Throws Moved unless the worktree is still on `expect`'s branch at its HEAD. */
@@ -209,13 +235,14 @@ export class ShipActions {
     if (msg.length > SHIP_TEXT_MAX) return { ok: false, error: 'the commit message is too long' };
     try {
       await this.verify(cwd, expect);
+      // Checked in a COPY of the index, so a refusal leaves the user's
+      // staging exactly as it was (nothing staged, nothing unstaged).
+      const refused = await this.withIndexCopy(cwd, async (env) => {
+        await this.git(['add', '-A'], cwd, 30_000, env);
+        return this.secretRefusal(cwd, ['--cached'], 'committed', env);
+      }).catch(() => ({ ok: false as const, error: describeScanFailure('committed'), secretScanFailed: true as const }));
+      if (refused) return refused;
       await this.git(['add', '-A'], cwd);
-      const found = await this.secretsIn(cwd, ['--cached']);
-      if (found.length) {
-        // Back to unstaged: nothing of this change is left half-committed.
-        await this.git(['reset', '-q'], cwd).catch(() => undefined);
-        return this.refuseSecrets(found, 'committed');
-      }
       await this.verify(cwd, expect);
       await this.git(['commit', '-m', msg], cwd, 60_000);
       return { ok: true };
@@ -232,8 +259,8 @@ export class ShipActions {
       const [remote, merge] = await Promise.all([cfg(`branch.${expect.branch}.remote`), cfg(`branch.${expect.branch}.merge`)]);
       if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) return { ok: false, error: 'the branch has no upstream branch on a remote' };
       await this.verify(cwd, expect);
-      const found = await this.secretsIn(cwd, [`${await this.pushBase(cwd, remote, merge)}..${expect.head}`]);
-      if (found.length) return this.refuseSecrets(found, 'pushed');
+      const refused = await this.secretRefusal(cwd, [`${await this.pushBase(cwd, remote, merge)}..${expect.head}`], 'pushed');
+      if (refused) return refused;
       await this.git(['push', remote, `${expect.head}:${merge}`], cwd, 120_000, { GIT_TERMINAL_PROMPT: '0' });
       return { ok: true };
     } catch (err) {
@@ -249,8 +276,10 @@ export class ShipActions {
     try {
       await this.verify(cwd, expect);
       const base = await this.defaultBranch(cwd);
-      const found = base ? await this.secretsIn(cwd, [`refs/remotes/origin/${base}...${expect.head}`]) : [];
-      if (found.length) return this.refuseSecrets(found, 'sent in a pull request');
+      // No known base: compared with the empty tree, so the whole branch is checked.
+      const range = base ? [`refs/remotes/origin/${base}...${expect.head}`] : [EMPTY_TREE, expect.head];
+      const refused = await this.secretRefusal(cwd, range, 'sent in a pull request');
+      if (refused) return refused;
       const { stdout } = await this.run(process.platform === 'win32' ? 'gh.exe' : 'gh', ['pr', 'create', '--fill', '--head', expect.branch, '--title', t], {
         cwd,
         env: ghIssueEnv(),

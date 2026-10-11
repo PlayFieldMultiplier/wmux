@@ -632,5 +632,6 @@ export const de = {
   'moa.fleetAnswer.omitted': "Einige Zeilen wurden ausgelassen. Öffnen Sie Fleet für die vollständige Übersicht.",
   'git.secret.file': "{path}: Diese Datei enthält Passwörter oder Schlüssel und wurde daher nicht hochgeladen. Entfernen Sie sie aus der Änderung (oder tragen Sie sie in .gitignore ein) und versuchen Sie es erneut.",
   'git.secret.value': "{path}, Zeile {line}, sieht wie ein Passwort oder API-Schlüssel aus und wurde daher nicht hochgeladen. Entfernen Sie ihn aus dem Code und versuchen Sie es erneut.",
+  'git.secret.scanFailed': "wmux konnte diese Änderung nicht auf Passwörter und Schlüssel prüfen, daher wurde sie nicht hochgeladen. Versuchen Sie es erneut; falls es weiter fehlschlägt, committen Sie weniger Dateien auf einmal.",
   'git.secret.more': "(und {count} weitere)",
 } as const;

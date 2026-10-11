@@ -32,7 +32,7 @@ import {
   type MoaGoalVerification,
 } from '../../shared/moaGoal';
 import type { GoalTaskRef } from './moaGoalVerifier';
-import { describeSecretFindings } from '../../shared/secretGuard';
+import { describeScanFailure, describeSecretFindings } from '../../shared/secretGuard';
 import { scanGitRange } from '../git/secretScan';
 import { formatReviewGuide, type ReviewGuide } from '../../shared/prReviewGuide';
 
@@ -167,13 +167,19 @@ export async function deliverGoal(
     }
     // Never deliver a secret: a .env file, a private key, a key-shaped value.
     // Compared with the remote's base branch (what the PR would show).
-    const secrets = await scanGitRange(async (args) => {
+    const scan = await scanGitRange(async (args) => {
       const r = await ports.git(args, wt);
       return r.code === 0 ? r.stdout : null;
     }, [`refs/remotes/origin/${base}...${gate.headSha}`]);
-    if (secrets.length) {
-      item.error = `not delivered: ${describeSecretFindings(secrets, 'pushed')}`;
-      item.secrets = secrets;
+    if (!scan.ok) {
+      // Fail closed: a change nobody could check is not delivered.
+      item.error = `not delivered: ${describeScanFailure('pushed')}`;
+      item.secretScanFailed = true;
+      continue;
+    }
+    if (scan.findings.length) {
+      item.error = `not delivered: ${describeSecretFindings(scan.findings, 'pushed')}`;
+      item.secrets = scan.findings;
       continue;
     }
     // Exactly the verified commit, by sha, to the same-named branch: a plain

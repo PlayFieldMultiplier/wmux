@@ -636,5 +636,6 @@ export const ptBR = {
   'moa.fleetAnswer.omitted': "Algumas linhas foram omitidas. Abra o Fleet para ver o quadro completo.",
   'git.secret.file': "{path}: este arquivo contém senhas ou chaves, então não foi enviado. Remova-o da alteração (ou adicione ao .gitignore) e tente de novo.",
   'git.secret.value': "{path}, linha {line}, parece uma senha ou chave de API, então não foi enviado. Tire-a do código e tente de novo.",
+  'git.secret.scanFailed': "O wmux não conseguiu verificar se esta alteração contém senhas ou chaves, então ela não foi enviada. Tente de novo; se continuar falhando, faça commit de menos arquivos por vez.",
   'git.secret.more': "(e mais {count})",
 } as const;

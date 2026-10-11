@@ -9,6 +9,8 @@
 // its parent (main/worktask/TaskAdoptService.ts) and Moa's own delivery
 // (main/deck/moaGoalDelivery.ts). A finding never carries the value itself.
 
+import { secretValueKind, type SecretValueKind } from './redactSecrets';
+
 /** Folder names whose whole contents are secret. */
 export const SECRET_DIR_SEGMENTS: readonly string[] = ['.git', '.ssh', '.gnupg', '.aws'];
 
@@ -25,7 +27,8 @@ export const SECRET_FILE_PAIRS: readonly (readonly [string, string])[] = [['.doc
  *  files that are only secret when they carry a token (checked by content). */
 const COMMITTABLE = [/\.(example|sample|template|dist|defaults?)$/i, /\.pub$/i, /^\.npmrc$/i, /^credentials.*\.(md|txt|ts|tsx|js|py|go|rs)$/i];
 
-export type SecretKind = 'env' | 'private-key' | 'credentials' | 'openai' | 'github' | 'aws' | 'slack' | 'random';
+/** A secret file's kind, or a key's kind (shared/redactSecrets.ts). */
+export type SecretKind = 'env' | 'credentials' | SecretValueKind;
 
 export interface SecretFinding {
   /** Repository-relative path. */
@@ -55,36 +58,9 @@ export function secretFileKind(p: string): SecretKind | null {
   return null;
 }
 
-const VALUE_RULES: readonly [SecretKind, RegExp][] = [
-  ['private-key', /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/],
-  ['openai', /\bsk-(?:proj-|ant-[a-z0-9]{2,6}-)?[A-Za-z0-9_-]{20,}/],
-  ['github', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})/],
-  ['aws', /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/],
-  ['slack', /\bxox[abposr]-[A-Za-z0-9-]{10,}/],
-];
-
-/** A long random-looking string assigned to something named like a secret. */
-const ASSIGNED = /(?:key|secret|token|passw(?:or)?d|pwd|credential)[A-Za-z0-9_-]*["']?\s*[:=]\s*["'`]?([A-Za-z0-9+/_\-.=]{24,})/i;
-
-function entropy(s: string): number {
-  const n = new Map<string, number>();
-  for (const c of s) n.set(c, (n.get(c) ?? 0) + 1);
-  let h = 0;
-  for (const k of n.values()) { const p = k / s.length; h -= p * Math.log2(p); }
-  return h;
-}
-
-/** The kind of key-shaped value on one line of added text, or null. */
-export function secretValueKind(line: string): SecretKind | null {
-  for (const [kind, re] of VALUE_RULES) if (re.test(line)) return kind;
-  const m = ASSIGNED.exec(line);
-  if (m) {
-    const v = m[1];
-    // A random string mixes letters and digits and is not a placeholder.
-    if (/[0-9]/.test(v) && /[A-Za-z]/.test(v) && !/^(x+|\*+|your[_-]|changeme|example)/i.test(v) && entropy(v) >= 4) return 'random';
-  }
-  return null;
-}
+/** The kind of key-shaped value on one line of added text, or null. The key
+ *  shapes live in shared/redactSecrets.ts, shared with log redaction. */
+export { secretValueKind };
 
 /**
  * Secrets a unified diff ADDS (`git diff -U0`, a patch). Deleting a secret
@@ -144,12 +120,25 @@ const KIND_WORDS: Record<SecretKind, string> = {
   env: 'passwords and keys',
   'private-key': 'a private key',
   credentials: 'login credentials',
+  anthropic: 'an AI service API key',
   openai: 'an AI service API key',
   github: 'a GitHub token',
+  gitlab: 'a GitLab token',
   aws: 'an AWS access key',
+  google: 'a Google API key',
+  stripe: 'a Stripe secret key',
   slack: 'a Slack token',
+  npm: 'an npm token',
+  twilio: 'a Twilio key',
+  jwt: 'a login token (JWT)',
   random: 'what looks like a password or key',
 };
+
+/** Plain-English reason when the check itself could not run: the action is
+ *  refused rather than let through unchecked. */
+export function describeScanFailure(action = 'sent'): string {
+  return `wmux could not check this change for passwords and keys, so it was not ${action}. Try again; if it keeps failing, commit fewer files at a time.`;
+}
 
 /** One plain-English sentence for logs and Moa's record (the UI localizes
  *  from the findings instead). Never includes the value. */
