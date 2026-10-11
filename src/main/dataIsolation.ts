@@ -74,8 +74,9 @@ export function shouldUsePortableData(realExecPath: string, home: string, env: N
 /**
  * Whether to tell the user, once per portable data dir, that this copy uses
  * separate data. Only when the portable suffix was FORCED. The marker is
- * created exclusively, so a later launch, or a marker that cannot be written,
- * never shows it again.
+ * created exclusively, so a later launch or renderer reload never shows it
+ * again; a marker that cannot be written skips the notice rather than nag.
+ * The renderer asks after mounting, so a claimed marker means a shown toast.
  */
 export function claimPortableDataNotice(forced: boolean, markerPath: string): boolean {
   if (!forced) return false;
@@ -83,7 +84,8 @@ export function claimPortableDataNotice(forced: boolean, markerPath: string): bo
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, new Date().toISOString(), { flag: 'wx' });
     return true;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') console.warn('[Main] portable data notice marker not written:', err);
     return false;
   }
 }

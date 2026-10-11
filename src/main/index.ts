@@ -733,6 +733,12 @@ ipcMain.handle('detection:resolveAgent', async (_e, ptyId: string) => {
   return (await daemonClient?.getAgentName(id)) ?? null;
 });
 
+// The renderer asks once it is mounted, so the marker is claimed only when the
+// toast is about to show: a push could land before anyone listens and be lost.
+ipcMain.handle(IPC.PORTABLE_DATA_NOTICE_CLAIM, () =>
+  claimPortableDataNotice(portableDataForced, path.join(getWmuxHomeDir(), 'portable-notice-shown')),
+);
+
 ipcMain.handle('daemon:get-ready-state', async () => {
   if (!daemonReadyDecided) {
     await new Promise<void>((resolve) => {
@@ -1821,20 +1827,6 @@ app.on('ready', async () => {
       });
   }, 5000);
   staleGateTimer.unref();
-
-  // Tell the user once (per portable data dir) why a portable copy opens empty.
-  // Deferred like the notice above so the window exists before the marker is
-  // claimed; a send before the renderer subscribes would be lost for good.
-  if (portableDataForced) {
-    const portableNoticeTimer = setTimeout(() => {
-      const wc = mainWindow?.webContents;
-      if (!wc || wc.isDestroyed()) return;
-      if (!claimPortableDataNotice(portableDataForced, path.join(getWmuxHomeDir(), 'portable-notice-shown'))) return;
-      if (wc.isLoading()) wc.once('did-finish-load', () => wc.send(IPC.PORTABLE_DATA_NOTICE));
-      else wc.send(IPC.PORTABLE_DATA_NOTICE);
-    }, 3000);
-    portableNoticeTimer.unref();
-  }
 
   // Dev Dock 아이콘: dev에선 패키징 안 된 제네릭 Electron 바이너리로 실행돼
   // macOS Dock에 기본 원자 아이콘이 뜬다. 패키지 빌드는 packagerConfig.icon으로
