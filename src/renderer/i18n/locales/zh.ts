@@ -3651,6 +3651,8 @@ export const zh = {
   'schedules.detail.browser_consent_unattended': "浏览器操作(页面脚本、下载或敏感网站的登录数据)需要有人确认,但计划运行没有人可以询问,因此已被拒绝。在该窗格中回答“在此窗格中始终允许”也适用于它的计划运行。",
   'git.secret.file': "{path}:此文件包含密码或密钥,因此未上传。请将其移出更改(或加入 .gitignore)后重试。",
   'git.secret.value': "{path} 第 {line} 行看起来像密码或 API 密钥,因此未上传。请将其移出代码后重试。",
-  'git.secret.scanFailed': "wmux 无法检查此更改是否包含密码或密钥,因此未上传。请重试;如果一直失败,请分批提交文件。",
+  'git.secret.scanFailed': "wmux 无法读取此更改以检查密码或密钥,因此未上传。请重试;如果一直失败,可以在 设置 › 常规 中关闭此检查。",
   'git.secret.more': "(另有 {count} 处)",
+  'settings.secretGuard': "在提交、推送和 PR 中拦截密码和密钥",
+  'settings.secretGuardDesc': "Git 页面的提交、推送和创建 PR,采纳任务以及 Moa 交付时,拒绝包含 .env 文件、私钥或 API 密钥的更改。",
 } as const;

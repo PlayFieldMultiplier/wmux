@@ -24,7 +24,8 @@ function make(answer: (cmd: string, args: string[]) => string | Error, exists: (
   });
   const prOf = vi.fn(async () => ({ number: 3, state: 'open' as const, checks: null, url: 'https://github.com/o/r/pull/3' }));
   const forgetPr = vi.fn();
-  return { svc: new ShipActions(run as never, prOf, forgetPr, () => 1_000, exists), calls, prOf, forgetPr };
+  // The secret check's reads answer an empty, clean change.
+  return { svc: new ShipActions(run as never, prOf, forgetPr, () => 1_000, exists, () => async () => true), calls, prOf, forgetPr };
 }
 
 /** A fake git that answers the pin checks with `head` on `branch`. */
@@ -102,11 +103,13 @@ describe('ShipActions writes', () => {
   it('commit stages everything and commits with the message as one argv, pinned to branch + HEAD', async () => {
     const { svc, calls } = make(onBranch());
     expect(await svc.commit('/repo', '  fix: a "quoted"; rm -rf x  ', EXPECT)).toEqual({ ok: true });
-    // The first add is the secret check's, into a throwaway index copy.
-    const writes = calls.filter((c) => c.args[0] === 'add' || c.args[0] === 'commit');
-    expect(writes.map((c) => c.args)).toEqual([['add', '-A'], ['add', '-A'], ['commit', '-m', 'fix: a "quoted"; rm -rf x']]);
+    // Staged, checked and committed in one throwaway index copy; then the
+    // real index catches up with the commit.
+    const writes = calls.filter((c) => ['add', 'commit', 'reset'].includes(c.args[0]));
+    expect(writes.map((c) => c.args)).toEqual([['add', '-A'], ['commit', '-m', 'fix: a "quoted"; rm -rf x'], ['reset', '-q']]);
     expect(writes[0].env.GIT_INDEX_FILE).toMatch(/wmux-secret-index-.*index$/);
-    expect(writes[1].env.GIT_INDEX_FILE).toBeUndefined();
+    expect(writes[1].env.GIT_INDEX_FILE).toBe(writes[0].env.GIT_INDEX_FILE);
+    expect(writes[2].env.GIT_INDEX_FILE).toBeUndefined();
     expect(await svc.commit('/repo', '   ', EXPECT)).toEqual({ ok: false, error: 'a commit message is required' });
   });
 

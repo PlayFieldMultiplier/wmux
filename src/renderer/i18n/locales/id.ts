@@ -635,6 +635,8 @@ export const id = {
   'moa.fleetAnswer.omitted': "Beberapa baris dihilangkan. Buka Fleet untuk melihat papan lengkap.",
   'git.secret.file': "{path}: file ini berisi kata sandi atau kunci, jadi tidak diunggah. Keluarkan dari perubahan (atau tambahkan ke .gitignore) lalu coba lagi.",
   'git.secret.value': "{path} baris {line} tampak seperti kata sandi atau kunci API, jadi tidak diunggah. Keluarkan dari kode lalu coba lagi.",
-  'git.secret.scanFailed': "wmux tidak dapat memeriksa perubahan ini untuk kata sandi dan kunci, jadi tidak diunggah. Coba lagi; jika terus gagal, commit lebih sedikit file sekaligus.",
+  'git.secret.scanFailed': "wmux tidak dapat membaca perubahan ini untuk memeriksa kata sandi dan kunci, jadi tidak diunggah. Coba lagi; jika terus gagal, pemeriksaan ini bisa dimatikan di Pengaturan › Umum.",
   'git.secret.more': "(dan {count} lainnya)",
+  'settings.secretGuard': "Blokir kata sandi dan kunci di commit, push, dan PR",
+  'settings.secretGuardDesc': "Commit, Push, dan Buat PR di halaman Git, mengadopsi tugas, serta pengiriman Moa menolak perubahan yang menambahkan file .env, kunci privat, atau kunci API.",
 } as const;

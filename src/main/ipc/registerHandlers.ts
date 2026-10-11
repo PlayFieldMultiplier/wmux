@@ -56,6 +56,7 @@ import { toastManager } from '../pipe/handlers/notify.rpc';
 import { markRendererNotificationListenerReady } from '../notification/rendererNotificationReadiness';
 import { setMutedNotificationCategories } from '../notification/mutedCategories';
 import { setDefaultWslDistro } from '../pty/defaultWslDistro';
+import { setSecretGuardEnabled } from '../git/secretGuardSetting';
 import { updateUnreadBadge } from '../tray';
 import { eventBus } from '../events/EventBus';
 import { WMUX_EVENT_TYPES, type WmuxEventType } from '../../shared/events';
@@ -264,6 +265,10 @@ export function registerAllHandlers(
   };
   ipcMain.removeAllListeners(IPC.SETTINGS_DEFAULT_WSL_DISTRO);
   ipcMain.on(IPC.SETTINGS_DEFAULT_WSL_DISTRO, onDefaultWslDistro);
+
+  // Mirror the secret guard switch; anything but an explicit false keeps it on.
+  ipcMain.removeAllListeners(IPC.SECRET_GUARD_ENABLED);
+  ipcMain.on(IPC.SECRET_GUARD_ENABLED, (_event: Electron.IpcMainEvent, enabled: unknown) => setSecretGuardEnabled(enabled !== false));
 
   // #516 — mirror the renderer's per-category mute so the no-renderer toast
   // fallback in dispatchNotification can honor it.
@@ -559,6 +564,7 @@ export function registerAllHandlers(
     ipcMain.removeAllListeners(IPC.TOAST_ENABLED);
     ipcMain.removeAllListeners(IPC.MUTED_NOTIFICATION_CATEGORIES);
     ipcMain.removeAllListeners(IPC.SETTINGS_DEFAULT_WSL_DISTRO);
+    ipcMain.removeAllListeners(IPC.SECRET_GUARD_ENABLED);
     ipcMain.removeAllListeners(IPC.WINDOW_HIDE);
     ipcMain.removeAllListeners(IPC.WINDOW_FLASH_FRAME);
     ipcMain.removeAllListeners(IPC.NOTIFICATION_OS_TOAST);

@@ -630,6 +630,8 @@ export const vi = {
   'moa.fleetAnswer.omitted': "Một số dòng đã được lược bớt. Mở Fleet để xem toàn bộ bảng.",
   'git.secret.file': "{path}: tệp này chứa mật khẩu hoặc khóa nên không được tải lên. Bỏ nó khỏi thay đổi (hoặc thêm vào .gitignore) rồi thử lại.",
   'git.secret.value': "{path} dòng {line} trông giống mật khẩu hoặc khóa API nên không được tải lên. Bỏ nó khỏi mã rồi thử lại.",
-  'git.secret.scanFailed': "wmux không kiểm tra được thay đổi này có mật khẩu hay khóa không nên không tải lên. Hãy thử lại; nếu vẫn lỗi, hãy commit ít tệp hơn mỗi lần.",
+  'git.secret.scanFailed': "wmux không đọc được thay đổi này để kiểm tra mật khẩu và khóa nên không tải lên. Hãy thử lại; nếu vẫn lỗi, có thể tắt bước kiểm tra này trong Cài đặt › Chung.",
   'git.secret.more': "(và {count} chỗ khác)",
+  'settings.secretGuard': "Chặn mật khẩu và khóa trong commit, push và PR",
+  'settings.secretGuardDesc': "Commit, Push và Tạo PR trên trang Git, nhận việc từ tác vụ và lần giao của Moa sẽ từ chối thay đổi có thêm tệp .env, khóa riêng tư hoặc khóa API.",
 } as const;

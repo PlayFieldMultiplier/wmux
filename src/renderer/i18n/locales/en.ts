@@ -4533,8 +4533,10 @@ export const en = {
   'schedules.detail.browser_consent_unattended': "A browser action needed a person's OK (a page script, a download or a sensitive site's sign-in data), and a scheduled run has nobody to ask, so it was refused. An \"Always on this pane\" answer given in that pane also covers its scheduled runs.",
   'git.secret.file': "{path}: this file holds passwords or keys, so it was not uploaded. Remove it from the change (or add it to .gitignore) and try again.",
   'git.secret.value': "{path} line {line} looks like a password or API key, so it was not uploaded. Move it out of the code and try again.",
-  'git.secret.scanFailed': "wmux could not check this change for passwords and keys, so it was not uploaded. Try again; if it keeps failing, commit fewer files at a time.",
+  'git.secret.scanFailed': "wmux could not read this change to check it for passwords and keys, so it was not uploaded. Try again; if it keeps failing, the check can be turned off in Settings › General.",
   'git.secret.more': "(and {count} more)",
+  'settings.secretGuard': "Block passwords and keys in commits, pushes and PRs",
+  'settings.secretGuardDesc': "Commit, Push and Create PR on the Git page, adopting a task, and Moa's delivery refuse a change that adds a .env file, a private key or an API key.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DELIVERABLE_BRANCH_RE, deliverGoal, prBody, reviewGuide, prNumberOf, revertDelivery, runDueMerges, type ExecResult, type MoaGoalDeliveryPorts } from '../moaGoalDelivery';
+import { setSecretGuardEnabled } from '../../git/secretGuardSetting';
 import { MOA_GOAL_AUTO_MERGE, MOA_GOAL_DEFAULT_HUMAN_ONLY, type MoaGoalContract, type MoaGoalVerification } from '../../../shared/moaGoal';
 
 let dir: string;
@@ -124,14 +125,53 @@ describe('deliverGoal — push the verified commit, open the PR', () => {
     expect(reviewGuide(contract(), failed, { taskId: 't1', headSha: head }).gate).toBe('failed');
   });
 
+  it('refuses a secret file added in one commit and removed in the next', async () => {
+    fs.writeFileSync(path.join(wt, '.env'), 'X=1\n');
+    git(['add', '-A'], wt);
+    git(['commit', '-qm', 'add'], wt);
+    git(['rm', '-q', '.env'], wt);
+    git(['commit', '-qm', 'drop'], wt);
+    const { p, gh } = ports();
+    const d = await deliverGoal(contract(), verification(git(['rev-parse', 'HEAD'], wt)), p);
+    expect(d.items[0]).toMatchObject({ pushed: false, secrets: [{ path: '.env', what: 'file', kind: 'env' }] });
+    expect(gh).not.toHaveBeenCalled();
+  });
+
+  it('without a local origin/<base> ref, checks only the commits no remote has, not the whole history', async () => {
+    // An old commit with a secret file, already on the remote: not what this delivery sends.
+    fs.writeFileSync(path.join(wt, '.env'), 'X=1\n');
+    git(['add', '-A'], wt);
+    git(['commit', '-qm', 'old'], wt);
+    git(['push', '-q', 'origin', 'HEAD:refs/heads/legacy'], wt);
+    fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
+    git(['add', '-A'], wt);
+    git(['commit', '-qm', 'new'], wt);
+    git(['symbolic-ref', '-d', 'refs/remotes/origin/HEAD'], repo);
+    git(['update-ref', '-d', 'refs/remotes/origin/main'], repo);
+    const { p } = ports();
+    const d = await deliverGoal(contract(), verification(git(['rev-parse', 'HEAD'], wt)), p);
+    expect(d.items[0]).toMatchObject({ pushed: true });
+  });
+
+  it('with the guard turned off in Settings, delivers as before', async () => {
+    fs.writeFileSync(path.join(wt, '.env'), 'X=1\n');
+    git(['add', '-A'], wt);
+    git(['commit', '-qm', 'oops'], wt);
+    setSecretGuardEnabled(false);
+    try {
+      const { p } = ports();
+      const d = await deliverGoal(contract(), verification(git(['rev-parse', 'HEAD'], wt)), p);
+      expect(d.items[0]).toMatchObject({ pushed: true });
+    } finally {
+      setSecretGuardEnabled(true);
+    }
+  });
+
   it('fails closed: when the secret check cannot run, nothing is pushed and the reason is recorded', async () => {
-    const { p, gh, git: gitMock } = ports();
-    const real = gitMock.getMockImplementation()!;
-    gitMock.mockImplementation(async (args: string[], cwd: string) =>
-      args[0] === 'diff' ? { code: 128, stdout: '', stderr: 'fatal: bad revision' } : real(args, cwd));
+    const { p, gh } = ports({ gitLines: () => async () => false });
     const d = await deliverGoal(contract(), verification(), p);
     expect(d.items[0]).toMatchObject({ pushed: false, secretScanFailed: true });
-    expect(d.items[0].error).toMatch(/^not delivered: wmux could not check this change for passwords and keys/);
+    expect(d.items[0].error).toMatch(/^not delivered: wmux could not read this change to check it for passwords and keys/);
     expect(gh).not.toHaveBeenCalled();
     expect(() => git(['rev-parse', 'refs/heads/wtask/fix-a'], remote)).toThrow();
   });

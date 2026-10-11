@@ -4490,6 +4490,8 @@ export const pl = {
   'schedules.detail.browser_consent_unattended': "Akcja przeglądarki wymagała zgody człowieka (skrypt strony, pobieranie lub dane logowania wrażliwej witryny), a zaplanowane uruchomienie nie ma kogo zapytać, więc została odrzucona. Odpowiedź „Zawsze w tym panelu” udzielona w tym panelu obejmuje też jego zaplanowane uruchomienia.",
   'git.secret.file': "{path}: ten plik zawiera hasła lub klucze, więc nie został wysłany. Usuń go ze zmiany (lub dodaj do .gitignore) i spróbuj ponownie.",
   'git.secret.value': "{path}, wiersz {line}, wygląda na hasło lub klucz API, więc nie został wysłany. Usuń go z kodu i spróbuj ponownie.",
-  'git.secret.scanFailed': "wmux nie mógł sprawdzić tej zmiany pod kątem haseł i kluczy, więc nie została wysłana. Spróbuj ponownie; jeśli to się powtarza, zatwierdzaj mniej plików naraz.",
+  'git.secret.scanFailed': "wmux nie mógł odczytać tej zmiany, aby sprawdzić ją pod kątem haseł i kluczy, więc nie została wysłana. Spróbuj ponownie; jeśli to się powtarza, sprawdzanie można wyłączyć w Ustawienia › Ogólne.",
   'git.secret.more': "(i jeszcze {count})",
+  'settings.secretGuard': "Blokuj hasła i klucze w commitach, pushach i PR",
+  'settings.secretGuardDesc': "Commit, Push i Utwórz PR na stronie Git, przejęcie zadania oraz dostarczenie przez Moa odrzucają zmianę, która dodaje plik .env, klucz prywatny lub klucz API.",
 } as const;

@@ -635,6 +635,8 @@ export const bs = {
   'moa.fleetAnswer.omitted': "Neki redovi su izostavljeni. Otvorite Fleet za cijelu tablu.",
   'git.secret.file': "{path}: ova datoteka sadrži lozinke ili ključeve, pa nije poslana. Uklonite je iz izmjene (ili dodajte u .gitignore) i pokušajte ponovo.",
   'git.secret.value': "{path}, red {line}, izgleda kao lozinka ili API ključ, pa nije poslano. Uklonite ga iz koda i pokušajte ponovo.",
-  'git.secret.scanFailed': "wmux nije mogao provjeriti ovu izmjenu na lozinke i ključeve, pa nije poslana. Pokušajte ponovo; ako i dalje ne uspijeva, commitajte manje datoteka odjednom.",
+  'git.secret.scanFailed': "wmux nije mogao pročitati ovu izmjenu da je provjeri na lozinke i ključeve, pa nije poslana. Pokušajte ponovo; ako i dalje ne uspijeva, provjeru možete isključiti u Postavke › Opšte.",
   'git.secret.more': "(i još {count})",
+  'settings.secretGuard': "Blokiraj lozinke i ključeve u commitima, pushevima i PR-ovima",
+  'settings.secretGuardDesc': "Commit, Push i Create PR na Git stranici, preuzimanje zadatka i Moa isporuka odbijaju izmjenu koja dodaje .env datoteku, privatni ključ ili API ključ.",
 } as const;

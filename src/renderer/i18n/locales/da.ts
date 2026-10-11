@@ -634,6 +634,8 @@ export const da = {
   'moa.fleetAnswer.omitted': "Nogle rækker er udeladt. Åbn Fleet for at se hele oversigten.",
   'git.secret.file': "{path}: filen indeholder adgangskoder eller nøgler, så den blev ikke uploadet. Fjern den fra ændringen (eller tilføj den til .gitignore), og prøv igen.",
   'git.secret.value': "{path} linje {line} ligner en adgangskode eller API-nøgle, så den blev ikke uploadet. Fjern den fra koden, og prøv igen.",
-  'git.secret.scanFailed': "wmux kunne ikke tjekke ændringen for adgangskoder og nøgler, så den blev ikke uploadet. Prøv igen; hvis det bliver ved med at fejle, så commit færre filer ad gangen.",
+  'git.secret.scanFailed': "wmux kunne ikke læse ændringen for at tjekke den for adgangskoder og nøgler, så den blev ikke uploadet. Prøv igen; hvis det bliver ved med at fejle, kan tjekket slås fra under Indstillinger › Generelt.",
   'git.secret.more': "(og {count} mere)",
+  'settings.secretGuard': "Bloker adgangskoder og nøgler i commits, pushes og PR'er",
+  'settings.secretGuardDesc': "Commit, Push og Opret PR på Git-siden, overtagelse af en opgave og Moas levering afviser en ændring, der tilføjer en .env-fil, en privat nøgle eller en API-nøgle.",
 } as const;

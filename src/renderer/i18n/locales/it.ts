@@ -635,6 +635,8 @@ export const it = {
   'moa.fleetAnswer.omitted': "Alcune righe sono omesse. Apri Fleet per vedere la bacheca completa.",
   'git.secret.file': "{path}: questo file contiene password o chiavi, quindi non è stato caricato. Toglilo dalla modifica (o aggiungilo a .gitignore) e riprova.",
   'git.secret.value': "{path}, riga {line}, sembra una password o una chiave API, quindi non è stato caricato. Toglila dal codice e riprova.",
-  'git.secret.scanFailed': "wmux non è riuscito a controllare se questa modifica contiene password o chiavi, quindi non è stata caricata. Riprova; se continua a non riuscire, fai commit di meno file alla volta.",
+  'git.secret.scanFailed': "wmux non è riuscito a leggere questa modifica per controllare password e chiavi, quindi non è stata caricata. Riprova; se continua a non riuscire, puoi disattivare il controllo in Impostazioni › Generale.",
   'git.secret.more': "(e altri {count})",
+  'settings.secretGuard': "Blocca password e chiavi in commit, push e PR",
+  'settings.secretGuardDesc': "Commit, Push e Crea PR nella pagina Git, l'adozione di un task e la consegna di Moa rifiutano una modifica che aggiunge un file .env, una chiave privata o una chiave API.",
 } as const;

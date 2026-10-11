@@ -632,6 +632,8 @@ export const de = {
   'moa.fleetAnswer.omitted': "Einige Zeilen wurden ausgelassen. Öffnen Sie Fleet für die vollständige Übersicht.",
   'git.secret.file': "{path}: Diese Datei enthält Passwörter oder Schlüssel und wurde daher nicht hochgeladen. Entfernen Sie sie aus der Änderung (oder tragen Sie sie in .gitignore ein) und versuchen Sie es erneut.",
   'git.secret.value': "{path}, Zeile {line}, sieht wie ein Passwort oder API-Schlüssel aus und wurde daher nicht hochgeladen. Entfernen Sie ihn aus dem Code und versuchen Sie es erneut.",
-  'git.secret.scanFailed': "wmux konnte diese Änderung nicht auf Passwörter und Schlüssel prüfen, daher wurde sie nicht hochgeladen. Versuchen Sie es erneut; falls es weiter fehlschlägt, committen Sie weniger Dateien auf einmal.",
+  'git.secret.scanFailed': "wmux konnte diese Änderung nicht lesen, um sie auf Passwörter und Schlüssel zu prüfen, daher wurde sie nicht hochgeladen. Versuchen Sie es erneut; falls es weiter fehlschlägt, lässt sich die Prüfung unter Einstellungen › Allgemein ausschalten.",
   'git.secret.more': "(und {count} weitere)",
+  'settings.secretGuard': "Passwörter und Schlüssel in Commits, Pushes und PRs blockieren",
+  'settings.secretGuardDesc': "Commit, Push und PR erstellen auf der Git-Seite, das Übernehmen einer Aufgabe und Moas Auslieferung lehnen eine Änderung ab, die eine .env-Datei, einen privaten Schlüssel oder einen API-Schlüssel hinzufügt.",
 } as const;

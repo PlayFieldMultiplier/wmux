@@ -937,6 +937,11 @@ export interface UISlice {
   autoUpdateEnabled: boolean;
   setAutoUpdateEnabled: (enabled: boolean) => void;
 
+  // ─── Git: refuse commits / pushes / PRs carrying passwords or keys ───
+  /** On by default; main holds the live value (main/git/secretGuardSetting.ts). */
+  secretGuardEnabled: boolean;
+  setSecretGuardEnabled: (enabled: boolean) => void;
+
   // ─── Onboarding ─────────────────────────────────────────────────────
   onboardingActive: boolean;
   onboardingCompleted: boolean;
@@ -2216,6 +2221,13 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setAutoUpdateEnabled: (enabled) => set((state) => {
     state.autoUpdateEnabled = enabled;
+  }),
+
+  // ─── Git: secret guard ─────────────────────────────────────────────────
+  secretGuardEnabled: true,
+
+  setSecretGuardEnabled: (enabled) => set((state) => {
+    state.secretGuardEnabled = enabled;
   }),
 
   // ─── Onboarding ─────────────────────────────────────────────────────

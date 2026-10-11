@@ -684,6 +684,8 @@ export const ja = {
   'moa.fleetAnswer.omitted': "一部の行を省略しています。全体は Fleet で確認してください。",
   'git.secret.file': "{path}: このファイルにはパスワードやキーが含まれているため、アップロードしませんでした。変更から外す(または .gitignore に追加する)と再試行できます。",
   'git.secret.value': "{path} の {line} 行目がパスワードや API キーのように見えるため、アップロードしませんでした。コードから外して再試行してください。",
-  'git.secret.scanFailed': "この変更にパスワードやキーが含まれていないか確認できなかったため、アップロードしませんでした。もう一度試し、失敗が続く場合はファイルを分けてコミットしてください。",
+  'git.secret.scanFailed': "この変更を読み取れず、パスワードやキーの確認ができなかったため、アップロードしませんでした。もう一度試し、失敗が続く場合は設定 › 一般でこの確認をオフにできます。",
   'git.secret.more': "(ほか {count} 件)",
+  'settings.secretGuard': "コミット・プッシュ・PR でパスワードとキーをブロック",
+  'settings.secretGuardDesc': "Git ページのコミット・プッシュ・PR 作成、タスクの取り込み、Moa の納品で、.env ファイル、秘密鍵、API キーを含む変更を送信しません。",
 } as const;

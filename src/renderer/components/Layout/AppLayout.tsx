@@ -483,6 +483,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     customKeybindings: state.customKeybindings,
     shortcutOverrides: state.shortcutOverrides,
     autoUpdateEnabled: state.autoUpdateEnabled,
+    secretGuardEnabled: state.secretGuardEnabled,
     customThemeColors: state.customThemeColors ?? undefined,
     pcRail: selectPcRailPersisted(state),
     onboardingCompleted: state.onboardingCompleted,

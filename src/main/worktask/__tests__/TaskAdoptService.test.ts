@@ -6,6 +6,7 @@
 // asserted is which commands run, with which arguments, in which directory.
 
 import { describe, it, expect, vi } from 'vitest';
+import { setSecretGuardEnabled } from '../../git/secretGuardSetting';
 
 import {
   adoptCommitMessage,
@@ -37,6 +38,10 @@ function fakeGit(opts: {
   /** What `diff --name-only` reports, NUL-framed. Defaults to two paths. */
   names?: string;
   diff?: string;
+  /** The secret check's `diff -z --name-status` and `-U0 --text` reads. */
+  scanNames?: string;
+  scanPatch?: string;
+  scanCode?: number;
   mergeBaseCode?: number;
   checkCode?: number;
   applyCode?: number;
@@ -68,6 +73,10 @@ function fakeGit(opts: {
     if (args[0] === 'add') return opts.addCode ? fail('add failed') : ok('');
     if (args[0] === 'diff' && args.includes('--name-only')) {
       return ok(opts.diff ? (opts.names ?? 'src/a.ts\0src/b.ts\0') : '');
+    }
+    if (args[0] === 'diff' && (args.includes('--name-status') || args.includes('--text'))) {
+      if (opts.scanCode) return fail('fatal: out of memory', opts.scanCode);
+      return ok((args.includes('--text') ? opts.scanPatch : opts.scanNames) ?? '');
     }
     if (args[0] === 'diff') return ok(opts.diff ?? '');
     if (args[0] === 'apply' && args.includes('--check')) {
@@ -106,22 +115,44 @@ function service(git: AdoptGit): { svc: TaskAdoptService; written: string[]; ind
 }
 
 describe('TaskAdoptService secret guard', () => {
-  it('refuses a task that adds a .env file or a key, before anything is applied', async () => {
-    for (const diff of [
-      'diff --git a/.env b/.env\nnew file mode 100644\n--- /dev/null\n+++ b/.env\n@@ -0,0 +1 @@\n+A=1\n',
-      `diff --git a/s.ts b/s.ts\n--- a/s.ts\n+++ b/s.ts\n@@ -1,0 +2 @@\n+const k = "AKIAIOSFODNN7EXAMPLE";\n`,
-    ]) {
-      const calls: Call[] = [];
-      const { svc, written } = service(fakeGit({ diff, calls }));
-      const res = await svc.adopt({ taskId: 'wtask-1', worktreePath: WT, commit: true });
-      expect(res).toMatchObject({ ok: false, reason: 'secret' });
-      if (!res.ok) {
-        expect(res.secrets?.length).toBe(1);
-        expect(res.error).toMatch(/^not adopted: /);
-        expect(res.error).not.toContain('AKIA');
-      }
-      expect(written).toEqual([]);
-      expect(calls.some((c) => c.args[0] === 'apply' || c.args[0] === 'commit')).toBe(false);
+  const DIFF = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n';
+  const adopt = async (o: Parameters<typeof fakeGit>[0]) => {
+    const calls: Call[] = [];
+    const { svc, written } = service(fakeGit({ diff: DIFF, calls, ...o }));
+    const res = await svc.adopt({ taskId: 'wtask-1', worktreePath: WT, commit: true });
+    return { res, written, wrote: calls.some((c) => c.args[0] === 'apply' || c.args[0] === 'commit') };
+  };
+
+  it.each([
+    // A non-ASCII folder: the path comes from the NUL-framed name list, never the quoted patch header.
+    ['A\0config/설정/.env\0', 'diff --git "a/config/\\354\\204\\244\\354\\240\\225/.env" "b/config/\\354\\204\\244\\354\\240\\225/.env"\nnew file mode 100644\n--- /dev/null\n+++ "b/config/\\354\\204\\244\\354\\240\\225/.env"\n@@ -0,0 +1 @@\n+A=1\n', { path: 'config/설정/.env', what: 'file', kind: 'env' }],
+    // A rename onto a secret name is read as the new name being added.
+    ['A\0.env\0', 'diff --git a/.env b/.env\nnew file mode 100644\n--- /dev/null\n+++ b/.env\n@@ -0,0 +1 @@\n+A=1\n', { path: '.env', what: 'file', kind: 'env' }],
+    ['M\0s.ts\0', 'diff --git a/s.ts b/s.ts\n--- a/s.ts\n+++ b/s.ts\n@@ -1,0 +2 @@\n+const k = "AKIAIOSFODNN7EXAMPLE";\n', { path: 's.ts', what: 'value', kind: 'aws', line: 2 }],
+  ])('refuses %j before anything is applied, never echoing the value', async (scanNames, scanPatch, finding) => {
+    const { res, written, wrote } = await adopt({ scanNames, scanPatch });
+    expect(res).toMatchObject({ ok: false, reason: 'secret', secrets: [finding] });
+    if (!res.ok) {
+      expect(res.error).toMatch(/^not adopted: /);
+      expect(res.error).not.toContain('AKIA');
+    }
+    expect(written).toEqual([]);
+    expect(wrote).toBe(false);
+  });
+
+  it('fails closed when the check cannot read the change', async () => {
+    const { res, wrote } = await adopt({ scanCode: 128 });
+    expect(res).toMatchObject({ ok: false, reason: 'secret' });
+    expect(wrote).toBe(false);
+  });
+
+  it('with the guard turned off in Settings, adopts as before', async () => {
+    setSecretGuardEnabled(false);
+    try {
+      const { res } = await adopt({ scanNames: 'A\0.env\0', scanPatch: 'diff --git a/.env b/.env\nnew file mode 100644\n--- /dev/null\n+++ b/.env\n@@ -0,0 +1 @@\n+A=1\n' });
+      expect(res.ok).toBe(true);
+    } finally {
+      setSecretGuardEnabled(true);
     }
   });
 });

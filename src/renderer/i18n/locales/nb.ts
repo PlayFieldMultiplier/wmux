@@ -635,6 +635,8 @@ export const nb = {
   'moa.fleetAnswer.omitted': "Noen rader er utelatt. Åpne Fleet for hele oversikten.",
   'git.secret.file': "{path}: filen inneholder passord eller nøkler, så den ble ikke lastet opp. Fjern den fra endringen (eller legg den i .gitignore) og prøv igjen.",
   'git.secret.value': "{path} linje {line} ser ut som et passord eller en API-nøkkel, så den ble ikke lastet opp. Fjern den fra koden og prøv igjen.",
-  'git.secret.scanFailed': "wmux kunne ikke sjekke endringen for passord og nøkler, så den ble ikke lastet opp. Prøv igjen; hvis det fortsetter å feile, commit færre filer om gangen.",
+  'git.secret.scanFailed': "wmux kunne ikke lese endringen for å sjekke den for passord og nøkler, så den ble ikke lastet opp. Prøv igjen; hvis det fortsetter å feile, kan sjekken slås av under Innstillinger › Generelt.",
   'git.secret.more': "(og {count} til)",
+  'settings.secretGuard': "Blokker passord og nøkler i commits, pusher og PR-er",
+  'settings.secretGuardDesc': "Commit, Push og Opprett PR på Git-siden, overtakelse av en oppgave og Moas levering avviser en endring som legger til en .env-fil, en privat nøkkel eller en API-nøkkel.",
 } as const;

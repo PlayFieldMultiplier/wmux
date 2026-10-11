@@ -447,6 +447,7 @@ const electronAPI = {
     setMutedNotificationCategories: (categories: NotificationCategory[]) =>
       ipcRenderer.send(IPC.MUTED_NOTIFICATION_CATEGORIES, categories),
     setAutoUpdateEnabled: (enabled: boolean) => ipcRenderer.send(IPC.AUTO_UPDATE_ENABLED, enabled),
+    setSecretGuardEnabled: (enabled: boolean) => ipcRenderer.send(IPC.SECRET_GUARD_ENABLED, enabled),
     // #1103 — null clears the choice (back to wsl.exe's system default).
     setDefaultWslDistro: (distro: string | null) => ipcRenderer.send(IPC.SETTINGS_DEFAULT_WSL_DISTRO, distro),
   },

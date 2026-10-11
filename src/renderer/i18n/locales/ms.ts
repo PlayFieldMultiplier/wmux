@@ -636,6 +636,8 @@ export const ms = {
   'moa.fleetAnswer.omitted': "Sesetengah baris diketepikan. Buka Fleet untuk melihat papan penuh.",
   'git.secret.file': "{path}: fail ini mengandungi kata laluan atau kunci, jadi tidak dimuat naik. Keluarkan daripada perubahan (atau tambah ke .gitignore) dan cuba lagi.",
   'git.secret.value': "{path} baris {line} kelihatan seperti kata laluan atau kunci API, jadi tidak dimuat naik. Keluarkan daripada kod dan cuba lagi.",
-  'git.secret.scanFailed': "wmux tidak dapat menyemak perubahan ini untuk kata laluan dan kunci, jadi tidak dimuat naik. Cuba lagi; jika terus gagal, commit lebih sedikit fail sekali gus.",
+  'git.secret.scanFailed': "wmux tidak dapat membaca perubahan ini untuk menyemak kata laluan dan kunci, jadi tidak dimuat naik. Cuba lagi; jika terus gagal, semakan ini boleh dimatikan di Tetapan › Umum.",
   'git.secret.more': "(dan {count} lagi)",
+  'settings.secretGuard': "Sekat kata laluan dan kunci dalam commit, push dan PR",
+  'settings.secretGuardDesc': "Commit, Push dan Cipta PR di halaman Git, mengambil alih tugasan dan penghantaran Moa menolak perubahan yang menambah fail .env, kunci peribadi atau kunci API.",
 } as const;

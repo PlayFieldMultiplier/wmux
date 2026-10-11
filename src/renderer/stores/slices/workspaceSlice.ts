@@ -1708,6 +1708,11 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         state.autoUpdateEnabled = data.autoUpdateEnabled;
         window.electronAPI.settings.setAutoUpdateEnabled(data.autoUpdateEnabled);
       }
+      // Strict boolean: an absent or malformed value keeps the guard on.
+      if (typeof data.secretGuardEnabled === 'boolean') {
+        state.secretGuardEnabled = data.secretGuardEnabled;
+        window.electronAPI.settings.setSecretGuardEnabled?.(data.secretGuardEnabled);
+      }
       if (data.sidebarMode) state.sidebarMode = data.sidebarMode;
       if (data.channelDockVisible != null) state.channelDockVisible = data.channelDockVisible;
       if (data.company !== undefined) state.company = data.company ?? null;

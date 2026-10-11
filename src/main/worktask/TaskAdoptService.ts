@@ -49,7 +49,9 @@
 //   are separated by several git invocations; two concurrent adopts would both
 //   see a clean tree and the second would apply onto the first's output.
 
-import { describeScanFailure, describeSecretFindings, scanUnifiedDiff, type SecretFinding } from '../../shared/secretGuard';
+import { describeScanFailure, describeSecretFindings, type SecretFinding } from '../../shared/secretGuard';
+import { scanDiff } from '../git/secretScan';
+import { secretGuardEnabled } from '../git/secretGuardSetting';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -397,15 +399,20 @@ export class TaskAdoptService {
       patch = diff.stdout;
       // A task never brings a secret into its parent: a .env file, a private
       // key, a key-shaped value. Refused before anything is written.
-      let secrets: SecretFinding[];
-      try {
-        secrets = scanUnifiedDiff(patch);
-      } catch {
-        // Fail closed: a patch nobody could check is not adopted.
-        return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeScanFailure('adopted')}` };
-      }
-      if (secrets.length) {
-        return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeSecretFindings(secrets, 'adopted')}`, secrets };
+      if (secretGuardEnabled()) {
+        const scan = await scanDiff(async (args, onLine) => {
+          const r = await this.git(args, worktreePath, env);
+          if (r.code !== 0) return false;
+          for (const l of r.stdout.split('\n')) onLine(l);
+          return true;
+        }, [base]);
+        if (!scan.ok) {
+          // Fail closed: a patch nobody could check is not adopted.
+          return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeScanFailure('adopted')}` };
+        }
+        if (scan.findings.length) {
+          return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeSecretFindings(scan.findings, 'adopted')}`, secrets: scan.findings };
+        }
       }
       const names = await this.git(['diff', '--name-only', '-z', base], worktreePath, env);
       files = names.stdout.split('\0').map((l) => l.trim()).filter((l) => l.length > 0);

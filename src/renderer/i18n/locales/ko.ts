@@ -3975,6 +3975,8 @@ export const ko = {
   'schedules.detail.browser_consent_unattended': "브라우저 작업(페이지 스크립트, 다운로드, 민감한 사이트의 로그인 정보)에 사람의 승인이 필요했지만 예약 실행에는 물어볼 사람이 없어 거부되었습니다. 해당 패널에서 \"이 패널에서 항상\"으로 답하면 그 패널의 예약 실행에도 적용됩니다.",
   'git.secret.file': "{path} 파일에는 비밀번호나 키가 들어 있어서 올리지 않았어요. 변경에서 빼거나 .gitignore에 추가한 뒤 다시 시도해 주세요.",
   'git.secret.value': "{path} {line}번째 줄이 비밀번호나 API 키처럼 보여서 올리지 않았어요. 코드에서 빼고 다시 시도해 주세요.",
-  'git.secret.scanFailed': "이 변경에 비밀번호나 키가 있는지 확인하지 못해서 올리지 않았어요. 다시 시도해 보고, 계속 안 되면 파일을 나눠서 커밋해 주세요.",
+  'git.secret.scanFailed': "이 변경을 읽지 못해 비밀번호나 키가 있는지 확인하지 못했어요. 그래서 올리지 않았어요. 다시 시도해 보고, 계속 안 되면 설정 › 일반에서 이 확인을 끌 수 있어요.",
   'git.secret.more': "(외 {count}건)",
+  'settings.secretGuard': "커밋·푸시·PR에서 비밀번호와 키 막기",
+  'settings.secretGuardDesc': "Git 페이지의 커밋·푸시·PR 만들기, 태스크 가져오기, Moa 전달에서 .env 파일, 개인 키, API 키가 들어간 변경을 올리지 않아요.",
 } as const;

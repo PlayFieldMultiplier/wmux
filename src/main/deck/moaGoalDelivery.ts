@@ -33,7 +33,8 @@ import {
 } from '../../shared/moaGoal';
 import type { GoalTaskRef } from './moaGoalVerifier';
 import { describeScanFailure, describeSecretFindings } from '../../shared/secretGuard';
-import { scanGitRange } from '../git/secretScan';
+import { reviewRange, scanCommits, spawnGitLines, type GitLines } from '../git/secretScan';
+import { secretGuardEnabled } from '../git/secretGuardSetting';
 import { formatReviewGuide, type ReviewGuide } from '../../shared/prReviewGuide';
 
 export interface ExecResult {
@@ -46,6 +47,8 @@ export interface MoaGoalDeliveryPorts {
   tasks: (contract: MoaGoalContract) => Promise<GoalTaskRef[] | null>;
   git: (args: string[], cwd: string) => Promise<ExecResult>;
   gh: (args: string[], cwd: string) => Promise<ExecResult>;
+  /** The secret check's streamed git reads (default: spawn git in `cwd`). */
+  gitLines?: (cwd: string) => GitLines;
   now?: () => number;
   /** Tests only: the auto-merge flag (default MOA_GOAL_AUTO_MERGE). */
   autoMerge?: boolean;
@@ -165,22 +168,22 @@ export async function deliverGoal(
       item.error = `the branch moved after verification (${head.stdout.trim().slice(0, 12) || 'unknown'} ≠ ${gate.headSha.slice(0, 12)}); complete the goal again`;
       continue;
     }
-    // Never deliver a secret: a .env file, a private key, a key-shaped value.
-    // Compared with the remote's base branch (what the PR would show).
-    const scan = await scanGitRange(async (args) => {
-      const r = await ports.git(args, wt);
-      return r.code === 0 ? r.stdout : null;
-    }, [`refs/remotes/origin/${base}...${gate.headSha}`]);
-    if (!scan.ok) {
-      // Fail closed: a change nobody could check is not delivered.
-      item.error = `not delivered: ${describeScanFailure('pushed')}`;
-      item.secretScanFailed = true;
-      continue;
-    }
-    if (scan.findings.length) {
-      item.error = `not delivered: ${describeSecretFindings(scan.findings, 'pushed')}`;
-      item.secrets = scan.findings;
-      continue;
+    // Never deliver a secret: a .env file, a private key, a key-shaped value,
+    // in any commit the PR would show (each commit's own change).
+    if (secretGuardEnabled()) {
+      const run = (ports.gitLines ?? spawnGitLines)(wt);
+      const scan = await scanCommits(run, await reviewRange(run, gate.headSha, `refs/remotes/origin/${base}`));
+      if (!scan.ok) {
+        // Fail closed: a change nobody could check is not delivered.
+        item.error = `not delivered: ${describeScanFailure('pushed')}`;
+        item.secretScanFailed = true;
+        continue;
+      }
+      if (scan.findings.length) {
+        item.error = `not delivered: ${describeSecretFindings(scan.findings, 'pushed')}`;
+        item.secrets = scan.findings;
+        continue;
+      }
     }
     // Exactly the verified commit, by sha, to the same-named branch: a plain
     // push that the remote rejects unless it is a fast-forward.

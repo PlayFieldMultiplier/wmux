@@ -1016,6 +1016,8 @@ export interface SessionData {
   /** #1455 — per-action changes to the built-in shortcuts (combo, or null = off). */
   shortcutOverrides?: Partial<Record<string, string | null>>;
   autoUpdateEnabled?: boolean;
+  /** Settings › General: refuse commits, pushes and PRs that carry passwords or keys. Absent = on. */
+  secretGuardEnabled?: boolean;
   customThemeColors?: CustomThemeColors;
   /** PC rail: the selected computer, the last workspace per computer, muted hosts. Never a shadow id. */
   pcRail?: PcRailPersisted;
