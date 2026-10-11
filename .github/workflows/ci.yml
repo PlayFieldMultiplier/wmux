@@ -5,13 +5,19 @@ on:
     branches:
       - main
       - 'security-*'
+  # Draft PRs do not run CI: every job below skips while the PR is a draft, and
+  # marking it ready (`gh pr ready`) fires ready_for_review, which runs it.
+  # Pushes to a draft used to restart ~10 queued jobs each time.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # A newer push to the same PR supersedes the run in flight. A push to main or
 # security-* gets a group of its own (its SHA): one shared group would still
 # drop a queued run whenever a third push arrived, leaving that commit unchecked.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  # A draft PR's run (skipped by the jobs' draft check) gets its own group, so a
+  # late synchronize event from before `gh pr ready` cannot cancel the ready run.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}${{ github.event.pull_request.draft && '-draft' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -20,6 +26,7 @@ jobs:
   # `npm test` does (test:parallel, then test:runtime), so wall time is the
   # slower job rather than the sum (#1685).
   validate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     # validate takes ~10 min; a hung step must not hold a runner for the 6 h default.
     timeout-minutes: 35
@@ -28,18 +35,19 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Node 22 runtime, npm 11 package manager — deliberately split. The
-          # lockfile lineage needs npm 11 (npm 10's `npm ci` rejects an
-          # npm-11-written lock, which is how all five Dependabot PRs arrived
-          # dead); the Node 24 runtime is NOT needed for that and kills one
-          # vitest fork per run on windows-latest (#984). Recouple when #984
-          # is resolved.
-          node-version: 22
+          # The floor is the fix for #984: official Node 24.16.0-24.20.0 ship
+          # libuv 1.52.1 without libuv/libuv#5152 and abort on a directory
+          # watch under the runner's 8.3 `%TEMP%` (C:\Users\RUNNER~1),
+          # killing a vitest fork. 24.21.0 carries the fix. A bare `24` is not
+          # enough: it resolved from the runner's tool cache to 24.19.0.
+          node-version: '>=24.21.0 <25'
           cache: npm
 
-      # npm 11 owns package-lock.json (see CONTRIBUTING). Node 22 bundles npm
-      # 10, so the lineage the lock is written in has to be installed, not
-      # assumed.
+      # npm 11 owns package-lock.json (see CONTRIBUTING; npm 10's `npm ci`
+      # rejects an npm-11-written lock). Node 24 bundles an npm 11 minor that
+      # moves with the Node patch; installing the latest npm 11 keeps the
+      # lineage guard below on the same npm as release.yml, perf.yml and
+      # CONTRIBUTING.
       - name: Use npm 11
         run: npm install -g npm@11
 
@@ -96,6 +104,7 @@ jobs:
         run: npm run test:parallel
 
   validate-runtime:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     # The runtime suite takes ~4-5 min plus setup; the cap only stops a hang.
     timeout-minutes: 25
@@ -105,7 +114,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '>=24.21.0 <25'
           cache: npm
 
       - name: Use npm 11
@@ -133,6 +142,7 @@ jobs:
   # run against Notepad on the runner's desktop (hello latency, listApps,
   # getAppState). Its own job, so a .NET problem never hides the TS suite.
   computer-use-windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -140,7 +150,8 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          # Same Node as validate (see the comment there, #984).
+          node-version: '>=24.21.0 <25'
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:

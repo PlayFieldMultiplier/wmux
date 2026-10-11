@@ -138,7 +138,7 @@ export function planChannelMessageDelivery(
   mentionWorkspaceIds: readonly string[],
   localIds: readonly string[],
   isObservedChannel = false,
-): { appendToDisplay: boolean; routeWorkspaces: string[] } {
+): { appendToDisplay: boolean; countUnread: boolean; routeWorkspaces: string[] } {
   // P5: display exactly the channels the unified HUMAN is a member of, and
   // ONLY those — the human's view is workspace-independent. The old
   // active-workspace branch (ship review: Codex privacy_leak + Claude
@@ -152,11 +152,20 @@ export function planChannelMessageDelivery(
   // has no ws-human recipient row, so append its live messages when its mirror
   // row is daemon-flagged `observed` (the caller resolves that flag; see the
   // JSDoc for why mirror PRESENCE alone would over-append).
-  const appendToDisplay =
-    recipientWorkspaceIds.includes(HUMAN_WORKSPACE_ID) || isObservedChannel;
+  // #1318: a post that @-mentions the human is displayed wherever it lands — a
+  // public channel the human has not joined included — so the red @ badge has
+  // one rule on the desktop and the phone (human-observable channels). Safe to
+  // trust: the daemon keeps ws-human in a message's mentions only when the
+  // human holds a seat or can observe the channel, and agent-to-agent mentions
+  // never carry it.
+  // Such a post bumps only the @ badge: the channel's other traffic is not
+  // shown, so counting this one message as unread would be a number no row
+  // explains (GLM P2 above).
+  const countUnread = recipientWorkspaceIds.includes(HUMAN_WORKSPACE_ID) || isObservedChannel;
+  const appendToDisplay = countUnread || mentionWorkspaceIds.includes(HUMAN_WORKSPACE_ID);
   const mentionWs = new Set(mentionWorkspaceIds);
   const routeWorkspaces = localIds.filter((id) => mentionWs.has(id));
-  return { appendToDisplay, routeWorkspaces };
+  return { appendToDisplay, countUnread, routeWorkspaces };
 }
 
 /** Bridge global installed by `useRpcBridge` that forwards the
@@ -601,7 +610,9 @@ export function useChannelsEventSubscription(): void {
               // Display cache / unread / mention badges: ACTIVE workspace only,
               // and never for pre-mount ring history (A4 — badge inflation).
               const preMount = event.ts < mountTs;
-              if (plan.appendToDisplay && !preMount) st.appendMessageFromEvent(channelEvent.message);
+              if (plan.appendToDisplay && !preMount) {
+                st.appendMessageFromEvent(channelEvent.message, { countUnread: plan.countUnread });
+              }
               // Route on REPLAYED events too (no historical drop): a mention
               // that arrived while this poll was down must still enqueue on
               // restart (codex R6). routeChannelMentionToInbox is idempotent

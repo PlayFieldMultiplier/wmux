@@ -120,6 +120,9 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
   const sockets = new Set<WebSocket>();
   let claimed = false;
   let everClaimed = false;
+  // A TUI's server link opened at least once. Until then nothing here reports
+  // on the pane: the TUI it was made for may never come (it exited first).
+  let everLinked = false;
   let retired = false;
   const redials = new Set<NodeJS.Timeout>();
   const reconnect = options.reconnect ?? {};
@@ -610,8 +613,15 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
       attempt.on('open',()=>{
         if (!alive || upstream !== attempt) return;
         linked = true;
+        const first = !everLinked;
+        everLinked = true;
         endLoss(on);
         linkSettled();
+        // The relay just became live: its owner re-reads it (an empty selection
+        // now does erase a stale recovery hint), before any frame goes upstream.
+        if (first) {
+          try {options.onStateChange?.();} catch {retire();return;}
+        }
         for(const {bytes,id} of queued) { send(attempt,bytes);if (id !== undefined) unsent.delete(id); }
         queued.length = 0;queuedBytes = 0;
       });
@@ -636,6 +646,8 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
     return {url:`unix://${socketPath}`,current:()=>tracker.current(),retired:()=>retired,close,
       /** The TUI's server link was lost and no new one has opened yet: nothing here is live. */
       disconnected:()=>!retired && !!loss,
+      /** A TUI linked to the server through this relay at least once. */
+      linked:()=>everLinked,
       /** A phone's answer to a request reported by `decisionPending`. */
       answer:(threadId:string,requestId:string,decision:CodexDecisionAnswer):Promise<CodexAnswerOutcome> =>
         retired || !answerOnConnection ? Promise.resolve('not-found') : answerOnConnection(threadId,requestId,decision),

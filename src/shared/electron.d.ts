@@ -137,6 +137,8 @@ declare global {
           }>,
         ) => void,
       ) => () => void;
+      /** True once per portable data dir: this macOS copy uses separate data. */
+      claimPortableDataNotice?: () => Promise<boolean>;
       /**
        * Phase 2.2 — MCP plugin permission approval. Main fires `onOpen`
        * with the prompt payload; renderer resolves via `resolve(promptId,
@@ -154,6 +156,8 @@ declare global {
         resolve: (
           promptId: string,
           approved: boolean,
+          /** browser-action prompts only: "Always on this pane". */
+          opts?: { remember?: boolean },
         ) => Promise<{ ok: boolean; error?: string }>;
         onClosed: (
           callback: (payload: { promptId: string }) => void,

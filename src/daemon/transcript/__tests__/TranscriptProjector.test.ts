@@ -566,14 +566,11 @@ describe('TranscriptProjector — draining a burst (D3) and stalling on an overs
     expect(harness.appends).toHaveLength(1);
     expect(harness.appends[0].data.cursor.tailOffset).toBe(settled);
 
-    // The newline releases it, and the skipped row is VISIBLE rather than a hole.
+    // The newline releases it, and the record arrives as the row it is.
     fs.appendFileSync(file, '\n', 'utf8');
     harness.projector.nudge('pty-1', 'agent.stop');
     await waitFor(() => harness.appends.length === 2);
-    const labels = harness.appends[1].data.events
-      .filter((e) => e.kind === 'meta')
-      .map((e) => (e.kind === 'meta' ? e.label : ''));
-    expect(labels).toContain('oversized entry skipped');
+    expect(harness.appends[1].data.events.map((e) => [e.id, e.kind])).toEqual([['huge-1', 'user_text']]);
   });
 });
 
@@ -946,7 +943,20 @@ describe('snapshot — a huge non-conversation line before the answer (after /cl
     harness.bindings.set('pane', binding({ transcriptPath: file }));
     const page = harness.projector.snapshot('pane')!;
     expect(page.events.map((e) => e.kind)).toEqual(['assistant_text']);
-    // Nothing older was found: the head stays where the first window put it.
-    expect(page.cursor.headOffset).toBe(Buffer.byteLength(big) + 1);
+    // The oversized line is read whole (it yields no rows), so the head moves
+    // to its start, which is the start of the file.
+    expect(page.cursor.headOffset).toBe(0);
+    expect(page.hasMore).toBe(false);
+  });
+
+  it('an oversized line whose rows alone bust the budget does not empty the first page', () => {
+    const file = path.join(harness.projects, '920b9112-1111-4222-8333-444455556699.jsonl');
+    // 24 text blocks of 16 KB: past TAIL_BYTES on disk, past BUDGET_BYTES as rows.
+    const blocks = Array.from({ length: 24 }, (_, i) => ({ type: 'text', text: `${i} ${'z'.repeat(16 * 1024)}` }));
+    const big = entry('big', 'assistant', blocks);
+    fs.writeFileSync(file, big + '\n' + entry('answer', 'assistant', [{ type: 'text', text: 'ok' }]) + '\n');
+    harness.bindings.set('pane', binding({ transcriptPath: file }));
+    const page = harness.projector.snapshot('pane')!;
+    expect(page.events.some((e) => e.kind === 'assistant_text' && e.text === 'ok')).toBe(true);
   });
 });

@@ -2,6 +2,17 @@ import { parseTranscriptLineDetailed, type ParsedTranscriptLine } from './parseE
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
+/** One item of a tool output array as a Claude content block. */
+const outputItem = (item: unknown): Record<string, unknown> => {
+  const p = object(item);
+  if (['input_text', 'output_text', 'text'].includes(String(p.type)) && typeof p.text === 'string') return { type: 'text', text: p.text };
+  if (['input_image', 'output_image', 'image'].includes(String(p.type))) return { type: 'image' };
+  // An item of another type that still carries an image url is not serialized
+  // either: the url is the image data.
+  if ('image_url' in p) return { type: 'image' };
+  return { type: 'text', text: JSON.stringify(item ?? null) ?? '' };
+};
+
 /** Project the CLI's own rollout. Event messages are the display transcript;
  * response_item messages also contain injected context and duplicate display
  * messages, so those are deliberately not treated as user conversation.
@@ -47,7 +58,12 @@ export function parseCodexLineDetailed(line: string, offset: number): ParsedTran
     return convert('assistant', [{ type: 'tool_use', id: payload.call_id, name: payload.name, input }]);
   }
   if (['function_call_output', 'custom_tool_call_output'].includes(String(payload.type))) {
-    const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output ?? '');
+    // A content-item array (`input_text` / `input_image`, e.g. a screenshot
+    // tool) maps onto Claude's text and image blocks, so the image's data url
+    // is never serialized into the tool body.
+    const output = typeof payload.output === 'string' ? payload.output
+      : Array.isArray(payload.output) ? payload.output.map(outputItem)
+        : JSON.stringify(payload.output ?? '');
     return convert('user', [{ type: 'tool_result', tool_use_id: payload.call_id, content: output }]);
   }
   return empty();

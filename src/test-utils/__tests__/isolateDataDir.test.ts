@@ -25,7 +25,7 @@ describe('isolateDataDir setup', () => {
     else process.env.WMUX_TEST_ISOLATED = origIsolated;
   });
 
-  it('inside the suite os.homedir() is under os.tmpdir() and WMUX_DATA_SUFFIX is -vitest', () => {
+  it('inside the suite os.homedir() is under the temp root (/tmp on POSIX) and WMUX_DATA_SUFFIX is -vitest', () => {
     // The setup realpaths the temp HOME, and on macOS os.tmpdir() is the
     // /var/folders symlink to /private/var/folders, so both sides go through
     // the same realpath. fs.realpathSync (the JS one the setup uses) rather
@@ -33,7 +33,8 @@ describe('isolateDataDir setup', () => {
     const norm = (p: string) =>
       fs.realpathSync(path.resolve(p)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
     const homedir = norm(os.homedir());
-    const tmpdir = norm(os.tmpdir());
+    // POSIX roots at /tmp so unix socket paths fit sun_path (see isolateDataDir).
+    const tmpdir = norm(process.platform === 'win32' ? os.tmpdir() : '/tmp');
     expect(homedir.startsWith(`${tmpdir}/`)).toBe(true);
     expect(path.posix.basename(homedir).startsWith('wmux-test-')).toBe(true);
     expect(process.env.WMUX_DATA_SUFFIX).toBe('-vitest');

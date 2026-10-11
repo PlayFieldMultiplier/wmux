@@ -7,6 +7,7 @@ import type { TranscriptPage, TranscriptStatus } from '../../../shared/transcrip
 import { ChatSendReceiptStore } from '../ChatSendReceiptStore';
 import { ChatCancelReceiptStore } from '../ChatCancelReceiptStore';
 import { ChatQueueStore } from '../ChatQueue';
+import { atomicWriteJSONSync } from '../../util/atomicWrite';
 import { withChosenAccountEnv } from '../../phone/paneAccountSpawn';
 import { createChatBridge, QUEUE_WATCH_CLIENT, WEB_BRIDGE_CLIENT, type ChatAgentState, type ChatPane, type NativeChatBridgeDeps } from '../nativeChatBridge';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
@@ -1742,9 +1743,9 @@ describe('daemon queue (chat-queue)', () => {
   const RULE = '─'.repeat(40);
   const IDLE = ['● done', RULE, '❯ ', RULE];
   const allow = async () => true;
-  const queued = (f: ReturnType<typeof fixture>, opts: { authorized?: (stage?: string) => Promise<boolean>; ttl?: number; now?: () => number } = {}) => {
+  const queued = (f: ReturnType<typeof fixture>, opts: { authorized?: (stage?: string) => Promise<boolean>; ttl?: number; now?: () => number; store?: ChatQueueStore } = {}) => {
     const events: ChatQueueEvent[] = [];
-    const bridge = createChatBridge({ ...f.deps, queue: new ChatQueueStore(f.dir), onQueueEvent: (e) => events.push(e),
+    const bridge = createChatBridge({ ...f.deps, queue: opts.store ?? new ChatQueueStore(f.dir), onQueueEvent: (e) => events.push(e),
       queueTickMs: 3_600_000, ...(opts.ttl !== undefined ? { queueTtlMs: opts.ttl } : {}), ...(opts.now ? { now: opts.now } : {}) });
     const send = (text: string, extra: Record<string, unknown> = {}) =>
       bridge.send(phoneSend(text, { queue: { authorized: opts.authorized ?? allow }, ...extra }));
@@ -2059,7 +2060,10 @@ describe('daemon queue (chat-queue)', () => {
 
   it('drops the memory half when the store prunes a record', async () => {
     const f = fixture(); f.liveClaude(); runningTurn(f, 1);
-    const q = queued(f);
+    // 34 queue writes: pruning is what is checked here, not crash durability.
+    // The default store fsyncs every write, which on windows-latest pushed
+    // this case past 5 s. Same atomic write and file format, without the fsync.
+    const q = queued(f, { store: new ChatQueueStore(f.dir, { write: (file, data) => atomicWriteJSONSync(file, data) }) });
     const first = (await q.send('first')).clientMessageId;
     q.bridge.dequeue('device:a', 'pane', first);
     for (let i = 0; i < 16; i++) { const { clientMessageId } = await q.send(`m${i}`); q.bridge.dequeue('device:a', 'pane', clientMessageId); }

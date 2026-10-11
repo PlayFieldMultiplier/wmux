@@ -309,7 +309,7 @@ export interface RpcContext {
    * Deliberately NOT flattened to `string | undefined`: that collapses `stale`
    * into `unclaimed` and makes the demotion the easy thing to write.
    */
-  workspaceClaim?: { kind: 'bound'; workspaceId: string; ptyId?: string } | { kind: 'stale' };
+  workspaceClaim?: { kind: 'bound'; workspaceId: string; ptyId?: string; browserOnly?: true } | { kind: 'stale' };
   /**
    * The envelope's `callerPtyId`, copied verbatim by RpcRouter (trimmed, empty
    * dropped). Advisory — see `RpcRequest.callerPtyId`.
@@ -500,6 +500,13 @@ export type RpcMethod =
   | 'browser.help.request'
   | 'browser.help.status'
   | 'browser.help.cancel'
+  // Protected browser panes: ask the operator before a dangerous action
+  // (page script, download, sensitive-site cookies). `request` asks (or reads
+  // a standing grant); a download then waits on `awaitDownload`; `release`
+  // withdraws an operation the caller will not finish.
+  | 'browser.consent.request'
+  | 'browser.consent.awaitDownload'
+  | 'browser.consent.release'
   | 'daemon.createSession'
   | 'daemon.destroySession'
   | 'daemon.attachSession'
@@ -783,6 +790,9 @@ export const ALL_RPC_METHODS = [
   'browser.help.request',
   'browser.help.status',
   'browser.help.cancel',
+  'browser.consent.request',
+  'browser.consent.awaitDownload',
+  'browser.consent.release',
   'daemon.createSession',
   'daemon.destroySession',
   'daemon.attachSession',

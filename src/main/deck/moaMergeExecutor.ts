@@ -59,6 +59,11 @@ export class MoaMergeExecutor {
     return p;
   }
 
+  /** Wait for the runs under way to finish recording their result. */
+  async idle(): Promise<void> {
+    while (this.running.size > 0) await Promise.allSettled([...this.running.values()]);
+  }
+
   /** Settle every uncertain row from a fresh read, then run what is pending
    *  (startup and the periodic tick). Never re-runs a row without a read. */
   async reconcileAll(): Promise<void> {

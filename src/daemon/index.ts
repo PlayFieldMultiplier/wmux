@@ -1,5 +1,6 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
+import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
@@ -5253,7 +5254,7 @@ function registerRpcHandlers(
   }
 
   // daemon.ping
-  pipeServer.onRpc('daemon.ping', async () => {
+  pipeServer.onRpc('daemon.ping', async (params) => {
     const sessions = sessionManager.listSessions();
     const uptime = Math.floor((Date.now() - startTime) / 1000);
     // RCA A4 — report event-loop lag (ms) so the controller distinguishes a
@@ -5287,6 +5288,10 @@ function registerRpcHandlers(
       spawnedByVersion: SPAWNED_BY_VERSION,
       channelsEpoch: CHANNELS_EPOCH,
       ...pingFormatVersionField(activeEventLogFormatVersion),
+      // Explicitly requested diagnostics only: routine health probes stay cheap.
+      ...(params?.includeMemory === true ? {
+        memory: collectDaemonMemoryDiagnostics(sessionManager.listManagedSessions(), sessionPipes),
+      } : {}),
     };
   });
 

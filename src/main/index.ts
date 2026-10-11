@@ -48,7 +48,7 @@ import { markBoot, emitBootSummary } from './util/bootTrace';
 import * as path from 'path';
 import * as os from 'os';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor } from 'electron';
-import { checkUserDataIsolation } from './dataIsolation';
+import { checkUserDataIsolation, claimPortableDataNotice, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
 import { createWindow, loadMainRenderer } from './window/createWindow';
 import { attachDesktopPresenceReporter, reportDesktopPresence } from './window/desktopPresence';
 import { PTYManager } from './pty/PTYManager';
@@ -87,7 +87,7 @@ import { getAccountStore } from './account/accountStore';
 import { IPC, getWmuxHomeDir } from '../shared/constants';
 import { HookSignalRouter } from './hooks/HookSignalRouter';
 import { SignalLatencyMeter } from './hooks/SignalLatencyMeter';
-import { registerBrowserRpc } from './pipe/handlers/browser.rpc';
+import { registerBrowserRpc, type CallerBrowserProtection } from './pipe/handlers/browser.rpc';
 import { registerA2aRpc } from './pipe/handlers/a2a.rpc';
 import { registerA2aChannelRpc } from './pipe/handlers/a2a.channel.rpc';
 import { registerCompanyRpc } from './pipe/handlers/company.rpc';
@@ -141,6 +141,9 @@ import { ShadowRejectionLogger } from './audit/shadowRejectionLog';
 import { LegacyTrafficCounter } from './audit/legacyTrafficCounter';
 import { ApprovalQueue } from './mcp/ApprovalQueue';
 import { createBorrowApprovalRequester } from './browser-session/liveBorrowApproval';
+import { DangerousActionConsent } from './browser-session/dangerousActionConsent';
+import { registerBrowserConsentRpc } from './pipe/handlers/browserConsent.rpc';
+import { registerBrowserConsentGrantsIpc } from './ipc/handlers/browserConsentGrants.handler';
 import type { BorrowApprovalRequester } from '../shared/liveWriteScope';
 import { resolveEnforcementMode } from './mcp/enforcementMode';
 import { setConfiguredFirstPartyClients } from './mcp/firstParty';
@@ -159,6 +162,8 @@ import { BrowserBackendStore } from './browser-session/BrowserBackendStore';
 import { ChromeLauncherRegistry } from './browser-session/ChromeLauncher';
 import { ChromeProfileStore, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
 import { CHROME_PANE_IPC } from '../shared/chromePaneBinding';
+import { BrowserPolicyStore, reconcileBrowserPoliciesFromMirror } from './browser-session/BrowserPolicyStore';
+import { isTrustedMainFrameSender, registerBrowserPolicyIpc, UNTRUSTED_SENDER_ERROR } from './ipc/handlers/browserPolicy.handler';
 import { ChromeSurfaceStore } from './browser-session/ChromeSurfaceStore';
 import { getActionCacheStore } from './browser-session/ActionCacheStore';
 import { getPromotedSkillStore } from './browser-session/PromotedSkillStore';
@@ -378,6 +383,22 @@ function appInit(): void {
 // setPath('userData')는 app ready 전에 호출해야 효력이 있으므로 lock 체크보다 먼저 둔다.
 if (!app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
   process.env.WMUX_DATA_SUFFIX = '-dev';
+}
+// A packaged copy run outside /Applications (DMG, AppTranslocation, forge out/,
+// Downloads) gets its own data too, so it cannot take over the installed app's
+// daemon, socket, token or CLI shim. One realpath; see shouldUsePortableData.
+let portableDataForced = false;
+if (process.platform === 'darwin' && app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
+  let realExecPath = process.execPath;
+  try { realExecPath = require('fs').realpathSync(process.execPath); } catch { /* keep execPath */ }
+  if (shouldUsePortableData(realExecPath, os.homedir(), process.env)) {
+    portableDataForced = true;
+    process.env.WMUX_DATA_SUFFIX = PORTABLE_DATA_SUFFIX;
+    console.log(
+      `[Main] packaged copy outside /Applications (${realExecPath}) → isolated data ` +
+      `(WMUX_DATA_SUFFIX=${PORTABLE_DATA_SUFFIX}); set WMUX_ALLOW_PRODUCTION_DATA=1 to use production data`,
+    );
+  }
 }
 if (process.env.WMUX_DATA_SUFFIX) {
   const suffix = process.env.WMUX_DATA_SUFFIX;
@@ -717,6 +738,12 @@ ipcMain.handle('detection:resolveAgent', async (_e, ptyId: string) => {
   return (await daemonClient?.getAgentName(id)) ?? null;
 });
 
+// The renderer asks once it is mounted, so the marker is claimed only when the
+// toast is about to show: a push could land before anyone listens and be lost.
+ipcMain.handle(IPC.PORTABLE_DATA_NOTICE_CLAIM, () =>
+  claimPortableDataNotice(portableDataForced, path.join(getWmuxHomeDir(), 'portable-notice-shown')),
+);
+
 ipcMain.handle('daemon:get-ready-state', async () => {
   if (!daemonReadyDecided) {
     await new Promise<void>((resolve) => {
@@ -964,6 +991,10 @@ registerPerfRpc(rpcRouter);
 // the approval queue, which is created further down — hence the late binding.
 let computerService: ComputerService | null = null;
 let computerConsentQueue: ApprovalQueue | null = null;
+// Protected browser panes: computer use is refused from a protected pane. The
+// check is the browser gate's own, handed over by registerBrowserRpc below;
+// until it is, nothing can say a caller is unprotected, so the answer refuses.
+let computerCallerProtection: CallerBrowserProtection | null = null;
 registerComputerRpc(
   rpcRouter,
   () => {
@@ -976,6 +1007,10 @@ registerComputerRpc(
   // The consent prompt names the asking session's workspace the way the
   // person named it; the renderer's mirror is the only place main knows it.
   (workspaceId) => getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name,
+  (method, ctx) =>
+    computerCallerProtection
+      ? computerCallerProtection(method, ctx)
+      : Promise.resolve("wmux has not finished setting up its browser protection check"),
 );
 registerComputerUseIpc(() => computerService);
 // #517 backend choice: main owns the setting (sync read at boot — an RPC can
@@ -985,6 +1020,9 @@ const browserBackendStore = new BrowserBackendStore(app.getPath('userData'));
 // 'chrome' backend: per-profile real-Chrome instances (Phase 2.5). The
 // 'default' profile keeps the pre-registry dir so existing logins survive.
 const chromeProfileStore = new ChromeProfileStore();
+// Protected browser panes: main-owned, fail-closed policy file. Reading never
+// creates it, so an install that never protects a pane is unchanged.
+const browserPolicyStore = new BrowserPolicyStore();
 // Stable chrome surface ids survive both Chrome swapping the target behind a
 // tab and an app restart, so an agent's tab handle stays valid across either.
 const chromeSurfaceStore = new ChromeSurfaceStore();
@@ -993,6 +1031,13 @@ const chromeRegistry = new ChromeLauncherRegistry({
   profilesDir: path.join(app.getPath('userData'), 'chrome-profiles'),
   store: chromeProfileStore,
   surfaceStore: chromeSurfaceStore,
+  // Protected panes: a profile bound to a protected pane launches behind
+  // main's filtering proxy (and is restarted when that changes).
+  protection: (profile) =>
+    browserPolicyStore.protectionPlanFor(profile, { paneBindings: () => chromeProfileStore.getPaneBindings() }),
+});
+browserPolicyStore.onChange(() => {
+  void chromeRegistry.reconcileProtection();
 });
 // Phase 2.2 enforcement mode. Production wmux defaults to `enforce`; dev
 // (electron-forge / npm start) defaults to `shadow` so a bad delta doesn't lock
@@ -1032,6 +1077,13 @@ const browserHelpRequests = registerBrowserRpc(
   // above uses. Fail-closed while it is unset: a borrow nobody can be asked
   // about is a borrow that does not happen.
   (request) => (liveBorrowRequester ? liveBorrowRequester(request) : Promise.resolve('denied')),
+  {
+    store: browserPolicyStore,
+    paneBindings: () => chromeProfileStore.getPaneBindings(),
+    exposeCallerProtection: (check) => {
+      computerCallerProtection = check;
+    },
+  },
 );
 // browser_request_help — the renderer's Done / Cancel. Mirrors
 // PERMISSION_PROMPT_RESOLVE: a shape-validated invoke, and the AUTHORITATIVE
@@ -1491,18 +1543,47 @@ liveBorrowRequester = createBorrowApprovalRequester({
   workspaceName: (workspaceId) =>
     getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name ?? workspaceId,
 });
+// Protected browser panes: ask the operator once before a dangerous action
+// (page script, download, sensitive-site cookies). Same queue, same dialog.
+registerBrowserConsentRpc(rpcRouter, {
+  getWindow: () => mainWindow,
+  store: browserPolicyStore,
+  paneBindings: () => chromeProfileStore.getPaneBindings(),
+  chrome: chromeRegistry,
+  backend: () => browserBackendStore.get(),
+  consent: new DangerousActionConsent({
+    store: browserPolicyStore,
+    queue: () => approvalQueue,
+    runOwnership: (ptyId) => automationBridge.runOwnership(ptyId),
+    workspaceName: (workspaceId) => getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name,
+    log: (line) => console.warn(line),
+  }),
+});
+registerBrowserConsentGrantsIpc(ipcMain, {
+  getWindow: () => mainWindow,
+  store: browserPolicyStore,
+  profileFor: (workspaceId, paneId) => chromeProfileStore.profileFor(workspaceId, paneId),
+  paneWorkspace: (paneId) => getWorkspaceMirror().getPaneWorkspaces()?.get(paneId) ?? null,
+});
 
 ipcMain.handle(
   IPC.PERMISSION_PROMPT_RESOLVE,
-  async (_event, payload: { promptId: string; approved: boolean }) => {
+  async (event, payload: { promptId: string; approved: boolean; remember?: boolean }) => {
+    if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
     if (
       !payload ||
       typeof payload.promptId !== 'string' ||
-      typeof payload.approved !== 'boolean'
+      typeof payload.approved !== 'boolean' ||
+      (payload.remember !== undefined && typeof payload.remember !== 'boolean')
     ) {
       return { ok: false, error: 'invalid permission prompt payload' };
     }
-    await approvalQueue.resolvePrompt(payload.promptId, payload.approved);
+    // `remember` rides only when set: every other prompt resolves exactly as before.
+    if (payload.remember === true) {
+      await approvalQueue.resolvePrompt(payload.promptId, payload.approved, { remember: true });
+    } else {
+      await approvalQueue.resolvePrompt(payload.promptId, payload.approved);
+    }
     return { ok: true };
   },
 );
@@ -1543,27 +1624,32 @@ ipcMain.handle('browser:clear-private-session', async () => {
   return { ok: true };
 });
 // #517 backend choice — renderer Settings UI reads/writes the main-owned value.
-ipcMain.handle('browser:get-backend', () => browserBackendStore.get());
+ipcMain.handle('browser:get-backend', (event) =>
+  isTrustedMainFrameSender(event, () => mainWindow) ? browserBackendStore.get() : 'builtin');
 // Synchronous boot read: the renderer initializes its mirror from this BEFORE
 // its first render, so no browser-open path (user click or session-restored
 // browser leaf) can spawn an embedded webview during the async-hydration window
 // while the persisted value is 'external' (#517, CodeRabbit).
 ipcMain.on('browser:get-backend-sync', (event) => {
-  event.returnValue = browserBackendStore.get();
+  // Always set returnValue: a sync sender blocks until it is answered.
+  event.returnValue = isTrustedMainFrameSender(event, () => mainWindow) ? browserBackendStore.get() : 'builtin';
 });
-ipcMain.handle('browser:set-backend', (_event, value: unknown) => {
+ipcMain.handle('browser:set-backend', (event, value: unknown) => {
+  if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
   if (!isBrowserBackend(value)) return { ok: false };
   browserBackendStore.set(value);
+  void browserPolicyStore.bumpEpoch().catch((err) => console.warn('[browser-policy] epoch bump failed:', err));
   return { ok: true };
 });
 // Phase 2.5 — chrome-backend profiles + workspace bindings (workspace card
 // menu). Validation lives in the store; IPC only shapes the payloads.
-ipcMain.handle('browser:chrome-profiles:list', () => ({
+ipcMain.handle('browser:chrome-profiles:list', (event) => isTrustedMainFrameSender(event, () => mainWindow) ? ({
   profiles: chromeProfileStore.listProfiles(),
   bindings: chromeProfileStore.getBindings(),
   paneBindings: chromeProfileStore.getPaneBindings(),
-}));
-ipcMain.handle('browser:chrome-profiles:create', async (_event, name: unknown) => {
+}) : { profiles: [], bindings: {}, paneBindings: {} });
+ipcMain.handle('browser:chrome-profiles:create', async (event, name: unknown) => {
+  if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
   if (typeof name !== 'string') return { ok: false, error: 'invalid name' };
   try {
     await chromeProfileStore.create(name.trim());
@@ -1574,7 +1660,8 @@ ipcMain.handle('browser:chrome-profiles:create', async (_event, name: unknown) =
 });
 ipcMain.handle(
   'browser:chrome-profiles:bind',
-  async (_event, payload: { workspaceId?: unknown; profileName?: unknown } | undefined) => {
+  async (event, payload: { workspaceId?: unknown; profileName?: unknown } | undefined) => {
+    if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
     const workspaceId = typeof payload?.workspaceId === 'string' ? payload.workspaceId : '';
     const profileName =
       payload?.profileName === null
@@ -1589,6 +1676,7 @@ ipcMain.handle(
       // user's own Chrome — including a re-bind to live, which is a new decision
       // and not a resumption of the old one.
       chromeRegistry.clearLiveBorrows(workspaceId);
+      void browserPolicyStore.bumpEpoch().catch((err) => console.warn('[browser-policy] epoch bump failed:', err));
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -1599,7 +1687,8 @@ ipcMain.handle(
 // validation and the exclusivity rule live in the store.
 ipcMain.handle(
   CHROME_PANE_IPC.bind,
-  async (_event, payload: { paneId?: unknown; workspaceId?: unknown; profileName?: unknown } | undefined) => {
+  async (event, payload: { paneId?: unknown; workspaceId?: unknown; profileName?: unknown } | undefined) => {
+    if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
     const paneId = typeof payload?.paneId === 'string' ? payload.paneId : '';
     const workspaceId = typeof payload?.workspaceId === 'string' ? payload.workspaceId : '';
     const profileName =
@@ -1611,6 +1700,9 @@ ipcMain.handle(
     if (!paneId || !workspaceId || profileName === undefined) return { ok: false, error: 'invalid payload' };
     try {
       await chromeProfileStore.setPaneBinding(paneId, workspaceId, profileName);
+      // A protected pane rebound to another profile (or unbound) stays
+      // protected and refuses every host until the user confirms it again.
+      await browserPolicyStore.onPaneRebind(paneId);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -1619,7 +1711,8 @@ ipcMain.handle(
 );
 ipcMain.handle(
   CHROME_PANE_IPC.reveal,
-  async (_event, payload: { paneId?: unknown; workspaceId?: unknown } | undefined) => {
+  async (event, payload: { paneId?: unknown; workspaceId?: unknown } | undefined) => {
+    if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
     const paneId = typeof payload?.paneId === 'string' ? payload.paneId : '';
     const workspaceId = typeof payload?.workspaceId === 'string' ? payload.workspaceId : '';
     if (!paneId || !workspaceId) return { ok: false, error: 'invalid payload' };
@@ -1638,6 +1731,18 @@ getWorkspaceMirror().onSnapshot(() => {
   reconcilePaneBindingsFromMirror(chromeProfileStore, getWorkspaceMirror()).catch((err) => {
     console.warn('[chrome-profiles] pane-binding reconcile failed:', err);
   });
+  reconcileBrowserPoliciesFromMirror(browserPolicyStore, getWorkspaceMirror()).catch((err) => {
+    console.warn('[browser-policy] reconcile failed:', err);
+  });
+});
+// Protected browser panes: the operator's policy editor (A-ui). Agents have no
+// path to these channels; the handler accepts the main window's top frame only.
+registerBrowserPolicyIpc(ipcMain, {
+  getWindow: () => mainWindow,
+  store: browserPolicyStore,
+  profileFor: (workspaceId, paneId) => chromeProfileStore.profileFor(workspaceId, paneId),
+  paneBindings: () => chromeProfileStore.getPaneBindings(),
+  paneWorkspace: (paneId) => getWorkspaceMirror().getPaneWorkspaces()?.get(paneId) ?? null,
 });
 // Discard/wake signals travel main → renderer: the renderer owns the <webview>
 // element, so main can only ask it to unmount (discard) or remount (wake).
@@ -1696,7 +1801,8 @@ app.on('ready', async () => {
   // 안 가리키면"(DMG/ZIP 임시 경로에서 첫 설치 후 볼륨 제거·앱 이동으로 죽은
   // 링크가 됨, issue #505) 복구를 위해 재실행한다. 부팅 경로를 막지 않게 지연
   // 실행, 전체 best-effort.
-  if (process.platform === 'darwin' && app.isPackaged) {
+  // A portable copy must not repoint the installed app's shim at itself.
+  if (process.platform === 'darwin' && app.isPackaged && process.env.WMUX_DATA_SUFFIX !== PORTABLE_DATA_SUFFIX) {
     const shimTimer = setTimeout(() => {
       try {
         const fs = require('fs') as typeof import('fs');
@@ -1751,7 +1857,8 @@ app.on('ready', async () => {
   // 낡은 채로 두라는 게 아니다. bridge refresh는 플러그인 캐시본(마켓플레이스가
   // 버전 디렉터리로 따로 관리)은 건드리지 않고 오직 plugin-LESS 복사본만 담당한다.
   // 부팅 경로를 막지 않게 지연 실행, 전체 best-effort.
-  if (app.isPackaged) {
+  // Not from a portable copy: these scripts live at suffix-blind ~/.wmux paths.
+  if (app.isPackaged && process.env.WMUX_DATA_SUFFIX !== PORTABLE_DATA_SUFFIX) {
     const refreshTimer = setTimeout(() => {
       try {
         const sl = refreshStatuslineScript(defaultStatuslinePaths());

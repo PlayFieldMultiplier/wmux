@@ -1,0 +1,28 @@
+{
+ "tui": "claude",
+ "version": "Claude Code 2.1.296",
+ "cols": 100,
+ "rows": 18,
+ "keysSent": "(prompt drawn)",
+ "note": "Bash permission for `rm -r \"$ADC_TARGET\"/*` in a bypassPermissions session: the dangerousRemoval safety check asks with an unattended-session auto-deny window (default 120 s), 100x18, fullscreen renderer (alternate buffer): the countdown (1:58) is drawn as in the main buffer",
+ "screen": [
+  "",
+  "────────────────────────────────────────────────────────────────────────────────────────────────────",
+  " Bash command",
+  " Remove contents of the ADC_TARGET directory ",
+  "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  " rm -r \"$ADC_TARGET\"/*",
+  "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  " │ Dangerous rm operation on possibly-empty variable path: \"$ADC_TARGET\"/* in `rm -r",
+  " │ \"$ADC_TARGET\"/*` (rewrite it as \"${ADC_TARGET:?}\"/* or use a literal path)",
+  " ⚠ Claude Code will automatically deny this request in 1:58, to avoid blocking progress on an ",
+  " unattended session",
+  "",
+  "",
+  " Do you want to proceed?                                                        ",
+  " ❯ 1. Yes",
+  "   2. No",
+  "",
+  " Esc to cancel · Tab to amend"
+ ]
+}

@@ -70,6 +70,7 @@ import {
   parsePlanPrompt,
   parseTerminalPrompt,
   terminalPromptAnswerability,
+  titleSaysUnsandboxed,
   toolOfDialog,
   webSearchDetail,
   type ParsedTerminalPrompt,
@@ -258,6 +259,12 @@ interface DialogRead {
   /** The grid's width and height at the read, when known. */
   cols?: number;
   height?: number;
+  /**
+   * When the read began: the ring is captured before the render's first
+   * await, so this is when the screen showed what was parsed, however long
+   * the render then queued.
+   */
+  readAt?: number;
 }
 
 /** The tool call a dialog is bound to (transcript, or the PermissionRequest hook). */
@@ -327,7 +334,7 @@ interface TerminalPromptIdentity {
    * The tool call the record was bound to, with its whole input's hash: by
    * its transcript id, or (no id) by the PermissionRequest hook's evidence.
    */
-  call?: { id?: string; name: string; command: string; description?: string; inputHash: string; promptId?: string };
+  call?: { id?: string; name: string; command: string; description?: string; unsandboxed?: true; inputHash: string; promptId?: string };
   /** The dialog read at creation spelled exactly that call's command. */
   matched: boolean;
   /** Matched with its top scrolled off (see buildTerminalPrompt). */
@@ -376,6 +383,24 @@ function copyRequest(r: ApprovalRequest): ApprovalRequest {
     ...(r.step ? { step: { ...r.step } } : {}),
     ...(r.answerDigest ? { answerDigest: { ...r.answerDigest } } : {}),
   };
+}
+
+/** How far a re-read countdown may land from the deadline a replaced record showed and still be the same one. */
+export const AUTO_DENY_JITTER_MS = 5_000;
+
+/**
+ * A record replacing another for the same dialog (the same `dialogKey`: screen
+ * hash and bound call) keeps the auto-deny deadline the phone was already
+ * shown: each read lands up to a second apart (the screen shows whole
+ * seconds), and a deadline that moved on every refresh would make the card's
+ * countdown jump. A read more than AUTO_DENY_JITTER_MS off is another
+ * countdown and keeps its own value.
+ */
+function keepAutoDenyAt(fresh: ApprovalRequest, previous: ApprovalRequest): void {
+  if (!fresh.autoDenyAt || !previous.autoDenyAt || fresh.dialogKey !== previous.dialogKey) return;
+  if (Math.abs(Date.parse(fresh.autoDenyAt) - Date.parse(previous.autoDenyAt)) <= AUTO_DENY_JITTER_MS) {
+    fresh.autoDenyAt = previous.autoDenyAt;
+  }
 }
 
 /** Cap on `localAnswer` (an option label; labels are capped far below this). */
@@ -1490,8 +1515,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
 
   /** One screen read, parsed. Outside the mutation chain: a render can take seconds. */
   private async readActiveDialog(sessionId: string): Promise<DialogRead | null> {
+    const readAt = this.now();
     const screen = await this.readPromptScreenSafely(sessionId);
-    return screen ? this.parseActiveDialog(screen) : null;
+    const read = screen ? this.parseActiveDialog(screen) : null;
+    return read ? { ...read, readAt } : null;
   }
 
   /**
@@ -1561,8 +1588,11 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       ?? (parsed ? boundRecordText(parsed.commandText, TERMINAL_PROMPT_SUMMARY_MAX) : undefined)
       ?? note.summary;
     // The summary is capped for display; the binding takes the WHOLE command.
+    // A call that asked to run outside the sandbox: only that one may bind a
+    // dialog titled `(unsandboxed)` (dialogMatchesToolCall).
+    const unsandboxed = binding?.input['dangerouslyDisableSandbox'] === true;
     const call = binding && command && !binding.unbindable && webSearch !== null
-      ? { name: binding.name, command, ...(description ? { description } : {}) }
+      ? { name: binding.name, command, ...(description ? { description } : {}), ...(unsandboxed ? { unsandboxed: true as const } : {}) }
       : null;
     const topCut = !!parsed && !parsed.topRuleFound;
     const mark = read?.mark ?? this.deps.promptScreenMark?.(note.sessionId) ?? null;
@@ -1590,7 +1620,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     );
     const answer = bound ? terminalPromptAnswerability(parsed) : null;
     const answerable = !!answer?.answerable;
-    const risky = terminalPromptTextRisk(command, summary, parsed?.reason);
+    // The phone card shows no title: a dialog that runs the call outside the
+    // sandbox is flagged critical, so the approver gets the louder treatment
+    // the terminal's "(unsandboxed)" title gives the person at the desk.
+    const risky = terminalPromptTextRisk(command, summary, parsed?.reason) || titleSaysUnsandboxed(parsed?.title);
     const inputHash = binding && !binding.unbindable ? toolInputHash(binding.input) : undefined;
     const record: WithIdentity = {
       id: this.newId(),
@@ -1603,6 +1636,11 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       ...(risky ? { risk: 'critical' as const } : {}),
       ...(answerable && parsed && read
         ? {
+            // Only on a record a key at the desk refreshes (noteFenceInput):
+            // that key stops Claude's countdown, and the refresh drops it.
+            ...(parsed.autoDenyRemainingMs !== undefined
+              ? { autoDenyAt: new Date((read.readAt ?? this.now()) + parsed.autoDenyRemainingMs).toISOString() }
+              : {}),
             question: parsed.question,
             ...(parsed.reason ? { reason: parsed.reason } : {}),
             choices: answer!.choices,
@@ -3591,6 +3629,7 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     return this.mutate<ApprovalRequest | null>(() => {
       // A stepwise answer owns the record from its first key: never replaced.
       if (record.state !== 'pending' || record.pressedAt !== undefined || record.step) return { result: null };
+      keepAutoDenyAt(fresh, record);
       record.state = 'superseded';
       record.resolvedAt = this.now();
       fresh.createdAt = this.now();

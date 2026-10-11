@@ -97,6 +97,14 @@ export interface Channel {
    * field never lands in `channels.json` (list stamps it on a shallow copy).
    */
   observed?: boolean;
+  /**
+   * #1318 — caller-relative, NOT persisted, ws-human only: on a channel the
+   * human reads WITHOUT a seat, the mentions of the human past its observer
+   * cursor (`ChannelState.observerCursors`). The desktop's @ badge for such a
+   * channel hydrates from it, so desktop and phone show one count. Stamped by
+   * list()/get() on a shallow copy, like `observed`.
+   */
+  observerUnreadMentions?: number;
 }
 
 /**
@@ -358,6 +366,15 @@ export interface ChannelState {
    * check O(1) amortized).
    */
   idempotency: Record<string, Record<string, number>>;
+  /**
+   * #1318 — channelId → the human's read cursor (last read seq) on a channel
+   * it OBSERVES without a seat. A mention of the human now lands in such a
+   * channel, and this is what keeps it unread until the human reads it on
+   * either surface, so an offline phone does not lose it. Advance-only. A
+   * seated channel uses its seat's `lastReadSeq` instead. Optional: state
+   * written before it existed has no observer cursors, which reads as 0.
+   */
+  observerCursors?: Record<string, number>;
 }
 
 /** Default empty state. Returned by `load()` on first-run / no-file. */

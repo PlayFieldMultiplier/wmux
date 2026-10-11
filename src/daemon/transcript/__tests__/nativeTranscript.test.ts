@@ -24,6 +24,16 @@ describe('native Codex transcript', () => {
     expect(parseCodexLineDetailed('{partial', 0).events).toEqual([]);
     expect(fileTranscriptProvider('__proto__')).toBeUndefined();
   });
+  it('reads a tool output array as text plus an image placeholder, never the data url', () => {
+    const output = [
+      { type: 'input_text', text: 'Wall time: 0.1 seconds' },
+      { type: 'input_image', image_url: 'data:image/png;base64,PLACEHOLDERDATA', detail: 'original' },
+    ];
+    const parsed = parseCodexLineDetailed(JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'call-1', output } }), 40);
+    expect(parsed.events).toMatchObject([{ kind: 'tool_result', toolUseId: 'call-1', ok: true, output: { inline: 'Wall time: 0.1 seconds\n[image]' } }]);
+    expect(JSON.stringify(parsed.events)).not.toContain('PLACEHOLDERDATA');
+    for (const bodies of parsed.bodies.values()) for (const body of bodies.values()) expect(body).not.toContain('PLACEHOLDERDATA');
+  });
   it('requires explicit completion; a final-looking assistant message is not completion', () => {
     expect(parseCodexLineDetailed(assistant, 0).events[0]).not.toHaveProperty('turnComplete');
     expect(parseCodexLineDetailed(entry({ type: 'task_complete', turn_id: 'turn-1' }), 30).events).toMatchObject([{ kind: 'meta', subtype: 'turn_complete', turnId: 'turn-1' }]);

@@ -231,6 +231,12 @@ function RunRow({ run, automation, showingOutput, onToggleOutput, onCancel }: {
           {t('schedules.firstRunBlockedHint', { agent: agentLabel(automation.action.agent) })}
         </p>
       )}
+      {(run.detail === 'browser_needs_consent' || run.detail === 'browser_policy_denied'
+        || run.detail === 'browser_consent_unattended') && (
+        <p className="ui-note px-[14px] pb-3" data-run-browser-refused={run.detail}>
+          {t(`schedules.detail.${run.detail}`)}
+        </p>
+      )}
       {showingOutput && <RunOutput run={run} automation={automation} />}
     </li>
   );

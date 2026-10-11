@@ -10,7 +10,7 @@ import { BROWSER_REPL_TOOLS } from '../bridge';
 import { createBrowserReplCatalog } from '../tool';
 
 describe('browser_repl catalog', () => {
-  const catalog = createBrowserReplCatalog(new Map());
+  const catalog = createBrowserReplCatalog(new Map(), async () => undefined);
 
   it('registers exactly browser_repl, full profile only, frozen', () => {
     expect(catalog.map((spec) => spec.name)).toEqual(['browser_repl']);

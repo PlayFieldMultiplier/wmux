@@ -12,7 +12,7 @@ npm run start   # dev mode
 npm test        # run tests
 ```
 
-Requires Node.js 22+ with **npm 11** (`npm install -g npm@11` if your Node bundles npm 10 — npm 11 owns the lockfile lineage, and `npm ci` under npm 10 rejects the lock) and Windows 10/11 (ConPTY).
+Requires Node.js 22+ (on Windows, avoid 24.16–24.20 and 26.0–26.7, whose libuv mishandles `fs.watch` on 8.3 short paths such as the CI runner's `%TEMP%`; 24.21.0+ and 26.8.0+ carry the fix, #984) with **npm 11** (`npm install -g npm@11` if your Node bundles npm 10 — npm 11 owns the lockfile lineage, and `npm ci` under npm 10 rejects the lock) and Windows 10/11 (ConPTY).
 
 ## Pull Requests
 
@@ -45,6 +45,11 @@ CI (`.github/workflows/ci.yml`) runs the two halves as parallel jobs:
 `validate-runtime` (`npm run test:runtime` against a freshly built daemon
 bundle). A PR needs both green; a branch-protection rule that requires status
 checks must list both.
+
+Draft PRs do not run CI: every job skips while the PR is a draft. Mark it
+ready (`gh pr ready`, or "Ready for review") to start CI, and push to a draft
+freely in the meantime. On CI a failing test is retried once; a test that
+passed only on retry is listed in the job summary.
 
 ### Running tests as an agent
 

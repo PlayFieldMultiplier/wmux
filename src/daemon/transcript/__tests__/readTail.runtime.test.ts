@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
-import { TAIL_BYTES, readTranscriptDelta, readTranscriptPage } from '../readTail';
+import { TAIL_BYTES, readTranscriptDelta, readTranscriptLineAt, readTranscriptPage } from '../readTail';
+import type { ToolResultEvent, TurnEvent } from '../../../shared/transcript/turnEvents';
 
 let dir: string;
 
@@ -141,17 +142,15 @@ describe('readTranscriptPage — file far larger than the cap', () => {
     expect(offset).toBe(size);
   });
 
-  it('skips a COMPLETE entry larger than the cap, visibly, landing on a boundary', () => {
+  it('reads a COMPLETE entry larger than the cap whole, landing on a boundary', () => {
     const file = path.join(dir, 'huge-line.jsonl');
     fs.writeFileSync(file, hugeEntry() + '\n' + entry(1) + '\n', 'utf8');
 
     const first = readTranscriptDelta(file, 0)!;
-    // D1(a) — the row is unreadable, but the conversation SAYS so. Returning
-    // zero events left a permanent silent hole instead.
+    // D1(a) — the record is read whole and parsed like any other line, so the
+    // conversation has neither a silent hole nor a "skipped" placeholder.
     expect(first.stalled).toBeUndefined();
-    expect(first.events).toEqual([
-      { id: '0:oversized', kind: 'meta', subtype: 'unknown', label: 'oversized entry skipped' },
-    ]);
+    expect(first.events.map((e) => [e.id, e.kind])).toEqual([['huge-1', 'assistant_text']]);
     // D1(b) — and the cursor lands on a real line boundary, so the consumer's
     // boundary check does not fail and reset the view on every later read.
     expect(isBoundary(file, first.cursor.tailOffset)).toBe(true);
@@ -243,6 +242,83 @@ describe('readTranscriptPage — file far larger than the cap', () => {
     if (codeEvent && codeEvent.kind === 'assistant_text') {
       expect(codeEvent.codeBlocks?.[0].srcOffset).toBe(size);
     }
+  });
+});
+
+describe('readTranscript* — an image tool result larger than the cap', () => {
+  // A screenshot result is one JSONL line holding the image's base64 (twice:
+  // in the content block and in `toolUseResult`), routinely past TAIL_BYTES.
+  const base64 = 'A'.repeat(3 * 1024 * 1024);
+  const toolUse = JSON.stringify({
+    type: 'assistant', uuid: 'use-1',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_shot', name: 'mcp__macos__Snapshot', input: { use_vision: true } }] },
+  });
+  const image = { type: 'image', source: { type: 'base64', data: base64, media_type: 'image/png' } };
+  const toolResult = JSON.stringify({
+    type: 'user', uuid: 'result-1',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_shot', content: [{ type: 'text', text: 'Focused app' }, image] }] },
+    toolUseResult: { type: 'image', file: { base64, type: 'image/png' } },
+  });
+  const after = entry(7);
+  const write = (file: string) => fs.writeFileSync(file, `${entry(0)}\n${toolUse}\n${toolResult}\n${after}\n`, 'utf8');
+  const pairedResult = (events: TurnEvent[]) => events.find((e) => e.kind === 'tool_result') as ToolResultEvent | undefined;
+
+  it('the forward delta yields the tool_result, paired and without the image data', () => {
+    const file = path.join(dir, 'image-delta.jsonl');
+    write(file);
+    const resultAt = Buffer.byteLength(`${entry(0)}\n${toolUse}\n`);
+    const delta = readTranscriptDelta(file, resultAt)!;
+    expect(delta.stalled).toBeUndefined();
+    expect(delta.events).toHaveLength(1);
+    expect(pairedResult(delta.events)).toMatchObject({ kind: 'tool_result', toolUseId: 'toolu_shot', ok: true, output: { inline: 'Focused app\n[image]' } });
+    expect(JSON.stringify(delta.events)).not.toContain('AAAAAAAA');
+    expect(isBoundary(file, delta.cursor.tailOffset)).toBe(true);
+    expect(readTranscriptDelta(file, delta.cursor.tailOffset)!.events.map((e) => e.id)).toEqual(['synthetic-000007']);
+  });
+
+  it('a snapshot whose window starts inside it still returns it, with the head on its start', () => {
+    const file = path.join(dir, 'image-page.jsonl');
+    write(file);
+    const page = readTranscriptPage(file)!;
+    expect(page.events.map((e) => e.kind)).toEqual(['tool_result', 'assistant_text']);
+    expect(pairedResult(page.events)?.toolUseId).toBe('toolu_shot');
+    expect(JSON.stringify(page.events)).not.toContain('AAAAAAAA');
+    expect(page.cursor.headOffset).toBe(Buffer.byteLength(`${entry(0)}\n${toolUse}\n`));
+    // Paging back from there reaches the tool_use, so the pair is complete.
+    const older = readTranscriptPage(file, { before: page.cursor.headOffset })!;
+    expect(older.events.filter((e) => e.kind === 'tool_use').map((e) => e.kind === 'tool_use' && e.toolUseId)).toEqual(['toolu_shot']);
+    expect(older.cursor.headOffset).toBe(0);
+  });
+
+  it('a page ending right after it reads it too, instead of skipping it', () => {
+    const file = path.join(dir, 'image-before.jsonl');
+    write(file);
+    const page = readTranscriptPage(file, { before: Buffer.byteLength(`${entry(0)}\n${toolUse}\n${toolResult}\n`) })!;
+    expect(page.events.map((e) => e.kind)).toEqual(['tool_result']);
+    expect(page.cursor.headOffset).toBe(Buffer.byteLength(`${entry(0)}\n${toolUse}\n`));
+  });
+
+  it('parses lines in file order, the recovered record first', () => {
+    const file = path.join(dir, 'image-order.jsonl');
+    write(file);
+    const offsets: number[] = [];
+    readTranscriptPage(file, { parseLine: (_line, offset) => { offsets.push(offset); return []; } });
+    expect(offsets.length).toBeGreaterThan(1);
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
+  });
+
+  it('a shrunk window does not pull the record in, so it can still fit a budget', () => {
+    const file = path.join(dir, 'image-shrunk.jsonl');
+    write(file);
+    const page = readTranscriptPage(file, { maxBytes: TAIL_BYTES / 2 })!;
+    expect(page.events.map((e) => e.kind)).toEqual(['assistant_text']);
+  });
+
+  it('an expand of a body on that line reads the whole line', () => {
+    const file = path.join(dir, 'image-line.jsonl');
+    write(file);
+    const line = readTranscriptLineAt(file, Buffer.byteLength(`${entry(0)}\n${toolUse}\n`));
+    expect(line).toBe(toolResult);
   });
 });
 

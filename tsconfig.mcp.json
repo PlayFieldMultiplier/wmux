@@ -26,6 +26,9 @@
     "src/main/**/*",
     "src/renderer/**/*",
     "src/preload/**/*",
-    "src/cli/**/*"
+    "src/cli/**/*",
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx"
   ]
 }

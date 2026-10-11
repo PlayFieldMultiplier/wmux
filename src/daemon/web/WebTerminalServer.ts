@@ -308,7 +308,8 @@ function decodeTurnCursor(
  *                              cursor-paged channel messages (oldest-first,
  *                              default 50 / max 200)
  *   POST /api/channels/:id/ack  advance the human seat's read cursor
- *                              (clamped, advance-only; no-seat → 400)
+ *                              (clamped, advance-only; the observer cursor
+ *                              when there is no seat)
  *   POST /api/channels/:id/join take the human seat (idempotent, full
  *                              history, archived → 400); input grant required
  *
@@ -10195,6 +10196,9 @@ function approvalWire(r: ApprovalRequest, caps: ClientCaps = { terminalPromptAns
       // A hint for the client's own confirm step — computed at creation from the
       // call's full command. Never a permission.
       ...(r.risk ? { risk: r.risk } : {}),
+      // When Claude denies the dialog by itself (its unattended countdown), for
+      // every client: a time, never agent-authored text. Only while pending.
+      ...(r.autoDenyAt && r.state === 'pending' ? { autoDenyAt: r.autoDenyAt } : {}),
       ...(parsed
         ? {
             ...(r.question ? { question: r.question } : {}),

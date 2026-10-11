@@ -10,6 +10,7 @@ import {
   HOST_CERT_VALID_DAYS,
   ISSUE_LOCK_STALE_MS,
   breakStaleIssueLock,
+  isLockInTransition,
   loadOrCreateHostIdentity,
   readIssueLockState,
 } from '../hostIdentity';
@@ -320,4 +321,20 @@ describe('loadOrCreateHostIdentity', () => {
     },
     30_000,
   );
+});
+
+describe('isLockInTransition', () => {
+  const err = (code: string) => Object.assign(new Error(code), { code });
+
+  it('reads a Windows delete-pending lock (EPERM/EACCES/EBUSY) as changing hands, not a fault', () => {
+    for (const code of ['EPERM', 'EACCES', 'EBUSY']) expect(isLockInTransition(err(code), 'win32')).toBe(true);
+  });
+
+  it('leaves every other error, and every POSIX error, to propagate', () => {
+    for (const code of ['ENOENT', 'EEXIST', 'EIO', 'ENOSPC']) expect(isLockInTransition(err(code), 'win32')).toBe(false);
+    for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+      expect(isLockInTransition(err(code), 'linux')).toBe(false);
+      expect(isLockInTransition(err(code), 'darwin')).toBe(false);
+    }
+  });
 });

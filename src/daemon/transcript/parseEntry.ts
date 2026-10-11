@@ -394,7 +394,15 @@ function unwrapToolError(body: string): string {
   return m ? m[1] : body;
 }
 
-/** `tool_result.content` is a string or an array of `{type:'text'}` blocks. */
+/** Stands in for an image block in a tool body; the image data never rides. */
+export const TOOL_IMAGE_PLACEHOLDER = '[image]';
+
+/**
+ * `tool_result.content` is a string or an array of `{type:'text'}` and
+ * `{type:'image'}` blocks (a screenshot, an image `Read`). Each image becomes
+ * {@link TOOL_IMAGE_PLACEHOLDER} in place, so an image-only result still reads
+ * as a finished call with something in it, and its base64 stays on disk.
+ */
 function flattenResultContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -403,6 +411,8 @@ function flattenResultContent(content: unknown): string {
     const block = asObject(raw);
     if (block?.['type'] === 'text' && typeof block['text'] === 'string') {
       parts.push(block['text'] as string);
+    } else if (block?.['type'] === 'image') {
+      parts.push(TOOL_IMAGE_PLACEHOLDER);
     }
   }
   return parts.join('\n');

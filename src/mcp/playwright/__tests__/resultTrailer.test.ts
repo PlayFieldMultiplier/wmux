@@ -10,6 +10,7 @@ import {
   toolErrorCodeFor,
   withEffectTrailer,
 } from '../resultTrailer';
+import { BrowserPolicyError, policyDeniedMessage } from '../../../shared/browserPolicy';
 
 function result(text: string, isError?: boolean) {
   return {
@@ -151,6 +152,38 @@ describe('toolErrorCodeFor', () => {
       toolErrorCodeFor({ message: 'not an Error either' }),
     ];
     for (const code of answers) expect(TOOL_ERROR_CODES).toContain(code);
+  });
+});
+
+describe('toolErrorCodeFor — protected-pane refusals', () => {
+  it("reports main's raw policy_denied as policy_denied, not unknown_error", () => {
+    const raw = new Error(policyDeniedMessage('browser.navigate', "that host is not on this pane's allowed list"));
+    expect(toolErrorCodeFor(raw)).toBe('policy_denied');
+  });
+
+  it('reports the typed refusal the MCP lane throws as policy_denied', () => {
+    expect(toolErrorCodeFor(new BrowserPolicyError('policy_denied', 'not on a protected pane'))).toBe('policy_denied');
+  });
+
+  it('wins over a wording match inside the reason', () => {
+    // The reason is main's prose; "Timeout" in it must not make this a timeout.
+    const raw = new Error(policyDeniedMessage('browser.click', 'Timeout waiting for consent'));
+    expect(toolErrorCodeFor(raw)).toBe('policy_denied');
+  });
+
+  it('is not forged by the code quoted mid-message', () => {
+    expect(toolErrorCodeFor(new Error('page title says policy_denied: yes'))).toBe('unknown_error');
+  });
+
+  it('reports a consent nobody could be asked for as needs_consent', () => {
+    const raw = new Error('browser.consent.request: needs_consent: download on a.test. Nobody is watching this run.');
+    expect(toolErrorCodeFor(raw)).toBe('needs_consent');
+    expect(toolErrorCodeFor(new BrowserPolicyError('needs_consent', 'unattended'))).toBe('needs_consent');
+  });
+
+  it('is in the closed set', () => {
+    expect(TOOL_ERROR_CODES).toContain('policy_denied');
+    expect(TOOL_ERROR_CODES).toContain('needs_consent');
   });
 });
 

@@ -1,4 +1,6 @@
 import type { RpcRouter } from '../RpcRouter';
+import { app } from 'electron';
+import type { AppMemoryDiagnostics } from '../../../shared/memoryDiagnostics';
 import { revealStatsAggregator } from '../../perf/revealStatsAggregator';
 
 export function registerPerfRpc(router: RpcRouter): void {
@@ -20,7 +22,15 @@ export function registerPerfRpc(router: RpcRouter): void {
    * by the console-message handler in src/main/index.ts. Counters + ptyIds
    * only — never terminal content.
    */
-  router.register('perf.status', (_params) => {
-    return Promise.resolve({ retention: revealStatsAggregator.getStats() });
+  router.register('perf.status', (params) => {
+    const memory: AppMemoryDiagnostics | undefined = params?.includeMemory === true ? {
+      mainPid: process.pid,
+      processes: app.getAppMetrics().map((metric) => ({
+        pid: metric.pid,
+        type: metric.type,
+        workingSetBytes: metric.memory.workingSetSize * 1024,
+      })),
+    } : undefined;
+    return Promise.resolve({ retention: revealStatsAggregator.getStats(), ...(memory ? { memory } : {}) });
   });
 }

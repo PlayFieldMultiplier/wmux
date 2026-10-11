@@ -29,6 +29,7 @@ export const COMPUTER_ERROR_CODES = [
   'shutting_down',
   'unsupported_platform',
   'invalid_argument',
+  'policy_denied',
   'internal',
 ] as const;
 
@@ -93,6 +94,10 @@ export const COMPUTER_ERROR_NEXT_STEPS: Record<ComputerErrorCode, readonly strin
   ],
   unsupported_platform: ['Computer use is not supported on this operating system yet.'],
   invalid_argument: ['Fix the arguments named in the message and call again.'],
+  policy_denied: [
+    "This pane's browser is protected, so computer use is refused from it. Do not retry unchanged.",
+    "Use the browser_* tools for this pane's own sites, or ask the user to do this step.",
+  ],
   internal: ['Retry once. If it fails again, tell the user.'],
 };
 
