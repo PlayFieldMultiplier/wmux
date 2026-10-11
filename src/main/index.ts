@@ -1297,8 +1297,7 @@ const trackRecordFeed = createTrackRecordFeed({
     return listed?.recentlyResolved ?? [];
   },
   agentOf: (ws) => agentSlug(getWorkspaceMirror().getEntries()?.find((e) => e.id === ws)?.metadata?.agentName),
-  ownerOfTaskWorkspace: (ws) =>
-    getTaskLedger().list({}).find((e) => e.taskWorkspaceId === ws)?.ownerWorkspaceId ?? null,
+  taskOfWorkspace: (ws) => getTaskLedger().list({}).find((e) => e.taskWorkspaceId === ws) ?? null,
   onRetroChanged: () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.TRACK_RECORD_CHANGED);
   },

@@ -1593,6 +1593,7 @@ export const en = {
   'moa.retro.dismiss': "Dismiss",
   'moa.retro.interruptions': "{decisions} decisions and {approvals} approvals reached you; {lane} approvals were pressed by rule.",
   'moa.retro.delegations': "{count} delegations handed out, {done} done.",
+  'moa.retro.ownerTouches': "Each finished delegation needed you {median} times (median over {tasks}).",
   'moa.retro.missedTitle': "Missed stalls",
   'moa.retro.missedNeedsYou': "{name} · {agent} · waited {duration} for you ({ref})",
   'moa.retro.missedBlocked': "{name} · {agent} · blocked for {duration} ({ref})",

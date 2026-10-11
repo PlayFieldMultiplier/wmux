@@ -21,6 +21,8 @@ export const MISSED_STALL_AFTER_MS = 8 * 60 * 60 * 1000;
 export const SIMILAR_QUESTION_JACCARD = 0.6;
 
 const MAX_ROWS_PER_WEEK = 200;
+/** Done delegations a week keeps for the owner-touch median. */
+export const MAX_DONE_TOUCHES = 200;
 const MAX_SLOWEST = 5;
 const MAX_MISSED = 10;
 const MAX_QUESTIONS = 100;
@@ -84,7 +86,15 @@ export interface TrackWeek {
   slowest: TrackItemRef[];
   missedStalls: TrackMissedStall[];
   questions: TrackQuestion[];
+  /** Owner touches (all kinds) of each delegation done this week, for the
+   *  median. Only delegations counted from their start (see TrackOpenItem.touches). */
+  doneTouches?: number[];
 }
+
+/** A person acting on one delegated task: a message sent to it, a decision
+ *  about it answered, an approval in it answered. Agents never count. */
+export type OwnerTouchKind = 'messages' | 'decisions' | 'approvals';
+export type OwnerTouches = Record<OwnerTouchKind, number>;
 
 export type OpenState = 'active' | 'needs-you' | 'blocked';
 
@@ -98,6 +108,9 @@ export interface TrackOpenItem {
   since: number;
   stallCounted?: boolean;
   missedCounted?: boolean;
+  /** Absent on an item opened before touches were counted: its total is unknown,
+   *  so it never enters the median. */
+  touches?: OwnerTouches;
 }
 
 export interface RetroSchedule {
@@ -130,6 +143,8 @@ export interface RetroCard {
   missedStalls: TrackMissedStall[];
   repeated: RetroRepeated[];
   slowest: TrackItemRef[];
+  /** Median owner touches per delegation done that week, over `tasks` of them. */
+  ownerTouches?: { median: number; tasks: number };
   /** Machine-readable next steps; the renderer words them. `precedent` is the
    *  hook for the decision-precedents feature. */
   suggestions: RetroSuggestion[];
@@ -140,7 +155,7 @@ export interface TrackRecordData {
   weeks: TrackWeek[];
   open: Record<string, TrackOpenItem>;
   /** Ids already counted, so a restart or a repeated signal counts nothing twice. */
-  seen: { links: string[]; decisions: string[]; linkedDecisions: string[]; approvals: string[]; ledger: string[] };
+  seen: { links: string[]; decisions: string[]; linkedDecisions: string[]; approvals: string[]; ledger: string[]; resolvedDecisions?: string[] };
   /** When the feed last ran (tick or stop). Waits do not accrue past it while
    *  the feed is off, whether Moa was switched off or the app was closed. */
   activeAt?: number;
@@ -158,7 +173,7 @@ export function emptyTrackRecord(schedule: RetroSchedule = DEFAULT_RETRO_SCHEDUL
     version: 1,
     weeks: [],
     open: {},
-    seen: { links: [], decisions: [], linkedDecisions: [], approvals: [], ledger: [] },
+    seen: { links: [], decisions: [], linkedDecisions: [], approvals: [], ledger: [], resolvedDecisions: [] },
     retro: { schedule: { ...schedule } },
   };
 }
@@ -249,7 +264,10 @@ export function openItem(
     const oldest = keys.reduce((a, b) => (data.open[a].createdAt <= data.open[b].createdAt ? a : b));
     delete data.open[oldest];
   }
-  data.open[key] = { workspaceId: item.workspaceId, agent: item.agent, createdAt: item.createdAt, state: item.state ?? 'active', since: now };
+  data.open[key] = {
+    workspaceId: item.workspaceId, agent: item.agent, createdAt: item.createdAt, state: item.state ?? 'active', since: now,
+    touches: { messages: 0, decisions: 0, approvals: 0 },
+  };
   bumpRow(data, now, item.workspaceId, item.agent, { delegations: 1 });
 }
 
@@ -270,17 +288,28 @@ function judgeWait(data: TrackRecordData, key: string, item: TrackOpenItem, now:
   }
 }
 
+/** A person acted on the open delegation `key`. False when it is not tracked
+ *  or was opened before touches were counted. */
+export function noteOwnerTouch(data: TrackRecordData, key: string, kind: OwnerTouchKind): boolean {
+  const touches = data.open[key]?.touches;
+  if (!touches) return false;
+  touches[kind] += 1;
+  return true;
+}
+
 /**
  * A tracked delegation moved. `done` counts it finished (time-to-done and the
  * slowest list); `gone` (cancelled, abandoned) just stops tracking it. A state
  * that did not change is not a reaction, so the wait clock keeps running.
+ * `touches: false` keeps a done item out of the owner-touch median (the same
+ * work is already tracked under another key).
  */
 export function moveItem(
   data: TrackRecordData,
   key: string,
   next: OpenState | 'done' | 'gone',
   now: number,
-  opts: { judge?: boolean } = {},
+  opts: { judge?: boolean; touches?: boolean } = {},
 ): void {
   const item = data.open[key];
   if (!item) return;
@@ -297,6 +326,10 @@ export function moveItem(
     week.slowest.push({ workspaceId: item.workspaceId, agent: item.agent, ref: shortRef(key.replace(/^\w+:/, '')), ms });
     week.slowest.sort((a, b) => b.ms - a.ms);
     week.slowest.splice(MAX_SLOWEST);
+    if (item.touches && opts.touches !== false) {
+      const t = item.touches;
+      week.doneTouches = [...(week.doneTouches ?? []), t.messages + t.decisions + t.approvals].slice(-MAX_DONE_TOUCHES);
+    }
     return;
   }
   item.state = next;
@@ -428,6 +461,8 @@ export function buildRetro(data: TrackRecordData, weekStart: number, now: number
   if (repeated.length > 0) suggestions.push('precedent');
   if (week.missedStalls.length > 0) suggestions.push('stalls');
   if (week.interruptions.approvals >= 5 && totals.approvalsLane === 0) suggestions.push('approvals');
+  const touched = [...(week.doneTouches ?? [])].sort((a, b) => a - b);
+  const mid = Math.floor(touched.length / 2);
   return {
     weekStart,
     builtAt: now,
@@ -443,6 +478,9 @@ export function buildRetro(data: TrackRecordData, weekStart: number, now: number
     missedStalls: week.missedStalls.slice(0, 5),
     repeated,
     slowest: week.slowest.slice(0, 3),
+    ...(touched.length > 0
+      ? { ownerTouches: { median: touched.length % 2 ? touched[mid] : (touched[mid - 1] + touched[mid]) / 2, tasks: touched.length } }
+      : {}),
     suggestions,
   };
 }

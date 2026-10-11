@@ -1699,6 +1699,7 @@ export const zh = {
   'moa.retro.dismiss': "关闭",
   'moa.retro.interruptions': "{decisions} 个决策和 {approvals} 个批准到了你这里；{lane} 个批准按规则自动通过。",
   'moa.retro.delegations': "共委派 {count} 项，完成 {done} 项。",
+  'moa.retro.ownerTouches': "每项完成的委派需要你介入 {median} 次（{tasks} 项的中位数）。",
   'moa.retro.missedTitle': "错过的停滞",
   'moa.retro.missedNeedsYou': "{name} · {agent} · 等你 {duration} ({ref})",
   'moa.retro.missedBlocked': "{name} · {agent} · 阻塞 {duration} ({ref})",

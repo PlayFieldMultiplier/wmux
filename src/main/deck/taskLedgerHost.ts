@@ -252,6 +252,12 @@ export function getMissionChannelId(taskId: string): string | null {
   return missionChannels.get(taskId) ?? null;
 }
 
+/** The fan-out task whose mission channel this is, or null. */
+export function getMissionTaskId(channelId: string): string | null {
+  for (const [taskId, id] of missionChannels) if (id === channelId) return taskId;
+  return null;
+}
+
 export function rememberMissionChannel(taskId: string, channelId: string): void {
   missionChannels.set(taskId, channelId);
 }

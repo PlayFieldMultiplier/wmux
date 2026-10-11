@@ -19,6 +19,7 @@ import { getWmuxDir } from '../../daemon/config';
 import { atomicReadJSONSync, atomicWriteJSON, BACKUP_SUFFIXES } from '../../daemon/util/atomicWrite';
 import {
   DEFAULT_RETRO_SCHEDULE,
+  MAX_DONE_TOUCHES,
   MAX_SEEN_IDS,
   TRACK_COUNTER_KEYS,
   emptyTrackRecord,
@@ -44,6 +45,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const str = (v: unknown, max = 200): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s) => str(s)).slice(-MAX_SEEN_IDS) : []);
+const count = (v: unknown): v is number => num(v) && Number.isInteger(v) && v >= 0;
 
 export function parseRetroSchedule(v: unknown, base: RetroSchedule = DEFAULT_RETRO_SCHEDULE): RetroSchedule {
   const o = isObj(v) ? v : {};
@@ -93,6 +95,7 @@ function parseWeek(v: unknown): TrackWeek | null {
     slowest: parseRefs(v.slowest, ref),
     missedStalls: parseRefs(v.missedStalls, (o) => (o.state === 'needs-you' || o.state === 'blocked' ? { ...ref(o), state: o.state } : null)),
     questions,
+    ...(Array.isArray(v.doneTouches) ? { doneTouches: v.doneTouches.filter(count).slice(-MAX_DONE_TOUCHES) } : {}),
   };
 }
 
@@ -117,6 +120,9 @@ export function parseRetroCard(v: unknown): RetroCard | null {
     missedStalls: parseRefs(v.missedStalls, (o) => (o.state === 'needs-you' || o.state === 'blocked' ? { ...ref(o), state: o.state } : null)),
     repeated,
     slowest: parseRefs(v.slowest, ref),
+    ...(isObj(v.ownerTouches) && num(v.ownerTouches.median) && count(v.ownerTouches.tasks)
+      ? { ownerTouches: { median: v.ownerTouches.median, tasks: v.ownerTouches.tasks } }
+      : {}),
     suggestions: (v.suggestions as unknown[]).filter((x): x is RetroSuggestion => SUGGESTIONS.includes(x as RetroSuggestion)),
   };
 }
@@ -131,6 +137,9 @@ function parseOpen(v: unknown): Record<string, TrackOpenItem> {
       workspaceId: o.workspaceId, agent: o.agent, createdAt: o.createdAt, state: o.state, since: o.since,
       ...(o.stallCounted === true ? { stallCounted: true } : {}),
       ...(o.missedCounted === true ? { missedCounted: true } : {}),
+      ...(isObj(o.touches) && count(o.touches.messages) && count(o.touches.decisions) && count(o.touches.approvals)
+        ? { touches: { messages: o.touches.messages, decisions: o.touches.decisions, approvals: o.touches.approvals } }
+        : {}),
     };
   }
   return out;
@@ -150,6 +159,7 @@ export function parseTrackRecord(raw: unknown): TrackRecordData {
     linkedDecisions: strList(seen.linkedDecisions),
     approvals: strList(seen.approvals),
     ledger: strList(seen.ledger),
+    resolvedDecisions: strList(seen.resolvedDecisions),
   };
   const retro = isObj(raw.retro) ? raw.retro : {};
   data.retro.schedule = parseRetroSchedule(retro.schedule);

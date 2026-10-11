@@ -1572,6 +1572,7 @@ export const pl = {
   'moa.retro.dismiss': "Zamknij",
   'moa.retro.interruptions': "Trafiło do Ciebie {decisions} decyzji i {approvals} zgód; {lane} zgód zatwierdzono według reguły.",
   'moa.retro.delegations': "Przekazano {count} zadań, ukończono {done}.",
+  'moa.retro.ownerTouches': "Każde ukończone zadanie wymagało Twojej interwencji {median} razy (mediana z {tasks}).",
   'moa.retro.missedTitle': "Przeoczone przestoje",
   'moa.retro.missedNeedsYou': "{name} · {agent} · czekało na Ciebie {duration} ({ref})",
   'moa.retro.missedBlocked': "{name} · {agent} · zablokowane przez {duration} ({ref})",

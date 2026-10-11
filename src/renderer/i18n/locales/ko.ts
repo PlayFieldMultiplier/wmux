@@ -1093,6 +1093,7 @@ export const ko = {
   'moa.retro.dismiss': "닫기",
   'moa.retro.interruptions': "결정 {decisions}건, 승인 {approvals}건이 직접 왔고, 승인 {lane}건은 규칙으로 눌렀습니다.",
   'moa.retro.delegations': "맡긴 일 {count}건 중 {done}건 완료.",
+  'moa.retro.ownerTouches': "끝난 일 하나에 직접 손댄 횟수는 {median}번이었습니다({tasks}건의 중앙값).",
   'moa.retro.missedTitle': "놓친 멈춤",
   'moa.retro.missedNeedsYou': "{name} · {agent} · {duration} 동안 응답을 기다림 ({ref})",
   'moa.retro.missedBlocked': "{name} · {agent} · {duration} 동안 막힘 ({ref})",

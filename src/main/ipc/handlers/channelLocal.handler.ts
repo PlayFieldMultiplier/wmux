@@ -43,6 +43,8 @@ import { getHqWorkspaceId } from '../../deck/deckHqStore';
 import { renderStrandedDeckWorkBlock } from '../../deck/deckWorkStore';
 import { recordTaskState } from '../../workLink/a2aProducer';
 import { getWorkLinkStore } from '../../workLink/workLinkStore';
+import { getMissionTaskId } from '../../deck/taskLedgerHost';
+import { noteTrackOwnerMessage } from '../../deck/trackRecordFeed';
 
 /** Positive allow-list — only channel/principal-mutating methods may ride the
  *  renderer trust path. Reads and every other RPC are rejected so this surface
@@ -172,6 +174,15 @@ export function registerChannelLocalHandlers(getDaemonClient: () => DaemonClient
       const dc = getDaemonClient();
       if (!dc) throw new Error('Daemon not connected');
       const result = await dc.rpc(method as RpcMethod, p);
+
+      // Track record: a post in a fan-out task's mission channel from this
+      // renderer-only path (the channel composer, a diff comment) is the person
+      // stepping in on that task — agents post through the pipe, never here.
+      if (method === 'a2a.channel.post' && typeof p.channelId === 'string') {
+        const posted = result && typeof result === 'object' && 'result' in result ? (result as { result?: unknown }).result : result;
+        const taskId = getMissionTaskId(p.channelId);
+        if (taskId && (posted as { ok?: unknown } | null)?.ok === true) noteTrackOwnerMessage(taskId);
+      }
 
       // Whole-workspace removal teardown: when purgeMembership is called for an entire
       // workspace (both memberId and principalId are absent), tear down its Deck stores.

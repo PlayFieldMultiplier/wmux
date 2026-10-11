@@ -91,6 +91,14 @@ export function MoaRetroCard({ workspaceId, t, api }: { workspaceId?: string; t:
           <div className="text-[12px] text-[var(--text-main)]">
             {fill(t, 'moa.retro.delegations', '{count} delegations handed out, {done} done.', { count: card.delegations, done: card.done })}
           </div>
+          {card.ownerTouches && (
+            <div className="text-[12px] text-[var(--text-main)]" data-moa-retro-touches>
+              {fill(t, 'moa.retro.ownerTouches', 'Each finished delegation needed you {median} times (median over {tasks}).', {
+                median: card.ownerTouches.median,
+                tasks: card.ownerTouches.tasks,
+              })}
+            </div>
+          )}
           {(card.missedStalls ?? []).length > 0 && (
             <>
               <div className={heading}>{fill(t, 'moa.retro.missedTitle', 'Missed stalls')}</div>

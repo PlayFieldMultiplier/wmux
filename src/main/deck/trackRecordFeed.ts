@@ -6,6 +6,8 @@
 //   - Deck decisions (a new pending id)              → interruptions, questions
 //   - the approval registry (resolved records)       → lane presses vs. people
 //   - A2A replies on an open task from a non-owner   → nudges
+//   - a person answering a decision or an approval, or posting in a fan-out
+//     task's mission channel                         → that task's owner touches
 // Only ids, states and times are read; titles, questions and summaries are
 // reduced to counts (questions to hashed words) before anything is stored.
 //
@@ -42,6 +44,7 @@ import {
   moveItem,
   noteDecisionAsked,
   noteHumanApproval,
+  noteOwnerTouch,
   openItem,
   pruneTrackRecord,
   resumeOpenItems,
@@ -88,8 +91,8 @@ export interface TrackRecordFeedPorts {
   listResolvedApprovals: () => Promise<TrackApprovalRecord[] | null>;
   /** A workspace's agent slug (`claude`), or `-`. */
   agentOf: (workspaceId: string) => string;
-  /** The ledger owner of a fan-out task workspace, or null. */
-  ownerOfTaskWorkspace: (workspaceId: string) => string | null;
+  /** The fan-out task (ledger entry id and owner) whose workspace this is, or null. */
+  taskOfWorkspace: (workspaceId: string) => { id: string; ownerWorkspaceId: string } | null;
   /** Told after a retro card was made or cleared. */
   onRetroChanged?: () => void;
   now?: () => number;
@@ -105,6 +108,8 @@ export interface TrackRecordFeed {
   onApprovalsChanged: () => Promise<void>;
   /** A reply landed on an existing A2A task. */
   noteReply: (taskId: unknown, senderWorkspaceId: unknown) => void;
+  /** A person posted in the mission channel of fan-out task `taskId`. */
+  noteOwnerMessage: (taskId: string) => void;
   /** Sweep waits and run the retro if due. */
   tick: () => void;
 }
@@ -152,6 +157,21 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
   // Set on every start: the first approval list read after it is a baseline.
   let approvalBaseline = false;
 
+  // A Git-page hand-off is both a fan-out task and a work link on its
+  // workspace: its touches go to the fan-out key, and the link's done stays
+  // out of the median.
+  const fanTwinOf = (d: TrackRecordData, ws: string): string | null => {
+    const task = ports.taskOfWorkspace(ws);
+    return task && d.open[`fan:${task.id}`] ? `fan:${task.id}` : null;
+  };
+  /** The one open delegation working in `ws`, or null when none or several are. */
+  const touchKeyOfWorkspace = (d: TrackRecordData, ws: string): string | null => {
+    const fan = fanTwinOf(d, ws);
+    if (fan) return fan;
+    const links = Object.keys(d.open).filter((k) => k.startsWith('link:') && d.open[k].workspaceId === ws);
+    return links.length === 1 ? links[0] : null;
+  };
+
   const onLinks = (ids: string[]): void => {
     if (!ports.isMoaEnabled()) return;
     const t = now();
@@ -171,7 +191,7 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
           }
         }
         if (d.open[key]) {
-          moveItem(d, key, next, t);
+          moveItem(d, key, next, t, { touches: ports.taskOfWorkspace(link.owner.workspaceId) === null });
           changed = true;
         }
         for (const decisionId of link.decisionIds) {
@@ -196,6 +216,19 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
     store.mutate((d) => {
       let changed = false;
       for (const [workspaceId, decision] of Object.entries(all)) {
+        // A person's answer (or dismissal) touches the linked task it is about;
+        // the brain's own answer does not, and neither does a legacy record
+        // with no resolvedBy (who answered it is not known).
+        if (decision.status === 'resolved' && decision.resolvedBy === 'human') {
+          const linkKey = Object.keys(d.open).find(
+            (k) => k.startsWith('link:') && ports.workLinks.get(k.slice(5))?.decisionIds.includes(decision.id),
+          );
+          const link = linkKey ? ports.workLinks.get(linkKey.slice(5)) : null;
+          if (linkKey && link && markSeen((d.seen.resolvedDecisions ??= []), decision.id)) {
+            noteOwnerTouch(d, fanTwinOf(d, link.owner.workspaceId) ?? linkKey, 'decisions');
+            changed = true;
+          }
+        }
         if (!markSeen(d.seen.decisions, decision.id)) continue;
         changed = true;
         // One answered while the feed was off was not seen being asked.
@@ -253,8 +286,10 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
         } else if (r.state === 'resolved' && !by.startsWith('brain')) {
           // Expired and superseded records never reached an answer; a brain's
           // press is not a person being asked.
-          const ws = r.workspaceId ? (ports.ownerOfTaskWorkspace(r.workspaceId) ?? r.workspaceId) : '-';
+          const ws = r.workspaceId ? (ports.taskOfWorkspace(r.workspaceId)?.ownerWorkspaceId ?? r.workspaceId) : '-';
           noteHumanApproval(d, ws, agent, at);
+          const key = r.workspaceId ? touchKeyOfWorkspace(d, r.workspaceId) : null;
+          if (key) noteOwnerTouch(d, key, 'approvals');
         }
       }
       return changed;
@@ -272,6 +307,11 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
       const agent = d.open[`link:${link.id}`]?.agent ?? (link.agent || ports.agentOf(link.owner.workspaceId));
       bumpRow(d, t, link.owner.workspaceId, agent, { nudges: 1 });
     });
+  };
+
+  const noteOwnerMessage = (taskId: string): void => {
+    if (!ports.isMoaEnabled()) return;
+    store.mutate((d) => noteOwnerTouch(d, `fan:${taskId}`, 'messages'));
   };
 
   const tick = (): void => {
@@ -304,10 +344,12 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
       const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
       let next: OpenState | 'done' | 'gone';
       let at = t;
+      let touches = true;
       if (kind === 'link') {
         const link = ports.workLinks.get(id);
         next = link ? linkState(link) : 'gone';
         if (link) at = link.updatedAt;
+        if (link) touches = ports.taskOfWorkspace(link.owner.workspaceId) === null;
       } else if (kind === 'fan') {
         const entry = ports.ledger.get(id);
         next = entry ? ledgerState(entry.status) : 'gone';
@@ -317,7 +359,7 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
       }
       // A finish found now happened while the feed was off, at the source's
       // last change: time-to-done uses it; the wait it ended is not judged.
-      moveItem(d, key, next, Math.min(t, Math.max(item.createdAt, at)), { judge: false });
+      moveItem(d, key, next, Math.min(t, Math.max(item.createdAt, at)), { judge: false, touches });
     }
   };
 
@@ -360,6 +402,7 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
     running: () => timer !== null,
     onApprovalsChanged,
     noteReply,
+    noteOwnerMessage,
     tick,
   };
 }
@@ -446,6 +489,15 @@ let feed: TrackRecordFeed | null = null;
 
 export function setTrackRecordFeed(next: TrackRecordFeed | null): void {
   feed = next;
+}
+
+/** A person posted in a fan-out task's mission channel (channelLocal handler). Never throws. */
+export function noteTrackOwnerMessage(taskId: string): void {
+  try {
+    feed?.noteOwnerMessage(taskId);
+  } catch {
+    /* stats never break a post */
+  }
 }
 
 /** A reply landed on an existing task (a2a.rpc). Never throws. */

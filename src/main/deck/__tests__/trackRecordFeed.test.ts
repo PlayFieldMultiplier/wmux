@@ -13,7 +13,7 @@ import {
   renderTrackRecordContext,
   type TrackApprovalRecord,
 } from '../trackRecordFeed';
-import { addWeeks, rollupRows, weekStartOf, TRACK_RETENTION_WEEKS } from '../../../shared/trackRecord';
+import { addWeeks, buildRetro, moveItem, rollupRows, weekStartOf, TRACK_RETENTION_WEEKS } from '../../../shared/trackRecord';
 
 const H = 60 * 60 * 1000;
 const NOW = new Date(2026, 8, 30, 12).getTime(); // Wednesday
@@ -53,7 +53,7 @@ function harness(opts: { moa?: boolean } = {}) {
     },
     listResolvedApprovals: async () => resolved,
     agentOf: (ws) => (ws === 'task-ws-1' ? 'codex' : 'claude'),
-    ownerOfTaskWorkspace: (ws) => (ws === 'task-ws-1' ? 'ws-a' : null),
+    taskOfWorkspace: (ws) => (ws === 'task-ws-1' ? { id: 'wtask-abc123', ownerWorkspaceId: 'ws-a' } : null),
     onRetroChanged: () => { retroSignals += 1; },
     now: () => state.now,
     setInterval: () => { const h = { unref: () => undefined }; intervals.push(h); return h; },
@@ -176,6 +176,49 @@ describe('track record feed', () => {
       h.ledger({ from: 'failed', to: 'working' });
       h.ledger({ from: 'review_requested', to: 'completed' });
       expect(row(h, 'ws-a', 'codex')).toMatchObject({ delegations: 1, done: 1, stalls: 1 });
+    });
+
+    it('counts a person\'s touches on each task, never an agent\'s, into the retro median', async () => {
+      const decided = (id: string, resolvedBy: WorkspaceDecision['resolvedBy']): WorkspaceDecision =>
+        ({ id, question: 'q', options: [], context: '', status: 'resolved', resolvedBy, raisedAt: NOW });
+      h.ledger({ from: null, to: 'working' }); // fan:wtask-abc123, working in task-ws-1
+      h.setLink(link('l5', 'running', { decisionIds: ['d5', 'd6', 'd7'] })); // working in ws-a
+      h.feed.noteOwnerMessage('wtask-abc123');
+      h.feed.noteOwnerMessage('wtask-abc123');
+      h.feed.noteOwnerMessage('wtask-unknown');
+      h.setResolved([
+        { id: 'p1', state: 'resolved', resolvedBy: 'desktop', agent: 'codex', workspaceId: 'task-ws-1' },
+        { id: 'p2', state: 'resolved', resolvedBy: 'hq:ws-hq;owner:ws-a;lane:hq', agent: 'codex', workspaceId: 'task-ws-1' },
+        { id: 'p3', state: 'resolved', resolvedBy: 'brain:ws-a', agent: 'claude', workspaceId: 'ws-a' },
+        { id: 'p4', state: 'resolved', resolvedBy: 'phone', agent: 'claude', workspaceId: 'ws-a' },
+      ]);
+      await h.feed.onApprovalsChanged();
+      h.setDecisions({ 'ws-hq': decided('d5', 'human') });
+      h.setDecisions({ 'ws-hq': decided('d5', 'human') }); // seen once
+      h.setDecisions({ 'ws-hq': decided('d6', 'brain') });
+      h.setDecisions({ 'ws-hq': decided('d7', undefined) }); // who answered is unknown
+      const open = h.store.read().open;
+      expect(open['fan:wtask-abc123'].touches).toEqual({ messages: 2, decisions: 0, approvals: 1 });
+      expect(open['link:l5'].touches).toEqual({ messages: 0, decisions: 1, approvals: 1 });
+      h.ledger({ from: 'review_requested', to: 'completed' });
+      h.setLink(link('l5', 'done', { decisionIds: ['d5', 'd6', 'd7'] }));
+      expect(h.store.read().weeks[0].doneTouches).toEqual([3, 2]);
+      expect(buildRetro(h.store.read(), weekStartOf(NOW), NOW)?.ownerTouches).toEqual({ median: 2.5, tasks: 2 });
+    });
+
+    it('puts a hand-off\'s touches on its fan-out task once, and leaves items from before the count out', () => {
+      h.store.mutate((d) => {
+        d.open['link:old'] = { workspaceId: 'ws-b', agent: 'claude', createdAt: NOW - H, state: 'active', since: NOW - H };
+      });
+      h.ledger({ from: null, to: 'working' });
+      // The Git page's hand-off link on the same task workspace.
+      h.setLink(link('l6', 'running', { owner: { workspaceId: 'task-ws-1' }, decisionIds: ['d8'] }));
+      h.setDecisions({ 'ws-hq': { id: 'd8', question: 'q', options: [], context: '', status: 'resolved', resolvedBy: 'human', raisedAt: NOW } });
+      expect(h.store.read().open['fan:wtask-abc123'].touches?.decisions).toBe(1);
+      h.setLink(link('l6', 'done', { owner: { workspaceId: 'task-ws-1' }, decisionIds: ['d8'] }));
+      h.ledger({ from: 'review_requested', to: 'completed' });
+      h.store.mutate((d) => moveItem(d, 'link:old', 'done', NOW));
+      expect(h.store.read().weeks[0].doneTouches).toEqual([1]);
     });
 
     it('makes the retro card on schedule and records a quiet week without one', () => {
