@@ -107,6 +107,11 @@ export interface ParsedTerminalPrompt {
   bodyCut: boolean;
   /** One cursor, the footer right under the options, blank rows after it. */
   active: boolean;
+  /**
+   * The command was read between the box's two dashed edges, so it is all
+   * there even when the dialog's top is cut: it binds whole, never as a tail.
+   */
+  commandBoxed?: true;
   /** Set only by `parsePlanPrompt`: the ExitPlanMode dialog's own rows. */
   plan?: PlanDialogRows;
 }
@@ -423,7 +428,9 @@ function boxedCommand(
   // The top scrolled off over a short, gutterless command (a warning
   // paragraph under the box makes the dialog taller): a "<Tool> command"
   // title still on screen above the box says it holds a command.
-  return gutter === 0 && lines.slice(0, upper).some((l) => toolFromDialogTitle(normalizePromptText(l)) !== undefined)
+  // The dialog then starts at the screen's top, so that title is its first row.
+  const first = lines.slice(0, upper).find((l) => l.trim().length > 0);
+  return gutter === 0 && first !== undefined && toolFromDialogTitle(normalizePromptText(first)) !== undefined
     ? { top: -1, upper, lower }
     : null;
 }
@@ -493,6 +500,7 @@ function parseBoxedPrompt(
     cut,
     bodyCut,
     active: isActive(activity, fullTitle),
+    commandBoxed: true,
   };
 }
 
@@ -888,7 +896,9 @@ function descriptionRowsSpell(rows: readonly string[], description: string): boo
  * `topCut`: the dialog's top rule and title scrolled off. Then the visible
  * command rows must be a TAIL of the call's command (at least one such row on
  * screen), and the caller must have bound the call by its exact `tool_use` id
- * — the screen alone cannot say which call a headless dialog is for.
+ * — the screen alone cannot say which call a headless dialog is for. A command
+ * boxed between dashed edges (`commandBoxed`) is on screen whole, so it must
+ * still be the call's whole command.
  *
  * A titled dialog (Read, WebFetch, WebSearch) binds only whole, title on
  * screen: its box rows must spell exactly what TITLED_BOX draws for the call
@@ -915,6 +925,8 @@ export function dialogMatchesToolCall(
   }
   const command = normalizePromptText(call.command);
   if (!command) return false;
+  // A tail only when the top cut may have taken the command's first rows.
+  const tail = topCut && parsed.commandBoxed !== true;
   const description = call.description ? normalizePromptText(call.description) : '';
   if (parsed.descriptionRows.length > 0) {
     // Gutter-drawn: the gutter rows are the command, the rows under them its
@@ -922,13 +934,13 @@ export function dialogMatchesToolCall(
     // Claude's own label there ("Run shell command"): prose the gutter keeps
     // apart from the command, so it binds nothing and is not compared.
     if (description && !descriptionRowsSpell(parsed.descriptionRows, description)) return false;
-    return rowsMatchAt(parsed.commandRows, command, topCut) >= 0;
+    return rowsMatchAt(parsed.commandRows, command, tail) >= 0;
   }
   // One block of indented rows: the command, optionally its description after
   // it. With the top cut off, at least part of the COMMAND must be on screen —
   // a visible description alone says nothing about which command it is under.
-  if (rowsMatchAt(parsed.commandRows, command, topCut) >= 0) return true;
+  if (rowsMatchAt(parsed.commandRows, command, tail) >= 0) return true;
   if (!description) return false;
-  const at = rowsMatchAt(parsed.commandRows, `${command} ${description}`, topCut);
+  const at = rowsMatchAt(parsed.commandRows, `${command} ${description}`, tail);
   return at >= 0 && at < command.length;
 }
