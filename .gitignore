@@ -103,8 +103,10 @@ Thumbs.db
 *.pdb
 .claude/worktrees/
 
-# Local tool/agent state (not committed)
-.claude/
+# Local tool/agent state (not committed). Project skills under .claude/skills/
+# are committed: they are repo tooling for coding agents (verify-wmux etc.).
+.claude/*
+!.claude/skills/
 .context/
 .gstack/
 .team/

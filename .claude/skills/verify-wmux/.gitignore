@@ -1,0 +1,3 @@
+# Run state and evidence from control-wmux are local, never committed.
+.run/
+evidence/
