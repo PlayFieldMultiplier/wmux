@@ -1051,6 +1051,13 @@ describe('HookIngest', () => {
       expect(gateInputIsCritical({ tool_input: { content: 'a'.repeat(1_000_001) } })).toBe(true);
     });
 
+    it("reads the PowerShell tool's input as PowerShell, where `rm -r` is Remove-Item -Recurse (#1939)", () => {
+      expect(gateInputIsCritical({ tool_name: 'PowerShell', tool_input: { command: 'rm -r .\\src' } })).toBe(true);
+      expect(gateInputIsCritical({ tool_name: 'PowerShell', tool_input: { command: 'rm .\\a.txt' } })).toBe(false);
+      // In Bash `rm -r` without -f stays unflagged, as before.
+      expect(gateInputIsCritical({ tool_name: 'Bash', tool_input: { command: 'rm -r ./src' } })).toBe(false);
+    });
+
     it('marks a gate exact only when the hook named the pane, inexact when routed by cwd', () => {
       const base = makeDeps();
       const seen: Array<{ attribution?: string }> = [];

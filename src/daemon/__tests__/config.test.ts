@@ -10,6 +10,7 @@ import {
   readNotifySinks,
   resetNotifySinksCache,
   readPushPresenceSuppression,
+  resetGateMigrationSaveFailure,
 } from '../config';
 import {
   DESKTOP_PRESENCE_STALE_AFTER_MS,
@@ -678,6 +679,24 @@ describe('loadConfig — one-time PowerShell gate migration (#1939)', () => {
     writeRawConfig({ ...preMigrationConfig({ gatedTools: ['Bash'] }), appliedMigrations: 'nope' });
     expect(loadConfig().gate?.gatedTools).toEqual(['Bash', 'PowerShell']);
     expect(readDisk().appliedMigrations).toEqual([GATE_POWERSHELL_MIGRATION]);
+  });
+
+  it('tries a failed save once per process, while the migrated list still applies in memory', () => {
+    writeRawConfig(preMigrationConfig({ gatedTools: ['Bash'] }));
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('EACCES');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (let i = 0; i < 3; i++) expect(loadConfig().gate?.gatedTools).toEqual(['Bash', 'PowerShell']);
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      rename.mockRestore();
+      error.mockRestore();
+      resetGateMigrationSaveFailure();
+    }
+    expect(readDisk().appliedMigrations).toBeUndefined();
   });
 
   it('does not touch a list once the marker is there', () => {

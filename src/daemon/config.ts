@@ -360,6 +360,14 @@ export function resetNotifySinksCache(): void {
   notifySinksCache = null;
 }
 
+/** #1939 — set once the gate migration's save failed in this process. */
+let gateMigrationSaveFailed = false;
+
+/** Test seam: let the gate migration try its save again. */
+export function resetGateMigrationSaveFailure(): void {
+  gateMigrationSaveFailed = false;
+}
+
 /**
  * Ensure ~/.wmux directory exists, then load config.json.
  * If the file is missing or malformed, a default config is written and returned.
@@ -418,7 +426,17 @@ export function loadConfig(): DaemonConfig {
     if (!appliedMigrations.includes(GATE_POWERSHELL_MIGRATION)) {
       config.gate = migrateGateForPowerShell(config.gate) as DaemonConfig['gate'];
       config.appliedMigrations = [...appliedMigrations, GATE_POWERSHELL_MIGRATION];
-      saveConfig(config);
+      // The daemon calls loadConfig on every hook signal. When the file cannot
+      // be written, the migrated list still applies in memory on each load, but
+      // the write (and its error log) is tried once per process, not per call.
+      if (!gateMigrationSaveFailed) {
+        try {
+          saveConfigOrThrow(config);
+        } catch (err) {
+          gateMigrationSaveFailed = true;
+          console.error('[daemon/config] Failed to save the gate migration; it applies in memory until a restart:', err);
+        }
+      }
     }
 
     // Enforce upper bound on buffer size to prevent excessive memory usage.
