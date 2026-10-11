@@ -609,6 +609,7 @@ export const es = {
   'schedules.problem.browserMode': "Una programación de Codex con identidad de navegador se ejecuta en modo de aprobación.",
   'schedules.detail.browser_needs_consent': "Se rechazó una llamada del navegador: la política del panel cambió después de autorizar la programación. Guárdala de nuevo para autorizarla.",
   'schedules.detail.browser_policy_denied': "La política de sitios del panel rechazó una llamada del navegador.",
+  'schedules.detail.browser_consent_unattended': "Una acción del navegador necesitaba la aprobación de una persona (un script de página, una descarga o los datos de inicio de sesión de un sitio sensible) y una ejecución programada no tiene a quién preguntar, así que se rechazó. Una respuesta «Siempre en este panel» dada en ese panel también cubre sus ejecuciones programadas.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Estado de Fleet (datos locales, respondido sin Moa):",
   'moa.fleetAnswer.needsYou.one': "{count} tarea necesita tu atención.",

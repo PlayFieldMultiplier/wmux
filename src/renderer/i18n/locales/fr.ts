@@ -608,6 +608,7 @@ export const fr = {
   'schedules.problem.browserMode': "Une planification Codex avec une identité de navigateur s'exécute en mode Approbation.",
   'schedules.detail.browser_needs_consent': "Un appel du navigateur a été refusé : la politique du volet a changé depuis l'autorisation. Enregistrez à nouveau la planification pour l'autoriser.",
   'schedules.detail.browser_policy_denied': "Un appel du navigateur a été refusé par la politique de sites du volet.",
+  'schedules.detail.browser_consent_unattended': "Une action du navigateur demandait l'accord d'une personne (un script de page, un téléchargement ou les données de connexion d'un site sensible), et une exécution planifiée n'a personne à qui demander : elle a été refusée. Une réponse « Toujours dans ce volet » donnée dans ce volet vaut aussi pour ses exécutions planifiées.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "État de Fleet (données locales, réponse sans Moa) :",
   'moa.fleetAnswer.needsYou.one': "{count} tâche requiert votre attention.",

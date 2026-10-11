@@ -608,6 +608,7 @@ export const bs = {
   'schedules.problem.browserMode': "Codex raspored s identitetom preglednika radi u načinu odobravanja.",
   'schedules.detail.browser_needs_consent': "Poziv preglednika je odbijen: pravila okna su se promijenila nakon odobrenja rasporeda. Ponovo spremite raspored da ga odobrite.",
   'schedules.detail.browser_policy_denied': "Pravila stranica okna odbila su poziv preglednika.",
+  'schedules.detail.browser_consent_unattended': "Radnja preglednika trebala je odobrenje osobe (skripta stranice, preuzimanje ili podaci za prijavu osjetljive stranice), a zakazano pokretanje nema koga pitati, pa je odbijena. Odgovor \"Uvijek u ovom oknu\" dat u tom oknu važi i za njegova zakazana pokretanja.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Pregled Fleet (lokalni podaci, odgovor bez Moa):",
   'moa.fleetAnswer.needsYou.one': "{count} zadatak traži vašu pažnju.",

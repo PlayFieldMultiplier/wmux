@@ -605,6 +605,7 @@ export const ar = {
   'schedules.problem.browserMode': "يعمل جدول Codex الذي له هوية متصفح في وضع الموافقة.",
   'schedules.detail.browser_needs_consent': "رُفض استدعاء المتصفح: تغيّرت سياسة اللوحة بعد منح هذا الجدول. احفظ الجدول مرة أخرى لمنحه.",
   'schedules.detail.browser_policy_denied': "رفضت سياسة مواقع اللوحة استدعاء المتصفح.",
+  'schedules.detail.browser_consent_unattended': "احتاج إجراء في المتصفح إلى موافقة شخص (نص برمجي للصفحة أو تنزيل أو بيانات تسجيل الدخول لموقع حساس)، ولا يوجد في التشغيل المجدول من يمكن سؤاله، لذا رُفض. إجابة \"دائمًا في هذه اللوحة\" المقدَّمة في تلك اللوحة تشمل أيضًا عمليات التشغيل المجدولة الخاصة بها.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "ملخص Fleet (بيانات محلية، أُجيب دون Moa):",
   'moa.fleetAnswer.needsYou.one': "المهام التي تحتاج إلى انتباهك: {count}.",

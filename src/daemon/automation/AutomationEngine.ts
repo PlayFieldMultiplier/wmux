@@ -402,7 +402,9 @@ export class AutomationEngine {
 
   /** Main refused a browser call of a live run: say why on the run. */
   async noteRunBrowser(runId: unknown, detail: unknown): Promise<AutomationOkResult> {
-    if (detail !== 'browser_needs_consent' && detail !== 'browser_policy_denied') return { ok: false, error: 'Invalid detail' };
+    if (detail !== 'browser_needs_consent' && detail !== 'browser_policy_denied' && detail !== 'browser_consent_unattended') {
+      return { ok: false, error: 'Invalid detail' };
+    }
     const run = this.runs.find((r) => r.id === runId);
     if (!run || !this.live.has(run.id) || isFinalRunState(run.state)) return { ok: false, error: 'Not found' };
     if (run.detail === detail) return { ok: true };

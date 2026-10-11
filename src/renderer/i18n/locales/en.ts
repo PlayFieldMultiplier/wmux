@@ -4487,6 +4487,7 @@ export const en = {
   'schedules.problem.browserMode': "A Codex schedule with a browser identity runs in Approval mode.",
   'schedules.detail.browser_needs_consent': "A browser call was refused: the pane's browser policy changed after this schedule was granted. Save the schedule again to grant it.",
   'schedules.detail.browser_policy_denied': "A browser call was refused by the pane's site policy.",
+  'schedules.detail.browser_consent_unattended': "A browser action needed a person's OK (a page script, a download or a sensitive site's sign-in data), and a scheduled run has nobody to ask, so it was refused. An \"Always on this pane\" answer given in that pane also covers its scheduled runs.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

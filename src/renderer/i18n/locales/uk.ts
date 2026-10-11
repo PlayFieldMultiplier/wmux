@@ -609,6 +609,7 @@ export const uk = {
   'schedules.problem.browserMode': "Розклад Codex із браузерним обліковим записом працює в режимі схвалення.",
   'schedules.detail.browser_needs_consent': "Виклик браузера відхилено: політика панелі змінилася після дозволу розкладу. Збережіть розклад знову, щоб дозволити його.",
   'schedules.detail.browser_policy_denied': "Виклик браузера відхилено політикою сайтів панелі.",
+  'schedules.detail.browser_consent_unattended': "Дії браузера потрібна була згода людини (скрипт сторінки, завантаження або дані входу чутливого сайту), а в запуску за розкладом немає кого запитати, тому її відхилено. Відповідь «Завжди в цій панелі», дана в цій панелі, діє і для її запусків за розкладом.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Зведення Fleet (локальні дані, відповідь без Moa):",
   'moa.fleetAnswer.needsYou.one': "{count} завдання потребує вашої уваги.",

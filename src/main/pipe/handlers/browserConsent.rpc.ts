@@ -25,8 +25,16 @@ import {
   type DownloadPass,
 } from '../../browser-session/dangerousActionConsent';
 import { resolvePaneForPty } from '../../workspace/ptyOwnership';
-import { callerPaneOf, callerScope } from './browser.rpc';
-import { policyDeniedMessage } from '../../../shared/browserPolicy';
+import { noteRunBrowserRefusal, type LiveRunIdentity } from '../../automation/runIdentity';
+import {
+  callerPaneOf,
+  callerScope,
+  identityRunPane,
+  isRunCaller,
+  needsConsentMessage,
+  staleRunIdentity,
+} from './browser.rpc';
+import { browserPolicyRefusalCode, policyDeniedMessage } from '../../../shared/browserPolicy';
 
 // ---------------------------------------------------------------------------
 // browser.consent.* — the MCP lane asks main before a dangerous action on a
@@ -34,16 +42,18 @@ import { policyDeniedMessage } from '../../../shared/browserPolicy';
 //
 // Identity comes only from main's attestation, along the same path A-core's
 // protected gate in browser.rpc.ts takes: callerScope → the attested pane
-// (callerPaneOf → resolvePaneForPty) → the pane's own exclusive profile →
-// the policy decision. Nothing the caller names (workspace, pane, profile) is
-// believed; a caller that is not a confirmed protected pane is refused.
+// (callerPaneOf → resolvePaneForPty, or for a scheduled run acting as a
+// pane's browser, the pane its live run identity names) → the pane's own
+// exclusive profile → the policy decision. Nothing the caller names
+// (workspace, pane, profile) is believed; a caller that is not a confirmed
+// protected pane is refused.
 // ---------------------------------------------------------------------------
 
 type GetWindow = () => BrowserWindow | null;
 
 export interface BrowserConsentRpcDeps {
   getWindow: GetWindow;
-  store: Pick<BrowserPolicyStore, 'decisionFor'> & Partial<Pick<BrowserPolicyStore, 'onChange'>>;
+  store: Pick<BrowserPolicyStore, 'decisionFor' | 'entryFor'> & Partial<Pick<BrowserPolicyStore, 'onChange'>>;
   paneBindings: () => ChromePaneBindings;
   chrome: {
     profileFor(workspaceId: string | undefined, paneId?: string): string;
@@ -96,10 +106,22 @@ async function resolveCaller(
   // Consent is a pane's question: no attested pane, nothing to ask about.
   if (!ptyId || !workspaceId) throw refuse('the calling pane could not be identified');
   let paneId: string | null = null;
-  try {
-    paneId = await resolvePaneForPty(deps.getWindow, ptyId, workspaceId);
-  } catch {
-    paneId = null;
+  let run: LiveRunIdentity | null = null;
+  if (isRunCaller(ctx)) {
+    // The gate's own mapping: the pane the run's identity names, or a refusal
+    // it has already recorded on the run.
+    try {
+      ({ run, paneId } = await identityRunPane(CONSENT_METHOD, ptyId, workspaceId));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new ConsentRefusal(browserPolicyRefusalCode(err) === 'needs_consent' ? 'needs_consent' : 'policy_denied', message);
+    }
+  } else {
+    try {
+      paneId = await resolvePaneForPty(deps.getWindow, ptyId, workspaceId);
+    } catch {
+      paneId = null;
+    }
   }
   if (!paneId) throw refuse('the calling pane could not be identified');
   const currentProfile = deps.chrome.profileFor(workspaceId, paneId);
@@ -110,12 +132,28 @@ async function resolveCaller(
     && binding.workspaceId === workspaceId
     && binding.profile.toLowerCase() === currentProfile.toLowerCase();
   const pd = deps.store.decisionFor(paneId, workspaceId, currentProfile, !!binding);
+  if (run) {
+    // Only under the identity the operator granted, held as the gate holds it.
+    const why = staleRunIdentity(run, pd, currentProfile, deps.store.entryFor(paneId), binding?.profile);
+    if (why && pd.kind !== 'denied') {
+      noteRunBrowserRefusal(run.runId, 'browser_needs_consent');
+      throw new ConsentRefusal('needs_consent', needsConsentMessage(CONSENT_METHOD, `${why}; grant the schedule again in wmux`));
+    }
+  }
   if (pd.kind === 'legacy') throw refuse('this pane is not protected, so there is nothing to consent to');
   if (pd.kind === 'denied') throw refuse(pd.why);
   if (deps.backend() !== 'chrome') throw refuse('a protected pane runs only on the Chrome browser backend');
   if (!ownsProfile) throw refuse('a protected pane needs a Chrome profile bound to that pane alone');
   if (!pd.confirmed) throw refuse("this pane's site list must be confirmed again by the user");
-  return { workspaceId, paneId, profileId: pd.profileId, epoch: pd.epoch, hosts: pd.hosts, ptyId };
+  return {
+    workspaceId,
+    paneId,
+    profileId: pd.profileId,
+    epoch: pd.epoch,
+    hosts: pd.hosts,
+    ptyId,
+    ...(run && { runId: run.runId }),
+  };
 }
 
 function parseOperation(params: Record<string, unknown>): { action: BrowserConsentAction; hosts: string[]; detail?: string } {
@@ -224,9 +262,11 @@ export function registerBrowserConsentRpc(router: Pick<RpcRouter, 'register'>, d
   };
 
   router.register('browser.consent.request', async (params, ctx) => {
+    let runId: string | undefined;
     try {
       const op = parseOperation(params);
       const caller = await resolveCaller(deps, params, ctx);
+      runId = caller.runId;
       let targetId = '';
       if (op.action === 'download') {
         targetId = typeof params['targetId'] === 'string' ? params['targetId'] : '';
@@ -266,6 +306,11 @@ export function registerBrowserConsentRpc(router: Pick<RpcRouter, 'register'>, d
       downloads.set(decision.operationId, { caller: { ...caller, epoch: decision.epoch }, pass, result });
       return { ok: true, operationId: decision.operationId, epoch: decision.epoch, via: decision.via };
     } catch (err) {
+      // A scheduled run asked for what only a person can allow: say so on the
+      // run, not only in the agent's transcript.
+      if (runId && err instanceof ConsentRefusal && err.code === 'needs_consent') {
+        noteRunBrowserRefusal(runId, 'browser_consent_unattended');
+      }
       rethrow(err);
     }
   });

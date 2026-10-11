@@ -3615,4 +3615,5 @@ export const zh = {
   'schedules.problem.browserMode': "带浏览器身份的 Codex 计划以审批模式运行。",
   'schedules.detail.browser_needs_consent': "浏览器调用被拒绝：授权此计划后窗格的浏览器策略已更改。请再次保存计划以授权。",
   'schedules.detail.browser_policy_denied': "窗格的网站策略拒绝了浏览器调用。",
+  'schedules.detail.browser_consent_unattended': "浏览器操作(页面脚本、下载或敏感网站的登录数据)需要有人确认,但计划运行没有人可以询问,因此已被拒绝。在该窗格中回答“在此窗格中始终允许”也适用于它的计划运行。",
 } as const;

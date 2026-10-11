@@ -644,6 +644,7 @@ export const zhTW = {
   'schedules.problem.browserMode': "具瀏覽器身分的 Codex 排程以核准模式執行。",
   'schedules.detail.browser_needs_consent': "瀏覽器呼叫遭拒：授權此排程後窗格的瀏覽器政策已變更。請重新儲存排程以授權。",
   'schedules.detail.browser_policy_denied': "窗格的網站政策拒絕了瀏覽器呼叫。",
+  'schedules.detail.browser_consent_unattended': "瀏覽器操作(頁面指令碼、下載或敏感網站的登入資料)需要有人確認,但排程執行沒有人可以詢問,因此已被拒絕。在該窗格中回答「在此窗格中一律允許」也適用於它的排程執行。",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Fleet 概況（用本機資料回答，未經過 Moa）：",
   'moa.fleetAnswer.needsYou.one': "{count} 個任務需要你處理。",

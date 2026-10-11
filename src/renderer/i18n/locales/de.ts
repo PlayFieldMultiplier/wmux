@@ -605,6 +605,7 @@ export const de = {
   'schedules.problem.browserMode': "Ein Codex-Zeitplan mit Browser-Identität läuft im Genehmigungsmodus.",
   'schedules.detail.browser_needs_consent': "Ein Browser-Aufruf wurde abgelehnt: Die Browser-Richtlinie des Bereichs hat sich seit der Freigabe geändert. Speichere den Zeitplan erneut, um ihn freizugeben.",
   'schedules.detail.browser_policy_denied': "Ein Browser-Aufruf wurde von der Website-Richtlinie des Bereichs abgelehnt.",
+  'schedules.detail.browser_consent_unattended': "Eine Browser-Aktion brauchte die Zustimmung einer Person (ein Seitenskript, ein Download oder Anmeldedaten einer sensiblen Website), und bei einem geplanten Lauf ist niemand da, der gefragt werden kann. Sie wurde abgelehnt. Eine Antwort „Immer in diesem Bereich“ in diesem Bereich gilt auch für seine geplanten Läufe.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Fleet-Übersicht (lokale Daten, ohne Moa beantwortet):",
   'moa.fleetAnswer.needsYou.one': "{count} Aufgabe benötigt Ihre Aufmerksamkeit.",

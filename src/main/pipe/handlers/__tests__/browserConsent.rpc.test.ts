@@ -189,3 +189,140 @@ describe('browser.consent.request', () => {
     expect(r.error).toMatch(/policy_denied/);
   });
 });
+
+describe('browser.consent.request from a scheduled run acting as a protected pane', () => {
+  // A live identity run the daemon answers for, keyed by its PTY.
+  let liveRuns: Map<string, { runId: string }>;
+  const notes: Array<{ runId: string; detail: string }> = [];
+
+  async function grantRun(ptyId: string) {
+    const { recordRunIdentity, panePolicyFingerprint } = await import('../../../automation/runIdentity');
+    await recordRunIdentity({
+      automationId: 'auto-a1', boundRevision: 2, workspaceId: 'ws-1', paneId: 'pane-a', profileId: 'pa', hosts: ['a.test'],
+      fingerprint: panePolicyFingerprint(policy.entryFor('pane-a'), profiles.getPaneBindings()['pane-a']?.profile),
+      mode: 'auto',
+    } as never);
+    liveRuns.set(ptyId, { runId: `r-${ptyId}` });
+  }
+
+  /** The real consent rules; a run's PTY is owned by the automation bridge. */
+  function registerReal(): RpcRouter {
+    const router = dispatchAsClaimedCaller(new RpcRouter());
+    registerBrowserConsentRpc(router, {
+      getWindow: () => null as unknown as BrowserWindow,
+      store: policy,
+      paneBindings: () => profiles.getPaneBindings(),
+      chrome: { profileFor: (ws, pane) => profiles.profileFor(ws, pane), forProfile: vi.fn() as never },
+      backend: () => backend,
+      consent: new DangerousActionConsent({
+        store: policy,
+        queue: () => null,
+        runOwnership: (ptyId) => (ptyId && liveRuns.has(ptyId) ? 'owned' : 'not-owned'),
+      }),
+      makeDownloadDir: () => mkdtempSync(join(dir, 'pass-')),
+      downloadGuardFor: () => guard,
+    });
+    return router;
+  }
+
+  async function asRun(router: RpcRouter, params: Record<string, unknown>, ptyId: string) {
+    const { claimTokenForRun } = await import('../../../workspace/workspaceClaimTrust');
+    const response = await router.dispatch(
+      { id: '1', method: 'browser.consent.request', params, workspaceToken: claimTokenForRun('ws-1', ptyId), callerPtyId: ptyId } as never,
+      { externalWire: true } as never,
+    );
+    if (response.ok) return { result: (response as { result?: unknown }).result, error: undefined };
+    return { result: undefined, error: String((response as { error?: unknown }).error ?? '') };
+  }
+
+  beforeEach(async () => {
+    const { __setRunIdentityStoreDirForTest, setRunIdentityTransport } = await import('../../../automation/runIdentity');
+    __setRunIdentityStoreDirForTest(dir);
+    liveRuns = new Map();
+    notes.length = 0;
+    setRunIdentityTransport({
+      rpc: async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'automation.runIdentity') {
+          const run = liveRuns.get(String(params?.['ptyId']));
+          return {
+            run: run
+              ? {
+                runId: run.runId, automationId: 'auto-a1', revision: 2, effectiveMode: 'auto', ptyId: params?.['ptyId'],
+                browserIdentity: { workspaceId: 'ws-1', paneId: 'pane-a', boundRevision: 2 },
+              }
+              : null,
+          };
+        }
+        if (method === 'automation.noteRunBrowser') {
+          notes.push({ runId: String(params?.['runId']), detail: String(params?.['detail']) });
+          return { ok: true };
+        }
+        return null;
+      },
+    } as never);
+  });
+
+  afterEach(async () => {
+    const { setRunIdentityTransport, __setRunIdentityStoreDirForTest } = await import('../../../automation/runIdentity');
+    setRunIdentityTransport(null);
+    __setRunIdentityStoreDirForTest(null);
+  });
+
+  it.each([
+    ['evaluate', { action: 'evaluate', url: 'https://a.test/x' }],
+    ['download', { action: 'download', url: 'https://a.test/file', targetId: 't-1' }],
+  ])('a %s is needs_consent because nobody is there to answer, and the run row says so', async (_label, op) => {
+    await grantRun('auto-r1');
+    const router = registerReal();
+    const res = await asRun(router, { workspaceId: 'ws-1', ...op }, 'auto-r1');
+    expect(res.error).toMatch(/^browser\.consent\.request: needs_consent: /);
+    expect(res.error).toContain('This is a scheduled run and nobody is there to answer.');
+    expect(notes).toEqual([{ runId: 'r-auto-r1', detail: 'browser_consent_unattended' }]);
+  });
+
+  it("honours the pane's \"Always on this pane\" grant: the run borrows that pane", async () => {
+    await grantRun('auto-r1');
+    await policy.setGrants('pane-a', { workspaceId: 'ws-1', profileId: 'pa' }, (g) => ({ ...g, evaluate: true }), policy.epoch());
+    const router = registerReal();
+    const res = await asRun(router, { workspaceId: 'ws-1', action: 'evaluate', url: 'https://a.test/x' }, 'auto-r1');
+    expect(res.error).toBeUndefined();
+    expect(res.result).toMatchObject({ ok: true, via: 'grant' });
+    expect(notes).toEqual([]);
+  });
+
+  it("a run whose pane's policy changed since the grant needs a new grant, as the gate says", async () => {
+    await grantRun('auto-r1');
+    await policy.write(
+      {
+        workspaceId: 'ws-1', paneId: 'pane-a', profileId: 'pa', protected: true,
+        hosts: { mode: 'allowlist', allow: ['a.test', 'b.test'], block: [] }, expectedEpoch: policy.epoch(),
+      },
+      'pa',
+      true,
+    );
+    const router = registerReal();
+    const res = await asRun(router, { workspaceId: 'ws-1', action: 'evaluate', url: 'https://a.test/x' }, 'auto-r1');
+    expect(res.error).toContain('needs_consent');
+    expect(res.error).toContain("the pane's browser policy changed after this schedule was granted");
+    expect(notes).toEqual([{ runId: 'r-auto-r1', detail: 'browser_needs_consent' }]);
+  });
+
+  it('still refuses an auto- PTY no live identity run owns', async () => {
+    const router = registerReal();
+    const res = await asRun(router, { workspaceId: 'ws-1', action: 'evaluate', url: 'https://a.test/x' }, 'auto-unknown');
+    expect(res.error).toContain('policy_denied');
+    expect(res.error).toContain('the calling pane could not be identified');
+    expect(notes).toEqual([]);
+  });
+
+  it('leaves a pane caller exactly as before', async () => {
+    await grantRun('auto-r1');
+    const router = registerReal();
+    // The protected pane's own agent is not a run, so a person would be asked;
+    // with nobody to ask here it gets the existing denial.
+    const res = await call(router, 'browser.consent.request', { workspaceId: 'ws-1', action: 'evaluate', url: 'https://a.test/x' }, 'pty-a');
+    expect(res.error).toContain('policy_denied');
+    expect(res.error).toContain('nobody can be asked right now');
+    expect(notes).toEqual([]);
+  });
+});

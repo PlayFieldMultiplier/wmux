@@ -608,6 +608,7 @@ export const id = {
   'schedules.problem.browserMode': "Jadwal Codex dengan identitas browser berjalan dalam mode persetujuan.",
   'schedules.detail.browser_needs_consent': "Panggilan browser ditolak: kebijakan panel berubah setelah jadwal ini diizinkan. Simpan jadwal lagi untuk mengizinkannya.",
   'schedules.detail.browser_policy_denied': "Panggilan browser ditolak oleh kebijakan situs panel.",
+  'schedules.detail.browser_consent_unattended': "Tindakan browser memerlukan persetujuan seseorang (skrip halaman, unduhan, atau data masuk situs sensitif), dan jalankan terjadwal tidak punya siapa pun untuk ditanya, jadi tindakan itu ditolak. Jawaban \"Selalu di panel ini\" yang diberikan di panel itu juga berlaku untuk jalankan terjadwalnya.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Ringkasan Fleet (data lokal, dijawab tanpa Moa):",
   'moa.fleetAnswer.needsYou.one': "{count} tugas memerlukan perhatian Anda.",

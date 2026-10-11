@@ -608,6 +608,7 @@ export const it = {
   'schedules.problem.browserMode': "Una pianificazione Codex con identità del browser viene eseguita in modalità approvazione.",
   'schedules.detail.browser_needs_consent': "Una chiamata del browser è stata rifiutata: la policy del riquadro è cambiata dopo l'autorizzazione. Salva di nuovo la pianificazione per autorizzarla.",
   'schedules.detail.browser_policy_denied': "Una chiamata del browser è stata rifiutata dalla policy dei siti del riquadro.",
+  'schedules.detail.browser_consent_unattended': "Un'azione del browser richiedeva l'approvazione di una persona (uno script della pagina, un download o i dati di accesso di un sito sensibile) e un'esecuzione pianificata non ha nessuno a cui chiedere, quindi è stata rifiutata. Una risposta \"Sempre in questo riquadro\" data in quel riquadro vale anche per le sue esecuzioni pianificate.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Stato di Fleet (dati locali, risposta senza Moa):",
   'moa.fleetAnswer.needsYou.one': "{count} attività richiede la tua attenzione.",

@@ -42,6 +42,7 @@ import {
   NEEDS_CONSENT_CODE,
   policyDeniedMessage,
   type BrowserPolicyAuthorization,
+  type PanePolicy,
   type PanePolicyDecision,
 } from '../../../shared/browserPolicy';
 import { compileHostPolicy, navigationVerdict, type NavigationVerdict } from '../../../shared/browserHostPolicy';
@@ -206,10 +207,66 @@ function protectedNavigationTarget(method: string, params: Record<string, unknow
  * A scheduled run acting as a protected pane's browser: a browser-only run
  * claim (main's walk) or a call from a PTY main knows to be such a run.
  */
-function isRunCaller(ctx: RpcContext | undefined): boolean {
+export function isRunCaller(ctx: RpcContext | undefined): boolean {
   const claim = ctx?.workspaceClaim;
   if (claim?.kind !== 'bound' || !claim.ptyId) return false;
   return claim.browserOnly === true || isIdentityRunPty(claim.ptyId);
+}
+
+/**
+ * The pane a scheduled run's call acts for: the one its live run's signed
+ * identity names (the daemon answers only for a live run of its current
+ * incarnation), never whatever the renderer says about the run's PTY. Shared
+ * by the gate and the consent RPC so both map a run the same way.
+ *
+ * `run` is null when the daemon knows no such identity run (the caller is then
+ * unidentified). Throws — and records why on the run — when the run's identity
+ * is not confirmed in main, or the call names another workspace.
+ */
+export async function identityRunPane(
+  method: string,
+  ptyId: string,
+  workspaceId: string,
+): Promise<{ run: LiveRunIdentity | null; paneId: string | null }> {
+  const found = await liveRunIdentity(ptyId);
+  if (found && 'unmatched' in found) {
+    // A live identity run main holds no confirmed snapshot for (or under
+    // another mode): refused, and the run says why.
+    noteRunBrowserRefusal(found.runId, 'browser_needs_consent');
+    throw new Error(needsConsentMessage(method, "this schedule's browser identity is not confirmed; grant the schedule again in wmux"));
+  }
+  const run = found;
+  const paneId = run && run.identity.workspaceId === workspaceId ? run.identity.paneId : null;
+  if (run && !paneId) {
+    // A run claim always names its identity's workspace; this one does not
+    // (a pane claim on the run's opened terminal elsewhere). Refused, and
+    // the run says so.
+    noteRunBrowserRefusal(run.runId, 'browser_policy_denied');
+    throw new Error(policyDeniedMessage(method, "the call did not come from this schedule's browser identity workspace"));
+  }
+  return { run, paneId };
+}
+
+/**
+ * Why a run may no longer act under the identity the operator granted, or
+ * null: the same profile, still protected and confirmed, and that pane's
+ * policy as it was (a change to another pane does not matter).
+ */
+export function staleRunIdentity(
+  run: LiveRunIdentity,
+  pd: PanePolicyDecision,
+  currentProfile: string | undefined,
+  entry: PanePolicy | null,
+  bindingProfile: string | undefined,
+): string | null {
+  const identity = run.identity;
+  return pd.kind === 'legacy' ? "the pane's protection was turned off after this schedule was granted"
+    : pd.kind === 'protected' && !pd.confirmed ? "the pane's site list must be confirmed again"
+      : !currentProfile || currentProfile.toLowerCase() !== identity.profileId.toLowerCase()
+        ? "the pane's Chrome profile changed after this schedule was granted"
+        : panePolicyFingerprint(entry, bindingProfile) !== identity.fingerprint
+          ? "the pane's browser policy changed after this schedule was granted"
+          : null;
 }
 
 /** Calls that wait for a person (help requests, borrowing the user's tabs). */
@@ -218,7 +275,7 @@ function waitsOnPerson(method: string, params: Record<string, unknown>): boolean
 }
 
 /** The message main throws for a call that needs the operator's consent again. */
-function needsConsentMessage(method: string, why: string): string {
+export function needsConsentMessage(method: string, why: string): string {
   return `${method}: ${NEEDS_CONSENT_CODE}: ${why}. Do not retry unchanged.`;
 }
 
@@ -1081,22 +1138,7 @@ export function registerBrowserRpc(
     let run: LiveRunIdentity | null = null;
     let paneId: string | null = null;
     if (ptyId && runCaller) {
-      const found = await liveRunIdentity(ptyId);
-      if (found && 'unmatched' in found) {
-        // A live identity run main holds no confirmed snapshot for (or under
-        // another mode): refused, and the run says why.
-        noteRunBrowserRefusal(found.runId, 'browser_needs_consent');
-        throw new Error(needsConsentMessage(method, "this schedule's browser identity is not confirmed; grant the schedule again in wmux"));
-      }
-      run = found;
-      paneId = run && run.identity.workspaceId === workspaceId ? run.identity.paneId : null;
-      if (run && !paneId) {
-        // A run claim always names its identity's workspace; this one does not
-        // (a pane claim on the run's opened terminal elsewhere). Refused, and
-        // the run says so.
-        noteRunBrowserRefusal(run.runId, 'browser_policy_denied');
-        throw new Error(policyDeniedMessage(method, "the call did not come from this schedule's browser identity workspace"));
-      }
+      ({ run, paneId } = await identityRunPane(method, ptyId, workspaceId));
     } else if (ptyId) {
       try {
         paneId = await resolvePaneForPty(getWindow, ptyId, workspaceId);
@@ -1133,15 +1175,7 @@ export function registerBrowserRpc(
       // was (a change to another pane does not matter). Any change since
       // needs a new grant — refused now, recorded on the run,
       // never waited on.
-      const identity = run.identity;
-      const why =
-        pd.kind === 'legacy' ? "the pane's protection was turned off after this schedule was granted"
-          : pd.kind === 'protected' && !pd.confirmed ? "the pane's site list must be confirmed again"
-            : !currentProfile || currentProfile.toLowerCase() !== identity.profileId.toLowerCase()
-              ? "the pane's Chrome profile changed after this schedule was granted"
-              : panePolicyFingerprint(store.entryFor(paneId), binding?.profile) !== identity.fingerprint
-                ? "the pane's browser policy changed after this schedule was granted"
-                : null;
+      const why = staleRunIdentity(run, pd, currentProfile, store.entryFor(paneId), binding?.profile);
       if (why && pd.kind !== 'denied') {
         noteRunBrowserRefusal(run.runId, 'browser_needs_consent');
         throw new Error(needsConsentMessage(method, `${why}; grant the schedule again in wmux`));

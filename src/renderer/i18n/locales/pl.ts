@@ -4444,4 +4444,5 @@ export const pl = {
   'schedules.problem.browserMode': "Harmonogram Codex z tożsamością przeglądarki działa w trybie zatwierdzania.",
   'schedules.detail.browser_needs_consent': "Wywołanie przeglądarki odrzucono: zasady panelu zmieniły się po udzieleniu zgody. Zapisz harmonogram ponownie, aby go zatwierdzić.",
   'schedules.detail.browser_policy_denied': "Wywołanie przeglądarki odrzuciły zasady witryn panelu.",
+  'schedules.detail.browser_consent_unattended': "Akcja przeglądarki wymagała zgody człowieka (skrypt strony, pobieranie lub dane logowania wrażliwej witryny), a zaplanowane uruchomienie nie ma kogo zapytać, więc została odrzucona. Odpowiedź „Zawsze w tym panelu” udzielona w tym panelu obejmuje też jego zaplanowane uruchomienia.",
 } as const;

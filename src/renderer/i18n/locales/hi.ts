@@ -604,6 +604,7 @@ export const hi = {
   'schedules.problem.browserMode': "ब्राउज़र पहचान वाला Codex शेड्यूल अनुमोदन मोड में चलता है।",
   'schedules.detail.browser_needs_consent': "एक ब्राउज़र कॉल अस्वीकार हुई: शेड्यूल को अनुमति देने के बाद पेन की नीति बदल गई। अनुमति देने के लिए शेड्यूल फिर से सहेजें।",
   'schedules.detail.browser_policy_denied': "पेन की साइट नीति ने एक ब्राउज़र कॉल अस्वीकार की।",
+  'schedules.detail.browser_consent_unattended': "एक ब्राउज़र कार्रवाई के लिए किसी व्यक्ति की अनुमति चाहिए थी (पेज स्क्रिप्ट, डाउनलोड या किसी संवेदनशील साइट का साइन-इन डेटा), और शेड्यूल किए गए रन में पूछने के लिए कोई नहीं होता, इसलिए इसे अस्वीकार कर दिया गया। उस पेन में दिया गया \"इस पेन पर हमेशा\" जवाब उसके शेड्यूल किए गए रन पर भी लागू होता है।",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Fleet स्थिति (स्थानीय डेटा, Moa के बिना जवाब):",
   'moa.fleetAnswer.needsYou.one': "{count} कार्य को आपके ध्यान की ज़रूरत है।",

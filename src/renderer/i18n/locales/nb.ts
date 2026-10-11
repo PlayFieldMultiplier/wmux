@@ -608,6 +608,7 @@ export const nb = {
   'schedules.problem.browserMode': "En Codex-plan med nettleseridentitet kjører i godkjenningsmodus.",
   'schedules.detail.browser_needs_consent': "Et nettleserkall ble avvist: panelets retningslinjer endret seg etter at planen ble godkjent. Lagre planen på nytt for å godkjenne den.",
   'schedules.detail.browser_policy_denied': "Et nettleserkall ble avvist av panelets nettstedsregler.",
+  'schedules.detail.browser_consent_unattended': "En nettleserhandling trengte samtykke fra en person (et sideskript, en nedlasting eller påloggingsdata for et sensitivt nettsted), og en planlagt kjøring har ingen å spørre, så den ble avvist. Et «Alltid i denne ruten»-svar gitt i den ruten gjelder også rutens planlagte kjøringer.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Fleet-status (lokale data, besvart uten Moa):",
   'moa.fleetAnswer.needsYou.one': "{count} oppgave trenger oppmerksomheten din.",

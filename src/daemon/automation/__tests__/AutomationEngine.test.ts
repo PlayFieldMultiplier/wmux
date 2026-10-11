@@ -860,6 +860,10 @@ describe('AutomationEngine — browser identity', () => {
     // A refused browser call is recorded on the run.
     expect(await h.engine.noteRunBrowser(run.id, 'browser_needs_consent')).toEqual({ ok: true });
     expect(h.engine.listRuns()[0].detail).toBe('browser_needs_consent');
+    // A consent nobody could answer, too — and nothing outside the three.
+    expect(await h.engine.noteRunBrowser(run.id, 'browser_consent_unattended')).toEqual({ ok: true });
+    expect(h.engine.listRuns()[0].detail).toBe('browser_consent_unattended');
+    expect(await h.engine.noteRunBrowser(run.id, 'submit_retried')).toEqual({ ok: false, error: 'Invalid detail' });
     // An unknown or ended run gets nothing.
     expect(h.engine.runIdentity('auto-nope').run).toBeNull();
     await h.engine.cancelRun(run.id);

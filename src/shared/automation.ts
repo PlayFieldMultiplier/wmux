@@ -171,7 +171,9 @@ export type AutomationRunDetail =
   /** A browser call was refused because the pane's identity or policy changed since the grant. */
   | 'browser_needs_consent'
   /** A browser call was refused by the pane's policy. */
-  | 'browser_policy_denied';
+  | 'browser_policy_denied'
+  /** A browser action needed a person's consent, and nobody watches a scheduled run. */
+  | 'browser_consent_unattended';
 
 export interface AutomationRun {
   id: string;
@@ -288,7 +290,7 @@ export interface AutomationIdentityRunsResult {
 
 export interface AutomationNoteRunBrowserParams {
   runId: string;
-  detail: Extract<AutomationRunDetail, 'browser_needs_consent' | 'browser_policy_denied'>;
+  detail: Extract<AutomationRunDetail, 'browser_needs_consent' | 'browser_policy_denied' | 'browser_consent_unattended'>;
 }
 
 /**

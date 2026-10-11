@@ -609,6 +609,7 @@ export const tr = {
   'schedules.problem.browserMode': "Tarayıcı kimliği olan bir Codex zamanlaması onay modunda çalışır.",
   'schedules.detail.browser_needs_consent': "Bir tarayıcı çağrısı reddedildi: zamanlama izin verildikten sonra bölmenin politikası değişti. İzin vermek için zamanlamayı yeniden kaydedin.",
   'schedules.detail.browser_policy_denied': "Bir tarayıcı çağrısı bölmenin site politikası tarafından reddedildi.",
+  'schedules.detail.browser_consent_unattended': "Bir tarayıcı işlemi bir kişinin onayını gerektiriyordu (bir sayfa betiği, bir indirme veya hassas bir sitenin oturum açma verileri) ve zamanlanmış bir çalıştırmada sorulacak kimse olmadığı için reddedildi. O bölmede verilen \"Bu bölmede her zaman\" yanıtı, bölmenin zamanlanmış çalıştırmalarını da kapsar.",
   // Moa Fleet fast path: the local answer (see en.ts).
   'moa.fleetAnswer.intro': "Fleet durumu (yerel veri, Moa olmadan yanıtlandı):",
   'moa.fleetAnswer.needsYou.one': "{count} görev ilginizi bekliyor.",

@@ -77,6 +77,8 @@ export interface ConsentCaller {
   hosts: HostPolicy;
   /** The caller's attested PTY (for the unattended check). */
   ptyId: string | undefined;
+  /** Set when the caller is a scheduled run acting as this pane's browser. */
+  runId?: string;
 }
 
 /** One operation's terms. Hosts are canonical (see browserConsent.rpc.ts). */
