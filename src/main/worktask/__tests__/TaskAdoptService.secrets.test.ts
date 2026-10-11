@@ -55,6 +55,6 @@ describe('TaskAdoptService secret guard (real git)', () => {
     fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
     const res = await new TaskAdoptService({ git: realGit }).adopt({ taskId: 'wtask-1', worktreePath: wt, commit: true });
     expect(res.ok).toBe(true);
-    expect(fs.readFileSync(path.join(repo, 'b.txt'), 'utf8')).toBe('b\n');
+    expect(fs.readFileSync(path.join(repo, 'b.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('b\n'); // autocrlf on Windows
   });
 });
