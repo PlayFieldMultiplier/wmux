@@ -3925,4 +3925,7 @@ export const ko = {
   'schedules.detail.browser_needs_consent': "브라우저 호출이 거부됐습니다: 이 일정을 허용한 뒤 창의 브라우저 정책이 바뀌었습니다. 일정을 다시 저장해 허용하세요.",
   'schedules.detail.browser_policy_denied': "창의 사이트 정책이 브라우저 호출을 거부했습니다.",
   'schedules.detail.browser_consent_unattended': "브라우저 작업(페이지 스크립트, 다운로드, 민감한 사이트의 로그인 정보)에 사람의 승인이 필요했지만 예약 실행에는 물어볼 사람이 없어 거부되었습니다. 해당 패널에서 \"이 패널에서 항상\"으로 답하면 그 패널의 예약 실행에도 적용됩니다.",
+  'git.secret.file': "{path} 파일에는 비밀번호나 키가 들어 있어서 올리지 않았어요. 변경에서 빼거나 .gitignore에 추가한 뒤 다시 시도해 주세요.",
+  'git.secret.value': "{path} {line}번째 줄이 비밀번호나 API 키처럼 보여서 올리지 않았어요. 코드에서 빼고 다시 시도해 주세요.",
+  'git.secret.more': "(외 {count}건)",
 } as const;

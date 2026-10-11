@@ -628,4 +628,7 @@ export const vi = {
   'moa.fleetAnswer.reason.complete': "lượt đã kết thúc",
   'moa.fleetAnswer.untitled': "(không có tiêu đề)",
   'moa.fleetAnswer.omitted': "Một số dòng đã được lược bớt. Mở Fleet để xem toàn bộ bảng.",
+  'git.secret.file': "{path}: tệp này chứa mật khẩu hoặc khóa nên không được tải lên. Bỏ nó khỏi thay đổi (hoặc thêm vào .gitignore) rồi thử lại.",
+  'git.secret.value': "{path} dòng {line} trông giống mật khẩu hoặc khóa API nên không được tải lên. Bỏ nó khỏi mã rồi thử lại.",
+  'git.secret.more': "(và {count} chỗ khác)",
 } as const;

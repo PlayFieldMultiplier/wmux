@@ -4448,4 +4448,7 @@ export const pl = {
   'schedules.detail.browser_needs_consent': "Wywołanie przeglądarki odrzucono: zasady panelu zmieniły się po udzieleniu zgody. Zapisz harmonogram ponownie, aby go zatwierdzić.",
   'schedules.detail.browser_policy_denied': "Wywołanie przeglądarki odrzuciły zasady witryn panelu.",
   'schedules.detail.browser_consent_unattended': "Akcja przeglądarki wymagała zgody człowieka (skrypt strony, pobieranie lub dane logowania wrażliwej witryny), a zaplanowane uruchomienie nie ma kogo zapytać, więc została odrzucona. Odpowiedź „Zawsze w tym panelu” udzielona w tym panelu obejmuje też jego zaplanowane uruchomienia.",
+  'git.secret.file': "{path}: ten plik zawiera hasła lub klucze, więc nie został wysłany. Usuń go ze zmiany (lub dodaj do .gitignore) i spróbuj ponownie.",
+  'git.secret.value': "{path}, wiersz {line}, wygląda na hasło lub klucz API, więc nie został wysłany. Usuń go z kodu i spróbuj ponownie.",
+  'git.secret.more': "(i jeszcze {count})",
 } as const;

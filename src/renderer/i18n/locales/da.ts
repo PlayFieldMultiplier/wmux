@@ -632,4 +632,7 @@ export const da = {
   'moa.fleetAnswer.reason.complete': "tur afsluttet",
   'moa.fleetAnswer.untitled': "(uden titel)",
   'moa.fleetAnswer.omitted': "Nogle rækker er udeladt. Åbn Fleet for at se hele oversigten.",
+  'git.secret.file': "{path}: filen indeholder adgangskoder eller nøgler, så den blev ikke uploadet. Fjern den fra ændringen (eller tilføj den til .gitignore), og prøv igen.",
+  'git.secret.value': "{path} linje {line} ligner en adgangskode eller API-nøgle, så den blev ikke uploadet. Fjern den fra koden, og prøv igen.",
+  'git.secret.more': "(og {count} mere)",
 } as const;

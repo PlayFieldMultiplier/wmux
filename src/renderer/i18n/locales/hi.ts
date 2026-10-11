@@ -629,4 +629,7 @@ export const hi = {
   'moa.fleetAnswer.reason.complete': "टर्न पूरा हुआ",
   'moa.fleetAnswer.untitled': "(बिना शीर्षक)",
   'moa.fleetAnswer.omitted': "कुछ पंक्तियाँ छोड़ी गई हैं। पूरा बोर्ड देखने के लिए Fleet खोलें।",
+  'git.secret.file': "{path}: इस फ़ाइल में पासवर्ड या कुंजियाँ हैं, इसलिए इसे अपलोड नहीं किया गया। इसे बदलाव से हटाएँ (या .gitignore में जोड़ें) और फिर कोशिश करें।",
+  'git.secret.value': "{path} की पंक्ति {line} पासवर्ड या API कुंजी जैसी लगती है, इसलिए अपलोड नहीं किया गया। इसे कोड से हटाकर फिर कोशिश करें।",
+  'git.secret.more': "(और {count})",
 } as const;

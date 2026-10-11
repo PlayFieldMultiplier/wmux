@@ -5,6 +5,7 @@
 // for a title (gh fills the body from the commits). Each write carries the
 // branch and HEAD the user saw (when the dialog opened or the step started);
 // main re-checks the step and refuses if either moved.
+import { secretRefusalText } from './secretRefusal';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { useStore } from '../../stores';
@@ -137,8 +138,9 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
     if (repoRef.current !== repo) return;
     setBusy(null);
     if (!res.ok) {
-      if (dialog) setDialogError(res.error);
-      else pushToast({ level: 'warn', message: `${t(`git.ship.failed.${action}`)}: ${res.error}` });
+      const why = res.secrets?.length ? secretRefusalText(res.secrets, t) : res.error;
+      if (dialog) setDialogError(why);
+      else pushToast({ level: 'warn', message: `${t(`git.ship.failed.${action}`)}: ${why}` });
       return;
     }
     setDialog(null);

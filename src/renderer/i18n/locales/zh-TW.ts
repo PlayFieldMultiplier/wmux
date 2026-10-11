@@ -669,4 +669,7 @@ export const zhTW = {
   'moa.fleetAnswer.reason.complete': "回合已結束",
   'moa.fleetAnswer.untitled': "（無標題）",
   'moa.fleetAnswer.omitted': "部分項目已省略。開啟 Fleet 查看完整看板。",
+  'git.secret.file': "{path}:此檔案包含密碼或金鑰,因此未上傳。請將其移出變更(或加入 .gitignore)後再試。",
+  'git.secret.value': "{path} 第 {line} 行看起來像密碼或 API 金鑰,因此未上傳。請將其移出程式碼後再試。",
+  'git.secret.more': "(另有 {count} 處)",
 } as const;

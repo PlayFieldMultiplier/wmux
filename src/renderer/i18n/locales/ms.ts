@@ -634,4 +634,7 @@ export const ms = {
   'moa.fleetAnswer.reason.complete': "giliran selesai",
   'moa.fleetAnswer.untitled': "(tanpa tajuk)",
   'moa.fleetAnswer.omitted': "Sesetengah baris diketepikan. Buka Fleet untuk melihat papan penuh.",
+  'git.secret.file': "{path}: fail ini mengandungi kata laluan atau kunci, jadi tidak dimuat naik. Keluarkan daripada perubahan (atau tambah ke .gitignore) dan cuba lagi.",
+  'git.secret.value': "{path} baris {line} kelihatan seperti kata laluan atau kunci API, jadi tidak dimuat naik. Keluarkan daripada kod dan cuba lagi.",
+  'git.secret.more': "(dan {count} lagi)",
 } as const;

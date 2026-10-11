@@ -633,4 +633,7 @@ export const it = {
   'moa.fleetAnswer.reason.complete': "turno terminato",
   'moa.fleetAnswer.untitled': "(senza titolo)",
   'moa.fleetAnswer.omitted': "Alcune righe sono omesse. Apri Fleet per vedere la bacheca completa.",
+  'git.secret.file': "{path}: questo file contiene password o chiavi, quindi non è stato caricato. Toglilo dalla modifica (o aggiungilo a .gitignore) e riprova.",
+  'git.secret.value': "{path}, riga {line}, sembra una password o una chiave API, quindi non è stato caricato. Toglila dal codice e riprova.",
+  'git.secret.more': "(e altri {count})",
 } as const;

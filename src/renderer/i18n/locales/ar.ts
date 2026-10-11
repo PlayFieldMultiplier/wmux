@@ -630,4 +630,7 @@ export const ar = {
   'moa.fleetAnswer.reason.complete': "انتهى الدور",
   'moa.fleetAnswer.untitled': "(بلا عنوان)",
   'moa.fleetAnswer.omitted': "تم حذف بعض الصفوف. افتح Fleet لرؤية اللوحة كاملة.",
+  'git.secret.file': "{path}: يحتوي هذا الملف على كلمات مرور أو مفاتيح، لذلك لم يُرفع. أزله من التغيير (أو أضفه إلى .gitignore) ثم حاول مجددًا.",
+  'git.secret.value': "{path} السطر {line} يبدو ككلمة مرور أو مفتاح API، لذلك لم يُرفع. أزله من الكود ثم حاول مجددًا.",
+  'git.secret.more': "(و{count} أخرى)",
 } as const;

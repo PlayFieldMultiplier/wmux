@@ -634,4 +634,7 @@ export const uk = {
   'moa.fleetAnswer.reason.complete': "хід завершено",
   'moa.fleetAnswer.untitled': "(без назви)",
   'moa.fleetAnswer.omitted': "Частину рядків пропущено. Відкрийте Fleet, щоб побачити всю дошку.",
+  'git.secret.file': "{path}: у цьому файлі паролі або ключі, тому його не надіслано. Приберіть його зі змін (або додайте в .gitignore) і спробуйте знову.",
+  'git.secret.value': "{path}, рядок {line}, схожий на пароль або API-ключ, тому не надіслано. Приберіть його з коду і спробуйте знову.",
+  'git.secret.more': "(і ще {count})",
 } as const;

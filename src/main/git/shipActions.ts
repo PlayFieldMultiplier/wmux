@@ -34,15 +34,6 @@ export interface ShipStatus {
   dirty: number;
   /** Unmerged (conflicted) files. */
   conflicts: number;
-  /** Secret files or key-shaped values `git diff <range>` adds. */
-  private secretsIn(cwd: string, range: string[]): Promise<SecretFinding[]> {
-    return scanGitRange((args) => this.git(args, cwd, 60_000).then(({ stdout }) => stdout, () => null), range);
-  }
-
-  private refuseSecrets(found: SecretFinding[], action: string): ShipActionResult {
-    return { ok: false, error: describeSecretFindings(found, action), secrets: found };
-  }
-
   /** A merge or cherry-pick in progress in this worktree. */
   inProgress: boolean;
   /** The remote's default branch, null when it cannot be read. */

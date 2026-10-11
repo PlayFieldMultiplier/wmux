@@ -634,4 +634,7 @@ export const ptBR = {
   'moa.fleetAnswer.reason.complete': "turno concluído",
   'moa.fleetAnswer.untitled': "(sem título)",
   'moa.fleetAnswer.omitted': "Algumas linhas foram omitidas. Abra o Fleet para ver o quadro completo.",
+  'git.secret.file': "{path}: este arquivo contém senhas ou chaves, então não foi enviado. Remova-o da alteração (ou adicione ao .gitignore) e tente de novo.",
+  'git.secret.value': "{path}, linha {line}, parece uma senha ou chave de API, então não foi enviado. Tire-a do código e tente de novo.",
+  'git.secret.more': "(e mais {count})",
 } as const;

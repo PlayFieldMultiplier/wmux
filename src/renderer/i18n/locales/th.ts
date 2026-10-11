@@ -628,4 +628,7 @@ export const th = {
   'moa.fleetAnswer.reason.complete': "จบเทิร์นแล้ว",
   'moa.fleetAnswer.untitled': "(ไม่มีชื่อ)",
   'moa.fleetAnswer.omitted': "ละบางแถวไว้ เปิด Fleet เพื่อดูบอร์ดทั้งหมด",
+  'git.secret.file': "{path}: ไฟล์นี้มีรหัสผ่านหรือคีย์ จึงไม่ได้อัปโหลด นำออกจากการเปลี่ยนแปลง (หรือเพิ่มใน .gitignore) แล้วลองใหม่",
+  'git.secret.value': "{path} บรรทัด {line} ดูเหมือนรหัสผ่านหรือ API key จึงไม่ได้อัปโหลด นำออกจากโค้ดแล้วลองใหม่",
+  'git.secret.more': "(และอีก {count} รายการ)",
 } as const;

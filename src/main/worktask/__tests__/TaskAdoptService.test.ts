@@ -105,6 +105,27 @@ function service(git: AdoptGit): { svc: TaskAdoptService; written: string[]; ind
   };
 }
 
+describe('TaskAdoptService secret guard', () => {
+  it('refuses a task that adds a .env file or a key, before anything is applied', async () => {
+    for (const diff of [
+      'diff --git a/.env b/.env\nnew file mode 100644\n--- /dev/null\n+++ b/.env\n@@ -0,0 +1 @@\n+A=1\n',
+      `diff --git a/s.ts b/s.ts\n--- a/s.ts\n+++ b/s.ts\n@@ -1,0 +2 @@\n+const k = "AKIAIOSFODNN7EXAMPLE";\n`,
+    ]) {
+      const calls: Call[] = [];
+      const { svc, written } = service(fakeGit({ diff, calls }));
+      const res = await svc.adopt({ taskId: 'wtask-1', worktreePath: WT, commit: true });
+      expect(res).toMatchObject({ ok: false, reason: 'secret' });
+      if (!res.ok) {
+        expect(res.secrets?.length).toBe(1);
+        expect(res.error).toMatch(/^not adopted: /);
+        expect(res.error).not.toContain('AKIA');
+      }
+      expect(written).toEqual([]);
+      expect(calls.some((c) => c.args[0] === 'apply' || c.args[0] === 'commit')).toBe(false);
+    }
+  });
+});
+
 describe('TaskAdoptService', () => {
   it('applies the task diff into the derived parent repository', async () => {
     const calls: Call[] = [];

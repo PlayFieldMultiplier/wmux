@@ -85,6 +85,20 @@ describe('deliverGoal — push the verified commit, open the PR', () => {
     expect(d.items[0].mergeAfter).toBeUndefined();
   });
 
+  it('refuses to deliver a commit that adds a secret file, records why, and never pushes or opens a PR', async () => {
+    fs.writeFileSync(path.join(wt, '.env'), 'OPENAI_API_KEY=x\n');
+    git(['add', '-A'], wt);
+    git(['commit', '-qm', 'oops'], wt);
+    const sha = git(['rev-parse', 'HEAD'], wt);
+    const { p, gh } = ports();
+    const d = await deliverGoal(contract(), verification(sha), p);
+    expect(d.items[0].pushed).toBe(false);
+    expect(d.items[0].error).toMatch(/^not delivered: \.env holds passwords and keys, so it was not pushed/);
+    expect(d.items[0].secrets).toEqual([{ path: '.env', what: 'file', kind: 'env' }]);
+    expect(gh).not.toHaveBeenCalled();
+    expect(() => git(['rev-parse', 'refs/heads/wtask/fix-a'], remote)).toThrow();
+  });
+
   it('never force-pushes: a remote that moved ahead rejects the push, and the item says so', async () => {
     const other = path.join(dir, 'other');
     git(['clone', '-q', remote, other], dir);
