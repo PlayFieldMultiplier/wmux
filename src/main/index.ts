@@ -87,7 +87,7 @@ import { getAccountStore } from './account/accountStore';
 import { IPC, getWmuxHomeDir } from '../shared/constants';
 import { HookSignalRouter } from './hooks/HookSignalRouter';
 import { SignalLatencyMeter } from './hooks/SignalLatencyMeter';
-import { registerBrowserRpc } from './pipe/handlers/browser.rpc';
+import { registerBrowserRpc, type CallerBrowserProtection } from './pipe/handlers/browser.rpc';
 import { registerA2aRpc } from './pipe/handlers/a2a.rpc';
 import { registerA2aChannelRpc } from './pipe/handlers/a2a.channel.rpc';
 import { registerCompanyRpc } from './pipe/handlers/company.rpc';
@@ -966,6 +966,10 @@ registerPerfRpc(rpcRouter);
 // the approval queue, which is created further down — hence the late binding.
 let computerService: ComputerService | null = null;
 let computerConsentQueue: ApprovalQueue | null = null;
+// Protected browser panes: computer use is refused from a protected pane. The
+// check is the browser gate's own, handed over by registerBrowserRpc below;
+// until it is, nothing can say a caller is unprotected, so the answer refuses.
+let computerCallerProtection: CallerBrowserProtection | null = null;
 registerComputerRpc(
   rpcRouter,
   () => {
@@ -978,6 +982,10 @@ registerComputerRpc(
   // The consent prompt names the asking session's workspace the way the
   // person named it; the renderer's mirror is the only place main knows it.
   (workspaceId) => getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name,
+  (method, ctx) =>
+    computerCallerProtection
+      ? computerCallerProtection(method, ctx)
+      : Promise.resolve("wmux has not finished setting up its browser protection check"),
 );
 registerComputerUseIpc(() => computerService);
 // #517 backend choice: main owns the setting (sync read at boot — an RPC can
@@ -1044,7 +1052,13 @@ const browserHelpRequests = registerBrowserRpc(
   // above uses. Fail-closed while it is unset: a borrow nobody can be asked
   // about is a borrow that does not happen.
   (request) => (liveBorrowRequester ? liveBorrowRequester(request) : Promise.resolve('denied')),
-  { store: browserPolicyStore, paneBindings: () => chromeProfileStore.getPaneBindings() },
+  {
+    store: browserPolicyStore,
+    paneBindings: () => chromeProfileStore.getPaneBindings(),
+    exposeCallerProtection: (check) => {
+      computerCallerProtection = check;
+    },
+  },
 );
 // browser_request_help — the renderer's Done / Cancel. Mirrors
 // PERMISSION_PROMPT_RESOLVE: a shape-validated invoke, and the AUTHORITATIVE

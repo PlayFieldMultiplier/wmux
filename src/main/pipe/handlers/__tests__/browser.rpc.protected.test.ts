@@ -4,14 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import { RpcRouter } from '../../RpcRouter';
-import { registerBrowserRpc } from '../browser.rpc';
+import { registerBrowserRpc, type CallerBrowserProtection } from '../browser.rpc';
+import { registerComputerRpc } from '../computer.rpc';
+import { parseComputerErrorMessage } from '../../../../shared/computer/errors';
 import { surfaceOpeners } from '../../../browser-session/SurfaceOpeners';
 import { ChromeProfileStore } from '../../../browser-session/ChromeProfileStore';
 import { BrowserPolicyStore } from '../../../browser-session/BrowserPolicyStore';
 import type { BrowserBackendStore } from '../../../browser-session/BrowserBackendStore';
 import { getWorkspaceMirror, __resetWorkspaceMirrorForTest } from '../../../workspace/WorkspaceMirror';
 import { BROWSER_POLICY_FILE } from '../../../../shared/browserPolicy';
-import { dispatchAsClaimedCaller } from './claimedCaller';
+import { dispatchAsClaimedCaller, paneClaimOn } from './claimedCaller';
 import { __resetProfileNamespaceStoreForTest } from '../../../browser-session/ProfileNamespaceStore';
 
 /**
@@ -64,6 +66,8 @@ function makeRegistry(store: ChromeProfileStore) {
 
 let backend: 'chrome' | 'builtin' = 'chrome';
 let registry: ReturnType<typeof makeRegistry>;
+/** The check registerBrowserRpc hands to computer use. */
+let callerProtection: CallerBrowserProtection | null;
 
 /** Surface ids the fake in-app browser (webview manager) knows. */
 const webviewSurfaces = new Set<string>();
@@ -96,7 +100,13 @@ function register(profiles: ChromeProfileStore, policy: BrowserPolicyStore): Rpc
     undefined,
     undefined,
     undefined,
-    { store: policy, paneBindings: () => profiles.getPaneBindings() },
+    {
+      store: policy,
+      paneBindings: () => profiles.getPaneBindings(),
+      exposeCallerProtection: (check) => {
+        callerProtection = check;
+      },
+    },
   );
   return router;
 }
@@ -141,6 +151,7 @@ beforeEach(async () => {
     fleets: [],
     panePtys: { 'pty-a': 'pane-a', 'pty-b': 'pane-b' },
   });
+  callerProtection = null;
   sendToRendererMock.mockReset();
   sendToRendererMock.mockResolvedValue([]);
   surfaceOpeners.clear();
@@ -556,5 +567,88 @@ describe('scheduled runs acting as a protected pane', () => {
     router.register('workspace.list' as never, async () => ({ workspaces: [] }));
     const other = await asRun(router, 'workspace.list', {}, 'auto-r1');
     expect(other.error).toContain('browser tools only');
+  });
+});
+
+describe('computer use from a protected pane', () => {
+  // The real computer.* handlers on the same router, asking the check the
+  // browser gate hands over — the wiring main/index.ts makes.
+  function withComputer(router: RpcRouter) {
+    const service = {
+      listApps: vi.fn(async () => []),
+      getAppState: vi.fn(async () => ({})),
+      control: vi.fn(async () => ({})),
+    };
+    registerComputerRpc(
+      router,
+      () => service as never,
+      async (ptyId) => (ptyId === 'pty-a' || ptyId === 'pty-b' ? 'ws-1' : null),
+      () => 'one',
+      (method, ctx) => (callerProtection as CallerBrowserProtection)(method, ctx),
+    );
+    return service;
+  }
+
+  async function computerCall(router: RpcRouter, method: string, params: Record<string, unknown>, ptyId?: string) {
+    const response = await router.dispatch({
+      id: '1',
+      method,
+      params: { ...params, ...(ptyId && { senderPtyId: ptyId }) },
+      clientName: 'claude-code',
+      ...(ptyId ? paneClaimOn('ws-1', ptyId) : {}),
+    } as never, { externalWire: true });
+    return response.ok ? null : parseComputerErrorMessage(String((response as { error?: unknown }).error ?? ''));
+  }
+
+  it('hands computer use the gate’s check', () => {
+    register(profiles, policy);
+    expect(callerProtection).toBeTypeOf('function');
+  });
+
+  it("refuses a protected pane's desktop calls; its unprotected neighbour is unchanged", async () => {
+    await protectPaneA();
+    const router = register(profiles, policy);
+    const service = withComputer(router);
+    for (const [method, params] of [
+      ['computer.listApps', {}],
+      ['computer.getAppState', { app: 'Chrome' }],
+      ['computer.act', { action: 'click', snapshotId: 's-1', index: 1 }],
+    ] as const) {
+      const refused = await computerCall(router, method, params, 'pty-a');
+      expect(refused?.code, method).toBe('policy_denied');
+      expect(refused?.message).toContain("this pane's browser is protected");
+      expect(await computerCall(router, method, params, 'pty-b'), method).toBeNull();
+    }
+    expect(service.getAppState).toHaveBeenCalledTimes(1);
+    expect(service.control).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a caller whose pane cannot be identified while a pane is protected', async () => {
+    await protectPaneA();
+    const router = register(profiles, policy);
+    const service = withComputer(router);
+    // A pane claim for a PTY no pane owns, and a caller with no claim at all.
+    expect((await computerCall(router, 'computer.listApps', {}, 'auto-run-1'))?.code).toBe('policy_denied');
+    expect((await computerCall(router, 'computer.listApps', {}))?.code).toBe('policy_denied');
+    expect(service.listApps).not.toHaveBeenCalled();
+  });
+
+  it('refuses a protected pane whose policy file is unreadable', async () => {
+    await protectPaneA();
+    writeFileSync(join(dir, BROWSER_POLICY_FILE), '{ torn');
+    const torn = new BrowserPolicyStore(dir);
+    const router = register(profiles, torn);
+    withComputer(router);
+    expect((await computerCall(router, 'computer.listApps', {}, 'pty-a'))?.code).toBe('policy_denied');
+  });
+
+  it('changes nothing on an install where no pane was ever protected', async () => {
+    const decisionFor = vi.spyOn(policy, 'decisionFor');
+    const router = register(profiles, policy);
+    const service = withComputer(router);
+    expect(await computerCall(router, 'computer.listApps', {}, 'pty-a')).toBeNull();
+    expect(await computerCall(router, 'computer.listApps', {})).toBeNull();
+    expect(service.listApps).toHaveBeenCalledTimes(2);
+    expect(decisionFor).not.toHaveBeenCalled();
   });
 });
