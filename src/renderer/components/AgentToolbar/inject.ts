@@ -23,11 +23,14 @@ const SAFE_WINDOWS_PATH_RE = /^[A-Za-z0-9_.:\\/-]+$/;
 
 /**
  * Characters that are not literal inside double quotes in PowerShell (`$`, a
- * backtick, and the Unicode double quotes it also ends a string on) or in
+ * backtick, `"` and the Unicode double quotes it also ends a string on) or in
  * cmd.exe (`%`, and `!` under delayed expansion). Without any of them a
  * double-quoted path reads the same in both.
  */
-const WINDOWS_DOUBLE_QUOTE_UNSAFE_RE = /[$`%!\u201C-\u201E]/;
+const WINDOWS_DOUBLE_QUOTE_UNSAFE_RE = /[$`%!"\u201C-\u201E]/;
+
+/** What cmd.exe cannot read literally even inside double quotes. */
+const CMD_UNQUOTABLE_RE = /"|%[^%]+%/;
 
 /** PowerShell treats all four of these as a single quote inside '...'. */
 const POWERSHELL_SINGLE_QUOTES_RE = /['\u2018\u2019\u201A\u201B]/g;
@@ -43,26 +46,30 @@ function windowsShellKind(shell: string | undefined): WindowsShellKind {
 }
 
 /**
- * Quote a path for a Windows pane. A bare-safe path stays bare; otherwise
- * double quotes, which PowerShell and cmd.exe both read literally unless the
- * name holds `$`, a backtick, `%`, `!` or a Unicode double quote. Only then
- * does the shell matter: cmd.exe cannot read single quotes, so it keeps double
- * quotes; PowerShell, and a pane whose shell is unknown (PowerShell is the
- * app default), get single quotes with each single quote doubled.
+ * Quote a path for a Windows pane, or null when the pane's shell cannot read
+ * it literally. A bare-safe path stays bare; otherwise double quotes, which
+ * PowerShell and cmd.exe both read literally unless the name holds `$`, a
+ * backtick, `%`, `!`, `"` or a Unicode double quote. Only then does the shell
+ * matter: PowerShell gets single quotes with each single quote doubled; cmd.exe
+ * cannot read single quotes, so it keeps double quotes unless the name holds
+ * `"` or a `%name%` pair; an unknown shell gets nothing, since the two rules
+ * disagree.
  */
-function quoteWindowsPath(p: string, kind: WindowsShellKind): string {
+function quoteWindowsPath(p: string, kind: WindowsShellKind): string | null {
   if (kind === 'posix') return quotePosixPath(p);
   if (SAFE_WINDOWS_PATH_RE.test(p)) return p;
-  if (kind === 'cmd' || !WINDOWS_DOUBLE_QUOTE_UNSAFE_RE.test(p)) return `"${p}"`;
-  return `'${p.replace(POWERSHELL_SINGLE_QUOTES_RE, '$&$&')}'`;
+  if (!WINDOWS_DOUBLE_QUOTE_UNSAFE_RE.test(p)) return `"${p}"`;
+  if (kind === 'powershell') return `'${p.replace(POWERSHELL_SINGLE_QUOTES_RE, '$&$&')}'`;
+  if (kind === 'cmd' && !CMD_UNQUOTABLE_RE.test(p)) return `"${p}"`;
+  return null;
 }
 
 /**
  * Quote each path so the pane's shell reads it literally, and join with a
  * single space. `shell` is the pane's shell executable (only consulted on
  * Windows; undefined = unknown). A path containing a control character is left
- * out (a newline would submit the line outside bracketed paste); if every path
- * is left out the result is ''.
+ * out (a newline would submit the line outside bracketed paste), as is a path
+ * the shell cannot read literally; if every path is left out the result is ''.
  */
 export function quotePathsForPrompt(
   paths: string[],
@@ -73,13 +80,21 @@ export function quotePathsForPrompt(
   return paths
     .filter((p) => p && !CONTROL_CHAR_RE.test(p))
     .map((p) => (kind ? quoteWindowsPath(p, kind) : quotePosixPath(p)))
+    .filter((q): q is string => q !== null)
     .join(' ');
 }
 
+/** ptyId → its shell executable. A pane's shell never changes, so one lookup per pane. */
+const shellByPtyId = new Map<string, string>();
+
 /** The pane's shell executable from the pty list, or undefined when unknown. */
 async function ptyShell(ptyId: string): Promise<string | undefined> {
+  const known = shellByPtyId.get(ptyId);
+  if (known) return known;
   try {
-    return (await window.electronAPI.pty.list()).find((s) => s.id === ptyId)?.shell;
+    const shell = (await window.electronAPI.pty.list()).find((s) => s.id === ptyId)?.shell;
+    if (shell) shellByPtyId.set(ptyId, shell);
+    return shell;
   } catch {
     return undefined;
   }

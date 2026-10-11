@@ -33,15 +33,26 @@ describe('quotePathsForPrompt', () => {
       expect(quotePathsForPrompt(['C:\\a&b.txt'], 'win32', shell)).toBe('"C:\\a&b.txt"');
     }
   });
-  it('uses PowerShell single quotes for $ and backticks when the shell is PowerShell or unknown', () => {
-    for (const shell of ['powershell.exe', 'pwsh.exe', undefined]) {
+  it('uses PowerShell single quotes for $ and backticks in a PowerShell pane', () => {
+    for (const shell of ['powershell.exe', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe']) {
       expect(quotePathsForPrompt(['C:\\a $(x) `y`.txt'], 'win32', shell)).toBe("'C:\\a $(x) `y`.txt'");
       expect(quotePathsForPrompt(["C:\\it's $x\u2019.txt"], 'win32', shell)).toBe("'C:\\it''s $x\u2019\u2019.txt'");
       expect(quotePathsForPrompt(['C:\\a\u201Cb\u201D.txt'], 'win32', shell)).toBe("'C:\\a\u201Cb\u201D.txt'");
     }
   });
   it('keeps double quotes for cmd.exe, which cannot read single quotes', () => {
-    expect(quotePathsForPrompt(['C:\\a $x & b.txt'], 'win32', 'C:\\Windows\\System32\\cmd.exe')).toBe('"C:\\a $x & b.txt"');
+    const cmd = 'C:\\Windows\\System32\\cmd.exe';
+    expect(quotePathsForPrompt(['C:\\a $x & b.txt'], 'win32', cmd)).toBe('"C:\\a $x & b.txt"');
+    expect(quotePathsForPrompt(['C:\\50% off.txt'], 'win32', cmd)).toBe('"C:\\50% off.txt"');
+  });
+  it('leaves out a path cmd.exe cannot read literally', () => {
+    const cmd = 'C:\\Windows\\System32\\cmd.exe';
+    expect(quotePathsForPrompt(['C:\\a%PATH%b.txt', 'C:\\ok.txt'], 'win32', cmd)).toBe('C:\\ok.txt');
+    expect(quotePathsForPrompt(['\\\\wsl.localhost\\u\\a"b'], 'win32', cmd)).toBe('');
+  });
+  it('leaves out a path that needs shell-specific quoting when the shell is unknown', () => {
+    expect(quotePathsForPrompt(['C:\\a $x & b.txt', 'C:\\c d.txt'], 'win32', undefined)).toBe('"C:\\c d.txt"');
+    expect(quotePathsForPrompt(['C:\\a`b.txt'], 'win32', 'nu.exe')).toBe('');
   });
   it('uses POSIX quoting for a Git Bash or WSL pane on Windows', () => {
     expect(quotePathsForPrompt(["C:\\it's"], 'win32', 'C:\\Program Files\\Git\\bin\\bash.exe')).toBe("'C:'\\\\'it'\\''s'");
