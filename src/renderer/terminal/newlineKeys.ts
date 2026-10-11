@@ -185,7 +185,7 @@ export interface AltEnterNewlineScope {
  */
 export const CODEX_END_GRACE_MS = 16_000;
 
-/** The pane's agent is the one Alt+Enter is for. The only place the slug is named. */
+/** The pane's agent is the one Alt+Enter is for. Every Codex check in this module goes through here. */
 function isCodex(agentSlug: string | undefined): boolean {
   return agentSlug === 'codex';
 }
@@ -217,7 +217,8 @@ export function wantsAltEnterNewline(scope: AltEnterNewlineScope): boolean {
 /**
  * Track when a prompt ended a running Codex. A prompt edge (not at a prompt →
  * at a prompt) while the slug is `codex` stamps `now`; anything else keeps
- * `prev`. The caller clears the stamp when the slug stops being `codex`.
+ * `prev`. The caller clears the stamp with `clearCodexEndedOnSlug` when the
+ * slug stops being `codex`.
  */
 export function noteCodexEndedByPrompt(
   prev: number | null,
@@ -236,6 +237,26 @@ export function noteCodexEndedByPrompt(
  */
 export function clearCodexEndedOnSlug(prev: number | null, agentSlug: string | undefined): number | null {
   return prev !== null && !isCodex(agentSlug) ? null : prev;
+}
+
+/**
+ * The end-of-Codex latch when a remote mirror reads a new pane row (#1754).
+ * The mirror hears the host's slug a poll late, so a short Codex can start and
+ * exit before its row ever says `codex`, and the prompt edge that should have
+ * stamped the latch saw no slug. A slug that turns `codex` while the shell sits
+ * at its prompt is that Codex: it is not the foreground command, so it already
+ * ended, and this stamps `now`. Otherwise the latch clears as in
+ * `clearCodexEndedOnSlug`.
+ */
+export function noteCodexSlugChange(
+  prev: number | null,
+  wasSlug: string | undefined,
+  agentSlug: string | undefined,
+  atPrompt: boolean,
+  now: number,
+): number | null {
+  if (atPrompt && isCodex(agentSlug) && !isCodex(wasSlug)) return now;
+  return clearCodexEndedOnSlug(prev, agentSlug);
 }
 
 const PROMPT_START_MARK = '\x1b]133;A';

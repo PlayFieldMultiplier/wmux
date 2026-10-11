@@ -15,6 +15,7 @@ import {
   foldAtPromptCarry,
   noteCodexEndedByPrompt,
   clearCodexEndedOnSlug,
+  noteCodexSlugChange,
   CODEX_END_GRACE_MS,
   ALT_ENTER,
   type AltEnterNewlineScope,
@@ -437,6 +438,17 @@ describe('end-of-Codex latch (#1694)', () => {
     expect(clearCodexEndedOnSlug(T0, 'claude')).toBeNull();
     expect(clearCodexEndedOnSlug(T0, 'codex')).toBe(T0);
     expect(clearCodexEndedOnSlug(null, 'codex')).toBeNull();
+  });
+
+  it('a mirror stamps the latch when the slug first reads codex at a prompt (#1754)', () => {
+    // A Codex the poll missed: the slug arrives while the shell sits at its prompt.
+    expect(noteCodexSlugChange(null, undefined, 'codex', true, T0)).toBe(T0);
+    // Mid-command it is a Codex running now: nothing to latch.
+    expect(noteCodexSlugChange(null, undefined, 'codex', false, T0)).toBeNull();
+    // A slug that already read codex is no new arrival: the latch is kept.
+    expect(noteCodexSlugChange(T0, 'codex', 'codex', true, T0 + 5)).toBe(T0);
+    // A slug that drops clears it, as clearCodexEndedOnSlug does.
+    expect(noteCodexSlugChange(T0, 'codex', undefined, true, T0 + 5)).toBeNull();
   });
 
   it('a pane where Codex starts from a prompt is armed as before', () => {

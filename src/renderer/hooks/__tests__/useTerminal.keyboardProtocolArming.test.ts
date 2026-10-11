@@ -77,7 +77,7 @@ describe('useTerminal keyboard-protocol arming (#1363)', () => {
 
   it('#1694: the latch clears once the stale Codex slug is dropped', () => {
     expect(SRC).toMatch(
-      /if \(codexEndedAtRef\.current !== null && state\.surfaceAgent\[ptyId\]\?\.slug !== 'codex'\) \{\s*codexEndedAtRef\.current = null;/,
+      /codexEndedAtRef\.current = clearCodexEndedOnSlug\(codexEndedAtRef\.current, state\.surfaceAgent\[ptyId\]\?\.slug\);/,
     );
   });
 

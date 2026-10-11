@@ -11,7 +11,7 @@ import {
 } from './mirrorFit';
 import { createMirrorGestureTracker, decideMirrorKeyWithRepeat, shouldHonorMirrorClipboardWrite } from './mirrorInput';
 import { foldRemoteKeyboardState, INITIAL_REMOTE_KEYBOARD_STATE } from './keyboardProtocol';
-import { clearCodexEndedOnSlug, CODEX_END_GRACE_MS, foldAtPromptCarry, noteCodexEndedByPrompt, wantsAltEnterNewline } from '../../terminal/newlineKeys';
+import { CODEX_END_GRACE_MS, foldAtPromptCarry, noteCodexEndedByPrompt, noteCodexSlugChange, wantsAltEnterNewline } from '../../terminal/newlineKeys';
 import { REMOTE_POLL_INTERVAL_MS, type RemotePaneSummary } from '../../../shared/remoteHosts';
 import { useStore, type StoreState } from '../../stores';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
@@ -70,6 +70,10 @@ export interface RemoteMirrorTerminalProps {
 function decodeBase64Bytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
+
+/** One latin1 view per chunk, shared by the keyboard and prompt folds: every
+ *  sequence either one looks for is ASCII, which latin1 keeps exact. */
+const latin1 = new TextDecoder('latin1');
 
 /** #1754 — this mirror's row in its host's last pane list, or undefined. A
  *  stale host's row is frozen, so it is not read. */
@@ -996,16 +1000,28 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
     const remote = window.electronAPI?.remote;
     if (!remote) return;
 
-    // #1754: follow this mirror's pane row. Once the host has dropped the
-    // stale Codex slug the end-of-Codex latch has done its job, and a fresh
-    // detection arms the mapping straight away. A row that is missing (a
-    // stale host) says nothing about the slug, so it leaves the latch alone.
+    // #1754: a new attachId can be another session, so its stream starts
+    // from nothing; the snapshot in its meta sets the prompt state again.
+    atPromptRef.current = false;
+    promptTailRef.current = '';
+    codexEndedAtRef.current = null;
+    // Follow this mirror's pane row. Once the host has dropped the stale Codex
+    // slug the end-of-Codex latch has done its job, and a fresh detection arms
+    // the mapping straight away; a slug that first reads `codex` at the prompt
+    // is a Codex that already ended (noteCodexSlugChange). A row that is
+    // missing (a stale host) says nothing about the slug, so it leaves the
+    // latch alone.
     remotePaneRef.current = findRemotePane(useStore.getState(), hostIdRef.current, sessionIdRef.current);
     const offRemotePane = useStore.subscribe((state, prev) => {
       if (state.remoteWorkspaces === prev.remoteWorkspaces) return;
       const pane = findRemotePane(state, hostIdRef.current, sessionIdRef.current);
+      const wasSlug = remotePaneRef.current?.agentSlug;
       remotePaneRef.current = pane;
-      if (pane) codexEndedAtRef.current = clearCodexEndedOnSlug(codexEndedAtRef.current, pane.agentSlug);
+      if (pane) {
+        codexEndedAtRef.current = noteCodexSlugChange(
+          codexEndedAtRef.current, wasSlug, pane.agentSlug, atPromptRef.current, Date.now(),
+        );
+      }
     });
     const offMeta = remote.onPaneMeta((e) => {
       if (e.attachId !== attachId) return;
@@ -1023,14 +1039,15 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       repaintDepthRef.current += 1;
       try {
         const snapshot = decodeBase64Bytes(e.snapshotB64);
+        const snapshotText = latin1.decode(snapshot);
         // A re-attach replays the pane's screen, negotiation included — reset
         // first so a protocol the app turned off before we attached does not
         // survive as a stale `true`.
-        remoteKeyboardRef.current = foldRemoteKeyboardState(INITIAL_REMOTE_KEYBOARD_STATE, snapshot);
+        remoteKeyboardRef.current = foldRemoteKeyboardState(INITIAL_REMOTE_KEYBOARD_STATE, snapshotText);
         // #1754: same reset for the prompt state. A snapshot that ends at the
         // prompt while the host still names Codex is a Codex that exited
         // before this attach, so it stamps the latch like a live prompt edge.
-        const folded = foldAtPromptCarry(false, '', snapshot);
+        const folded = foldAtPromptCarry(false, '', snapshotText);
         atPromptRef.current = folded.atPrompt;
         promptTailRef.current = folded.tail;
         codexEndedAtRef.current = noteCodexEndedByPrompt(
@@ -1079,11 +1096,12 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       // same way the paste path reads xterm's parse of DECSET 2004. xterm
       // exposes nothing for this one, and without it the mirror cannot tell an
       // app that wants CSI-u from one that would read it as Escape + garbage.
-      remoteKeyboardRef.current = foldRemoteKeyboardState(remoteKeyboardRef.current, data);
+      const text = latin1.decode(data);
+      remoteKeyboardRef.current = foldRemoteKeyboardState(remoteKeyboardRef.current, text);
       // #1754: the prompt marker ends the Codex mapping at once; the host's
       // slug only drops on its next pane-list poll.
       const wasAtPrompt = atPromptRef.current;
-      const folded = foldAtPromptCarry(wasAtPrompt, promptTailRef.current, data);
+      const folded = foldAtPromptCarry(wasAtPrompt, promptTailRef.current, text);
       atPromptRef.current = folded.atPrompt;
       promptTailRef.current = folded.tail;
       codexEndedAtRef.current = noteCodexEndedByPrompt(

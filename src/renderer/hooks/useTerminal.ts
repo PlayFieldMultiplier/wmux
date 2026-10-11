@@ -37,7 +37,7 @@ import {
 } from '../terminal/replayMute';
 import { terminalFontFamilyCss } from '../utils/terminalFont';
 import { createPathLinkProvider } from '../terminal/pathLinkProvider';
-import { resolveNewlineKeyByte, wantsAltEnterNewline, foldAtPromptCarry, noteCodexEndedByPrompt } from '../terminal/newlineKeys';
+import { resolveNewlineKeyByte, wantsAltEnterNewline, foldAtPromptCarry, noteCodexEndedByPrompt, clearCodexEndedOnSlug } from '../terminal/newlineKeys';
 import { resolveMacLineDeleteByte } from '../terminal/macLineDeleteKey';
 import { isWslShell } from '../../shared/imagePaste';
 import { encodeEscape, isBareEscape } from '../terminal/escapeKeys';
@@ -2087,9 +2087,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     const unsubscribeKeyboardLiveness = useStore.subscribe((state, prev) => {
       // #1694: the stale Codex slug is gone, so the end-of-Codex latch has
       // done its job; a fresh detection arms the mapping straight away.
-      if (codexEndedAtRef.current !== null && state.surfaceAgent[ptyId]?.slug !== 'codex') {
-        codexEndedAtRef.current = null;
-      }
+      codexEndedAtRef.current = clearCodexEndedOnSlug(codexEndedAtRef.current, state.surfaceAgent[ptyId]?.slug);
       const gone = (now: boolean | undefined, was: boolean | undefined) =>
         now === false && was !== false;
       if (

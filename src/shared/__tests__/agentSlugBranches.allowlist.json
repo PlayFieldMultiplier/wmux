@@ -83,7 +83,6 @@
     "src/renderer/components/Sidebar/WorkspaceAgentRoster.tsx": 1,
     "src/renderer/components/Sidebar/workspaceFilter.ts": 2,
     "src/renderer/hooks/useRpcBridge.ts": 2,
-    "src/renderer/hooks/useTerminal.ts": 1,
     "src/renderer/stores/slices/channelsSlice.ts": 1,
     "src/renderer/stores/slices/workspaceSlice.ts": 1,
     "src/renderer/terminal/imeAnchor.ts": 1,
