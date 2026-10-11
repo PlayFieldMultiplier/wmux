@@ -144,7 +144,8 @@ import {
   type ChatResolution,
   type ChatUnavailableCause,
 } from '../chat/chatBridge';
-import type { TranscriptCursor } from '../../shared/transcript/turnEvents';
+import type { TranscriptCursor, TurnEvent } from '../../shared/transcript/turnEvents';
+import { moaPhoneRows, type NotedPrompt } from '../../shared/moaTranscriptRows';
 import { cursorMatches, decodeChatCursor, encodeChatCursor, type ReadSource } from './chatCursor';
 import { ChatLaunchReceiptStore, type LaunchReceiptState } from './chatLaunchReceipts';
 import { cancelEventBody, cancelReceiptResponse } from './chatCancelOutcome';
@@ -794,6 +795,8 @@ interface WebTerminalServerDeps {
    * check; `moaSession` re-validates it against the live session.
    */
   moaPane?: () => MoaPaneFact | null;
+  /** The prompts main sent to the HQ brain (`moa-prompts.json`), read per Moa `/turns` request. Absent: none. */
+  moaPrompts?: () => NotedPrompt[];
   /** Records one phone send to the Moa pane (the device audit log). */
   auditMoaSend?: (entry: { deviceId: string; sessionId: string; route: 'chat' | 'input' | 'wake' }) => void;
   /** `POST /api/moa/messages` before the Moa pane exists (`moa.wake`). Absent: the route answers 503. */
@@ -1443,6 +1446,8 @@ export class WebTerminalServer {
   /** The chat-v2 host whose pushes nudge phone watchers, subscribed on first use. */
   private chatV2PushHost: ChatV2PhoneHost | null = null;
   private chatV2PushOff: (() => void) | null = null;
+  /** The Moa pane's entry → prompt matches (see moaPhoneEvents), for one brain session. */
+  private moaRowMatches: { sessionId: string; assigned: Map<string, NotedPrompt> } | null = null;
   /** Per-pane coalescing timers for the non-recording liveness event. */
   private readonly livenessTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
@@ -4546,7 +4551,7 @@ export class WebTerminalServer {
       }
       this.json(res, 200, {
         available: true,
-        events: page.events,
+        events: this.moaPhoneEvents(sessionId, page.events),
         cursor: encodeTurnCursor(page.cursor),
         hasMore: page.hasMore,
         ...(page.truncatedHead ? { truncatedHead: true } : {}),
@@ -4563,7 +4568,7 @@ export class WebTerminalServer {
     }
     this.json(res, 200, {
       available: true,
-      events: result.events,
+      events: this.moaPhoneEvents(sessionId, result.events),
       cursor: encodeTurnCursor(result.cursor),
       reset: result.reset,
       ...(result.budgetDropped ? { budgetDropped: true } : {}),
@@ -4624,8 +4629,10 @@ export class WebTerminalServer {
     const queue = caps.chatQueue === true && chat.queueEnabled?.() === true ? chat.queue?.(owner, sessionId) ?? [] : undefined;
     // A Moa wake's row is tagged for any caller: it never went through chat.send.
     const wakeRows = this.moaWakeRows(sessionId, owner);
+    // Before the tagging: it matches a row by the text the phone sent.
+    const rows = viaMoa ? this.moaPhoneEvents(sessionId, body.events) : body.events;
     const events = queue !== undefined || wakeRows.length > 0
-      ? this.tagDeliveredRows(chat, sessionId, owner, body.events, queue !== undefined) : body.events;
+      ? this.tagDeliveredRows(chat, sessionId, owner, rows, queue !== undefined) : rows;
     // Only a terminal binding whose agent is not alive can be resumable; skip the lookup otherwise.
     const resumable = resolution.source === 'file' && resolution.status.agentAlive !== true
       ? await chat.resumable?.(sessionId).catch(() => false) ?? false : false;
@@ -4749,6 +4756,25 @@ export class WebTerminalServer {
       const [match] = unused.splice(index, 1);
       return { ...event, clientMessageId: match.clientMessageId };
     });
+  }
+
+  /**
+   * The Moa pane's rows as the desktop's Moa chat reads them (moaPhoneRows):
+   * pasted turns as the prompt main sent, main's own prompts as turn starts,
+   * Moa's working folded. Entry → prompt matches are kept per brain session so
+   * a snapshot and the deltas after it agree.
+   */
+  private moaPhoneEvents(sessionId: string, events: unknown): unknown {
+    const fact = this.deps.moaPane?.() ?? null;
+    if (!Array.isArray(events) || fact?.sessionId !== sessionId) return events;
+    if (this.moaRowMatches?.sessionId !== sessionId) this.moaRowMatches = { sessionId, assigned: new Map() };
+    let prompts: NotedPrompt[] = [];
+    try {
+      prompts = (this.deps.moaPrompts?.() ?? []).filter((p) => p.hq === fact.workspaceId);
+    } catch {
+      /* no record: the rows still fold, and pasted ones read as turn starts */
+    }
+    return moaPhoneRows(events as TurnEvent[], prompts, this.moaRowMatches.assigned);
   }
 
   /** The owner's accepted Moa wake texts, when `sessionId` is the Moa pane. */

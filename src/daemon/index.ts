@@ -35,6 +35,7 @@ import { startPushRecovery } from './web/phoneGitPush';
 import { AnswerReceiptStore } from './approvals/AnswerReceiptStore';
 import { MoaWakeService } from './phone/MoaWakeService';
 import { isMoaWakeFailure } from '../shared/moaWake';
+import { MOA_PROMPTS_FILE, parseNotedPrompts, type NotedPrompt } from '../shared/moaTranscriptRows';
 import { coercePhoneDecisions } from './approvals/decisionConfig';
 import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
@@ -531,6 +532,15 @@ let workspaceFactsPublisher: string | null = null;
 // registerRpcHandlers, which holds the session manager it checks against.
 let moaPaneRpc: MoaPaneRpc<ManagedSession> | null = null;
 const currentMoaPane = () => moaPaneRpc?.current() ?? null;
+// The prompts main sent to the HQ brain, as main keeps them on disk (see
+// main/deck/moaTranscript.ts). The phone's `/turns` shows Moa's pasted turns as these.
+const readMoaPrompts = (): NotedPrompt[] => {
+  try {
+    return parseNotedPrompts(JSON.parse(fs.readFileSync(path.join(getWmuxDir(), MOA_PROMPTS_FILE), 'utf8')));
+  } catch {
+    return [];
+  }
+};
 // #1772 — the Moa pane's own permission dialog as a `terminal_prompt` record
 // (see web/moaPrompt.ts). Built with moaPaneRpc, whose pushes drive it.
 let moaPrompt: MoaPromptSync | null = null;
@@ -895,6 +905,7 @@ async function restoreWebServer(sessionManager: DaemonSessionManager): Promise<v
         // The Moa (HQ brain) pane main last vouched for, read per request so a
         // withdrawal closes the next check. See web/moaPane.ts.
         moaPane: currentMoaPane,
+        moaPrompts: readMoaPrompts,
         moaWake: getMoaWake,
         auditMoaSend: (entry) => getDeviceStore().recordMoaSend(entry),
         // #1772 — a refused answer to the Moa prompt looks at the screen once.
@@ -3260,6 +3271,7 @@ function registerRpcHandlers(
       auditSentFile: (entry) => getDeviceStore().recordSentFile(entry),
       // See the restore path.
       moaPane: currentMoaPane,
+      moaPrompts: readMoaPrompts,
       moaWake: getMoaWake,
       auditMoaSend: (entry) => getDeviceStore().recordMoaSend(entry),
       moaPromptRefused: (sessionId) => moaPrompt?.noteRefusedPress(sessionId),

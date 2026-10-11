@@ -32,7 +32,8 @@ interface TurnEventBase {
   /**
    * Belongs in the folded activity, not the conversation: set by main on the
    * Moa chat's mid-turn narration and its internal tool calls (failed ones
-   * included). Never set by the daemon projector.
+   * included), and by the daemon on the Moa pane's phone `/turns` rows. Never
+   * set by the daemon projector.
    */
   folded?: true;
 }

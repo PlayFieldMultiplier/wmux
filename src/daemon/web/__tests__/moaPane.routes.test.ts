@@ -313,6 +313,57 @@ describe('the Moa pane on the phone routes', () => {
     });
   });
 
+  describe('Moa\'s rows on /turns', () => {
+    const T = 1_700_000_000_000;
+    const pasted = (body: string) => `<pasted_content id="4d08">${body}</pasted_content id="4d08">`;
+    const cursor = { headOffset: 0, tailOffset: 10, fileSize: 10, mtimeMs: 1 };
+
+    it('the snapshot and the append after it show the sent text, hide main\'s own prompts and fold Moa\'s working', async () => {
+      // Re-read like the file is: fresh objects on every request. Another HQ's prompt never matches.
+      const noted: Array<{ at: number; text: string; hq: string }> = [
+        { at: T - 1_000, text: '뭐하냐', hq: 'ws-hq' },
+        { at: T - 500, text: 'other hq', hq: 'ws-2' },
+      ];
+      server = new WebTerminalServer({ ...serverDeps, moaPrompts: () => noted.map((p) => ({ ...p })) });
+      const projector = serverDeps.projector!() as unknown as { snapshot: ReturnType<typeof vi.fn>; delta: ReturnType<typeof vi.fn> };
+      projector.snapshot.mockImplementation(() => ({
+        events: [
+          { id: 'u1', kind: 'user_text', ts: T, text: pasted('[active-work] … leave this work active. 뭐하냐 ') },
+          { id: 't1', kind: 'tool_use', toolUseId: 'x', name: 'mcp__wmux__fleet_triage', argSummary: '' },
+          { id: 'r1', kind: 'tool_result', toolUseId: 'x', ok: true, bytes: 2 },
+          { id: 'a1', kind: 'assistant_text', text: 'All quiet.', turnComplete: true },
+        ],
+        cursor, hasMore: false, truncatedHead: false,
+      }));
+      projector.delta.mockImplementation(() => ({
+        events: [
+          { id: 'u2', kind: 'user_text', ts: T + 5_000, text: pasted('[active-work] id: w1 — unchanged since your last turn') },
+          { id: 'u3', kind: 'user_text', ts: T + 6_000, text: '[pane-events] (UNTRUSTED terminal/A2A signals' },
+          { id: 'a2', kind: 'assistant_text', text: 'looking' },
+        ],
+        cursor: { ...cursor, tailOffset: 20, fileSize: 20 }, reset: false,
+      }));
+      await start();
+      const h = device('dev-1');
+      type Row = { id: string; kind: string; text?: string; subtype?: string; folded?: true };
+      const read = async (q = '') => (await (await fetch(`${base()}/api/sessions/brain-hq/turns${q}`, { headers: h })).json()) as { events: Row[]; cursor: string };
+      const snap = await read();
+      expect(snap.events.map((e) => [e.id, e.text, e.folded])).toEqual([
+        ['u1', '뭐하냐', undefined], ['t1', undefined, true], ['r1', undefined, true], ['a1', 'All quiet.', undefined],
+      ]);
+      const append = await read(`?cursor=${encodeURIComponent(snap.cursor)}`);
+      expect(projector.delta).toHaveBeenCalled();
+      expect(append.events.map((e) => [e.id, e.kind, e.subtype, e.folded])).toEqual([
+        ['moa-wake:u2', 'meta', 'turn_started', undefined],
+        ['moa-wake:u3', 'meta', 'turn_started', undefined],
+        ['a2', 'assistant_text', undefined, true],
+      ]);
+      // An ordinary pane's rows are served as the projector made them.
+      expect((await (await fetch(`${base()}/api/sessions/s1/turns`, { headers: h })).json() as { events: Row[] }).events[0].text)
+        .toBe(pasted('[active-work] … leave this work active. 뭐하냐 '));
+    });
+  });
+
   describe('revocation', () => {
     it('Moa withdrawn while a chat send body is on the wire: refused, nothing typed, nothing audited', async () => {
       await start();

@@ -42,96 +42,17 @@ import type {
   TranscriptAppendData,
   TranscriptPage,
   TranscriptStatus,
-  TurnEvent,
 } from '../../shared/transcript/turnEvents';
+import {
+  MOA_PROMPTS_FILE,
+  PROMPT_MEMORY,
+  foldMoaInternals,
+  parseNotedPrompts,
+  rewritePastedPrompts,
+  type NotedPrompt,
+} from '../../shared/moaTranscriptRows';
 
-/** How many recent prompts Moa remembers for the chat view. */
-const PROMPT_MEMORY = 50;
-/** How long after main noted a prompt its transcript entry may land: a cold
- *  start waits for the TUI (up to 20 s) and a turn can wait for a slot. */
-const PROMPT_MATCH_WINDOW_MS = 120_000;
-/** How many entry → prompt assignments are kept so a re-read stays stable. */
-const ASSIGNED_MEMORY = 200;
-/** Where the remembered prompts live (wmux data dir), so a restart keeps the
- *  questions earlier turns showed. */
-const PROMPTS_FILE = 'moa-prompts.json';
-
-/** A prompt main sent to an HQ brain. */
-export interface NotedPrompt { at: number; text: string; hq: string }
-
-/** The remembered prompts on disk, or [] (none yet, unreadable, foreign). */
-export function parseNotedPrompts(raw: unknown): NotedPrompt[] {
-  const list = (raw as { prompts?: unknown } | null)?.prompts;
-  if (!Array.isArray(list)) return [];
-  return list
-    .filter((p): p is NotedPrompt =>
-      !!p && typeof p === 'object'
-      && typeof (p as NotedPrompt).at === 'number' && Number.isFinite((p as NotedPrompt).at)
-      && typeof (p as NotedPrompt).text === 'string'
-      && typeof (p as NotedPrompt).hq === 'string')
-    .slice(-PROMPT_MEMORY);
-}
-
-/**
- * The terminal brain types each turn as one paste — the context blocks main
- * builds (rules, policy, decision, active work) with the prompt at the end —
- * so Claude records the whole wire as the user's message, capped by the
- * parser. Shown as-is, the chat would display Moa's instructions as if the
- * operator had typed them. Main knows what was actually asked, so such an
- * entry is shown as the prompt main sent for it:
- *  - an entry that ends with a prompt is that prompt's (a wire typed into a
- *    TUI that is still starting can lose its paste markers and its start);
- *  - else a pasted entry takes the latest prompt noted before it, within
- *    PROMPT_MATCH_WINDOW_MS. Never a prompt noted after it.
- * Each prompt is used once, and `assigned` remembers which entry took which
- * prompt across calls (snapshots and appends see the same entries again).
- */
-export function rewritePastedPrompts<P extends { at: number; text: string }>(
-  events: readonly TurnEvent[],
-  prompts: readonly P[],
-  assigned: Map<string, P> = new Map(),
-): TurnEvent[] {
-  if (prompts.length === 0) return [...events];
-  const used = new Set<P>(assigned.values());
-  return events.map((e) => {
-    if (e.kind !== 'user_text') return e;
-    const known = assigned.get(e.id);
-    if (known) return known.text === e.text ? e : { ...e, text: known.text };
-    const ts = typeof e.ts === 'number' ? e.ts : null;
-    const before = (p: P) => ts !== null && p.at <= ts && ts - p.at <= PROMPT_MATCH_WINDOW_MS;
-    const tail = e.text.trimEnd();
-    let match: P | undefined;
-    for (const p of prompts) {
-      const text = p.text.trim();
-      if (used.has(p) || !text || !tail.endsWith(text) || (ts !== null && !before(p))) continue;
-      if (!match || p.at > match.at) match = p;
-    }
-    if (!match && e.text.includes('<pasted_content')) {
-      for (const p of prompts) {
-        if (!used.has(p) && before(p) && (!match || p.at > match.at)) match = p;
-      }
-    }
-    if (!match) return e;
-    used.add(match);
-    assigned.set(e.id, match);
-    if (assigned.size > ASSIGNED_MEMORY) assigned.delete(assigned.keys().next().value as string);
-    return match.text === e.text ? e : { ...e, text: match.text };
-  });
-}
-
-/**
- * The operator reads Moa's replies, not its working: text Moa wrote between
- * tool calls (its turn went on: no end_turn) and every tool call it made,
- * failed ones included, are marked to fold into the activity view. Only the
- * text that ended a turn stays in the conversation.
- */
-export function foldMoaInternals(events: readonly TurnEvent[]): TurnEvent[] {
-  return events.map((e) => {
-    const internal = e.kind === 'tool_use' || e.kind === 'tool_result'
-      || (e.kind === 'assistant_text' && !e.thinking && !e.turnComplete);
-    return internal && !e.folded ? { ...e, folded: true as const } : e;
-  });
-}
+export { foldMoaInternals, parseNotedPrompts, rewritePastedPrompts, type NotedPrompt };
 
 /** The projector's one session key. Never a daemon pty id. */
 const SESSION_KEY = 'moa-hq-brain';
@@ -274,7 +195,7 @@ export class MoaTranscript {
 
   private promptStore(): NonNullable<MoaTranscriptDeps['promptStore']> {
     if (this.deps.promptStore) return this.deps.promptStore;
-    const file = path.join((this.deps.wmuxDir ?? getWmuxDir)(), PROMPTS_FILE);
+    const file = path.join((this.deps.wmuxDir ?? getWmuxDir)(), MOA_PROMPTS_FILE);
     return {
       load: () => JSON.parse(fs.readFileSync(file, 'utf8')),
       save: (prompts) => {
