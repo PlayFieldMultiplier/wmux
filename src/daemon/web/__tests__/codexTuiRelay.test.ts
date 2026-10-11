@@ -128,11 +128,14 @@ describe.skipIf(process.platform === 'win32')('pane-owned Codex Unix relay',()=>
       const socketPath=f.relay.url.slice('unix://'.length);
       expect((await stat(path.dirname(socketPath))).mode & 0o777).toBe(0o700);
       expect((await stat(socketPath)).mode & 0o777).toBe(0o600);
+      // No TUI has linked yet: the relay reports nothing about the pane.
+      expect(f.relay.linked()).toBe(false);
       const client=await f.connect();
       await expect(f.connect()).rejects.toThrow();
       const reply=new Promise(resolve=>client.once('message',bytes=>resolve(JSON.parse(bytes.toString()))));
       client.send(JSON.stringify({id:1,method:'thread/start',params:{}}));
       await expect(reply).resolves.toMatchObject({id:1,result:{thread:{id:threadId}}});
+      expect(f.relay.linked()).toBe(true);
       expect(f.relay.current()?.threadId).toBe(threadId);
       expect(f.relay.retired()).toBe(false);
       client.terminate();
