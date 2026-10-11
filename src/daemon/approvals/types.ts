@@ -196,6 +196,15 @@ export interface ApprovalRequest {
    */
   reason?: string;
   /**
+   * When Claude Code will deny a `terminal_prompt` dialog by itself (ISO 8601,
+   * UTC): its unattended-session countdown ("will automatically deny this
+   * request in 1:58") read at creation and added to the clock. Present only
+   * while the dialog draws that countdown. A record that replaces this one for
+   * the same dialog keeps the value unless the new read is more than 5 s off.
+   * Display only: nothing is decided from it.
+   */
+  autoDenyAt?: string;
+  /**
    * Hash of the whole `terminal_prompt` dialog as parsed at creation (see
    * terminalPromptParse.ts). Present only on an answerable record. An answer
    * must echo it, and the live screen must still hash to it, before a key is

@@ -51,6 +51,20 @@
 // boxes `Web Search("<query>")`: the title alone names no tool, the box's
 // first row does (`toolOfDialog`).
 //
+// Claude Code 2.1.296 adds a countdown to a dialog that will deny itself when
+// nobody answers (a `dangerousRemoval` safety check in bypass or auto mode,
+// or auto mode's fallback after repeated classifier denials). It is the LAST
+// row(s) of the reason, at the prose indent, with no gutter, wrapped like any
+// prose row, and it is redrawn every second:
+//
+//    ⚠ Claude Code will automatically deny this request in 1:58, to avoid blocking progress on an
+//    unattended session
+//
+// It is read off (`autoDenyRemainingMs`) and kept out of the reason and the
+// fingerprint: a hash that took it would change every second, so an answer
+// to the card a phone was shown could never match the screen. Only that exact
+// sentence, as the reason's trailing rows, is dropped (see AUTO_DENY_LINE).
+//
 // Biased to refuse, like every screen check that could lead to a keystroke: a
 // grid without the question row followed by option rows numbered 1..n in
 // order parses to null.
@@ -91,6 +105,12 @@ export interface ParsedTerminalPrompt {
   reason?: string;
   /** "Do you want to proceed?" Capped. */
   question: string;
+  /**
+   * What Claude's auto-deny countdown read (`in 1:58` → 118000) when the
+   * dialog draws one. Not part of the reason or the fingerprint. Absent with no
+   * countdown, or with its worded form (`about 2 minutes`: not precise enough to show).
+   */
+  autoDenyRemainingMs?: number;
   options: TerminalPromptOption[];
   /** Hash of the whole dialog (see the header). Cursor- and wrap-free. */
   fingerprint: string;
@@ -160,6 +180,31 @@ const FOOTER_ROW = /^Esc to (?:cancel|exit|close|go back|dismiss)\b/i;
 const BOX_EDGE = /^[│║┃]\s?|\s?[│║┃]$/g;
 /** Ink marks a row it had to cut with an ellipsis at the end. */
 const CUT_ROW = /…\s*$/;
+/**
+ * Claude's auto-deny countdown (2.1.296), its rows joined with one space:
+ * `M:SS`, or `about N minute(s)` / `about N second(s)` in Claude's
+ * accessibility rendering. The fixed wording on both sides of the time, so a
+ * reason row that merely mentions it stays in the hash.
+ */
+const AUTO_DENY_LINE = /^⚠️? Claude Code will automatically deny this request in (?:(\d{1,4}):([0-5]\d)|about \d{1,4} (?:minute|second)s?), to avoid blocking progress on an unattended session$/;
+/** Rows the countdown may take once a narrow pane wraps it (four at 40 columns). */
+const AUTO_DENY_MAX_ROWS = 12;
+
+/**
+ * The auto-deny countdown, when it is the trailing rows of `rows` (raw rows,
+ * the reason's last): every one of them at the prose indent, no gutter, and
+ * together exactly AUTO_DENY_LINE. How many rows it takes, and the time it
+ * shows. Null when there is none.
+ */
+function trailingAutoDeny(rows: readonly string[], proseIndent: number): { rows: number; remainingMs?: number } | null {
+  for (let k = 1; k <= Math.min(AUTO_DENY_MAX_ROWS, rows.length); k++) {
+    const tail = rows.slice(rows.length - k);
+    if (indentOf(tail[0]!) !== proseIndent) return null;
+    const m = AUTO_DENY_LINE.exec(normalizePromptText(tail.join(' ')));
+    if (m) return { rows: k, ...(m[1] !== undefined ? { remainingMs: (Number(m[1]) * 60 + Number(m[2])) * 1000 } : {}) };
+  }
+  return null;
+}
 
 function rowText(row: PromptRow): { text: string; wrapped: boolean } {
   return typeof row === 'string' ? { text: row, wrapped: false } : { text: row.text, wrapped: row.wrapped === true };
@@ -271,7 +316,9 @@ export function parseTerminalPrompt(
   // above is then the box's LOWER edge, not the dialog's top.
   const boxed = topRuleFound ? boxedCommand(lines, top - 1, questionStart, isTopRule) : null;
   if (boxed) return parseBoxedPrompt(lines, boxed, questionStart, fullQuestion, fullOptions, activity);
-  const body = lines.slice(topRuleFound ? top : 0, questionStart).filter((line) => line.trim().length > 0);
+  const drawn = lines.slice(topRuleFound ? top : 0, questionStart).filter((line) => line.trim().length > 0);
+  const autoDeny = trailingAutoDeny(drawn, indentOf(lines[questionStart]!));
+  const body = autoDeny ? drawn.slice(0, drawn.length - autoDeny.rows) : drawn;
   const bodyCut = body.some((line) => CUT_ROW.test(line));
   const cut = bodyCut || fullOptions.some((o) => o.cut);
   // The prose indent. With the top rule on screen it is the body's own
@@ -343,6 +390,7 @@ export function parseTerminalPrompt(
     commandFull: normalizePromptText(fullCommand.join(' ')),
     ...(reason ? { reason } : {}),
     question,
+    ...(autoDeny?.remainingMs !== undefined ? { autoDenyRemainingMs: autoDeny.remainingMs } : {}),
     options,
     fingerprint,
     topRuleFound,
@@ -461,7 +509,10 @@ function parseBoxedPrompt(
   // A warning paragraph Claude draws under the box (2.1.296: "This command
   // changes directory before running a version-control command, …") has a
   // gutter of its own: it is reason prose, read without the glyph.
-  const reasonRows = nonBlank(box.lower + 1, questionStart).map((line) => normalizePromptText(line.trim().replace(GUTTER, '')));
+  const underBox = nonBlank(box.lower + 1, questionStart);
+  const autoDeny = trailingAutoDeny(underBox, indentOf(lines[questionStart]!));
+  const reasonRows = underBox.slice(0, underBox.length - (autoDeny?.rows ?? 0))
+    .map((line) => normalizePromptText(line.trim().replace(GUTTER, '')));
   const bodyCut = [...head, ...nonBlank(box.upper + 1, questionStart)].some((line) => CUT_ROW.test(line));
   const cut = bodyCut || fullOptions.some((o) => o.cut);
   let truncated = false;
@@ -493,6 +544,7 @@ function parseBoxedPrompt(
     commandFull: normalizePromptText(commandRows.join(' ')),
     ...(reason ? { reason } : {}),
     question: cap(fullQuestion),
+    ...(autoDeny?.remainingMs !== undefined ? { autoDenyRemainingMs: autoDeny.remainingMs } : {}),
     options: fullOptions.map((o) => ({ ...o, label: cap(o.label) })),
     fingerprint,
     topRuleFound,

@@ -10196,6 +10196,9 @@ function approvalWire(r: ApprovalRequest, caps: ClientCaps = { terminalPromptAns
       // A hint for the client's own confirm step — computed at creation from the
       // call's full command. Never a permission.
       ...(r.risk ? { risk: r.risk } : {}),
+      // When Claude denies the dialog by itself (its unattended countdown), for
+      // every client: a time, never agent-authored text. Only while pending.
+      ...(r.autoDenyAt && r.state === 'pending' ? { autoDenyAt: r.autoDenyAt } : {}),
       ...(parsed
         ? {
             ...(r.question ? { question: r.question } : {}),

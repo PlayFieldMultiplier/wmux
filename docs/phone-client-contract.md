@@ -1148,6 +1148,7 @@ What `/api/approvals` carries for this kind:
 | `id`, `sessionId`, `agent`, `kind`, `state`, `createdAt`, `workspaceId?` | yes | yes |
 | `toolName` (when known), `summary` (the command, ≤200 chars + `…`, display only — the full command is at `/detail`) | yes | yes |
 | `risk` (`critical` when the command or rule reads as destructive — `rm -rf`, `sudo`, …) | yes | yes |
+| `autoDenyAt` (ISO 8601 UTC: when Claude Code denies the dialog by itself, see below) | while pending, when the dialog draws the countdown | same |
 | `question`, `reason` | never | only when the record is answerable |
 | `choices`, `promptFingerprint` | never | only when the record is answerable, pending and not yet answered |
 | `hasDetail: true` (`GET /api/approvals/<id>/detail` has the full command) | never | with `choices`, on a server started with `--allow-transcript` |
@@ -1242,6 +1243,22 @@ fingerprint; a call whose input changed after you read the record fails with
 409 `prompt-changed`. Whitespace runs in the dialog collapse to one space and
 are never dropped. A resize that moves where the TUI broke a long word
 changes the hash; the record is then refreshed once.
+
+**The auto-deny countdown** (Claude Code 2.1.296). A dialog Claude will deny by
+itself when nobody answers — a dangerous-removal safety check in a bypass or
+auto-mode session (120 s by default), or auto mode's fallback after repeated
+classifier denials — draws, as the last rows of its reason, `⚠ Claude Code
+will automatically deny this request in 1:58, to avoid blocking progress on an
+unattended session`, redrawn every second. That sentence is neither in
+`reason` nor in `promptFingerprint`, so the fingerprint you were shown stays
+valid while it ticks. The record carries `autoDenyAt` instead: the shown time
+added to the daemon's clock when the record was made (good to about a second:
+the screen shows whole seconds). A record that replaces this one for the same dialog keeps
+the same `autoDenyAt` unless its own read is more than 5 s off (a new
+countdown). Absent when there is no countdown, after a key at the computer
+stopped it, and when Claude draws it in words (`about 2 minutes`). Display only: show
+a countdown to it; an answer after it is refused like any answer to a dialog
+that is gone. A record resolved or expired never carries it.
 
 **Every remote key is proved first.** Before writing `1` (answer) or Esc
 (decline) the daemon re-reads the screen and requires: the same transcript

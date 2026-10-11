@@ -379,6 +379,23 @@ function copyRequest(r: ApprovalRequest): ApprovalRequest {
   };
 }
 
+/** How far a re-read countdown may land from the deadline a replaced record showed and still be the same one. */
+export const AUTO_DENY_JITTER_MS = 5_000;
+
+/**
+ * A record replacing another for the same dialog keeps the auto-deny deadline
+ * the phone was already shown: each read lands up to a second apart (the
+ * screen shows whole seconds), and a deadline that moved on every refresh
+ * would make the card's countdown jump. A read more than AUTO_DENY_JITTER_MS
+ * off is another countdown (a new dialog) and keeps its own value.
+ */
+function keepAutoDenyAt(fresh: ApprovalRequest, previous: ApprovalRequest): void {
+  if (!fresh.autoDenyAt || !previous.autoDenyAt) return;
+  if (Math.abs(Date.parse(fresh.autoDenyAt) - Date.parse(previous.autoDenyAt)) <= AUTO_DENY_JITTER_MS) {
+    fresh.autoDenyAt = previous.autoDenyAt;
+  }
+}
+
 /** Cap on `localAnswer` (an option label; labels are capped far below this). */
 const LOCAL_ANSWER_MAX = 200;
 
@@ -1300,6 +1317,7 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       await this.mutate(() => {
         const stale = stillStale();
         if (!stale) return [];
+        keepAutoDenyAt(fresh, stale);
         stale.state = 'superseded';
         stale.resolvedAt = this.now();
         fresh.createdAt = this.now();
@@ -1608,6 +1626,9 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       ...(toolName ? { toolName } : {}),
       ...(summary ? { summary } : {}),
       ...(risky ? { risk: 'critical' as const } : {}),
+      ...(parsed?.autoDenyRemainingMs !== undefined
+        ? { autoDenyAt: new Date(this.now() + parsed.autoDenyRemainingMs).toISOString() }
+        : {}),
       ...(answerable && parsed && read
         ? {
             question: parsed.question,
@@ -3598,6 +3619,7 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     return this.mutate<ApprovalRequest | null>(() => {
       // A stepwise answer owns the record from its first key: never replaced.
       if (record.state !== 'pending' || record.pressedAt !== undefined || record.step) return { result: null };
+      keepAutoDenyAt(fresh, record);
       record.state = 'superseded';
       record.resolvedAt = this.now();
       fresh.createdAt = this.now();
