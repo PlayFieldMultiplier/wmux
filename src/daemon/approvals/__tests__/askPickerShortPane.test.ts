@@ -26,6 +26,9 @@ const SCROLLED = screen('claude-ask-short-05-options-scrolled-44x13-2.1.296.json
 const QUESTION_CUT = screen('claude-ask-short-06-question-cut-44x12-2.1.296.json');
 const FULL = screen('claude-ask-single-01-whole-100x30-2.1.296.json');
 const DISMISSED = screen('claude-ask-dismissed-01-esc-80x24-2.1.296.json');
+/** A session named with `/rename`: its name rides a rule under the picker's hint. */
+const NAMED = screen('claude-ask-named-01-session-label-80x24-2.1.296.json');
+const LABEL_ROW = '───────────────────────────────────────────────── workspace-identity-card-plan ─';
 /** Claude Code 2.1.283's review screen of a two-question prompt (no hint row). */
 const REVIEW = (JSON.parse(fs.readFileSync(path.join(DIR, '..', 'claude-ask-multi-09-review.json'), 'utf8')) as { screen: string[] }).screen;
 /** The same question answered at the desk with a digit: Claude reports it answered, not declined. */
@@ -103,6 +106,25 @@ describe('the picker in a short pane', () => {
   it('a dismissed question shows no picker', () => {
     expect(parseAskPicker(DISMISSED)).toBeNull();
     expect(askPickerOnScreen(DISMISSED)).toBe(false);
+  });
+});
+
+describe('the picker in a named session', () => {
+  it('reads with the session-name rule under the hint', () => {
+    expect(NAMED.filter((r) => r.trim()).at(-1)).toBe(LABEL_ROW);
+    const picker = parseAskPicker(NAMED);
+    expect(picker).toMatchObject({ view: 'question', tabs: [{ label: 'Approach', answered: false }] });
+    expect(askPickerUntouched(picker, questionsOf(PAYLOAD))).toBe(true);
+    expect(askPickerOnScreen(NAMED)).toBe(true);
+  });
+
+  it.each([
+    ['narrower than the picker\'s rules', (rows: string[]) => rows.map((r) => (r === LABEL_ROW ? r.slice(4) : r))],
+    ['indented', (rows: string[]) => rows.map((r) => (r === LABEL_ROW ? `  ${r.slice(2)}` : r))],
+    ['not the last row', (rows: string[]) => [...rows.filter((r) => r.trim()), 'something else']],
+    ['without the closing rule glyph', (rows: string[]) => rows.map((r) => (r === LABEL_ROW ? `${r.slice(0, -2)}  ` : r))],
+  ])('only that exact row is dropped: a label row %s still stops the read', (_label, change) => {
+    expect(parseAskPicker(change(NAMED))).toBeNull();
   });
 });
 
@@ -191,6 +213,20 @@ const answer = (h: ReturnType<typeof makeRegistry>, record: ApprovalRequest) => 
 });
 
 describe('a phone answer in a short pane', () => {
+  it('in a named session: one digit, confirmed, resolved', async () => {
+    const h = makeRegistry(NAMED);
+    h.pane.cols = 80;
+    const record = await create(h);
+    h.drawAfterKey([
+      ...NAMED.slice(0, 9),
+      '⏺ User answered Claude\'s questions:',
+      '  ⎿  · The build failed on the lint step, how should I proceed? → Fix the lint errors',
+      ...Array.from({ length: 13 }, () => ''),
+    ]);
+    expect(await answer(h, record)).toMatchObject({ ok: true });
+    expect(h.stepKeys).toEqual(['1']);
+  });
+
   it('with the tab bar scrolled off: one digit, confirmed on screen, resolved', async () => {
     const h = makeRegistry(QUESTION_FIRST);
     const record = await create(h);

@@ -1862,7 +1862,10 @@ form describes: the answer is 409 `prompt-changed` with nothing typed.
   off, for a single single-select question only. Once Claude scrolls the
   option list itself (`↓` before a row) the answer is 409 `prompt-changed`
   and the record stays pending; a taller view (about 17 rows at 44 columns
-  for two options) makes it answerable again.
+  for two options) makes it answerable again. In a session named with
+  `/rename`, Claude draws the name in a rule under the picker's hint
+  (`───…─ <name> ─`); that row, exactly as wide as the picker's own rules, is
+  not part of the picker.
 - A question dismissed with Esc at the computer sends Claude Code no hook;
   its record expires (`prompt-gone`) a couple of seconds later, once the
   screen shows Claude's "User declined to answer questions", the question

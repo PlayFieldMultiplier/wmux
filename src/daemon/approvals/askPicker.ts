@@ -153,6 +153,8 @@ const HINT_MAX_ROWS = 4;
 /** The review screen's own rows: a picker is up even with no hint drawn. */
 const REVIEW_ROWS: ReadonlySet<string> = new Set(['Review your answers', 'Ready to submit your answers?']);
 const DECLINED_HEADER = 'User declined to answer questions';
+/** A rule row carrying the session's name (`/rename`): `────… <name> ─`. */
+const LABELED_RULE = /^─+ \S(?:.*\S)? ─$/;
 
 export const ASK_KEY_DOWN = '\x1b[B';
 export const ASK_KEY_ENTER = '\r';
@@ -367,6 +369,24 @@ function parseReviewView(rows: readonly string[], start: number, bar: AskPickerT
 }
 
 /**
+ * The rows without the rule Claude draws under the picker in a NAMED session
+ * (`/rename`, measured on 2.1.296: `───…─ workspace-identity-card-plan ─` as
+ * the grid's last row, under the hint). Only that exact shape is dropped: the
+ * last non-blank row, starting at column 0, and exactly as wide as a plain
+ * `────` rule row at column 0 elsewhere on the grid (the picker's own). Any
+ * other row stays, and a picker with something else under its hint is still
+ * not read. Rows are right-trimmed.
+ */
+function withoutSessionName(rows: readonly string[]): readonly string[] {
+  let last = rows.length - 1;
+  while (last >= 0 && !rows[last]!.trim()) last--;
+  if (last < 0 || !LABELED_RULE.test(rows[last]!)) return rows;
+  const width = [...rows[last]!].length;
+  const plainRule = rows.some((row, i) => i !== last && RULE.test(row) && [...row].length === width);
+  return plainRule ? rows.slice(0, last) : rows;
+}
+
+/**
  * The row of the LAST tab bar drawn right under a `────` rule, or -1. A tab
  * bar on row 0 counts too: its rule scrolled off the top of a short pane.
  * Rows are right-trimmed.
@@ -392,7 +412,7 @@ function lastTabBar(rows: readonly string[]): number {
  * else is on screen there reads as question text and fails the question match.
  */
 export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | null {
-  const rows = rawRows.map((row) => row.replace(/\s+$/, ''));
+  const rows = withoutSessionName(rawRows.map((row) => row.replace(/\s+$/, '')));
   const bar = lastTabBar(rows);
   if (bar >= 0) {
     const tabs = parseTabBar(rows[bar]!)!;
@@ -420,7 +440,8 @@ export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | nu
  */
 export function askPickerOnScreen(rawRows: readonly string[]): boolean {
   if (parseAskPicker(rawRows)) return true;
-  const rows = rawRows.map((row) => normalize(row)).filter((row) => row.length > 0);
+  const rows = withoutSessionName(rawRows.map((row) => row.replace(/\s+$/, '')))
+    .map((row) => normalize(row)).filter((row) => row.length > 0);
   if (rows.some((row) => REVIEW_ROWS.has(row))) return true;
   const tail = rows.slice(-HINT_MAX_ROWS);
   for (let i = 0; i < tail.length; i++) {
