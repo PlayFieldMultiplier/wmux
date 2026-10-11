@@ -745,11 +745,24 @@ const TITLED_TOOLS: ReadonlyMap<string, string> = new Map([
   ['Read file', 'Read'],
 ]);
 
+/**
+ * A shell dialog's title: "Bash command", or (measured on 2.1.296, with
+ * `sandbox.enabled` and a call that sets `dangerouslyDisableSandbox`) "Bash
+ * command (unsandboxed)". Claude also draws "… command (runs on <machine>)";
+ * that one is not measured and names no tool here.
+ */
+const COMMAND_TITLE = /^(\w[\w-]*) command( \(unsandboxed\))?$/i;
+
 /** "Bash command" → "Bash", "Fetch" → "WebFetch": the tool a permission dialog's title names. */
 export function toolFromDialogTitle(title: string | undefined): string | undefined {
   if (!title) return undefined;
-  const m = /^(\w[\w-]*) command$/i.exec(title);
+  const m = COMMAND_TITLE.exec(title);
   return m ? m[1] : TITLED_TOOLS.get(title);
+}
+
+/** The title says Claude runs this call outside its sandbox ("Bash command (unsandboxed)"). */
+function titleSaysUnsandboxed(title: string | undefined): boolean {
+  return !!title && COMMAND_TITLE.exec(title)?.[2] !== undefined;
 }
 
 /**
@@ -904,13 +917,19 @@ function descriptionRowsSpell(rows: readonly string[], description: string): boo
  * screen: its box rows must spell exactly what TITLED_BOX draws for the call
  * (`description` carries WebFetch's `prompt`, WebSearch's `webSearchDetail`). The prose above its box ("Claude wants to
  * fetch content from …") is Claude's own and is not compared.
+ *
+ * A title that says `(unsandboxed)` binds only a call that asked to run
+ * outside the sandbox (`unsandboxed`: its `dangerouslyDisableSandbox` is
+ * true). A plain title binds either: with no sandbox configured, Claude draws
+ * it for such a call too (measured on 2.1.296).
  */
 export function dialogMatchesToolCall(
   parsed: ParsedTerminalPrompt,
-  call: { name: string; command: string; description?: string },
+  call: { name: string; command: string; description?: string; unsandboxed?: boolean },
   opts: { topCut?: boolean } = {},
 ): boolean {
   const topCut = opts.topCut === true;
+  if (titleSaysUnsandboxed(parsed.title) && call.unsandboxed !== true) return false;
   const titledBox = Object.prototype.hasOwnProperty.call(TITLED_BOX, call.name) ? TITLED_BOX[call.name] : undefined;
   if (titledBox) {
     if (topCut || !parsed.topRuleFound || toolOfDialog(parsed) !== call.name) return false;
