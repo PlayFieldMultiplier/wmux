@@ -298,6 +298,22 @@ describe('readTranscript* — an image tool result larger than the cap', () => {
     expect(page.cursor.headOffset).toBe(Buffer.byteLength(`${entry(0)}\n${toolUse}\n`));
   });
 
+  it('parses lines in file order, the recovered record first', () => {
+    const file = path.join(dir, 'image-order.jsonl');
+    write(file);
+    const offsets: number[] = [];
+    readTranscriptPage(file, { parseLine: (_line, offset) => { offsets.push(offset); return []; } });
+    expect(offsets.length).toBeGreaterThan(1);
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
+  });
+
+  it('a shrunk window does not pull the record in, so it can still fit a budget', () => {
+    const file = path.join(dir, 'image-shrunk.jsonl');
+    write(file);
+    const page = readTranscriptPage(file, { maxBytes: TAIL_BYTES / 2 })!;
+    expect(page.events.map((e) => e.kind)).toEqual(['assistant_text']);
+  });
+
   it('an expand of a body on that line reads the whole line', () => {
     const file = path.join(dir, 'image-line.jsonl');
     write(file);

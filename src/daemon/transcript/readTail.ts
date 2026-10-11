@@ -110,22 +110,30 @@ export function readTranscriptPage(
   // drop. A read from 0 has no fragment.
   const truncatedHead = start > 0;
   const parseLine = opts?.parseLine ?? parseTranscriptLine;
-  const scanned = scanLines(raw, start, { dropTrailingPartial: true, skipHead: truncatedHead }, parseLine);
-  let events = scanned.events;
-  let headOffset = truncatedHead ? scanned.firstOffset : 0;
   // The dropped head fragment is normally recovered by the next backward page,
   // which ends exactly where it does. A record longer than TAIL_BYTES never
   // fits in any page, so it would vanish from every one of them — and with it
   // the `tool_result` of a screenshot or an image Read, leaving its tool row
   // spinning. Such a record is read whole and parsed in place instead.
-  const straddling = truncatedHead ? oversizedHeadRecord(transcriptPath, start, raw) : null;
+  //
+  // Only on a full-size window: a caller that shrinks the window to fit a
+  // byte budget must get a page that is actually smaller, or one record whose
+  // rows alone exceed the budget would empty every retry, newest rows
+  // included. It is parsed BEFORE the window, so `parseLine` sees lines in
+  // file order (`searchPage` maps events to offsets by call order).
+  let head: TurnEvent[] = [];
+  let headStart: number | null = null;
+  const straddling = truncatedHead && maxBytes >= TAIL_BYTES ? oversizedHeadRecord(transcriptPath, start, raw) : null;
   if (straddling) {
     const text = readRange(transcriptPath, straddling.from, straddling.end - straddling.from);
     if (text !== null && text.length === straddling.end - straddling.from) {
-      events = [...parseLine(text.toString('utf8'), straddling.from), ...events];
-      headOffset = straddling.from;
+      head = parseLine(text.toString('utf8'), straddling.from);
+      headStart = straddling.from;
     }
   }
+  const scanned = scanLines(raw, start, { dropTrailingPartial: true, skipHead: truncatedHead }, parseLine);
+  const events = head.length ? [...head, ...scanned.events] : scanned.events;
+  let headOffset = headStart ?? (truncatedHead ? scanned.firstOffset : 0);
   // D1(c) — when the last complete record before `end` is OVERSIZED, the window
   // holds the fragment plus at most that record's terminating newline, so
   // `firstOffset` lands at `end` itself. The caller pages backward with

@@ -6,8 +6,10 @@ const object = (value: unknown): Record<string, unknown> => value && typeof valu
 const outputItem = (item: unknown): Record<string, unknown> => {
   const p = object(item);
   if (['input_text', 'output_text', 'text'].includes(String(p.type)) && typeof p.text === 'string') return { type: 'text', text: p.text };
-  // Any image-typed item (`input_image` today), or anything carrying an image url.
-  if (/image/i.test(String(p.type)) || 'image_url' in p) return { type: 'image' };
+  if (['input_image', 'output_image', 'image'].includes(String(p.type))) return { type: 'image' };
+  // An item of another type that still carries an image url is not serialized
+  // either: the url is the image data.
+  if ('image_url' in p) return { type: 'image' };
   return { type: 'text', text: JSON.stringify(item ?? null) ?? '' };
 };
 

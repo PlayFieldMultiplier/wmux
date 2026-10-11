@@ -948,4 +948,15 @@ describe('snapshot — a huge non-conversation line before the answer (after /cl
     expect(page.cursor.headOffset).toBe(0);
     expect(page.hasMore).toBe(false);
   });
+
+  it('an oversized line whose rows alone bust the budget does not empty the first page', () => {
+    const file = path.join(harness.projects, '920b9112-1111-4222-8333-444455556699.jsonl');
+    // 24 text blocks of 16 KB: past TAIL_BYTES on disk, past BUDGET_BYTES as rows.
+    const blocks = Array.from({ length: 24 }, (_, i) => ({ type: 'text', text: `${i} ${'z'.repeat(16 * 1024)}` }));
+    const big = entry('big', 'assistant', blocks);
+    fs.writeFileSync(file, big + '\n' + entry('answer', 'assistant', [{ type: 'text', text: 'ok' }]) + '\n');
+    harness.bindings.set('pane', binding({ transcriptPath: file }));
+    const page = harness.projector.snapshot('pane')!;
+    expect(page.events.some((e) => e.kind === 'assistant_text' && e.text === 'ok')).toBe(true);
+  });
 });
