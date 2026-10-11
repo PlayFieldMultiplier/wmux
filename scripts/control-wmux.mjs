@@ -11,10 +11,12 @@
 //
 //   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms]
 //   node scripts/control-wmux.mjs doctor
-//   node scripts/control-wmux.mjs snapshot [--testid ID | --selector CSS] [--name label]
-//   node scripts/control-wmux.mjs screenshot [--name label]
+//   node scripts/control-wmux.mjs snapshot [--testid ID | --selector CSS | --role R --name N] [--as label]
+//   node scripts/control-wmux.mjs screenshot [--as label]
 //   node scripts/control-wmux.mjs click (--testid ID | --label ARIA | --role R --name N | --text T) [--nth N]
+//   node scripts/control-wmux.mjs hover (same targets as click)   (reveals hover-only controls)
 //   node scripts/control-wmux.mjs press --key Meta+Comma [--testid ID to focus first]
+//   node scripts/control-wmux.mjs type --text "echo hi" [--label "Terminal input" to focus first]
 //   node scripts/control-wmux.mjs eval --js "<read-only expression>"   (alias: inspect)
 //   node scripts/control-wmux.mjs wait-settle [--testid ID|--label ARIA|--selector CSS] [--state visible|hidden] [--quiet ms] [--timeout ms]
 //   node scripts/control-wmux.mjs console [--errors] [--tail N]
@@ -153,9 +155,15 @@ async function httpJson(url, timeoutMs = 1500) {
   }
 }
 
-/** Is `t` the wmux main window (not a webview / devtools / service worker)? */
+/**
+ * Is `t` the wmux main window? Not a webview, devtools, or the hidden
+ * quick-launch window (launcher.html), which is also a `page` target.
+ */
 function isMainWindowTarget(t) {
-  return t?.type === 'page' && /^(file:|https?:\/\/localhost)/.test(t.url || '') && !/devtools:/.test(t.url || '');
+  if (t?.type !== 'page' || !/^(file:|https?:\/\/localhost)/.test(t.url || '')) return false;
+  let pathname;
+  try { pathname = new URL(t.url).pathname; } catch { return false; }
+  return pathname.endsWith('/index.html') || pathname === '/';
 }
 
 /** Verify the recorded port still belongs to our pid before every attach. */
@@ -209,6 +217,14 @@ function locatorFor(page, opts) {
   else return null;
   if (opts.nth !== undefined) loc = loc.nth(Number(opts.nth));
   return loc;
+}
+
+/** First line of a Playwright error plus the "intercepts pointer events" culprit, ANSI-free. */
+function playwrightReason(err) {
+  // eslint-disable-next-line no-control-regex
+  const lines = String(err?.message || err).replace(/\u001b\[[0-9;]*m/g, '').split('\n').map((l) => l.trim());
+  const blocker = lines.find((l) => /intercepts pointer events/.test(l));
+  return [lines[0], blocker].filter(Boolean).join(' | ').slice(0, 400);
 }
 
 function describeTarget(opts) {
@@ -366,10 +382,10 @@ async function cmdSnapshot(opts) {
   const state = requireState();
   const text = await withPage(state, async (page) => {
     const root = locatorFor(page, opts) ?? page.locator('body');
-    const header = `# wmux ${state.suffix} — ${await page.title()}\n# target: ${opts.testid || opts.selector ? describeTarget(opts) : 'body'}\n`;
+    const header = `# wmux ${state.suffix} — ${await page.title()}\n# target: ${locatorFor(page, opts) ? describeTarget(opts) : 'body'}\n`;
     return header + (await root.first().ariaSnapshot({ timeout: 10_000 }));
   });
-  const out = nextArtifact(state, opts.name || 'snapshot', 'aria.yml');
+  const out = nextArtifact(state, opts.as || 'snapshot', 'aria.yml');
   fs.writeFileSync(out, text);
   timeline(state, { cmd: 'snapshot', target: describeTarget(opts), path: out });
   return { ok: true, path: out, lines: text.split('\n').length, text: text.length > 6000 ? `${text.slice(0, 6000)}\n…(truncated; full file at path)` : text };
@@ -385,7 +401,7 @@ async function cmdScreenshot(opts) {
     timeline(state, { cmd: 'screenshot', ok: false, meta: shot.meta });
     return { ok: false, screenshot: 'unavailable', reason: 'Page.captureScreenshot timed out (window occluded, screen locked, or rAF paused); use `snapshot` as the evidence', meta: shot.meta };
   }
-  const out = nextArtifact(state, opts.name || 'screenshot', 'png');
+  const out = nextArtifact(state, opts.as || 'screenshot', 'png');
   fs.writeFileSync(out, shot.img.data);
   // A PNG of a blank/black frame compresses to almost nothing.
   const suspectBlank = shot.img.data.length < (shot.meta.w * shot.meta.h) / 400;
@@ -398,12 +414,34 @@ async function cmdClick(opts) {
   return withPage(state, async (page) => {
     const loc = locatorFor(page, opts);
     if (!loc) fail('click needs --testid, --label, --role [--name], --text or --selector');
+    const timeout = Number(opts.timeout || 5000);
+    // The previous action may still be rendering; give the target a moment to appear.
+    await loc.first().waitFor({ state: 'attached', timeout }).catch(() => undefined);
     const count = await loc.count();
     if (count === 0) fail(`no element for ${describeTarget(opts)}`);
     if (count > 1 && opts.nth === undefined) fail(`${count} elements match ${describeTarget(opts)}; scope it or pass --nth`);
-    await loc.click({ timeout: Number(opts.timeout || 5000) });
+    try {
+      await loc.click({ timeout });
+    } catch (err) {
+      fail(`click ${describeTarget(opts)} failed: ${playwrightReason(err)}`);
+    }
     timeline(state, { cmd: 'click', target: describeTarget(opts) });
     return { ok: true, clicked: describeTarget(opts) };
+  });
+}
+
+async function cmdHover(opts) {
+  const state = requireState();
+  return withPage(state, async (page) => {
+    const loc = locatorFor(page, opts);
+    if (!loc) fail('hover needs --testid, --label, --role [--name], --text or --selector');
+    try {
+      await loc.first().hover({ timeout: Number(opts.timeout || 5000) });
+    } catch (err) {
+      fail(`hover ${describeTarget(opts)} failed: ${playwrightReason(err)}`);
+    }
+    timeline(state, { cmd: 'hover', target: describeTarget(opts) });
+    return { ok: true, hovered: describeTarget(opts) };
   });
 }
 
@@ -416,6 +454,19 @@ async function cmdPress(opts) {
     await page.keyboard.press(String(opts.key));
     timeline(state, { cmd: 'press', key: opts.key, focus: loc ? describeTarget(opts) : null });
     return { ok: true, pressed: opts.key };
+  });
+}
+
+async function cmdType(opts) {
+  const state = requireState();
+  if (typeof opts.text !== 'string') fail('type needs --text "<characters>" (use `press --key Enter` to submit)');
+  return withPage(state, async (page) => {
+    // --text is the payload here, so the focus target can only be a handle.
+    const loc = locatorFor(page, { ...opts, text: undefined });
+    if (loc) await loc.first().focus({ timeout: 5000 });
+    await page.keyboard.type(opts.text, { delay: 10 });
+    timeline(state, { cmd: 'type', chars: opts.text.length, focus: loc ? describeTarget(opts) : null });
+    return { ok: true, typed: opts.text.length };
   });
 }
 
@@ -434,7 +485,7 @@ async function cmdEval(opts) {
 async function cmdWaitSettle(opts) {
   const state = requireState();
   const timeout = Number(opts.timeout || 10_000);
-  const quiet = Number(opts.quiet || 400);
+  const quiet = opts.quiet === undefined ? 400 : Number(opts.quiet);
   return withPage(state, async (page) => {
     const loc = locatorFor(page, opts);
     const started = Date.now();
@@ -576,7 +627,9 @@ const COMMANDS = {
   snapshot: cmdSnapshot,
   screenshot: cmdScreenshot,
   click: cmdClick,
+  hover: cmdHover,
   press: cmdPress,
+  type: cmdType,
   eval: cmdEval,
   // Same command; some agent sandboxes refuse any shell line containing `eval`.
   inspect: cmdEval,
