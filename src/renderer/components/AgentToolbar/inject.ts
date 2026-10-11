@@ -1,9 +1,55 @@
 import { terminalRegistry } from '../../hooks/useTerminal';
+import { useStore } from '../../stores';
+import { quotePosixPath } from '../../../shared/imagePaste';
 import { pastePtyChunked, type TerminalModesLike } from '../../utils/clipboardChunk';
 
-/** Quote any path containing a space; join with a single space. */
-export function quotePathsForPrompt(paths: string[]): string {
-  return paths.map((p) => (p.includes(' ') ? `"${p}"` : p)).join(' ');
+/** C0 (incl. \t \n \r ESC), DEL and C1. A path holding one is never pasted. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL_CHAR_RE = /[\u0000-\u001F\u007F-\u009F]/;
+
+/** Characters PowerShell reads literally in a bare argument (no `,` `@` `$` `'` ...). */
+const SAFE_POWERSHELL_PATH_RE = /^[A-Za-z0-9_.:\\/-]+$/;
+
+/** PowerShell treats all four of these as a single quote inside '...'. */
+const POWERSHELL_SINGLE_QUOTES_RE = /['\u2018\u2019\u201A\u201B]/g;
+
+function quotePowerShellPath(p: string): string {
+  if (SAFE_POWERSHELL_PATH_RE.test(p)) return p;
+  return `'${p.replace(POWERSHELL_SINGLE_QUOTES_RE, '$&$&')}'`;
+}
+
+/**
+ * Which quoting a Windows pane gets, from the configured default shell
+ * (a path or a legacy name). The renderer does not know each pane's shell,
+ * and PowerShell is the app's default, so anything unrecognised is PowerShell.
+ */
+function windowsQuoteStyle(shell: string | undefined): 'powershell' | 'cmd' | 'posix' {
+  const base = (shell ?? '').toLowerCase().split(/[\\/]/).pop() ?? '';
+  if (base.includes('pwsh') || base.includes('powershell')) return 'powershell';
+  if (base.includes('bash') || base.includes('wsl')) return 'posix';
+  if (base === 'cmd' || base === 'cmd.exe') return 'cmd';
+  return 'powershell';
+}
+
+/**
+ * Quote each path so the pane's shell reads it literally, and join with a
+ * single space. POSIX shells and PowerShell get single quotes; cmd.exe cannot
+ * read single quotes, so it keeps the double-quote-on-space rule. A path
+ * containing a control character is left out (a newline would submit the line
+ * outside bracketed paste); if every path is left out the result is ''.
+ */
+export function quotePathsForPrompt(
+  paths: string[],
+  platform: string | undefined = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined,
+  windowsShell: string | undefined = platform === 'win32' ? useStore.getState().defaultShell : undefined,
+): string {
+  const style = platform === 'win32' ? windowsQuoteStyle(windowsShell) : 'posix';
+  const quote = style === 'posix'
+    ? quotePosixPath
+    : style === 'powershell'
+      ? quotePowerShellPath
+      : (p: string) => (p.includes(' ') ? `"${p}"` : p);
+  return paths.filter((p) => p && !CONTROL_CHAR_RE.test(p)).map(quote).join(' ');
 }
 
 /** The ordered raw writes for a submit/no-submit inject. Pure, for testing. */
