@@ -419,14 +419,17 @@ both labels are sticky and keep naming an agent that has exited.
   (by its hook or on screen) but no live process proves it yet, as for a moment
   after a launch. Fall back to what you did before the field existed.
 
-For a pane bound to a Claude or Codex transcript, it is the same reading the
-`/turns` chat object's `agentAlive` is built on, so the two never contradict:
-where the row says `true` or `false`, `/turns` for that pane says the same.
-`/turns` is stricter in two ways: it answers `false` where the row omits the
-field, and `false` when the running agent is not the one whose conversation the
-pane is bound to. An OpenCode plugin binding and a desktop chat record answer
-`/turns` from their own connection, which a list row does not open. The row is
-read from state the daemon already holds; polling it costs no process scan.
+It is the same process reading a Claude or Codex transcript binding's `/turns`
+`chat.agentAlive` is built on, and `/turns` adds one condition: the live agent
+must be the one whose conversation the pane is bound to. So a row `false` means
+`/turns` says `false`, and a `/turns` `true` means the row says `true`. The
+reverse does not hold: a row `true` with a `/turns` `false` is a running agent
+the pane has no matching conversation for yet, such as a fresh Claude before its
+first prompt. The row answers "is an agent running", `/turns` answers "is this
+conversation's agent running". An OpenCode plugin binding and a desktop chat
+record answer `/turns` from their own connection, which a list row does not
+open. The row is read from state the daemon already holds; polling it costs no
+process scan.
 
 `spawnCwd` is the directory the daemon actually started the pane in. Unlike
 `cwd`, which follows OSC 7 and the prompt and can name a deleted worktree or a

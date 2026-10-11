@@ -3148,8 +3148,10 @@ export class WebTerminalServer {
      * Whether the pane's agent is running right now: the PRESENCE answer that
      * `agent` and `lastDetectedAgent` refuse to be. `agentAliveVerdict` decides
      * it from the daemon's canonical agent state, the same reading a Claude or
-     * Codex transcript binding's `/turns` `agentAlive` is built on, so the two
-     * never contradict there. Map reads only: no process scan per poll.
+     * Codex transcript binding's `/turns` `agentAlive` is built on. `/turns`
+     * also requires the live agent to own the bound conversation, so row false
+     * implies `/turns` false and `/turns` true implies row true, never the
+     * reverse. Map reads only: no process scan per poll.
      *
      * `true`: a live, attributed process of the pane's agent. `false`: the
      * daemon names no agent for the pane (shell back at its prompt, agent

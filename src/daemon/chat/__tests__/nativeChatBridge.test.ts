@@ -170,6 +170,11 @@ describe('resolve', () => {
     f.state.agent = { ...f.state.agent, agentName: 'Claude Code', agentVerified: false };
     expect(agentAliveVerdict(f.state.agent)).toBeUndefined();
     expect(await alive()).toBe(false);
+    // A live Claude with no conversation of its own bound yet: the row says an
+    // agent runs, /turns says this conversation's agent does not. Never the reverse.
+    f.liveClaude(); f.state.projector = { available: false, reason: 'no-hook' };
+    expect(agentAliveVerdict(f.state.agent)).toBe(true);
+    expect(await alive()).not.toBe(true);
   });
 
   it('serves the running episode only through turn(), never on the shared status', async () => {

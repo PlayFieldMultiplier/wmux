@@ -453,7 +453,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     const status = deps.projector.status(id);
     const live = deps.chatAgentState(id);
     const slug = slugOf(live);
-    // The live half is `/api/sessions`' `agentAlive` verdict, so the two never contradict.
+    // The live half is `/api/sessions`' `agentAlive` verdict: a row `false` is never a `true` here.
     const agentAlive = !!slug && slug === status.terminal?.agent && agentAliveVerdict(live) === true;
     // Per-agent capabilities are `terminalChat` on the registry row (agentIdentity.ts).
     const chat = agentAlive ? agentRow(slug)?.terminalChat : undefined;

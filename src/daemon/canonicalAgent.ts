@@ -160,7 +160,8 @@ export function reportedAgentName(inputs: {
  * Whether a pane's agent is running right now, read off the daemon's
  * canonical agent state (`readDaemonAgentState`). `/api/sessions` rows carry it
  * as `agentAlive`, and a transcript binding's `/turns` `agentAlive` takes its
- * live half from the same call, so the two never contradict each other.
+ * live half from the same call (and adds that the live agent owns the bound
+ * conversation), so a `false` here is never a `true` there.
  *
  * - `true`: a live, attributed process of the pane's canonical agent
  *   (`agentVerified`, see provesLiveAgent).
