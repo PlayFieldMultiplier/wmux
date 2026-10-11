@@ -724,6 +724,29 @@ describe('AgentDetector', () => {
       expect(cb).toHaveBeenCalledTimes(2);
     });
 
+    it('two long lines that differ past the 80 shown characters both fire', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      const dir = `/tmp/${'x'.repeat(100)}`;
+      det.feed(`$ rm -rf ${dir}/a\n`);
+      det.feed(`$ rm -rf ${dir}/b\n`);
+      expect(cb).toHaveBeenCalledTimes(2);
+      expect(cb.mock.calls[0][0].matchedLine).toBe(cb.mock.calls[1][0].matchedLine);
+    });
+
+    it('a clock set back does not stretch the window', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      det.feed(LINES[0]!);
+      vi.setSystemTime(new Date('2026-10-11T11:00:00Z'));
+      det.feed(LINES[0]!);
+      expect(cb).toHaveBeenCalledTimes(2);
+    });
+
     it('remembers at most CRITICAL_SEEN_MAX lines, dropping the oldest', () => {
       vi.useFakeTimers();
       const det = new AgentDetector();
@@ -756,6 +779,9 @@ describe('AgentDetector', () => {
       '$ echo done && git push --force origin main',
       '$ rm -rf $(echo /tmp/junk)',
       '$ echo "rm -rf /" > run.sh',
+      '⏺ Bash(docker exec echo rm -rf /data)',
+      '⏺ Bash(rm -rf /tmp/victim && echo "git push --force")',
+      '$ grep foo =(rm -rf /build)',
     ])('…but a line that can still run the action does: %s', (line) => {
       const det = new AgentDetector();
       const cb = vi.fn();

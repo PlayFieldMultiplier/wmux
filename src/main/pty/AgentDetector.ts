@@ -34,21 +34,27 @@ function stripControls(s: string): string {
 export const CRITICAL_REPEAT_WINDOW_MS = 10 * 60_000;
 /** Lines remembered per pane for that window; the oldest go first. */
 export const CRITICAL_SEEN_MAX = 256;
-
-/** A search or print command: what follows it is its argument, not an action. */
-const SEARCH_OR_PRINT_RE = /(?:^|[\s(])(?:grep|egrep|fgrep|rg|echo|printf)\s/;
-/** Anything that could start another command on the same line. */
-const SHELL_CONTROL_RE = /[;&|`<>\n]|\$\(/;
+/** How much of a line its dedup key keeps. */
+const CRITICAL_KEY_MAX = 512;
 
 /**
- * The critical match is an argument of grep/rg/echo/printf, and nothing on the
- * line after that command could run anything else (`grep -rn "rm -rf" src`).
- * Any `;`, `&`, `|`, backquote, redirect or `$(` after it and the line is
- * judged as before.
+ * A line that IS a grep/rg/echo/printf command: the command is the first word,
+ * after nothing but a shell prompt sign or Claude's own `⏺ Bash(` / `⎿ $` row
+ * prefix. A wrapper in front (`docker exec echo …`, `sudo`, `ssh`) is not this.
  */
-function isSearchOrPrintArgument(line: string, matchIndex: number): boolean {
-  const m = SEARCH_OR_PRINT_RE.exec(line);
-  return !!m && m.index < matchIndex && !SHELL_CONTROL_RE.test(line.slice(m.index));
+const SEARCH_OR_PRINT_LINE_RE = /^(?:(?:[$%>❯]|[⏺●]\s*Bash\(|⎿\s*\$?)\s*)?(?:grep|egrep|fgrep|rg|echo|printf)\s/;
+/** Anything that could run another command on the same line (`(` covers `$(`, `<(`, `=(`). */
+const SHELL_CONTROL_RE = /[;&|`<>(\n]/;
+
+/**
+ * The whole line is one search or print command whose arguments name the
+ * action (`grep -rn "rm -rf" src`), and nothing on it could run anything else.
+ * Any `;`, `&`, `|`, backquote, redirect or `(` after the command word and the
+ * line is judged as before.
+ */
+function isSearchOrPrintLine(line: string): boolean {
+  const m = SEARCH_OR_PRINT_LINE_RE.exec(line);
+  return !!m && !SHELL_CONTROL_RE.test(line.slice(m[0].length));
 }
 
 // Agent event status uses the same enum as WorkspaceMetadata.agentStatus so
@@ -871,12 +877,14 @@ export class AgentDetector {
    */
   private admitCritical(key: string): boolean {
     const now = Date.now();
+    // A time ahead of the clock (it was set back) counts as expired.
+    const fresh = (at: number): boolean => at <= now && now - at < CRITICAL_REPEAT_WINDOW_MS;
     const last = this.criticalSeen.get(key);
-    if (last !== undefined && now - last < CRITICAL_REPEAT_WINDOW_MS) return false;
+    if (last !== undefined && fresh(last)) return false;
     this.criticalSeen.delete(key);
     this.criticalSeen.set(key, now);
     for (const [k, at] of this.criticalSeen) {
-      if (this.criticalSeen.size <= CRITICAL_SEEN_MAX && now - at < CRITICAL_REPEAT_WINDOW_MS) break;
+      if (this.criticalSeen.size <= CRITICAL_SEEN_MAX && fresh(at)) break;
       this.criticalSeen.delete(k);
     }
     return true;
@@ -1209,26 +1217,31 @@ export class AgentDetector {
     }
 
     // Check critical patterns first
+    const searchOrPrint = isSearchOrPrintLine(clean);
+    let criticalMatched = false;
     for (const cp of CRITICAL_PATTERNS) {
-      const hit = cp.regex.exec(clean);
-      if (hit) {
-        if (isSearchOrPrintArgument(clean, hit.index)) return;
+      if (cp.regex.test(clean)) {
+        criticalMatched = true;
+        // The match is that command's argument: no other pattern on this line can run either.
+        if (searchOrPrint) break;
         // Normalize ONCE, then cap: stripControls drops the C0 bytes that
         // survived ANSI_STRIP and collapses whitespace, and only the result is
-        // sliced to 80. That single value is the dedup key AND the payload, so
-        // what a surface shows is exactly what the dedup judged — two lines
-        // that differ only by a tab or other control byte now collapse to one
-        // emission instead of both firing. Normalizing before the cap also
-        // means the 80-char limit counts visible characters, not control
-        // bytes. This string ends up in notification bodies and on a phone.
-        const value = stripControls(clean).slice(0, 80);
-        if (!this.admitCritical(`${cp.label}\n${value}`)) return;
+        // sliced to 80 for the payload. Two lines that differ only by a tab or
+        // other control byte collapse to one emission instead of both firing.
+        // Normalizing before the cap also means the 80-char limit counts
+        // visible characters, not control bytes. This string ends up in
+        // notification bodies and on a phone. The dedup key takes the line
+        // past 80 (bounded), so two long commands that differ late both fire.
+        const line = stripControls(clean);
+        const value = line.slice(0, 80);
+        if (!this.admitCritical(`${cp.label}\n${line.slice(0, CRITICAL_KEY_MAX)}`)) return;
         for (const cb of this.criticalCallbacks) {
           cb({ action: cp.label, riskLevel: cp.riskLevel, matchedLine: value });
         }
         return;
       }
     }
+    if (criticalMatched) return;
 
     // Check agent gates — activate agents when their gate pattern matches.
     // gate가 처음 매칭되는 순간 'running'으로 한 번 emit한다(checkGates). idle
