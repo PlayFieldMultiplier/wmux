@@ -14,6 +14,7 @@ import {
 import {
   BrowserPolicyError,
   POLICY_DENIED_CODE,
+  browserPolicyRefusal,
   type BrowserPolicyAuthorization,
 } from '../../shared/browserPolicy';
 
@@ -148,7 +149,10 @@ export async function assertCodeToolAllowed(deps: BrowserToolDeps, tool: string)
   try {
     res = await sendRpc('browser.lease.acquire', { workspaceId, authorize: true });
   } catch (err) {
-    const refusal = browserCallRefusal(err);
+    // A protected pane's refusal says the pane is protected; anything else —
+    // the pane-profile refusal (caller not identified) included — says only
+    // that main did not answer "unprotected".
+    const refusal = browserPolicyRefusal(err);
     if (refusal) throw protectedCodeToolRefusal(tool, refusal.message);
     throw unconfirmedCodeToolRefusal(tool);
   }
