@@ -190,6 +190,12 @@ describe('Git page Worktrees: who acts next', () => {
     expect(diff.status).toHaveBeenCalledWith(wt('done'));
   });
 
+  it('the current-branch card agrees with its row on a staged-then-reverted tree', async () => {
+    statusOnly = { [MAIN]: 1 };
+    await mount();
+    expect(container.querySelector('[data-git-changes]')?.textContent).toBe('1 files·1');
+  });
+
   it('a failed status read on a merged worktree whose diff saw nothing is unknown, not clean; with diff changes the row keeps its counts', async () => {
     statusFails = new Set([wt('done'), wt('feat')]);
     dirty = { [wt('wip')]: 2, [wt('feat')]: 1 };

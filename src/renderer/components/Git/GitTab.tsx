@@ -454,13 +454,14 @@ export function GitTab({
       if (!readDiff) return null;
       try {
         // The line counts come from the diff; the changed paths also from git
-        // status, as on every other row: `git diff HEAD` misses a change that
+        // status, as on every other row (and on the card, so the two agree):
+        // `git diff HEAD` misses a change that
         // was staged and then reverted in the tree, which would read as clean.
         // Either read seeing a change makes the tree not clean. A failed
         // status read leaves it unknown only when the diff saw nothing.
         const [diff, st] = await withStatReadSlot(() => Promise.all([
           readDiff(path, '', 'workspace'),
-          showSections && readStatus ? readStatus(path) : null,
+          readStatus ? readStatus(path) : null,
         ]));
         if (!diff.ok) return { files: 0, additions: 0, deletions: 0, error: diff.error };
         if (st && !st.ok && diff.numstat.length === 0) return { files: 0, additions: 0, deletions: 0, error: st.error };
