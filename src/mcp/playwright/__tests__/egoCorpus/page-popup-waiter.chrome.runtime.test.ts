@@ -11,7 +11,7 @@ import type { Page } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
 import { MODES, harnessFor } from '../../../../test-utils/realBrowserHarness';
 import { generateSnapshot } from '../../snapshot';
-import { CASE_TIMEOUT_MS, openPage, refFor, serveCorpus } from './_support';
+import { ACTION_TIMEOUT_MS, CASE_TIMEOUT_MS, openPage, refFor, serveCorpus } from './_support';
 
 const { engine } = vi.hoisted(() => ({
   engine: { page: null as unknown },
@@ -208,6 +208,49 @@ for (const mode of MODES) {
         // used to be retried by browser_click, opening the same popup twice.
         expect(opened.filter((p) => p.url().includes('popup-waiter=old'))).toHaveLength(1);
         expect(opened.filter((p) => p.url().includes('popup-waiter=next'))).toHaveLength(1);
+      } finally {
+        for (const p of opened) await p.close().catch(() => undefined);
+        await source.close();
+      }
+    });
+
+    // browser_click returns as soon as the popup fires and leaves Playwright's
+    // own click action pending (on macOS it waits on the opener, which is
+    // behind the popup). That abandoned action must not leak into the next
+    // tool call: no second press of the link, no stray input landing on the
+    // next target, and nothing left over once the abandoned action gives up.
+    it('the click abandoned after its popup does not interfere with the next action', async (ctx) => {
+      if (h.skipUnless(ctx)) return;
+      const source = await openPage(h, '/no-frame');
+      const opened: Page[] = [];
+      source.context().on('page', (p) => opened.push(p as Page));
+      try {
+        await addPopupLinks(source, { 'overlap-popup-link': url('overlap') });
+        await source.evaluate(() => {
+          const w = window as unknown as { __hits: number };
+          w.__hits = 0;
+          const button = document.createElement('button');
+          button.textContent = 'Count me';
+          button.addEventListener('click', () => (w.__hits += 1));
+          document.body.prepend(button);
+        });
+        await untilRendering(source, mode.headless);
+        const pending = armPopupWaiter(source);
+        await clickTool(source, 'overlap-popup-link');
+        const popup = await pending.afterClick();
+        if (!mode.headless) await closePopup(popup);
+
+        // The next action, while the first click's action may still be pending.
+        await untilRendering(source, mode.headless);
+        await clickTool(source, 'Count me');
+        expect(await source.evaluate(() => (window as unknown as { __hits: number }).__hits)).toBe(1);
+
+        // Let the abandoned action run out its own cap, then check nothing
+        // pressed anything afterwards.
+        await new Promise((r) => setTimeout(r, ACTION_TIMEOUT_MS + 500));
+        await untilRendering(source, mode.headless);
+        expect(await source.evaluate(() => (window as unknown as { __hits: number }).__hits)).toBe(1);
+        expect(opened.filter((p) => p.url().includes('popup-waiter=overlap'))).toHaveLength(1);
       } finally {
         for (const p of opened) await p.close().catch(() => undefined);
         await source.close();

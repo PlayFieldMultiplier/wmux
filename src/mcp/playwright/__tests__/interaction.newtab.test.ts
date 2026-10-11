@@ -115,6 +115,7 @@ function makePage(
   return {
     el,
     listenerCount: () => handlers.get('popup')?.size ?? 0,
+    handlers: (event: string) => [...(handlers.get(event) ?? [])],
     page: {
       on: (event: string, fn: Handler) => {
         const set = handlers.get(event) ?? new Set<Handler>();
@@ -258,6 +259,53 @@ describe('browser_click new-tab detection', () => {
     expect(result.isError).toBe(true);
     expect(watched.el.click).toHaveBeenCalledTimes(2);
     expect(watched.listenerCount()).toBe(0);
+  });
+
+  it('an abandoned click that settles later does not touch the next click on the same page', async () => {
+    // First click: opens its popup, then Playwright's action stays pending
+    // (the opener is behind the popup's tab) and only rejects much later.
+    const first = makePage({ popupUrl: 'https://popup.example/first' });
+    let rejectAbandoned!: (e: Error) => void;
+    const abandoned = new Promise<void>((_, reject) => (rejectAbandoned = reject));
+    first.el.click.mockImplementationOnce(async () => {
+      for (const fn of first.handlers('popup')) fn({ url: () => 'https://popup.example/first' });
+      await abandoned;
+    });
+    const second = {
+      click: vi.fn(async () => undefined),
+      dblclick: vi.fn(async () => undefined),
+      boundingBox: vi.fn(async () => ({ x: 10, y: 80, width: 100, height: 40 })),
+    };
+    getPage.mockResolvedValue(first.page);
+    resolveWorkspaceBackend.mockResolvedValue('chrome');
+    resolveRefMock.mockImplementation(async (_p: unknown, ref: string) => (ref === '3' ? first.el : second));
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const firstResult = await click({ ref: '3' });
+      expect(firstResult.isError).toBeFalsy();
+      expect(firstResult.content[0].text).toContain('popup.example/first');
+
+      // The next action runs while the first is still pending in the background.
+      const secondResult = await click({ ref: '4' });
+      expect(secondResult.isError).toBeFalsy();
+      expect(secondResult.content[0].text).toBe('Clicked element ref=4' + COMMITTED);
+      expect(second.click).toHaveBeenCalledTimes(1);
+
+      // Now the abandoned action gives up. It must not press anything again
+      // (clickWithApproach's centre-click fallback) nor surface as an error.
+      rejectAbandoned(new Error('Timeout 1500ms exceeded.'));
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(first.el.click).toHaveBeenCalledTimes(1);
+      expect(second.click).toHaveBeenCalledTimes(1);
+      expect(first.listenerCount()).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('[CRIT] detaches the listener when the click itself throws', async () => {
