@@ -42,10 +42,14 @@ async function connect(): Promise<Client> {
     { name: 'wmux-test', version: '0.0.0' },
     { capabilities: { tools: {} } },
   );
-  registerReplTools(server, {
-    profile: 'full',
-    context: { principal: { kind: 'unattributed' } },
-  });
+  registerReplTools(
+    server,
+    {
+      profile: 'full',
+      context: { principal: { kind: 'unattributed' } },
+    },
+    async () => undefined,
+  );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '1.0.0' }, { capabilities: {} });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

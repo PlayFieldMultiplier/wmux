@@ -224,7 +224,15 @@ describe('MCP workspace routing (source-level invariants)', () => {
       /const browserServer\s*=\s*collectingServer\(\s*server\s*,\s*browserTools\s*\)/,
     );
     expect(src).toMatch(
-      /registerBrowserReplTool\(\s*server\s*,\s*browserTools\s*,\s*MCP_CATALOG_OPTIONS\s*\)/,
+      /registerBrowserReplTool\(\s*server\s*,\s*browserTools\s*,\s*MCP_CATALOG_OPTIONS\s*,\s*codeToolGate\s*\)/,
+    );
+    // Both code-running tools share the one gate, bound to the browser lane's
+    // strict workspace resolver.
+    expect(src).toMatch(
+      /const codeToolGate\s*=\s*\(tool: string\)\s*=>\s*assertCodeToolAllowed\(\s*browserToolDeps\s*,\s*tool\s*\)/,
+    );
+    expect(src).toMatch(
+      /registerReplTools\(\s*server\s*,\s*MCP_CATALOG_OPTIONS\s*,\s*codeToolGate\s*,\s*browserTools\s*\)/,
     );
     for (const name of [
       'Navigation',

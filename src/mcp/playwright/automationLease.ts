@@ -82,6 +82,78 @@ function unconfirmedProtectedError(): BrowserPolicyError {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Tools that run caller-supplied code (browser_repl, repl_run).
+//
+// Their code runs in this process, not in the page: it can read the pane's
+// Chrome profile from disk, start processes and open sockets, none of which
+// passes main's gate or this lane's per-operation checks. So they are refused
+// on a protected pane outright, and unlike the lease there is no fail-open:
+// only main's explicit "not protected" answer lets them run.
+// ---------------------------------------------------------------------------
+
+/** A code-running tool's refusal; `paneProtected` is false when main gave no usable answer. */
+export class CodeToolRefusal extends BrowserPolicyError {
+  constructor(message: string, readonly paneProtected: boolean) {
+    super(POLICY_DENIED_CODE, message);
+    this.name = 'CodeToolRefusal';
+  }
+}
+
+function protectedCodeToolRefusal(tool: string, detail?: string): CodeToolRefusal {
+  return new CodeToolRefusal(
+    `${tool} is not available on a protected pane: this pane's browser is protected, and code ` +
+      `run by ${tool} would not be held to the pane's browser checks.` +
+      (detail ? ` wmux answered: ${detail}` : '') +
+      ' Use the individual browser_* tools instead. Do not retry unchanged.',
+    true,
+  );
+}
+
+function unconfirmedCodeToolRefusal(tool: string): CodeToolRefusal {
+  return new CodeToolRefusal(
+    `${tool} was refused: wmux could not confirm that this pane's browser is not protected, ` +
+      'so no code was run. It runs only once wmux answers that the pane is unprotected.',
+    false,
+  );
+}
+
+/**
+ * Resolve when main answers that the calling pane is NOT protected; throw a
+ * CodeToolRefusal otherwise — protected, refused by main's gate, or no usable
+ * answer (no workspace identity, transport failure, a reply without a policy).
+ *
+ * Asked fresh on every call: a pane can be protected at any time. The request
+ * names no surface, so it is authorization only and holds no lease.
+ */
+export async function assertCodeToolAllowed(deps: BrowserToolDeps, tool: string): Promise<void> {
+  let workspaceId: string;
+  try {
+    workspaceId = await deps.resolveWorkspaceId();
+  } catch {
+    throw unconfirmedCodeToolRefusal(tool);
+  }
+  if (!workspaceId) throw unconfirmedCodeToolRefusal(tool);
+  let res: unknown;
+  try {
+    res = await sendRpc('browser.lease.acquire', { workspaceId, authorize: true });
+  } catch (err) {
+    const refusal = browserCallRefusal(err);
+    if (refusal) throw protectedCodeToolRefusal(tool, refusal.message);
+    throw unconfirmedCodeToolRefusal(tool);
+  }
+  // A main that predates authorization leases its default surface for an
+  // unnamed acquire. Not ours to hold.
+  const token = (res as { token?: unknown } | null | undefined)?.token;
+  if (typeof token === 'string' && token) {
+    sendRpc('browser.lease.release', { token }).catch(() => undefined);
+  }
+  const authorization = readAuthorization(res);
+  if (!authorization) throw unconfirmedCodeToolRefusal(tool);
+  rememberProtection(workspaceId, authorization.protected);
+  if (authorization.protected) throw protectedCodeToolRefusal(tool);
+}
+
 // Renew well inside main's 30s RPC-lease TTL so a long-running tool op
 // (browser_wait_for, slow page interactions) never lapses mid-flight.
 const RENEW_INTERVAL_MS = 10_000;

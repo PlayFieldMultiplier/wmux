@@ -189,7 +189,7 @@ describe('the sweep timer', () => {
 });
 
 describe('repl_sessions idle reporting', () => {
-  const sessionsTool = createReplToolCatalog().find((spec) => spec.name === 'repl_sessions');
+  const sessionsTool = createReplToolCatalog(async () => undefined).find((spec) => spec.name === 'repl_sessions');
 
   function listSessions(scope: ReturnType<typeof createConnectionScope>): string {
     const result = runInConnectionScope(

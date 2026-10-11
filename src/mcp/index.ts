@@ -29,6 +29,7 @@ import { PlaywrightEngine } from './playwright/PlaywrightEngine';
 import { getOpenerKey, noteOpenedSurface } from './playwright/surfaceRouting';
 import { registerNavigationTools } from './playwright/tools/navigation';
 import { paneProfileRefusal } from './playwright/paneProfileRefusal';
+import { assertCodeToolAllowed } from './playwright/automationLease';
 import { registerInteractionTools } from './playwright/tools/interaction';
 import { registerInspectionTools } from './playwright/tools/inspection';
 import { registerStateTools } from './playwright/tools/state';
@@ -1604,7 +1605,11 @@ registerFileTools(browserServer, browserToolDeps);
 registerUtilityTools(browserServer, browserToolDeps);
 registerExtractionTools(browserServer, browserToolDeps);
 registerReplayTools(browserServer, browserToolDeps, MCP_CATALOG_OPTIONS);
-registerBrowserReplTool(server, browserTools, MCP_CATALOG_OPTIONS);
+// browser_repl and repl_run run caller-supplied code in this process, outside
+// the per-operation browser checks: refused on a protected pane, and wherever
+// main has not answered that the pane is unprotected.
+const codeToolGate = (tool: string) => assertCodeToolAllowed(browserToolDeps, tool);
+registerBrowserReplTool(server, browserTools, MCP_CATALOG_OPTIONS, codeToolGate);
 
 // The engine's auto-open (getPage Strategy 4) issues browser.open outside any
 // tool handler, so it cannot rely on the per-tool requireWorkspaceId() guard
@@ -2420,16 +2425,18 @@ registerPaneLifecycleTools(
 
 // === Agent REPL tools ===
 // A persistent Node runtime per session, hosted as a child of THIS process and
-// scoped to this connection. It takes no RPC and needs no workspace identity:
-// nothing here touches the substrate, so there is nothing for the daemon to
-// authorize. The authority ceiling is unchanged — a caller holding
-// `terminal_send` already drives an arbitrary shell in its own pane as the user.
+// scoped to this connection. Its code touches no substrate RPC, but it runs
+// outside every browser check, so each repl_run first asks main whether the
+// calling pane is protected (codeToolGate above) and runs only on an explicit
+// "not protected". Otherwise the authority ceiling is unchanged — a caller
+// holding `terminal_send` already drives an arbitrary shell in its own pane as
+// the user.
 // `browserTools` is the same collector sink browser_repl calls through, so a
 // repl_run script's `browser.X` goes through the real handler (lease,
 // redaction, frame-aware refs). Only the full profile actually gets the
 // binding — the gate is in resolveReplBrowser, because the sink holds browser
 // handlers even on a profile whose tools/list omits them.
-registerReplTools(server, MCP_CATALOG_OPTIONS, browserTools);
+registerReplTools(server, MCP_CATALOG_OPTIONS, codeToolGate, browserTools);
 
 // Desktop computer use: opt-in (~/.wmux/computer-use.json, Settings › Computer use),
 // full profile only, and appended after every other full-profile tool so the

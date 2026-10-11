@@ -28,6 +28,7 @@ import {
   IDLE_SWEEP_INTERVAL_MS,
   IDLE_TIMEOUT_MS,
   MAX_SESSIONS_PER_CONNECTION,
+  disposeReplRegistry,
   getReplRegistry,
   isValidSessionName,
 } from './replRegistry';
@@ -46,6 +47,38 @@ export function clampTimeout(requested: number | undefined): number {
 
 function text(body: string, isError = false): CallToolResult {
   return { content: [{ type: 'text' as const, text: body }], isError: isError || undefined };
+}
+
+/**
+ * Resolves when `tool` may run caller-supplied code for this caller; throws the
+ * refusal otherwise (in the server: assertCodeToolAllowed, which refuses a
+ * protected pane and any pane main has not answered for).
+ */
+export type CodeToolGate = (tool: string) => Promise<void>;
+
+/**
+ * Run the gate; null when the tool may proceed, else the refusal as a result.
+ * `onProtected` runs when the refusal says the pane IS protected, so a runtime
+ * this caller started before the pane was protected does not outlive it.
+ */
+export async function codeToolRefusal(
+  gate: CodeToolGate,
+  tool: string,
+  onProtected: () => void,
+): Promise<CallToolResult | null> {
+  try {
+    await gate(tool);
+    return null;
+  } catch (error) {
+    if ((error as { paneProtected?: unknown } | null)?.paneProtected === true) {
+      try {
+        onProtected();
+      } catch {
+        /* the refusal stands either way */
+      }
+    }
+    return text(String(error instanceof Error ? error.message : error), true);
+  }
 }
 
 /** The browser handlers a repl_run `browser` object would call, and the profile. */
@@ -189,6 +222,7 @@ const REPL_SESSIONS_DESCRIPTION =
   'List this connection\'s REPL sessions: cwd, pid, age, and current state.';
 
 export function createReplToolCatalog(
+  gate: CodeToolGate,
   browserAccess?: ReplBrowserAccess,
 ): readonly WmuxToolSpec[] {
   const replRun = defineWmuxTool({
@@ -218,6 +252,9 @@ export function createReplToolCatalog(
     strictInput: true,
     profiles: ['full', 'core'],
     invoke: async ({ code, session, timeout, cwd }) => {
+      // Before anything else, so a refused caller never gets a runtime.
+      const refused = await codeToolRefusal(gate, 'repl_run', disposeReplRegistry);
+      if (refused) return refused;
       const name = session ?? DEFAULT_SESSION_NAME;
       if (!isValidSessionName(name)) {
         return text(`Invalid session name "${name}". Use 1-64 of: letters, digits, dot, underscore, hyphen.`, true);
@@ -352,11 +389,13 @@ export function createReplToolCatalog(
 export function registerReplTools(
   server: McpServer,
   options: RegisterWmuxToolsOptions,
+  gate: CodeToolGate,
   browserTools?: ReadonlyMap<string, CollectedTool>,
 ): void {
   registerWmuxTools(
     server,
     createReplToolCatalog(
+      gate,
       browserTools && { tools: browserTools, profile: options.profile },
     ),
     options,
