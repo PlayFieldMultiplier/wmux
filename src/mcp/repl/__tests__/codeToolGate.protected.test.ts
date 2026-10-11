@@ -77,6 +77,15 @@ describe('assertCodeToolAllowed', () => {
     await expect(gate('browser_repl')).rejects.toMatchObject({ code: 'policy_denied', paneProtected: true });
   });
 
+  it('refuses, without calling the pane protected, when main cannot identify the calling pane', async () => {
+    acquireAnswers(() =>
+      Promise.reject(new Error('browser.lease.acquire: PANE_PROFILE_UNRESOLVED: panes in this workspace have their own Chrome profiles')),
+    );
+    const refusal = await gate('repl_run').catch((e: unknown) => e);
+    expect(refusal).toMatchObject({ code: 'policy_denied', paneProtected: false });
+    expect((refusal as Error).message).not.toContain('is not available on a protected pane');
+  });
+
   it.each(UNKNOWN_ANSWERS)('refuses on %s', async (_label, acquire) => {
     acquireAnswers(acquire);
     const refusal = await gate('repl_run').catch((e: unknown) => e);
