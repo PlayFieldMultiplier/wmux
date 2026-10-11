@@ -68,4 +68,26 @@ describe('createFanoutCallerStopNotify', () => {
     stop();
     expect(sent).toEqual([]);
   });
+
+  it('a fan-out workspace the ledger never heard of is reconciled once, then told if its task is open', async () => {
+    let reconciles = 0;
+    handler = createFanoutCallerStopNotify({
+      deckRuntimeActive: () => runtime,
+      hasBrain: () => brain,
+      notify: (...a) => { sent.push(a); },
+      reconcile: async () => {
+        reconciles++;
+        await ledger.register({ id: 'wtask-late', taskWorkspaceId: 'ws-late', ownerWorkspaceId: 'ws-parent', title: 'late' });
+      },
+      isFanoutTask: (ws) => ws === 'ws-late',
+      ledger,
+    });
+    stop({ workspaceId: 'ws-plain' }); // no lineage: no reconcile
+    expect(reconciles).toBe(0);
+    stop({ workspaceId: 'ws-late', seq: 11 });
+    await new Promise((r) => setTimeout(r, 0));
+    await ledger.flush();
+    expect(reconciles).toBe(1);
+    expect(sent).toEqual([['ws-parent', 'ws-late', 'wtask-late', 'agent.stop', 11]]);
+  });
 });

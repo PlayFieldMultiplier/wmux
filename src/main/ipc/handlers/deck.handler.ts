@@ -2144,7 +2144,12 @@ export function registerDeckHandler(
     getWindow,
     () => opts.getDaemonClient?.() ?? null,
     ownerHasBrain,
-    createFanoutCallerStopNotify({ deckRuntimeActive: () => offBus !== null, hasBrain: ownerHasBrain, notify: notifyCaller }),
+    createFanoutCallerStopNotify({
+      deckRuntimeActive: () => offBus !== null,
+      hasBrain: ownerHasBrain,
+      notify: notifyCaller,
+      reconcile: reconcileTaskLedger,
+    }),
   );
   // The pane that owns a PR, told about CI / review / conflict when no brain
   // listens (prOwnerNotify.ts). The coalescer push below is unchanged.
