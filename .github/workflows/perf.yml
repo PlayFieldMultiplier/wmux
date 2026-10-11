@@ -24,7 +24,9 @@ on:
       - 'forge.config.*'
 
 concurrency:
-  group: perf-${{ github.ref }}
+  # A draft PR's run (skipped by the jobs' draft check) gets its own group, so a
+  # late synchronize event from before `gh pr ready` cannot cancel the ready run.
+  group: perf-${{ github.ref }}${{ github.event.pull_request.draft && '-draft' || '' }}
   # Cancel superseded PR runs, but never kill a main-push run mid-flight — the
   # history append happens at the END of the job, so cancelling main runs would
   # make the trend file routinely lossy under normal merge cadence.

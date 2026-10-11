@@ -15,7 +15,9 @@ on:
 # security-* gets a group of its own (its SHA): one shared group would still
 # drop a queued run whenever a third push arrived, leaving that commit unchecked.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  # A draft PR's run (skipped by the jobs' draft check) gets its own group, so a
+  # late synchronize event from before `gh pr ready` cannot cancel the ready run.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}${{ github.event.pull_request.draft && '-draft' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

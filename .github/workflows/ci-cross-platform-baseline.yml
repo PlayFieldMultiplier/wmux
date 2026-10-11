@@ -25,7 +25,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: baseline-${{ github.ref }}
+  # A draft PR's run (skipped by the jobs' draft check) gets its own group, so a
+  # late synchronize event from before `gh pr ready` cannot cancel the ready run.
+  group: baseline-${{ github.ref }}${{ github.event.pull_request.draft && '-draft' || '' }}
   # Safe to cancel anywhere: this workflow is informational and writes nothing
   # (unlike perf.yml, whose main runs append to the history file at the end).
   cancel-in-progress: true
