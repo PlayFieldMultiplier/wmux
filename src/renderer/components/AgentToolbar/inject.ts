@@ -1,55 +1,96 @@
 import { terminalRegistry } from '../../hooks/useTerminal';
-import { useStore } from '../../stores';
-import { quotePosixPath } from '../../../shared/imagePaste';
 import { pastePtyChunked, type TerminalModesLike } from '../../utils/clipboardChunk';
 
 /** C0 (incl. \t \n \r ESC), DEL and C1. A path holding one is never pasted. */
 // eslint-disable-next-line no-control-regex -- matching control characters is the point
 const CONTROL_CHAR_RE = /[\u0000-\u001F\u007F-\u009F]/;
 
-/** Characters PowerShell reads literally in a bare argument (no `,` `@` `$` `'` ...). */
-const SAFE_POWERSHELL_PATH_RE = /^[A-Za-z0-9_.:\\/-]+$/;
+/** Characters every POSIX shell (and fish) reads literally in a bare word. */
+const SAFE_POSIX_PATH_RE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Single-quote a path for a POSIX shell. `'` and `\` are written outside the
+ * quotes (`'\''`, `'\\'`), which bash, zsh and fish all read the same way;
+ * fish would otherwise treat `\'` and `\\` inside quotes as escapes.
+ */
+function quotePosixPath(p: string): string {
+  if (SAFE_POSIX_PATH_RE.test(p)) return p;
+  return `'${p.replace(/['\\]/g, (c) => (c === "'" ? `'\\''` : `'\\\\'`))}'`;
+}
+
+/** Characters PowerShell and cmd.exe both read literally in a bare argument. */
+const SAFE_WINDOWS_PATH_RE = /^[A-Za-z0-9_.:\\/-]+$/;
+
+/**
+ * Characters that are not literal inside double quotes in PowerShell (`$`, a
+ * backtick, and the Unicode double quotes it also ends a string on) or in
+ * cmd.exe (`%`, and `!` under delayed expansion). Without any of them a
+ * double-quoted path reads the same in both.
+ */
+const WINDOWS_DOUBLE_QUOTE_UNSAFE_RE = /[$`%!\u201C-\u201E]/;
 
 /** PowerShell treats all four of these as a single quote inside '...'. */
 const POWERSHELL_SINGLE_QUOTES_RE = /['\u2018\u2019\u201A\u201B]/g;
 
-function quotePowerShellPath(p: string): string {
-  if (SAFE_POWERSHELL_PATH_RE.test(p)) return p;
+type WindowsShellKind = 'powershell' | 'cmd' | 'posix' | 'unknown';
+
+function windowsShellKind(shell: string | undefined): WindowsShellKind {
+  const base = (shell ?? '').toLowerCase().split(/[\\/]/).pop() ?? '';
+  if (base.includes('pwsh') || base.includes('powershell')) return 'powershell';
+  if (base === 'cmd' || base === 'cmd.exe') return 'cmd';
+  if (base.includes('bash') || /^(wsl|sh|zsh|fish|dash|ksh)(\.exe)?$/.test(base)) return 'posix';
+  return 'unknown';
+}
+
+/**
+ * Quote a path for a Windows pane. A bare-safe path stays bare; otherwise
+ * double quotes, which PowerShell and cmd.exe both read literally unless the
+ * name holds `$`, a backtick, `%`, `!` or a Unicode double quote. Only then
+ * does the shell matter: cmd.exe cannot read single quotes, so it keeps double
+ * quotes; PowerShell, and a pane whose shell is unknown (PowerShell is the
+ * app default), get single quotes with each single quote doubled.
+ */
+function quoteWindowsPath(p: string, kind: WindowsShellKind): string {
+  if (kind === 'posix') return quotePosixPath(p);
+  if (SAFE_WINDOWS_PATH_RE.test(p)) return p;
+  if (kind === 'cmd' || !WINDOWS_DOUBLE_QUOTE_UNSAFE_RE.test(p)) return `"${p}"`;
   return `'${p.replace(POWERSHELL_SINGLE_QUOTES_RE, '$&$&')}'`;
 }
 
 /**
- * Which quoting a Windows pane gets, from the configured default shell
- * (a path or a legacy name). The renderer does not know each pane's shell,
- * and PowerShell is the app's default, so anything unrecognised is PowerShell.
- */
-function windowsQuoteStyle(shell: string | undefined): 'powershell' | 'cmd' | 'posix' {
-  const base = (shell ?? '').toLowerCase().split(/[\\/]/).pop() ?? '';
-  if (base.includes('pwsh') || base.includes('powershell')) return 'powershell';
-  if (base.includes('bash') || base.includes('wsl')) return 'posix';
-  if (base === 'cmd' || base === 'cmd.exe') return 'cmd';
-  return 'powershell';
-}
-
-/**
  * Quote each path so the pane's shell reads it literally, and join with a
- * single space. POSIX shells and PowerShell get single quotes; cmd.exe cannot
- * read single quotes, so it keeps the double-quote-on-space rule. A path
- * containing a control character is left out (a newline would submit the line
- * outside bracketed paste); if every path is left out the result is ''.
+ * single space. `shell` is the pane's shell executable (only consulted on
+ * Windows; undefined = unknown). A path containing a control character is left
+ * out (a newline would submit the line outside bracketed paste); if every path
+ * is left out the result is ''.
  */
 export function quotePathsForPrompt(
   paths: string[],
   platform: string | undefined = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined,
-  windowsShell: string | undefined = platform === 'win32' ? useStore.getState().defaultShell : undefined,
+  shell?: string,
 ): string {
-  const style = platform === 'win32' ? windowsQuoteStyle(windowsShell) : 'posix';
-  const quote = style === 'posix'
-    ? quotePosixPath
-    : style === 'powershell'
-      ? quotePowerShellPath
-      : (p: string) => (p.includes(' ') ? `"${p}"` : p);
-  return paths.filter((p) => p && !CONTROL_CHAR_RE.test(p)).map(quote).join(' ');
+  const kind = platform === 'win32' ? windowsShellKind(shell) : null;
+  return paths
+    .filter((p) => p && !CONTROL_CHAR_RE.test(p))
+    .map((p) => (kind ? quoteWindowsPath(p, kind) : quotePosixPath(p)))
+    .join(' ');
+}
+
+/** The pane's shell executable from the pty list, or undefined when unknown. */
+async function ptyShell(ptyId: string): Promise<string | undefined> {
+  try {
+    return (await window.electronAPI.pty.list()).find((s) => s.id === ptyId)?.shell;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Paste paths into the pane, quoted for its shell (no Enter). */
+export async function insertPathsIntoPty(ptyId: string, paths: string[]): Promise<void> {
+  if (!ptyId) return;
+  const platform = window.electronAPI.platform;
+  const shell = platform === 'win32' ? await ptyShell(ptyId) : undefined;
+  await injectText(ptyId, quotePathsForPrompt(paths, platform, shell), false);
 }
 
 /** The ordered raw writes for a submit/no-submit inject. Pure, for testing. */
@@ -81,5 +122,5 @@ export async function attachFilesToPty(ptyId: string): Promise<void> {
   if (!ptyId) return;
   const paths = await window.electronAPI.dialog.pickFile();
   if (paths.length === 0) return;
-  await injectText(ptyId, quotePathsForPrompt(paths), false);
+  await insertPathsIntoPty(ptyId, paths);
 }

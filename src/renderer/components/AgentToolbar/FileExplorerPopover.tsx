@@ -5,7 +5,7 @@ import { selectActiveWorkspace } from '../../stores/selectors/workspaceProjectio
 import { useT } from '../../hooks/useT';
 import { parsePorcelain, type GitStatusCode } from '../../../shared/gitStatus';
 import { findActiveLeaf } from '../../utils/focusedSurface';
-import { injectText, quotePathsForPrompt } from './inject';
+import { insertPathsIntoPty } from './inject';
 import { placePopover } from './placePopover';
 
 interface Entry { name: string; path: string; isDirectory: boolean; isSymlink: boolean; }
@@ -93,7 +93,7 @@ export default function FileExplorerPopover({ cwd: cwdProp, ptyId, onClose }: Fi
   }, [statusByRel]);
 
   const insertPath = (path: string) => {
-    if (ptyId) void injectText(ptyId, quotePathsForPrompt([path]), false);
+    if (ptyId) void insertPathsIntoPty(ptyId, [path]);
     onClose();
   };
 

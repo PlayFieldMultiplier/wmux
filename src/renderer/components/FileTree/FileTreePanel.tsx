@@ -7,7 +7,7 @@ import { findLeaf } from '../../../shared/paneUtils';
 import type { Pane, Workspace } from '../../../shared/types';
 import { IconChevron, IconFile, IconFolder, IconRefresh, IconSearch, IconX } from '../icons';
 import { FOCUS_RING } from '../focusRing';
-import { injectText, quotePathsForPrompt } from '../AgentToolbar/inject';
+import { insertPathsIntoPty } from '../AgentToolbar/inject';
 import { tokenAttrs } from '../../themes';
 import FileTreeResizeHandle from './FileTreeResizeHandle';
 import { filterTree, FILTER_SCAN_LIMIT, type FilterResult } from './fileTreeFilter';
@@ -544,7 +544,7 @@ export default function FileTreePanel({ position }: FileTreePanelProps) {
             <button
               type="button"
               role="menuitem"
-              onClick={() => runMenu(() => { void injectText(ptyId, quotePathsForPrompt([menu.node.path]), false); })}
+              onClick={() => runMenu(() => { void insertPathsIntoPty(ptyId, [menu.node.path]); })}
               data-file-tree-action="insert"
             >
               {t('filetree.menu.insertPath')}
