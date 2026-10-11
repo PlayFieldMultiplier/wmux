@@ -175,8 +175,15 @@ describe('toolErrorCodeFor — protected-pane refusals', () => {
     expect(toolErrorCodeFor(new Error('page title says policy_denied: yes'))).toBe('unknown_error');
   });
 
+  it('reports a consent nobody could be asked for as needs_consent', () => {
+    const raw = new Error('browser.consent.request: needs_consent: download on a.test. Nobody is watching this run.');
+    expect(toolErrorCodeFor(raw)).toBe('needs_consent');
+    expect(toolErrorCodeFor(new BrowserPolicyError('needs_consent', 'unattended'))).toBe('needs_consent');
+  });
+
   it('is in the closed set', () => {
     expect(TOOL_ERROR_CODES).toContain('policy_denied');
+    expect(TOOL_ERROR_CODES).toContain('needs_consent');
   });
 });
 

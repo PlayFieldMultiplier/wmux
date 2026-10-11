@@ -46,7 +46,7 @@
  * prior art. No code copied.
  */
 
-import { browserPolicyRefusalCode, POLICY_DENIED_CODE } from '../../shared/browserPolicy';
+import { browserPolicyRefusalCode } from '../../shared/browserPolicy';
 
 /** What a mutating tool did to the page, as far as this process can verify. */
 export const EFFECT_STATES = ['none', 'committed', 'unknown'] as const;
@@ -72,9 +72,11 @@ export const TOOL_ERROR_CODES = [
   'transport_lost',
   'not_supported',
   'dialog_blocked',
-  // A protected pane's refusal (src/shared/browserPolicy.ts): final until the
+  // A protected pane's refusals (src/shared/browserPolicy.ts): final until the
   // operator changes the pane's policy, so an agent must not retry it unchanged.
   'policy_denied',
+  // Consent the operator could not be asked for (a scheduled run nobody watches).
+  'needs_consent',
   'unknown_error',
 ] as const;
 
@@ -265,7 +267,8 @@ export function toolErrorCodeFor(error: unknown): ToolErrorCode {
   if (tagged) return tagged.code;
   // Asked before the wording table: the refusal quotes main's reason, which may
   // itself mention a timeout or a hidden element.
-  if (browserPolicyRefusalCode(error) === POLICY_DENIED_CODE) return 'policy_denied';
+  const refusal = browserPolicyRefusalCode(error);
+  if (refusal) return refusal;
   const message = error instanceof Error ? error.message : String(error);
   for (const [pattern, code] of MESSAGE_CODES) {
     if (pattern.test(message)) return code;
