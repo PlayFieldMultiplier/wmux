@@ -2263,7 +2263,8 @@ every state change, and once more (same `state`) when an item switches to
 `steer` or a `queued` item's `holdReason` changes (a try held for the same
 reason as the last one sends nothing). `delivering` is sent only once the first write
 is about to happen; an item the daemon holds back before that never shows
-`delivering` then `queued`. Live-only like `chat.blocked` (no `id:`, never replayed),
+`delivering` then `queued`, and one held back after it (an OpenCode plugin
+answering busy) is always sent as `queued` again, with its `holdReason`. Live-only like `chat.blocked` (no `id:`, never replayed),
 and only to the item's owner among the pane's `/turns` watchers. `/turns` is
 the authoritative state after a reconnect.
 

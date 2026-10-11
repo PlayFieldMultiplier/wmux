@@ -2056,6 +2056,27 @@ describe('daemon queue (chat-queue)', () => {
     expect(f.unsubscribe).toHaveBeenCalledWith(QUEUE_WATCH_CLIENT, 'pane');
   });
 
+  it('an item held after the phone saw it delivering is always announced back as queued', async () => {
+    const f = fixture();
+    f.state.native = { status: { ...TUI_STATUS, agentStatus: 'running' }, page: page('raw:ses_one') };
+    const q = queued(f);
+    const { clientMessageId } = await q.bridge.send({ owner: 'device:a', id: 'pane', agentSessionId: 'ses_one', historyEpoch: tuiHistoryEpoch('raw:ses_one'),
+      clientMessageId: msgId(), text: 'tui', managedReadOnly: true, queue: { authorized: allow } });
+    // The plugin takes the authorized request, then answers busy: twice, the same hold.
+    f.tuiSend.mockImplementation(async (...args: unknown[]) => {
+      await (args[4] as { authorized: (stage: string) => Promise<boolean> }).authorized('first-write');
+      return { result: 'busy' } as never;
+    });
+    f.state.native = { status: TUI_STATUS, page: page('raw:ses_one') };
+    await q.bridge.kickQueue('pane');
+    await q.bridge.kickQueue('pane');
+    // Every `delivering` is followed by `queued` naming the hold, the same reason each time included.
+    const seen = q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => `${e.state}:${e.holdReason ?? ''}`);
+    const tries = seen.filter((e) => e === 'delivering:').length;
+    expect(tries).toBeGreaterThanOrEqual(2);
+    expect(seen.slice(seen.indexOf('delivering:'))).toEqual(Array.from({ length: tries }, () => ['delivering:', 'queued:busy']).flat());
+  });
+
   it('a draft in a complete (not idle) Claude composer still fails the item', async () => {
     const f = fixture(); f.liveClaude(); runningTurn(f, 1);
     const q = queued(f);

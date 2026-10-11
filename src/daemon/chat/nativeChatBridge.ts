@@ -1216,9 +1216,12 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       if ('hold' in verdict) {
         if (inserted === 'inserted') receipts?.discard(head.owner, head.clientMessageId);
         if (verdict.hold) memo.hold = verdict.hold;
+        const reason: ChatQueueHoldReason = verdict.hold === 'prompt-active' ? 'approval'
+          : verdict.hold === 'blocked' ? screenHold ?? 'dialog' : outcome.error === 'chat-busy' ? 'busy' : 'unavailable';
+        // Once the phone was shown `delivering`, it is always told the item is back.
+        if (announced) { memo.holdReason = reason; settle(head, 'queued'); return; }
         settle(head, 'queued', undefined, true);
-        return held(verdict.hold === 'prompt-active' ? 'approval' : verdict.hold === 'blocked' ? screenHold ?? 'dialog'
-          : outcome.error === 'chat-busy' ? 'busy' : 'unavailable');
+        return held(reason);
       }
       if (inserted === 'inserted' && !receipts?.complete(head.owner, head.clientMessageId, outcome)) {
         deps.log('warn', `[chat] send receipt for queued ${id} not persisted`);
