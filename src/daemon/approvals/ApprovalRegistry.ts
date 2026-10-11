@@ -70,6 +70,7 @@ import {
   parsePlanPrompt,
   parseTerminalPrompt,
   terminalPromptAnswerability,
+  titleSaysUnsandboxed,
   toolOfDialog,
   webSearchDetail,
   type ParsedTerminalPrompt,
@@ -1593,7 +1594,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     );
     const answer = bound ? terminalPromptAnswerability(parsed) : null;
     const answerable = !!answer?.answerable;
-    const risky = terminalPromptTextRisk(command, summary, parsed?.reason);
+    // The phone card shows no title: a dialog that runs the call outside the
+    // sandbox is flagged critical, so the approver gets the louder treatment
+    // the terminal's "(unsandboxed)" title gives the person at the desk.
+    const risky = terminalPromptTextRisk(command, summary, parsed?.reason) || titleSaysUnsandboxed(parsed?.title);
     const inputHash = binding && !binding.unbindable ? toolInputHash(binding.input) : undefined;
     const record: WithIdentity = {
       id: this.newId(),

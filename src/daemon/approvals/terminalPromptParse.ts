@@ -761,7 +761,7 @@ export function toolFromDialogTitle(title: string | undefined): string | undefin
 }
 
 /** The title says Claude runs this call outside its sandbox ("Bash command (unsandboxed)"). */
-function titleSaysUnsandboxed(title: string | undefined): boolean {
+export function titleSaysUnsandboxed(title: string | undefined): boolean {
   return !!title && COMMAND_TITLE.exec(title)?.[2] !== undefined;
 }
 

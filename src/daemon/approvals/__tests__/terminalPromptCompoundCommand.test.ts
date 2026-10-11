@@ -180,6 +180,8 @@ describe('compound-command and unsandboxed records', () => {
     expect(record.choices?.map((c) => c.key)).toEqual(keys);
     expect(record.reason).toMatch(/^A variable in this command can't be checked before it runs/);
     expect(record.promptFingerprint).toMatch(/^[0-9a-f]{32}$/);
+    // Outside the sandbox: flagged critical, since the phone card shows no title.
+    expect(record.risk).toBe(fx.screen.some((row) => row.includes('(unsandboxed)')) ? 'critical' : undefined);
     expect(await h.registry.resolve({
       id: record.id,
       decision: 'approve',
