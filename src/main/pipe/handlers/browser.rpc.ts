@@ -133,7 +133,17 @@ export interface BrowserPolicyWiring {
   store: Pick<BrowserPolicyStore, 'hasAnyHistory' | 'workspaceHasHistory' | 'decisionFor'>;
   /** paneId → its exclusive Chrome profile binding (ChromeProfileStore). */
   paneBindings: () => ChromePaneBindings;
+  /** Receives the caller-protection check below, for callers outside browser.* (computer use). */
+  exposeCallerProtection?: (check: CallerBrowserProtection) => void;
 }
+
+/**
+ * Whether the calling pane's agent may act outside the browser lane on its
+ * desktop: null when it may, otherwise why not. Answered by the same gate every
+ * browser.* call passes — a protected caller, a pane the gate refuses, and a
+ * caller it cannot identify while any pane is protected all get a reason.
+ */
+export type CallerBrowserProtection = (method: string, ctx: RpcContext | undefined) => Promise<string | null>;
 
 /** Token-addressed lease bookkeeping: no caller scope, nothing to decide. */
 const PROTECTED_GATE_EXEMPT: ReadonlySet<string> = new Set(['browser.lease.renew', 'browser.lease.release']);
@@ -1063,6 +1073,29 @@ export function registerBrowserRpc(
 
   /** The protected decision the gate recorded for this call, if any. */
   const protectedDecisionOf = (ctx: RpcContext | undefined) => (ctx ? protectedDecisions.get(ctx) : undefined);
+
+  // Computer use asks the same gate: from a protected pane its agent could
+  // drive the pane's own Chrome window — DevTools, the address bar, a
+  // javascript: URL — around every check above.
+  browserPolicy?.exposeCallerProtection?.(async (method, ctx) => {
+    const store = browserPolicy?.store;
+    if (!store || !store.hasAnyHistory()) return null;
+    if (!ctx) return 'the caller could not be identified';
+    // The gate leaves an unscoped caller to the handler's own refusal; here
+    // nothing else would refuse it, and it could be a protected pane's agent.
+    if (callerScope(ctx, {}).kind === 'rejected') {
+      return 'the calling pane could not be identified while a browser pane is protected';
+    }
+    try {
+      await protectedGate(method, {}, ctx);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return message.startsWith(`${method}: `) ? message.slice(method.length + 2) : message;
+    }
+    const decided = protectedDecisionOf(ctx);
+    protectedDecisions.delete(ctx);
+    return decided ? "this pane's browser is protected" : null;
+  });
 
   const router: Pick<RpcRouter, 'register'> = {
     register: (method, handler) =>
