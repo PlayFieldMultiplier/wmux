@@ -26,8 +26,11 @@ import { DEFAULT_SESSION_NAME, isValidSessionName } from '../replRegistry';
 import { truncateText } from '../truncate';
 import { toAgentPath } from '../../wslPaths';
 
+/** A gate that lets every call run, as main does for an unprotected pane. */
+const allowCode = async () => undefined;
+
 describe('repl tool catalog', () => {
-  const catalog = createReplToolCatalog();
+  const catalog = createReplToolCatalog(allowCode);
 
   it('registers exactly the three MVP tools', () => {
     expect(catalog.map((spec) => spec.name)).toEqual(['repl_run', 'repl_reset', 'repl_sessions']);
@@ -276,7 +279,7 @@ describe('repl_run browser binding', () => {
 });
 
 function catalogDescription(): string {
-  return createReplToolCatalog()[0].description;
+  return createReplToolCatalog(allowCode)[0].description;
 }
 
 describe('repl_run cwd for a WSL caller', () => {
@@ -288,7 +291,7 @@ describe('repl_run cwd for a WSL caller', () => {
   it('refuses a distro cwd before starting a runtime', async () => {
     process.env.WMUX_WSL_DISTRO = 'Ubuntu';
     process.env.WMUX_WSL_MOUNT = '/mnt/c/';
-    const run = createReplToolCatalog()[0];
+    const run = createReplToolCatalog(allowCode)[0];
 
     const res = (await run.invoke({ code: '1', cwd: '/home/me/proj' }, {} as never)) as {
       content: { type: string; text: string }[];
@@ -302,7 +305,7 @@ describe('repl_run cwd for a WSL caller', () => {
   it('names a missing drive-mount cwd in the WSL spelling', async () => {
     process.env.WMUX_WSL_DISTRO = 'Ubuntu';
     process.env.WMUX_WSL_MOUNT = '/mnt/c/';
-    const run = createReplToolCatalog()[0];
+    const run = createReplToolCatalog(allowCode)[0];
 
     const res = (await run.invoke({ code: '1', cwd: '/mnt/c/wmux-no-such-dir' }, {} as never)) as {
       content: { type: string; text: string }[];
@@ -325,7 +328,7 @@ describe('repl_run cwd for a WSL caller', () => {
       fs.mkdirSync(path.join(base, 'alias'));
       fs.mkdirSync(verbatim(dotted));
       try {
-        const run = createReplToolCatalog()[0];
+        const run = createReplToolCatalog(allowCode)[0];
         type Res = { content: { type: string; text: string }[]; isError?: boolean };
 
         const fromWindows = (await run.invoke({ code: '1', session: 'alias-win', cwd: dotted }, {} as never)) as Res;

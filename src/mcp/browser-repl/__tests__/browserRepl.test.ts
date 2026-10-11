@@ -955,7 +955,7 @@ describe('browser_repl images', () => {
 
   it('renders the image legend and puts the images in the tool result after the text', async () => {
     const h = harness();
-    const result = await createBrowserReplCatalog(h.tools)[0].invoke(
+    const result = await createBrowserReplCatalog(h.tools, async () => undefined)[0].invoke(
       { code: 'await browser.screenshot(); 1' },
       { principal: { kind: 'unattributed' } },
     );
