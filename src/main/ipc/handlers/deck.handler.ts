@@ -211,6 +211,7 @@ import {
   type DeckBriefingConfig,
 } from '../../deck/deckBriefingStore';
 import { eventBus, type EventBusSubscriber } from '../../events/EventBus';
+import { createFanoutCallerStopNotify } from '../../deck/fanoutCallerStopNotify';
 import {
   loadDeckSchedules,
   mutateDeckSchedules,
@@ -2137,7 +2138,14 @@ export function registerDeckHandler(
   const disposeCallerLedgerNotify = installFanoutCallerLedgerNotify(ownerHasBrain, notifyCaller);
   // A worker whose agent exited, whose PTY ended, or that sits idle long after
   // its last turn moves to input_required, which the line above tells the caller.
-  const workerWatch = startFanoutWorkerWatch(getWindow, () => opts.getDaemonClient?.() ?? null, ownerHasBrain);
+  // Also, with Moa's runtime off, a brainless parent still hears its workers'
+  // turn ends (fanoutCallerStopNotify.ts); with it on, onBusEvent does that.
+  const workerWatch = startFanoutWorkerWatch(
+    getWindow,
+    () => opts.getDaemonClient?.() ?? null,
+    ownerHasBrain,
+    createFanoutCallerStopNotify({ deckRuntimeActive: () => offBus !== null, hasBrain: ownerHasBrain, notify: notifyCaller }),
+  );
   // The pane that owns a PR, told about CI / review / conflict when no brain
   // listens (prOwnerNotify.ts). The coalescer push below is unchanged.
   setPrOwnerSink((ev) => {

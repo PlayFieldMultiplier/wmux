@@ -4,6 +4,7 @@
 // stays one line.
 
 import type { BrowserWindow } from 'electron';
+import type { AgentLifecycleEvent } from '../../shared/events';
 import { eventBus } from '../events/EventBus';
 import { resolvePtyOwnerWorkspace } from '../workspace/ptyOwnership';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
@@ -15,6 +16,8 @@ export function startFanoutWorkerWatch(
   getWindow: () => BrowserWindow | null,
   getDaemonClient: () => unknown,
   hasBrain: (ownerWorkspaceId: string) => boolean,
+  /** Another always-on consumer of worker turn ends (fanoutCallerStopNotify.ts). */
+  onLifecycle?: (ev: AgentLifecycleEvent) => void,
 ): FanoutWorkerWatch {
   const probe = createDaemonLaunchProbe(() => (getDaemonClient() as LaunchProbeDaemon | null) ?? null);
   const watch = installFanoutWorkerWatch({
@@ -30,7 +33,9 @@ export function startFanoutWorkerWatch(
   });
   // Its own subscription, not the deck's: that one only runs while Moa is on.
   const offBus = eventBus.subscribe((ev) => {
-    if (ev.type === 'agent.lifecycle') watch.noteLifecycle(ev);
+    if (ev.type !== 'agent.lifecycle') return;
+    watch.noteLifecycle(ev);
+    onLifecycle?.(ev);
   });
   return {
     ...watch,
