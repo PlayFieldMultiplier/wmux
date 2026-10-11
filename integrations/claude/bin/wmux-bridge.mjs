@@ -558,8 +558,11 @@ function extractPermissionModeFromTranscript(transcriptPath) {
 //    the pane's turn latch stayed open with the agent idle at its prompt.
 //  - TURN SCOPE: only shells dispatched in the turn that just ended count. A
 //    turn starts at a non-meta user record that carries no tool_result (a
-//    typed prompt, an interrupt marker, or a task-notification Claude Code
-//    answers). A shell from an earlier turn that is still alive is a server
+//    typed prompt or an interrupt marker). A task-notification turn and a
+//    compact summary do not start one: the shells of the turn they continue
+//    are still that turn's work, and a sibling still running after another
+//    one's notification must keep the pane running (#1096). A shell from an
+//    earlier turn that is still alive is a server
 //    the agent left up on purpose (`npm run dev`, live transcript
 //    2026-10-11): it never ends, so counting it kept every later Stop
 //    `running` and the pane showed a live dot with the agent idle.
@@ -616,6 +619,8 @@ function countLeftoverBackgroundTasks(transcriptPath) {
         : null;
       // TURN SCOPE — a new turn drops the dispatches of the turns before it.
       if (entry.type === 'user' && entry.isMeta !== true && entry.message
+        && entry.isCompactSummary !== true
+        && !(entry.origin && entry.origin.kind === 'task-notification')
         && (typeof entry.message.content === 'string'
           || (content && !content.some((b) => b && b.type === 'tool_result')))
       ) {

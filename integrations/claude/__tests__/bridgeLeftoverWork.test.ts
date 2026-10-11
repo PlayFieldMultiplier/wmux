@@ -366,6 +366,35 @@ describe('countLeftoverBackgroundTasks — scoped to the turn that just ended', 
     expect(count(p)).toBe(1);
   });
 
+  it('a task-notification turn continues its turn: a sibling still running keeps counting', () => {
+    // Claude Code writes the turn it runs for a finished shell as a non-meta
+    // user record with a string body. The other shell from the same turn is
+    // still running, so that turn's Stop has leftover work (#1096).
+    const p = fixture('sibling-after-notification.jsonl', [
+      userPrompt('run unit and e2e in the background'),
+      bgStart('call_unit'),
+      bgStartResultWithTaskId('call_unit', 'bunit'),
+      bgStart('call_e2e'),
+      bgStartResultWithTaskId('call_e2e', 'be2e'),
+      notificationFor('call_unit', 'bunit'),
+      userPrompt(notificationFor('call_unit', 'bunit').content, { origin: { kind: 'task-notification' } }),
+    ]);
+    expect(count(p)).toBe(1);
+  });
+
+  it('a compact summary does not open a new turn', () => {
+    const p = fixture('compact-mid-turn.jsonl', [
+      userPrompt('build it'),
+      bgStart('call_c'),
+      bgStartResultWithTaskId('call_c', 'bcompact'),
+      userPrompt('This session is being continued from a previous conversation…', {
+        isCompactSummary: true,
+        isVisibleInTranscriptOnly: true,
+      }),
+    ]);
+    expect(count(p)).toBe(1);
+  });
+
   it('text-block prompts open a new turn too', () => {
     const p = fixture('array-prompt.jsonl', [
       bgStart('call_old'),
