@@ -419,7 +419,13 @@ function boxedCommand(
       ? { top: i, upper, lower }
       : null;
   }
-  return allGutter ? { top: -1, upper, lower } : null;
+  if (allGutter) return { top: -1, upper, lower };
+  // The top scrolled off over a short, gutterless command (a warning
+  // paragraph under the box makes the dialog taller): a "<Tool> command"
+  // title still on screen above the box says it holds a command.
+  return gutter === 0 && lines.slice(0, upper).some((l) => toolFromDialogTitle(normalizePromptText(l)) !== undefined)
+    ? { top: -1, upper, lower }
+    : null;
 }
 
 /** The boxed layout read as the usual record: the first prose row is the
@@ -445,7 +451,10 @@ function parseBoxedPrompt(
     head = t >= 0 ? head.slice(t) : [];
   }
   const commandRows = nonBlank(box.upper + 1, box.lower).map((line) => normalizePromptText(line.trim().replace(GUTTER, '')));
-  const reasonRows = nonBlank(box.lower + 1, questionStart).map(normalizePromptText);
+  // A warning paragraph Claude draws under the box (2.1.296: "This command
+  // changes directory before running a version-control command, …") has a
+  // gutter of its own: it is reason prose, read without the glyph.
+  const reasonRows = nonBlank(box.lower + 1, questionStart).map((line) => normalizePromptText(line.trim().replace(GUTTER, '')));
   const bodyCut = [...head, ...nonBlank(box.upper + 1, questionStart)].some((line) => CUT_ROW.test(line));
   const cut = bodyCut || fullOptions.some((o) => o.cut);
   let truncated = false;
