@@ -1,0 +1,23 @@
+{
+ "tui": "claude",
+ "version": "Claude Code 2.1.296",
+ "cols": 44,
+ "rows": 13,
+ "keysSent": "(question drawn)",
+ "note": "AskUserQuestion, one single-select question (header \"Approach\", 2 options with descriptions, plus Claude's \"Type something.\" and \"Chat about this\" rows), main buffer, nothing typed: 44x13, Claude scrolls the option list inside the picker: \"↓ 2.\" marks more rows below and the \"Type something.\" row is not drawn",
+ "screen": [
+  "The build failed on the lint step, how ",
+  "should I proceed?",
+  "",
+  "❯ 1. Fix the lint errors",
+  "     Edit the files the linter flagged",
+  "↓ 2. Skip lint for now",
+  "     Commit with the lint step disabled",
+  "────────────────────────────────────────────",
+  "  4. Chat about this",
+  "",
+  "Enter to select · ↑/↓ to navigate · Esc to",
+  "cancel",
+  ""
+ ]
+}

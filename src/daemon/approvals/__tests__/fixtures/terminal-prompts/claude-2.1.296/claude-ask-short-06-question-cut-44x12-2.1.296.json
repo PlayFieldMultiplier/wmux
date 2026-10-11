@@ -1,0 +1,22 @@
+{
+ "tui": "claude",
+ "version": "Claude Code 2.1.296",
+ "cols": 44,
+ "rows": 12,
+ "keysSent": "(question drawn)",
+ "note": "AskUserQuestion, one single-select question (header \"Approach\", 2 options with descriptions, plus Claude's \"Type something.\" and \"Chat about this\" rows), main buffer, nothing typed: 44x12, the question's first row scrolled off and the option list scrolled (\"↓ 2.\"); the dialog is still up",
+ "screen": [
+  "should I proceed?",
+  "",
+  "❯ 1. Fix the lint errors",
+  "     Edit the files the linter flagged",
+  "↓ 2. Skip lint for now",
+  "     Commit with the lint step disabled",
+  "────────────────────────────────────────────",
+  "  4. Chat about this",
+  "",
+  "Enter to select · ↑/↓ to navigate · Esc to",
+  "cancel",
+  ""
+ ]
+}

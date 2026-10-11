@@ -1856,7 +1856,16 @@ form describes: the answer is 409 `prompt-changed` with nothing typed.
 - The picker must be untouched when the answer starts: the first question, no
   tab answered, the cursor on option 1, nothing ticked, no typed text. Anything
   else is 409 `prompt-changed` with `effect: 'none'` and nothing typed; a
-  question no longer on screen is 410 `prompt-gone`.
+  question no longer on screen is 410 `prompt-gone`. A pane too short for
+  the whole picker (one the phone sized to its own view) is still read while
+  its question and every option row are on screen: with the tab bar scrolled
+  off, for a single single-select question only. Once Claude scrolls the
+  option list itself (`↓` before a row) the answer is 409 `prompt-changed`
+  and the record stays pending; a taller view (about 17 rows at 44 columns
+  for two options) makes it answerable again.
+- A question dismissed with Esc at the computer sends Claude Code no hook;
+  its record expires (`prompt-gone`) a couple of seconds later, once the
+  screen shows the question gone and no picker up.
 - 200 `{state: 'resolved', effect: 'complete'}` only once the screen confirms
   the answer: this prompt's picker is gone and a new "User answered Claude's
   questions" block lists every question with exactly the answer given. When every key

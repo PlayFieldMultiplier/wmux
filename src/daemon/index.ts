@@ -6754,6 +6754,9 @@ function wireEvents(
       payload.sessionId,
       payload.reason === 'screen-cleared' ? 'screen-cleared' : 'answered-locally',
     ).catch((err: unknown) => log('warn', `[approvals] answered card sweep failed for ${payload.sessionId}: ${String(err)}`));
+    // An AskUserQuestion dismissed with Esc sends no hook: its record is
+    // retired once the screen shows the question gone.
+    approvalRegistry?.noteDialogKey(payload.sessionId);
     const managed = sessionManager.getSession(payload.sessionId);
     const screenAgent = managed?.bridge.getLastAgent() ?? null;
     const slug = (screenAgent ? agentDisplayToSlug(screenAgent) : undefined) ?? managed?.meta.lastDetectedAgent;

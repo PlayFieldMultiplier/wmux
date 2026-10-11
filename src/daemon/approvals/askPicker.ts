@@ -38,6 +38,13 @@
 // one-row question, the option rows and their descriptions draw none. The
 // review screen draws the same gutter before a wrapped `● question` entry.
 //
+// A pane too short for the whole picker (measured on 2.1.296, 44 columns: 16
+// rows or fewer, which a phone sets when it sizes the pane to its own view)
+// shows its bottom: first the top rule scrolls off (the tab bar is row 0),
+// then the tab bar (the question is the first text), then Claude scrolls the
+// option list itself (`↓ 2.` marks rows below, the free-text row is not
+// drawn). The first two still read as the picker; a scrolled list never does.
+//
 // Measured key effects (KEYS.md): on a single-select question a digit selects
 // and moves to the next tab (or, alone, submits); on a multi-select question a
 // digit only toggles its row and the cursor stays put; the free-text row of a
@@ -69,6 +76,11 @@ interface AskPickerTabs {
   tabs: Array<{ label: string; answered: boolean }>;
   /** The trailing `✔ Submit` tab (drawn for several questions, or one multi-select). */
   submitTab: boolean;
+  /**
+   * The tab bar scrolled off the top of a short pane: `tabs` is empty and
+   * nothing is known of the header or which tabs are answered (see tabsMatch).
+   */
+  topCut?: true;
 }
 
 export interface AskPickerQuestionView extends AskPickerTabs {
@@ -335,10 +347,14 @@ function parseReviewView(rows: readonly string[], start: number, bar: AskPickerT
   };
 }
 
-/** The row of the LAST tab bar drawn right under a `────` rule, or -1. Rows are right-trimmed. */
+/**
+ * The row of the LAST tab bar drawn right under a `────` rule, or -1. A tab
+ * bar on row 0 counts too: its rule scrolled off the top of a short pane.
+ * Rows are right-trimmed.
+ */
 function lastTabBar(rows: readonly string[]): number {
-  for (let bar = rows.length - 1; bar > 0; bar--) {
-    if (RULE.test(rows[bar - 1]!.trim()) && parseTabBar(rows[bar]!)) return bar;
+  for (let bar = rows.length - 1; bar >= 0; bar--) {
+    if ((bar === 0 || RULE.test(rows[bar - 1]!.trim())) && parseTabBar(rows[bar]!)) return bar;
   }
   return -1;
 }
@@ -347,6 +363,14 @@ function lastTabBar(rows: readonly string[]): number {
  * The AskUserQuestion picker at the bottom of the grid, or null. The picker is
  * the LAST tab bar drawn right under a `────` rule; a question view must end
  * at its bottom rule, a review view with its numbered rows.
+ *
+ * With no tab bar on the grid at all, a question view that fills the grid
+ * from its first text row to the hint is read with `topCut` (the bar scrolled
+ * off a short pane). Every rule of the view still holds: the rows from the top
+ * to the first option row are the question (no rule among them), then the
+ * option rows to the bottom rule, then only the chat row and the hint. Rows
+ * above a picker whose bar is gone can only be the picker's own, so whatever
+ * else is on screen there reads as question text and fails the question match.
  */
 export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | null {
   const rows = rawRows.map((row) => row.replace(/\s+$/, ''));
@@ -360,7 +384,19 @@ export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | nu
       ? parseReviewView(rows, i + 1, tabs)
       : parseQuestionView(rows, i, tabs);
   }
-  return null;
+  const first = rows.findIndex((row) => row.trim().length > 0);
+  if (first < 0 || rows[first]!.trim() === 'Review your answers') return null;
+  return parseQuestionView(rows, first, { tabs: [], submitTab: false, topCut: true });
+}
+
+/**
+ * Claude's picker hint (`Enter to select · … · Esc to cancel`, wrapped over two
+ * rows or not) is on the grid: some question is still up, even when too little
+ * of it is drawn to read (a short pane scrolls its rows).
+ */
+export function askPickerHintShown(rawRows: readonly string[]): boolean {
+  const rows = rawRows.map((row) => normalize(row)).filter((row) => row.length > 0);
+  return rows.some((row, i) => HINT.test(row) || (i + 1 < rows.length && HINT.test(`${row} ${rows[i + 1]}`)));
 }
 
 /** How many "User answered Claude's questions:" blocks the grid shows. */
@@ -473,8 +509,18 @@ export function answerLabels(question: AskFormQuestion, answer: AskAnswer): stri
   ];
 }
 
-/** Tab `j` of `screen` is question `j` of the form. */
+/**
+ * Tab `j` of `screen` is question `j` of the form. A picker whose tab bar
+ * scrolled off (`topCut`) matches only a form of ONE single-select question:
+ * for that shape the bar carries nothing the rest of the view does not prove
+ * while the picker is up (its one tab is unanswered until the digit that
+ * closes the picker; it draws no Submit tab), except the header label, which
+ * names the question and does not change what a key does. Several questions
+ * (which tab is current, which are answered) or a multi-select (its Submit
+ * tab and review) still need the bar.
+ */
 function tabsMatch(screen: AskPickerTabs, questions: readonly AskFormQuestion[]): boolean {
+  if (screen.topCut) return questions.length === 1 && questions[0]!.multiSelect !== true;
   return screen.tabs.length === questions.length
     && screen.tabs.every((tab, j) => tab.label === normalize(questions[j]!.header ?? ''))
     && (questions.length > 1
