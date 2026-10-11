@@ -613,9 +613,15 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
       attempt.on('open',()=>{
         if (!alive || upstream !== attempt) return;
         linked = true;
+        const first = !everLinked;
         everLinked = true;
         endLoss(on);
         linkSettled();
+        // The relay just became live: its owner re-reads it (an empty selection
+        // now does erase a stale recovery hint), before any frame goes upstream.
+        if (first) {
+          try {options.onStateChange?.();} catch {retire();return;}
+        }
         for(const {bytes,id} of queued) { send(attempt,bytes);if (id !== undefined) unsent.delete(id); }
         queued.length = 0;queuedBytes = 0;
       });
