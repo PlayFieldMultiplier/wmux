@@ -1141,35 +1141,53 @@ describe('the Stop gate', () => {
     // then died on the timeout used to hand its tally to the next turn, which
     // would then be allowed to stop on its very first Stop — the gate would go
     // quiet for exactly the fleet that had just proved it needs one.
-    const host = makeHost();
-    const calls: number[] = [];
-    const adapter = makeAdapter(host, {
-      turnTimeoutMs: 60,
-      evaluateStopGate: (_ws: string, consecutiveBlocks: number) => {
-        calls.push(consecutiveBlocks);
-        return { block: true, reason: 'worker-a (running) still needs you' };
-      },
-    });
+    //
+    // The timeout is driven by a FAKE clock. With a real 60 ms timer the turn
+    // raced the test's own setup (spawn + vi.waitFor's 50 ms poll): on a
+    // loaded CI runner the timer fired first, the turn was superseded, and both
+    // Stops below were swallowed as late Stops (`expected [] to deeply equal
+    // [0, 1]`). Now the turn times out exactly when the test says so — after
+    // the refusals — and never before. vi.waitFor advances the fake clock by
+    // its poll interval, far short of the timeout.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const TIMEOUT = 10 * 60_000;
+      const host = makeHost();
+      const calls: number[] = [];
+      const adapter = makeAdapter(host, {
+        turnTimeoutMs: TIMEOUT,
+        evaluateStopGate: (_ws: string, consecutiveBlocks: number) => {
+          calls.push(consecutiveBlocks);
+          return { block: true, reason: 'worker-a (running) still needs you' };
+        },
+      });
 
-    const first = collect(adapter.send('delegate the build'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
-    const ptyId = host.created[0].id;
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
-    expect(calls).toEqual([0, 1]);
-    // The turn is abandoned on the timeout, refusals still outstanding.
-    expect(await first).toEqual([
-      { type: 'error', message: 'the terminal brain did not finish its turn' },
-    ]);
+      const first = collect(adapter.send('delegate the build'));
+      await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+      const ptyId = host.created[0].id;
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
+      expect(calls).toEqual([0, 1]);
+      // The turn is abandoned on the timeout, refusals still outstanding.
+      await vi.advanceTimersByTimeAsync(TIMEOUT);
+      expect(await first).toEqual([
+        { type: 'error', message: 'the terminal brain did not finish its turn' },
+      ]);
+      // The race this clock existed to rule out is over; the next turn runs on
+      // real time (its pending verify delays must elapse for dispose to unwind).
+      vi.useRealTimers();
 
-    const second = collect(adapter.send('a new question'));
-    await vi.waitFor(() => expect(host.writes.filter((w) => w.data === 'a new question').length).toBe(1));
-    // The superseded turn's late Stop is swallowed, so it never reaches the gate.
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-2' }));
-    expect(calls).toEqual([0, 1, 0]);
-    adapter.dispose();
-    await second;
+      const second = collect(adapter.send('a new question'));
+      await vi.waitFor(() => expect(host.writes.filter((w) => w.data === 'a new question').length).toBe(1));
+      // The superseded turn's late Stop is swallowed, so it never reaches the gate.
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-2' }));
+      expect(calls).toEqual([0, 1, 0]);
+      adapter.dispose();
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is never consulted for a Stop with no open turn', async () => {

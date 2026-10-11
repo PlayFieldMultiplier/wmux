@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import { AgentDetector } from '../AgentDetector';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { AgentDetector, CRITICAL_REPEAT_WINDOW_MS, CRITICAL_SEEN_MAX } from '../AgentDetector';
+import { hasElevatedRisk } from '../../../shared/criticalPatterns';
 
 describe('AgentDetector', () => {
   // Helper: feed both banner AND prompt to open the Claude compound gate (#850).
@@ -674,6 +675,125 @@ describe('AgentDetector', () => {
       det.feed('$ rm -rf\t/tmp/junk\n');
       expect(cb).toHaveBeenCalledTimes(1);
       expect(cb.mock.calls[0][0].matchedLine).toBe('$ rm -rf /tmp/junk');
+    });
+  });
+
+  describe('critical lines: one report per line per pane within ten minutes', () => {
+    const LINES = [
+      '⏺ Bash(rm -rf build/cache)\n',
+      '  ⎿  $ git push --force origin main\n',
+      '  DELETE FROM sessions WHERE stale = 1\n',
+    ];
+
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('three rows a TUI keeps redrawing fire once each, across activity cycles', () => {
+      vi.useFakeTimers();
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      for (let redraw = 0; redraw < 20; redraw++) {
+        for (const line of LINES) det.feed(line);
+        det.resetEmissionState(); // every redraw is a new activity cycle
+        vi.advanceTimersByTime(10_000);
+      }
+      expect(cb.mock.calls.map((c) => c[0].action)).toEqual(['rm -rf', 'git push --force', 'DELETE FROM']);
+    });
+
+    it('a new dangerous line still fires at once', () => {
+      vi.useFakeTimers();
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      for (const line of LINES) det.feed(line);
+      det.feed('$ rm -rf /tmp/other\n');
+      expect(cb).toHaveBeenCalledTimes(4);
+      expect(cb).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'rm -rf', matchedLine: '$ rm -rf /tmp/other' }));
+    });
+
+    it('the same line fires again once ten minutes have passed', () => {
+      vi.useFakeTimers();
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      det.feed(LINES[0]!);
+      vi.advanceTimersByTime(CRITICAL_REPEAT_WINDOW_MS - 1);
+      det.feed(LINES[0]!);
+      expect(cb).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      det.feed(LINES[0]!);
+      expect(cb).toHaveBeenCalledTimes(2);
+    });
+
+    it('two long lines that differ past the 80 shown characters both fire', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      const dir = `/tmp/${'x'.repeat(100)}`;
+      det.feed(`$ rm -rf ${dir}/a\n`);
+      det.feed(`$ rm -rf ${dir}/b\n`);
+      expect(cb).toHaveBeenCalledTimes(2);
+      expect(cb.mock.calls[0][0].matchedLine).toBe(cb.mock.calls[1][0].matchedLine);
+    });
+
+    it('a clock set back does not stretch the window', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      det.feed(LINES[0]!);
+      vi.setSystemTime(new Date('2026-10-11T11:00:00Z'));
+      det.feed(LINES[0]!);
+      expect(cb).toHaveBeenCalledTimes(2);
+    });
+
+    it('remembers at most CRITICAL_SEEN_MAX lines, dropping the oldest', () => {
+      vi.useFakeTimers();
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      for (let i = 0; i <= CRITICAL_SEEN_MAX; i++) det.feed(`$ rm -rf /tmp/n${i}\n`);
+      expect(cb).toHaveBeenCalledTimes(CRITICAL_SEEN_MAX + 1);
+      det.feed('$ rm -rf /tmp/n1\n'); // still remembered
+      expect(cb).toHaveBeenCalledTimes(CRITICAL_SEEN_MAX + 1);
+      det.feed('$ rm -rf /tmp/n0\n'); // the oldest was let go
+      expect(cb).toHaveBeenCalledTimes(CRITICAL_SEEN_MAX + 2);
+    });
+
+    it.each([
+      '⏺ Bash(grep -rn "git push --force" src)',
+      '$ rg \'rm -rf /tmp\' docs',
+      '$ echo DROP TABLE users',
+      '$ printf "%s\\n" "npm publish"',
+    ])('a search or print argument does not fire: %s', (line) => {
+      expect(hasElevatedRisk(line)).toBe(true); // the line does name an action
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      det.feed(`${line}\n`);
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      '$ grep -l tmp list.txt | xargs rm -rf --',
+      '$ echo cleaning; rm -rf /tmp/junk',
+      '$ echo done && git push --force origin main',
+      '$ rm -rf $(echo /tmp/junk)',
+      '$ echo "rm -rf /" > run.sh',
+      '⏺ Bash(docker exec echo rm -rf /data)',
+      '⏺ Bash(rm -rf /tmp/victim && echo "git push --force")',
+      '$ grep foo =(rm -rf /build)',
+      // Claude wraps a long call: the next row may carry `| sh"`.
+      '⏺ Bash(echo "rm -rf /tmp/x and a long argument that wraps',
+      // Its result rows wrap the same way, with no closing mark to tell.
+      '  ⎿  $ rg \'rm -rf /tmp\' docs',
+    ])('…but a line that can still run the action does: %s', (line) => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onCritical(cb);
+      det.feed(`${line}\n`);
+      expect(cb).toHaveBeenCalledTimes(1);
     });
   });
 

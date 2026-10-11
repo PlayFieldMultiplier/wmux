@@ -17,7 +17,9 @@ on:
   push:
     branches:
       - main
+  # Drafts skip the job; marking the PR ready runs it (see ci.yml).
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
   workflow_dispatch:
@@ -31,6 +33,7 @@ concurrency:
 jobs:
   baseline:
     name: Baseline (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
     # The slowest leg (windows) takes ~13 min; a hung test must not hold a
     # runner for the 6 h default.

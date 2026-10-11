@@ -83,6 +83,7 @@ const GATE_RUN = '        run: node scripts/perf-compare.mjs --current out/perf-
 const FRESH = 'Confirm on this runner';
 const FRESH_RUN = '        run: node scripts/perf-confirm-fresh.mjs --escalation first/out/perf-escalation.json --current first/out/perf-current.json --baseline bench/baseline-ci.json --json out/perf-fresh.json --summary perf-summary-fresh.md';
 const DETECT = 'Detect escalation';
+const DRAFT_GUARD = "github.event_name != 'pull_request' || github.event.pull_request.draft == false";
 const SAFE_SPLICE_VALUES = new Set([
   '',
   '--append-history out/perf-history-line.ndjson',
@@ -125,7 +126,9 @@ export function checkWorkflow(text) {
   if (/^\s*(?:if|"if"|'if')\s*:/m.test(gate)) v.push('the compare step is conditional, so it can be skipped');
   const job = jobKeys(text, 'bench');
   if (!job) v.push('the bench job is gone');
-  else if (job.some((k) => /^(?:if|"if"|'if')\s*:/.test(k))) {
+  // The one allowed condition skips draft PRs only: drafts run no CI, and a
+  // draft cannot be merged, so marking it ready re-runs the gate first.
+  else if (job.some((k) => /^(?:if|"if"|'if')\s*:/.test(k) && k.replace(/\s+/g, ' ') !== `if: ${DRAFT_GUARD}`)) {
     v.push('the bench job is conditional, and a skipped job reports success');
   }
 
@@ -359,6 +362,13 @@ describe('perf.yml gate contract', () => {
       what: 'the whole job is made conditional with a quoted YAML key',
       mutated: () => mutate(TEXT, '  bench:\n', '  bench:\n    "if": false\n'),
       lines: 1,
+      expected: /skipped job reports success/,
+    },
+    {
+      // The draft guard is the only allowed condition; widening it is not.
+      what: 'the draft guard is widened to skip every pull request',
+      mutated: () => mutate(TEXT, `    if: ${DRAFT_GUARD}\n    runs-on`, "    if: github.event_name != 'pull_request'\n    runs-on"),
+      lines: 2,
       expected: /skipped job reports success/,
     },
     {

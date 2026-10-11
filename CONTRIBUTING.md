@@ -46,6 +46,11 @@ CI (`.github/workflows/ci.yml`) runs the two halves as parallel jobs:
 bundle). A PR needs both green; a branch-protection rule that requires status
 checks must list both.
 
+Draft PRs do not run CI: every job skips while the PR is a draft. Mark it
+ready (`gh pr ready`, or "Ready for review") to start CI, and push to a draft
+freely in the meantime. On CI a failing test is retried once; a test that
+passed only on retry is listed in the job summary.
+
 ### Running tests as an agent
 
 Coding agents pay for every line of test output they read. While working,

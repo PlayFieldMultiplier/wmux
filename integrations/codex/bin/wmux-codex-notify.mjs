@@ -53,10 +53,12 @@ import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import {
-  classifyCodexThread, codexSessionsRoot, notifierOrigin, attributeThread,
+  inspectCodexThread, codexSessionsRoot, codexRolloutMissing, notifierOrigin, attributeThread,
 } from './wmux-codex-thread.mjs';
 
-const HOOK_TIMEOUT_MS = 2000; // hard cap so we never stall a Codex turn
+// Hard cap on the RPC walk so we never stall a Codex turn. Only a stop whose
+// rollout is not on disk yet waits longer, by ROLLOUT_RECHECK_MS (#1765).
+const HOOK_TIMEOUT_MS = 2000;
 const AGENT_TURN_COMPLETE = 'agent-turn-complete';
 // Stamped on every codex-notify.log line; bump on behavior changes.
 //   0.2.0 — daemon-first targeting (daemon.hooks.signal → hooks.signal).
@@ -72,7 +74,13 @@ const AGENT_TURN_COMPLETE = 'agent-turn-complete';
 //           root can no longer rebind or replace a pane's resume binding
 //           either way; the rollout scan runs after the shared-server origin
 //           check and reads a bounded number of directory entries.
-const BRIDGE_VERSION = '0.6.0';
+//   0.7.0 — an agent.stop carries `rolloutMissing`, this process's verdict on
+//           the thread's rollout, so the daemon can hold a title-thread stop
+//           it cannot check itself (#1765).
+const BRIDGE_VERSION = '0.7.0';
+// A rollout can land just after the turn-complete notify; look again before
+// telling the daemon it is missing (#1765).
+const ROLLOUT_RECHECK_MS = [250, 500, 750];
 const CONNECT_RETRY_BACKOFFS_MS = [100, 250];
 const TRANSIENT_CONNECT_CODES = new Set([
   'EPERM', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EBUSY', 'EAGAIN',
@@ -347,7 +355,7 @@ async function sendToTargets(targets, buildRequest) {
 export {
   classifyNotifierOrigin, isSharedServerArgv, claimsPaneIdentity, tokenizeCommandLine,
   parseProcEntry, parsePsEntry, parseHandedArgv,
-  uuidV7Millis, findRolloutFile, parseSessionMeta, classifyCodexThread,
+  uuidV7Millis, findRolloutFile, parseSessionMeta, classifyCodexThread, codexRolloutMissing,
 } from './wmux-codex-thread.mjs';
 
 // ----- Main ---------------------------------------------------------------
@@ -413,13 +421,40 @@ async function main() {
   // agentSessionId (see "Sub-agent threads" above) — never agent.stop under
   // its own id, which would replace the pane's resume binding with a thread
   // the user cannot type into.
-  let thread = { subagent: false, rootId: sessionId };
-  try {
-    thread = classifyCodexThread(sessionId, codexSessionsRoot(process.env));
-  } catch {
-    // Fail open: an unreadable history is today's agent.stop.
-  }
+  const classify = () => {
+    try {
+      return inspectCodexThread(sessionId, codexSessionsRoot(process.env));
+    } catch {
+      // Fail open: an unreadable history is today's agent.stop.
+      return { subagent: false, rootId: sessionId, confirmed: false };
+    }
+  };
+  let { confirmed, ...thread } = classify();
+  // #1765 — the verdict reads the env Codex spawned us with; attribution may
+  // replace the routing env (and drops the WSL launcher's marker).
+  const spawnEnv = { ...process.env };
   if (!await attributeThread(origin, thread)) return;
+  // No verdict (undefined) leaves the daemon's own check, as before. A legacy
+  // payload names its own transcript, which the daemon checks instead.
+  let rolloutMissing;
+  if (!thread.subagent && !transcriptPathClaimed) {
+    try {
+      // A confirmed top-level thread was read from its rollout just now.
+      rolloutMissing = confirmed ? false : codexRolloutMissing(sessionId, spawnEnv);
+      for (const wait of ROLLOUT_RECHECK_MS) {
+        if (rolloutMissing !== true) break;
+        await sleep(wait);
+        rolloutMissing = codexRolloutMissing(sessionId, spawnEnv);
+      }
+      // A rollout that landed after the first look may be a sub-agent's.
+      if (rolloutMissing === false && !confirmed) {
+        ({ confirmed, ...thread } = classify());
+        if (thread.subagent) rolloutMissing = undefined;
+      }
+    } catch {
+      rolloutMissing = undefined;
+    }
+  }
   const envPtyId = nonEmptyStr(process.env.WMUX_PTY_ID);
   const envWorkspaceId = nonEmptyStr(process.env.WMUX_WORKSPACE_ID);
   const envSurfaceId = nonEmptyStr(process.env.WMUX_SURFACE_ID);
@@ -439,8 +474,9 @@ async function main() {
     logEvent('no-auth-token', { origin, ...threadLog, paths: [getDaemonAuthTokenPath(), getAuthTokenPath()] });
     // Still spool so a later daemon boot reconciles the capture. A sub-agent
     // completion carries no id to spool (#1697 review, "should fix" #5): it
-    // must never replace an older, valid agent.stop spool for this pane.
-    if (envPtyId && !thread.subagent) {
+    // must never replace an older, valid agent.stop spool for this pane, and
+    // neither must a thread with no rollout (#1765).
+    if (envPtyId && !thread.subagent && rolloutMissing !== true) {
       spoolResumeBinding({ ptyId: envPtyId, agent: 'codex', sessionId, cwd, transcriptPath, ts: Date.now() });
     }
     return;
@@ -452,7 +488,8 @@ async function main() {
   // with no agentSessionId (see "Sub-agent threads" above), so it binds
   // nothing. Only non-sensitive, allowlisted metadata rides in
   // signal.payload: official turn-id and the legacy transcript_path used by the
-  // binding's D5 liveness probe. Native input/assistant content is never copied.
+  // binding's D5 liveness probe, and the rollout verdict (#1765). Native
+  // input/assistant content is never copied.
   const envelope = {
     kind: signalKind,
     agent: 'codex',
@@ -465,6 +502,7 @@ async function main() {
     payload: {
       ...(turnId ? { 'turn-id': turnId } : {}),
       ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
+      ...(rolloutMissing !== undefined ? { rolloutMissing } : {}),
     },
     ts: Date.now(),
   };
@@ -496,8 +534,9 @@ async function main() {
     // Anything but a durable success would lose the capture. Spool it (needs
     // the exact per-pane key) so the daemon reconciles it on its next boot —
     // except a sub-agent completion, which carries nothing to spool and must
-    // never replace an older, valid agent.stop spool for this pane.
-    if (envPtyId && !thread.subagent) {
+    // never replace an older, valid agent.stop spool for this pane, nor may a
+    // thread with no rollout (#1765).
+    if (envPtyId && !thread.subagent && rolloutMissing !== true) {
       spoolResumeBinding({ ptyId: envPtyId, agent: 'codex', sessionId, cwd, transcriptPath, ts: envelope.ts });
     }
   }

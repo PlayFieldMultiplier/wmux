@@ -49,7 +49,22 @@ const GO = reply({ verdict: 'answer', choiceKey: 'go', ruleId: 'R-merge-green', 
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-moa-ask-')); });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+/** Services built by the test, closed before the directory goes so no
+ *  judging, courier try, merge run or store write is still landing in it.
+ *  A "crashed" one (a judge, enqueue or merge call that never returns, as
+ *  when main dies) only has its store writes awaited: the hung call never
+ *  writes anything. */
+let built: Array<{ service: MoaAskService; decisions: MoaDecisionStore; effects: MoaEffectStore; crashed: boolean }> = [];
+beforeEach(() => { built = []; });
+afterEach(async () => {
+  await Promise.all(built.map(async (b) => {
+    if (!b.crashed) return b.service.close();
+    b.service.stop();
+    await b.decisions.flush();
+    await b.effects.flush();
+  }));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 interface World {
   facts: PrLaneFacts | null;
@@ -120,6 +135,10 @@ function build(w: World) {
     ...(w.login !== undefined ? { currentLogin: async () => w.login ?? null } : {}),
     log: () => undefined,
   });
+  const entry = { service, decisions, effects, crashed: false };
+  built.push(entry);
+  /** A call of this instance never returns (main died mid-flight). */
+  const crash = () => { entry.crashed = true; };
   const settle = async () => {
     await service?.idle();
     // The executor runs in the background after a settle (real file writes:
@@ -127,7 +146,7 @@ function build(w: World) {
     // inFlight, so the wait is bounded.
     await until(() => !effects.list().some((e) => e.status === 'pending' || e.status === 'inFlight'), 500);
   };
-  return { service, decisions, effects, executor, readFresh, merge, judge, readScreen, settle };
+  return { service, decisions, effects, executor, readFresh, merge, judge, readScreen, settle, crash };
 }
 
 /** Poll `cond` every 5 ms for up to `ms`. */
@@ -537,6 +556,7 @@ describe('crashes', () => {
   it('merge succeeded, killed before the receipt: restart reconciles to done without merging again', async () => {
     const w = world();
     const h = build(w);
+    h.crash();
     // GitHub merges, then main dies before finish(): the call never returns.
     w.onMerge = () => {
       if (w.facts) w.facts = { ...w.facts, state: 'MERGED', mergeCommitOid: SQUASH };
@@ -557,6 +577,7 @@ describe('crashes', () => {
   it('inFlight at restart stays uncertain while GitHub cannot be read: never re-run', async () => {
     const w = world();
     const h = build(w);
+    h.crash();
     w.onMerge = () => new Promise<PrWriteResult>(() => undefined);
     await h.service.ask(ASKER, '/repo', MERGE_REQ);
     await h.settle();
@@ -570,6 +591,7 @@ describe('crashes', () => {
   it('a ticket being judged when main stopped reads restart-uncertain and is never judged again', async () => {
     const w = world();
     const h = build(w);
+    h.crash();
     h.judge.mockImplementationOnce(() => new Promise<JudgeRunResult>(() => undefined));
     const r = await h.service.ask(ASKER, '/repo', Q_REQ);
     await until(() => h.judge.mock.calls.length > 0);
@@ -586,6 +608,7 @@ describe('crashes', () => {
   it('answered by auto but killed before the effect was enqueued: startup re-enqueues and re-checks', async () => {
     const w = world();
     const h = build(w);
+    h.crash();
     const enqueue = vi.spyOn(h.effects, 'enqueue').mockImplementationOnce(() => new Promise<MergeEffect>(() => undefined));
     await h.service.ask(ASKER, '/repo', MERGE_REQ);
     await until(() => enqueue.mock.calls.length > 0);
