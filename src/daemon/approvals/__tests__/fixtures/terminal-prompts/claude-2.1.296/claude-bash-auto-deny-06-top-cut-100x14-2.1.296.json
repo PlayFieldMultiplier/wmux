@@ -4,7 +4,7 @@
  "cols": 100,
  "rows": 14,
  "keysSent": "(prompt drawn)",
- "note": "Bash permission for `rm -r \"$ADC_TARGET\"/*` in a bypassPermissions session: the dangerousRemoval safety check asks with an unattended-session auto-deny window (default 120 s), 100x14, fullscreen renderer: the title and the box's upper edge scrolled off; the countdown (1:58) is still the reason's last rows",
+ "note": "Bash permission for `rm -r \"$ADC_TARGET\"/*` in a bypassPermissions session: the dangerousRemoval safety check asks with an unattended-session auto-deny window (default 120 s), 100x14, fullscreen renderer: the dialog's top rule, title and description scrolled off (the box's upper dashed edge is the first row); the countdown (1:58) is still the reason's last rows",
  "screen": [
   "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
   " rm -r \"$ADC_TARGET\"/*",
