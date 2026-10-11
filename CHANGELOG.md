@@ -1,3 +1,793 @@
+## [Unreleased]
+
+## [4.3.0] — 2026-10-11
+
+### Added
+
+- **Point an agent at a pane by its name: `#w1-2` or `#backend`.** Every pane already shows a unique name in its header (`w1-2`, plus the agent running in it) or the name you gave it. Type that name with a `#` to an agent and it can pass it straight to the wmux tools — `terminal_send`, `terminal_read`, the `pane_*` tools and `send_message` (as `to`, `pane_id` or `surface_id`) all accept it where they used to need a long pane, surface or terminal id. Before, targeting a pane meant pasting a block of ids from the pane header. `pane_list`, `a2a_discover` and `a2a_whoami` now report each pane's `paneName` and `paneTag`, and a name only reaches what its ids could, with the same checks. (#1954)
+
+- **Dragging a pane header into a wmux terminal types just its tag.** Drop the pane header on a terminal and it inserts `#w1-2 ` instead of the full block of ids, ready for the prompt you are writing to an agent. Dropping it on another app still gives the full description, which now also lists the pane tag (and the pane's name when you named it). (#1954)
+
+- **Dismiss a question that needs no answer.** When an agent ends its turn on a question you don't need to answer, right-click its workspace in the sidebar or open the row's menu in Fleet and choose **Dismiss question**: it stops counting as Needs you, and stays dismissed after a restart. Approval and permission prompts still wait for you. (#1957)
+
+- **Connect a PC… on the Remote page.** One dialog covers both ends. On "Invite this PC" it turns cross-PC A2A on if needed, then creates and copies the invite, marking the tailnet address. As soon as the other PC joins, it asks what that PC may see. On "Paste an invite" it accepts an A2A invite, a pairing link, a `wmux web` address with its token, or an address and a code. Opening the dialog changes nothing, and the clipboard is read only when you press Paste. Before this you had to pair PCs from Settings › LAN.
+
+- **Kitty keyboard protocol in terminal panes (macOS and Linux).** wmux now answers the kitty keyboard query, so Claude Code switches to the protocol inside wmux. Codex's request for the protocol now takes effect too. Once an app has asked for it, Shift+Enter, Escape and Ctrl+letters reach the app exactly as it expects instead of through wmux's workarounds. Before, an app either never asked or got a mix of encodings. Korean and other IME input is unaffected: the key that picks an IME candidate no longer leaks into the app next to the committed text, a known xterm.js issue that wmux works around here. An app that exits without switching the protocol back off no longer leaves the shell receiving encoded keys. Windows keeps the previous behaviour for now. (#1963)
+
+- **Pane names now work in channel mentions and Moa hand-offs too.** A channel post's mention can pin a pane with `#w1-2` or `#backend` instead of its pane id, and Moa can hand work to `#backend` instead of looking up the terminal id first. These were the last two places that still needed the raw id after pane names became addresses.
+
+- Connect a PC's invite can also let the other PC see this PC's workspaces. Tick the new box, and the copy holds the invite plus a view-only pairing link on a second line. The box is off by default and offered only while Share & pair is on over HTTPS. The other PC pastes once and both connect.
+
+- **Groundwork for pushing, opening PRs and merging from the phone.** `wmux web`
+  gains `--allow-git-write` (off by default) and `--git-write-login <login>`, the
+  host-side switch and GitHub account for upcoming phone push, PR creation and
+  squash merge. The gate needs an input grant that was set explicitly for the
+  device, push and merge need a fresh preview and a single-use confirmation,
+  and every request leaves a receipt kept for 72 hours so a resent request never
+  runs twice. No action is served yet, and the phone is not offered any of them
+  until it is.
+
+- **Scheduled runs can use Claude's auto mode, and new schedules run unattended by default.** A new Claude schedule now starts in Auto, where Claude approves routine actions itself and stops risky ones; a new Codex schedule starts in Scoped (its workspace sandbox). Before, every new schedule started in Approval and could sit on a Claude safety prompt with nobody at the desk. Saving an Auto schedule asks you to confirm in a native dialog, as Bypass already did. Unattended runs (Claude Auto and Bypass, Codex Scoped and Bypass) start without wmux's own MCP tools.
+
+- **The phone can open and squash-merge pull requests.** With
+  `wmux web --allow-git-write`, the daemon now serves `pr.create` and
+  `pr.merge`. Opening a PR checks that the branch is pushed and has no open PR
+  yet. Merging shows the facts first (head, mergeability, checks, and which
+  required checks fail or are pending when GitHub reports them), then merges
+  exactly the head that was shown, one merge per PR at a time. A merge whose
+  outcome cannot be read back is reported as uncertain and is never retried on
+  its own. Before this, these routes answered 501.
+
+- **Push from the phone.** With `wmux web --allow-git-write` on, a phone with an
+  explicit input grant can push a session's branch to its upstream on GitHub.
+  It first shows a preview of the target, the commits and whether the push is a
+  fast-forward. The push sends exactly the commit that was shown and never
+  forces. It refuses the repository's default branch and any remote that is not
+  HTTPS github.com. Before, pushing meant typing `git push` into a terminal.
+
+- **Groundwork for a column of paired computers.** The shapes, rules and translated strings a later release uses to list every web-paired computer beside the page rail, with its own workspaces and attention badge. Nothing changes on screen yet. (#1989)
+
+- **Live feeds for paired computers.** wmux can now keep every web-paired computer's workspace list and attention counts current: each one is checked every 10 seconds on its own, and a computer that stops answering is retried less often. An approval that starts waiting on another computer shows up at once. A muted computer still updates its badge but shows no notifications. Nothing changes on screen yet; the sidebar's computer switcher that shows this comes in a later release. (#1992)
+
+- **The Git page's All repos list says whose turn each item is.** The flat list across repos is now split into Needs you, Ready to merge, Agents on it and Waiting on others, newest first within each, with a count on every section and a summary line under the title that jumps to a section. Needs you and Ready to merge start open; the other two start folded and remember how you left them. The turn comes from wmux's own signals (the PR's checks, conflicts and review, and whether an agent pane is working on it), because agents open PRs under your own GitHub account. Another author's PR, or an issue nobody has picked up, counts as yours to act on only in repos you can write to, so an upstream project you do not maintain no longer floods Needs you, and a mergeable PR in a repo with no CI shows as ready to merge. (#1995)
+
+- **Keep memory and CPU in the titlebar.** A new setting, "Always show memory and CPU", keeps both chips visible at every reading. Before, they appeared only once memory use grew large, so on an ordinary session you never saw them. It is off by default. (#2000)
+
+- **Bookmark workspaces and filter the sidebar to them.** Right-click a
+  workspace and choose Bookmark (or use "Toggle bookmark for this workspace"
+  in the command palette) to mark it with a small ribbon. Then turn on
+  Bookmarked only in the sidebar filter to see just those workspaces, along
+  with their fan-out tasks. Until now the only way to keep a few workspaces in
+  reach was Pin to top, which also changes their order. Bookmarks never move a
+  row and are kept with your session. (#2002)
+
+- **The Git page's Worktrees tab says what each worktree needs.** Worktrees are sorted into In use, Uncommitted changes (no workspace, but changes on disk), No open PR, Cleanup candidates (now including a worktree whose PR is merged, once its tree is clean and no agent is working there) and No workspace. A summary line under the title jumps to a section. Before, the tab only said whether a workspace sat on a worktree. A row that asks something of you can be snoozed for an hour, a day or a week, or until it changes. It waits in a folded Snoozed group and comes back early if it gets a new commit or new edits. Snoozes are remembered across restarts. The tab makes no extra GitHub calls: it uses the PR lists the page has already read. (#2006)
+
+- **Pairing says what a paired device can reach.** Share & pair, Paired
+  devices and Connect a PC now state that a paired device can read and
+  search every workspace, including later ones; that view only can still
+  answer single-key prompts on screen; and that typing also covers opening
+  and closing sessions and answering approvals. (#2009)
+
+- **Pages say when they show this computer only.** With another computer
+  selected in the sidebar's computer switcher, Fleet, Schedules and Git show one muted
+  line, "This computer · office-mac isn't shown here yet"; what they list is
+  unchanged. Git's This repo and the file tree say "Files on office-mac aren't
+  shown yet" instead of reading that computer's folders from this disk, and a
+  pane's new-browser action reads "Browser (this computer)". (#2011)
+
+- **Browser actions wait for the page to catch up.** After a click, typing,
+  a form fill, a key press or a select, the agent's next snapshot now shows
+  what the action did. If the action starts page requests (documents,
+  scripts, styles, XHR or fetch), wmux waits for them, or for the new page to
+  load when it navigated, for at most 5 seconds. An action that starts none
+  within 100 ms returns as before, and images, beacons and background polling
+  never add a wait. Before, a snapshot taken right after a click that loaded
+  data often still showed the old page.
+
+- **Dialogs are reported to the agent.** When an `alert`, `confirm` or
+  `prompt` appears on a page the agent is working in, it is still dismissed
+  at once as before, and the agent's next tool result now says so with a
+  `[modal]` note. Before, the agent never learned a `confirm` had been
+  answered "no" for it.
+
+- **Real-Chrome regression tests for refs, clicks, frames and dialogs.** The
+  runtime suite now drives wmux's snapshot and click code against a real Google
+  Chrome, headless and headed, across ref identity, multi-step forms, partial
+  snapshots, disabled and covered targets, cross-site iframes, shadow DOM,
+  popups, dialogs and page isolation. Scenarios wmux does not handle yet run as
+  recorded known gaps instead of being skipped. (#2017)
+
+- **Moa can answer Fleet questions on this computer.** Turn on the new switch
+  in Settings > Moa. Then a short read-only Fleet question typed in the Moa
+  composer, such as "Who needs me?" or "fleet status", gets its answer from
+  the Fleet board on this computer. No Moa turn starts, and nothing is sent
+  over the network. The switch is off by default. (#2024)
+
+- **Moa has an autonomy level wmux enforces, and a goal you approve once.** Settings › Moa now sets Moa's level from 0 (observe only: typing into panes, messaging agents, hand-offs, fan-outs, channel posts, task changes and approval presses are refused; Moa can still read, report, ask you, and keep its own records) to 2 and 3 (delegate). At level 2 Moa can propose a goal: what to do, in which repository and workspaces, with a task, time and turn budget. You approve it with one card that shows everything it grants. Inside an approved goal Moa fans out, answers and instructs its own tasks, and hands work to the goal's workspaces without asking each time. Push, pull requests, merges, releases, secrets, deletes and permission prompts stay yours. Before this, Moa's level was only a sentence in its prompt. (#2025)
+
+- **Workers a goal starts run with a restricted profile.** They run on Claude Code only. Push, PR, tag, release, publish and recursive-delete commands are denied in their session as they are commonly written, and GitHub credentials are withheld from their environment. This adds friction; it is not a sandbox: a command wrapped in a script or another shell (for example `powershell -c "Remove-Item -Recurse …"`), or one the list does not name (`find -delete`), can get past the deny list, and only a push to `origin` is also stopped by its disabled push URL. If a worker's shell dies and its pane is recreated, the new shell does not have the profile's environment. The fan-out worker permission mode is pinned when you approve the goal. Fan-outs outside a goal keep your current settings. (#2025)
+
+- **What a goal does not let through.** Under a goal, a hand-off that comes from a wake (worker output, PR comments, another PC's Moa) still asks you with a card, and work sent by another PC's Moa is never fanned out on the goal's budget. wmux also checks what Moa sends a worker (messages, fan-out prompts, task updates, channel posts) for requests to push, release, expose a secret or delete, and refuses a line Moa types that starts an agent CLI by hand, since that agent would run without the profile. That check is a tripwire, not a guarantee. (#2025)
+
+- **Protected browser panes.** A pane bound to its own Chrome profile can now
+  be protected: its agent then reaches only the sites on that pane's allowed
+  list. The pane's Chrome runs behind a filtering proxy owned by wmux, so pages,
+  frames, workers, WebSockets and popups are all held to the list, and a site
+  edit applies on the next request. On a protected pane, page scripts
+  (`browser_evaluate`), downloads and recorded flows are off, cookies and
+  storage are limited to the allowed sites, and moving or rebinding the pane
+  blocks every site until the list is confirmed again. `browser_repl` and
+  `repl_run`, which run code outside those checks, are refused on a protected
+  pane and whenever wmux cannot confirm the pane is unprotected, and a refusal
+  reports `error_code: policy_denied`. Desktop computer use is refused from a
+  protected pane too, and from an agent wmux cannot place in a pane while any
+  pane is protected. With no pane protected, nothing changes. The editor
+  arrives in a follow-up. (#2044)
+
+- **Edit a pane's browser protection from its menu.** A pane with its own
+  Chrome profile gets "Browser protection…" in its ⋮ menu: turn protection on,
+  choose any site or only the sites you list, and list sites to block. The menu
+  row and a small muted lock in the pane's tab strip show the protection. The
+  lock belongs to the pane's own Chrome; in-app browser tabs in that pane say in
+  their tooltip that protection does not cover them. The editor warns before a
+  change restarts the pane's Chrome. If the pane's profile or workspace changed
+  since you confirmed its sites, the editor says so, and saving confirms them
+  again. Panes without a bound profile show the row disabled, with what to do
+  first; nothing else changes for them.
+
+- **Ask once before a dangerous action on a protected browser pane.** On a
+  protected pane, a page script (`browser_evaluate`), a download
+  (`browser_download`, `browser_wait_for_download`) or reading or changing
+  sign-in data of a sensitive site (email, banking, auth) now asks you first
+  instead of being refused: Allow once, Always on this pane, or Deny. Each
+  action gets its own question, which is denied if nobody answers within a
+  minute. A scheduled run nobody is watching is refused at once rather than
+  left waiting. "Always on this pane" choices are listed in the pane's Browser
+  protection editor, where you can revoke them; rebinding or moving the pane
+  clears them. An approved download is the only one let through, from the tab
+  it was approved for. The agent's own `allowDangerous` and
+  `allowSensitiveDomains` flags no longer unlock anything on a protected pane.
+  A refusal nobody could be asked about reports `error_code: needs_consent`.
+  Unprotected panes behave exactly as before. (#2046)
+
+- **Per-account browser memory on protected panes.** A protected pane's
+  recorded flows, promoted flows and site memory are now kept for that pane's
+  Chrome account alone, instead of being switched off. They start empty, never
+  mix with the workspace's other panes, and start over when the pane is
+  rebound or moved. Memory of unprotected panes is unchanged.
+
+- **Scheduled runs that act as a protected pane's browser.** A schedule's
+  More options now has a Browser identity: pick a workspace and one of its
+  protected panes, and the run browses as that pane's Chrome account, limited
+  to its allowed sites. wmux confirms the pane, account and sites in its own
+  prompt when you save. The run gets wmux's browser tools and nothing else of
+  wmux. If the pane's site list, protection or account changes after you
+  saved, the run's browser calls are refused at once and the run says why;
+  save the schedule again to grant it. A page script, download or sensitive
+  site's sign-in data that would ask a person is refused for the run at once
+  (the run row says why) unless that pane already has "Always on this pane"
+  for it. Schedules without a browser identity
+  run exactly as before.
+
+- **The pane that started a fan-out hears when a worker stops for good.** If a
+  worker's agent exits, its terminal ends, or it sits idle for 15 minutes after
+  its last turn while its task still says working, the pane that ran the
+  fan-out now gets the usual one-line "needs input" note. Each task sends this
+  note at most once for an exit and once for idling. Before, such a worker
+  went quiet and nobody was told. (#2055)
+
+- **Open a mirrored session as a tab in your own workspace.** In the read-only mirror grid you get from "Attach remote workspace…", each pane now has **Open as tab…**. Pick one of your workspaces and the session opens there as a remote tab you can work in, then wmux takes you to it. Before, the grid could only watch, and working in a session meant starting a new one from ⋮ → "Split right — remote". The session keeps running on the other computer: closing the tab only stops showing it. When a tab already shows the session, the pane offers **Go to tab** instead. (#2056)
+
+- **A file tree beside your terminals.** A new titlebar button, or Cmd/Ctrl+Shift+E, opens a file tree column between the panes and Moa's panel. It shows the focused pane's project from its repository root. Click a file to open it in an editor tab, drag it into a terminal to insert its path, or right-click to copy its path or relative path or to open its folder. A search button filters the tree by file or folder name across the whole project. The column is resizable, and its width and open state are kept across restarts. (#2062)
+
+- On-demand memory diagnostics in `wmux doctor --performance`, including daemon buffers and output queues, Electron memory, and process-tree RSS grouping on macOS/Linux.
+
+- **Measure how often the screen detector misreads an agent.** Agents without
+  hooks get their status from reading the terminal screen, and a misread shows
+  up as "Needs you" when nothing needs you, or "working" after the turn is over.
+  There was no way to tell how often that happens. Set
+  `"diagnostics": { "detectionAgreement": true }` in `~/.wmux/config.json` and
+  restart wmux. The background service then compares the screen reader with the
+  hook on Claude Code and Codex panes, where the hook knows the true state, and
+  writes the result to a local file. `wmux doctor detect --stats` reports false
+  "idle", "busy" and "needs you" reads, missed turn ends and dialogs, the error
+  rate per agent, how many misreads reached the screen, and which rules misread
+  most. Off by default; nothing leaves your machine. (#2077)
+
+- **The phone is told why a queued message is waiting.** Each waiting
+  message now carries a reason (the turn is still running, an approval or a
+  dialog is open, no prompt is on screen, someone is typing, and so on), and
+  the phone gets an update whenever that reason changes.
+
+- **The phone can tell whether a pane's agent is still running.** `GET /api/sessions` rows now carry `agentAlive`: `true` while the daemon tracks a live agent process in the pane, `false` once it names no agent there (the shell is back at its prompt or the agent exited), and no field when it cannot tell. Before, the phone had only `agent`, which keeps naming the last agent after it exits, so its "has an agent" filter also listed panes sitting at a shell prompt. `agent` is unchanged.
+
+- **The phone can list every Fleet ticket and open its final report.** `GET /api/workspaces` now carries `fleetTickets`: every delegated job the desktop Fleet shows, of any origin (Moa hand-offs, sends between workspaces including `wtask` workers, Git page issues, and hand-offs still waiting on your click), each with its state and, on a server started with `--allow-transcript`, one line of its request and report and its verification count. `GET /api/fleet/tickets/<id>` returns the full request, the full report and the verification items, behind the same flag. The desktop keeps that text in memory for 24 hours, so a report stays readable after the agent's task record expires (30 minutes). `/api/workspaces` also carries `nextScheduleAt`, the next scheduled run. Before, the phone saw only Moa's own delegations, with no text.
+
+- **Switch computers from the sidebar title.** Once another computer is paired
+  for its workspaces, the sidebar title reads "Workspaces ▾" and opens a menu
+  of this computer and each paired PC, with whether it is online, offline
+  (and when it was last seen) or needs pairing again, and how many things
+  there need you. A small badge beside the title counts what needs you on the
+  computers you are not looking at. Each PC's settings in that menu mute its
+  notifications, open the Remote page or pair again, and say whether this
+  computer can type there and how to revoke it. With the sidebar collapsed,
+  one icon at the top of the rail opens the same menu. Alt+Shift+Up/Down moves
+  between computers and Alt+Shift+Home returns to this one; both can be moved
+  in Settings › Shortcuts. With no paired PC nothing changes.
+
+- **Open another computer's workspaces.** Selecting a
+  paired computer now lists its workspaces in the sidebar, in that computer's
+  own order, with the usual needs-you and error marks. Opening one shows its
+  panes in the same split layout as on that computer, at your usual font
+  size, with what is on its screen right away, and you can read and type in
+  them. Splitting or adding panes is left to that computer. Browser and editor tabs there show as "not shown" placeholders,
+  and a session you already have open in another tab says where it is instead
+  of opening twice. Until you pick one, the centre reads "Pick a workspace on
+  <computer>"; an offline computer keeps its last list, muted. Closing one of
+  these workspaces only stops watching it: nothing on the other computer is
+  closed. They are never saved to the session and never show up in this
+  computer's sidebar, keyboard switching or archive.
+
+- **Workspaces with no terminal are listed.** A paired computer's `/api/workspaces`
+  now also lists the workspaces its window shows that have no live terminal,
+  as `empty` rows, so they appear in the list (they cannot be opened).
+
+- **Quit and Stop Sessions.** Quitting wmux keeps the background service and
+  every terminal and agent running, so the next launch picks them back up.
+  When you want everything to end, the app menu (next to Quit on macOS, under
+  File on Windows and Linux) now has **Quit and Stop Sessions**. It asks first,
+  saying how many agent sessions and terminals are running, then stops the
+  background service and all of its sessions and quits. If the service does not
+  stop, wmux stays open and tells you to run `wmux daemon stop`. Before, only
+  the tray menu could do this. Plain Quit is unchanged. (#2021)
+
+### Changed
+
+- **Pane names must be one word and unique.** Because a pane name is now an address, renaming a pane refuses a name with spaces, `#` or `@`, a name that starts with a digit, one shaped like an automatic name (`w1-2`), or one another open pane already uses (ignoring case). The rename field says which rule it broke instead of quietly going back to the old name, and an agent setting a label through `pane_metadata` gets the same reason. Names you set before keep working as they are. (#1954)
+
+- **A terminal that stops taking keys now logs why.** When the dead-input watchdog finds keys reaching a terminal without producing input, its log line now also lists the modifier keys those keys carried, and flags any modifier with no recorded press since the window last gained focus. For example, a Windows key Windows still reports as held makes Space and letters type nothing. The line also shows which part of wmux's key handling declined the keys and whether the terminal's composition state was stuck. Typed characters are never logged. No key is handled differently. (#1955)
+
+- **Fleet's board starts with Running.** The board's columns now read Running, Needs you, Finished and Idle, and the arrow keys follow that order. (#1956)
+
+- **Terminals run on xterm.js 6.1 (beta).** wmux moves its terminal engine and every add-on to the 6.1 beta line, pinned to exact versions built from the same upstream commit, as the groundwork for the kitty keyboard protocol. Nothing should look or type differently: the behaviours 6.1 would turn on by itself (answering terminal-version and color-scheme queries, and the kitty "not bold" / "not faint" styles) stay off, in the panes and in the daemon's restore snapshots alike, and the WebGL glyph-atlas and search fixes wmux carries are re-applied on top. The inline-image fix wmux used to patch in (#1925) now comes from upstream. (#1958)
+
+- **The Remote page is one Tailnet-first page.** This computer is a single line, and anything waiting on you sits in one "Needs you" block at the top: link requests from other PCs, held remote work, or a PC whose certificate changed. Below that is one list of your other PCs with their links nested under each, workspace shares, phones (now with the pane each one is viewing) and message links. Before, the page was a card grid, the cross-PC parts were stacked under it, and requests could sit below the fold. The Remote rail item shows a badge while something needs you.
+
+- **A pull request the agent linked arrives on the phone as a PR link.** The
+  turn view used to get it as a generic note with the url as its text. It now
+  comes as a `pr_link` row carrying the url and, when known, the PR number and
+  `owner/name` repository, so the app can show it as a pull request. Clients
+  that do not know the new row see the same url as before. (#1967)
+
+- **A plain drag selects text in apps that use the mouse.** Codex and other terminal apps that turn on mouse tracking used to take every drag, so the only way to copy from their panes was Option+drag on macOS or Shift+drag elsewhere. Now a plain drag selects text there too, while a click still goes to the app and the wheel still scrolls it. To send a drag to the app, hold Shift (macOS) or Alt (Windows, Linux). Settings › Terminal › Input turns this off to get the old behaviour back. (#1947)
+
+- **wmux pins each fresh Claude it launches to its own conversation id.** Claude launched from a preset, a fan-out or the phone starts as `claude --session-id <id>`, so the pane knows its exact conversation from the first moment. (#1973)
+
+- **Pair a phone or link a computer in one click.** Share & pair now has **Pair a phone**, which starts sharing if needed and shows the QR, and **Connect another computer**, which creates the pairing link and copies it. Both fill in a name you can change. When Tailscale can serve this computer, it is ticked by default; you can see it before anything starts. The buttons appear only when the other device can actually reach this computer; otherwise the popover says why. Before, a first phone pairing took five clicks and a typed name.
+
+- **Approval runs stop waiting after 15 minutes.** A scheduled run in Approval that is still waiting for your response after 15 minutes now ends as "no response in time", so the next occurrence is not skipped as overlapping. Before, it waited until the four-hour run limit. This also applies to existing Approval schedules; set "Await timeout" on a schedule to change it.
+
+- **An edited schedule no longer quietly drops to Approval.** If a schedule's folder, agent, account, model or prompt changes after its permission was granted, its runs are now skipped ("permission needs granting again") until you grant it again, instead of running in Approval. Saving the change in the editor asks for the permission again in the same step.
+
+- **Moa merge decisions now record the same facts as the phone merge
+  preview.** Each pull request Moa is asked to merge keeps its title, head,
+  branches, mergeability, merge block, squash permission, check summary,
+  squash subject and the GitHub account at the time it was checked. A merge
+  is also refused when gh now signs in as another account than the one
+  recorded.
+
+- **All repos on the Git page is one list across your repos.** Issues and Pull requests used to stack one collapsible section per repo in a single column, which meant scrolling past repo headings to find anything once you had several projects open. They are now one list, newest update first, and each row carries a small tag naming its repo. A row of repo chips above the list shows each repo's open count and filters by repo (pick one or several; none means all). Clicking a row's tag toggles that repo's chip. A repo that is still loading or whose read failed says so on its chip. The chips are remembered. A Flat | By repo switch brings back the grouped view. (#1988)
+
+- **Browser tools now act on the workspace of the pane that called them.**
+  Every browser call takes its workspace from the identity wmux verifies for
+  the caller: the pane an agent runs in, the orchestrator's own workspace, the
+  workspace a plugin is shown in, or the one an external client claimed. A
+  workspace named in the request can only narrow the call to that same
+  workspace, and a call wmux cannot place in a workspace is refused with a
+  message saying what is missing. This holds on every backend, including
+  `external`.
+
+- **Browser tools in a Codex session on the shared Codex background server
+  on Windows are refused, with the reason.** wmux cannot tell which pane's
+  conversation made such a call there, so it could have opened the browser in
+  another pane's workspace. Codex run without the shared server, Claude Code
+  and `wmux browser` in the same pane are unaffected.
+
+- **`browser_dialog` answers only dialogs the agent's own action opens, on
+  tabs the agent opened.** The pre-set answer applies to the next dialog
+  raised while one of the agent's clicks, keystrokes or selects is running,
+  and lapses after 30 seconds. On a tab you own or lent to an agent it is
+  refused, so your own dialogs are never answered for you. Leaving a page
+  (`beforeunload`) is still accepted automatically and never uses up a
+  pre-set answer.
+
+- **"Switch accounts by quota" now also covers the Command Deck orchestrator
+  and background (A2A) tasks.** Previously only a new Claude pane moved to
+  another of your registered accounts when the workspace's bound account was
+  out of quota. The Deck orchestrator and A2A tasks always ran on the bound
+  account and failed with a quota error. With the switch on, they now start a
+  new conversation on the account with the most quota left, or say when the
+  first account frees up if every account is out. A conversation already under
+  way stays on its account, because its history lives there, and that holds
+  across a restart. With the switch off nothing changes. (#2026)
+
+- **Another computer's workspaces look like its own sidebar.** With a paired
+  computer selected, its workspace rows are drawn exactly as that computer
+  draws them: numbered in its order, with the same status marks, needs-you
+  card, idle time, branch line, and the expandable rows for each pane's agent
+  and pane name ("Claude Code · w1-1"). Clicking a pane row opens that tab.
+  Nothing there can rename, close, drag or archive anything on that computer. (#2038)
+
+- **The host list carries each pane's name, tab title and last output time.**
+  `GET /api/workspaces` adds optional `paneName`, `surfaceTitle` and
+  `lastActivity` to each pane; older clients ignore them. (#2038)
+
+- **Codex browser tools on Windows check who started them.** The first browser
+  tool call of a Codex session now checks which process started wmux's tools
+  for that session. A session on the shared Codex background server is
+  refused, as other Codex calls there already were. When the check cannot run
+  (for example, a Windows process query times out), browser tools ask you to
+  retry the call in a minute instead of guessing the pane. Claude Code and
+  OpenCode skip the check and behave as before, and so do terminal, channel
+  and other tools. (#2042)
+
+- **Name a pane's new Chrome profile.** "New profile for this pane" now opens
+  a name field, prefilled with the name it used to pick on its own, so you can
+  name the profile after the account you sign in to. Enter keeps the old
+  one-step path, and a name that already exists is refused instead of reused.
+
+- **Ctrl+N follows a filtered workspace list.** With a sidebar filter or
+  search on, the shortcut numbers counted every workspace, so "Bookmarked only"
+  could show rows numbered 2 and 4, and Ctrl+1 opened a workspace the list was
+  hiding. The visible rows are now numbered 1, 2, …, and Ctrl+N opens exactly
+  those. With the sidebar collapsed, the numbers still reach every workspace.
+  (#2113)
+
+- **Attached remote mirrors leave the sidebar.** With a computer paired, the
+  computer switcher replaces the one-by-one "Attach remote workspace…" entry and
+  the mirror rows in the workspace list. With no computer paired nothing
+  changes.
+
+### Fixed
+
+- **A recovered pane comes back in the folder its shell was in.** In
+  PowerShell, a `cd` typed on the same line as a program (`cd my-project;
+  claude`) was reported only at the next prompt. While the program ran, wmux
+  still held the folder from the previous prompt. If the background service
+  restarted in that window, the pane came back in that older folder, and the
+  Resume button ran `claude --continue` there, which can open another
+  project's conversation. wmux now picks up the new folder before the program
+  starts. A pane replaced after its session ended now also reopens in the
+  folder the shell was last in, and falls back to the folder it was opened in
+  only when that one no longer exists. (#1942)
+
+- **Recovered panes no longer all reopen the same conversation.** When a
+  recovered Codex or Claude pane had no saved conversation of its own, its
+  resume pill typed `codex resume --last` or `claude --continue`. Several panes
+  sharing a folder then each reopened the newest conversation there, the same
+  one in every pane. Such a pane now offers **Pick a Codex session** (or
+  Claude), which opens that agent's own session picker for the folder so you
+  choose the right conversation. The resume chip and the Deck's fleet recovery
+  do the same. Panes with a saved conversation still resume exactly that one,
+  and the picker never carries a permission-bypass flag. The opt-in "resume
+  Claude on start" now resumes only a pane's saved conversation and otherwise
+  leaves the pill for you. Thanks to @p-poppe for the report. (#1953)
+
+- **Moa on the answering PC can see that its replies arrived.** On a task
+  between two PCs, the side that answered had no sign that the other PC had
+  received its replies and state changes, so its Moa reported them as still
+  waiting to be delivered when they had already arrived. `a2a_task_query` now
+  shows `replyDeliveredAt` once the other PC has received every reply and
+  state change this side sent on the task. (#1959)
+
+- **A question in a background fan-out task now shows as Needs you.** A fan-out task whose workspace had never been opened could run in a very narrow terminal. When its agent asked a question there, the question's footer wrapped one word per row, wmux decided the question was gone a few seconds after flagging it, and Fleet showed the task as Running instead of Needs you. wmux now keeps the task at Needs you until the question is actually answered or the turn ends, however narrow the terminal is. (#1962)
+
+- **Sixel images show up in Windows 11 panes.** Windows 11 panes used the
+  console host built into Windows, which hid sixel images and told programs
+  that the terminal could not draw them. Windows 11 now uses the same bundled
+  console host as Windows 10, so sixel images reach the pane and render.
+  Programs that ask the terminal what it supports now get wmux's own answer.
+  (#1964)
+
+- **The phone shows images the agent made in its scratch folder.** Claude Code
+  writes screenshots and renders to a per-session scratch folder outside the
+  project and then reads them; the phone's turn view asked for those images and
+  got "image not found", so it fell back to a filename. An image the pane's own
+  agent opened with `Read` is now served to that pane's turn view, under the
+  same 24-hour, same-session rules as files sent with `SendUserFile`. (#1966)
+
+- **Windows 10: a pane recovered after a daemon restart shows its prompt again.** On the bundled ConPTY that Windows 10 uses, a recovered pane could stay blank until you pressed a key. The console sends nothing when a pane is resized, and recovery was waiting for a repaint that never came. The prompt the shell printed during recovery is now kept and shown. (#1968)
+
+- **Windows 10: new panes no longer take about 3 seconds to show a prompt.** At startup the bundled console asks the terminal to identify itself and waits for the answer before showing any shell output. Nothing answered that question, so every new pane waited about 3 seconds. wmux now answers it once, and only when no terminal view is receiving that output live. (#1968)
+
+- **The Remote badge no longer misses a link request or blanks on one slow
+  read.** The slow re-read of held work could make a newer link request go
+  unseen on the Remote rail item until the next change, and one held-work
+  read that failed cleared every PC, link and request from the page and the
+  badge. (#1969)
+
+- **Connect a PC asks what a PC that joined can see, every time.** A PC that
+  paired again while its old pairing was still live, or that joined in the
+  moment between the invite being used and the pairing being stored, used to
+  skip that step and the invite looked as if it had just ended. (#1969)
+
+- **The Remote page fits a narrow window as designed, and a link's Unlink
+  stays on the link's row.** In a narrow window the page kept its wide 28px
+  sides, and Unlink (or a shared workspace's Open) dropped onto a line of its
+  own under the row it belongs to. (#1969)
+
+- **The link dialog's PC picker and pane list work from the keyboard.** In
+  **Link with a pane on another PC…**, each is now one Tab stop: arrow keys
+  move between PCs (and pick one) or between panes, Home/End jump to the
+  ends, and Enter or Space picks the pane. Before, arrow keys did nothing and
+  every PC and pane was a separate Tab stop. (#1970)
+
+- **Recovery resumes only a pane's own conversation.** A supervised pane replayed with no exact conversation id now starts its agent fresh. It used to run `claude --continue` / `codex resume --last`, which reopened the newest conversation in the folder, the same one in every pane that shared it. On the phone, `resume` on a pane with no binding now answers `resume-unavailable` instead of guessing. (#1973)
+
+- **A Codex thread resumed by hand stays bound.** Typing `codex resume <id>` (or `claude --resume <id>`) in a pane binds it to that conversation as soon as the agent starts, so recovery and Chat follow it. Before, an older Codex thread resumed by hand never bound. (#1891, #1973)
+
+- **A pull-request link on the phone is the address it opens.** The `pr_link`
+  row carried the transcript's url string as written, so spaces, control
+  characters, tabs or backslashes in it could make the text differ from the
+  address a browser opens; it now carries the parsed url. A repository name
+  of `.` or `..` is no longer passed on. (#1975)
+
+- **The pairing QR stays on screen after Pair a phone on the Remote page.** Pair a phone, Connect another computer and Turn on HTTPS over Tailscale start sharing from Share & pair. Within about 10 seconds the page noticed sharing was on and removed the button, which closed the popover with the QR, the code or the link you had just copied. The popover now stays open until you close it.
+
+- **A failed start no longer removes another wmux's Tailscale front.** When another wmux on the same computer (another Windows user, or an installed app next to a development build) already served the web port behind `tailscale serve`, a start here failed to bind and then ran `tailscale serve --https=443 off` on that front, which cut off its paired phones. A front that was already there is now left alone.
+
+- **A slow paired computer no longer delays updates from the others.** Each
+  paired computer is now asked for its workspaces on its own schedule. Before,
+  one computer that was asleep or not answering held back the next update for
+  every other paired computer until its request timed out. (#1990)
+
+- **Limits on what a paired computer can send this app.** Workspace lists,
+  pane streams, terminal sizes and notifications from a paired computer are
+  now held to fixed size and count limits. An answer over a limit is refused.
+  Before, an unusually large or malformed answer was read in full. (#1990)
+
+- **Text from a paired computer can no longer restyle or reorder what this app
+  shows.** Workspace names, pane details, notification text and error
+  messages from a paired computer now have control characters and
+  right-to-left overrides replaced with spaces. Before, a paired computer could reverse part of a sidebar row
+  or split one error message into two lines. (#1994)
+
+- **A paired computer that sends an oversized notification is retried once a
+  minute, not once a second.** (#1994)
+
+- **A workspace you come back to after a while shows its last screen at once.** Workspaces hidden for more than 5 minutes are unloaded to save memory. Switching back to one used to show empty panes for up to a couple of seconds while the daemon rebuilt each screen. Each pane now keeps a copy of its last screen and draws it straight away, then swaps in the live screen without a blank frame in between. (#2001)
+
+- **Quitting wmux on macOS no longer ends your terminal sessions.** The daemon
+  that keeps sessions alive was being terminated along with the app on every
+  plain Quit, because macOS still counted it as one of the app's processes, so
+  relaunching started from scratch. The daemon now runs as a per-user launchd
+  job (nothing is added to login items), and sessions are still there when you
+  open wmux again. The same applies to `wmux daemon start` run from a terminal.
+  Windows and Linux are unchanged. (#2003)
+
+- **A restored workspace opens its terminals where they were.** Restoring an archived workspace opened every pane in your home folder; each pane now opens in the folder it had when you archived it. Workspaces archived before this update still open in the startup folder. (#2004)
+
+- **Pane content and full pages can no longer be nudged out of place by the
+  text cursor.** Moving the cursor or focus near the edge of a pane, a
+  multiview tile, or a page such as Fleet, Schedules, Remote, Git or Settings
+  could scroll a box that is not meant to scroll. The content shifted, and
+  there was no scrollbar to put it back. These boxes now clip their overflow,
+  as the app frame already does. (#2005)
+
+- **WebSearch permission prompts can be answered from the phone.** Claude Code's WebSearch dialog used to reach the phone and Moa's chat as an informational card that could only be answered in the terminal. It now becomes an answerable card showing the search query (and its domain filter, when there is one). The card offers Yes only, and No is the decline, which presses Esc in the pane. The "don't ask again" option is never offered. A dialog whose only cut-off row is that option is no longer refused for it. (#2008)
+
+- **Computer use says why a call was refused.** When computer use was
+  switched off, or wmux was quitting, agents got the same
+  `helper_unavailable` error as for a missing or damaged helper, which reads
+  like the install is broken. They now get `turned_off` or `shutting_down`,
+  each with its own next step. A helper that crashes no longer sends its own
+  diagnostic output to the agent; it goes to the log, and the agent gets the
+  exit code. (#2010)
+
+- A headless `claude -p` started from inside a Claude pane no longer takes over that pane's conversation on the phone, marks the pane finished, or hands its session to recovery (#2016).
+
+- A conversation compact summary no longer shows as a message from you in the chat view (#2016).
+
+- **Restarting wmux no longer types a resume command into a running Claude Code session.** When the daemon kept your sessions alive across an app restart, a pane that had once been resumed got `claude --resume …` typed into Claude's own input box again on every restart. Automatic resume now only runs when the pane's shell is at its prompt. (#2018)
+
+- On macOS, the process check from #2016 is now switched on: a hook from a process that is not the pane's own agent can no longer rebind the pane, even when that process reports no entrypoint. A relaunched agent is never refused while wmux still remembers the one that just exited (#2022).
+
+- **A report that ends with a checklist no longer counts as a question.** When an agent finished with a list of things to check, written in Korean as "…나오는지", the pane was marked Needs you as if it were waiting for an answer. List items now count as a question only when they end with a question mark. (#2023)
+
+- **A killed agent's mouse reporting is cleared once wmux sees it die.**
+  When an agent such as Claude Code is killed, wmux clears the mouse and
+  focus reporting it left behind as soon as the shell prompt returns. If
+  wmux could not yet confirm the agent was gone at that prompt, it never
+  checked again. This can happen when the Windows process snapshot fails
+  under low memory, and on WSL panes. Every mouse move then kept typing
+  text like `[<35;114;8M` into the prompt. wmux now checks again when the
+  agent's process is confirmed dead and clears the modes then.
+
+- **Moa's local Fleet answers now use your language.** With "Answer Fleet
+  questions locally" on, the answer to a question like "작업 상태" or "Who
+  needs me?" was always in English, even in a Korean UI. It is now written in
+  the app's language, with correct singular and plural forms, in every
+  language wmux ships. A local answer is also no longer tagged "terminal" as
+  if the terminal brain had written it. (#2031)
+
+- **A Command Deck conversation no longer loses its context when you bind
+  the workspace to another account.** Before, the next message, or the next
+  start of wmux, resumed the conversation under the new account, where its
+  history does not exist. The orchestrator then silently started over. A
+  conversation now stays on the account it started on, and a new binding
+  applies to the next new conversation, for example after `/clear`. (#2032)
+
+- **Starting workers or reopening wmux with many archived channels no longer fails with "rate limited".** wmux used to re-read the members of every channel, archived ones included, each time any channel changed. With a long channel history, that burst hit the background service's request limit, so a worker's terminal could fail to start. It now reads members only for live channels and loads an archived channel's members when you open it. Overlapping refreshes are also merged into one. (#2040)
+
+- **Panes no longer lose their live session during a reconnect burst.** When the background service was too busy to reattach a terminal right away, the pane used to give up after about three seconds and start a fresh, empty session over the one still running. It now keeps waiting a little longer and, if the service is still busy, keeps the session, shows a Retry banner and keeps trying to reconnect in the background. A resize dropped during the same burst is now re-sent. (#2040)
+
+- **A failed pane create no longer leaves a hidden terminal behind.** When
+  opening a pane failed partway (for example when the background service was
+  briefly rate-limiting requests, or its data connection timed out), the
+  half-created terminal stayed alive in the background forever: it never
+  appeared in the Detached list and was never cleaned up. wmux now shuts that
+  terminal down and reports the original error. (#2049)
+
+- **A copy of wmux opened outside Applications no longer takes over your
+  installed app (macOS).** Opening wmux straight from the downloaded disk
+  image, from Downloads, or from a build folder used the installed app's
+  terminals, background service and settings; a newer copy could replace the
+  installed app's background service and point the `wmux` command at itself.
+  Such a copy now runs with its own separate data and leaves the installed app
+  alone, and the first time it opens a notice says why it starts empty. An app
+  anywhere inside /Applications or ~/Applications is unaffected. To open a copy
+  elsewhere with your normal data, start it with
+  `WMUX_ALLOW_PRODUCTION_DATA=1`. (#2050)
+
+- **Settings › Computer use no longer says "Ready" for a damaged Windows helper.** When the helper's bytes no longer matched the copy wmux was built with (damaged, partly updated or changed by antivirus), Settings still showed it as ready and let you turn computer use on, and you only found out when an agent call failed. It now shows "Damaged: reinstall wmux" with a note, and the switch does not turn on. Reinstalling, or restoring the file, shows it as ready again. (#2051)
+
+- **Codex panes with `CODEX_HOME` set in a shell startup file, and Codex panes not yet bound to a session, no longer read Codex's title-generation thread as the end of a turn.** The title thread's completion arrives seconds into a long first turn. wmux only held it back when it could check the thread's rollout itself, and it cannot follow a `CODEX_HOME` the pane never saw or trust a root before the pane is bound, so those panes went on showing the turn as finished. The Codex bridge now reports whether it found the thread's rollout where Codex writes them, and wmux holds the stop on that answer instead. Bridges that do not report it behave as before. WSL panes were already covered: their notify hook skips the title thread inside the distro. (#2052)
+
+- **Newline keys in a remote mirror of Codex on Windows.** When a mirrored pane
+  runs Codex natively on a Windows host (not under WSL), Shift+Enter,
+  Ctrl+Enter and Ctrl+J now send Alt+Enter, which Codex takes as a newline.
+  This is the same mapping a local pane got in #1751. Before, Ctrl+Enter and
+  Ctrl+J sent a line feed that Codex ignored, and Shift+Enter submitted the
+  prompt. The mapping turns off when the shell prompt returns. A host on an
+  older wmux keeps the old keys. (#2053)
+
+- **Claude's PowerShell tool is now held by the phone permission gate.** On Windows, Claude Code often runs shell commands through its PowerShell tool instead of Bash. That tool was not in the default gate list, so those calls went straight to the local dialog and never waited for the phone. `PowerShell` is now gated by default. An existing config that gates Bash gets PowerShell added once on upgrade. If you remove it afterwards with `wmux gate --remove PowerShell`, it stays removed. A PowerShell tree delete (`Remove-Item -Recurse` or one of its aliases, including `rm -r` in a PowerShell tool call) and cmd's `rd /s` and `del /s` are now marked critical, including when they run through `cmd /c` or `powershell -Command`, so they are no longer one-tap approvable from a locked phone. The activity line shows the PowerShell command the same way it shows a Bash one. (#2054)
+
+- **PR wakes keep working while the window is hidden.** CI results, new review
+  comments and merge conflicts on a pane's PR still reach that pane when wmux
+  is minimized or hidden. CI is checked every minute from the existing PR cache
+  and reviews every 5 minutes, so this adds no extra GitHub calls. Before, these
+  wakes stopped until the window was shown again. (#2055)
+
+- **Two views of the same remote session no longer cut each other off.** When a session was on screen twice in one window, closing one view could leave the other blank. Each view now holds its own place on the shared connection, and the connection closes only when the last view does. (#2056)
+
+- **The Worktrees tab no longer offers a worktree for cleanup when it has changes or an agent working in it.**
+  Before, a merged worktree could appear in Cleanup candidates in two cases. One:
+  a change had been staged and then reverted in the files. Two: an agent was
+  working in a background tab rather than the pane's visible one. The tab now
+  decides "clean" from git status. A worktree holding only new files also
+  counts as changed when your git config hides untracked files from status.
+  Any local tab with an agent working or asking keeps its worktree In use.
+  (#2057)
+
+- **Two daemon starts at once no longer strand a daemon (macOS, Linux).**
+  Opening wmux while `wmux daemon start` was running, or running that command
+  twice at the same time, could start a second background service. The second
+  one took over the socket, and the first kept running with its terminals and
+  agents but could no longer be reached. Starts now take turns, so the second
+  start finds the running service and reports it as already running. Each
+  start now also reports the pid of the service that actually answered, not
+  the pid of one that gave up. (#2058)
+
+- **An agent's @-mention of you now reaches you in channels you have not
+  joined.** Before, a mention of the human in a channel where you held no
+  seat was dropped, so you only heard mentions in channels you had joined. A
+  phone-only setup heard almost none. Now a mention of you in any channel you
+  can see (not trashed) is delivered without joining you to the channel. It
+  raises the phone's mention event, and the phone's channel list counts it
+  until you read it, on the phone or by opening the channel on the desktop.
+  On the desktop it shows the red @ badge, including on unjoined channels
+  under Discover. Agents no longer get such a mention back in
+  `droppedMentions`. (#2061)
+
+- **Fan-out workers' turn ends reach the pane that started them when Moa is
+  off.** When a worker finishes a turn or stops on an error, the pane that ran
+  the fan-out gets its one-line note again: "updated" at most once every 5
+  minutes per task, and "stopped on an error" every time. Before, these notes
+  were sent only while Moa was on, so without Moa that pane heard nothing
+  until a task was handed back or failed. (#2066)
+
+- **Fleet completion checks reflect the latest delegated job.** A newer working, failed or canceled task no longer leaves an older success badge on the agent. Completed jobs without evidence explicitly say that no verification was reported. Failed checks take precedence over passed checks; partially verified work stays neutral, and only a fully verified set gets a green check. English and Korean labels and tooltips identify the checks as agent reports and include failed commands.
+
+- **Updated Fleet reports stay unread until their current result is shown.** Reload a selected ticket's result when its report version, task or workspace changes, and ignore older in-flight replies. An earlier result or expired-report notice no longer acknowledges a newer report, and a resumed ticket no longer shows its previous completion report while working.
+
+- **A busy agent pane no longer comes back garbled after restarting wmux.** If the daemon could not rebuild a pane's screen from its whole history in time, it replayed the raw output instead. A program like Claude Code redraws in place, so that replay painted old frames over each other. wmux now rebuilds the screen from the pane's most recent output instead. The screen is correct; only the oldest scrollback of that pane is dropped. (#2071)
+
+- **A Codex pane's phone chat no longer goes blank after a launch that never
+  started.** When a phone launch of Codex exited before connecting (for
+  example at Codex's self-update prompt) and Codex was then run by hand in the
+  same pane, the phone showed "Waiting for the agent's conversation record"
+  for as long as the pane lived, although wmux had recorded the pane's exact
+  conversation. The pane now shows that conversation. (#2072)
+
+- **The phone can answer Claude's "cd before a version-control command" prompt.**
+  Claude Code 2.1.296 adds a warning paragraph under the command box when a Bash
+  command changes directory and then runs `git` (`cd <dir> && git push …`). The
+  taller dialog lost its top rule in a short pane or the fullscreen renderer.
+  wmux then read the warning as the dialog's title, so the phone got a card it
+  could only decline. The dialog now binds as a plain Yes/No approval, the
+  warning shows as its reason, and the command in the box must still be the
+  call's whole command. (#2073)
+
+- Avoid retaining history copies while terminal restores wait for their snapshot slot, and skip canceled queued restores.
+
+- Release output batching bookkeeping after sessions finish without dropping their final output.
+
+- **Fewer repeated phone alerts for dangerous commands.** Each matching row
+  used to alert again every time an agent's screen was redrawn, so one pane
+  could send dozens of alerts in a few minutes. A pane now reports each
+  dangerous line once in ten minutes, and a new dangerous line still alerts
+  right away. A row that is only a `grep`, `rg`, `echo` or `printf` of such
+  text, with nothing else on the line that could run, no longer alerts. (#2075)
+
+- **The phone can answer Claude's unsandboxed Bash prompt.** With Claude Code's
+  sandbox turned on, a Bash call that asks to run outside it
+  (`dangerouslyDisableSandbox`) gets a dialog titled "Bash command
+  (unsandboxed)". wmux did not read that title as naming a tool, so at every
+  pane size the phone got a card it could only decline. The dialog now binds as
+  a plain Yes/No approval, but only to a call that really asked to run
+  unsandboxed, and the command in the box must still be the call's whole
+  command. (#2079)
+
+- **A refused push now says why in the daemon log.** When the push relay turned
+  down a notification or a Live Activity update, the log showed only the status,
+  such as `relay answered 403`, so an intermittent refusal could not be traced.
+  The line now names who refused and why, for example
+  `relay answered 403 (apns: InvalidProviderToken)`, and it is written again
+  when the reason changes even if the status stays the same. The device token
+  and the notification contents are never logged.
+
+- **Phone approvals work on dialogs Claude Code will deny by itself.** Since
+  Claude Code 2.1.296, a dialog nobody is answering (a risky `rm` in a bypass or
+  auto-mode session, for example) shows "Claude Code will automatically deny
+  this request in 1:58" and counts down every second. wmux read that countdown
+  as part of the dialog, so the dialog looked different every second. Every
+  answer from the phone was refused as "prompt changed" until Claude denied the
+  request. The countdown no longer counts as part of the dialog, and it no
+  longer shows up in the card's reason. The phone API now gives the deadline
+  as `autoDenyAt`, so the app can show its own countdown. (#2091)
+
+- **A screenshot or image tool call no longer spins forever in the phone chat
+  view.** A tool result that carried an image (a screenshot, or `Read` of an
+  image file) is one large transcript entry, often bigger than what the turn
+  view reads at once. The phone then got the tool call without its result, so
+  the row kept spinning, or got a row reading "oversized entry skipped" in its
+  place. Such an entry is now read whole, so the result arrives and closes the
+  row. Each image shows as `[image]` between the text the tool returned, and
+  the image data itself is never sent. The same applies to a Codex tool that
+  returns an image, which used to put the image's encoded data into the tool
+  output. (#2094)
+
+- **Phone messages for a named Claude session now get delivered.** Once a
+  Claude session has a name (`/rename`, or a title Claude gave it), Claude
+  draws that name into the line above its prompt. wmux no longer recognised
+  the prompt there, so a message queued from the phone stayed "queued" and
+  failed as blocked after ten minutes, and a message meant to go into the
+  running turn was turned away the whole time. Both now go in, including
+  after a turn that ended with background agents or shells still running.
+
+- **Phone answers to Claude's questions work when the phone's view is
+  short.** A phone sizes the pane to its own screen. When that was shorter
+  than Claude's question picker (below about 17 rows for a two-option
+  question), the top of the picker scrolled off. wmux then no longer saw the
+  question as untouched and refused every Submit with "the screen differs,
+  nothing was typed" for as long as the pane kept that size. On an even
+  shorter view it closed a question that was still open. The picker is now
+  read with its top scrolled off, for a single single-select question. A
+  question still shown on screen is never closed. Questions in a session
+  you named with `/rename` failed the same way at any size, because Claude
+  draws the name in a line under the picker. That line is now recognised. A question dismissed with
+  Esc at the computer, which sends no signal of its own, now leaves the phone
+  a couple of seconds later instead of waiting for the next tap. (#2099)
+
+- **A Claude Code pane no longer shows as running after its turn has ended.**
+  After a turn, Claude Code works on the suggested next prompt and the recap in
+  the background, and wmux counted those tool calls as the agent working. The
+  sidebar dot stayed lit for about two minutes with the agent idle at its
+  prompt. wmux now ignores them. (#2100)
+
+- **Fleet cards name a working Claude Code agent by its workspace.** While
+  Claude Code was working, its card in the Running section was titled
+  "◐ Claude Code", with the workspace name moved to the second line. Cards
+  for other agents were titled with their workspace. A working agent's card
+  now reads the same way. (#2102)
+
+- **A Claude Code pane no longer stays "running" because of background
+  commands that are not running.** When Claude Code stopped a background
+  command itself, or a dev server was left running from an earlier request,
+  wmux kept counting it as unfinished work. The pane's dot stayed lit after
+  every reply. Now only a background command started in the request that just
+  ended, and still running, keeps the pane running. (#2108)
+
+- **The file tree stays on your pane's folder while an editor tab is open.**
+  Opening a file from the tree used to move the tree to the workspace folder
+  or another pane's folder and hide **Insert path**; the tree now follows the
+  pane's terminal, and Insert path types into it. (#2111)
+
+- **A cd inside the same repository no longer resets the file tree.** The
+  tree used to reload from the subfolder and then from the repository root,
+  collapsing expanded folders; it now keeps the root. (#2111)
+
+- **Insert path quotes each path so the pane's shell reads it as written.**
+  The file tree's insert path action, the toolbar file popover and the attach
+  picker used to add double quotes only around a path with a space. They now
+  quote any path with characters a shell would treat specially. macOS and
+  Linux shells and PowerShell get single quotes, and cmd.exe gets double
+  quotes. On Windows, the quoting follows the pane's own shell. A path with a
+  control character in its name, such as a newline, is not inserted. Neither
+  is a path the pane's shell cannot read literally. (#2115)
+
+- **Drag-to-copy works in Claude Code panes again.** Since plain-drag text
+  selection arrived, a drag in a Claude Code pane was taken over by the
+  terminal, so Claude Code's own selection, its automatic copy and its
+  "Copied" message never happened. In Claude Code panes, a drag goes to Claude
+  Code again. Codex and other apps keep plain-drag selection. (#2118)
+
+- **A2A host identity no longer fails to start on Windows when several wmux processes start at once.** The certificate issue lock is a file that one process creates and deletes. On Windows, a file another process is still reading stays "delete pending" for a moment, and creating or opening it in that window fails with EPERM. The process that hit this crashed instead of waiting its turn. It now treats that state as "the lock is changing hands" and keeps waiting, within the same time limit as before.
+
+- **Moa finds Claude Code wherever your terminal finds it.** Moa only looked
+  in `~/.local/bin` (and the Windows npm folder), so a Claude Code installed
+  with npm, Homebrew or any other way on your PATH showed "Claude Code not
+  found", and the welcome screen could disagree with Moa about whether Claude
+  was installed. wmux now looks on PATH first (only absolute folders, never
+  the current folder, so a `claude` file inside an opened project is never
+  run), then in `~/.local/bin`, the npm global folder and Homebrew's
+  `/opt/homebrew/bin` and `/usr/local/bin`. The welcome screen and Moa use
+  the same check, so they always agree.
+
+- **Moa also finds Claude Code installed through nvm, fnm or Volta, even when
+  wmux is opened from Finder or the Dock.** An app opened that way does not
+  get the PATH your terminal builds. wmux now also checks those version
+  managers' folders, and reads your login shell's PATH once in the background
+  (from your home folder, for at most a few seconds). A `claude` file that is
+  not allowed to run is skipped.
+
+- **Moa explains Claude Code's first-time setup in plain words.** The first
+  time Claude Code runs, it asks you to pick a look and sign in. When Moa hit
+  that screen, the chat showed the raw terminal text ("Dark mode / Light mode
+  ... Syntax theme") next to "Not sent", with no hint of what to do. Moa now
+  says that Claude Code needs a one-time setup and lists the three steps:
+  open the setup, answer Claude's questions, then press Retry.
+
+- **Moa explains Claude's "trust this folder?" question.** Claude Code asks
+  whether to trust a folder before it works there, with "No, exit" chosen by
+  default. Moa used to show that as raw terminal text. It now explains what
+  trusting means (Claude can read, change and run files there), tells you how
+  to answer, and leaves the choice to you; wmux never answers it for you. The
+  setup cards are also left-aligned now instead of right-aligned.
+
+- **Clicking a link that opens a new tab no longer times out on macOS, or opens
+  the tab twice.** When a click opened a popup as the active tab, Chrome on
+  macOS stopped drawing the page behind it, so browser_click waited for that
+  page until its action timeout, reported a failure, and then clicked the
+  element a second time. browser_click now treats the popup as proof the click
+  landed and returns right away, and never presses the element again after it
+  has opened its popup.
+
+### Security
+
+- **The phone's turn view no longer makes the daemon reach a network share
+  named in a request.** On Windows, `/turns/image` and `/turns/file` resolved
+  the requested path before checking it. A UNC path such as
+  `\\host\share\x.png` made the daemon open an SMB connection to that host,
+  which can send the user's NTLM response there, and held the request for
+  about 20 seconds. Both routes now accept only a plain drive path on Windows
+  and answer any other shape with the same "not found" as a missing file,
+  before touching the filesystem. (#1980)
+
+- **Helper tools on Windows always come from PATH.** When wmux ran `git`, `gh` or an agent CLI by name inside a project folder, Windows could start a same-named program sitting in that folder instead of the installed one. wmux now looks these tools up on PATH only, in the app, the background service, the MCP server and the `wmux` CLI. Your own terminal panes are unchanged: a shell there finds programs the same way it does outside wmux. (#1991)
+
 ## [4.2.0] — 2026-10-08
 
 ### Added
