@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   claimOwnedBy,
+  envHasSuffix,
   findClaimedPort,
   parseCdpLog,
   parseConsoleLine,
@@ -65,5 +66,14 @@ describe('parseConsoleLine', () => {
       level: 'error', text: 'boom', source: 'main_window-x.js (26)',
     });
     expect(parseConsoleLine('[Main] not a console line')).toBeNull();
+  });
+});
+
+describe('envHasSuffix', () => {
+  it('matches only the exact suffix, in ps -E and /proc environ shapes', () => {
+    expect(envHasSuffix('node daemon.js HOME=/x WMUX_DATA_SUFFIX=-verify-a PATH=/bin', '-verify-a')).toBe(true);
+    expect(envHasSuffix('HOME=/x\0WMUX_DATA_SUFFIX=-verify-a\0', '-verify-a')).toBe(true);
+    expect(envHasSuffix('WMUX_DATA_SUFFIX=-verify-ab PATH=/bin', '-verify-a')).toBe(false);
+    expect(envHasSuffix('PATH=/bin', '-verify-a')).toBe(false);
   });
 });

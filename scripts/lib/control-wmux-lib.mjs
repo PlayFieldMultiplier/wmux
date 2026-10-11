@@ -131,3 +131,13 @@ export function parseConsoleLine(line) {
   const level = m[1] === 'WARNING' ? 'warning' : m[1] === 'ERROR' ? 'error' : 'info';
   return { level, text: m[2].slice(0, 500), source: m[3].replace(/^file:\/\/.*\/(?=[^/]+$)/, '') };
 }
+
+/**
+ * Does a process environment dump (`/proc/<pid>/environ` NUL-separated, or
+ * `ps -E` space-separated) set WMUX_DATA_SUFFIX to exactly `suffix`?
+ */
+export function envHasSuffix(envText, suffix) {
+  if (!suffix) return false;
+  const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[\\s\\0])WMUX_DATA_SUFFIX=${escaped}($|[\\s\\0])`).test(String(envText ?? ''));
+}

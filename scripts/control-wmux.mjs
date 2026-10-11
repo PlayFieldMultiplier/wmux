@@ -29,6 +29,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   claimOwnedBy,
+  envHasSuffix,
   findClaimedPort,
   parseCdpLog,
   parseConsoleLine,
@@ -539,6 +540,28 @@ function daemonCli(app) {
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 
+/** process.kill that treats "already gone" (ESRCH) as success. */
+function signal(pid, sig) {
+  try {
+    process.kill(pid, sig);
+  } catch (err) {
+    if (err.code !== 'ESRCH') throw err;
+  }
+}
+
+/** The environment of a same-user process as text, or '' when unreadable. */
+function processEnvText(pid) {
+  if (process.platform === 'linux') {
+    try { return fs.readFileSync(`/proc/${pid}/environ`, 'utf8'); } catch { return ''; }
+  }
+  if (process.platform === 'darwin') {
+    // `ps -E` appends the environment of processes owned by the same user.
+    const r = spawnSync('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+    return r.status === 0 ? r.stdout : '';
+  }
+  return '';
+}
+
 async function waitDead(pid, ms) {
   const end = Date.now() + ms;
   while (pidAlive(pid) && Date.now() < end) await sleep(200);
@@ -553,9 +576,9 @@ async function cmdStop(opts) {
 
   // 1. The app: only the pid we spawned. SIGTERM detaches it from its daemon.
   if (pidAlive(state.pid)) {
-    process.kill(state.pid, 'SIGTERM');
+    signal(state.pid, 'SIGTERM');
     if (!(await waitDead(state.pid, 10_000))) {
-      process.kill(state.pid, 'SIGKILL');
+      signal(state.pid, 'SIGKILL');
       await waitDead(state.pid, 3000);
       steps.push(`app pid ${state.pid}: SIGKILL after SIGTERM timeout`);
     } else steps.push(`app pid ${state.pid}: exited on SIGTERM`);
@@ -573,9 +596,13 @@ async function cmdStop(opts) {
       steps.push(`daemon stop via ${path.relative(REPO_ROOT, cli).startsWith('..') ? cli : path.relative(REPO_ROOT, cli)}: exit ${r.status}`);
     }
     if (!(await waitDead(daemonPid, 8000))) {
-      process.kill(daemonPid, 'SIGTERM');
-      steps.push(`daemon pid ${daemonPid}: SIGTERM (from ${daemonPidFile})`);
-      await waitDead(daemonPid, 5000);
+      // A stale pid file can name a reused pid: only signal a process whose own
+      // environment carries this run's suffix.
+      if (envHasSuffix(processEnvText(daemonPid), state.suffix)) {
+        signal(daemonPid, 'SIGTERM');
+        steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by WMUX_DATA_SUFFIX)`);
+        await waitDead(daemonPid, 5000);
+      } else steps.push(`daemon pid ${daemonPid}: still running, identity not verified, not signalled`);
     } else steps.push(`daemon pid ${daemonPid}: stopped`);
   } else steps.push('daemon: not running');
 

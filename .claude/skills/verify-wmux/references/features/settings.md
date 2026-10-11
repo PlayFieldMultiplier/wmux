@@ -28,7 +28,23 @@ Preconditions:
 - **Close / reopen by keyboard.** `control-wmux press --key Escape`, then `control-wmux wait-settle --testid settings-page-title --state hidden`; `control-wmux press --key Meta+Comma` reopens it.
 - **Switch tab.** Run `control-wmux click --selector '[data-settings-tab="appearance"]'`. The tab gets `aria-current="page"` and the title reads "Appearance".
 - **Change theme.** Run `control-wmux click --role radio --name Paper`. `control-wmux inspect --js "document.documentElement.dataset.theme"` returns `"paper"` immediately.
-- **Persistence (second view).** Wait about 6 s (5 s autosave), then read the profile file from the shell: `python3 -c "import json,os,sys; print(json.load(open(os.path.expanduser('~/Library/Application Support/wmux'+sys.argv[1]+'/session.json')))['theme'])" <suffix>` prints `paper`. Restore with `control-wmux click --role radio --name Tint`.
+- **Persistence (second view).** The UI autosaves every 5 s, so poll the profile file with a bound instead of sleeping; this prints `paper` (anything else after 15 s is NOT VERIFIED):
+
+  ```sh
+  python3 - <suffix> <<'PY'
+  import json, os, sys, time
+  f = os.path.expanduser(f"~/Library/Application Support/wmux{sys.argv[1]}/session.json")
+  end, theme = time.time() + 15, None
+  while time.time() < end:
+      theme = json.load(open(f)).get("theme")
+      if theme == "paper":
+          break
+      time.sleep(0.5)
+  print(theme)
+  PY
+  ```
+
+  Restore with `control-wmux click --role radio --name Tint`.
 - **Search.** Run `control-wmux click --testid settings-search`, `control-wmux type --text theme --testid settings-search`. `control-wmux wait-settle --testid settings-search-results` passes. `type` appends, so clear first (`control-wmux press --key Meta+a --testid settings-search`, `press --key Backspace`); a nonsense query such as `zzzqqq` shows `settings-search-empty` ("No settings match “zzzqqq”.").
 - **Proof.** `control-wmux screenshot --as settings-general` shows the Settings page with the General tab.
 
