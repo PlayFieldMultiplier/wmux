@@ -155,3 +155,25 @@ export function reportedAgentName(inputs: {
   if (!rawName || screenSlug) return null;
   return rawName;
 }
+
+/**
+ * Whether a pane's agent is running right now, read off the daemon's
+ * canonical agent state (`readDaemonAgentState`). `/api/sessions` rows carry it
+ * as `agentAlive`, and a transcript binding's `/turns` `agentAlive` takes its
+ * live half from the same call, so the two never contradict each other.
+ *
+ * - `true`: a live, attributed process of the pane's canonical agent
+ *   (`agentVerified`, see provesLiveAgent).
+ * - `false`: the daemon names no agent for the pane. The shell is back at its
+ *   prompt, the tracked agent died, or no hook, process or screen evidence
+ *   names one. A sticky `lastDetectedAgent` is no evidence here.
+ * - `undefined`: the daemon cannot tell. An agent is named (a fresh hook or
+ *   the screen) but no live process proves it yet, or the reader has no state.
+ */
+export function agentAliveVerdict(
+  state: { agentName: string | null; agentVerified?: boolean } | undefined,
+): boolean | undefined {
+  if (state?.agentVerified === undefined) return undefined;
+  if (state.agentVerified) return true;
+  return state.agentName === null ? false : undefined;
+}

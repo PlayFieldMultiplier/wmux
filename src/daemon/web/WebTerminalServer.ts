@@ -3,6 +3,7 @@ import type { PaneSettingsChoice } from './paneCodexSettings';
 import { buildAgentLaunch, type AgentLaunchChoice, type AgentLaunchOptions } from './agentLaunch';
 import { DesktopPhoneError, type DesktopPhoneBridge } from '../phone/DesktopPhoneBridge';
 import type { RunHistoryStore } from '../history/RunHistoryStore';
+import { agentAliveVerdict } from '../canonicalAgent';
 import { applyPaneAccount, handoffRowOf, paneAccountFailure, resolvePaneAccount, verifyHandoff, type ResolvedPaneAccount } from '../phone/paneAccount';
 import { resolveWorkspaceAccountKeys } from '../phone/workspaceAccountEnv';
 import { DESKTOP_ACCOUNT_ENV_COMMAND, parsePaneAccountFields, type StoredHandoffFrom } from '../../shared/phonePaneAccount';
@@ -909,9 +910,11 @@ interface WebTerminalServerDeps {
    * daemon.getAgentName gives the desktop), for GET /api/workspaces. Resolved
    * per request: the reader is registered with the RPC handlers, which may run
    * after this server is built. Absent, or undefined for a session, means the
-   * pane carries no detected-agent fields.
+   * pane carries no detected-agent fields. `agentVerified` (a live attributed
+   * process proven) also feeds `/api/sessions` `agentAlive`; absent, that field
+   * is omitted.
    */
-  agentState?: (sessionId: string) => { agentName: string | null; agentStatus: AgentStatus } | undefined;
+  agentState?: (sessionId: string) => { agentName: string | null; agentStatus: AgentStatus; agentVerified?: boolean } | undefined;
   /**
    * #1342 — the daemon's resume state for a session, for GET /api/workspaces:
    * the captured conversation binding (already transcript-probed, so a purged
@@ -3142,6 +3145,20 @@ export class WebTerminalServer {
      */
     lastDetectedAgent?: string;
     /**
+     * Whether the pane's agent is running right now: the PRESENCE answer that
+     * `agent` and `lastDetectedAgent` refuse to be. `agentAliveVerdict` decides
+     * it from the daemon's canonical agent state, the same reading a Claude or
+     * Codex transcript binding's `/turns` `agentAlive` is built on, so the two
+     * never contradict there. Map reads only: no process scan per poll.
+     *
+     * `true`: a live, attributed process of the pane's agent. `false`: the
+     * daemon names no agent for the pane (shell back at its prompt, agent
+     * exited, or no evidence of one at all), whatever `agent` still says.
+     * ABSENT: the daemon cannot tell, or predates the field. An agent is named
+     * but no live process proves it yet, as for a moment after a launch.
+     */
+    agentAlive?: boolean;
+    /**
      * Last segment of `cwd` — the phone's label of last resort (#1319). See
      * `cwdLeafOf`. Absent for a pane whose cwd is empty or a bare root.
      *
@@ -3209,6 +3226,10 @@ export class WebTerminalServer {
         agent: s.agent?.displayName ?? s.lastDetectedAgent ?? null,
         lastActivity: s.lastActivity,
         ...(s.lastDetectedAgent ? { lastDetectedAgent: s.lastDetectedAgent } : {}),
+        ...(() => {
+          const agentAlive = agentAliveVerdict(this.deps.agentState?.(s.id));
+          return agentAlive === undefined ? {} : { agentAlive };
+        })(),
         ...cwdLeafOf(s.cwd),
         ...workspaceLabelOf(s.env),
         ...workspaceIdOf(s.env),

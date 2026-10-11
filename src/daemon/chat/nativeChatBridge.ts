@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { agentDisplayToSlug, agentRow } from '../../shared/agentIdentity';
+import { agentAliveVerdict } from '../canonicalAgent';
 import { isBrainPty } from '../../shared/constants';
 import type { AgentStatus } from '../../shared/types';
 import type { ChatSkillCatalog } from '../../shared/transcript/chatSkills';
@@ -452,7 +453,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     const status = deps.projector.status(id);
     const live = deps.chatAgentState(id);
     const slug = slugOf(live);
-    const agentAlive = !!slug && slug === status.terminal?.agent && live.agentVerified;
+    // The live half is `/api/sessions`' `agentAlive` verdict, so the two never contradict.
+    const agentAlive = !!slug && slug === status.terminal?.agent && agentAliveVerdict(live) === true;
     // Per-agent capabilities are `terminalChat` on the registry row (agentIdentity.ts).
     const chat = agentAlive ? agentRow(slug)?.terminalChat : undefined;
     return { ...status, agentStatus: live.agentStatus, agentAlive,

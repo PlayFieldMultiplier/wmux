@@ -12,6 +12,7 @@ import { withChosenAccountEnv } from '../../phone/paneAccountSpawn';
 import { createChatBridge, QUEUE_WATCH_CLIENT, WEB_BRIDGE_CLIENT, type ChatAgentState, type ChatPane, type NativeChatBridgeDeps } from '../nativeChatBridge';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
 import { cancelResponse } from '../../web/chatWire';
+import { agentAliveVerdict } from '../../canonicalAgent';
 import { OPENCODE_MAX_SEND_BYTES, fileHistoryEpoch, projectChatBlocked, tuiHistoryEpoch, type ChatQueueEvent } from '../chatBridge';
 
 const dirs: string[] = [];
@@ -153,6 +154,22 @@ describe('resolve', () => {
     expect(await f.bridge.resolve('pane')).not.toHaveProperty('epoch');
     f.state.agent.agentVerified = false;
     expect(await f.bridge.resolve('pane')).toMatchObject({ source: 'file', status: { terminal: { capabilities: { send: false } } } });
+  });
+
+  it('/turns agentAlive never contradicts the /api/sessions verdict for the same pane state', async () => {
+    const f = fixture(); f.liveClaude();
+    const alive = async () => { const r = await f.bridge.resolve('pane'); return r.status.agentAlive; };
+    // Live Claude: both true.
+    expect(agentAliveVerdict(f.state.agent)).toBe(true);
+    expect(await alive()).toBe(true);
+    // Claude exited while its transcript is still bound: both false.
+    f.state.agent = { ...f.state.agent, agentName: null, agentVerified: false, agentStatus: 'idle' };
+    expect(agentAliveVerdict(f.state.agent)).toBe(false);
+    expect(await alive()).toBe(false);
+    // Named but unproven: the row omits the field, /turns stays closed (false).
+    f.state.agent = { ...f.state.agent, agentName: 'Claude Code', agentVerified: false };
+    expect(agentAliveVerdict(f.state.agent)).toBeUndefined();
+    expect(await alive()).toBe(false);
   });
 
   it('serves the running episode only through turn(), never on the shared status', async () => {
