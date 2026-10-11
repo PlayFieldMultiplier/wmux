@@ -181,7 +181,9 @@ export class RelayTransport {
   noteFailure(subject: string, status: number | null): void {
     const answer = status !== null && this.lastAnswer?.status === status ? this.lastAnswer : null;
     const reason = answer?.reason;
-    if (status === this.lastFailureStatus && reason === this.lastFailureReason) return;
+    // A missing reason on a repeat status is not news: a body that could not be
+    // read must not make a steady outage log once per send.
+    if (status === this.lastFailureStatus && (reason === undefined || reason === this.lastFailureReason)) return;
     this.lastFailureStatus = status;
     this.lastFailureReason = reason;
     const detail = answer ? describeAnswer(answer) : '';
@@ -246,9 +248,11 @@ const RELAY_ANSWER_MAX_BYTES = 1024;
 /**
  * Shape of a reason worth repeating in a log line: Apple's closed enum
  * (`BadDeviceToken`) or the relay's own (`bad-json`, a field name). Anything
- * else — spaces, newlines, length — is dropped rather than echoed.
+ * else — spaces, newlines, length — is dropped rather than echoed. So is a run
+ * of hex: no reason looks like one, and a device token does.
  */
 const SAFE_REASON = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const HEX_RUN = /^[0-9A-Fa-f]{16,}$/;
 
 interface RelayAnswer {
   status: number;
@@ -272,7 +276,7 @@ async function readAnswer(res: Response): Promise<RelayAnswer> {
     const parsed: unknown = JSON.parse(text);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const reason = (parsed as { reason?: unknown }).reason;
-      if (typeof reason === 'string' && SAFE_REASON.test(reason)) answer.reason = reason;
+      if (typeof reason === 'string' && SAFE_REASON.test(reason) && !HEX_RUN.test(reason)) answer.reason = reason;
     }
   } catch {
     // An unreadable body costs the detail, never the status.

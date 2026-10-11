@@ -89,7 +89,7 @@ describe('RelayTransport refusal detail', () => {
   });
 
   it('never echoes a reason of the wrong shape', async () => {
-    for (const reason of ['Bad Device', 'Bad\nInjected line', 'A'.repeat(65), '-leading', 42]) {
+    for (const reason of ['Bad Device', 'Bad\nInjected line', 'A'.repeat(65), '-leading', 42, `ab${'0'.repeat(62)}`]) {
       const h = harness([refusal(403, JSON.stringify({ ok: false, reason }), 'apns')]);
       await refuse(h);
       expect(h.warns()).toEqual(['[push] relay answered 403 (apns) for dev-1']);
@@ -102,6 +102,16 @@ describe('RelayTransport refusal detail', () => {
       expect(await refuse(h)).toBe(403);
       expect(h.warns()).toEqual(['[push] relay answered 403 for dev-1']);
     }
+  });
+
+  it('keeps the status, without a retry, when the body stream fails mid-read', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"rea')); },
+      pull() { throw new Error('aborted'); },
+    });
+    const h = harness([new Response(body, { status: 403 })]);
+    expect(await refuse(h)).toBe(403);
+    expect(h.warns()).toEqual(['[push] relay answered 403 for dev-1']);
   });
 
   it('logs again when the status repeats with a new reason, but not for a repeat of both', async () => {
@@ -117,6 +127,18 @@ describe('RelayTransport refusal detail', () => {
       '[push] relay answered 403 (apns: BadDeviceToken) for dev-1',
       '[push] relay answered 403 (apns: ExpiredProviderToken) for dev-1',
     ]);
+  });
+
+  it('does not log again when a repeat status comes without a readable reason', async () => {
+    const h = harness([
+      refusal(403, JSON.stringify({ reason: 'BadDeviceToken' }), 'apns'),
+      refusal(403, 'not json'),
+      refusal(403, JSON.stringify({ reason: 'BadDeviceToken' }), 'apns'),
+    ]);
+    await refuse(h);
+    await refuse(h);
+    await refuse(h);
+    expect(h.warns()).toEqual(['[push] relay answered 403 (apns: BadDeviceToken) for dev-1']);
   });
 
   it('keeps the detail of the attempt that was returned after a 5xx retry', async () => {
