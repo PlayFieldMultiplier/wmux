@@ -36,6 +36,8 @@ describe('secretValueKind', () => {
     ['-----BEGIN PGP PRIVATE KEY BLOCK-----', 'private-key'],
     ['DB_PASSWORD="q8Zr2LpX0vKt9mNw4YcB7sHd"', 'random'],
     ['apiKey: "Zq8r2LpX0vKt9mNw4YcB7sHd"', 'random'],
+    // Every assignment on a line is read, not only the first.
+    ['{ publicKey: "BEl62iUYgUivxIkv69yViEuiBIa4", password: "q8Zr2LpX0vKt9mNw4YcB7sHd" }', 'random'],
   ] as const)('%s → %s', (line, kind) => expect(secretValueKind(line)).toBe(kind));
 
   it.each([
@@ -60,6 +62,13 @@ describe('secretValueKind', () => {
 
 const add = (p: string, lines: string[]) =>
   [`diff --git a/${p} b/${p}`, 'new file mode 100644', '--- /dev/null', `+++ b/${p}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)];
+
+it('reads a long key-like line in linear time', () => {
+  const line = `${'key='.repeat(20_000)}.`;
+  const t = Date.now();
+  expect(secretValueKind(line)).toBeNull();
+  expect(Date.now() - t).toBeLessThan(500);
+});
 
 describe('scanPatch', () => {
   it('finds added secret files and values with their line; a deleted or modified secret-named file is not refused by name', () => {
@@ -101,7 +110,7 @@ describe('scanPatch', () => {
     const files = parseNameStatusZ('A\0.env.production\0A\0credentials.json\0');
     const patch = [
       ...add('.env.production', ['NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiJ9', 'API_URL=https://x.example', 'SECRET_KEY=changeme', 'DB_PASSWORD=hunter2hunter2']),
-      ...add('credentials.json', ['{', '  "client_id": "123.apps.googleusercontent.com",', '  "client_secret": "GOCSPX-abcdefgh12345"', '}']),
+      ...add('credentials.json', ['{', '  "client_id": "123.apps.googleusercontent.com",', '  "auth": "", "client_secret": "GOCSPX-abcdefgh12345"', '}']),
     ].join('\n');
     expect(scanPatch(files, patch)).toEqual([
       { path: '.env.production', what: 'value', kind: 'env', line: 4 },

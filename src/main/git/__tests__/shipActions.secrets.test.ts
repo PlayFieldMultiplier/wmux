@@ -21,6 +21,8 @@ let gh: ReturnType<typeof vi.fn<(args: string[]) => Promise<{ stdout: string }>>
 let svc: ShipActions;
 /** The secret check's git reads; tests swap in a failing or racing one. */
 let lines: (cwd: string, env?: NodeJS.ProcessEnv) => GitLines;
+/** Makes the real index's catch-up reset fail, as an index.lock would. */
+let failReset = false;
 
 const write = (rel: string, text: string | Buffer) => {
   fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
@@ -50,6 +52,7 @@ beforeEach(() => {
   gh = vi.fn(async (_args: string[]) => ({ stdout: 'https://github.com/o/r/pull/1\n' }));
   const exec = (cmd: string, args: string[], opts: { cwd: string; env?: NodeJS.ProcessEnv }) => {
     if (cmd.startsWith('gh')) return gh(args);
+    if (failReset && args[0] === 'reset') return Promise.reject(Object.assign(new Error('x'), { stderr: 'fatal: index.lock exists' }));
     try {
       return Promise.resolve({ stdout: execFileSync(cmd, args, { cwd: opts.cwd, env: opts.env, encoding: 'utf8', maxBuffer: 1 << 24 }) });
     } catch (e) {
@@ -57,6 +60,7 @@ beforeEach(() => {
     }
   };
   lines = spawnGitLines;
+  failReset = false;
   svc = new ShipActions(exec as never, async () => null, () => undefined, () => 1000, () => false, (cwd, env) => lines(cwd, env));
 });
 
@@ -103,6 +107,15 @@ describe('ShipActions secret guard: commit', () => {
     expect(await svc.commit(repo, 'add b', pin())).toEqual({ ok: true });
     expect(git(['show', '--name-only', '--format=', 'HEAD'], repo)).toBe('b.txt');
     expect(git(['status', '--porcelain'], repo)).toBe('?? .env');
+  });
+
+  it('says so when the commit was made but the staging area could not catch up', async () => {
+    write('b.txt', 'b\n');
+    failReset = true;
+    const res = await svc.commit(repo, 'add b', pin());
+    expect(res).toMatchObject({ ok: false });
+    expect(!res.ok && res.error).toMatch(/^committed, but the staging area could not be updated \(fatal: index.lock exists\)/);
+    expect(git(['show', '--name-only', '--format=', 'HEAD'], repo)).toBe('b.txt');
   });
 
   it('refuses a key-shaped value and never echoes it', async () => {
@@ -203,6 +216,24 @@ describe('ShipActions secret guard: push and PR', () => {
     git(['add', '-A'], repo);
     git(['commit', '-q', '--no-edit'], repo);
     expect(await svc.push(repo, pin())).toMatchObject({ ok: false, secrets: [{ path: 'm.txt', kind: 'gitlab' }] });
+    // git without remerge diffs: the merge is read against each parent.
+    lines = (cwd, env) => {
+      const real = spawnGitLines(cwd, env);
+      return async (args, onLine) => (args.includes('--diff-merges=remerge') ? false : real(args, onLine));
+    };
+    expect(await svc.push(repo, pin())).toMatchObject({ ok: false, secrets: [{ path: 'm.txt', kind: 'gitlab' }] });
+  });
+
+  it('a push to another remote reads the commits that remote does not have', async () => {
+    write('.env', 'X=1\n');
+    commitAll('env');
+    git(['push', '-q', 'origin', 'feat/x'], repo);
+    const pub = path.join(dir, 'pub.git');
+    git(['init', '-q', '--bare', '-b', 'main', pub], dir);
+    git(['remote', 'add', 'pub', pub], repo);
+    git(['push', '-q', 'pub', 'main'], repo);
+    git(['config', 'branch.feat/x.remote', 'pub'], repo);
+    expect(await svc.push(repo, pin())).toMatchObject({ ok: false, secrets: [{ path: '.env' }] });
   });
 
   it('with no local origin/<default> ref, checks the commits no remote has — never the whole history', async () => {

@@ -6,7 +6,7 @@
 // A push, PR or delivery is checked commit by commit — each commit's own
 // change — so a file added in one commit and removed in a later one is still
 // found. A merge commit is checked for what the merge itself changed
-// (--diff-merges=remerge, git 2.36+; older git reads non-merge commits only).
+// (--diff-merges=remerge; on git before 2.36, its change against each parent).
 //
 // FAIL CLOSED: when git cannot answer, the result is `ok: false` and the
 // caller refuses the action.
@@ -73,10 +73,10 @@ export async function scanDiff(run: GitLines, args: string[]): Promise<SecretSca
 
 /** Secrets added by any commit in `revs` (rev-list arguments), each commit's own change. */
 export async function scanCommits(run: GitLines, revs: string[]): Promise<SecretScanResult> {
-  const log = (merges: string[], out: string[]) => ['log', '--no-show-signature', '--format=%x01%H', ...merges, ...out, ...DIFF, ...revs, '--'];
-  for (const merges of [['--diff-merges=remerge'], []]) {
+  const log = (merges: string[], out: string[]) => ['log', '--root', '--no-show-signature', '--format=%x01%H', ...merges, ...out, ...DIFF, ...revs, '--'];
+  for (const merges of [['--diff-merges=remerge'], ['-m']]) {
     const names: string[] = [];
-    // A failure here with remerge is git too old for it: read again without.
+    // remerge needs git 2.36: on a failure, read merges against each parent.
     if (await run(log(merges, NAMES), (l) => names.push(l))) return scan(run, names, log(merges, PATCH));
   }
   return { ok: false };

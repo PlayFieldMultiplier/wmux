@@ -41,9 +41,9 @@
 //   not a passenger in someone else's commit.
 //
 //   THE TASK'S INDEX IS NOT TOUCHED. Untracked files only appear in a diff
-//   after `git add -N`, which would leave intent-to-add entries in the index of
-//   a worktree an agent is still working in. The add and the diff run against a
-//   TEMPORARY index (GIT_INDEX_FILE) that is deleted afterwards.
+//   once added, which would change the index of a worktree an agent is still
+//   working in. The add and the diffs run against a TEMPORARY index
+//   (GIT_INDEX_FILE) that is deleted afterwards.
 //
 //   ADOPTS ARE SERIALIZED PER TARGET REPOSITORY. The clean check and the apply
 //   are separated by several git invocations; two concurrent adopts would both
@@ -362,10 +362,12 @@ export class TaskAdoptService {
     }
 
     // ── The patch, built against a TEMPORARY index ───────────────────────
-    // `add -N` is what makes new files appear in a diff at all, and doing it in
-    // the task's real index leaves intent-to-add entries in a worktree an agent
-    // is still using (its next `git status` reads differently, and its own
-    // commit picks up files it never staged).
+    // `add -A` is what makes new files appear in a diff at all, and doing it in
+    // the task's real index would change a worktree an agent is still using
+    // (its next `git status` reads differently, and its own commit picks up
+    // files it never staged). Staged in full, so the patch, the secret check
+    // and the file list all read the same snapshot (`diff --cached`), whatever
+    // the agent writes meanwhile.
     const temp = this.makeTempIndex();
     const env = { GIT_INDEX_FILE: temp.indexFile };
     let patch: string;
@@ -375,7 +377,7 @@ export class TaskAdoptService {
       if (seed.code !== 0) {
         return { ok: false, taskId, reason: 'error', error: `could not seed a temporary index: ${seed.stderr.trim()}` };
       }
-      const added = await this.git(['add', '-A', '-N'], worktreePath, env);
+      const added = await this.git(['add', '-A'], worktreePath, env);
       if (added.code !== 0) {
         return {
           ok: false,
@@ -384,7 +386,7 @@ export class TaskAdoptService {
           error: `could not stage the task's new files for diffing: ${added.stderr.trim()}`,
         };
       }
-      const diff = await this.git(['diff', '--binary', base], worktreePath, env);
+      const diff = await this.git(['diff', '--cached', '--binary', base], worktreePath, env);
       if (diff.code !== 0) {
         return { ok: false, taskId, reason: 'error', error: `git diff failed in the task worktree: ${diff.stderr.trim()}` };
       }
@@ -405,7 +407,7 @@ export class TaskAdoptService {
           if (r.code !== 0) return false;
           for (const l of r.stdout.split('\n')) onLine(l);
           return true;
-        }, [base]);
+        }, ['--cached', base]);
         if (!scan.ok) {
           // Fail closed: a patch nobody could check is not adopted.
           return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeScanFailure('adopted')}` };
@@ -414,7 +416,7 @@ export class TaskAdoptService {
           return { ok: false, taskId, reason: 'secret', error: `not adopted: ${describeSecretFindings(scan.findings, 'adopted')}`, secrets: scan.findings };
         }
       }
-      const names = await this.git(['diff', '--name-only', '-z', base], worktreePath, env);
+      const names = await this.git(['diff', '--cached', '--name-only', '-z', base], worktreePath, env);
       files = names.stdout.split('\0').map((l) => l.trim()).filter((l) => l.length > 0);
     } finally {
       temp.cleanup();

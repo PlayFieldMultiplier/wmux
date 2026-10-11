@@ -35,6 +35,11 @@ describe('redactSecrets', () => {
     expect(redactSecrets(`log ${s} end`)).not.toContain(secret);
   });
 
+  it('masks a token as a whole even when a newer key shape matches its start', () => {
+    const token = `sk_live_${'4eC3'.repeat(6)}.Sensitive12`;
+    expect(redactSecrets(`log ${token} end`)).toBe(`log ${REDACTED} end`);
+  });
+
   it('keeps the inline URL credential masking the IPC log uses', () => {
     expect(maskInlineCredentials('http://h/x?token=abc&y=1')).toBe('http://h/x?token=[redacted]&y=1');
     expect(redactSecrets('open http://h/#wmux-desktop-code=zzz')).toContain('wmux-desktop-code=[redacted]');

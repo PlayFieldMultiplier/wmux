@@ -227,7 +227,11 @@ export class ShipActions {
           await this.verify(cwd, expect);
           await this.git(['commit', '-m', msg], cwd, 60_000, env);
           // The real index catches up with the commit, as `add -A` + `commit` leaves it.
-          await this.git(['reset', '-q'], cwd).catch(() => undefined);
+          try {
+            await this.git(['reset', '-q'], cwd);
+          } catch (err) {
+            return { ok: false, error: `committed, but the staging area could not be updated (${failure(err)}); run "git reset" in this repository` };
+          }
           return { ok: true };
         });
       }
@@ -249,8 +253,8 @@ export class ShipActions {
       if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) return { ok: false, error: 'the branch has no upstream branch on a remote' };
       await this.verify(cwd, expect);
       if (secretGuardEnabled()) {
-        // Every commit no remote-tracking ref has yet, each commit's own change.
-        const refused = this.secretRefusal(await scanCommits(this.gitLines(cwd), [expect.head, '--not', '--remotes']), 'pushed');
+        // Every commit the destination remote's tracking refs lack, each commit's own change.
+        const refused = this.secretRefusal(await scanCommits(this.gitLines(cwd), [expect.head, '--not', `--remotes=${remote}`]), 'pushed');
         if (refused) return refused;
       }
       await this.git(['push', remote, `${expect.head}:${merge}`], cwd, 120_000, { GIT_TERMINAL_PROMPT: '0' });

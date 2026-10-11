@@ -55,8 +55,10 @@ export const KEY_RULES: readonly (readonly [SecretValueKind, RegExp])[] = [
 /** `<name> = <value>` whose name ENDS in a secret word (apiKey, DB_PASSWORD,
  *  "token":) and whose value is one whole run of base64 characters. Dotted,
  *  slashed-with-dots, underscored or dashed values (storage keys, module ids,
- *  paths) are not this rule's business. */
-const ASSIGNED = /([A-Za-z0-9_-]{0,64}?(?:key|secret|token|passw(?:or)?d|pwd|credentials?))["']?\s*[:=]\s*["'`]?([A-Za-z0-9+/=]{24,})(?![A-Za-z0-9+/=._-])/i;
+ *  paths) are not this rule's business. The value is taken whole, at most 512
+ *  characters (lookahead + backreference: no backtracking into it), so a long
+ *  line costs linear time. */
+const ASSIGNED = /([A-Za-z0-9_-]{0,64}?(?:key|secret|token|passw(?:or)?d|pwd|credentials?))["']?\s*[:=]\s*["'`]?(?=([A-Za-z0-9+/=]{24,512}))\2(?![A-Za-z0-9+/=._-])/gi;
 /** Names that are public by design (browser / client keys). */
 const PUBLIC_NAME = /public|publishable|anon|client_?id|vapid/i;
 
@@ -76,8 +78,8 @@ function generated(v: string): boolean {
 /** The kind of credential on one line of added text, or null. */
 export function secretValueKind(line: string): SecretValueKind | null {
   for (const [kind, re] of KEY_RULES) if (re.test(line)) return kind;
-  const m = ASSIGNED.exec(line);
-  return m && !PUBLIC_NAME.test(m[1]) && generated(m[2]) ? 'random' : null;
+  for (const m of line.matchAll(ASSIGNED)) if (!PUBLIC_NAME.test(m[1]) && generated(m[2])) return 'random';
+  return null;
 }
 
 /** A file's kind (env file, credential store, private key) — or a key's. */
@@ -137,14 +139,14 @@ const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']?([^"'\s#
 const ENV_SECRET_NAME = /key|secret|token|passw(?:or)?d|pwd|credential|private|dsn|database_url/i;
 const ENV_PUBLIC_NAME = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_)|public|publishable/i;
 /** A credential field in a credentials file (JSON, YAML, INI). */
-const CREDENTIAL_FIELD = /["']?(private_key|client_secret|refresh_token|access_token|oauth_token|secret_access_key|aws_secret_access_key|password|secret|auth)["']?\s*[:=]\s*["']?([^"'\s,]+)/i;
+const CREDENTIAL_FIELD = /["']?(private_key|client_secret|refresh_token|access_token|oauth_token|secret_access_key|aws_secret_access_key|password|secret|auth)["']?\s*[:=]\s*["']?([^"'\s,]+)/gi;
 
 /** An assigned secret on one line of an env or credentials file. */
 function assignedSecret(kind: 'env' | 'credentials', line: string): boolean {
-  const m = kind === 'env' ? ENV_LINE.exec(line) : CREDENTIAL_FIELD.exec(line);
-  if (!m) return false;
-  if (kind === 'env' && (!ENV_SECRET_NAME.test(m[1]) || ENV_PUBLIC_NAME.test(m[1]))) return false;
-  return m[2].length >= 8 && !PLACEHOLDER.test(m[2]);
+  const filled = (v: string) => v.length >= 8 && !PLACEHOLDER.test(v);
+  if (kind === 'credentials') return [...line.matchAll(CREDENTIAL_FIELD)].some((m) => filled(m[2]));
+  const m = ENV_LINE.exec(line);
+  return !!m && ENV_SECRET_NAME.test(m[1]) && !ENV_PUBLIC_NAME.test(m[1]) && filled(m[2]);
 }
 
 /** One path a diff touches, from `--name-status -z --no-renames`. */

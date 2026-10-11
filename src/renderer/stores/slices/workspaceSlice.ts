@@ -1070,6 +1070,13 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       state.sessionSettingsLoaded = true;
       if (state.browserBackendHydrated) Object.assign(state, siteGuidesAutoEnablePatch(state));
 
+      // Secret guard, ahead of the empty-workspace return below. Strict
+      // boolean: an absent or malformed value keeps the guard on.
+      if (typeof data.secretGuardEnabled === 'boolean') {
+        state.secretGuardEnabled = data.secretGuardEnabled;
+        window.electronAPI.settings.setSecretGuardEnabled?.(data.secretGuardEnabled);
+      }
+
       if (!data.workspaces || data.workspaces.length === 0) return;
 
       // Cold-park is renderer-only and non-persisted. loadSession replaces the
@@ -1707,11 +1714,6 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       if (data.autoUpdateEnabled != null) {
         state.autoUpdateEnabled = data.autoUpdateEnabled;
         window.electronAPI.settings.setAutoUpdateEnabled(data.autoUpdateEnabled);
-      }
-      // Strict boolean: an absent or malformed value keeps the guard on.
-      if (typeof data.secretGuardEnabled === 'boolean') {
-        state.secretGuardEnabled = data.secretGuardEnabled;
-        window.electronAPI.settings.setSecretGuardEnabled?.(data.secretGuardEnabled);
       }
       if (data.sidebarMode) state.sidebarMode = data.sidebarMode;
       if (data.channelDockVisible != null) state.channelDockVisible = data.channelDockVisible;
