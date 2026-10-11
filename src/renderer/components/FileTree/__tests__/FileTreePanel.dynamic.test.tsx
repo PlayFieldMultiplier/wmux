@@ -114,6 +114,32 @@ describe('FileTreePanel', () => {
     expect(container.querySelector('[data-file-tree-root]')?.textContent).toBe('two');
   });
 
+  it("stays on the pane's terminal folder, and can still insert a path, while an editor tab is active", async () => {
+    resolveRepo.mockResolvedValue({ ok: true, repoPath: '/code/two' });
+    act(() => root.render(createElement(FileTreePanel, { position: 'right' })));
+    await flush();
+    act(() => useStore.getState().addEditorSurface('p2', '/code/two/README.md'));
+    await flush();
+    expect(fileTreeCwd(useStore.getState().workspaces[0])).toBe('/code/two/src');
+    expect(container.querySelector('[data-file-tree-root]')?.textContent).toBe('two');
+    const file = container.querySelector('[data-file-tree-row="file"]') as HTMLElement;
+    act(() => { file.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 })); });
+    expect(container.querySelector('[data-file-tree-action="insert"]')).not.toBeNull();
+  });
+
+  it('a cd inside the same repository does not reload the tree from the subfolder', async () => {
+    resolveRepo.mockResolvedValue({ ok: true, repoPath: '/code/two' });
+    act(() => root.render(createElement(FileTreePanel, { position: 'right' })));
+    await flush();
+    readDir.mockClear();
+    act(() => useStore.getState().updateSurfaceCwd('pty-2', '/code/two/src/lib'));
+    await flush();
+    expect(resolveRepo).toHaveBeenLastCalledWith('/code/two/src/lib');
+    expect(readDir).not.toHaveBeenCalledWith('/code/two/src/lib');
+    expect(readDir).not.toHaveBeenCalledWith('/code/two');
+    expect(container.querySelector('[data-file-tree-root]')?.textContent).toBe('two');
+  });
+
   it('copies a path relative to the tree root from the row menu', async () => {
     resolveRepo.mockResolvedValue({ ok: true, repoPath: '/code/two' });
     act(() => root.render(createElement(FileTreePanel, { position: 'right' })));
