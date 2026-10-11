@@ -215,9 +215,14 @@ describe('SessionPipe.reflush — gap-free live re-flush', () => {
 
     await sleep(15);
     client.socket.write('typed-during-resync');
+    const duringResync = Buffer.from('background output 한글');
+    ring.write(duringResync);
+    bridge.emit('data', duringResync);
+    expect(pipe.getMemoryDiagnostics().resyncQueuedBytes).toBe(duringResync.length);
 
     const result = await p;
     expect(result.mode).toBe('snapshot');
+    expect(pipe.getMemoryDiagnostics().resyncQueuedBytes).toBe(0);
 
     await sleep(20);
     expect(Buffer.concat(inputs).toString()).toContain('typed-during-resync');

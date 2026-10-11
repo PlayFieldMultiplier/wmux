@@ -528,6 +528,7 @@ export const hi = {
   'remotePage.connect.pasteScope': "अगर आमंत्रण वर्कस्पेस साझा करता है, तो यह कंप्यूटर उस पीसी के हर वर्कस्पेस को पढ़ और खोज सकता है, बाद में खुलने वाले भी। जुड़े रहने तक wmux हर कुछ सेकंड में उसे जाँचता है, अलर्ट के लिए कनेक्शन खुला रखता है और उसकी सूचनाएँ दिखाता है; साइडबार शीर्षक के कंप्यूटर मेनू से उन्हें म्यूट करें।",
   'pcSwitcher.open': "कंप्यूटर बदलें",
   'pcSwitcher.manage': "{name} सेटिंग्स",
+  'app.portableData.notice': "wmux की यह कॉपी Applications फ़ोल्डर के बाहर चल रही है, इसलिए यह अलग डेटा का उपयोग करती है। अपने मौजूदा सत्र देखने के लिए इसे Applications में ले जाएँ।",
   'pcSwitcher.othersNeedYou': "अन्य कंप्यूटरों पर {count} आपकी प्रतीक्षा में",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "wmux बंद करें और सभी सेशन रोकें?",

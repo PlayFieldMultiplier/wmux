@@ -48,6 +48,36 @@ function browserClick(): ToolHandler {
   return tools.get('browser_click')!;
 }
 
+/**
+ * Wait until `page` is the tab its window shows and is producing frames.
+ *
+ * Playwright's click waits for the target to be "stable", which it measures
+ * with requestAnimationFrame on the page. A target=_blank popup opens as a new
+ * TAB in the opener's window and becomes the active one; on macOS Chrome stops
+ * producing frames for the tab behind it, so the next click on the opener sat
+ * in "waiting for element to be visible, enabled and stable" until the 1.5 s
+ * action cap ran out (macos-14, both modes, since this case landed in #2017;
+ * Linux Chrome keeps rendering the background tab, so it never showed there).
+ *
+ * The fix is the event, not a longer wait: headless has no user focus to keep,
+ * so the opener is made the active tab outright; headed must stay an unfocused
+ * window, so the popups are closed instead (closing the active tab hands the
+ * window back to the opener). Either way the click starts only after the
+ * opener has rendered a frame, and a page that never renders fails at the
+ * case timeout with that reason named rather than as an action timeout.
+ */
+async function untilRendering(page: Page, headless: boolean): Promise<void> {
+  if (headless) await page.bringToFront();
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+}
+
+async function closePopup(popup: Page): Promise<void> {
+  if (popup.isClosed()) return;
+  const closed = new Promise<void>((resolve) => popup.once('close', () => resolve()));
+  await popup.close();
+  await closed;
+}
+
 async function clickTool(page: Page, name: string): Promise<string> {
   engine.page = page;
   const ref = refFor(await generateSnapshot(page), name);
@@ -55,6 +85,36 @@ async function clickTool(page: Page, name: string): Promise<string> {
   const text = result.content.map((c) => c.text).join('\n');
   if (result.isError) throw new Error(text);
   return text;
+}
+
+/** How long a popup may take to appear once the click has returned. */
+const POPUP_AFTER_CLICK_MS = 3_000;
+
+/**
+ * Arm a popup waiter now; its clock starts only when `afterClick()` is called.
+ * `page.waitForEvent('popup', { timeout })` started counting before
+ * clickTool's own snapshot and tool work, so on a loaded runner the window
+ * could run out before the click even happened — the tool saw its popup, the
+ * test's waiter had already given up.
+ */
+function armPopupWaiter(page: Page): { afterClick: () => Promise<Page> } {
+  const popup = new Promise<Page>((resolve) => page.once('popup', resolve));
+  return {
+    afterClick: async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`no popup within ${POPUP_AFTER_CLICK_MS} ms after the click returned`)),
+          POPUP_AFTER_CLICK_MS,
+        );
+      });
+      try {
+        return await Promise.race([popup, late]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
 }
 
 async function addPopupLinks(page: Page, links: Record<string, string>): Promise<void> {
@@ -109,9 +169,10 @@ for (const mode of MODES) {
           document.body.prepend(button);
         }, url('explicit'));
 
-        const pending = source.waitForEvent('popup', { timeout: 3_000 });
+        await untilRendering(source, mode.headless);
+        const pending = armPopupWaiter(source);
         await clickTool(source, 'Open delayed popup');
-        const popup = await pending;
+        const popup = await pending.afterClick();
         await popup.waitForURL(/popup-waiter=explicit/, { timeout: 3_000 });
         expect(popup.url()).toContain('popup-waiter=explicit');
         await popup.close();
@@ -127,15 +188,20 @@ for (const mode of MODES) {
       source.context().on('page', (p) => opened.push(p as Page));
       try {
         await addPopupLinks(source, { 'old-popup-link': url('old'), 'next-popup-link': url('next') });
-        const oldPopup = source.waitForEvent('popup', { timeout: 3_000 });
+        await untilRendering(source, mode.headless);
+        const oldPopup = armPopupWaiter(source);
         const oldReport = await clickTool(source, 'old-popup-link');
         expectOwnPopup(oldReport, 'old', ['next'], mode.headless);
-        await oldPopup;
+        // The old popup has been reported and received; it plays no further
+        // part. Closing it is what gives the opener its tab back (see
+        // untilRendering), and the next report must still not name it.
+        await closePopup(await oldPopup.afterClick());
 
-        const nextPopup = source.waitForEvent('popup', { timeout: 3_000 });
+        await untilRendering(source, mode.headless);
+        const nextPopup = armPopupWaiter(source);
         const nextReport = await clickTool(source, 'next-popup-link');
         expectOwnPopup(nextReport, 'next', ['old'], mode.headless);
-        const next = await nextPopup;
+        const next = await nextPopup.afterClick();
         await next.waitForURL(/popup-waiter=next/, { timeout: 3_000 });
         expect(next.url()).toContain('popup-waiter=next');
       } finally {

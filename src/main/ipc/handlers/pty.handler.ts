@@ -25,6 +25,7 @@ import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
 import { withheldCredentialNames } from '../../../shared/envFilter';
 import { getShellUtf8Locale } from '../../pty/shellLocale';
 import { forgetPtyShell, recordPtyShell } from '../../pty/ptyShellRegistry';
+import { withDaemonCreateRollback } from './daemonCreateRollback';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { scheduleInitialCommand } from './scheduleInitialCommand';
 import {
@@ -302,7 +303,7 @@ export function registerPTYHandlers(
   function clearSessionDataListener(sessionId: string): void {
     if (!sessionDataDispatcher) return;
     if (!sessionDataDispatcher.has(sessionId)) return;
-    dataBatcher.flushSession(sessionId); // P1-3: no bytes stranded in the batch
+    dataBatcher.finishSession(sessionId); // Preserve final output, release its timestamp too.
     sessionDataDispatcher.delete(sessionId);
   }
 
@@ -560,37 +561,49 @@ export function registerPTYHandlers(
       // the daemon replays it verbatim (see DaemonCreateSessionParams.env).
       // `exec`/`supervision` are present only for an X8 supervised leaf — the
       // daemon runs the command as the pane root and arms the PaneSupervisor.
-      const result = await daemonClient.rpc('daemon.createSession', {
-        id: sessionId,
-        cmd: shell,
-        ...(wslArgs ? { args: wslArgs } : {}),
-        cwd: effectiveCwd,
-        wslTarget: trustedRecovery?.wslTarget,
-        cols: options?.cols || 80,
-        rows: options?.rows || 24,
-        env: resolvedEnv,
-        ...(execCommand !== undefined ? { exec: { command: execCommand } } : {}),
-        ...(supervisionPolicy !== undefined ? { supervision: supervisionPolicy } : {}),
-      }, isWslShell(shell) ? { timeoutMs: WSL_RPC_TIMEOUT_MS } : undefined);
+      // A failure after the id exists rolls the daemon session back (it would
+      // otherwise leak attached forever) and rethrows the original error.
+      let result: unknown;
+      await withDaemonCreateRollback(sessionId, {
+        rpc: (method, params) => daemonClient.rpc(method, params),
+        undoLocal: () => {
+          daemonClient.disconnectSessionPipe(sessionId).catch(() => undefined);
+          forgetPtyShell(sessionId);
+          forgetGoalWorkerSession(sessionId);
+        },
+      }, async () => {
+        result = await daemonClient.rpc('daemon.createSession', {
+          id: sessionId,
+          cmd: shell,
+          ...(wslArgs ? { args: wslArgs } : {}),
+          cwd: effectiveCwd,
+          wslTarget: trustedRecovery?.wslTarget,
+          cols: options?.cols || 80,
+          rows: options?.rows || 24,
+          env: resolvedEnv,
+          ...(execCommand !== undefined ? { exec: { command: execCommand } } : {}),
+          ...(supervisionPolicy !== undefined ? { supervision: supervisionPolicy } : {}),
+        }, isWslShell(shell) ? { timeoutMs: WSL_RPC_TIMEOUT_MS } : undefined);
 
-      const createdCwd = (result as { cwd?: string })?.cwd;
-      if (isWslShell(shell) && createdCwd) effectiveCwd = createdCwd;
+        const createdCwd = (result as { cwd?: string })?.cwd;
+        if (isWslShell(shell) && createdCwd) effectiveCwd = createdCwd;
 
-      // Attach to the session (makes daemon start the SessionPipe server)
-      await daemonClient.rpc('daemon.attachSession', { id: sessionId });
+        // Attach to the session (makes daemon start the SessionPipe server)
+        await daemonClient.rpc('daemon.attachSession', { id: sessionId });
 
-      // Under a Moa goal, Moa may type only into a session spawned with the goal
-      // worker profile. Recorded from the env main just handed the daemon and
-      // the launch line it will type, never from what the pane reports.
-      noteGoalWorkerSpawn(sessionId, { env: resolvedEnv, initialCommand: options?.initialCommand, fanoutTaskOf: options?.fanoutTaskOf });
+        // Under a Moa goal, Moa may type only into a session spawned with the goal
+        // worker profile. Recorded from the env main just handed the daemon and
+        // the launch line it will type, never from what the pane reports.
+        noteGoalWorkerSpawn(sessionId, { env: resolvedEnv, initialCommand: options?.initialCommand, fanoutTaskOf: options?.fanoutTaskOf });
 
-      // Daemon sessions have no PTYInstance in this process, so the shell would
-      // otherwise be unknowable to main — record it for the clipboard handler's
-      // WSL path rewrite (#1196).
-      recordPtyShell(sessionId, shell);
+        // Daemon sessions have no PTYInstance in this process, so the shell would
+        // otherwise be unknowable to main — record it for the clipboard handler's
+        // WSL path rewrite (#1196).
+        recordPtyShell(sessionId, shell);
 
-      // Connect session data pipe
-      await daemonClient.connectSessionPipe(sessionId);
+        // Connect session data pipe
+        await daemonClient.connectSessionPipe(sessionId);
+      });
 
       // Workspace profile startup command. Written as shell INPUT (not spawned
       // as the executable) so the allowed-shell check and quoting behavior are
@@ -1464,7 +1477,7 @@ export function registerPTYHandlers(
       // P1-3 ordering rule: drain buffered output before the exit marker so
       // the shell's final lines land ahead of "[Process exited...]" (same
       // drain-before-exit contract as local-mode PTYBridge).
-      dataBatcher.flushSession(payload.sessionId);
+      dataBatcher.finishSession(payload.sessionId);
       const win = getWindow?.();
       if (win && !win.isDestroyed()) {
         win.webContents.send(IPC.PTY_EXIT, payload.sessionId, payload.exitCode ?? -1, payload.signal ?? null);
@@ -1516,7 +1529,7 @@ export function registerPTYHandlers(
       forgetGoalWorkerSession(payload.sessionId);
       // P1-3 ordering rule: the old PTY's trailing output must precede the
       // restart marker (the renderer re-attaches on it).
-      dataBatcher.flushSession(payload.sessionId);
+      dataBatcher.finishSession(payload.sessionId);
       const win = getWindow?.();
       if (win && !win.isDestroyed()) {
         win.webContents.send(IPC.PTY_RESTARTED, {

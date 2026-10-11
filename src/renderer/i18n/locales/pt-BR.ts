@@ -533,6 +533,7 @@ export const ptBR = {
   'remotePage.connect.pasteScope': "Se o convite compartilhar workspaces, este computador pode ler e pesquisar todos os workspaces daquele PC, inclusive os abertos depois. Enquanto pareado, o wmux o verifica a cada poucos segundos, mantém uma conexão aberta para os alertas e mostra as notificações dele; silencie-as pelo menu de computadores no título da barra lateral.",
   'pcSwitcher.open': "Trocar de computador",
   'pcSwitcher.manage': "Configurações de {name}",
+  'app.portableData.notice': "Esta cópia do wmux está sendo executada fora de Aplicativos, por isso usa dados separados. Mova-a para Aplicativos para ver suas sessões existentes.",
   'pcSwitcher.othersNeedYou': "{count} precisam de você em outros computadores",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Sair do wmux e encerrar todas as sessões?",

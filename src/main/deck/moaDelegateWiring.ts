@@ -314,7 +314,9 @@ export function refreshMoaDelegate(): MoaAskService | null {
   syncMoaAskSwitch(mode);
   if (mode === 'off') {
     if (running) {
-      running.service.stop();
+      // close(), not just stop(): the tries and store writes already under
+      // way finish before a later service reads the same files.
+      void running.service.close().catch((err) => (deps?.log ?? console.warn)(`[moa-ask] close: ${String(err)}`));
       for (const t of running.timers) clearInterval(t);
       running = null;
       setMoaDelegateService(null);

@@ -532,6 +532,7 @@ export const id = {
   'remotePage.connect.pasteScope': "Jika undangan membagikan ruang kerja, komputer ini dapat membaca dan mencari setiap ruang kerja di PC itu, termasuk yang dibuka nanti. Selama terpasang, wmux memeriksanya setiap beberapa detik, menjaga koneksi terbuka untuk peringatannya, dan menampilkan notifikasinya; bisukan dari menu komputer di judul bilah samping.",
   'pcSwitcher.open': "Ganti komputer",
   'pcSwitcher.manage': "Pengaturan {name}",
+  'app.portableData.notice': "Salinan wmux ini berjalan di luar Aplikasi, jadi menggunakan data terpisah. Pindahkan ke Aplikasi untuk melihat sesi yang sudah ada.",
   'pcSwitcher.othersNeedYou': "{count} menunggu Anda di komputer lain",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Keluar dari wmux dan hentikan semua sesi?",

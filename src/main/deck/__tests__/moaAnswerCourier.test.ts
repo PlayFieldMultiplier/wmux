@@ -23,8 +23,14 @@ const Q_REQ: MoaAskRequest = {
 const ESCALATE: JudgeRunResult = { reply: JSON.stringify({ verdict: 'escalate', reasonCode: 'unclear', why: 'no rule covers it' }), tokens: { input: 1, output: 1 }, ms: 3 };
 
 let dir: string;
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-moa-courier-')); });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+/** Every service a test built: closed before the directory goes, so no
+ *  courier try or store write is still landing in it. */
+let built: MoaAskService[] = [];
+beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-moa-courier-')); built = []; });
+afterEach(async () => {
+  await Promise.all(built.map((s) => s.close()));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function build(opts: {
   pane: () => AskerPaneState;
@@ -81,6 +87,7 @@ function build(opts: {
     },
     log: () => undefined,
   });
+  built.push(service);
   /** Run the timers queued so far (the courier's retries). */
   const tick = async () => {
     const due = timers.splice(0);
@@ -178,12 +185,19 @@ describe('the answer goes back to the asker', () => {
   });
 
   it('a paste started when main stopped is never sent again', async () => {
-    const h = build({ pane: () => 'idle', send: () => new Promise(() => undefined) });
+    // The paste never returns while main is up; released only so the test
+    // can close the service before its directory goes.
+    let release: () => void = () => undefined;
+    const testEnd = new Promise<CourierSendResult>((r) => { release = () => r({ ok: false, retry: false, reason: 'test-end' }); });
+    const h = build({ pane: () => 'idle', send: () => testEnd });
     const { decision } = await escalatedTicket(h);
     await h.service.resolveByOwner({ decisionId: decision.id, answer: { type: 'choice', choiceKey: 'rerun' } });
     await vi.waitFor(() => expect(h.decisions.get(decision.id)?.delivery?.state).toBe('sending'));
+    // The map says sending before the file does: read the file once it does.
+    await h.decisions.flush();
     const reloaded = new MoaDecisionStore(dir);
     expect(reloaded.get(decision.id)?.delivery).toMatchObject({ state: 'failed', reason: 'restart' });
+    release();
   });
 });
 
@@ -271,14 +285,17 @@ describe('review fixes: one courier, no lost or doubled answer', () => {
   });
 
   it('the asker polls the answer while the paste waits: no paste, recorded as read by its poll', async () => {
-    let release: (() => void) | null = null;
+    // The gate exists before the paste starts: `sending` is recorded before
+    // send() is called, so the test can reach release() first.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
     let ticketId = '';
     const h = build({
       pane: () => 'idle',
       // The gated submit waits for a quiet pane; the poll lands meanwhile and
       // the check before the paste refuses it.
       send: async (_text, wanted) => {
-        await new Promise<void>((r) => { release = r; });
+        await gate;
         return wanted() ? { ok: true } : { ok: false, retry: false, reason: 'guard_refused' };
       },
     });
@@ -288,7 +305,7 @@ describe('review fixes: one courier, no lost or doubled answer', () => {
     await vi.waitFor(() => expect(h.decisions.get(e.decision.id)?.delivery?.state).toBe('sending'));
     const s = await h.service.status(ASKER, ticketId);
     expect(s.ok && s.ticket.status).toBe('answered');
-    release!();
+    release();
     await vi.waitFor(() => expect(h.decisions.get(e.decision.id)?.delivery).toMatchObject({ state: 'seen', reason: 'read-by-poll' }));
     expect(h.sent).toHaveLength(0);
   });

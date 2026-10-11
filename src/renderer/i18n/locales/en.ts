@@ -3959,6 +3959,12 @@ export const en = {
   'remote.mirrorDescription': 'Mirror a workspace from another wmux',
   'remote.labelOptional': 'Label (optional)',
   'remote.paneCount': '{count} panes',
+  // #1323 — a mirror-grid session opened as a tab in one of your workspaces.
+  'remote.openAsTab': 'Open as tab',
+  'remote.openAsTabLabel': 'Open {session} as a tab',
+  'remote.openAsTabDescription': 'Add {session} to one of your workspaces as a tab. It keeps running on {host}: closing the tab only stops showing it there.',
+  'remote.openAsTabFailed': 'Could not open {session} as a tab in that workspace',
+  'remote.goToTab': 'Go to tab',
 
   // ─── Remote Workspace Attach: pair-with-code ──────────────────────────────
   'remote.pairTab': 'Pair with code',
@@ -4405,6 +4411,7 @@ export const en = {
   'remotePage.connect.pasteScope': "If the invite shares workspaces, this computer can read and search every workspace on that PC, including later ones. While paired, wmux checks it every few seconds, keeps a connection open for its alerts and shows its notifications; mute them from the computer menu in the sidebar title.",
   'pcSwitcher.open': "Switch computer",
   'pcSwitcher.manage': "{name} settings",
+  'app.portableData.notice': "This copy of wmux is running outside Applications, so it uses separate data. Move it to Applications to see your existing sessions.",
   'pcSwitcher.othersNeedYou': "{count} need you on other computers",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Quit wmux and stop all sessions?",

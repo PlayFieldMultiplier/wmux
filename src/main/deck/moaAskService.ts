@@ -219,6 +219,19 @@ export class MoaAskService implements MoaDelegateServicePort {
     this.courier?.stop();
   }
 
+  /** Stop, then wait until nothing this service started still writes:
+   *  background judging, courier tries and merge runs already under way,
+   *  and the store write chains. stop() alone leaves those running, so a caller that then
+   *  removes or re-reads the store directory raced them (shutdown, tests). */
+  async close(): Promise<void> {
+    this.stop();
+    await this.idle();
+    await this.courier?.idle();
+    await this.ports.executor.idle();
+    await this.ports.decisions.flush();
+    await this.ports.effects.flush();
+  }
+
   /** Wait for background judging (tests, shutdown). */
   async idle(): Promise<void> {
     while (this.work.size > 0) await Promise.all([...this.work.values()]);

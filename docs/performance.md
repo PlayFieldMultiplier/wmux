@@ -4,6 +4,46 @@ How wmux spends CPU and RAM, what background pane optimization changes, the
 daemon knobs that actually exist, and how to diagnose a slow workspace switch
 before filing an issue.
 
+## Memory diagnostics
+
+Run `wmux doctor --performance` (or add `--json`) to collect memory counters
+on demand. Normal doctor runs and routine daemon health checks do not collect
+them. Upgrade both the app and daemon to see the new fields; older processes
+are reported as unavailable rather than as using zero memory.
+
+- **Electron:** per-process working sets from the app, including main,
+  renderers, GPU and utility processes (`performance.memory`).
+- **Daemon:** RSS, JS heap, external allocations and ArrayBuffers, plus each
+  session's stored/allocated/maximum ring bytes, current socket queue, socket
+  queue peak over that pipe object's lifetime, and pending resync tee bytes
+  (`daemon.memory`). Closed/replaced pipes do not retain their historical peak.
+  Tee bytes cover chunks waiting to enter the snapshot parser; chunks already
+  being parsed and socket/kernel/renderer queues are separate.
+- **Process trees (macOS/Linux):** one bounded `ps` sample groups the app,
+  daemon, daemon descendants (shells, agents and MCP servers), Chrome descendants
+  of the app, and other app children (`performance.processMemory`). Each PID
+  belongs to at most one group. Unrelated applications, reparented children,
+  and the diagnostic process itself are excluded. Processes can start or exit
+  between RPC and OS samples, so this is a best-effort snapshot. Windows still
+  reports Electron and daemon metrics; process-tree RSS is marked unavailable.
+
+RSS excludes swapped-out pages and macOS compressed pages. Shared pages may
+be counted more than once across processes. These numbers do not identify
+which application owns the system's swap usage. Compare macOS Activity
+Monitor's memory pressure, compressed memory and swap trend separately.
+
+Heap, external, ArrayBuffers, ring storage and output queues overlap: **do not
+add them to RSS**. Ring capacity is a configured ceiling, not an allocation.
+The report contains counters and session IDs, never terminal output or process
+command lines. Collection does not pause output, kill processes, change
+concurrency, or reduce history limits.
+
+Attach snapshots capture history when their shared processing slot starts.
+Waiting attaches hold no extra history copy, canceled attaches skip the copy,
+and small raw replays can proceed without waiting behind a large snapshot.
+History still follows the existing ring-buffer retention window. Output queue
+counters are observational; this change does not impose a new queue limit.
+
 ## Background pane optimization (hidden pane retention)
 
 **On by default.** Panes hidden behind another workspace no longer parse and

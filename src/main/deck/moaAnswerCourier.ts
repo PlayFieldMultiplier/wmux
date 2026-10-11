@@ -97,6 +97,8 @@ export class MoaAnswerCourier {
   /** Cancels of the timers still pending. */
   private readonly timers = new Set<() => void>();
   private stopped = false;
+  /** Schedules and timer tries under way, so idle() can wait for what they write. */
+  private readonly inFlight = new Set<Promise<void>>();
 
   constructor(private readonly ports: MoaAnswerCourierPorts) {
     this.now = ports.now ?? Date.now;
@@ -115,7 +117,12 @@ export class MoaAnswerCourier {
    * delivery already moved past `waiting`, is left alone. `delayMs` holds the
    * first try (an auto answer the asker may still be polling for).
    */
-  async schedule(d: MoaDecision, delayMs = 0): Promise<void> {
+  schedule(d: MoaDecision, delayMs = 0): Promise<void> {
+    // Callers fire and forget this; tracked so idle() can wait for it.
+    return this.track(this.queue(d, delayMs));
+  }
+
+  private async queue(d: MoaDecision, delayMs: number): Promise<void> {
     if (this.stopped || !answerLine(d)) return;
     const state = d.delivery?.state ?? null;
     if (state !== null && state !== 'waiting') return;
@@ -210,6 +217,19 @@ export class MoaAnswerCourier {
     this.queuedAt.clear();
   }
 
+  /** Wait for the schedules and tries already under way to finish recording
+   *  what happened. Pending timers are not waited for: stop() cancels them. */
+  async idle(): Promise<void> {
+    while (this.inFlight.size > 0) await Promise.all([...this.inFlight]);
+  }
+
+  private track(run: Promise<void>): Promise<void> {
+    this.inFlight.add(run);
+    const done = () => { this.inFlight.delete(run); };
+    run.then(done, done);
+    return run;
+  }
+
   private later(decisionId: string): void {
     this.after(decisionId, this.retryMs);
   }
@@ -218,7 +238,7 @@ export class MoaAnswerCourier {
     if (this.stopped) return;
     const cancel = this.setTimer(() => {
       this.timers.delete(cancel);
-      void this.attempt(decisionId);
+      void this.track(this.attempt(decisionId));
     }, ms);
     this.timers.add(cancel);
   }

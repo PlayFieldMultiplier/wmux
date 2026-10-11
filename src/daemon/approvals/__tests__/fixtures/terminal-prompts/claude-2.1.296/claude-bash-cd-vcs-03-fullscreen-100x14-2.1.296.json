@@ -1,0 +1,24 @@
+{
+ "tui": "claude",
+ "version": "Claude Code 2.1.296",
+ "cols": 100,
+ "rows": 14,
+ "keysSent": "(prompt drawn)",
+ "note": "The same dialog in the fullscreen renderer, 100x14: the top rule, the title and the description are cut off; the command box is the first row",
+ "screen": [
+  "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  " cd sub && git push --dry-run origin main",
+  "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  " │ This command changes directory before running a version-control command, which can pick up",
+  " │ untrusted hooks or repository configuration from the target directory. Approve only if you trust",
+  " │ it.",
+  " Permission rule Bash(git push *) requires confirmation for this command.",
+  " /permissions to update rules",
+  "",
+  " Do you want to proceed?                                                        ",
+  " ❯ 1. Yes",
+  "   2. No",
+  "",
+  " Esc to cancel · Tab to amend"
+ ]
+}

@@ -43,6 +43,11 @@ import {
   type PhaseDef,
 } from '../../shared/bootPhases';
 import type { RpcResponse } from '../../shared/rpc';
+import {
+  isAppMemoryDiagnostics, isDaemonMemoryDiagnostics,
+  type AppMemoryDiagnostics, type DaemonMemoryDiagnostics,
+} from '../../shared/memoryDiagnostics';
+import { collectProcessMemory, renderMemoryDiagnostics } from '../memoryDiagnostics';
 
 // --- public report model -----------------------------------------------------
 
@@ -74,6 +79,7 @@ export interface DoctorReport {
     lines: CheckLine[];
     /** Recovery steps, only populated when the daemon is down. */
     recovery: string[];
+    memory?: DaemonMemoryDiagnostics;
   };
   bootPhases: {
     verdict: Verdict;
@@ -93,6 +99,7 @@ export interface DoctorReport {
 // --- injected dependencies (the seam unit tests substitute) ------------------
 
 export interface DaemonPingResult {
+  memory?: DaemonMemoryDiagnostics;
   status?: string;
   pid?: number;
   uptime?: number;
@@ -318,7 +325,10 @@ function buildDaemon(
     });
   }
 
-  return { verdict: worst(lines.map((l) => l.verdict)), lines, recovery: [] };
+  return {
+    verdict: worst(lines.map((l) => l.verdict)), lines, recovery: [],
+    ...(isDaemonMemoryDiagnostics(ping.memory) ? { memory: ping.memory } : {}),
+  };
 }
 
 function buildBootPhases(
@@ -452,6 +462,7 @@ export interface PerformanceSection {
   /** false = main unreachable or pre-P0 build (unknown method / bad shape). */
   available: boolean;
   retention?: PerfStatusRetention;
+  memory?: AppMemoryDiagnostics;
 }
 
 /** Canonical render order for the reveal mechanism codes (docs/performance.md);
@@ -488,6 +499,7 @@ export async function fetchPerformanceSection(
         (count) => typeof count === 'number' && Number.isFinite(count) && count >= 0,
       );
     const retention = (resp.result as { retention?: unknown } | null)?.retention;
+    const memory = (resp.result as { memory?: unknown } | null)?.memory;
     if (
       retention !== null &&
       typeof retention === 'object' &&
@@ -499,7 +511,10 @@ export async function fetchPerformanceSection(
         return last === null || (typeof last === 'object' && last !== null && !Array.isArray(last));
       })()
     ) {
-      return { available: true, retention: retention as PerfStatusRetention };
+      return {
+        available: true, retention: retention as PerfStatusRetention,
+        ...(isAppMemoryDiagnostics(memory) ? { memory } : {}),
+      };
     }
     return { available: false };
   } catch {
@@ -748,7 +763,7 @@ export async function handleDoctor(args: string[], jsonMode: boolean): Promise<v
     // pipe, and a direct connect lets the doctor diagnose the daemon even when
     // the main process is dead. NOT `sendRequest` (that targets the main pipe,
     // which returns "Unknown method: daemon.ping").
-    ping: () => sendDaemonRequest('daemon.ping', {}),
+    ping: () => sendDaemonRequest('daemon.ping', performanceMode ? { includeMemory: true } : {}),
     // Main-pipe liveness probe — system.identify is registered on the main
     // pipe and is always permitted (null capability).
     appPipeReachable: () => sendRequest('system.identify', {}),
@@ -769,15 +784,17 @@ export async function handleDoctor(args: string[], jsonMode: boolean): Promise<v
   // Rides the same main-pipe client the app-pipe probe uses; a dead main or a
   // pre-P0 build renders an "unavailable" line rather than failing doctor.
   const perf = performanceMode
-    ? await fetchPerformanceSection(() => sendRequest('perf.status', {}))
+    ? await fetchPerformanceSection(() => sendRequest('perf.status', { includeMemory: true }))
     : null;
+  const processMemory = performanceMode ? await collectProcessMemory(perf?.memory, report.daemon.memory) : null;
 
   if (jsonMode) {
-    const payload = perf ? { ...report, performance: perf } : report;
+    const payload = perf ? { ...report, performance: { ...perf, processMemory } } : report;
     console.log(JSON.stringify(payload, null, 2));
   } else {
     console.log(renderReport(report));
     if (perf) console.log(renderPerformanceSection(perf));
+    if (processMemory) console.log(renderMemoryDiagnostics(perf?.memory, report.daemon.memory, processMemory));
   }
 
   // Exit code reflects health so scripts can gate on it. FAIL → 1; WARN/SKIP/OK

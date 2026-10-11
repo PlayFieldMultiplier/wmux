@@ -529,6 +529,7 @@ export const de = {
   'remotePage.connect.pasteScope': "Teilt die Einladung Workspaces, kann dieser Computer jeden Workspace auf jenem PC lesen und durchsuchen, auch später geöffnete. Solange gekoppelt, prüft wmux ihn alle paar Sekunden, hält eine Verbindung für seine Hinweise offen und zeigt seine Benachrichtigungen; stummschalten kannst du sie im Computermenü im Titel der Seitenleiste.",
   'pcSwitcher.open': "Computer wechseln",
   'pcSwitcher.manage': "Einstellungen für {name}",
+  'app.portableData.notice': "Diese Kopie von wmux läuft außerhalb von „Programme“ und verwendet daher separate Daten. Verschiebe sie nach „Programme“, um deine bestehenden Sitzungen zu sehen.",
   'pcSwitcher.othersNeedYou': "{count} warten auf dich auf anderen Computern",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "wmux beenden und alle Sitzungen stoppen?",

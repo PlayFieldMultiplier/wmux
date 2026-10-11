@@ -533,6 +533,7 @@ export const ms = {
   'remotePage.connect.pasteScope': "Jika jemputan berkongsi ruang kerja, komputer ini boleh membaca dan mencari setiap ruang kerja di PC itu, termasuk yang dibuka kemudian. Semasa dipasangkan, wmux menyemaknya setiap beberapa saat, mengekalkan sambungan untuk amarannya dan memaparkan pemberitahuannya; senyapkan daripada menu komputer dalam tajuk bar sisi.",
   'pcSwitcher.open': "Tukar komputer",
   'pcSwitcher.manage': "Tetapan {name}",
+  'app.portableData.notice': "Salinan wmux ini berjalan di luar Aplikasi, jadi ia menggunakan data berasingan. Alihkannya ke Aplikasi untuk melihat sesi sedia ada anda.",
   'pcSwitcher.othersNeedYou': "{count} menunggu anda di komputer lain",
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Keluar daripada wmux dan hentikan semua sesi?",
