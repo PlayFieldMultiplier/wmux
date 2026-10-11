@@ -260,8 +260,6 @@ export function recordAction(deps: BrowserToolDeps, input: RecordActionInput): v
   try {
     const ring = ringFor(deps);
     if (!ring || isActionRecordingSuppressed()) return;
-    // Protected pane: nothing it does is remembered (memory is workspace-wide).
-    if (isProtectedScope(input.scope)) return;
     const resolved = axisFor(input.page, input.ref, input.selector, input.refEntry);
     const target = input.targetRef === undefined
       ? undefined
