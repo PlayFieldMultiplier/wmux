@@ -95,7 +95,9 @@ describe('channel dock beside the rail pages (Moa stays in reach)', () => {
     // The narrow-window overlay dock lives in the same region, so it too stays
     // live beside a rail page and is what the page measures.
     const overlayAt = appLayout.indexOf('data-dock-overlay');
-    const regionEnd = appLayout.indexOf('data-workspaces-page', regionAt);
+    // The region is the last thing in the sheet before the rail pages (the
+    // file tree column's page wrapper sits before it, beside the panes).
+    const regionEnd = appLayout.indexOf('<RailPage />', regionAt);
     expect(overlayAt).toBeGreaterThan(regionAt);
     expect(overlayAt).toBeLessThan(regionEnd);
   });

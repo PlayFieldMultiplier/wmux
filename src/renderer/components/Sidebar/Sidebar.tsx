@@ -34,7 +34,7 @@ import CompanyPanel from './CompanyPanel';
 import SidebarNavigation from './SidebarNavigation';
 import WorkspaceFilterPopover, { filterChipKey } from './WorkspaceFilterPopover';
 import {
-  EMPTY_FILTER, factsFromKey, filterChips, isFilterActive, matchesFilter, selectWorkspaceFactKeys, toggleFacet,
+  EMPTY_FILTER, filterChips, isFilterActive, narrowWorkspaces, selectWorkspaceFactKeys, toggleFacet,
 } from './workspaceFilter';
 
 import PresetPicker from './PresetPicker';
@@ -91,7 +91,8 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
     return id !== LOCAL_PC_ID && s.pcRailHosts.some((h) => h.id === id) ? id : null;
   });
   const scopedRowCount = useStore((s) => (scopedHostId ? s.pcRailFeeds[scopedHostId]?.workspaces.length ?? 0 : 0));
-  const [wsSearch, setWsSearch] = useState('');
+  const wsSearch = useStore((s) => s.sidebarSearch);
+  const setWsSearch = useStore((s) => s.setSidebarSearch);
   const wsSearchRef = useRef<HTMLInputElement>(null);
   // The header's filter button (or Ctrl/Cmd+F) opens the filter popover: the
   // text search on top, facet checks below. Facets live in the store for the
@@ -110,11 +111,10 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
   // Facts are read only while a facet is on, so an unfiltered sidebar does
   // not re-render for status or git changes.
   const factKeys = useStore(useShallow((s) => (filterOn ? selectWorkspaceFactKeys(s) : NO_FACTS)));
-  const filteredWorkspaces = useMemo(() => {
-    const q = wsSearch.trim().toLowerCase();
-    return listed.filter((ws) => (!q || ws.name.toLowerCase().includes(q))
-      && (!filterOn || (factKeys[ws.id] !== undefined && matchesFilter(wsFilter, factsFromKey(factKeys[ws.id])))));
-  }, [listed, wsSearch, filterOn, wsFilter, factKeys]);
+  const filteredWorkspaces = useMemo(
+    () => narrowWorkspaces(listed, wsSearch, wsFilter, factKeys),
+    [listed, wsSearch, wsFilter, factKeys],
+  );
 
   // #1481 — fan-out nesting. Both maps change only when a fan-out lands, a
   // task closes or detaches, or the audit log is re-read — not on output.
@@ -370,7 +370,7 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
       isActive={id === shownActiveId}
       isMultiview={multiviewIds.includes(id)}
       index={workspaces.findIndex((w) => w.id === id)}
-      shortcutNumber={workspaceShortcutNumber(listed.findIndex((w) => w.id === id), listed.length)}
+      shortcutNumber={workspaceShortcutNumber(filteredWorkspaces.findIndex((w) => w.id === id), filteredWorkspaces.length)}
       onSelect={setActiveWorkspace}
       onCtrlSelect={handleCtrlSelect}
       onRename={renameWorkspace}
@@ -382,7 +382,7 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
       taskRow
       tabStop={id === tabStopId}
     />
-  ), [tabStopId, shownActiveId, multiviewIds, workspaces, listed, setActiveWorkspace, handleCtrlSelect, renameWorkspace, handleClose, handleArchive, handleCopySessionInfo, duplicateWorkspace, reorderWorkspace]);
+  ), [tabStopId, shownActiveId, multiviewIds, workspaces, filteredWorkspaces, setActiveWorkspace, handleCtrlSelect, renameWorkspace, handleClose, handleArchive, handleCopySessionInfo, duplicateWorkspace, reorderWorkspace]);
 
   // One top-level node: a task row whose owner is filtered out, or a
   // workspace row with its nested tasks. `inSettleGroup` rows sit out of
@@ -400,7 +400,7 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
           isActive={ws.id === shownActiveId}
           isMultiview={multiviewIds.includes(ws.id)}
           index={workspaces.indexOf(ws)}
-          shortcutNumber={workspaceShortcutNumber(listed.indexOf(ws), listed.length)}
+          shortcutNumber={workspaceShortcutNumber(filteredWorkspaces.indexOf(ws), filteredWorkspaces.length)}
           onSelect={setActiveWorkspace}
           onCtrlSelect={handleCtrlSelect}
           onRename={renameWorkspace}

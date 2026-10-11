@@ -383,7 +383,7 @@ GET /api/config    → {allowInput, allowUpload, allowTranscript, inlineImages?,
                       terminalPromptDecline?, protocolVersion, minProtocolVersion,
                       serverVersion, hostPlatform}
 GET /api/sessions  → {sessions: [{id, cwd, spawnCwd?, cols, rows, state, agent, lastActivity,
-                      workspace?, workspaceId?, shell?, lastDetectedAgent?, cwdLeaf?,
+                      workspace?, workspaceId?, shell?, lastDetectedAgent?, agentAlive?, cwdLeaf?,
                       liveness?, lastFailure?, lastAssistantText?, surfaceTitle?, paneName?, role?, deferred?}]}
 POST /api/input?session=<id>   body: raw bytes
 ```
@@ -404,8 +404,36 @@ from a plain shell, which is how every shell pane's chip collapsed to one word.
 Two rules: treat an unrecognised value as "some agent" (the set is not closed on
 the wire), and read it as **identity, not presence**. It is persisted, so it
 outlives the agent process and every reboot — a pane that ran Claude keeps
-saying so while the shell sits at a prompt. What is running *now* is `liveness`
-and the `agent.liveness` frames, never this.
+saying so while the shell sits at a prompt. What is running *now* is `agentAlive`,
+`liveness` and the `agent.liveness` frames, never this.
+
+`agentAlive` says whether the pane's agent process is running right now. Use it,
+not `agent` or `lastDetectedAgent`, to decide whether a pane "has an agent":
+both labels are sticky and keep naming an agent that has exited.
+
+- `true`: the daemon tracks a live process of the pane's agent.
+- `false`: the daemon names no agent for the pane. The shell is back at its
+  prompt, the agent exited, or nothing shows one ran. `agent` may still say
+  `claude` on such a row. An agent launched a moment ago reads `false` until
+  its first hook, banner or process check names it.
+- absent: the daemon cannot tell, or predates the field. An agent is named
+  (by its hook or on screen) but no live process proves it yet. Fall back to
+  what you did before the field existed.
+
+It is the same process reading a Claude or Codex transcript binding's `/turns`
+`chat.agentAlive` is built on, and `/turns` adds one condition: the live agent
+must be the one whose conversation the pane is bound to. So a row `false` means
+`/turns` says `false`, and a `/turns` `true` means the row says `true`. The
+reverse does not hold: a row `true` with a `/turns` `false` is a running agent
+the pane has no matching conversation for yet, such as a fresh Claude before its
+first prompt. The row answers "is an agent running", `/turns` answers "is this
+conversation's agent running". A desktop chat-v2 record (a `managed` binding
+on `/turns`) is the one source the row also reads: both report its driver's
+state. These implications hold for Claude and Codex transcript bindings only.
+An OpenCode plugin binding and a desktop-managed record answer `/turns` from
+their own connection, which a list row does not open, so the row can say
+`false` there while `/turns` says `true`. The row is read from state the
+daemon already holds; polling it costs no process scan.
 
 `spawnCwd` is the directory the daemon actually started the pane in. Unlike
 `cwd`, which follows OSC 7 and the prompt and can name a deleted worktree or a
@@ -744,6 +772,22 @@ within the page budget. Daemons before this could answer the newest row alone
 with `hasMore: true` (most visibly right after `/clear`); paging back with
 `dir=back` recovered the rest.
 
+**An entry larger than the read window still arrives as its rows.** A
+screenshot or an image `Read` result is one transcript line of hundreds of KB
+(the image's base64), often more than one read window. Such an entry (up to
+8 MB) is read whole, so its `tool_result` reaches the page or delta and pairs
+with its `tool_use`. Daemons before this could leave such a `tool_use` with no
+`tool_result`, so the row spun forever. The forward delta answered a `meta`
+row instead (`subtype: 'unknown'`, label `oversized entry skipped`), and a
+page that started inside the entry dropped it without a row. That `meta` row
+can still appear, but now only when the entry could not be read back.
+
+**An image in a tool result is a placeholder.** A result whose content holds
+image blocks (alone or between text) carries its text parts in order with each
+image as the literal line `[image]` in the tool body; `bytes` counts that body,
+not the image. The image data is never on the wire. The same holds for a Codex
+tool output that returns an image. No wire field changed.
+
 `503` is different from all of these: the daemon has no projector wired at all
 (nothing to read from, on any pane). `404` is the same contract as the other
 `/api/sessions/<id>/*` routes — the pane is gone, which is not the same as its
@@ -784,8 +828,9 @@ letting someone copy a shortened body out believing it is whole.
 did not resolve, and there are two reasons it might not. Usually the ref is
 stale — the file rotated, or the offset no longer starts a line — and re-fetching
 the turn page fixes it. But the daemon also reads one transcript line up to a
-fixed ceiling, so a block inside an unusually large entry (roughly half a
-megabyte of JSON) cannot be parsed at all and answers 404 permanently. Re-fetch
+fixed ceiling, so a block inside an unusually large entry (more than 8 MB of
+JSON; roughly half a megabyte on daemons before the image-result fix) cannot be
+parsed at all and answers 404 permanently. Re-fetch
 once; if the fresh chip 404s again, show the block as unavailable rather than
 retrying, and keep the chip's `lines`/`lang` visible so the user still sees what
 is there.
@@ -1148,6 +1193,7 @@ What `/api/approvals` carries for this kind:
 | `id`, `sessionId`, `agent`, `kind`, `state`, `createdAt`, `workspaceId?` | yes | yes |
 | `toolName` (when known), `summary` (the command, ≤200 chars + `…`, display only — the full command is at `/detail`) | yes | yes |
 | `risk` (`critical` when the command or rule reads as destructive — `rm -rf`, `sudo`, …) | yes | yes |
+| `autoDenyAt` (ISO 8601 UTC: when Claude Code denies the dialog by itself, see below) | only when the record is answerable and pending | same |
 | `question`, `reason` | never | only when the record is answerable |
 | `choices`, `promptFingerprint` | never | only when the record is answerable, pending and not yet answered |
 | `hasDetail: true` (`GET /api/approvals/<id>/detail` has the full command) | never | with `choices`, on a server started with `--allow-transcript` |
@@ -1242,6 +1288,22 @@ fingerprint; a call whose input changed after you read the record fails with
 409 `prompt-changed`. Whitespace runs in the dialog collapse to one space and
 are never dropped. A resize that moves where the TUI broke a long word
 changes the hash; the record is then refreshed once.
+
+**The auto-deny countdown** (Claude Code 2.1.296). A dialog Claude will deny by
+itself when nobody answers — a dangerous-removal safety check in a bypass or
+auto-mode session (120 s by default), or auto mode's fallback after repeated
+classifier denials — draws, as the last rows of its reason, `⚠ Claude Code
+will automatically deny this request in 1:58, to avoid blocking progress on an
+unattended session`, redrawn every second. That sentence is neither in
+`reason` nor in `promptFingerprint`, so the fingerprint you were shown stays
+valid while it ticks. An answerable record carries `autoDenyAt` instead: the
+shown time added to the moment the daemon read the screen (good to about a second:
+the screen shows whole seconds). A record that replaces this one for the same dialog keeps
+the same `autoDenyAt` unless its own read is more than 5 s off (a new
+countdown). Absent when there is no countdown, after a key at the computer
+stopped it, and when Claude draws it in words (`about 2 minutes`). Display only: show
+a countdown to it; an answer after it is refused like any answer to a dialog
+that is gone. A record resolved or expired never carries it.
 
 **Every remote key is proved first.** Before writing `1` (answer) or Esc
 (decline) the daemon re-reads the screen and requires: the same transcript
@@ -1822,7 +1884,20 @@ form describes: the answer is 409 `prompt-changed` with nothing typed.
 - The picker must be untouched when the answer starts: the first question, no
   tab answered, the cursor on option 1, nothing ticked, no typed text. Anything
   else is 409 `prompt-changed` with `effect: 'none'` and nothing typed; a
-  question no longer on screen is 410 `prompt-gone`.
+  question no longer on screen is 410 `prompt-gone`. A pane too short for
+  the whole picker (one the phone sized to its own view) is still read while
+  its question and every option row are on screen: with the tab bar scrolled
+  off, for a single single-select question only. Once Claude scrolls the
+  option list itself (`↓` before a row) the answer is 409 `prompt-changed`
+  and the record stays pending; a taller view (about 17 rows at 44 columns
+  for two options) makes it answerable again. In a session named with
+  `/rename`, Claude draws the name in a rule under the picker's hint
+  (`───…─ <name> ─`); that row, exactly as wide as the picker's own rules, is
+  not part of the picker.
+- A question dismissed with Esc at the computer sends Claude Code no hook;
+  its record expires (`prompt-gone`) a couple of seconds later, once the
+  screen shows Claude's "User declined to answer questions", the question
+  gone and no picker up.
 - 200 `{state: 'resolved', effect: 'complete'}` only once the screen confirms
   the answer: this prompt's picker is gone and a new "User answered Claude's
   questions" block lists every question with exactly the answer given. When every key
@@ -2193,6 +2268,28 @@ requests with one id make one item.
 An `uncertain` item's receipt reads `uncertain` too, and its replay carries
 `effect:"uncertain"`: check the transcript before sending it again.
 
+**Why it waits (`holdReason`).** A `queued` item the daemon has tried and held
+carries `holdReason`, the hold its last try met (closed set; memory-only like
+`preview`, absent after a restart, before the item's first try, and on every
+other state). The daemon retries a held item at least every 5 seconds while
+anything waits in the queue, and sooner when the agent's status changes or
+its transcript grows; the hold is not final, and a later try may meet
+another one.
+
+| `holdReason` | The item waits because |
+| --- | --- |
+| `turn-running` | the turn runs (a `next-turn` item waits for its end) |
+| `turn-starting` | the turn the previous delivery started has not been seen yet (30 seconds at most) |
+| `busy` | another send is being typed into the pane, or someone is typing in it |
+| `cancel-check` | a Stop's check of the prompt Claude put back in its box runs first |
+| `approval` | an approval is pending on the pane (the item fails as `prompt-active` if its time runs out) |
+| `dialog` | a dialog owns the screen (fails as `blocked`) |
+| `no-composer` | the screen shows no composer to type into, such as a usage view (fails as `blocked`) |
+| `unavailable` | the agent or its conversation cannot be read right now |
+| `retry` | the daemon could not save the item's next state; it tries again shortly |
+
+Unknown values may appear in later daemons: show them as a generic wait.
+
 **Authorization at delivery.** The daemon re-checks the owner right before
 the first write and again before Enter: the device must still be paired and
 hold input, the server must still run with `--allow-input` and
@@ -2210,7 +2307,7 @@ item `uncertain` (`restart-uncertain`); nothing is delivered.
 
 **`/turns`.** For a `chat-queue` caller on a daemon whose queue loaded, the
 chat object carries `queue: [{clientMessageId, state, reason?, deliver?, queuedAt, at,
-preview?}]`: the caller's own items on the pane, most recent kept, in enqueue
+preview?, holdReason?}]`: the caller's own items on the pane, most recent kept, in enqueue
 order. `preview` is the first 80 characters, held in memory only (absent after
 a restart). `capabilities.queue` is `true` for a live Claude, Codex or
 OpenCode agent, and `capabilities.send` stays `true` while a turn runs. User
@@ -2236,11 +2333,13 @@ back. Needs the input grant (403 otherwise); only the owner's items are found.
 A 404 without one of these two `error` values means the route is missing (an
 older daemon).
 
-**SSE `chat.queue`.** `{sessionId, clientMessageId, state, reason?, deliver?, at}` on
+**SSE `chat.queue`.** `{sessionId, clientMessageId, state, reason?, deliver?, holdReason?, at}` on
 every state change, and once more (same `state`) when an item switches to
-`steer`. `delivering` is sent only once the first write
+`steer` or a `queued` item's `holdReason` changes (a try held for the same
+reason as the last one sends nothing). `delivering` is sent only once the first write
 is about to happen; an item the daemon holds back before that never shows
-`delivering` then `queued`. Live-only like `chat.blocked` (no `id:`, never replayed),
+`delivering` then `queued`, and one held back after it (an OpenCode plugin
+answering busy) is always sent as `queued` again, with its `holdReason`. Live-only like `chat.blocked` (no `id:`, never replayed),
 and only to the item's owner among the pane's `/turns` watchers. `/turns` is
 the authoritative state after a reconnect.
 
@@ -2731,9 +2830,14 @@ row:
 `lastReadSeq`/`unread`/`unreadMentions` are present only when the human holds
 a **seat** (member row) in that channel, and `unread`/`unreadMentions` are
 computed server-side against that seat — the phone never derives them from raw
-messages. A channel observed without a seat carries `"observed": true` and
-omits the cursor fields: render it read-only with no badge, mirroring the
-desktop's observed-channel treatment. An **archived** channel keeps reporting
+messages. Their presence still means "seated". A channel the human reads
+without a seat (a private one carries `"observed": true`; render it read-only,
+mirroring the desktop) omits them and carries `observerUnreadMentions`
+instead: mentions of the human there are delivered too (below) and counted
+server-side against the human's **observer cursor**, which
+`observerLastReadSeq` reports once it has moved. The two pairs never appear on
+the same row. A client that predates them ignores the observer fields and sees
+the seatless row exactly as before. An **archived** channel keeps reporting
 its seat's real `unread`/`unreadMentions` (archiving freezes a channel; it does
 not read it for you), and acking it works as on any other channel.
 
@@ -2745,14 +2849,25 @@ past the human's cursor were evicted before they were read: `unread` and
 missed than the number says. The key is omitted when there is no gap. The human takes a seat **explicitly** —
 at the desktop GUI, or from the phone via the join route below — never
 implicitly as a side effect of reading.
-**The seat is a precondition for mentions, not just for badges:** a post's
-mentions are validated against the channel's current member set, and a mention
-of a workspace that holds no seat is dropped at post time — you cannot ping a
-workspace that isn't in the room. A channel the human only observes therefore
-never raises `channel.mention` and never grows `unreadMentions`: its
-notification value begins the moment the human joins, and not before. The
-reserved human workspace cannot be invited (P5) — the join is always the
-human's own act, on either surface.
+**Mentions of the human do not need a seat.** A post's mentions are validated
+against the channel's current member set, and a mention of a workspace that
+holds no seat is dropped at post time — you cannot ping a workspace that isn't
+in the room. The human is the one exception: a mention of the human in any
+channel this list shows is kept even without a seat, raises `channel.mention`
+and counts in that row's `observerUnreadMentions` until the human reads past
+it. Any member id on such a mention is the human's one seat id, so a post never
+reports the human dropped while also delivering it.
+Nothing about membership changes — no seat, no system message, no member
+cursor. Reading moves the human's observer cursor instead: the ack route below,
+or opening the channel at the desktop (one cursor for both surfaces). Joining
+still gives the full seat (`unread` and all), its cursor starting at the head
+as before, so mentions from before the join count as read; leaving carries the
+seat's cursor back to the observer cursor. The desktop's @ badge on such a
+channel shows the same server-side count, so a read on either surface clears
+both. A pane pin on a mention of the human is dropped quietly (the human owns
+no panes). The reserved human
+workspace cannot be invited (P5) — the join is always the human's own act, on
+either surface.
 
 `POST /api/channels/<id>/join` — takes the seat the desktop's join takes:
 the same constant `(ws-human)` row with **full history** (`historyFromSeq`
@@ -2801,13 +2916,18 @@ indistinguishable from a missing one (404), the same collapse `get()` applies.
 The value is clamped to the channel head and the cursor is advance-only:
 acking backwards is a no-op that returns the current cursor, not an error.
 No 409 — reading is idempotent. `lastReadSeq` must be a non-negative safe
-integer, or the answer is `400 invalid-body`. A seatless (observed-only)
-channel has no cursor to advance: it answers 400 `{error: 'no-seat'}`.
+integer, or the answer is `400 invalid-body`. On a channel the human reads
+without a seat it advances the human's observer cursor instead (same clamping,
+advance-only; the response's `lastReadSeq` is that cursor), which is what
+clears that row's `observerUnreadMentions`. Seat or observer is decided when
+the ack runs, so an ack that races a join or a leave lands on whichever the
+channel has by then. Older daemons answered a seatless ack with
+`400 {error: 'no-seat'}`; this one never does.
 
 ### `channel.mention` — a recorded SSE event, unlike the nudges
 
 When a posted message's server-verified mentions include the human workspace
-and the human holds a seat in that channel, the daemon raises:
+— seated or not (above) — the daemon raises:
 
 ```json
 {
@@ -2830,9 +2950,10 @@ and the human holds a seat in that channel, the daemon raises:
 This event **is** in the backlog — but replay is delivery, not durability. The
 recorded window is bounded (100 entries / 30 minutes, §4), so a phone that was
 away past the window gets the standard `reset` and nothing from the log. The
-durable record of an unread mention is the **server-side seat cursor**: the
-next `GET /api/channels` reports `unreadMentions` regardless of what the
-backlog still holds. Refetch on reconnect is what must not be skipped, not the
+durable record of an unread mention is the **server-side cursor** (the seat's,
+or the human's observer cursor on a channel without a seat): the next
+`GET /api/channels` reports `unreadMentions` (or `observerUnreadMentions`)
+regardless of what the backlog still holds. Refetch on reconnect is what must not be skipped, not the
 replay. Emission is mention-only for exactly this reason: a busy channel's
 ordinary traffic must not churn the bounded ring and push a pending `approval`
 out of it.
@@ -2862,7 +2983,7 @@ version bump.
 | Status | Body | Meaning |
 | --- | --- | --- |
 | 200 | route-specific | Listed / paged / acked (clamped) |
-| 400 | `{error: 'invalid-cursor' \| 'invalid-body' \| 'no-seat' \| 'archived'}` | `since`/`limit` malformed, an ack body that is not a non-negative integer, an ack against a seatless observed channel, or a join against an archived channel |
+| 400 | `{error: 'invalid-cursor' \| 'invalid-body' \| 'archived'}` | `since`/`limit` malformed, an ack body that is not a non-negative integer, or a join against an archived channel |
 | 401 | auth failure | Bearer credential missing or rejected — same as every route; an ack whose device was revoked mid-request answers `{error: 'authorization-expired'}` |
 | 403 | `{error: 'read-only: …', detail}` | Join without this caller's input grant (server or device); same shape as every input route |
 | 404 | `{error: 'not-found'}` | No such channel, or one the principal cannot observe — indistinguishable by design |
@@ -2876,10 +2997,11 @@ version bump.
   not a download state.
 - A channel deleted at the desktop answers 404 on the next fetch; drop it and
   its unread badge without an error surface.
-- Join is the human's explicit act and the start of a channel's notification
-  value: before it, the channel renders observed (read-only, no badge) and its
-  mentions of the human are dropped at post time. After it, unread and
-  `channel.mention` begin from the join point.
+- Join is the human's explicit act and the start of a channel's `unread`
+  count: before it, the channel renders read-only (`observed` on a private one)
+  and badges only mentions of the human — `observerUnreadMentions`, with
+  `channel.mention` raised for each. After it, the seat's `unread` and
+  `unreadMentions` begin from the join point.
 - On `gap: true` (a list row or a page), say that older messages are gone;
   never render the retained tail as if it were contiguous with your cursor.
 - Posting from the phone does not exist yet. There is no route to try, and

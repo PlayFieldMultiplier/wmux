@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { claudeComposerEmpty, claudeComposerRows, claudeComposerShows, codexComposerEmpty, deliverChatPrompt, type ChatDeliveryDeps } from '../deliverChatPrompt';
+import { claudeComposerEmpty, claudeComposerRows, claudeComposerShows, claudeComposerVisible, codexComposerEmpty, deliverChatPrompt, type ChatDeliveryDeps } from '../deliverChatPrompt';
 import type { ScheduledPromptAgentState } from '../../sessionPromptDelivery';
 import { generateTextSnapshot } from '../../HeadlessSnapshot';
 
@@ -157,6 +157,64 @@ describe('Claude\'s dimmed next-prompt suggestion', () => {
     draft.deps.readScreen = async () => typedRows;
     expect(await deliverChatPrompt('conversation-1', 'next', draft.deps)).toBe('unconfirmed');
     expect(draft.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('a named Claude session (the name drawn into the composer\'s top rule)', () => {
+  // The bottom of a live pane (2026-10-11, Claude Code 2.1, fullscreen
+  // renderer, 86 columns): the session name sits in the top rule, the prompt
+  // row holds only the dimmed suggestion (`❯` NBSP, SGR 2 … SGR 22), and the
+  // bottom rule is plain. Account details in the footer are replaced.
+  const bytes = Buffer.from([
+    '\x1b[?1049h\x1b[H',
+    `${'─'.repeat(55)} workspace-identity-card-plan ─\r\n`,
+    '❯\u00a0\x1b[2m현상황 보고해라\x1b[22m\r\n',
+    `${'─'.repeat(86)}\r\n`,
+    '  Opus 5.5 (high) · ctx 23%\r\n',
+    '  ⏵⏵ bypass permissions on · 2 shells · ← 2 agents',
+  ].join(''));
+  const render = async (data: Buffer) => {
+    const outcome = await generateTextSnapshot({ cols: 86, rows: 12, scrollback: 0, initial: data, undimmed: true });
+    if (!outcome.ok) throw new Error('snapshot failed');
+    return Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) });
+  };
+  it('still reads as the composer, empty under its suggestion', async () => {
+    const rows = await render(bytes);
+    expect(claudeComposerVisible(rows)).toBe(true);
+    expect(claudeComposerEmpty(rows)).toBe(true);
+    expect(claudeComposerRows(rows)).toEqual({ rows: [], width: 86 });
+  });
+  it('takes a queued (idle-only) send instead of holding it as a screen without a composer', async () => {
+    const f = fixture(); f.state.status = 'idle';
+    const rows = await render(bytes);
+    f.deps.readScreen = async () => rows;
+    const holds: string[] = [];
+    expect(await deliverChatPrompt('conversation-1', 'how many lines?', { ...f.deps, idleOnly: true, onScreenHold: (why) => holds.push(why) })).toBe('sent');
+    expect(holds).toEqual([]);
+  });
+  it('accepts a label only as Claude draws it: between dash runs, from column 0, as wide as the rule under the prompt', () => {
+    const RULE = '─'.repeat(40);
+    const labeled = `${'─'.repeat(27)} my-session ─`;
+    expect(labeled.length).toBe(40);
+    expect(claudeComposerVisible([labeled, '❯ ', RULE])).toBe(true);
+    for (const top of [`${'─'.repeat(27)} my-session`, `notes ${'─'.repeat(34)}`, `${'─'.repeat(38)}x─`, `${'─'.repeat(4)} short ─`,
+      `${'─'.repeat(20)} my-session ─`, `  ${'─'.repeat(25)} my-session ─`]) {
+      expect(claudeComposerVisible([top, '❯ ', RULE])).toBe(false);
+    }
+    // A rule-like block typed into a draft (indented continuation rows) is not the composer.
+    const draft = [RULE, '❯ look at this:', `  ${'─'.repeat(25)} Example ─`, '  ❯', `  ${RULE.slice(2)}`, RULE];
+    expect(claudeComposerEmpty(draft)).toBe(false);
+    expect(claudeComposerRows(draft)).toBeNull();
+    // The bottom rule stays plain.
+    expect(claudeComposerVisible([RULE, '❯ ', `${'─'.repeat(20)} my-session ─`])).toBe(false);
+  });
+  it('says which screen hold it was: a dialog, or no composer at all', async () => {
+    const holds: string[] = [];
+    const dialog = fixture(); dialog.show(['Select model', '❯ 1. Sonnet', 'Esc to cancel']);
+    expect(await deliverChatPrompt('conversation-1', 'x', { ...dialog.deps, onScreenHold: (why) => holds.push(why) })).toBe('blocked');
+    const usage = fixture(); usage.show(['  Total cost: $0.12', '  Press any key to continue']);
+    expect(await deliverChatPrompt('conversation-1', 'x', { ...usage.deps, idleOnly: true, onScreenHold: (why) => holds.push(why) })).toBe('blocked');
+    expect(holds).toEqual(['dialog', 'no-composer']);
   });
 });
 

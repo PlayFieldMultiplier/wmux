@@ -260,3 +260,62 @@ describe('a2a.task.query — only the public views reach the task sources', () =
     expect(list.tasks[0]).not.toHaveProperty('history');
   });
 });
+
+describe('내부 상태 조회 — 이력 없는 단건 응답', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  async function stateQuery(router: RpcRouter, taskId = 'task-0042'): Promise<Rec> {
+    const res = await router.dispatch({
+      id: 'state', method: 'a2a.task.query', params: { workspaceId: WS, view: 'state', taskId },
+    }, { operator: true });
+    expect(res.ok).toBe(true);
+    return (res as unknown as { result: Rec }).result;
+  }
+
+  it('150개 작업과 큰 이력이 있어도 한 작업의 최신 상태만 전달한다', async () => {
+    const canonical: Rec = { ...store[42], status: { state: 'completed' }, metadata: { ...store[42].metadata, updatedAt: '2026-10-01T00:00:00.000Z' } };
+    const { router, wire } = setup(store, [...store.filter((t) => t.id !== canonical.id), canonical]);
+    const result = await stateQuery(router);
+    expect(result.tasks).toEqual([{
+      id: canonical.id, status: { state: 'completed' }, metadata: { updatedAt: canonical.metadata.updatedAt },
+    }]);
+    expect(wire.daemonLineBytes[0]).toBeLessThan(512);
+    expect(bytes(result)).toBeLessThan(512);
+    expect((await stateQuery(router, 'missing')).tasks).toEqual([]);
+  });
+
+  it('UI 응답을 기다리는 동안 데몬 조회를 먼저 완료한다', async () => {
+    const { router, wire } = setup(store, store);
+    let release!: (value: unknown) => void;
+    sendToRendererMock.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    const pending = stateQuery(router);
+    await vi.waitFor(() => expect(wire.daemonLineBytes).toHaveLength(1));
+    release({ workspaceId: WS, tasks: applyTaskQueryView(store, { view: 'state', taskId: 'task-0042' }) });
+    expect((await pending).tasks[0].status.state).toBe('working');
+  });
+
+  it('데몬 오류에도 UI의 상태를 반환하고 구형 응답의 이력을 제거한다', async () => {
+    const { router, wire } = setup(store, store, { legacyDaemon: true });
+    sendToRendererMock.mockResolvedValue({ workspaceId: WS, tasks: store });
+    const result = await stateQuery(router);
+    expect(wire.daemonLineBytes[0]).toBeGreaterThan(DAEMON_LINE_CAP);
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).not.toHaveProperty('history');
+    expect(bytes(result)).toBeLessThan(512);
+  });
+
+  it('UI가 없어도 데몬에 남은 작업 상태를 반환한다', async () => {
+    const { router } = setup([], store);
+    sendToRendererMock.mockRejectedValue(new Error('renderer unavailable'));
+    const result = await stateQuery(router);
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toMatchObject({ id: 'task-0042', status: { state: 'working' } });
+  });
+
+  it('일반 호출자는 내부 view를 활성화하지 못하며 기존 응답을 받는다', async () => {
+    const { router } = setup([store[42]], [store[42]]);
+    const result = await query(router, { view: 'state', taskId: 'task-0042', operator: true });
+    expect(result.tasks[0].history).toHaveLength(6);
+    expect(sendToRendererMock.mock.calls.at(-1)?.[2]).not.toHaveProperty('view');
+  });
+});

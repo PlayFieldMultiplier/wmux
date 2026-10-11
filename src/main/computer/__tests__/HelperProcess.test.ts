@@ -230,14 +230,22 @@ describe('HelperProcess', () => {
   });
 
   it('fails input closed while no helper confirms the release, but lets observation through', async () => {
-    const { helper, requests } = makeHelper('hang-norelease', { timeoutFor: () => 300 });
+    // The helper says when the background releases are used up. Waiting on
+    // that, not on a 3 s poll plus a 200 ms settle, is what makes the count
+    // exact: three refused releases each spawn a fresh helper, and on a loaded
+    // Windows runner the poll window ran out after the first (expected 1 to be 3).
+    let exhausted!: () => void;
+    const releasesExhausted = new Promise<void>((resolve) => { exhausted = resolve; });
+    const { helper, requests } = makeHelper('hang-norelease', {
+      timeoutFor: () => 300,
+      log: (message) => { if (message.includes('held input is still not released')) exhausted(); },
+    });
     const click = () => helper.request('click', {
       snapshotId: 's', target: TARGET, index: 1, button: 'left', clickCount: 1, modifiers: [],
     });
     expect(await codeOf(click())).toBe('timeout');
     // Background releases are bounded, then the next request retries.
-    await waitFor(() => requests().filter((r) => r === 'releaseInput').length >= 3);
-    await new Promise((r) => setTimeout(r, 200));
+    await releasesExhausted;
     const before = requests().filter((r) => r === 'releaseInput').length;
     expect(before).toBe(3);
     expect(await codeOf(click())).toBe('internal');

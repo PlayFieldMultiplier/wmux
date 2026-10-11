@@ -165,7 +165,7 @@ export function createMoaHandoffService(opts: {
       return resolveRepoRoot(cwd);
     },
     taskState: async (taskId) => {
-      const res = (await opts.invoke('a2a.task.query', { workspaceId: HUMAN_WORKSPACE_ID }).catch(() => null)) as
+      const res = (await opts.invoke('a2a.task.query', { workspaceId: HUMAN_WORKSPACE_ID, view: 'state', taskId }).catch(() => null)) as
         | { ok?: boolean; result?: { tasks?: unknown } }
         | null;
       const tasks = res && res.ok !== false && Array.isArray(res.result?.tasks) ? (res.result!.tasks as Array<Record<string, unknown>>) : null;

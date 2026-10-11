@@ -1,5 +1,5 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/app/shell/Sidebar.tsx), MIT License, Copyright (c) 2026 Nick
-import { memo } from 'react';
+import { memo, useId } from 'react';
 import type { FleetPane, FleetRow } from '../../stores/selectors/fleet';
 import { fleetRow, fleetTargetPtyId, selectLatestCompletionEvidenceTask } from '../../stores/selectors/fleet';
 import type { WorkTask } from '../../../shared/workTask';
@@ -9,7 +9,7 @@ import { AGENT_STATUS_ICON } from '../Sidebar/agentStatusIcon';
 import { useT } from '../../hooks/useT';
 import { getLocale, t } from '../../i18n';
 import { useStore } from '../../stores';
-import { IconCheck, IconChevronDir, IconExternalLink } from '../icons';
+import { IconCheck, IconChevronDir, IconExternalLink, IconReview, IconX } from '../icons';
 import { fleetTitle } from './fleetPresentation';
 import { nowDoingLine } from './nowDoing';
 import { fleetRequesterText } from '../../utils/fanoutProvenance';
@@ -71,7 +71,7 @@ const AGENT_DISPLAY_BY_NAME = new Map<string, string>(
 /** One name per agent: a terminal title or detector name that is a known
  *  agent ("claude", "✳ Claude Code") reads as its display name. */
 export function agentDisplayName(raw: string): string {
-  const clean = raw.replace(/^[✳✻✽✶✢*]\s*/, '').trim();
+  const clean = raw.replace(/^[✳✻✽✶✢◐◑*]\s*/, '').trim();
   return AGENT_DISPLAY_BY_NAME.get(clean.toLowerCase()) ?? clean;
 }
 
@@ -107,41 +107,51 @@ export function FleetCardMissionLine({ mission }: { mission: WorkTask | undefine
 }
 
 /**
- * NB3 trust surface — completion-evidence badge (pure, prop-driven, testable).
- * Given the most recent COMPLETED A2A task addressed to this pane (resolved by
- * selectLatestCompletionEvidenceTask), it shows `✓ evidence n/m` where n is the
- * verified-item count (verifiedItemCount) and m the total evidence items — the
- * durable proof the agent left when it finished, made legible on the card. The
- * tooltip carries the detail (task title + evidence summary) so the on-card text
- * stays a single compact token. Renders null when the pane has no such task or
- * the task carries no evidence items (additive — never a new empty row).
+ * The latest completed job's reported checks, separate from turn completion.
+ * A failed check takes precedence over passed items; only an entirely verified
+ * set gets a green check. Missing evidence is explicit. These are the agent's
+ * reports, not an independent test run by wmux.
  */
-export function FleetCardEvidenceBadge({ task }: { task: Task | undefined }): React.ReactElement | null {
-  if (!task) return null;
+export function FleetCardEvidenceBadge({ task, id }: { task: Task | undefined; id?: string }): React.ReactElement | null {
+  const t = useT();
+  if (!task || task.status.state !== 'completed') return null;
   const evidence = task.status.evidence;
-  if (!evidence || evidence.items.length === 0) return null;
-  const total = evidence.items.length;
-  const verified = evidence.items.filter(isVerifiedItem).length;
+  const items = evidence?.items ?? [];
+  const total = items.length;
+  const verified = items.filter(isVerifiedItem).length;
+  const failed = items.filter((item) => item.kind === 'command' && item.status === 'failed').length;
+  const state = total === 0 ? 'missing' : failed > 0 ? 'failed'
+    : verified === total ? 'verified' : verified > 0 ? 'partial' : 'unverified';
+  const label = t(`fleet.evidence.${state}`, { verified, total, failed });
+  const color = state === 'failed' ? 'var(--accent-red)'
+    : state === 'verified' ? 'var(--accent-green)' : 'var(--text-muted)';
+  const Mark = state === 'failed' ? IconX : state === 'verified' ? IconCheck : IconReview;
+  const detail = [
+    t('fleet.evidence.reportedByAgent', { title: task.metadata.title }),
+    label,
+    evidence?.summary,
+    ...items.map((item) => `${t(`fleet.evidence.item.${item.status}`)}: ${item.kind === 'command' ? `${item.command} — ` : ''}${item.summary}`),
+  ].filter(Boolean).join('\n');
   return (
     <span
+      id={id}
       className="flex items-center gap-1 min-w-0 text-[12px] font-mono"
       data-fleet-evidence
       data-evidence-verified={verified}
       data-evidence-total={total}
-      title={`Completion evidence — ${task.metadata.title}: ${evidence.summary} (${verified}/${total} verified)`}
+      data-evidence-state={state}
+      title={detail}
+      aria-label={detail}
     >
-      {/* The check is green only when at least one item is actually verified —
-          verified is a GRADE, not a gate (completionEvidence E9), so an all-
-          unverified proof reads muted, not falsely reassuring. */}
       <span
         className="flex-shrink-0"
-        style={{ color: verified > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}
+        style={{ color }}
         aria-hidden="true"
       >
-        <IconCheck size={12} />
+        <Mark size={12} />
       </span>
       <span className="truncate text-[var(--text-muted)]">
-        evidence {verified}/{total}
+        {label}
       </span>
     </span>
   );
@@ -150,6 +160,7 @@ export function FleetCardEvidenceBadge({ task }: { task: Task | undefined }): Re
 /** One agent's row. Terminal output belongs in the detail area, never here. */
 function FleetCard({ card, focused, onJump, resource, row: rowProp, changed, onFocus, ticketTitle, errorLine, onInspect }: FleetCardProps) {
   const t = useT();
+  const evidenceId = useId();
   const icon = AGENT_STATUS_ICON[card.agentStatus];
   const mission = useStore((s) => s.missionByPaneGroup[card.workspaceId]);
   const evidenceTask = useStore((s) =>
@@ -214,6 +225,7 @@ function FleetCard({ card, focused, onJump, resource, row: rowProp, changed, onF
       type="button"
       role="option"
       aria-selected={focused}
+      aria-describedby={card.agentStatus === 'complete' && evidenceTask ? evidenceId : undefined}
       aria-label={[displayName, statusLabel, card.workspaceName, card.remote?.hostLabel,
         changed ? t('fleet.changedSinceSeen') : '', said].filter(Boolean).join(', ')}
       tabIndex={focused ? 0 : -1}
@@ -294,7 +306,7 @@ function FleetCard({ card, focused, onJump, resource, row: rowProp, changed, onF
           {line.kind === 'question' && !usageLimit ? `“${detail}”` : detail}
         </span>
         <span className="wmux-fleet-meta">
-          {card.agentStatus === 'complete' && <FleetCardEvidenceBadge task={evidenceTask} />}
+          {card.agentStatus === 'complete' && <FleetCardEvidenceBadge task={evidenceTask} id={evidenceId} />}
           {elapsed && <span data-fleet-elapsed>{elapsed}</span>}
         </span>
       </span>

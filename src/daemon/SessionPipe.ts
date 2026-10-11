@@ -5,8 +5,8 @@ import crypto from 'node:crypto';
 import { getSessionSocketPath } from '../shared/constants';
 import type { RingBuffer, ReplayGeometry } from './RingBuffer';
 import type { OutputModeTracker } from './util/outputModeTracker';
-import { readRingWithModesAndGeometry } from './sessionTextReplay';
-import { generateSnapshot, MAX_SCROLLBACK } from './HeadlessSnapshot';
+import { readRingTailWithModesAndGeometry, readRingWithModesAndGeometry } from './sessionTextReplay';
+import { enqueueSnapshotJob, generateSnapshotUnqueued, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import {
   createSessionPipeMarkers,
   type SessionPipeMarkers,
@@ -24,6 +24,15 @@ export { createSessionPipeMarkers };
  * (The resync/reflush path has its own caller-side policy — see reflush.)
  */
 export const ATTACH_SNAPSHOT_MIN_BYTES = 256 * 1024;
+/** The attach snapshot's second try parses only this much of the ring's
+ *  newest output (see flushRingBuffer). Small enough to finish well inside
+ *  the budget on a busy daemon, large enough to hold many full redraws of an
+ *  agent's screen. */
+export const ATTACH_TAIL_SNAPSHOT_BYTES = 1024 * 1024;
+/** The second try's budget. It runs in the same snapshot queue slot as the
+ *  first, so every other pane's attach and reveal waits behind both; 1 MB
+ *  parses in about 0.25 s at the measured ~4 MB/s. */
+export const ATTACH_TAIL_SNAPSHOT_BUDGET_MS = 1500;
 
 /**
  * Per-session data pipe for raw byte streaming.
@@ -42,6 +51,8 @@ export class SessionPipe {
   private inputCallback: ((data: Buffer) => void) | null = null;
   private flushed = false;
   private reflushInFlight = false;
+  private socketPeakQueuedBytes = 0;
+  private resyncQueuedBytes = 0;
   private connectionRate = { count: 0, resetAt: 0 };
   private readonly markers: SessionPipeMarkers;
 
@@ -86,6 +97,20 @@ export class SessionPipe {
    * (main/DaemonClient.getSessionPipeName)와 lockstep의 단일 진실 소스. */
   getPipeName(): string {
     return getSessionSocketPath(this.sessionId);
+  }
+
+  /** Counters only; the peak covers this pipe object's lifetime, including replay. */
+  getMemoryDiagnostics(): { socketQueuedBytes: number; socketPeakQueuedBytes: number; resyncQueuedBytes: number } {
+    return {
+      socketQueuedBytes: this.client && !this.client.destroyed ? this.client.writableLength : 0,
+      socketPeakQueuedBytes: this.socketPeakQueuedBytes,
+      resyncQueuedBytes: this.resyncQueuedBytes,
+    };
+  }
+
+  private writeOutput(socket: net.Socket, data: Buffer): void {
+    socket.write(data);
+    this.socketPeakQueuedBytes = Math.max(this.socketPeakQueuedBytes, socket.writableLength);
   }
 
   /** Start listening for a single client connection. */
@@ -208,6 +233,18 @@ export class SessionPipe {
   }
 
   private async flushRingBuffer(socket: net.Socket): Promise<void> {
+    // Waiting attaches retain only the ring, not a second full history copy.
+    // Keep small raw replays off the queue so interactive shells do not wait
+    // behind another pane's snapshot. Re-read dimensions inside the slot.
+    if (this.getDims && (this.ringBuffer.size >= ATTACH_SNAPSHOT_MIN_BYTES || this.ringBuffer.hasGeometryChanges)) {
+      return enqueueSnapshotJob(() => this.flushRingBufferInSlot(socket));
+    }
+    return this.flushRingBufferInSlot(socket);
+  }
+
+  private async flushRingBufferInSlot(socket: net.Socket): Promise<void> {
+    // A queued attach may have disappeared or been replaced while waiting.
+    if (socket.destroyed || this.client !== socket) return;
     const { raw: buffered, replay, geometry, writtenAt: writtenBefore } = this.readRing();
     // Instrumentation for #35 (scrollback-empty-after-restart). Pairs
     // with `[recovery] session X bytes=N` on daemon startup and
@@ -233,7 +270,8 @@ export class SessionPipe {
       // handle at this layer, so bytes arriving DURING the parse are
       // recovered by re-reading the ring afterwards — writeToClient gates
       // on `flushed`, so nothing reaches the socket in between.
-      const outcome = await generateSnapshot({
+      let base = writtenBefore;
+      let outcome = await generateSnapshotUnqueued({
         cols: dims.cols,
         rows: dims.rows,
         // Led by the mode preamble, so an alt screen or mouse / paste mode the
@@ -249,6 +287,32 @@ export class SessionPipe {
         scrollback: MAX_SCROLLBACK,
       });
       if (socket.destroyed || this.client !== socket) return; // client left mid-parse
+      if (!outcome.ok && outcome.reason === 'budget') {
+        // The whole ring did not parse in time (seen on a live agent pane
+        // while the daemon was busy). A raw replay of a cursor-addressed app's
+        // history at mixed widths paints its redraws over each other, so
+        // rebuild the screen from the newest output instead: older
+        // scrollback is lost, the screen comes out right.
+        // eslint-disable-next-line no-console
+        console.log(
+          `[SessionPipe.flush] sessionId=${this.sessionId} snapshot over budget (${outcome.detail ?? ''}), retrying on the newest ${ATTACH_TAIL_SNAPSHOT_BYTES} bytes`,
+        );
+        const tail = readRingTailWithModesAndGeometry(
+          this.ringBuffer,
+          this.getOutputModes?.() ?? null,
+          ATTACH_TAIL_SNAPSHOT_BYTES,
+        );
+        base = tail.writtenAt;
+        outcome = await generateSnapshotUnqueued({
+          cols: dims.cols,
+          rows: dims.rows,
+          initial: tail.replay,
+          geometry: tail.geometry,
+          scrollback: MAX_SCROLLBACK,
+          budgetMs: ATTACH_TAIL_SNAPSHOT_BUDGET_MS,
+        });
+        if (socket.destroyed || this.client !== socket) return;
+      }
       // Size guard: when most of the history still fits inside the
       // serialized scrollback (buffers just past the threshold), the
       // cell-by-cell SGR reconstruction can come out BIGGER than the raw
@@ -276,7 +340,7 @@ export class SessionPipe {
         // The lifetime counter locates the delta whether or not the ring
         // dropped bytes; only a delta larger than the ring itself is lost.
         const { raw: after, replay: afterReplay } = this.readRing();
-        const written = this.ringBuffer.totalBytesWritten - writtenBefore;
+        const written = this.ringBuffer.totalBytesWritten - base;
         if (written > after.length) {
           payload = afterReplay;
           // eslint-disable-next-line no-console
@@ -305,16 +369,16 @@ export class SessionPipe {
     }
 
     if (payload.length > 0) {
-      socket.write(payload);
+      this.writeOutput(socket, payload);
     }
-    socket.write(this.markers.flushDone);
+    this.writeOutput(socket, this.markers.flushDone);
     this.flushed = true;
   }
 
   /** Write PTY output data to the connected client. */
   writeToClient(data: Buffer): void {
     if (this.client && !this.client.destroyed && this.flushed) {
-      this.client.write(data);
+      this.writeOutput(this.client, data);
     }
   }
 
@@ -465,12 +529,18 @@ export class SessionPipe {
     }
     const teeQueue: Buffer[] = [];
     const tee = (data: Buffer) => {
-      teeQueue.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+      const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      teeQueue.push(chunk);
+      this.resyncQueuedBytes += chunk.length;
+    };
+    const drainQueue = () => {
+      this.resyncQueuedBytes = 0;
+      return teeQueue.splice(0);
     };
     try {
       // T0 — one synchronous block: announce, suppress live writes, capture
       // the ring, arm the tee. Nothing can arrive between these statements.
-      socket.write(this.markers.resyncBegin);
+      this.writeOutput(socket, this.markers.resyncBegin);
       this.flushed = false;
       const { replay: initial, geometry } = this.readRing();
       opts.bridge.on('data', tee);
@@ -483,7 +553,7 @@ export class SessionPipe {
           scrollback: opts.scrollback,
           initial,
           geometry,
-          drainQueue: () => teeQueue.splice(0),
+          drainQueue,
         });
       } catch (err) {
         outcome = {
@@ -508,13 +578,13 @@ export class SessionPipe {
       // against that duplicated prefix instead of appending misaligned.
       const RIS = Buffer.from('\x1bc');
       if (outcome.ok) {
-        const tailRaw = teeQueue.length > 0 ? Buffer.concat(teeQueue.splice(0)) : null;
-        socket.write(RIS);
-        socket.write(outcome.payload);
-        socket.write(this.markers.flushDone);
+        const tailRaw = teeQueue.length > 0 ? Buffer.concat(drainQueue()) : null;
+        this.writeOutput(socket, RIS);
+        this.writeOutput(socket, outcome.payload);
+        this.writeOutput(socket, this.markers.flushDone);
         this.flushed = true;
         if (tailRaw && tailRaw.length > 0) {
-          socket.write(tailRaw);
+          this.writeOutput(socket, tailRaw);
         }
         // eslint-disable-next-line no-console
         console.log(
@@ -527,10 +597,11 @@ export class SessionPipe {
       // every tee'd byte — the classic replay, gap-free because this block
       // is synchronous.
       teeQueue.length = 0;
+      this.resyncQueuedBytes = 0;
       const raw = this.readRing().replay;
-      socket.write(RIS);
-      socket.write(raw);
-      socket.write(this.markers.flushDone);
+      this.writeOutput(socket, RIS);
+      this.writeOutput(socket, raw);
+      this.writeOutput(socket, this.markers.flushDone);
       this.flushed = true;
       // A3 rollout metric: fallback-rate by reason.
       // eslint-disable-next-line no-console
@@ -540,6 +611,7 @@ export class SessionPipe {
       return { mode: 'raw', fallbackReason: outcome.reason };
     } finally {
       opts.bridge.removeListener('data', tee);
+      this.resyncQueuedBytes = 0;
     }
   }
 

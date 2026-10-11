@@ -227,3 +227,151 @@ describe('countLeftoverBackgroundTasks', () => {
     expect(count(p)).toBe(0);
   });
 });
+
+// A background task the agent stopped itself never gets a task-notification
+// (live transcript, 2026-10-11). Shapes copied from that transcript.
+function bgStartResultWithTaskId(id: string, taskId: string) {
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        { tool_use_id: id, type: 'tool_result', content: `Command running in background with ID: ${taskId}. Output is being written to: /tmp/${taskId}.output` },
+      ],
+    },
+  };
+}
+
+function taskStop(callId: string, taskId: string, name = 'TaskStop', key = 'task_id') {
+  return {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: callId, name, input: { [key]: taskId }, caller: { type: 'direct' } }],
+    },
+  };
+}
+
+function taskStopResult(callId: string, taskId: string) {
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{
+        tool_use_id: callId,
+        type: 'tool_result',
+        content: JSON.stringify({ message: `Successfully stopped task: ${taskId} (npx electron . > /dev/null 2>&1)`, task_id: taskId, task_type: 'local_bash' }),
+      }],
+    },
+  };
+}
+
+function notificationFor(id: string, taskId: string) {
+  const body = `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<output-file>/tmp/${taskId}.output</output-file>\n<status>completed</status>\n<summary>Background command "Relaunch a clean app instance" completed (exit code 0)</summary>\n</task-notification>`;
+  return { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-10-10T21:26:26.345Z', sessionId: 's1', content: body };
+}
+
+describe('countLeftoverBackgroundTasks — tasks the agent stopped itself', () => {
+  it('a TaskStop\'d background shell is settled (no notification ever arrives for it)', () => {
+    const p = fixture('taskstop.jsonl', [
+      bgStart('call_s'),
+      bgStartResultWithTaskId('call_s', 'bhq42z0r3'),
+      taskStop('call_k', 'bhq42z0r3'),
+      taskStopResult('call_k', 'bhq42z0r3'),
+    ]);
+    expect(count(p)).toBe(0);
+  });
+
+  it('the older KillShell (shell_id) and KillBash (bash_id) names settle too', () => {
+    const p = fixture('killshell.jsonl', [
+      bgStart('call_1'),
+      bgStartResultWithTaskId('call_1', 'shell1'),
+      bgStart('call_2'),
+      bgStartResultWithTaskId('call_2', 'shell2'),
+      taskStop('call_k1', 'shell1', 'KillShell', 'shell_id'),
+      taskStop('call_k2', 'shell2', 'KillBash', 'bash_id'),
+    ]);
+    expect(count(p)).toBe(0);
+  });
+
+  it('stopping one task leaves a different, still-running task counted', () => {
+    const p = fixture('taskstop-other.jsonl', [
+      bgStart('call_a'),
+      bgStartResultWithTaskId('call_a', 'taska'),
+      bgStart('call_b'),
+      bgStartResultWithTaskId('call_b', 'taskb'),
+      taskStop('call_k', 'taska'),
+    ]);
+    expect(count(p)).toBe(1);
+  });
+
+  it('live sequence: stopped relaunches + one real background shell → 1 at the turn end, 0 after its notification turn', () => {
+    // The DocuCompare pane (2026-10-11): the agent relaunched its app several
+    // times, stopping each previous `npx electron .` with TaskStop, then left
+    // one relaunch running when its turn ended ("1 shell still running").
+    // That shell finished later and Claude Code ran a task-notification turn
+    // (UserPromptSubmit + Stop). Its Stop must report NO leftover work, or
+    // HookIngest projects it as `running` and the turn latch never closes.
+    const stopped = ['b0hydmf3e', 'bo39v4t92', 'bu64yawau', 'bu2qqfwny', 'bfbp60qth', 'bhq42z0r3'];
+    const history: unknown[] = [];
+    stopped.forEach((taskId, i) => {
+      history.push(bgStart(`call_start_${i}`), bgStartResultWithTaskId(`call_start_${i}`, taskId));
+      history.push(taskStop(`call_stop_${i}`, taskId), taskStopResult(`call_stop_${i}`, taskId));
+    });
+    history.push(bgStart('call_live'), bgStartResultWithTaskId('call_live', 'bv8plccqv'));
+
+    // Stop at the end of the turn: the one live shell is real leftover work.
+    expect(count(fixture('live-turn-end.jsonl', history))).toBe(1);
+
+    // Stop at the end of the task-notification turn: nothing is left.
+    history.push(notificationFor('call_live', 'bv8plccqv'));
+    expect(count(fixture('live-notification-turn.jsonl', history))).toBe(0);
+  });
+});
+
+function userPrompt(text: string, extra: Record<string, unknown> = {}) {
+  return { type: 'user', message: { role: 'user', content: text }, ...extra };
+}
+
+describe('countLeftoverBackgroundTasks — scoped to the turn that just ended', () => {
+  it('a server left running from an EARLIER turn is not leftover work (live CompareIt pane)', () => {
+    // 2026-10-11: the agent relaunched `npm run dev` in the background, then
+    // answered several more prompts. The server never ends, so counting it
+    // kept every later Stop `running` and the sidebar showed a live dot.
+    const p = fixture('earlier-turn-server.jsonl', [
+      userPrompt('relaunch the app'),
+      bgStart('call_dev'),
+      bgStartResultWithTaskId('call_dev', 'b8r7r8zur'),
+      userPrompt('commit and push'),
+    ]);
+    expect(count(p)).toBe(0);
+  });
+
+  it('a shell dispatched in the ending turn still counts', () => {
+    const p = fixture('this-turn-shell.jsonl', [
+      userPrompt('run the tests in the background'),
+      bgStart('call_t'),
+      bgStartResultWithTaskId('call_t', 'btest'),
+    ]);
+    expect(count(p)).toBe(1);
+  });
+
+  it('meta user records (skill bodies, caveats) do not open a new turn', () => {
+    const p = fixture('meta-user.jsonl', [
+      userPrompt('build it'),
+      bgStart('call_b'),
+      bgStartResultWithTaskId('call_b', 'bbuild'),
+      userPrompt('Base directory for this skill: …', { isMeta: true }),
+    ]);
+    expect(count(p)).toBe(1);
+  });
+
+  it('text-block prompts open a new turn too', () => {
+    const p = fixture('array-prompt.jsonl', [
+      bgStart('call_old'),
+      bgStartResultWithTaskId('call_old', 'bold'),
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'next' }] } },
+    ]);
+    expect(count(p)).toBe(0);
+  });
+});

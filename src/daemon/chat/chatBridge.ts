@@ -187,6 +187,19 @@ export interface ChatSendReceiptView {
  */
 export type ChatQueueDeliver = 'next-turn' | 'steer';
 
+/**
+ * Why a `queued` item was not typed on the daemon's last try (closed set,
+ * memory-only like `deliver`): `turn-running` (it waits for the turn's end),
+ * `turn-starting` (the turn the previous delivery opened has not been seen
+ * yet), `busy` (another send or someone typing), `cancel-check` (a Stop's
+ * restored-prompt check runs first), `approval` (an approval is pending),
+ * `dialog` (a dialog owns the screen), `no-composer` (the screen shows no
+ * composer to type into), `unavailable` (the agent or its conversation cannot
+ * be read right now), `retry` (a storage write failed; it retries shortly).
+ */
+export type ChatQueueHoldReason = 'turn-running' | 'turn-starting' | 'busy' | 'cancel-check' | 'approval' | 'dialog'
+  | 'no-composer' | 'unavailable' | 'retry';
+
 /** One `/turns` `chat.queue[]` entry. `preview` is memory-only (absent after a restart). */
 export interface ChatQueueItemView {
   clientMessageId: string;
@@ -197,6 +210,8 @@ export interface ChatQueueItemView {
   queuedAt: number;
   at: number;
   preview?: string;
+  /** `queued` only: why the last try held it (absent before its first try). */
+  holdReason?: ChatQueueHoldReason;
 }
 
 /** A queue transition, for the owner's live `chat.queue` SSE event. */
@@ -207,6 +222,8 @@ export interface ChatQueueEvent {
   state: ChatQueueState;
   reason?: ChatQueueReason;
   deliver?: ChatQueueDeliver;
+  /** `queued` only: why the last try held it. */
+  holdReason?: ChatQueueHoldReason;
   at: number;
 }
 

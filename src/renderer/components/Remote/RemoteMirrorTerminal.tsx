@@ -11,7 +11,9 @@ import {
 } from './mirrorFit';
 import { createMirrorGestureTracker, decideMirrorKeyWithRepeat, shouldHonorMirrorClipboardWrite } from './mirrorInput';
 import { foldRemoteKeyboardState, INITIAL_REMOTE_KEYBOARD_STATE } from './keyboardProtocol';
-import { useStore } from '../../stores';
+import { CODEX_END_GRACE_MS, foldAtPromptCarry, noteCodexEndedByPrompt, noteCodexSlugChange, wantsAltEnterNewline } from '../../terminal/newlineKeys';
+import { REMOTE_POLL_INTERVAL_MS, type RemotePaneSummary } from '../../../shared/remoteHosts';
+import { useStore, type StoreState } from '../../stores';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { createAutoSelectionCopy } from '../../utils/autoSelectionCopy';
 import { pastePtyChunked } from '../../utils/clipboardChunk';
@@ -51,6 +53,9 @@ export interface RemoteMirrorTerminalProps {
   /** The paired host's id — flags the host's rows when it rejects the
    *  credential, so the workspace view and the sidebar say so too. */
   hostId?: string;
+  /** The remote session this mirror shows. With `hostId` it finds the pane's
+   *  row in the host's pane list (#1754). */
+  sessionId?: string;
   /** Keep the user's font size: a grid the box cannot hold scrolls instead of
    *  shrinking (a shadow workspace — the host owns geometry, the viewer
    *  letterboxes). The resize request to the host is unchanged. */
@@ -65,6 +70,30 @@ export interface RemoteMirrorTerminalProps {
 function decodeBase64Bytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
+
+/** One latin1 view per chunk, shared by the keyboard and prompt folds: every
+ *  sequence either one looks for is ASCII, which latin1 keeps exact. */
+const latin1 = new TextDecoder('latin1');
+
+/** #1754 — this mirror's row in its host's last pane list, or undefined. A
+ *  stale host's row is frozen, so it is not read. */
+function findRemotePane(
+  state: Pick<StoreState, 'remoteWorkspaces'>,
+  hostId: string | undefined,
+  sessionId: string | undefined,
+): RemotePaneSummary | undefined {
+  if (!hostId || !sessionId) return undefined;
+  for (const attached of state.remoteWorkspaces) {
+    if (attached.stale || attached.hostId !== hostId) continue;
+    const pane = attached.panes.find((p) => p.sessionId === sessionId);
+    if (pane) return pane;
+  }
+  return undefined;
+}
+
+/** #1754 — the end-of-Codex latch, widened by one pane-list poll: a mirror
+ *  hears the host drop the stale slug only on its next poll. */
+const MIRROR_CODEX_END_GRACE_MS = CODEX_END_GRACE_MS + REMOTE_POLL_INTERVAL_MS;
 
 /** Trailing debounce for box-size-driven fits. A divider drag emits a resize
  *  every frame; restyling the font that often re-measures the character and
@@ -96,7 +125,7 @@ const MIN_REMOTE_RESIZE_ROWS = 8;
  * when it does not — the fallback is not a regression, it is what made this
  * safe to ship without a protocol bump.
  */
-export default function RemoteMirrorTerminal({ attachId, error, insecureTransport = false, readOnly, onTitleChange, hostLabel, hostId, fixedFont = false }: RemoteMirrorTerminalProps) {
+export default function RemoteMirrorTerminal({ attachId, error, insecureTransport = false, readOnly, onTitleChange, hostLabel, hostId, sessionId, fixedFont = false }: RemoteMirrorTerminalProps) {
   const t = useT();
   // Ref, same reason as readOnlyRef below: the title subscription is wired
   // once inside the mount-only effect, and a parent re-render passing a new
@@ -124,11 +153,24 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
    * and nothing renders from it.
    */
   const remoteKeyboardRef = useRef(INITIAL_REMOTE_KEYBOARD_STATE);
+  /**
+   * #1754 — this mirror's row in the host's pane list (kept by a store
+   * subscription, so neither a key nor an output chunk walks the store), the
+   * remote shell's prompt state folded from its own output the way a local
+   * pane folds it (OSC 133;A / 133;C), the end-of-Codex latch, and the
+   * unscanned tail of the last chunk. See useTerminal.
+   */
+  const remotePaneRef = useRef<RemotePaneSummary | undefined>(undefined);
+  const atPromptRef = useRef(false);
+  const codexEndedAtRef = useRef<number | null>(null);
+  const promptTailRef = useRef('');
   // A host that rejected the credential takes no input either: swallow it
   // locally instead of POSTing writes the host will refuse.
   readOnlyRef.current = readOnly || authRejected || insecure || insecureTransport;
   const hostIdRef = useRef(hostId);
   hostIdRef.current = hostId;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const hostLabelRef = useRef(hostLabel);
   hostLabelRef.current = hostLabel;
   // Same reason: the key handler is installed once, at mount, and needs the
@@ -831,6 +873,7 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
     });
 
     term.attachCustomKeyEventHandler((ev) => {
+      const pane = remotePaneRef.current;
       const decision = decideMirrorKeyWithRepeat(ev, {
         isMac,
         hasSelection: term.hasSelection(),
@@ -839,6 +882,17 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
         hasCustomCtrlJBinding: useStore.getState().customKeybindings.some(
           (kb) => kb.key === 'Ctrl+J',
         ),
+        // #1754: native Windows Codex on the host takes Alt+Enter as its
+        // newline. The host's pane row says which OS, shell and agent; a host
+        // that predates those fields leaves hostPlatform unknown, so no.
+        altEnterNewline: wantsAltEnterNewline({
+          hostPlatform: pane?.hostPlatform ?? null,
+          isWsl: pane?.wsl,
+          agentSlug: pane?.agentSlug,
+          atPrompt: atPromptRef.current,
+          codexEndedAt: codexEndedAtRef.current,
+          graceMs: MIRROR_CODEX_END_GRACE_MS,
+        }),
       });
       switch (decision.kind) {
         case 'pass':
@@ -946,6 +1000,29 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
     const remote = window.electronAPI?.remote;
     if (!remote) return;
 
+    // #1754: a new attachId can be another session, so its stream starts
+    // from nothing; the snapshot in its meta sets the prompt state again.
+    atPromptRef.current = false;
+    promptTailRef.current = '';
+    codexEndedAtRef.current = null;
+    // Follow this mirror's pane row. Once the host has dropped the stale Codex
+    // slug the end-of-Codex latch has done its job, and a fresh detection arms
+    // the mapping straight away; a slug that first reads `codex` at the prompt
+    // is a Codex that already ended (noteCodexSlugChange). A row that is
+    // missing (a stale host) says nothing about the slug, so it leaves the
+    // latch alone.
+    remotePaneRef.current = findRemotePane(useStore.getState(), hostIdRef.current, sessionIdRef.current);
+    const offRemotePane = useStore.subscribe((state, prev) => {
+      if (state.remoteWorkspaces === prev.remoteWorkspaces) return;
+      const pane = findRemotePane(state, hostIdRef.current, sessionIdRef.current);
+      const wasSlug = remotePaneRef.current?.agentSlug;
+      remotePaneRef.current = pane;
+      if (pane) {
+        codexEndedAtRef.current = noteCodexSlugChange(
+          codexEndedAtRef.current, wasSlug, pane.agentSlug, atPromptRef.current, Date.now(),
+        );
+      }
+    });
     const offMeta = remote.onPaneMeta((e) => {
       if (e.attachId !== attachId) return;
       const term = termRef.current;
@@ -962,10 +1039,20 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       repaintDepthRef.current += 1;
       try {
         const snapshot = decodeBase64Bytes(e.snapshotB64);
+        const snapshotText = latin1.decode(snapshot);
         // A re-attach replays the pane's screen, negotiation included — reset
         // first so a protocol the app turned off before we attached does not
         // survive as a stale `true`.
-        remoteKeyboardRef.current = foldRemoteKeyboardState(INITIAL_REMOTE_KEYBOARD_STATE, snapshot);
+        remoteKeyboardRef.current = foldRemoteKeyboardState(INITIAL_REMOTE_KEYBOARD_STATE, snapshotText);
+        // #1754: same reset for the prompt state. A snapshot that ends at the
+        // prompt while the host still names Codex is a Codex that exited
+        // before this attach, so it stamps the latch like a live prompt edge.
+        const folded = foldAtPromptCarry(false, '', snapshotText);
+        atPromptRef.current = folded.atPrompt;
+        promptTailRef.current = folded.tail;
+        codexEndedAtRef.current = noteCodexEndedByPrompt(
+          codexEndedAtRef.current, false, folded.atPrompt, remotePaneRef.current?.agentSlug, Date.now(),
+        );
         term.write(snapshot, () => {
           repaintDepthRef.current = Math.max(0, repaintDepthRef.current - 1);
         });
@@ -1009,7 +1096,21 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       // same way the paste path reads xterm's parse of DECSET 2004. xterm
       // exposes nothing for this one, and without it the mirror cannot tell an
       // app that wants CSI-u from one that would read it as Escape + garbage.
-      remoteKeyboardRef.current = foldRemoteKeyboardState(remoteKeyboardRef.current, data);
+      const text = latin1.decode(data);
+      remoteKeyboardRef.current = foldRemoteKeyboardState(remoteKeyboardRef.current, text);
+      // #1754: the prompt marker ends the Codex mapping at once; the host's
+      // slug only drops on its next pane-list poll.
+      const wasAtPrompt = atPromptRef.current;
+      const folded = foldAtPromptCarry(wasAtPrompt, promptTailRef.current, text);
+      atPromptRef.current = folded.atPrompt;
+      promptTailRef.current = folded.tail;
+      codexEndedAtRef.current = noteCodexEndedByPrompt(
+        codexEndedAtRef.current,
+        wasAtPrompt,
+        folded.atPrompt,
+        remotePaneRef.current?.agentSlug,
+        Date.now(),
+      );
       term.write(data);
     });
     const offExit = remote.onPaneExit((e) => {
@@ -1056,6 +1157,7 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       offResize();
       offData();
       offExit();
+      offRemotePane();
       offError();
       dataDisposable?.dispose();
       userInput?.dispose();

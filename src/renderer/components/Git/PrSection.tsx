@@ -15,7 +15,7 @@ import { PR_DRAG_TYPE, prUrlParts, serializePrDragRef } from '../../../shared/pr
 import { useStore } from '../../stores';
 import type { GitDragOwner } from './gitPageState';
 import { beginHandoffDrag } from './handoffDrag';
-import type { PrSummary, PrComment } from '../../../shared/prSurface';
+import type { PrSummary, PrComment, PrDetail } from '../../../shared/prSurface';
 
 export { relTime };
 
@@ -24,7 +24,7 @@ export interface GithubBridge {
     { ok: true; prs: PrSummary[] } | { ok: false; code: string; message: string; provider?: 'github' | 'gitlab' }
   >;
   prDetail: (repoPath: string, number: number, updatedAt: string) => Promise<
-    { ok: true; detail: { number: number; comments: PrComment[] } } | { ok: false; code: string; message: string }
+    { ok: true; detail: PrDetail } | { ok: false; code: string; message: string }
   >;
 }
 

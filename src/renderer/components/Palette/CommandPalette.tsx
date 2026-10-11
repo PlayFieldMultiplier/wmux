@@ -29,6 +29,7 @@ import {
   type KeyConflict,
 } from '../../utils/shortcutRebind';
 import KeyConflictConfirm from '../shared/KeyConflictConfirm';
+import { toggleFileTreePanel } from '../FileTree/fileTreeToggle';
 import {
   openMultiTask,
   openWorktaskCleanup,
@@ -274,6 +275,11 @@ export default function CommandPalette() {
         label: t('palette.cmd.toggleSidebar'),
         shortcut: 'toggleSidebar',
         action: () => { useStore.getState().toggleSidebar(); setVisible(false); },
+      },
+      {
+        label: t('palette.cmd.toggleFileTree'),
+        shortcut: 'toggleFileTree',
+        action: () => { toggleFileTreePanel(useStore.getState()); setVisible(false); },
       },
       {
         label: t('palette.cmd.splitRight'),

@@ -170,8 +170,9 @@ export class CodexPaneRelays {
       void this.retireEntry(entry);return {live:false};
     }
     const relay = entry.relay;
-    // A lost server link reads as no live relay until the TUI is linked again.
-    if (!relay || relay.retired() || relay.disconnected()) return {live:false};
+    // A lost server link reads as no live relay until the TUI is linked again;
+    // one that never linked (its TUI exited before connecting) is not live either.
+    if (!relay || relay.retired() || relay.disconnected() || !relay.linked()) return {live:false};
     const selected = relay.current();
     return selected ? {live:true,selection:selected} : {live:true};
   }
@@ -187,7 +188,7 @@ export class CodexPaneRelays {
 
   /** Panes whose relay is live and committed to an owner. */
   liveIds():string[] {
-    return [...this.entries.values()].filter(entry=>!entry.retired && !!entry.owner && !!entry.relay && !entry.relay.retired() && !entry.relay.disconnected()).map(entry=>entry.id);
+    return [...this.entries.values()].filter(entry=>!entry.retired && !!entry.owner && !!entry.relay && !entry.relay.retired() && !entry.relay.disconnected() && entry.relay.linked()).map(entry=>entry.id);
   }
 
   /**

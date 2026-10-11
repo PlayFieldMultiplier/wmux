@@ -44,6 +44,7 @@ import {
   type MoaGoalStatus,
   type MoaGoalDelivery,
   type MoaGoalVerification,
+  type MoaGoalDeliveryItem,
   type MoaGoalView,
 } from '../../shared/moaGoal';
 import type { GoalCriterionClaim, MoaGoalVerifyResult } from './moaGoalVerifier';
@@ -251,6 +252,16 @@ export class MoaGoalService {
 
   get(id: string): MoaGoalContract | null {
     return this.file.items[id] ?? null;
+  }
+
+  /** The delivery record of the PR at `url`, if Moa opened it from this
+   *  computer: the contract, its verification and the delivered item. */
+  deliveredPr(url: string): { contract: MoaGoalContract; verification: MoaGoalVerification; item: MoaGoalDeliveryItem } | null {
+    for (const c of Object.values(this.file.items)) {
+      const item = c.delivery?.items.find((i) => i.prUrl === url);
+      if (item && c.verification) return { contract: c, verification: c.verification, item };
+    }
+    return null;
   }
 
   byDecision(decisionId: string): MoaGoalContract | null {

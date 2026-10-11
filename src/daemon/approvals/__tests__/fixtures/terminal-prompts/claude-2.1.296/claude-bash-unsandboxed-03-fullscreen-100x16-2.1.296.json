@@ -1,0 +1,26 @@
+{
+ "tui": "claude",
+ "version": "Claude Code 2.1.296",
+ "cols": 100,
+ "rows": 16,
+ "keysSent": "(prompt drawn)",
+ "note": "The unsandboxed dialog in the fullscreen renderer, 100x16: its top rule is cut off and the \"Bash command (unsandboxed)\" title is the first row. The local path is swapped for a same-length one.",
+ "screen": [
+  " Bash command (unsandboxed)",
+  " Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below",
+  " Run the dog2052 scenario",
+  "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  " │ S=/private/tmp/claude-502/-Users-devs/3d0c9b8e-5a41-4f7e-9b2d-6c1e8f0a7b25/scratchpad/wt-1765;",
+  " │ cd $S && REPO=$S/wt-1765 SCRATCH=$S node dog/dog2052.mjs > dog/run2052.log 2>&1; echo exit=$?;",
+  " │ tail -60 dog/run2052.log",
+  "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  " A variable in this command can't be checked before it runs",
+  "",
+  " Do you want to proceed?",
+  " ❯ 1. Yes",
+  "   2. Yes, and switch to auto mode · auto mode handles these prompts for you",
+  "   3. No",
+  "",
+  " Esc to cancel · Tab to amend"
+ ]
+}

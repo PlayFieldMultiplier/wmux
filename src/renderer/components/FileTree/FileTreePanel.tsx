@@ -1,13 +1,20 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { selectActiveWorkspace } from '../../stores/selectors/workspaceProjections';
-import { tokenAttrs } from '../../themes';
 import { selectRemoteScopeName } from '../Git/thisComputerOnly';
+import { findLeaf } from '../../../shared/paneUtils';
+import type { Pane, Surface, Workspace } from '../../../shared/types';
+import { IconChevron, IconFile, IconFolder, IconRefresh, IconSearch, IconX } from '../icons';
+import { FOCUS_RING } from '../focusRing';
+import { insertPathsIntoPty } from '../AgentToolbar/inject';
+import { tokenAttrs } from '../../themes';
+import FileTreeResizeHandle from './FileTreeResizeHandle';
+import { filterTree, FILTER_SCAN_LIMIT, type FilterResult } from './fileTreeFilter';
 
 interface FileTreePanelProps {
+  /** The window edge the column sits on: the one opposite the sidebar. */
   position: 'left' | 'right';
-  workspaceId?: string;
 }
 
 interface TreeNode {
@@ -18,11 +25,13 @@ interface TreeNode {
   children?: TreeNode[];
   isExpanded?: boolean;
   isLoading?: boolean;
+  /** Set in a filtered tree on an entry whose own name matched. */
+  matched?: boolean;
 }
 
 async function readDir(dirPath: string): Promise<TreeNode[]> {
   try {
-    const api = (window as any).electronAPI?.fs;
+    const api = window.electronAPI?.fs;
     if (!api?.readDir) return [];
     const entries: { name: string; path: string; isDirectory: boolean; isSymlink: boolean }[] =
       await api.readDir(dirPath);
@@ -43,182 +52,125 @@ async function readDir(dirPath: string): Promise<TreeNode[]> {
   }
 }
 
-async function readFile(filePath: string): Promise<string | null> {
-  try {
-    const api = (window as any).electronAPI?.fs;
-    if (!api?.readFile) return null;
-    return await api.readFile(filePath);
-  } catch {
-    return null;
-  }
+function separatorOf(p: string): string {
+  return p.includes('/') ? '/' : '\\';
 }
 
-/** Simple markdown to React elements renderer (no external deps) */
-function renderMarkdown(source: string): React.ReactNode[] {
-  const lines = source.split('\n');
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Code block
-    if (line.trimStart().startsWith('```')) {
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++; // skip closing ```
-      elements.push(
-        <pre
-          key={elements.length}
-          className="bg-[var(--bg-base)] text-[var(--text-sub)] rounded px-2 py-1.5 my-1 overflow-x-auto text-[11px] leading-relaxed font-mono"
-        >
-          {codeLines.join('\n')}
-        </pre>,
-      );
-      continue;
-    }
-
-    // Heading
-    const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const text = headingMatch[2];
-      const sizes = ['text-sm font-bold', 'text-xs font-bold', 'text-xs font-semibold'];
-      elements.push(
-        <div key={elements.length} className={`${sizes[level - 1]} text-[var(--text-main)] mt-2 mb-0.5`}>
-          {applyInlineFormatting(text)}
-        </div>,
-      );
-      i++;
-      continue;
-    }
-
-    // List item
-    const listMatch = line.match(/^(\s*)([-*])\s+(.+)/);
-    if (listMatch) {
-      const indent = Math.floor(listMatch[1].length / 2);
-      elements.push(
-        <div
-          key={elements.length}
-          className="flex text-[var(--text-sub)] leading-relaxed"
-          style={{ paddingLeft: `${indent * 12 + 4}px` }}
-        >
-          <span className="mr-1.5 shrink-0">&#x2022;</span>
-          <span>{applyInlineFormatting(listMatch[3])}</span>
-        </div>,
-      );
-      i++;
-      continue;
-    }
-
-    // Empty line
-    if (line.trim() === '') {
-      elements.push(<div key={elements.length} className="h-1.5" />);
-      i++;
-      continue;
-    }
-
-    // Normal paragraph
-    elements.push(
-      <div key={elements.length} className="text-[var(--text-sub)] leading-relaxed">
-        {applyInlineFormatting(line)}
-      </div>,
-    );
-    i++;
-  }
-
-  return elements;
+function basename(p: string): string {
+  const sep = separatorOf(p);
+  return p.split(sep).filter(Boolean).pop() ?? p;
 }
 
-/** Apply inline formatting: bold, italic, code, links */
-function applyInlineFormatting(text: string): React.ReactNode[] {
-  const parts: React.ReactNode[] = [];
-  // Pattern order matters: bold before italic
-  const regex = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+function dirname(p: string): string {
+  const sep = separatorOf(p);
+  const i = p.lastIndexOf(sep);
+  return i > 0 ? p.slice(0, i) : p;
+}
 
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
+/** `target` relative to `base`, or `target` itself when it is not under it. */
+export function relativeTo(base: string, target: string): string {
+  const sep = separatorOf(target);
+  const prefix = base.endsWith(sep) ? base : base + sep;
+  return target.startsWith(prefix) ? target.slice(prefix.length) : target;
+}
 
-    const m = match[0];
-    if (m.startsWith('`')) {
-      // Inline code
-      parts.push(
-        <code
-          key={`c${match.index}`}
-          className="bg-[var(--bg-base)] text-[var(--accent)] px-1 rounded text-[10px] font-mono"
-        >
-          {m.slice(1, -1)}
-        </code>,
-      );
-    } else if (m.startsWith('**')) {
-      // Bold
-      parts.push(
-        <strong key={`b${match.index}`} className="font-bold text-[var(--text-main)]">
-          {m.slice(2, -2)}
-        </strong>,
-      );
-    } else if (m.startsWith('*')) {
-      // Italic
-      parts.push(
-        <em key={`i${match.index}`} className="italic">
-          {m.slice(1, -1)}
-        </em>,
-      );
-    } else if (m.startsWith('[')) {
-      // Link
-      const linkMatch = m.match(/\[([^\]]+)\]\(([^)]+)\)/);
-      if (linkMatch) {
-        parts.push(
-          <span key={`l${match.index}`} className="text-[var(--accent-blue)] underline cursor-pointer" title={linkMatch[2]}>
-            {linkMatch[1]}
-          </span>,
-        );
-      }
-    }
+/**
+ * The surface of a pane the tree follows: the active one when it is a local
+ * terminal, otherwise (an editor, browser or diff tab, which has no cwd or
+ * PTY) the pane's first local terminal, so opening a file does not move the
+ * tree away from the pane's folder.
+ */
+function anchorSurface(pane: Pane | null): Surface | undefined {
+  if (!pane || pane.type !== 'leaf') return undefined;
+  const active = pane.surfaces?.find((s) => s.id === pane.activeSurfaceId);
+  if (active?.ptyId) return active;
+  return pane.surfaces?.find((s) => s.ptyId) ?? active;
+}
 
-    lastIndex = match.index + m.length;
+function surfaceCwd(pane: Pane | null): string | undefined {
+  return anchorSurface(pane)?.cwd || undefined;
+}
+
+function firstLeafCwd(pane: Pane): string | undefined {
+  if (pane.type === 'leaf') return surfaceCwd(pane);
+  for (const child of pane.children) {
+    const found = firstLeafCwd(child);
+    if (found) return found;
   }
+  return undefined;
+}
 
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
+/**
+ * The folder the tree starts from: the focused pane's working directory, so
+ * the tree follows the pane you are working in. Then the workspace's own
+ * folder, then any pane's.
+ */
+export function fileTreeCwd(ws: Workspace | null | undefined): string | undefined {
+  if (!ws) return undefined;
+  return surfaceCwd(findLeaf(ws.rootPane, ws.activePaneId)) || ws.metadata?.cwd || firstLeafCwd(ws.rootPane);
+}
 
-  return parts.length > 0 ? parts : [text];
+function activePtyId(ws: Workspace | null | undefined): string | undefined {
+  if (!ws) return undefined;
+  return anchorSurface(findLeaf(ws.rootPane, ws.activePaneId))?.ptyId || undefined;
+}
+
+/**
+ * Whether `target` is `base` itself or a path below it. Separators are unified
+ * and drive paths compared case-insensitively, since on Windows git reports
+ * `C:/repo` for a pane whose cwd reads `c:\repo\sub`.
+ */
+export function isAtOrUnder(base: string | undefined, target: string): boolean {
+  if (!base) return false;
+  const norm = (p: string) => {
+    const unified = p.replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[a-z]:/i.test(unified) ? unified.toLowerCase() : unified;
+  };
+  const b = norm(base);
+  const t = norm(target);
+  return t === b || t.startsWith(b + '/');
+}
+
+/** The OS's own word for its file manager (same vocabulary as the sidebar's menu). */
+function fileManagerKey(): 'workspace.finder' | 'workspace.fileExplorer' | 'workspace.fileManager' {
+  const platform = window.electronAPI?.platform;
+  if (platform === 'darwin') return 'workspace.finder';
+  if (platform === 'win32') return 'workspace.fileExplorer';
+  return 'workspace.fileManager';
+}
+
+const INDENT = 12;
+
+/** The name with the query's first occurrence emphasised. */
+function NameWithMatch({ name, query }: { name: string; query: string }) {
+  const i = query ? name.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()) : -1;
+  if (i < 0) return <>{name}</>;
+  return (
+    <>
+      {name.slice(0, i)}
+      <mark className="wmux-filetree-match">{name.slice(i, i + query.length)}</mark>
+      {name.slice(i + query.length)}
+    </>
+  );
 }
 
 function TreeItem({
   node,
   depth,
+  query,
+  selectedPath,
   onFileClick,
   onToggle,
+  onContextMenu,
 }: {
   node: TreeNode;
   depth: number;
-  onFileClick: (path: string) => void;
+  query: string;
+  selectedPath: string | null;
+  onFileClick: (node: TreeNode) => void;
   onToggle: (node: TreeNode) => void;
+  onContextMenu: (node: TreeNode, e: React.MouseEvent) => void;
 }) {
-  const icon = node.isDirectory
-    ? node.isExpanded
-      ? '\u{1F4C2}'
-      : '\u{1F4C1}'
-    : '\u{1F4C4}';
-
-  const handleClick = () => {
-    if (node.isDirectory) {
-      onToggle(node);
-    } else {
-      onFileClick(node.path);
-    }
-  };
-
   const setTerminalTextDropDragActive = useStore((s) => s.setTerminalTextDropDragActive);
 
   const handleDragStart = (e: React.DragEvent) => {
@@ -227,46 +179,56 @@ function TreeItem({
     setTerminalTextDropDragActive(true);
   };
 
-  const handleDragEnd = () => {
-    setTerminalTextDropDragActive(false);
-  };
+  const selected = selectedPath === node.path;
 
   return (
     <>
       <button
-        className="flex items-center w-full text-left px-2 py-0.5 hover:bg-[var(--bg-surface)] text-[var(--text-sub)] hover:text-[var(--text-main)] transition-colors truncate"
-        style={{ paddingLeft: `${depth * 14 + 8}px` }}
-        onClick={handleClick}
+        type="button"
+        role="treeitem"
+        className={`wmux-filetree-row ${FOCUS_RING}`}
+        style={{ paddingLeft: `${depth * INDENT + 6}px` }}
+        onClick={() => (node.isDirectory ? onToggle(node) : onFileClick(node))}
+        onContextMenu={(e) => onContextMenu(node, e)}
         title={node.path}
-        draggable={!node.isDirectory}
+        draggable
         onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
+        onDragEnd={() => setTerminalTextDropDragActive(false)}
+        aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
+        aria-selected={selected}
+        data-file-tree-row={node.isDirectory ? 'dir' : 'file'}
       >
-        <span className="mr-1 shrink-0 text-[11px]">{icon}</span>
-        <span className="truncate">{node.name}</span>
-        {node.isSymlink && <span className="ml-1 text-[var(--text-muted)] text-[10px]">&rarr;</span>}
+        <span
+          className="wmux-filetree-chevron"
+          style={{ transform: node.isExpanded ? 'rotate(90deg)' : undefined, visibility: node.isDirectory ? undefined : 'hidden' }}
+        >
+          <IconChevron size={12} />
+        </span>
+        <span className="wmux-filetree-icon">
+          {node.isDirectory ? <IconFolder size={14} /> : <IconFile size={14} />}
+        </span>
+        <span className="truncate">{node.matched ? <NameWithMatch name={node.name} query={query} /> : node.name}</span>
+        {node.isSymlink && <span className="wmux-filetree-meta">&rarr;</span>}
       </button>
       {node.isDirectory && node.isExpanded && (
-        <>
-          {node.isLoading ? (
-            <div
-              className="text-[var(--text-muted)] text-[10px] py-0.5"
-              style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }}
-            >
-              ...
-            </div>
-          ) : (
-            node.children?.map((child) => (
-              <TreeItem
-                key={child.path}
-                node={child}
-                depth={depth + 1}
-                onFileClick={onFileClick}
-                onToggle={onToggle}
-              />
-            ))
-          )}
-        </>
+        node.isLoading ? (
+          <div className="wmux-filetree-meta py-0.5" style={{ paddingLeft: `${(depth + 1) * INDENT + 24}px` }}>
+            …
+          </div>
+        ) : (
+          node.children?.map((child) => (
+            <TreeItem
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              query={query}
+              selectedPath={selectedPath}
+              onFileClick={onFileClick}
+              onToggle={onToggle}
+              onContextMenu={onContextMenu}
+            />
+          ))
+        )
       )}
     </>
   );
@@ -274,65 +236,89 @@ function TreeItem({
 
 export default function FileTreePanel({ position }: FileTreePanelProps) {
   const t = useT();
-  // A1: 활성 ws OBJECT만 구독(cwd/pane 트리 파생) — 배경 ws churn 무시.
+  // A1: subscribe to the active workspace OBJECT only (cwd / pane tree derive
+  // from it), so background workspace churn does not re-render the tree.
   const activeWorkspace = useStore(selectActiveWorkspace);
   // PC rail: another computer on screen ('' while the roster has not named it).
   // Its folders are on that computer, so no path of it is read from this disk.
   const remoteScope = useStore(selectRemoteScopeName);
+  const width = useStore((s) => s.fileTreeWidth);
 
-  // Resolve CWD: try workspace metadata first, then recursively find from panes
-  let cwd = remoteScope !== null ? undefined : activeWorkspace?.metadata?.cwd;
-  if (!cwd && activeWorkspace && remoteScope === null) {
-    const findCwd = (pane: any): string | undefined => {
-      if (pane.type === 'leaf') {
-        const surface = pane.surfaces?.find((s: any) => s.id === pane.activeSurfaceId);
-        return surface?.cwd || undefined;
-      }
-      if (pane.children) {
-        for (const child of pane.children) {
-          const found = findCwd(child);
-          if (found) return found;
-        }
-      }
-      return undefined;
-    };
-    cwd = findCwd(activeWorkspace.rootPane);
-  }
+  const cwd = remoteScope !== null ? undefined : fileTreeCwd(activeWorkspace);
+
+  // Inside a git repository the tree starts at the repository's root, so a
+  // pane that has cd'd into a subfolder still shows the whole project.
+  const [root, setRoot] = useState<string | undefined>(cwd);
+  useEffect(() => {
+    if (!cwd) { setRoot(undefined); return; }
+    // A cd within the current root keeps it until the repository is resolved,
+    // so a move inside the same repo does not reload the tree twice.
+    setRoot((prev) => (isAtOrUnder(prev, cwd) ? prev : cwd));
+    const resolveRepo = window.electronAPI?.diff?.resolveRepo;
+    if (!resolveRepo) { setRoot(cwd); return; }
+    let cancelled = false;
+    resolveRepo(cwd).then(
+      (r) => { if (!cancelled) setRoot(r.ok ? r.repoPath : cwd); },
+      () => { if (!cancelled) setRoot(cwd); },
+    );
+    return () => { cancelled = true; };
+  }, [cwd]);
 
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const treeRef = useRef<TreeNode[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null);
 
-  // Markdown preview state
-  const [previewFile, setPreviewFile] = useState<string | null>(null);
-  const [previewContent, setPreviewContent] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  // A preview of this computer's file does not stay under another computer's line.
+  // Name filter. The field only exists while open; it opens from the header's
+  // search button and folds away on Escape or when it loses focus empty.
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const filterQuery = query.trim();
+  const [filtered, setFiltered] = useState<FilterResult | null>(null);
+  const filteredRef = useRef<FilterResult | null>(null);
+  const filterInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    if (remoteScope === null) return;
-    setPreviewFile(null);
-    setPreviewContent(null);
-  }, [remoteScope]);
+    filteredRef.current = null;
+    setFiltered(null);
+    if (!root || !filterQuery) return;
+    let cancelled = false;
+    // Debounced: every keystroke would otherwise start a walk of the tree.
+    const timer = setTimeout(() => {
+      void filterTree(root, filterQuery, readDir, () => cancelled).then((result) => {
+        if (cancelled || !result) return;
+        filteredRef.current = result;
+        setFiltered(result);
+      });
+    }, 150);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [root, filterQuery, refreshKey]);
 
-  // Track previous cwd to detect directory changes vs refreshes
-  const prevCwdRef = useRef<string | undefined>(undefined);
+  const closeFilter = useCallback(() => {
+    setQuery('');
+    setFilterOpen(false);
+  }, []);
 
-  // Load root directory, preserving expanded folder state on same-dir refresh
+  // Track the previous root to tell a directory change from a refresh.
+  const prevRootRef = useRef<string | undefined>(undefined);
+
+  // Load the root directory, keeping expanded folders on a same-dir refresh.
   useEffect(() => {
-    if (!cwd) {
+    if (!root) {
       setTree([]);
       treeRef.current = [];
-      prevCwdRef.current = undefined;
+      prevRootRef.current = undefined;
       return;
     }
 
-    const cwdChanged = prevCwdRef.current !== cwd;
-    prevCwdRef.current = cwd;
+    const rootChanged = prevRootRef.current !== root;
+    prevRootRef.current = root;
 
-    // If CWD changed, reset tree completely (old tree is from different directory)
-    if (cwdChanged) {
+    // A new root: the old tree belongs to a different directory.
+    if (rootChanged) {
       treeRef.current = [];
       setTree([]);
+      setSelectedPath(null);
     }
 
     let cancelled = false;
@@ -349,7 +335,7 @@ export default function FileTreePanel({ position }: FileTreePanelProps) {
     };
 
     const loadTree = () => {
-      readDir(cwd!).then((nodes) => {
+      readDir(root).then((nodes) => {
         if (cancelled) return;
         const merged = treeRef.current.length > 0 ? mergeNodes(treeRef.current, nodes) : nodes;
         treeRef.current = merged;
@@ -364,182 +350,265 @@ export default function FileTreePanel({ position }: FileTreePanelProps) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [cwd, refreshKey]);
+  }, [root, refreshKey]);
 
-  // Watch directory for real-time changes via main process fs.watch
+  // Watch the root for real-time changes via main's fs.watch.
   useEffect(() => {
-    if (!cwd) return;
-    const api = (window as any).electronAPI?.fs;
+    if (!root) return;
+    const api = window.electronAPI?.fs;
     if (!api?.watch) return;
 
-    api.watch(cwd);
+    api.watch(root);
     const unsub = api.onChanged?.((changedDir: string) => {
       // Compare normalized paths (main sends path.resolve'd paths)
-      const normalizedCwd = cwd.replace(/\\/g, '/').toLowerCase();
+      const normalizedRoot = root.replace(/\\/g, '/').toLowerCase();
       const normalizedChanged = changedDir.replace(/\\/g, '/').toLowerCase();
-      if (normalizedChanged === normalizedCwd) {
+      if (normalizedChanged === normalizedRoot) {
         setRefreshKey((k) => k + 1);
       }
     });
 
     return () => {
-      api.unwatch?.(cwd);
+      api.unwatch?.(root);
       unsub?.();
     };
-  }, [cwd]);
+  }, [root]);
 
-  const toggleNode = useCallback(
-    async (target: TreeNode) => {
-      if (target.isExpanded) {
-        // collapse
-        target.isExpanded = false;
-        target.children = undefined;
-        setTree([...treeRef.current]);
-        return;
-      }
+  // Nodes are mutated in place (plain or filtered tree); a fresh top-level
+  // array re-renders whichever is on screen.
+  const rerender = () => {
+    setTree([...treeRef.current]);
+    const f = filteredRef.current;
+    if (f) setFiltered({ ...f, nodes: [...f.nodes] });
+  };
 
-      // expand - lazy load children
-      target.isExpanded = true;
-      target.isLoading = true;
-      setTree([...treeRef.current]);
+  const toggleNode = useCallback(async (target: TreeNode) => {
+    setSelectedPath(target.path);
+    if (target.isExpanded) {
+      target.isExpanded = false;
+      target.children = undefined;
+      rerender();
+      return;
+    }
 
-      const children = await readDir(target.path);
-      target.children = children;
-      target.isLoading = false;
-      setTree([...treeRef.current]);
-    },
-    [],
-  );
+    // Expand: children load lazily.
+    target.isExpanded = true;
+    target.isLoading = true;
+    rerender();
+
+    const children = await readDir(target.path);
+    target.children = children;
+    target.isLoading = false;
+    rerender();
+  }, []);
 
   const addEditorSurface = useStore((s) => s.addEditorSurface);
 
-  const handleFileClick = useCallback(
-    (filePath: string) => {
+  const openFile = useCallback(
+    (node: TreeNode) => {
+      setSelectedPath(node.path);
       if (!activeWorkspace) return;
-
-      // Find active leaf pane id
-      const findActivePaneId = (pane: any): string | undefined => {
-        if (pane.type === 'leaf') return pane.id === activeWorkspace.activePaneId ? pane.id : undefined;
-        for (const child of pane.children ?? []) {
-          const found = findActivePaneId(child);
-          if (found) return found;
-        }
-        return undefined;
-      };
-
-      const paneId = findActivePaneId(activeWorkspace.rootPane);
-      if (paneId) {
-        addEditorSurface(paneId, filePath);
-      }
+      addEditorSurface(activeWorkspace.activePaneId, node.path);
     },
     [activeWorkspace, addEditorSurface],
   );
 
-  const closePreview = useCallback(() => {
-    setPreviewFile(null);
-    setPreviewContent(null);
+  // Main returns canonical paths (realpath), so the base for relative paths
+  // is the parent of the listed entries, not the root string as given.
+  const base = tree[0] ? dirname(tree[0].path) : root;
+
+  const openMenu = useCallback((node: TreeNode, e: React.MouseEvent) => {
+    e.preventDefault();
+    setSelectedPath(node.path);
+    setMenu({ node, x: e.clientX, y: e.clientY });
   }, []);
 
-  const previewFileName = useMemo(() => {
-    if (!previewFile) return '';
-    const sep = previewFile.includes('/') ? '/' : '\\';
-    return previewFile.split(sep).pop() ?? '';
-  }, [previewFile]);
+  // Close the menu on any outside click or Escape.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
-  const renderedMarkdown = useMemo(() => {
-    if (!previewContent) return null;
-    return renderMarkdown(previewContent);
-  }, [previewContent]);
+  const runMenu = (action: () => void) => {
+    setMenu(null);
+    action();
+  };
 
-  const borderClass = position === 'left' ? 'border-r' : 'border-l';
+  const ptyId = activePtyId(activeWorkspace);
+  const header = root ? basename(root) : remoteScope ? remoteScope : t('filetree.noCwd');
 
   return (
     <div
-      className={`flex flex-col h-full bg-[var(--bg-mantle)] ${borderClass} border-[var(--bg-surface)] font-mono text-xs`}
-      style={{ width: 240, minWidth: 240 }}
-      {...tokenAttrs('bgMantle', 'bg')}
-      {...tokenAttrs('bgSurface', 'border')}
+      className="wmux-filetree relative flex flex-col h-full shrink-0"
+      style={{ width, maxWidth: '100%' }}
+      id="wmux-file-tree"
+      data-file-tree
+      data-file-tree-position={position}
+      {...tokenAttrs('bgBase', 'bg')}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--bg-surface)] shrink-0">
-        <span
-          className="text-[var(--text-sub)] truncate flex-1 mr-2"
-          title={cwd ?? t('filetree.noDirectory')}
-          {...tokenAttrs('textSub', 'text')}
-        >
-          {cwd ? shortenPath(cwd) : remoteScope ? remoteScope : t('filetree.noCwd')}
+      <FileTreeResizeHandle position={position} />
+      <div className="wmux-filetree-header" {...tokenAttrs('bgMantle', 'bg')}>
+        <span className="truncate flex-1" title={root ?? t('filetree.noDirectory')} data-file-tree-root {...tokenAttrs('textMain', 'text')}>
+          {header}
         </span>
         <button
-          className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors text-sm"
-          onClick={() => setRefreshKey((k) => k + 1)}
-          title={t('filetree.refresh')}
+          type="button"
+          className={`wmux-filetree-action ${FOCUS_RING}`}
+          // Keep focus in the field: a blur on an empty field would fold it
+          // away first, and this click would then open it again.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            if (filterOpen) { closeFilter(); return; }
+            setFilterOpen(true);
+          }}
+          title={t('filetree.filter')}
+          aria-label={t('filetree.filter')}
+          aria-pressed={filterOpen}
+          disabled={!root}
+          data-file-tree-filter-toggle
           {...tokenAttrs('textMuted', 'text')}
         >
-          &#x21BB;
+          <IconSearch size={14} />
+        </button>
+        <button
+          type="button"
+          className={`wmux-filetree-action ${FOCUS_RING}`}
+          onClick={() => setRefreshKey((k) => k + 1)}
+          title={t('filetree.refresh')}
+          aria-label={t('filetree.refresh')}
+          disabled={!root}
+        >
+          <IconRefresh size={14} />
         </button>
       </div>
 
-      {/* Tree */}
-      <div className={`overflow-y-auto overflow-x-hidden py-1 ${previewFile ? 'flex-1 min-h-0' : 'flex-1'}`}>
-        {tree.length === 0 && cwd && (
-          <div className="px-3 py-2 text-[var(--text-muted)] text-[10px]">
-            {t('filetree.empty')}
-          </div>
+      {filterOpen && root && (
+        <div className="wmux-filetree-filter">
+          <input
+            ref={filterInputRef}
+            autoFocus
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); closeFilter(); }
+            }}
+            onBlur={() => { if (!query.trim()) setFilterOpen(false); }}
+            placeholder={t('filetree.filterPlaceholder')}
+            aria-label={t('filetree.filter')}
+            className="ui-input h-8 text-[13px] flex-1 min-w-0"
+            spellCheck={false}
+            data-file-tree-filter
+          />
+          {query && (
+            <button
+              type="button"
+              className={`wmux-filetree-action ${FOCUS_RING}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { setQuery(''); filterInputRef.current?.focus(); }}
+              title={t('filetree.clearFilter')}
+              aria-label={t('filetree.clearFilter')}
+            >
+              <IconX size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-1" role="tree" aria-label={header}>
+        {filterQuery && root && filtered === null && (
+          <div className="wmux-filetree-meta px-3 py-2" data-file-tree-searching>{t('filetree.searching')}</div>
         )}
-        {!cwd && (
-          <div className="px-3 py-2 text-[var(--text-muted)] text-[10px]" {...(remoteScope !== null ? { 'data-filetree-remote': '' } : {})}>
+        {filterQuery && filtered !== null && filtered.matchCount === 0 && (
+          <div className="wmux-filetree-meta px-3 py-2" data-file-tree-no-match>{t('filetree.noMatches')}</div>
+        )}
+        {!filterQuery && tree.length === 0 && root && (
+          <div className="wmux-filetree-meta px-3 py-2">{t('filetree.empty')}</div>
+        )}
+        {!root && (
+          <div className="wmux-filetree-meta px-3 py-2" {...(remoteScope !== null ? { 'data-filetree-remote': '' } : {})}>
             {remoteScope ? t('pcRail.filesNotShown', { name: remoteScope }) : t('filetree.noCwdDetected')}
           </div>
         )}
-        {tree.map((node) => (
+        {(filterQuery ? (filtered?.nodes ?? []) : tree).map((node) => (
           <TreeItem
             key={node.path}
             node={node}
             depth={0}
-            onFileClick={handleFileClick}
+            query={filterQuery}
+            selectedPath={selectedPath}
+            onFileClick={openFile}
             onToggle={toggleNode}
+            onContextMenu={openMenu}
           />
         ))}
+        {filterQuery && filtered?.truncated && (
+          <div className="wmux-filetree-meta px-3 py-2" data-file-tree-truncated>
+            {t('filetree.filterTruncated', { count: FILTER_SCAN_LIMIT.toLocaleString() })}
+          </div>
+        )}
       </div>
 
-      {/* Markdown Preview */}
-      {previewFile && (
-        <div className="flex flex-col border-t border-[var(--bg-surface)] shrink-0" style={{ height: '45%', minHeight: 120 }}>
-          {/* Preview Header */}
-          <div className="flex items-center justify-between px-2 py-1 border-b border-[var(--bg-surface)] shrink-0 bg-[var(--bg-surface)]" {...tokenAttrs('bgSurface', 'bg')}>
-            <span className="text-[var(--text-main)] text-[10px] font-semibold truncate flex-1 mr-2" title={previewFile} {...tokenAttrs('textMain', 'text')}>
-              {previewFileName}
-            </span>
-            <button
-              className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors text-xs leading-none px-1"
-              onClick={closePreview}
-              title={t('filetree.closePreview')}
-            >
-              &#x2715;
+      {menu && (
+        <div
+          role="menu"
+          className="wmux-filetree-menu fixed z-[var(--z-popover-top)] w-max flex flex-col py-1"
+          style={{ left: menu.x, top: menu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          data-file-tree-menu
+        >
+          {!menu.node.isDirectory && (
+            <button type="button" role="menuitem" onClick={() => runMenu(() => openFile(menu.node))} data-file-tree-action="open">
+              {t('filetree.menu.open')}
             </button>
-          </div>
-          {/* Preview Content */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-1.5 text-[11px] leading-relaxed">
-            {previewLoading && (
-              <div className="text-[var(--text-muted)] text-[10px] py-2">{t('filetree.loading')}</div>
-            )}
-            {!previewLoading && previewContent === null && (
-              <div className="text-[var(--text-muted)] text-[10px] py-2">
-                {t('filetree.readFailed')}
-              </div>
-            )}
-            {!previewLoading && previewContent !== null && renderedMarkdown}
-          </div>
+          )}
+          {ptyId && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runMenu(() => { void insertPathsIntoPty(ptyId, [menu.node.path]); })}
+              data-file-tree-action="insert"
+            >
+              {t('filetree.menu.insertPath')}
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runMenu(() => { void window.clipboardAPI?.writeText(menu.node.path).catch(() => undefined); })}
+            data-file-tree-action="copy-path"
+          >
+            {t('filetree.menu.copyPath')}
+          </button>
+          {base && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runMenu(() => { void window.clipboardAPI?.writeText(relativeTo(base, menu.node.path)).catch(() => undefined); })}
+              data-file-tree-action="copy-relative"
+            >
+              {t('filetree.menu.copyRelativePath')}
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runMenu(() => {
+              void window.electronAPI?.shell?.openPath(menu.node.isDirectory ? menu.node.path : dirname(menu.node.path));
+            })}
+            data-file-tree-action="reveal"
+          >
+            {t('workspace.openInExplorer', { app: t(fileManagerKey()) })}
+          </button>
         </div>
       )}
     </div>
   );
-}
-
-/** Shorten a path for display (show last 2-3 segments) */
-function shortenPath(p: string): string {
-  const sep = p.includes('/') ? '/' : '\\';
-  const parts = p.split(sep).filter(Boolean);
-  if (parts.length <= 3) return p;
-  return '...' + sep + parts.slice(-2).join(sep);
 }

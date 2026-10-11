@@ -90,6 +90,39 @@ const hashFileDefault: HashFile = (p) =>
   });
 
 /**
+ * What the Windows pin check found: `ok` the bytes match; `no_pin` the build
+ * carries no pin; `unreadable` the helper could not be read; `changed` it
+ * changed while being hashed; `mismatch` its bytes do not match the pin.
+ */
+export type WindowsPinVerdict = 'ok' | 'no_pin' | 'unreadable' | 'changed' | 'mismatch';
+
+/** The Windows pin check, shared by the spawn (verifyWindowsHelper) and Settings (createWindowsPinCheck). */
+async function checkWindowsHelper(
+  exePath: string,
+  pin: WindowsHelperPin | undefined,
+  readIdentity: ReadFileIdentity,
+  hashFile: HashFile,
+): Promise<{ verdict: WindowsPinVerdict; identity?: string }> {
+  if (!pin || !/^[0-9a-f]{64}$/.test(pin.sha256)) return { verdict: 'no_pin' };
+  let before: string;
+  let digest: string;
+  try {
+    before = await readIdentity(exePath);
+    digest = (await hashFile(exePath)).toLowerCase();
+  } catch {
+    return { verdict: 'unreadable' };
+  }
+  let after: string | null = null;
+  try {
+    after = await readIdentity(exePath);
+  } catch {
+    // Gone or unreadable now; refused below.
+  }
+  if (after !== before) return { verdict: 'changed' };
+  return { verdict: digest === pin.sha256 ? 'ok' : 'mismatch', identity: before };
+}
+
+/**
  * Windows, packaged builds. The helper's bytes must hash to the SHA-256 baked
  * into the main bundle at build time. A release signature is not required.
  *
@@ -108,32 +141,60 @@ async function verifyWindowsHelper(
   readIdentity: ReadFileIdentity,
   hashFile: HashFile,
 ): Promise<void> {
-  if (!pin || !/^[0-9a-f]{64}$/.test(pin.sha256)) {
-    throw new ComputerError('helper_unavailable', 'this wmux build carries no fingerprint for its computer-use helper');
+  const { verdict } = await checkWindowsHelper(exePath, pin, readIdentity, hashFile);
+  switch (verdict) {
+    case 'ok':
+      return;
+    case 'no_pin':
+      throw new ComputerError('helper_unavailable', 'this wmux build carries no fingerprint for its computer-use helper');
+    case 'unreadable':
+      throw new ComputerError('helper_unavailable', 'the computer-use helper is missing from this wmux build');
+    case 'changed':
+      throw new ComputerError('helper_unavailable', 'the computer-use helper changed while it was being checked');
+    case 'mismatch':
+      throw new ComputerError(
+        'helper_unavailable',
+        'the computer-use helper does not match this wmux build (damaged, partly updated or changed by antivirus); reinstall wmux',
+      );
   }
-  let before: string;
-  let digest: string;
-  try {
-    before = await readIdentity(exePath);
-    digest = (await hashFile(exePath)).toLowerCase();
-  } catch {
-    throw new ComputerError('helper_unavailable', 'the computer-use helper is missing from this wmux build');
-  }
-  let after: string | null = null;
-  try {
-    after = await readIdentity(exePath);
-  } catch {
-    // Gone or unreadable now; refused below.
-  }
-  if (after !== before) {
-    throw new ComputerError('helper_unavailable', 'the computer-use helper changed while it was being checked');
-  }
-  if (digest !== pin.sha256) {
-    throw new ComputerError(
-      'helper_unavailable',
-      'the computer-use helper does not match this wmux build (damaged, partly updated or changed by antivirus); reinstall wmux',
-    );
-  }
+}
+
+/**
+ * Returns `check(exePath)`: the same Windows pin check a spawn runs, for
+ * Settings, so a helper that would be refused does not read as ready. Its
+ * `ok` and `mismatch` verdicts are cached per path by file identity (device,
+ * inode, size, ctime), so the helper is hashed once per binary, not on every
+ * Settings read. Advisory only: the spawn re-hashes regardless
+ * (verifyWindowsHelper), so a stale verdict here never lets a changed helper
+ * run.
+ */
+export function createWindowsPinCheck(opts: {
+  windowsPin?: WindowsHelperPin;
+  fileIdentity?: ReadFileIdentity;
+  hashFile?: HashFile;
+}): (exePath: string) => Promise<WindowsPinVerdict> {
+  const readIdentity = opts.fileIdentity ?? fileIdentityDefault;
+  const hashFile = opts.hashFile ?? hashFileDefault;
+  const cache = new Map<string, { identity: string; verdict: WindowsPinVerdict }>();
+
+  return async (exePath) => {
+    const cached = cache.get(exePath);
+    if (cached) {
+      let identity: string | null = null;
+      try {
+        identity = await readIdentity(exePath);
+      } catch {
+        // Gone or unreadable; checked afresh below.
+      }
+      if (identity === cached.identity) return cached.verdict;
+      cache.delete(exePath);
+    }
+    const { verdict, identity } = await checkWindowsHelper(exePath, opts.windowsPin, readIdentity, hashFile);
+    // A read failure or a change mid-hash says nothing lasting about the
+    // binary, so the next read checks again.
+    if (identity !== undefined) cache.set(exePath, { identity, verdict });
+    return verdict;
+  };
 }
 
 /**

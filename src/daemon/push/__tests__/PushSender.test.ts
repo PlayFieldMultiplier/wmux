@@ -40,7 +40,7 @@ interface Harness {
 }
 
 function makeSender(
-  replies: Array<number | 'throw'>,
+  replies: Array<number | 'throw' | (() => Response)>,
   targets: PushTarget[],
   over: { relayUrl?: string; relaySecret?: string } = {},
 ): Harness {
@@ -55,6 +55,7 @@ function makeSender(
     const reply = replies[Math.min(i, replies.length - 1)];
     i += 1;
     if (reply === 'throw') throw new Error('network down');
+    if (typeof reply === 'function') return reply();
     return new Response('', { status: reply });
   }) as unknown as typeof fetch;
 
@@ -236,6 +237,19 @@ describe('PushSender — a broken pipeline is visible', () => {
     expect(h.logs.some((l) => l.includes('1/1 notification(s) were not delivered'))).toBe(true);
     // Never the payload.
     expect(h.logs.join(String.fromCharCode(10))).not.toContain('title');
+  });
+
+  it('names the reason and stage the relay gave, never the device token', async () => {
+    const h = makeSender([
+      () => new Response(JSON.stringify({ ok: false, apnsStatus: 400, reason: 'BadDeviceToken' }), {
+        status: 400,
+        headers: { 'x-wmux-relay-stage': 'apns' },
+      }),
+    ], [device('d1').target]);
+    h.sender.notify({ title: 't', body: 'b' });
+    await h.sender.flush();
+    expect(h.logs).toContain('[push] relay answered 400 (apns: BadDeviceToken) for d1');
+    expect(h.logs.join(String.fromCharCode(10))).not.toContain('a'.repeat(64));
   });
 
   it('reports a relay that never answers', async () => {

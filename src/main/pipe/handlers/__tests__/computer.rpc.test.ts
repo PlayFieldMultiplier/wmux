@@ -15,7 +15,10 @@ const PANES: Record<string, string> = { 'pty-a1': 'ws-a', 'pty-a2': 'ws-a', 'pty
 
 const WORKSPACE_NAMES: Record<string, string> = { 'ws-a': 'api', 'ws-b': 'web "prod"\nX', 'ws-c': 'claimed' };
 
-function setup(service: Partial<ComputerService>) {
+function setup(
+  service: Partial<ComputerService>,
+  callerProtection?: (method: string, ctx: RpcContext | undefined) => Promise<string | null>,
+) {
   const handlers = new Map<string, Handler>();
   const router = { register: (method: string, handler: Handler) => handlers.set(method, handler) } as unknown as RpcRouter;
   const getService = vi.fn(() => service as ComputerService);
@@ -27,6 +30,7 @@ function setup(service: Partial<ComputerService>) {
       return PANES[ptyId] ?? null;
     },
     (workspaceId) => WORKSPACE_NAMES[workspaceId],
+    callerProtection,
   );
   const call = (method: string, params: Record<string, unknown>, ctx?: Partial<RpcContext>) =>
     handlers.get(method)!(params, ctx as RpcContext);
@@ -255,5 +259,66 @@ describe('computer.rpc with the real service', () => {
     await call('computer.act', { action: 'click', snapshotId: a.snapshotId, index: 1, senderPtyId: 'pty-a1' }, ctx);
     const busy = await errorOf(call('computer.act', { action: 'click', snapshotId: b.snapshotId, index: 1, senderPtyId: 'pty-a2' }, ctx));
     expect(busy).toEqual({ code: 'input_busy', message: 'claude-code in workspace "api" is using the desktop' });
+  });
+});
+
+describe('computer.rpc on a protected browser pane', () => {
+  // Every method that observes or drives the desktop, with the identity it needs.
+  const DESKTOP_CALLS: Array<[string, Record<string, unknown>]> = [
+    ['computer.listApps', {}],
+    ['computer.listWindows', { senderPtyId: 'pty-a1' }],
+    ['computer.getAppState', { app: 'Chrome', senderPtyId: 'pty-a1' }],
+    ['computer.act', { action: 'click', snapshotId: 's-1', index: 1, senderPtyId: 'pty-a1' }],
+    ['computer.act', { action: 'openApp', app: 'Chrome', senderPtyId: 'pty-a1' }],
+  ];
+  const ctx = { clientName: 'claude-code' };
+
+  function service() {
+    return {
+      capabilities: vi.fn(async () => ({ enabled: true })),
+      listApps: vi.fn(async () => []),
+      listWindows: vi.fn(async () => []),
+      getAppState: vi.fn(async () => ({})),
+      control: vi.fn(async () => ({})),
+      openApp: vi.fn(async () => ({})),
+    };
+  }
+
+  it.each(DESKTOP_CALLS)('refuses %s from a protected pane before the service is reached', async (method, params) => {
+    const svc = service();
+    const protection = vi.fn(async () => "this pane's browser is protected");
+    const { call, getService } = setup(svc as never, protection);
+    const error = await errorOf(call(method, params, ctx));
+    expect(error).toEqual({
+      code: 'policy_denied',
+      message: "computer use is not available from a protected browser pane: this pane's browser is protected",
+    });
+    expect(protection).toHaveBeenCalledWith(method, ctx);
+    expect(getService).not.toHaveBeenCalled();
+  });
+
+  it.each(DESKTOP_CALLS)('refuses %s when the protection check itself fails', async (method, params) => {
+    const svc = service();
+    const { call, getService } = setup(svc as never, async () => {
+      throw new Error('policy store unreadable');
+    });
+    const error = await errorOf(call(method, params, ctx));
+    expect(error?.code).toBe('policy_denied');
+    expect(error?.message).toContain('policy store unreadable');
+    expect(getService).not.toHaveBeenCalled();
+  });
+
+  it.each(DESKTOP_CALLS)('lets %s through, unchanged, for an unprotected caller', async (method, params) => {
+    const svc = service();
+    const { call } = setup(svc as never, async () => null);
+    expect(await errorOf(call(method, params, ctx))).toBeNull();
+  });
+
+  it('still answers capabilities, which reads nothing on the desktop', async () => {
+    const svc = service();
+    const protection = vi.fn(async () => 'protected');
+    const { call } = setup(svc as never, protection);
+    await expect(call('computer.capabilities', {}, ctx)).resolves.toEqual({ enabled: true });
+    expect(protection).not.toHaveBeenCalled();
   });
 });

@@ -109,8 +109,31 @@ export function readTranscriptPage(
   // A seek past byte 0 lands INSIDE a line, so that fragment is the head to
   // drop. A read from 0 has no fragment.
   const truncatedHead = start > 0;
-  const scanned = scanLines(raw, start, { dropTrailingPartial: true, skipHead: truncatedHead }, opts?.parseLine);
-  let headOffset = truncatedHead ? scanned.firstOffset : 0;
+  const parseLine = opts?.parseLine ?? parseTranscriptLine;
+  // The dropped head fragment is normally recovered by the next backward page,
+  // which ends exactly where it does. A record longer than TAIL_BYTES never
+  // fits in any page, so it would vanish from every one of them — and with it
+  // the `tool_result` of a screenshot or an image Read, leaving its tool row
+  // spinning. Such a record is read whole and parsed in place instead.
+  //
+  // Only on a full-size window: a caller that shrinks the window to fit a
+  // byte budget must get a page that is actually smaller, or one record whose
+  // rows alone exceed the budget would empty every retry, newest rows
+  // included. It is parsed BEFORE the window, so `parseLine` sees lines in
+  // file order (`searchPage` maps events to offsets by call order).
+  let head: TurnEvent[] = [];
+  let headStart: number | null = null;
+  const straddling = truncatedHead && maxBytes >= TAIL_BYTES ? oversizedHeadRecord(transcriptPath, start, raw) : null;
+  if (straddling) {
+    const text = readRange(transcriptPath, straddling.from, straddling.end - straddling.from);
+    if (text !== null && text.length === straddling.end - straddling.from) {
+      head = parseLine(text.toString('utf8'), straddling.from);
+      headStart = straddling.from;
+    }
+  }
+  const scanned = scanLines(raw, start, { dropTrailingPartial: true, skipHead: truncatedHead }, parseLine);
+  const events = head.length ? [...head, ...scanned.events] : scanned.events;
+  let headOffset = headStart ?? (truncatedHead ? scanned.firstOffset : 0);
   // D1(c) — when the last complete record before `end` is OVERSIZED, the window
   // holds the fragment plus at most that record's terminating newline, so
   // `firstOffset` lands at `end` itself. The caller pages backward with
@@ -122,7 +145,7 @@ export function readTranscriptPage(
   if (truncatedHead && headOffset >= end) headOffset = start;
 
   return {
-    events: scanned.events,
+    events,
     cursor: {
       headOffset,
       tailOffset: scanned.tailOffset,
@@ -192,14 +215,21 @@ export function readTranscriptDelta(
     // (D1(a)).
     //
     // So: hunt for the record's terminating newline. Found ⇒ the record is
-    // complete, and we skip exactly it, leaving one `meta` row that says a row
-    // was skipped and a cursor that is still a true line boundary. Not found ⇒
-    // the writer is mid-entry; hold the cursor and let the caller back off.
+    // complete: it is read whole (bounded by the hunt) and parsed like any
+    // other line, and the cursor lands just past it, a true line boundary. A
+    // screenshot or image Read result is such a record — its base64 alone runs
+    // to hundreds of KB — and the parser never puts that data on the wire.
+    // Only a record that cannot be read back leaves the `meta` receipt. Not
+    // found ⇒ the writer is mid-entry; hold the cursor and let the caller back
+    // off.
     const nl = findNextNewline(transcriptPath, from, stat.size);
     if (nl === null) {
       stalled = true;
     } else {
-      events = [oversizedSkipped(from)];
+      const record = readRange(transcriptPath, from, nl - from);
+      events = record !== null && record.length === nl - from
+        ? parseLine(record.toString('utf8'), from)
+        : [oversizedSkipped(from)];
       tailOffset = nl + 1;
     }
   }
@@ -218,8 +248,8 @@ export function readTranscriptDelta(
 }
 
 /**
- * The visible receipt for D1(a): a single entry too large to page is dropped,
- * but the conversation says so rather than developing a silent hole.
+ * The visible receipt for D1(a): an oversized entry that could not be read back
+ * is dropped, but the conversation says so rather than developing a silent hole.
  */
 function oversizedSkipped(offset: number): MetaEvent {
   return {
@@ -249,6 +279,46 @@ function findNextNewline(transcriptPath: string, from: number, fileSize: number)
 }
 
 /**
+ * The record a page window starts inside, when it is longer than TAIL_BYTES
+ * and complete inside the window: `[from, end)` with `end` its newline.
+ * `null` for anything a backward page can still read whole (the common case,
+ * settled by one small read), for a record that runs past the window, and for
+ * one longer than the bounded hunt.
+ */
+function oversizedHeadRecord(transcriptPath: string, start: number, raw: Buffer): { from: number; end: number } | null {
+  const nl = raw.indexOf(0x0a);
+  if (nl === -1) return null;
+  const end = start + nl;
+  const from = findLineStart(transcriptPath, start, end - MAX_OVERSIZED_SCAN_BYTES);
+  if (from === null || end - from <= TAIL_BYTES) return null;
+  return { from, end };
+}
+
+/** First record-head chunk read backward; most records are a few KB. */
+const BACK_SCAN_FIRST_BYTES = 16 * 1024;
+
+/**
+ * Start of the line that contains byte `at`: just past the closest `\n` before
+ * it, or 0. `null` when no line start lies at or after `floor`, or on a read
+ * failure.
+ */
+function findLineStart(transcriptPath: string, at: number, floor: number): number | null {
+  const limit = Math.max(0, floor);
+  let to = at;
+  let chunkBytes = BACK_SCAN_FIRST_BYTES;
+  while (to > limit) {
+    const from = Math.max(limit, to - chunkBytes);
+    const chunk = readRange(transcriptPath, from, to - from);
+    if (chunk === null || chunk.length !== to - from) return null;
+    const nl = chunk.lastIndexOf(0x0a);
+    if (nl !== -1) return from + nl + 1;
+    to = from;
+    chunkBytes = TAIL_BYTES;
+  }
+  return to === 0 ? 0 : null;
+}
+
+/**
  * The single transcript line that starts at `offset`, or `null`.
  *
  * This is how an on-expand code-body fetch stays O(1): the block ref carries
@@ -262,9 +332,16 @@ export function readTranscriptLineAt(transcriptPath: string, offset: number): st
   if (from >= stat.size) return null;
   const raw = readRange(transcriptPath, from, Math.min(stat.size - from, LINE_READ_BYTES));
   if (raw === null) return null;
-  const text = raw.toString('utf8');
-  const nl = text.indexOf('\n');
-  return nl === -1 ? text : text.slice(0, nl);
+  const nl = raw.indexOf(0x0a);
+  if (nl !== -1) return raw.toString('utf8', 0, nl);
+  if (raw.length < LINE_READ_BYTES) return raw.toString('utf8');
+  // A record past the single read (an image tool result is one) is read whole,
+  // within the same bound the delta path's hunt uses; cut short, it would not
+  // parse and the expand would answer nothing.
+  const end = findNextNewline(transcriptPath, from, stat.size);
+  if (end === null) return null;
+  const record = readRange(transcriptPath, from, end - from);
+  return record !== null && record.length === end - from ? record.toString('utf8') : null;
 }
 
 /**

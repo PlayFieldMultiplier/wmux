@@ -152,6 +152,10 @@ DIAGNOSTICS
          [--performance]            Also print reveal-mechanism performance
                                     stats (last reveal, 5-min + since-boot
                                     counters) from the running app.
+  doctor detect --stats             How often the screen detector disagreed with
+                                    the hook, from the opt-in local log
+                                    (diagnostics.detectionAgreement in config.json)
+         [--since <7d>] [--grace <5s>] [--sample <n>]
 
 ROLES
   role resolve <Role>               Print what a role is bound to in Settings
@@ -208,6 +212,7 @@ EXAMPLES
   wmux doctor
   wmux doctor --json
   wmux doctor --performance
+  wmux doctor detect --stats --since 7d
   wmux role resolve Builder --json
   wmux deck state --orphans
   wmux deck state --prune --yes

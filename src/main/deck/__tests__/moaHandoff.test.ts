@@ -582,10 +582,16 @@ describe('moa hand-off — review fixes', () => {
     let now = 1_000_000;
     const r = rig({ now: () => now });
     let hang: () => void = () => undefined;
-    r.deliver.mockImplementationOnce(() => new Promise((res) => { hang = () => res({ ok: false, code: 'error', message: 'x' }); }));
+    // deliver() runs only once "delivering" is saved: its call, not a 10 ms sleep, marks the stop point.
+    let delivering!: () => void;
+    const sendStarted = new Promise<void>((res) => { delivering = res; });
+    r.deliver.mockImplementationOnce(() => new Promise((res) => {
+      hang = () => res({ ok: false, code: 'error', message: 'x' });
+      delivering();
+    }));
     await propose(r);
     void r.svc.resolve(SEAL, r.slots.get(SEAL)!.id, 'handoff');
-    await new Promise((res) => setTimeout(res, 10));
+    await sendStarted;
     now += 5 * 60_000;
     const fresh = rig({ now: () => now }, r.file);
     await r.svc.save();
@@ -616,12 +622,18 @@ describe('moa hand-off — panel review round 2', () => {
     let now = 1_000_000;
     const r = rig({ now: () => now });
     let finish: () => void = () => undefined;
+    // deliver() is called only after the "delivering" record is saved, so its
+    // call is the signal that disk says "delivering". A 10 ms sleep stood in
+    // for it, and a slow Windows save outlasted that (state: 'pending').
+    let delivering!: () => void;
+    const sendStarted = new Promise<void>((res) => { delivering = res; });
     r.deliver.mockImplementationOnce((args: { presetTaskId: string }) => new Promise((res) => {
       finish = () => res({ ok: true, taskId: args.presetTaskId, delivered: true, assurance: 'assured' });
+      delivering();
     }));
     await propose(r);
     void r.svc.resolve(SEAL, r.slots.get(SEAL)!.id, 'handoff');
-    await new Promise((res) => setTimeout(res, 10));
+    await sendStarted;
     // The app stops here: disk says "delivering". The task exists and is open.
     now += 5 * 60_000;
     const after = rig({ now: () => now, taskState: async () => 'working' }, r.file);

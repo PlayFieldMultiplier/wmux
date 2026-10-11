@@ -5,6 +5,13 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from '../shared/constants';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
+import {
+  BROWSER_POLICY_IPC,
+  type BrowserPolicyReadResult,
+  type BrowserPolicyWritePayload,
+  type BrowserPolicyGrantsPayload,
+  type BrowserPolicyWriteResult,
+} from '../shared/browserPolicy';
 import type {
   AgySensorInstallResult,
   AgySensorStatus,
@@ -780,8 +787,14 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.AUTOMATION_SET_ENABLED, id, enabled) as Promise<
         import('../shared/automation').AutomationMutationResult
       >,
-    grant: (id: string, mode: import('../shared/automation').AutomationPermissionMode, allowedTools?: string[]) =>
-      ipcRenderer.invoke(IPC.AUTOMATION_GRANT, id, mode, allowedTools) as Promise<
+    // browserIdentity: the operator's pick (main resolves and confirms it), null to remove one.
+    grant: (
+      id: string,
+      mode: import('../shared/automation').AutomationPermissionMode,
+      allowedTools?: string[],
+      browserIdentity?: { workspaceId: string; paneId: string; paneLabel: string } | null,
+    ) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_GRANT, id, mode, allowedTools, ...(browserIdentity === undefined ? [] : [browserIdentity])) as Promise<
         import('../shared/automation').AutomationMutationResult
       >,
     runNow: (id: string, kind: 'manual' | 'test') =>
@@ -1313,6 +1326,17 @@ const electronAPI = {
         ipcRenderer.invoke(CHROME_PANE_IPC.bind, { paneId, workspaceId, profileName }),
       revealPane: (paneId: string, workspaceId: string): Promise<{ ok: boolean; error?: string }> =>
         ipcRenderer.invoke(CHROME_PANE_IPC.reveal, { paneId, workspaceId }),
+    },
+    // Protected browser panes (src/shared/browserPolicy.ts). Operator-only:
+    // main accepts these from the main window's top frame alone.
+    policy: {
+      get: (workspaceId: string, paneId: string): Promise<BrowserPolicyReadResult> =>
+        ipcRenderer.invoke(BROWSER_POLICY_IPC.get, { workspaceId, paneId }),
+      set: (payload: BrowserPolicyWritePayload): Promise<BrowserPolicyWriteResult> =>
+        ipcRenderer.invoke(BROWSER_POLICY_IPC.set, payload),
+      // Revoke standing consent ("Always on this pane"); revocation only.
+      grants: (payload: BrowserPolicyGrantsPayload): Promise<BrowserPolicyWriteResult> =>
+        ipcRenderer.invoke(BROWSER_POLICY_IPC.grants, payload),
     },
     onDiscarded: (callback: (surfaceId: string) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, surfaceId: string) => callback(surfaceId);
@@ -1991,6 +2015,9 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 };
 
+(electronAPI as Record<string, unknown>).claimPortableDataNotice = (): Promise<boolean> =>
+  ipcRenderer.invoke(IPC.PORTABLE_DATA_NOTICE_CLAIM);
+
 // Main fires PERMISSION_PROMPT_OPEN with the ApprovalPromptInfo payload
 // when an unconfirmed plugin needs the user's approval; the renderer's
 // PermissionApprovalDialog renders it and sends the decision back via
@@ -2011,10 +2038,13 @@ document.addEventListener('DOMContentLoaded', () => {
       ipcRenderer.removeListener(IPC.PERMISSION_PROMPT_OPEN, listener);
     };
   },
-  resolve: (promptId: string, approved: boolean) =>
+  // `opts.remember` ("Always on this pane", browser-action prompts only) is
+  // added to the payload only when set, so every other resolve is unchanged.
+  resolve: (promptId: string, approved: boolean, opts?: { remember?: boolean }) =>
     ipcRenderer.invoke(IPC.PERMISSION_PROMPT_RESOLVE, {
       promptId,
       approved,
+      ...(opts?.remember === true && { remember: true }),
     }) as Promise<{ ok: boolean; error?: string }>,
   onClosed: (callback: (payload: { promptId: string }) => void) => {
     const listener = (_event: unknown, payload: { promptId: string }) => callback(payload);

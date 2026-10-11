@@ -399,3 +399,22 @@ describe('normalizeWorkspaces — host sidebar pane fields', () => {
     expect(Object.keys(ws.panes[2])).toEqual(['sessionId']);
   });
 });
+
+describe('normalizeWorkspaces — #1754 newline facts', () => {
+  it('keeps a well-formed platform, WSL flag and known agent slug, and drops anything else', () => {
+    const [ws] = normalizeWorkspaces({
+      workspaces: [{
+        id: 'w1',
+        name: 'api',
+        panes: [
+          { sessionId: 's1', hostPlatform: 'win32', wsl: false, agentSlug: 'codex' },
+          { sessionId: 's2', hostPlatform: 'Win32\u001b', wsl: 'false', agentSlug: 'not-an-agent' },
+          { sessionId: 's3', hostPlatform: 'x'.repeat(40), wsl: 1, agentSlug: 7 },
+        ],
+      }],
+    });
+    expect(ws.panes[0]).toMatchObject({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' });
+    expect(Object.keys(ws.panes[1])).toEqual(['sessionId']);
+    expect(Object.keys(ws.panes[2])).toEqual(['sessionId']);
+  });
+});

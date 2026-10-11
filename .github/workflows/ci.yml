@@ -5,13 +5,19 @@ on:
     branches:
       - main
       - 'security-*'
+  # Draft PRs do not run CI: every job below skips while the PR is a draft, and
+  # marking it ready (`gh pr ready`) fires ready_for_review, which runs it.
+  # Pushes to a draft used to restart ~10 queued jobs each time.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # A newer push to the same PR supersedes the run in flight. A push to main or
 # security-* gets a group of its own (its SHA): one shared group would still
 # drop a queued run whenever a third push arrived, leaving that commit unchecked.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  # A draft PR's run (skipped by the jobs' draft check) gets its own group, so a
+  # late synchronize event from before `gh pr ready` cannot cancel the ready run.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}${{ github.event.pull_request.draft && '-draft' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -20,6 +26,7 @@ jobs:
   # `npm test` does (test:parallel, then test:runtime), so wall time is the
   # slower job rather than the sum (#1685).
   validate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     # validate takes ~10 min; a hung step must not hold a runner for the 6 h default.
     timeout-minutes: 35
@@ -97,6 +104,7 @@ jobs:
         run: npm run test:parallel
 
   validate-runtime:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     # The runtime suite takes ~4-5 min plus setup; the cap only stops a hang.
     timeout-minutes: 25
@@ -134,6 +142,7 @@ jobs:
   # run against Notepad on the runner's desktop (hello latency, listApps,
   # getAppState). Its own job, so a .NET problem never hides the TS suite.
   computer-use-windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

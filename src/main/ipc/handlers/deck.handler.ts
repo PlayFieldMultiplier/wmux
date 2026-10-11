@@ -164,6 +164,8 @@ import { createMoaWakeHandler, setMoaWakeHandler } from '../../deck/moaWake';
 import { createMoaHandoffService } from '../../deck/moaHandoffHost';
 import { renderGoalBlock, setMoaGoalService } from '../../deck/moaGoalContract';
 import { createMoaGoalService, installMoaLevelGate } from '../../deck/moaGoalHost';
+import { reviewGuide } from '../../deck/moaGoalDelivery';
+import { ghPrService } from '../../github/GhPrService';
 import { setMoaLevelGate } from '../../deck/moaLevelGate';
 import { HANDOFF_NOTICE_OPTION, HANDOFF_OPTIONS, type MoaHandoffResolveResult } from '../../../shared/moaHandoff';
 import { MoaTranscript, type MoaTranscriptHint } from '../../deck/moaTranscript';
@@ -211,6 +213,7 @@ import {
   type DeckBriefingConfig,
 } from '../../deck/deckBriefingStore';
 import { eventBus, type EventBusSubscriber } from '../../events/EventBus';
+import { createFanoutCallerStopNotify } from '../../deck/fanoutCallerStopNotify';
 import {
   loadDeckSchedules,
   mutateDeckSchedules,
@@ -839,6 +842,11 @@ export function registerDeckHandler(
     getDaemonClient: () => (opts.getDaemonClient?.() ?? null) as { rpc(method: string, params?: unknown): Promise<unknown> } | null,
   });
   setMoaGoalService(moaGoals);
+  // The Git page's review guide: only for PRs this computer's Moa delivered.
+  ghPrService.setMoaReviewGuideLookup((url) => {
+    const r = moaGoals.deliveredPr(url);
+    return r ? reviewGuide(r.contract, r.verification, r.item) : null;
+  });
   installMoaLevelGate(moaGoals, { getWindow, getDaemonClient: () => opts.getDaemonClient?.() ?? null });
 
   const moaHandoffs = opts.invokeOperatorRpc
@@ -2137,7 +2145,19 @@ export function registerDeckHandler(
   const disposeCallerLedgerNotify = installFanoutCallerLedgerNotify(ownerHasBrain, notifyCaller);
   // A worker whose agent exited, whose PTY ended, or that sits idle long after
   // its last turn moves to input_required, which the line above tells the caller.
-  const workerWatch = startFanoutWorkerWatch(getWindow, () => opts.getDaemonClient?.() ?? null, ownerHasBrain);
+  // Also, with Moa's runtime off, a brainless parent still hears its workers'
+  // turn ends (fanoutCallerStopNotify.ts); with it on, onBusEvent does that.
+  const workerWatch = startFanoutWorkerWatch(
+    getWindow,
+    () => opts.getDaemonClient?.() ?? null,
+    ownerHasBrain,
+    createFanoutCallerStopNotify({
+      deckRuntimeActive: () => offBus !== null,
+      hasBrain: ownerHasBrain,
+      notify: notifyCaller,
+      reconcile: reconcileTaskLedger,
+    }),
+  );
   // The pane that owns a PR, told about CI / review / conflict when no brain
   // listens (prOwnerNotify.ts). The coalescer push below is unchanged.
   setPrOwnerSink((ev) => {

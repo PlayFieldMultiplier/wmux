@@ -57,7 +57,7 @@ export const SHORTCUT_ACTION_IDS = [
   'nextSurface', 'prevSurface', 'nextPane', 'prevPane',
   'focusUp', 'focusDown', 'focusLeft', 'focusRight',
   'focusUpAlt', 'focusDownAlt', 'focusLeftAlt', 'focusRightAlt',
-  'toggleSidebar', 'openSettings', 'toggleFleetView', 'toggleCompanyView',
+  'toggleSidebar', 'toggleFileTree', 'openSettings', 'toggleFleetView', 'toggleCompanyView',
   'clearMultiview', 'openBrowser', 'openPrivateBrowser', 'addBookmark', 'toggleMessageFeed',
   'zoomIn', 'zoomOut', 'zoomReset',
   'mentionAgent',
@@ -181,6 +181,7 @@ export const WMUX_KEYMAP: readonly KeymapEntry[] = [
   // Panels and views.
   // Sidebar pairs with the tmux prefix → literal Ctrl on every OS.
   { action: 'toggleSidebar', combo: 'Ctrl+Shift+B', literalCtrl: true, descriptionKey: 'settings.sc.toggleSidebar' },
+  { action: 'toggleFileTree', combo: 'Ctrl+Shift+E', descriptionKey: 'settings.sc.toggleFileTree' },
   { action: 'openSettings', combo: 'Ctrl+,', descriptionKey: 'settings.sc.openSettings' },
   { action: 'toggleFleetView', combo: 'Ctrl+Shift+A', descriptionKey: 'settings.sc.toggleFleetView' },
   { action: 'toggleCompanyView', combo: 'Ctrl+Shift+O', descriptionKey: 'settings.sc.toggleCompanyView' },

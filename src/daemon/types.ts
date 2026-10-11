@@ -307,12 +307,22 @@ export interface DaemonConfig {
    *
    * `gatedTools` is the set of Claude Code tool names that trigger a remote
    * permission gate when the agent runs inside a wmux pane. Defaults to the
-   * high-risk tools only (Bash, Write, Edit, NotebookEdit) — gating every tool
+   * high-risk tools only (`DEFAULT_GATED_TOOLS`: Bash, PowerShell, Write, Edit
+   * and the other tools that write or execute) — gating every tool
    * would add constant latency on the Mac for little safety gain. The user
    * extends it with `wmux gate --add`. An empty array disables the gate
    * entirely (same as `WMUX_GATE=0`, but durable).
    */
   gate?: GateConfig;
+  /**
+   * Ids of the one-time config migrations already applied (e.g.
+   * `GATE_POWERSHELL_MIGRATION`). OPTIONAL and ignored by `validateConfig`. Kept
+   * at the top level on purpose: the `gate` slice is rebuilt as
+   * `{ gatedTools }` by `coerceGate` and by `wmux gate`, in this build and in
+   * older ones, so a marker inside it would be dropped and the migration would
+   * run again over a list the user had edited since.
+   */
+  appliedMigrations?: string[];
   /**
    * Kill switch for the phone decision channels. Absent ⇒ both on; only an
    * explicit `false` turns one off (see approvals/decisionConfig.ts).
@@ -349,6 +359,17 @@ export interface DaemonConfig {
    * approval sends it regardless. See `daemon/push/presence.ts`.
    */
   pushPresenceSuppression?: PushPresenceSuppressionConfig;
+  /**
+   * Local diagnostics. OPTIONAL and off when absent; `validateConfig` ignores
+   * it and only a literal `true` turns anything on, so a garbage value can
+   * neither reset the file nor enable a log by accident.
+   *
+   * `detectionAgreement`: record where the screen detector and the hook
+   * disagree to `<wmuxDir>/diagnostics/detection.ndjson`, for
+   * `wmux doctor detect --stats`. Read once at daemon start. Never sent
+   * anywhere. See `daemon/diagnostics/detectionAgreementLog.ts`.
+   */
+  diagnostics?: { detectionAgreement?: boolean };
 }
 
 /**

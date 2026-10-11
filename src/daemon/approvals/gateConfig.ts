@@ -23,6 +23,9 @@
  */
 export const DEFAULT_GATED_TOOLS: readonly string[] = [
   'Bash',
+  // #1939 — on Windows Claude Code often runs shell commands through its
+  // PowerShell tool instead of Bash; without it the gate missed most of them.
+  'PowerShell',
   'Write',
   'Edit',
   // Matching is exact, so every tool that writes or executes has to be listed
@@ -69,6 +72,35 @@ export function coerceGate(raw: unknown): GateConfig {
     gatedTools.push(t);
   }
   return { gatedTools };
+}
+
+/**
+ * #1939 — id of the one-time migration that adds PowerShell next to Bash in a
+ * stored `gatedTools` list. Recorded in `DaemonConfig.appliedMigrations` once
+ * applied, so a PowerShell the user removes afterwards stays removed.
+ */
+export const GATE_POWERSHELL_MIGRATION = 'gate-powershell';
+
+/**
+ * #1939 — the migration itself, on the RAW `gate` slice (before `coerceGate`).
+ * A stored array that gates Bash but not PowerShell gets PowerShell inserted
+ * right after Bash. Anything else is returned untouched: an absent slice keeps
+ * tracking `DEFAULT_GATED_TOOLS` (which now has PowerShell), a malformed one is
+ * still `coerceGate`'s to repair, and a list without Bash — including the empty
+ * "gate off" list — means the user chose not to gate the shell.
+ *
+ * Only ever adds an entry, so it cannot un-gate anything.
+ */
+export function migrateGateForPowerShell(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const slice = raw as Record<string, unknown>;
+  const tools = slice['gatedTools'];
+  if (!Array.isArray(tools)) return raw;
+  const bashAt = tools.indexOf('Bash');
+  if (bashAt === -1 || tools.includes('PowerShell')) return raw;
+  const gatedTools = [...tools];
+  gatedTools.splice(bashAt + 1, 0, 'PowerShell');
+  return { ...slice, gatedTools };
 }
 
 /** Create a fresh default gate config (used by `createDefaultConfig`). */

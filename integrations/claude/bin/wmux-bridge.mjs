@@ -547,6 +547,22 @@ function extractPermissionModeFromTranscript(transcriptPath) {
 //      {"type":"queue-operation","operation":"enqueue","content":"<task-notification>…"}
 //      {"type":"attachment","attachment":{"type":"queued_command",
 //       "commandMode":"task-notification","prompt":"<task-notification>…"}}
+//  - STOPPED: a task the agent stops itself (the TaskStop tool, formerly
+//    KillShell / KillBash) gets NO task-notification (live transcript,
+//    2026-10-11: six TaskStop'd `npx electron .` shells, none ever notified).
+//    The stop's tool_use names the TASK id (input.task_id; shell_id / bash_id
+//    on the older names), which maps back to its dispatch through the start's
+//    "running in background with ID: <task id>" result. Missing this counted
+//    every stopped shell as running for the rest of the session: every later
+//    Stop reported leftover work, HookIngest projected it as `running`, and
+//    the pane's turn latch stayed open with the agent idle at its prompt.
+//  - TURN SCOPE: only shells dispatched in the turn that just ended count. A
+//    turn starts at a non-meta user record that carries no tool_result (a
+//    typed prompt, an interrupt marker, or a task-notification Claude Code
+//    answers). A shell from an earlier turn that is still alive is a server
+//    the agent left up on purpose (`npm run dev`, live transcript
+//    2026-10-11): it never ends, so counting it kept every later Stop
+//    `running` and the pane showed a live dot with the agent idle.
 //
 // Returns 0 on any failure (fail-open: the alarm then relies on the
 // provisional window alone). A 1MB tail — much wider than the usage/mode
@@ -555,6 +571,9 @@ function extractPermissionModeFromTranscript(transcriptPath) {
 // A substring pre-filter keeps the parse cost near zero for the common
 // line. The residual miss case (a start pushed out of the window by a very
 // verbose turn) reads as no leftover — the fail-open direction.
+const TASK_STOP_TOOLS = new Set(['TaskStop', 'KillShell', 'KillBash']);
+const TASK_STOP_LINE_RE = /"name"\s*:\s*"(?:TaskStop|KillShell|KillBash)"/;
+const BACKGROUND_TASK_ID_RE = /running in background with ID:\s*([\w-]+)/i;
 function countLeftoverBackgroundTasks(transcriptPath) {
   try {
     if (!existsSync(transcriptPath)) return 0;
@@ -577,10 +596,12 @@ function countLeftoverBackgroundTasks(transcriptPath) {
     const startedIds = new Set();
     const resultTexts = new Map(); // tool_use id → immediate tool_result text
     const settledIds = new Set();
+    const stoppedTaskIds = new Set(); // TASK ids (not tool_use ids) the agent stopped
     for (const line of lines) {
-      // Cheap pre-filter: only the two marker substrings can contribute.
+      // Cheap pre-filter: only these marker substrings can contribute.
       if (!line.includes('"run_in_background"') && !line.includes('<task-notification>')
-          && !line.includes('"tool_result"')) {
+          && !line.includes('"tool_result"') && !line.includes('"type":"user"')
+          && !TASK_STOP_LINE_RE.test(line)) {
         continue;
       }
       let entry;
@@ -593,6 +614,13 @@ function countLeftoverBackgroundTasks(transcriptPath) {
       const content = entry.message && Array.isArray(entry.message.content)
         ? entry.message.content
         : null;
+      // TURN SCOPE — a new turn drops the dispatches of the turns before it.
+      if (entry.type === 'user' && entry.isMeta !== true && entry.message
+        && (typeof entry.message.content === 'string'
+          || (content && !content.some((b) => b && b.type === 'tool_result')))
+      ) {
+        startedIds.clear();
+      }
       if (content) {
         for (const block of content) {
           if (!block || typeof block !== 'object') continue;
@@ -602,6 +630,14 @@ function countLeftoverBackgroundTasks(transcriptPath) {
             && block.input.run_in_background === true && typeof block.id === 'string'
           ) {
             startedIds.add(block.id);
+          }
+          // STOPPED shape — the agent stopped a background task itself. The
+          // dispatch settles it: a stop that fails because the task had
+          // already ended is settled by that task's own notification anyway,
+          // and a spurious settle at worst fires one window-gated alarm.
+          if (block.type === 'tool_use' && TASK_STOP_TOOLS.has(block.name) && block.input) {
+            const taskId = block.input.task_id ?? block.input.shell_id ?? block.input.bash_id;
+            if (typeof taskId === 'string' && taskId.length > 0) stoppedTaskIds.add(taskId);
           }
           // The IMMEDIATE tool_result of a background dispatch. Its text
           // separates a real start ("Command running in background with
@@ -647,8 +683,11 @@ function countLeftoverBackgroundTasks(transcriptPath) {
       // A rejected attempt (error tool_result) or a missing result never
       // settles — treating either as leftover would permanently suppress
       // the completion alarm.
-      const started = /running in background/i.test(resultTexts.get(id) ?? '');
-      if (started) leftover++;
+      const resultText = resultTexts.get(id) ?? '';
+      if (!/running in background/i.test(resultText)) continue;
+      const taskId = resultText.match(BACKGROUND_TASK_ID_RE)?.[1];
+      if (taskId && stoppedTaskIds.has(taskId)) continue;
+      leftover++;
     }
     return leftover;
   } catch (err) {
@@ -1066,6 +1105,21 @@ async function main() {
     delete payload.transcript_path;
     delete payload.session_id;
     logEvent('unknown-entrypoint', { hook: hookName, entrypoint });
+  }
+
+  // Claude Code's own forked agents — the prompt suggestion and the away recap,
+  // run after a turn ends — fire tool hooks in this session. Their payload has
+  // an `agent_id` and no `agent_type` (Claude Code sends `agent_type: ""` on
+  // their SubagentStop); a real subagent always carries both. Sent, a fork's
+  // PostToolUse stamped the pane's activity and lit the running dot for two
+  // minutes with the agent idle at its prompt (live, 2026-10-11: `cat` and Read
+  // calls missing from the transcript, seconds after Stop). The permission gate
+  // and PermissionRequest still go out: they answer or report a real dialog.
+  if (!permissionGateMode && hookName !== 'PermissionRequest' && payload
+      && typeof payload.agent_id === 'string' && payload.agent_id.length > 0
+      && !(typeof payload.agent_type === 'string' && payload.agent_type.length > 0)) {
+    logEvent('skip-internal-fork', { hook: hookName });
+    return;
   }
 
   // PreToolUse fires per tool call; we only treat AskUserQuestion as

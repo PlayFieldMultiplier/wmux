@@ -51,6 +51,10 @@ import type { BrainEvent } from '../BrainAdapter';
 // ── fake daemon pty ─────────────────────────────────────────────────────────
 
 interface FakeHost extends BrainPtyHost {
+  /** Resolves once `check` holds, re-checked on every spawn and write this
+   *  host sees: the event itself is the signal, so no polling window can run
+   *  out on a loaded runner (vi.waitFor's default is 1 s of wall time). */
+  until(check: () => boolean): Promise<void>;
   readonly created: Array<{ id: string; command: string; env: Record<string, string>; cwd: string }>;
   readonly writes: Array<{ id: string; data: string }>;
   readonly destroyed: string[];
@@ -82,7 +86,25 @@ function makeHost(): FakeHost {
   const listened: string[] = [];
   let failAttach = false;
   let failWrites = false;
+  const waiters: Array<{ check: () => boolean; resolve: () => void }> = [];
+  // Checked one macrotask after the spawn/write, so the adapter's own
+  // continuation past that call (the embed callback, the submit) has run
+  // before the test resumes, as it had by vi.waitFor's first poll.
+  const notify = (): void => {
+    setImmediate(() => {
+      for (const w of waiters.splice(0)) {
+        if (w.check()) w.resolve();
+        else waiters.push(w);
+      }
+    });
+  };
   return {
+    until(check) {
+      return new Promise<void>((resolve) => {
+        waiters.push({ check, resolve });
+        notify();
+      });
+    },
     get failWrites() {
       return failWrites;
     },
@@ -113,6 +135,7 @@ function makeHost(): FakeHost {
     },
     async createSession(params) {
       created.push({ id: params.id, command: params.command, env: params.env, cwd: params.cwd });
+      notify();
     },
     async attach() {
       if (failAttach) {
@@ -123,6 +146,7 @@ function makeHost(): FakeHost {
     write(id, data) {
       if (failWrites) throw new Error(`the terminal brain's pty session is gone (write to ${id} was refused)`);
       writes.push({ id, data });
+      notify();
     },
     async destroy(id) {
       destroyed.push(id);
@@ -233,7 +257,7 @@ describe('scrubBrainSpawnEnv', () => {
       const adapter = makeAdapter(host);
       const it = adapter.send('hello')[Symbol.asyncIterator]();
       const first = it.next();
-      await vi.waitFor(() => expect(host.created.length).toBe(1));
+      await host.until(() => host.created.length === 1);
       const env = host.created[0].env;
       expect(Object.keys(env).some((k) => k.toUpperCase().startsWith('CLAUDE'))).toBe(false);
       // The hook bridge must target MAIN's pipe (`hooks.signal`), which is
@@ -263,7 +287,7 @@ describe('scrubBrainSpawnEnv', () => {
     try {
       const adapter = makeAdapter(host);
       const turn = collect(adapter.send('hello'));
-      await vi.waitFor(() => expect(host.created.length).toBe(1));
+      await host.until(() => host.created.length === 1);
       expect(host.created[0].env.CLAUDE_CONFIG_DIR).toBe('/home/me/.claude-work');
       adapter.dispose();
       await turn;
@@ -281,7 +305,7 @@ describe('ClaudePtyBrainAdapter — account choice (quota rotation)', () => {
     launchMock.mockImplementation(async () => ({ kind: 'run', env: { CLAUDE_CONFIG_DIR: '/acc/b' }, accountId: 'b' }));
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hello'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     expect(host.created[0].env.CLAUDE_CONFIG_DIR).toBe('/acc/b');
     expect(launchMock).toHaveBeenCalledWith('ws-1', 'claude', expect.objectContaining({ resuming: false }));
     expect(adapter.conversationAccountId).toBe('b');
@@ -294,7 +318,7 @@ describe('ClaudePtyBrainAdapter — account choice (quota rotation)', () => {
     const adapter = makeAdapter(host);
     adapter.start({ resumeSessionId: 'sess-old', resumeAccountId: 'b' });
     const turn = collect(adapter.send('hello'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     expect(launchMock).toHaveBeenCalledWith('ws-1', 'claude', expect.objectContaining({ resuming: true, conversationAccountId: 'b' }));
     adapter.dispose();
     await turn;
@@ -341,7 +365,7 @@ describe('resolveBrainHomeDir', () => {
     const adapter = makeAdapter(host);
     const it2 = adapter.send('hello')[Symbol.asyncIterator]();
     const first = it2.next();
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     const expected = path.join(tmpDir, 'brains', 'ws-1');
     expect(host.created[0].cwd).toBe(expected);
     expect(fs.existsSync(expected)).toBe(true);
@@ -505,7 +529,7 @@ describe('generated profile files', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     const dir = path.join(tmpDir, 'brain-profiles');
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
     const files = fs.readdirSync(dir);
@@ -686,7 +710,7 @@ describe('the spawned command line', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { model: 'opus' });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     expect(host.created[0].command).toMatch(/--model ["']opus["']/);
     adapter.dispose();
     await turn;
@@ -699,7 +723,7 @@ describe('the spawned command line', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { resolvePermissionMode: () => mode });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     expect(host.created[0].command).toMatch(/--permission-mode ["']acceptEdits["']/);
     mode = 'bypassPermissions';
     adapter.dispose();
@@ -714,7 +738,7 @@ describe('the spawned command line', () => {
       },
     });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     // No flag → claude's own prompting default, which is the safe direction.
     expect(host.created[0].command).not.toContain('--permission-mode');
     expect(host.created[0].command).not.toContain('--dangerously-skip-permissions');
@@ -756,7 +780,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('summarise the fleet'));
-    await vi.waitFor(() => expect(host.writes.length).toBe(3));
+    await host.until(() => host.writes.length === 3);
     const ptyId = host.created[0].id;
     // The prompt and the submitting Enter are separate writes (one chunk would
     // make the TUI's paste detection swallow the `\r` as pasted content), and
@@ -790,7 +814,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const adapter = makeAdapter(host);
     adapter.start({ resumeSessionId: 'sess-prev' });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     expect(host.created[0].command).toMatch(/--resume ["']sess-prev["']/);
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 'sess-prev' }));
     await turn;
@@ -803,11 +827,11 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     adapter.start({ resumeSessionId: 'sess-dead' });
     host.nextBanner = 'No conversation found with session ID: sess-dead\n';
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(2));
+    await host.until(() => host.created.length === 2);
     expect(host.created[0].command).toContain('--resume');
     expect(host.created[1].command).not.toContain('--resume');
     expect(host.destroyed).toContain(host.created[0].id);
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     deliverBrainPtyHookSignal(
       signal('agent.stop', host.created[1].id, { agentSessionId: 'sess-new' }),
     );
@@ -868,7 +892,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     // The user answered the dialog in the terminal: the TUI starts.
     expect(deliverBrainPtyHookSignal(signal('agent.session_start', ptyId)).consumed).toBe(true);
     const third = collect(adapter.send('summarise the fleet'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     expect(host.writes.every((w) => w.id === ptyId)).toBe(true);
     expect(host.writes.map((w) => w.data).join('')).toContain('summarise the fleet');
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-ok' }));
@@ -883,7 +907,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 'sess-quiet' }));
     const events = await turn;
     expect(events.at(-1)).toEqual({ type: 'turn-end', sessionId: 'sess-quiet' });
@@ -895,14 +919,14 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const adapter = makeAdapter(host, { sessionStartTimeoutMs: 2_000 });
     host.nextBanner = 'Welcome to Claude Code\n';
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     const ptyId = host.created[0].id;
     // The hook bus registration lands just after createSession resolves, so
     // retry until the signal is actually claimed by this pty's lane.
     await vi.waitFor(() =>
       expect(deliverBrainPtyHookSignal(signal('agent.session_start', ptyId)).consumed).toBe(true),
     );
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-ok' }));
     const events = await turn;
     expect(events.some((e) => e.type === 'error')).toBe(false);
@@ -914,7 +938,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { turnTimeoutMs: 60_000 });
     const turn = collect(adapter.send('long job'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     adapter.dispose();
     // Must RESOLVE (not hang): the session manager's for-await has to unwind
     // on app quit. No turn-end is emitted for a turn that never finished.
@@ -936,7 +960,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const dir = path.join(tmpDir, 'brain-profiles');
     expect(fs.readdirSync(dir).length).toBe(3); // settings + mcp config + deny script
     adapter.dispose();
@@ -971,7 +995,7 @@ describe('ClaudePtyBrainAdapter — superseded turns', () => {
     expect(host.writes.at(-1)).toEqual({ id: ptyId, data: '\u001b' });
 
     const second = collect(adapter.send('a new question'));
-    await vi.waitFor(() => expect(host.writes.filter((w) => w.data === 'a new question').length).toBe(1));
+    await host.until(() => host.writes.filter((w) => w.data === 'a new question').length === 1);
     // The OLD turn's Stop finally lands. It must not resolve the new turn —
     // that would hang the old transcript off the new request.
     deliverBrainPtyHookSignal(
@@ -1013,7 +1037,7 @@ describe('ClaudePtyBrainAdapter — spawn lifecycle', () => {
     };
     const adapter = makeAdapter(wrapped);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     expect(order.indexOf('onData')).toBeLessThan(order.indexOf('create'));
     expect(order.indexOf('onExit')).toBeLessThan(order.indexOf('create'));
     // The hook lane is claimed just as early — a SessionStart delivered before
@@ -1045,7 +1069,7 @@ describe('ClaudePtyBrainAdapter — spawn lifecycle', () => {
       onPtySpawned: (id: string | null) => spawned.push(id),
     });
     const turn = collect(adapter.send('do a big job'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     host.killSession(host.created[0].id, 1);
     const events = await turn;
     expect(events).toHaveLength(1);
@@ -1056,7 +1080,7 @@ describe('ClaudePtyBrainAdapter — spawn lifecycle', () => {
     expect(adapter.brainPtyId).toBeNull();
     // …so the next send spawns a fresh TUI rather than typing into a corpse.
     const next = collect(adapter.send('again'));
-    await vi.waitFor(() => expect(host.created.length).toBe(2));
+    await host.until(() => host.created.length === 2);
     adapter.dispose();
     await next;
   });
@@ -1073,7 +1097,7 @@ describe('ClaudePtyBrainAdapter — spawn lifecycle', () => {
     adapter.start({ resumeSessionId: 'sess-dead' });
     host.nextBanner = 'No conversation found with session ID: sess-dead\n';
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(2));
+    await host.until(() => host.created.length === 2);
     expect(spawned).toEqual([host.created[0].id, null, host.created[1].id]);
     // Dispose (the /clear + vendor-swap path) retracts too.
     adapter.dispose();
@@ -1098,7 +1122,7 @@ describe('the Stop gate', () => {
       },
     });
     const turn = collect(adapter.send('delegate the build'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
 
     // The refusal rides the delivery result — this is what the gated bridge
@@ -1141,35 +1165,55 @@ describe('the Stop gate', () => {
     // then died on the timeout used to hand its tally to the next turn, which
     // would then be allowed to stop on its very first Stop — the gate would go
     // quiet for exactly the fleet that had just proved it needs one.
-    const host = makeHost();
-    const calls: number[] = [];
-    const adapter = makeAdapter(host, {
-      turnTimeoutMs: 60,
-      evaluateStopGate: (_ws: string, consecutiveBlocks: number) => {
-        calls.push(consecutiveBlocks);
-        return { block: true, reason: 'worker-a (running) still needs you' };
-      },
-    });
+    //
+    // The timeout is driven by a FAKE clock. With a real 60 ms timer the turn
+    // raced the test's own setup (spawn + vi.waitFor's 50 ms poll): on a
+    // loaded CI runner the timer fired first, the turn was superseded, and both
+    // Stops below were swallowed as late Stops (`expected [] to deeply equal
+    // [0, 1]`). Now the turn times out exactly when the test says so — after
+    // the refusals — and never before. vi.waitFor advances the fake clock by
+    // its poll interval, far short of the timeout.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const TIMEOUT = 10 * 60_000;
+      const host = makeHost();
+      const calls: number[] = [];
+      const adapter = makeAdapter(host, {
+        turnTimeoutMs: TIMEOUT,
+        evaluateStopGate: (_ws: string, consecutiveBlocks: number) => {
+          calls.push(consecutiveBlocks);
+          return { block: true, reason: 'worker-a (running) still needs you' };
+        },
+      });
 
-    const first = collect(adapter.send('delegate the build'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
-    const ptyId = host.created[0].id;
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
-    expect(calls).toEqual([0, 1]);
-    // The turn is abandoned on the timeout, refusals still outstanding.
-    expect(await first).toEqual([
-      { type: 'error', message: 'the terminal brain did not finish its turn' },
-    ]);
+      const first = collect(adapter.send('delegate the build'));
+      // setTimeout is fake here, so the adapter's submit/paste delays only
+      // elapse as the test moves the clock: step it until the prompt is written.
+      while (host.writes.length === 0) await vi.advanceTimersByTimeAsync(1);
+      const ptyId = host.created[0].id;
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
+      expect(calls).toEqual([0, 1]);
+      // The turn is abandoned on the timeout, refusals still outstanding.
+      await vi.advanceTimersByTimeAsync(TIMEOUT);
+      expect(await first).toEqual([
+        { type: 'error', message: 'the terminal brain did not finish its turn' },
+      ]);
+      // The race this clock existed to rule out is over; the next turn runs on
+      // real time (its pending verify delays must elapse for dispose to unwind).
+      vi.useRealTimers();
 
-    const second = collect(adapter.send('a new question'));
-    await vi.waitFor(() => expect(host.writes.filter((w) => w.data === 'a new question').length).toBe(1));
-    // The superseded turn's late Stop is swallowed, so it never reaches the gate.
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
-    deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-2' }));
-    expect(calls).toEqual([0, 1, 0]);
-    adapter.dispose();
-    await second;
+      const second = collect(adapter.send('a new question'));
+      await host.until(() => host.writes.filter((w) => w.data === 'a new question').length === 1);
+      // The superseded turn's late Stop is swallowed, so it never reaches the gate.
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
+      deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-2' }));
+      expect(calls).toEqual([0, 1, 0]);
+      adapter.dispose();
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is never consulted for a Stop with no open turn', async () => {
@@ -1182,7 +1226,7 @@ describe('the Stop gate', () => {
       },
     });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     adapter.dispose();
     await turn;
@@ -1200,7 +1244,7 @@ describe('the Stop gate', () => {
       },
     });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const result = deliverBrainPtyHookSignal(
       signal('agent.stop', host.created[0].id, { agentSessionId: 'sess-x' }),
     );
@@ -1218,7 +1262,7 @@ describe('a turn the human started in the TUI', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const first = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     // Our OWN turn's UserPromptSubmit is not a foreign turn — turnStop owns it.
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId));
@@ -1238,7 +1282,7 @@ describe('a turn the human started in the TUI', () => {
     // The foreign turn emitted no turn-end of its own: the next adapter turn
     // still ends exactly once (the manager's exactly-once contract).
     const second = collect(adapter.send('again'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(3));
+    await host.until(() => host.writes.length > 3);
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-3', payload: { transcript_path: '/tmp/t.jsonl' } }));
     expect(await second).toEqual([
       { type: 'text-delta', text: 'final answer' },
@@ -1251,7 +1295,7 @@ describe('a turn the human started in the TUI', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1', payload: { transcript_path: '/tmp/t.jsonl' } }));
     await turn;
@@ -1265,7 +1309,7 @@ describe('a turn the human started in the TUI', () => {
     const host2 = makeHost();
     const adapter2 = makeAdapter(host2);
     const t2 = collect(adapter2.send('hi'));
-    await vi.waitFor(() => expect(host2.writes.length).toBeGreaterThan(0));
+    await host2.until(() => host2.writes.length > 0);
     const pty2 = host2.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', pty2, { agentSessionId: 's' }));
     await t2;
@@ -1283,7 +1327,7 @@ describe('the view pointer on a prompt the human typed', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, over);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     return { host, adapter, turn, ptyId };
   }
@@ -1364,7 +1408,7 @@ describe('the view pointer on a prompt the human typed', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { viewContext });
     const first = collect(adapter.send('Fleet event: worker pane finished; check the ledger and report blocked work.'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     // The shape measured on Claude Code 2.1.289: a paste-marked head whose
     // closing marker falls mid-word ("blo" / "cked").
@@ -1377,7 +1421,7 @@ describe('the view pointer on a prompt the human typed', () => {
     await first;
     // A short automated prompt is never "inside" a human prompt: exact only.
     const second = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.filter((w) => w.data === 'hi').length).toBe(1));
+    await host.until(() => host.writes.filter((w) => w.data === 'hi').length === 1);
     expect(deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'look at this' } })))
       .toEqual({ consumed: true, additionalContext: LINE });
     expect(deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'hi' } })))
@@ -1428,7 +1472,7 @@ describe('a foreign turn that could get stuck open', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { turnTimeoutMs: 30 });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await turn;
@@ -1458,7 +1502,7 @@ describe('the foreign-turn-START notification', () => {
     const onForeignTurnStart = vi.fn();
     const adapter = makeAdapter(host, { onForeignTurnStart });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await turn;
@@ -1494,7 +1538,7 @@ describe('the foreign-turn-START notification', () => {
       foreignResubmitFoldMs: 1,
     });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await turn;
@@ -1519,7 +1563,7 @@ describe('the foreign-turn-START notification', () => {
     const onForeignTurnStart = vi.fn();
     const adapter = makeAdapter(host, { onForeignTurnStart, foreignResubmitFoldMs: 1 });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await turn;
@@ -1538,7 +1582,7 @@ describe('the foreign-turn-end notification', () => {
     const onForeignTurnEnd = vi.fn();
     const adapter = makeAdapter(host, { onForeignTurnEnd });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await turn;
@@ -1559,7 +1603,7 @@ describe('the foreign-turn-end notification', () => {
     const onForeignTurnEnd = vi.fn();
     const adapter = makeAdapter(host, { onForeignTurnEnd });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await turn;
@@ -1577,7 +1621,7 @@ describe('an automation turn racing the human`s Enter', () => {
     // Establish a live pty with a finished turn, so the ambient send below
     // takes the "already spawned" path and reaches the double-check.
     const first = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-1' }));
     await first;
@@ -1604,7 +1648,7 @@ describe('an automation turn racing the human`s Enter', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { foreignTurnRecheckMs: 5 });
     const turn = collect(adapter.send('ambient wake', { origin: 'automation' }));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     expect(host.writes[0].data).toBe('ambient wake');
     deliverBrainPtyHookSignal(
       signal('agent.stop', host.created[0].id, {
@@ -1625,7 +1669,7 @@ describe('an automation turn racing the human`s Enter', () => {
     // the waitFor below.
     const adapter = makeAdapter(host, { foreignTurnRecheckMs: 5_000 });
     const turn = collect(adapter.send('typed by a person'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0), { timeout: 1_000 });
+    await host.until(() => host.writes.length > 0);
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 's' }));
     await turn;
     adapter.dispose();
@@ -1639,7 +1683,7 @@ describe('brainPtyHookBus', () => {
     const host = makeHost();
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     // A worker pane's signal falls through to the fleet path untouched.
     expect(deliverBrainPtyHookSignal(signal('agent.stop', 'pane-42')).consumed).toBe(false);
@@ -1702,7 +1746,7 @@ describe('a session id learned from a foreign Stop', () => {
     const reported: string[] = [];
     const adapter = makeAdapter(host, { onForeignSessionId: (id: string) => reported.push(id) });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     // Our OWN turn's Stop persists through turn-end, never through the dep.
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-own', payload: { transcript_path: '/tmp/t.jsonl' } }));
@@ -1729,7 +1773,7 @@ describe('transcript hints', () => {
     const hints: unknown[] = [];
     const adapter = makeAdapter(host, { onTranscriptHint: (h: unknown) => hints.push(h) });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-own', payload: { transcript_path: '/tmp/sess-own.jsonl' } }));
     await turn;
@@ -1745,7 +1789,7 @@ describe('transcript hints', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { onTranscriptHint: () => { throw new Error('boom'); } });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 's' }));
     expect((await turn).some((e) => e.type === 'turn-end')).toBe(true);
     adapter.dispose();
@@ -1787,7 +1831,7 @@ describe('the Moa proposal gate in the profile', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { proposalGate: { proposalsDir } });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(host.created.length).toBe(1));
+    await host.until(() => host.created.length === 1);
     const dir = path.join(tmpDir, 'brain-profiles');
     const gateFile = fs.readdirSync(dir).find((f) => f.startsWith('proposal-gate-'));
     expect(gateFile).toBeDefined();
@@ -1801,7 +1845,7 @@ describe('the Moa proposal gate in the profile', () => {
     const plainHost = makeHost();
     const plain = makeAdapter(plainHost, { workspaceId: 'ws-2' });
     const plainTurn = collect(plain.send('hi'));
-    await vi.waitFor(() => expect(plainHost.created.length).toBe(1));
+    await plainHost.until(() => plainHost.created.length === 1);
     // The first brain's dispose unlinked its gate; this one never wrote one.
     expect(fs.readdirSync(dir).filter((f) => f.startsWith('proposal-gate-'))).toEqual([]);
     plain.dispose();
@@ -1815,14 +1859,14 @@ describe('first-turn memory', () => {
     const adapter = makeAdapter(host, { loadMemory: () => '## Orchestrator memory (background context)\nprecedent-x' });
     adapter.start({ systemPrompt: 'SYSTEM' });
     const first = collect(adapter.send('first'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     expect(host.writes[0].data).toContain('SYSTEM');
     expect(host.writes[0].data).toContain('precedent-x');
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 's1' }));
     await first;
     const n = host.writes.length;
     const second = collect(adapter.send('second'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(n));
+    await host.until(() => host.writes.length > n);
     expect(host.writes[n].data).not.toContain('precedent-x');
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 's1' }));
     await second;
@@ -1831,7 +1875,7 @@ describe('first-turn memory', () => {
     const host2 = makeHost();
     const throwing = makeAdapter(host2, { loadMemory: () => { throw new Error('torn'); } });
     const t = collect(throwing.send('go'));
-    await vi.waitFor(() => expect(host2.writes.length).toBeGreaterThan(0));
+    await host2.until(() => host2.writes.length > 0);
     expect(host2.writes[0].data).toContain('go');
     deliverBrainPtyHookSignal(signal('agent.stop', host2.created[0].id, { agentSessionId: 's2' }));
     expect((await t).some((e) => e.type === 'error')).toBe(false);
@@ -1844,7 +1888,7 @@ describe('first-turn memory after the conversation changes', () => {
     const host = makeHost();
     const adapter = makeAdapter(host, { loadMemory: () => 'MEMORY-BLOCK' });
     const first = collect(adapter.send('first'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const ptyId = host.created[0].id;
     expect(host.writes[0].data).toContain('MEMORY-BLOCK');
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 's1' }));
@@ -1854,7 +1898,7 @@ describe('first-turn memory after the conversation changes', () => {
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 's1' }));
     let n = host.writes.length;
     const second = collect(adapter.send('second'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(n));
+    await host.until(() => host.writes.length > n);
     expect(host.writes[n].data).not.toContain('MEMORY-BLOCK');
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 's1' }));
     await second;
@@ -1863,7 +1907,7 @@ describe('first-turn memory after the conversation changes', () => {
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 's2' }));
     n = host.writes.length;
     const third = collect(adapter.send('third'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(n));
+    await host.until(() => host.writes.length > n);
     expect(host.writes[n].data).toContain('MEMORY-BLOCK');
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 's2' }));
     await third;
@@ -2160,7 +2204,7 @@ describe('the Moa delegate (contract file + merge deny)', () => {
     const adapter = makeAdapter(host, { loadMemory: () => 'MEMORY-X', ...over });
     adapter.start({ systemPrompt: 'CONTRACT-BODY' });
     const turn = collect(adapter.send('task'));
-    await vi.waitFor(() => expect(host.writes.length).toBeGreaterThan(0));
+    await host.until(() => host.writes.length > 0);
     const typed = host.writes[0].data;
     deliverBrainPtyHookSignal(signal('agent.stop', host.created[0].id, { agentSessionId: 's1' }));
     await turn;

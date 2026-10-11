@@ -90,6 +90,19 @@ vi.mock('../../../deck/taskLedgerHost', async (importOriginal) => {
   };
 });
 
+// The caller pointer for a worker's turn end, whichever path sends it.
+const { notifyCallerSpy } = vi.hoisted(() => ({ notifyCallerSpy: vi.fn() }));
+vi.mock('../../../deck/fanoutCallerNotify', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../deck/fanoutCallerNotify')>();
+  return {
+    ...actual,
+    notifyFanoutCaller: vi.fn((...args: Parameters<typeof actual.notifyFanoutCaller>) => {
+      notifyCallerSpy(...args.slice(0, 5));
+      return false;
+    }),
+  };
+});
+
 vi.mock('../../../deck/commanderTrust', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../deck/commanderTrust')>();
   return { ...actual, mintCommanderToken: vi.fn(actual.mintCommanderToken) };
@@ -120,7 +133,7 @@ import {
 } from '../../../deck/deckHqStore';
 import { setWorkspaceAutonomy, setWorkspaceMode } from '../../../deck/deckAutonomyStore';
 import { raiseDecision } from '../../../deck/deckDecisionStore';
-import { getTaskLedger } from '../../../deck/taskLedgerHost';
+import { getTaskLedger, routeWorkerEventToOwner } from '../../../deck/taskLedgerHost';
 import { __resetStartupDeckReconcileForTest } from '../../../deck/deckOrphanReconcile';
 import { mintCommanderToken } from '../../../deck/commanderTrust';
 import { registerBrainPty } from '../../../deck/brainPtyHookBus';
@@ -426,6 +439,33 @@ describe('HQ presence', () => {
     bootSpy.mockClear();
     mirror(['ws-hq', 'ws-a']);
     expect(bootSpy).toHaveBeenCalledWith('ws-hq');
+  });
+});
+
+describe('worker turn end -> the caller pane, Moa on or off', () => {
+  it('Moa off: the always-on subscription sends one pointer; Moa on: only the deck path runs, never both', async () => {
+    cleanup?.();
+    cleanup = null;
+    await setMoaEnabled(false);
+    reregister({ production: true });
+    await getTaskLedger().register({ id: 'wtask-cs1', taskWorkspaceId: 'ws-cs-task', ownerWorkspaceId: 'ws-cs-owner', title: 't' });
+    const route = vi.mocked(routeWorkerEventToOwner);
+    try {
+      route.mockClear();
+      notifyCallerSpy.mockClear();
+      lifecycle('ws-cs-task');
+      expect(notifyCallerSpy).toHaveBeenCalledTimes(1);
+      expect(notifyCallerSpy.mock.calls[0].slice(0, 4)).toEqual(['ws-cs-owner', 'ws-cs-task', 'wtask-cs1', 'agent.stop']);
+      expect(route).not.toHaveBeenCalled();
+
+      await invoke(IPC.DECK_MOA_SET, { enabled: true });
+      notifyCallerSpy.mockClear();
+      lifecycle('ws-cs-task');
+      expect(route).toHaveBeenCalledTimes(1); // the deck path (its own notifyCaller port)
+      expect(notifyCallerSpy).not.toHaveBeenCalled();
+    } finally {
+      await getTaskLedger().closeTask('wtask-cs1');
+    }
   });
 });
 

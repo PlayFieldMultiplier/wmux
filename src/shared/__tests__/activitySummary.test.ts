@@ -28,6 +28,8 @@ describe('summarizeActivity — tool_name → activity string', () => {
       input: { command: `echo ${'a'.repeat(50)}ZZZ` },
       expected: `$ echo ${'a'.repeat(35)}…`,
     },
+    // PowerShell (#1939) takes Bash's `{ command }` input → same line.
+    { name: 'PowerShell command', tool: 'PowerShell', input: { command: 'Get-ChildItem -Force', description: 'List' }, expected: '$ Get-ChildItem -Force' },
 
     // Grep / Glob → ⌕ {pattern}
     { name: 'Grep pattern', tool: 'Grep', input: { pattern: 'TODO' }, expected: '⌕ TODO' },

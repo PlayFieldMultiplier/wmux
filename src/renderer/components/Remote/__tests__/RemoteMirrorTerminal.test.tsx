@@ -165,6 +165,7 @@ function render(ui: React.ReactElement) {
   act(() => root.render(ui));
   return {
     container,
+    rerender: (next: React.ReactElement) => act(() => root.render(next)),
     unmount: () => {
       act(() => root.unmount());
       container.remove();
@@ -1114,6 +1115,137 @@ describe('RemoteMirrorTerminal', () => {
       expect(paneWrite).not.toHaveBeenCalledWith('a1', '\x1b[13;2u');
 
       unmount();
+    });
+
+    // #1754: the host's pane row says native Windows Codex; the mirror's own
+    // fold of the remote's OSC 133 markers ends the mapping at the prompt.
+    describe('native Windows Codex on the host', () => {
+      const row = (pane: Record<string, unknown>) => ({
+        key: 'h1:w1', hostId: 'h1', hostLabel: 'pc', workspaceId: 'w1', name: '',
+        panes: [{ sessionId: 's1', ...pane }],
+      });
+      const feed = async (bytes: string) => {
+        await act(async () => {
+          for (const h of dataHandlers) h({ attachId: 'a1', dataB64: btoa(bytes) });
+        });
+      };
+      const ctrlJ = async (term: FakeTerminal) => {
+        paneWrite.mockClear();
+        await act(async () => { press(term, { key: 'j', code: 'KeyJ', ctrlKey: true }); });
+        return paneWrite.mock.calls.map((c) => c[1]);
+      };
+      afterEach(() => { useStore.setState({ remoteWorkspaces: [] }); });
+
+      it('sends Alt+Enter while Codex runs, and LF again once the shell prompt returns', async () => {
+        useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] });
+        const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+
+        expect(await ctrlJ(term)).toEqual(['\x1b\r']);
+        // The prompt marker, split across two chunks.
+        await feed('\x1b]13');
+        await feed('3;A\x07');
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        // A command started before the host drops the stale slug stays on LF.
+        await feed('\x1b]133;C\x07');
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        // The host's next poll drops the slug, and a fresh Codex arms it again.
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false })] }); });
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] }); });
+        expect(await ctrlJ(term)).toEqual(['\x1b\r']);
+
+        unmount();
+      });
+
+      it('a stale host row does not clear the end-of-Codex latch', async () => {
+        useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] });
+        const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+        await feed('\x1b]133;A\x07');
+        await feed('\x1b]133;C\x07');
+        // One failed poll: the row goes stale, then comes back still naming Codex.
+        await act(async () => { useStore.setState({ remoteWorkspaces: [{ ...row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' }), stale: true }] }); });
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] }); });
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        unmount();
+      });
+
+      it('an attach snapshot that ends at the prompt latches a stale Codex slug', async () => {
+        useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] });
+        const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+        await act(async () => {
+          metaHandlers.forEach((h) => h({ attachId: 'a1', cols: 80, rows: 24, snapshotB64: btoa('codex\r\n\x1b]133;A\x07PS> ') }));
+        });
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        await feed('\x1b]133;C\x07');
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        unmount();
+      });
+
+      it('a slug that first reads codex at the prompt latches it (a Codex the poll missed)', async () => {
+        useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false })] });
+        const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+        // Codex starts and exits between two polls: no row ever named it.
+        await feed('\x1b]133;C\x07');
+        await feed('\x1b]133;A\x07');
+        // The next poll names it, stale, while the shell sits at its prompt.
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] }); });
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        // The next command (git commit, say) is not Codex.
+        await feed('\x1b]133;C\x07');
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        // Once the slug drops, a Codex the host detects mid-command arms it.
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false })] }); });
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] }); });
+        expect(await ctrlJ(term)).toEqual(['\x1b\r']);
+        unmount();
+      });
+
+      it('a row that arrives after an at-prompt snapshot still latches a stale Codex slug', async () => {
+        const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+        await act(async () => {
+          metaHandlers.forEach((h) => h({ attachId: 'a1', cols: 80, rows: 24, snapshotB64: btoa('codex\r\n\x1b]133;A\x07PS> ') }));
+        });
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: false, agentSlug: 'codex' })] }); });
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        await feed('\x1b]133;C\x07');
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        unmount();
+      });
+
+      it('a new attachId does not inherit the last stream\'s prompt state or latch', async () => {
+        const codexRow = (sessionId: string) => ({
+          ...row({}), panes: [{ sessionId, hostPlatform: 'win32', wsl: false, agentSlug: 'codex' }],
+        });
+        useStore.setState({ remoteWorkspaces: [codexRow('s1')] });
+        const { rerender, unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+        // s1 ends Codex at its prompt: at the prompt, latch stamped.
+        await feed('\x1b]133;A\x07');
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        // The mirror moves to s2, where Codex is running; its stream opens
+        // with output and no prompt marker.
+        await act(async () => { useStore.setState({ remoteWorkspaces: [codexRow('s2')] }); });
+        rerender(<RemoteMirrorTerminal attachId="a2" hostId="h1" sessionId="s2" />);
+        await act(async () => {
+          for (const h of dataHandlers) h({ attachId: 'a2', dataB64: btoa('thinking...') });
+        });
+        expect(await ctrlJ(term)).toEqual(['\x1b\r']);
+        unmount();
+      });
+
+      it('keeps LF for a host that sends no platform, and for a WSL pane', async () => {
+        useStore.setState({ remoteWorkspaces: [row({ agentSlug: 'codex' })] });
+        const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostId="h1" sessionId="s1" />);
+        const term = termInstances[0]!;
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        await act(async () => { useStore.setState({ remoteWorkspaces: [row({ hostPlatform: 'win32', wsl: true, agentSlug: 'codex' })] }); });
+        expect(await ctrlJ(term)).toEqual(['\n']);
+        unmount();
+      });
     });
 
     it('Ctrl+V writes the clipboard text to the remote pane', async () => {

@@ -214,6 +214,7 @@ function PaneCell({ hostId, hostLabel, remoteWorkspaceId, pane, readOnly, attach
           readOnly={readOnly}
           hostLabel={hostLabel}
           hostId={hostId}
+          sessionId={pane.sessionId}
         />
       </div>
       {picking && (

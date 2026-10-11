@@ -367,6 +367,15 @@ describe('remoteWorkspacesSlice — live pane membership', () => {
     expect(store.getState().remoteWorkspaces[0].panes).toBe(before);
   });
 
+  it('#1754: setRemoteWorkspacePanes stores a change in the agent slug', () => {
+    const facts = { hostPlatform: 'win32', wsl: false };
+    store.getState().setRemoteWorkspacePanes('host-1:ws-1', [{ sessionId: 'a', ...facts }, { sessionId: 'b' }]);
+    store.getState().setRemoteWorkspacePanes('host-1:ws-1', [{ sessionId: 'a', ...facts, agentSlug: 'codex' }, { sessionId: 'b' }]);
+    expect(store.getState().remoteWorkspaces[0].panes[0]).toMatchObject({ ...facts, agentSlug: 'codex' });
+    store.getState().setRemoteWorkspacePanes('host-1:ws-1', [{ sessionId: 'a', ...facts }, { sessionId: 'b' }]);
+    expect(store.getState().remoteWorkspaces[0].panes[0]).not.toHaveProperty('agentSlug');
+  });
+
   it('setRemoteWorkspacePanes ignores an unknown key', () => {
     store.getState().setRemoteWorkspacePanes('host-1:gone', [{ sessionId: 'z' }]);
     expect(store.getState().remoteWorkspaces).toHaveLength(1);

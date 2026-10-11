@@ -272,6 +272,35 @@ export function IconFolder({ size = 14 }: { size?: number }) {
   );
 }
 
+/** Search — a lens, for filter and search buttons. */
+export function IconSearch({ size = 14 }: { size?: number }) {
+  return <Icon size={size}><circle cx="6" cy="6" r="3.8" /><line x1="8.9" y1="8.9" x2="12" y2="12" /></Icon>;
+}
+
+/** File — a page with a folded corner, for file rows in the file tree. */
+export function IconFile({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <path d="M3.5 1.8 H8.2 L10.8 4.4 V12.2 H3.5 Z" />
+      <polyline points="8.2,1.8 8.2,4.4 10.8,4.4" />
+    </Icon>
+  );
+}
+
+/** File tree — a folder with two entries hanging off it: the file tree
+ *  column's titlebar toggle. */
+export function IconFileTree({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <path d="M1.8 2 H4 L4.8 3 H7 V5.4 H1.8 Z" />
+      <path d="M3.4 5.4 V11 H6.4" />
+      <line x1="3.4" y1="8.2" x2="6.4" y2="8.2" />
+      <rect x="7.2" y="6.9" width="5" height="2.6" rx="0.6" />
+      <rect x="7.2" y="9.7" width="5" height="2.6" rx="0.6" />
+    </Icon>
+  );
+}
+
 /** Sort — the sidebar's order menu: two arrows, down and up. */
 export function IconSort({ size = 14 }: { size?: number }) {
   return (

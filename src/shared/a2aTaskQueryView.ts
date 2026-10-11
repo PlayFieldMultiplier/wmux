@@ -294,6 +294,15 @@ export function taskAnchorRows<T extends object>(tasks: readonly T[]): Rec[] {
  * full or a summary of each task, flagged when orphaned.
  */
 export function applyTaskQueryView<T extends object>(tasks: readonly T[], params: Rec): unknown[] {
+  // 내부 상태 조회는 이력·산출물을 어느 IPC 구간에도 싣지 않는다.
+  if (params.view === 'state') {
+    return tasks.filter((task) => (task as Rec).id === params.taskId).map((task) => {
+      const row = task as Rec;
+      const status = isRec(row.status) ? row.status : {};
+      const metadata = isRec(row.metadata) ? row.metadata : {};
+      return { id: row.id, status: { state: status.state }, metadata: { updatedAt: metadata.updatedAt } };
+    });
+  }
   if (isAnchorTaskQuery(params)) return taskAnchorRows(tasks);
   if (!isPagedTaskQuery(params)) return [...tasks];
   const taskId = pagedTaskId(params);

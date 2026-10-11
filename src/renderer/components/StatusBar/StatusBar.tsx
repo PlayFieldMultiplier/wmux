@@ -13,6 +13,7 @@ import { selectFleetPanes, sortFleetPanes, selectFleetSectionCounts, fleetHqId, 
 import PluginStatusBarWidgets from '../../plugins/PluginStatusBarWidgets';
 import { COMPANY_MODE_ENABLED } from '../../../shared/featureFlags';
 import MoaTitlebarButton from '../Moa/MoaTitlebarButton';
+import FileTreeToggle from '../Titlebar/FileTreeToggle';
 import { FOCUS_RING } from '../focusRing';
 import type { StoreState } from '../../stores';
 import { RAIL_PAGE_TITLE_KEYS, workspaceChromeInTitlebar } from '../Titlebar/railPageTitle';
@@ -332,11 +333,12 @@ export default function StatusBar() {
         <NotificationBellBadgeView unreadCount={unreadCount} onActivate={toggleNotificationPanel} />
         {/* A5: 메모리 + 시각(시계 커서 의존) — 분리된 소형 컴포넌트. */}
         <StatusClockTime />
-        {/* The titlebar's right end: Moa's button while Moa is on (the right
-            panel's only toggle), left of the Windows window controls (the
-            titlebar reserves their strip). Settings lives in the rail's More
-            menu. */}
+        {/* The titlebar's right end: the file tree toggle, then Moa's button
+            while Moa is on (the dock's only toggle), left of the Windows
+            window controls (the titlebar reserves their strip). Settings
+            lives in the rail's More menu. */}
         <span className="flex items-center gap-1">
+          <FileTreeToggle />
           <MoaTitlebarButton />
         </span>
       </div>

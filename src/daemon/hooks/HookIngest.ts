@@ -58,7 +58,7 @@ import {
   type HookSignalResponse,
 } from '../../shared/hooks/signal-types';
 import { ENV_KEYS, isBrainPty } from '../../shared/constants';
-import { hasCriticalRisk } from '../../shared/criticalPatterns';
+import { hasCriticalRiskIn } from '../../shared/criticalPatterns';
 // Pure regex/lookup module (no electron), already imported by src/daemon/index.ts.
 import { agentDisplayToSlug, agentStatusToSignalKind, type AgentEventStatus } from '../../main/pty/AgentDetector';
 import { isPlausibleResumeSessionId, type ResumeBinding, type PermissionMode } from '../../shared/agentResume';
@@ -559,10 +559,14 @@ const RISK_SCAN_MAX_NODES = 10_000;
  * cut is still the call being approved. Every string LEAF counts, however
  * deep — MultiEdit's `edits[]` and an MCP tool's nested arguments included. A
  * match in a file's content over-fires, which only sends it to a human.
+ *
+ * The PowerShell tool's input is read as PowerShell (#1939): there `rm -r` is
+ * Remove-Item -Recurse, not the Unix spelling.
  */
 export function gateInputIsCritical(payload: Record<string, unknown> | undefined): boolean {
   const root = payload?.['tool_input'];
   if (root === undefined || root === null) return false;
+  const shell = payload?.['tool_name'] === 'PowerShell' ? 'powershell' : 'any';
   const stack: unknown[] = [root];
   let nodes = 0;
   let chars = 0;
@@ -572,7 +576,7 @@ export function gateInputIsCritical(payload: Record<string, unknown> | undefined
     if (typeof v === 'string') {
       chars += v.length;
       if (chars > RISK_SCAN_MAX_CHARS) return true;
-      if (hasCriticalRisk(v)) return true;
+      if (hasCriticalRiskIn(shell, v)) return true;
     } else if (Array.isArray(v)) {
       for (const item of v) stack.push(item);
     } else if (v && typeof v === 'object') {

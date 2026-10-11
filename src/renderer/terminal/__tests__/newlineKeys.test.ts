@@ -14,6 +14,8 @@ import {
   foldAtPrompt,
   foldAtPromptCarry,
   noteCodexEndedByPrompt,
+  clearCodexEndedOnSlug,
+  noteCodexSlugChange,
   CODEX_END_GRACE_MS,
   ALT_ENTER,
   type AltEnterNewlineScope,
@@ -410,6 +412,12 @@ describe('end-of-Codex latch (#1694)', () => {
     expect(wantsAltEnterNewline(scope({ codexEndedAt: s.endedAt, now: T0 + CODEX_END_GRACE_MS }))).toBe(true);
   });
 
+  it('#1754: a longer graceMs (a remote mirror) holds the latch for that long', () => {
+    const graceMs = CODEX_END_GRACE_MS + 10_000;
+    expect(wantsAltEnterNewline(scope({ codexEndedAt: T0, now: T0 + graceMs - 1, graceMs }))).toBe(false);
+    expect(wantsAltEnterNewline(scope({ codexEndedAt: T0, now: T0 + graceMs, graceMs }))).toBe(true);
+  });
+
   it('a cleared latch (slug dropped, then Codex detected again) arms at once', () => {
     expect(wantsAltEnterNewline(scope({ codexEndedAt: null, now: T0 + 1 }))).toBe(true);
   });
@@ -423,6 +431,24 @@ describe('end-of-Codex latch (#1694)', () => {
     expect(noteCodexEndedByPrompt(null, true, false, 'codex', T0)).toBeNull();
     // The stamp survives later chunks until the caller clears it.
     expect(noteCodexEndedByPrompt(T0, false, false, 'codex', T0 + 5)).toBe(T0);
+  });
+
+  it('the latch clears once the slug stops being codex, and only then', () => {
+    expect(clearCodexEndedOnSlug(T0, undefined)).toBeNull();
+    expect(clearCodexEndedOnSlug(T0, 'claude')).toBeNull();
+    expect(clearCodexEndedOnSlug(T0, 'codex')).toBe(T0);
+    expect(clearCodexEndedOnSlug(null, 'codex')).toBeNull();
+  });
+
+  it('a mirror stamps the latch when the slug first reads codex at a prompt (#1754)', () => {
+    // A Codex the poll missed: the slug arrives while the shell sits at its prompt.
+    expect(noteCodexSlugChange(null, undefined, 'codex', true, T0)).toBe(T0);
+    // Mid-command it is a Codex running now: nothing to latch.
+    expect(noteCodexSlugChange(null, undefined, 'codex', false, T0)).toBeNull();
+    // A slug that already read codex is no new arrival: the latch is kept.
+    expect(noteCodexSlugChange(T0, 'codex', 'codex', true, T0 + 5)).toBe(T0);
+    // A slug that drops clears it, as clearCodexEndedOnSlug does.
+    expect(noteCodexSlugChange(T0, 'codex', undefined, true, T0 + 5)).toBeNull();
   });
 
   it('a pane where Codex starts from a prompt is armed as before', () => {

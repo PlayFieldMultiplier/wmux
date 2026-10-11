@@ -5,6 +5,7 @@ import {
   detectorSuppressedBy,
   reportedAgentName,
   provesLiveAgent,
+  agentAliveVerdict,
 } from '../canonicalAgent';
 import type { AgentSlug } from '../../shared/agentIdentity';
 
@@ -227,5 +228,17 @@ describe('provesLiveAgent (#1307 scheduled-prompt delivery proof)', () => {
 
   it('fails a live slugless tracked pick — liveness without a name proves nothing', () => {
     expect(provesLiveAgent({ alive: true }, 'codex')).toBe(false);
+  });
+});
+
+describe('agentAliveVerdict', () => {
+  it('is true only for a proven live process, false when no agent is named, absent otherwise', () => {
+    expect(agentAliveVerdict({ agentName: 'Claude Code', agentVerified: true })).toBe(true);
+    // Exited agent or a shell back at its prompt: the reader names none.
+    expect(agentAliveVerdict({ agentName: null, agentVerified: false })).toBe(false);
+    // Named by a fresh hook or the screen, no process proof yet.
+    expect(agentAliveVerdict({ agentName: 'Claude Code', agentVerified: false })).toBeUndefined();
+    expect(agentAliveVerdict({ agentName: null })).toBeUndefined();
+    expect(agentAliveVerdict(undefined)).toBeUndefined();
   });
 });

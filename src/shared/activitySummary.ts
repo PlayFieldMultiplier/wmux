@@ -81,7 +81,9 @@ export function summarizeActivity(toolName: unknown, toolInput: unknown): string
         || basename(getStringField(toolInput, 'notebook_path'));
       return file ? truncate(`→ ${file}`) : truncate(fallback);
     }
-    case 'Bash': {
+    // #1939 — Claude's PowerShell tool takes Bash's `{ command }` input.
+    case 'Bash':
+    case 'PowerShell': {
       const cmd = getStringField(toolInput, 'command');
       if (!cmd) return truncate(fallback);
       const short = cmd.length > BASH_CMD_LEN ? `${cmd.slice(0, BASH_CMD_LEN)}…` : cmd;

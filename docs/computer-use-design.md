@@ -350,7 +350,9 @@ a person was faster by hand, so the defaults moved:
   - It fails closed: while the shortcut cannot be registered (another app
     owns the chord), every input action is refused with
     `stop_key_unavailable`, and Settings shows the key as unavailable instead
-    of advertising it. Observation still works.
+    of advertising it. Observation still works. This relies on the OS
+    reporting the conflict, which Windows does; macOS does not reliably
+    (see macOS specifics).
 - **Rate cap.** 120 control actions per minute per agent session.
 - **Elevation (Windows).** Before injecting input, the helper compares token
   integrity levels. An elevated target returns `target_elevated`; UIPI would
@@ -392,6 +394,19 @@ a person was faster by hand, so the defaults moved:
 - A grant can read as denied for about 2 s after it is given, so the helper
   re-checks every 100 ms for up to 2 s before reporting missing.
 - Electron targets need `AXManualAccessibility` set once per process instance.
+- **Known limit: a taken stop chord is not reliably detected.** macOS does
+  not reliably report that another app holds the chord, so the fail-closed
+  refusal above may not trigger; the demonstrated case is an exclusive Carbon
+  registration. Checked on macOS 15.6 with Electron 41.10.6: a second Electron
+  app or a plain Carbon `RegisterEventHotKey` registration of
+  `Control+Option+Shift+Esc` succeeds alongside wmux, and both get the press,
+  so the stop key still works. An app that registers the chord with
+  `kEventHotKeyExclusive`, before or after wmux, also succeeds, and so does
+  wmux's `globalShortcut.register`, but only that app gets the press: the
+  stop key is silently dead while Settings shows it held. A System Settings
+  keyboard shortcut set to the chord was not checked. Closing this needs a
+  stop path that does not depend on hot-key registration, such as a
+  listen-only event tap in the helper.
 
 ## Windows specifics (phase 1)
 

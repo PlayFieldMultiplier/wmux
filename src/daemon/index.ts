@@ -1,5 +1,6 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
+import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
@@ -154,6 +155,7 @@ import type { ResumeBinding } from '../shared/agentResume';
 import { agentDisplayToSlug, AGENT_SLUG_SET, isAgentSlug } from '../shared/agentIdentity';
 import type { AgentEventStatus } from '../main/pty/AgentDetector';
 import { HookIngest, identifiedAgentPid, type HookArbitration } from './hooks/HookIngest';
+import { DetectionAgreementLog } from './diagnostics/detectionAgreementLog';
 import { deriveAgentLiveness } from './hooks/agentLiveness';
 import { classifyClaudeStopFailure, classifyCodexTurnCompleted, type TurnFailure } from '../shared/phoneTurnFailure';
 import { serveTurnFailure } from './turnFailure/serveTurnFailure';
@@ -293,6 +295,12 @@ function recordHistory(work: (store: RunHistoryStore) => void): void {
   catch (error) { log('warn', 'Phone run history could not be saved:', error); }
 }
 let hookIngest: HookIngest | null = null;
+/**
+ * Opt-in detector-vs-hook agreement log (`diagnostics.detectionAgreement`).
+ * Module-level like `hookIngest`: its hook side lives in registerRpcHandlers
+ * and its detector side in wireEvents. Null when off.
+ */
+let detectionAgreementLog: DetectionAgreementLog | null = null;
 /** Panes held at a provider usage limit (shared/usageLimit). Built once delivery exists. */
 let usageLimits: UsageLimitRegistry | null = null;
 /** Scheduled runs. Built in registerRpcHandlers once the session RPCs exist. */
@@ -338,10 +346,11 @@ let bindFromAgentCommandLine: ((sessionId: string, slug: string, pid: number) =>
 // The agent process (`pid@start`) whose command line each pane last read; cleared on its death edge.
 const agentCommandLineRead = new Map<string, string>();
 // #1163 — registerRpcHandlers' canonical agent-state reader (readDaemonAgentState),
-// read by BOTH WebTerminalServer construction sites for /api/workspaces. Module-
+// read by BOTH WebTerminalServer construction sites for /api/workspaces (and
+// /api/sessions' `agentAlive`). Module-
 // scoped because the boot-restore site has no agent tracker in scope; a request
 // that arrives before registration simply reports no agent fields.
-let readAgentStateForWeb: ((id: string) => { agentName: string | null; agentStatus: AgentStatus }) | undefined;
+let readAgentStateForWeb: ((id: string) => { agentName: string | null; agentStatus: AgentStatus; agentVerified: boolean }) | undefined;
 // #1342 — registerRpcHandlers' resume-state reader, read by BOTH
 // WebTerminalServer construction sites for /api/workspaces. Module-scoped for
 // the same reason readAgentStateForWeb is: the boot-restore site has neither
@@ -3718,7 +3727,10 @@ function registerRpcHandlers(
         // Push side of the running-episode close: an interrupt fires no Stop
         // hook, so the recorded end is the only signal the turn is over.
         const ended = transcriptTurnEnd(data.events, 0);
-        if (ended) sessionManager.getSession(sessionId)?.bridge.noteTranscriptTurnEnd(ended.at);
+        if (ended) {
+          sessionManager.getSession(sessionId)?.bridge.noteTranscriptTurnEnd(ended.at);
+          detectionAgreementLog?.noteTurnEnd(sessionId, ended.at);
+        }
         const event: DaemonEvent = { type: 'transcript.appended', sessionId, data };
         for (const clientId of clientIds) {
           // D6 — `sendTo` refuses once a client's unflushed buffer passes
@@ -4282,6 +4294,9 @@ function registerRpcHandlers(
           ? data.signal.ts
           : undefined;
         const hookBridge = sessionManager.getSession(sessionId)?.bridge;
+        // A Codex stop the rollout has not confirmed is not a turn end yet; the
+        // detection agreement log must not take it as ground truth either.
+        let codexStopUnconfirmed = false;
         // #1463 — SessionStart applies the same edge, then may mark the pane pre-turn.
         if (data.signal.kind === 'agent.session_start') {
           hookBridge?.noteSessionStart(data.signal.ts, data.signal.payload?.['source']);
@@ -4294,9 +4309,11 @@ function registerRpcHandlers(
           hookBridge.noteAgentStatus(data.status, true, questionAt, true);
           const endedAt = confirmedStopAt(projector.snapshot(sessionId)?.events, data.signal.payload?.['turn-id']);
           if (endedAt !== undefined) hookBridge.noteTranscriptTurnEnd(endedAt);
+          codexStopUnconfirmed = endedAt === undefined;
         } else {
           hookBridge?.noteAgentStatus(data.status, true, questionAt, false, data.signal.ts);
         }
+        detectionAgreementLog?.noteHook(sessionId, data, { provisionalStop: codexStopUnconfirmed });
         const event: DaemonEvent = { type: 'agent.event', sessionId, data };
         pipeServer.broadcast(event);
         // Phone liveness header. The desktop reads pane state off this same
@@ -4865,7 +4882,10 @@ function registerRpcHandlers(
       // recorded end also closes the running episode (the bridge ignores an end
       // older than the episode).
       const ended = transcriptTurnEnd(events, 0);
-      if (ended) bridge.noteTranscriptTurnEnd(ended.at);
+      if (ended) {
+        bridge.noteTranscriptTurnEnd(ended.at);
+        detectionAgreementLog?.noteTurnEnd(id, ended.at);
+      }
       const agentStatus = chatAgentStatus(live.agentStatus, events, bridge.getTurnEvidenceStartedAt());
       return { ...live, agentStatus, turn: bridge.getTurn(agentStatus) };
     }
@@ -5253,7 +5273,7 @@ function registerRpcHandlers(
   }
 
   // daemon.ping
-  pipeServer.onRpc('daemon.ping', async () => {
+  pipeServer.onRpc('daemon.ping', async (params) => {
     const sessions = sessionManager.listSessions();
     const uptime = Math.floor((Date.now() - startTime) / 1000);
     // RCA A4 — report event-loop lag (ms) so the controller distinguishes a
@@ -5287,6 +5307,10 @@ function registerRpcHandlers(
       spawnedByVersion: SPAWNED_BY_VERSION,
       channelsEpoch: CHANNELS_EPOCH,
       ...pingFormatVersionField(activeEventLogFormatVersion),
+      // Explicitly requested diagnostics only: routine health probes stay cheap.
+      ...(params?.includeMemory === true ? {
+        memory: collectDaemonMemoryDiagnostics(sessionManager.listManagedSessions(), sessionPipes),
+      } : {}),
     };
   });
 
@@ -6662,6 +6686,9 @@ function wireEvents(
     // arbitrate against; the bare tag is the legacy always-emit behavior.
     const arbitration: HookArbitration =
       hookIngest?.arbitrateDetector(payload.sessionId, payload.event) ?? { source: 'detector' };
+    // Recorded before the pending/suppression returns below: a held or vetoed
+    // read is exactly what the agreement log is there to judge.
+    detectionAgreementLog?.noteDetector(payload.sessionId, payload.event, arbitration.decision);
     // CompletionAlarm: a provisional completion window is open — the stash
     // broadcast (ledger write + agent.event) fires from the alarm at window
     // expiry via `emitDetectorEvent`. Everything ABOVE this point already ran
@@ -6749,6 +6776,9 @@ function wireEvents(
       payload.sessionId,
       payload.reason === 'screen-cleared' ? 'screen-cleared' : 'answered-locally',
     ).catch((err: unknown) => log('warn', `[approvals] answered card sweep failed for ${payload.sessionId}: ${String(err)}`));
+    // An AskUserQuestion dismissed with Esc sends no hook: its record is
+    // retired once the screen shows the question gone.
+    approvalRegistry?.noteDialogKey(payload.sessionId);
     const managed = sessionManager.getSession(payload.sessionId);
     const screenAgent = managed?.bridge.getLastAgent() ?? null;
     const slug = (screenAgent ? agentDisplayToSlug(screenAgent) : undefined) ?? managed?.meta.lastDetectedAgent;
@@ -7320,6 +7350,38 @@ async function main(): Promise<void> {
 
   const sessionManager = new DaemonSessionManager();
   sessionManager.setConfig(config);
+  // Opt-in, local-only detection agreement log — see
+  // daemon/diagnostics/detectionAgreementLog.ts. Built before any session can
+  // emit; the hook authority is read lazily because HookIngest is created later
+  // (registerRpcHandlers).
+  if (config.diagnostics?.detectionAgreement === true) {
+    try {
+      const diagnosticsDir = path.join(wmuxDir, 'diagnostics');
+      fs.mkdirSync(diagnosticsDir, { recursive: true });
+      const writer = createDaemonLogWriter({
+        path: path.join(diagnosticsDir, 'detection.ndjson'),
+        maxBytes: 8 * 1024 * 1024,
+        flushMs: 1000,
+        bufferMaxBytes: 64 * 1024,
+      });
+      process.once('exit', () => writer.flush());
+      detectionAgreementLog = new DetectionAgreementLog({
+        write: (line) => writer.write('info', line),
+        authorityFor: (id) => hookIngest?.authorityAgentFor(id),
+        isBrain: (id) => {
+          const session = sessionManager.getSession(id);
+          return session !== undefined && isBrainPty({ id, env: session.meta.env });
+        },
+        app: SPAWNED_BY_VERSION,
+        os: process.platform,
+      });
+      sessionManager.on('session:died', (payload: { id: string }) => detectionAgreementLog?.dropSession(payload.id));
+      sessionManager.on('session:destroyed', (payload: { id: string }) => detectionAgreementLog?.dropSession(payload.id));
+      log('info', '[diagnostics] detection agreement log enabled');
+    } catch (err) {
+      log('warn', '[diagnostics] detection agreement log could not start:', err);
+    }
+  }
   // Shutdown-kill classification (reboot-reattach RCA 2026-07-02): a PTY exit
   // with the Windows console-teardown code, or ANY exit while our own graceful
   // shutdown is in flight, is an involuntary kill — suspend for recovery

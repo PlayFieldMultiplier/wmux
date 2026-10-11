@@ -147,7 +147,12 @@ function samePanes(a: RemotePaneSummary[], b: RemotePaneSummary[]): boolean {
     && pane.resume?.agent === b[i].resume?.agent
     && pane.resume?.sessionId === b[i].resume?.sessionId
     && pane.resume?.cwdMatches === b[i].resume?.cwdMatches
-    && pane.resume?.permissionMode === b[i].resume?.permissionMode);
+    && pane.resume?.permissionMode === b[i].resume?.permissionMode
+    // #1754 — the mirror's Alt+Enter inputs: a Codex start or exit on the host
+    // reaches the mirror only through this comparison.
+    && pane.hostPlatform === b[i].hostPlatform
+    && pane.wsl === b[i].wsl
+    && pane.agentSlug === b[i].agentSlug);
 }
 
 export interface RemoteWorkspacesSlice {

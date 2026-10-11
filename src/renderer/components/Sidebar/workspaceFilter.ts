@@ -12,6 +12,7 @@ import type { AgentStatus } from '../../../shared/types';
 import { getWorkspacePtyIds } from '../../../shared/paneUtils';
 import { resolveTaskLink } from '../../utils/fanoutProvenance';
 import { workspaceHasUsageLimitWaiting } from '../../stores/slices/usageLimitSlice';
+import { listedWorkspaces, moaHqId } from '../../stores/slices/moaSlice';
 
 export type StatusFacet = 'needsYou' | 'running' | 'usageWaiting' | 'idle';
 export type KindFacet = 'agent' | 'terminal';
@@ -155,4 +156,29 @@ export function factsFromKey(key: string): WorkspaceFacts {
     isTask: task === '1',
     isBookmarked: bookmarked === '1',
   };
+}
+
+/** The rows a narrowed sidebar keeps, in stored order: the search text
+ *  matches the name, and an active filter matches the workspace's facts. */
+export function narrowWorkspaces<T extends { id: string; name: string }>(
+  listed: readonly T[],
+  search: string,
+  filter: WorkspaceFilter,
+  factKeys: Readonly<Record<string, string>>,
+): T[] {
+  const q = search.trim().toLowerCase();
+  const filterOn = isFilterActive(filter);
+  return listed.filter((ws) => (!q || ws.name.toLowerCase().includes(q))
+    && (!filterOn || (factKeys[ws.id] !== undefined && matchesFilter(filter, factsFromKey(factKeys[ws.id])))));
+}
+
+/** The workspaces the Ctrl+N digits reach, in stored order: what the open
+ *  sidebar lists, so a filtered list numbers its rows 1, 2, … The collapsed
+ *  rail lists every workspace, so there the digits reach all of them. */
+export function selectShortcutWorkspaces(state: StoreState): StoreState['workspaces'] {
+  const listed = listedWorkspaces(state.workspaces, moaHqId(state));
+  if (!state.sidebarVisible) return listed;
+  const filterOn = isFilterActive(state.sidebarFilter);
+  if (!filterOn && state.sidebarSearch.trim() === '') return listed;
+  return narrowWorkspaces(listed, state.sidebarSearch, state.sidebarFilter, filterOn ? selectWorkspaceFactKeys(state) : {});
 }

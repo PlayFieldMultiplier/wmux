@@ -983,6 +983,9 @@ export interface SessionData {
   sidebarBookmarkedIds?: string[];
   /** #1481 — expanded sidebar width in px. Clamped on load. */
   sidebarWidth?: number;
+  /** The file tree column, opposite the sidebar: shown, and its width in px (clamped on load). */
+  fileTreeVisible?: boolean;
+  fileTreeWidth?: number;
   /** #1481 — owner workspace id → user-chosen expansion of its fan-out task group. */
   sidebarTaskGroupExpanded?: Record<string, boolean>;
   /** ptyId → the pending question the user dismissed. Persisted because the

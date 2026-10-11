@@ -631,6 +631,27 @@ describe('HookIngest', () => {
       });
     });
 
+    it('a stop held for a background shell, then its task-notification turn, ends at complete', () => {
+      // Live hook sequence (DocuCompare pane, 2026-10-11): the turn ends with
+      // one background shell still running, the shell finishes, and Claude
+      // Code runs a task-notification turn that fires UserPromptSubmit and
+      // Stop like any other. That last Stop is the one that must close the
+      // pane; its leftover count comes from the bridge's transcript miner.
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.user_prompt_submit' }));
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.activity', payload: { tool_name: 'Bash' } }));
+      ingest.handle(makeSignal({ ptyId: 'pty-a', payload: { wmux_leftover_work: 1 } }));
+      expect(fixture.emitted.at(-1)?.data).toMatchObject({ hookKind: 'agent.stop', status: 'running' });
+
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.user_prompt_submit' }));
+      ingest.handle(makeSignal({ ptyId: 'pty-a' }));
+      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+      expect(fixture.emitted.at(-1)?.data).toMatchObject({
+        hookKind: 'agent.stop',
+        decision: 'emit',
+        status: 'complete',
+      });
+    });
+
     it('an answered cue cancels a pending attention window before its broadcast', () => {
       ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.activity', payload: { tool_name: 'Bash' } }));
       ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.awaiting_input' }));
@@ -1049,6 +1070,13 @@ describe('HookIngest', () => {
       expect(gateInputIsCritical({ tool_input: { edits: [{ old_string: 'a', new_string: 'b' }] } })).toBe(false);
       // Past the walk's bounds the unread rest is not evidence of safety.
       expect(gateInputIsCritical({ tool_input: { content: 'a'.repeat(1_000_001) } })).toBe(true);
+    });
+
+    it("reads the PowerShell tool's input as PowerShell, where `rm -r` is Remove-Item -Recurse (#1939)", () => {
+      expect(gateInputIsCritical({ tool_name: 'PowerShell', tool_input: { command: 'rm -r .\\src' } })).toBe(true);
+      expect(gateInputIsCritical({ tool_name: 'PowerShell', tool_input: { command: 'rm .\\a.txt' } })).toBe(false);
+      // In Bash `rm -r` without -f stays unflagged, as before.
+      expect(gateInputIsCritical({ tool_name: 'Bash', tool_input: { command: 'rm -r ./src' } })).toBe(false);
     });
 
     it('marks a gate exact only when the hook named the pane, inexact when routed by cwd', () => {

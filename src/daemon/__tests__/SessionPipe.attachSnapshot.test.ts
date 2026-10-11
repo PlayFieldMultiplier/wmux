@@ -11,14 +11,17 @@
 //   4. active DECSTBM margins → fail-open raw (HeadlessSnapshot refuses)
 //   5. live bytes written DURING the parse arrive after the snapshot (delta
 //      re-read), before FLUSH_DONE — no gap, no reorder
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, vi } from 'vitest';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { SessionPipe, createSessionPipeMarkers, ATTACH_SNAPSHOT_MIN_BYTES } from '../SessionPipe';
 import { RingBuffer } from '../RingBuffer';
 import { waitFor } from '../../test-utils/waitFor';
+import { enqueueSnapshotJob } from '../HeadlessSnapshot';
 
 function uniqueSessionId(tag: string): string {
   return `attsnap-${tag}-${crypto.randomUUID().slice(0, 8)}`;
@@ -120,6 +123,15 @@ const ROWS = 24;
 
 const pipes: SessionPipe[] = [];
 const clients: Client[] = [];
+// macOS's isolated HOME can already consume most of sockaddr_un.sun_path.
+// Concurrent sockets then collide when their unique suffix is truncated.
+// Keep this suite's real sockets in a private short directory; other tests
+// continue to exercise the production path, and Windows keeps named pipes.
+const socketDir = process.platform === 'darwin' ? fs.mkdtempSync('/tmp/wmux-as-') : null;
+
+afterAll(() => {
+  if (socketDir) fs.rmSync(socketDir, { recursive: true, force: true });
+});
 
 afterEach(async () => {
   for (const c of clients.splice(0)) c.socket.destroy();
@@ -132,12 +144,81 @@ async function startPipe(
   dims?: () => { cols: number; rows: number },
 ): Promise<SessionPipe> {
   const pipe = new SessionPipe(id, ring, TOKEN, dims);
+  if (socketDir) vi.spyOn(pipe, 'getPipeName').mockReturnValue(path.join(socketDir, `${id}.sock`));
   pipes.push(pipe);
   await pipe.start();
   return pipe;
 }
 
 describe('SessionPipe initial-attach snapshot (TASK-10)', () => {
+  it('defers history copies until the slot, keeps input live, and replays output produced while waiting', async () => {
+    let release!: () => void;
+    const gate = enqueueSnapshotJob(() => new Promise<void>((resolve) => { release = resolve; }));
+    await waitFor(() => typeof release === 'function');
+    const rings = Array.from({ length: 3 }, () => {
+      const ring = new RingBuffer(2 * 1024 * 1024);
+      ring.write(redrawHistory(ATTACH_SNAPSHOT_MIN_BYTES));
+      return ring;
+    });
+    const reads = rings.map((ring) => vi.spyOn(ring, 'readAllWithGeometry'));
+    const input = vi.fn();
+    try {
+      for (const ring of rings) {
+        const pipe = await startPipe(uniqueSessionId('queued'), ring, () => ({ cols: COLS, rows: ROWS }));
+        pipe.onInput(input);
+        const client = await connectClient(pipe.getPipeName(), TOKEN);
+        clients.push(client);
+        // The input handler is wired before attach replay starts. Receiving
+        // this proves authentication and the queued flush have both run.
+        client.socket.write('hello\r');
+      }
+      await waitFor(() => input.mock.calls.length === 3);
+      for (const read of reads) expect(read).not.toHaveBeenCalled();
+      for (const ring of rings) ring.write(Buffer.from('\x1b[H\x1b[2Jlatest 한글 frame'));
+    } finally {
+      release();
+      await gate;
+    }
+    for (let i = 0; i < clients.length; i++) {
+      await waitFor(() => replaySegment(clients[i].wire()) !== null, 10_000);
+      const replay = replaySegment(clients[i].wire());
+      if (!replay) throw new Error('missing replay after flush');
+      expect(await screenOf(replay, COLS, ROWS))
+        .toEqual(await screenOf(rings[i].readAll(), COLS, ROWS));
+    }
+  });
+
+  it('skips a canceled queued attach without copying its history and lets a small shell replay immediately', async () => {
+    let release!: () => void;
+    const gate = enqueueSnapshotJob(() => new Promise<void>((resolve) => { release = resolve; }));
+    await waitFor(() => typeof release === 'function');
+    const ring = new RingBuffer(1024 * 1024);
+    ring.write(redrawHistory(ATTACH_SNAPSHOT_MIN_BYTES));
+    const read = vi.spyOn(ring, 'readAllWithGeometry');
+    try {
+      const pipe = await startPipe(uniqueSessionId('canceled'), ring, () => ({ cols: COLS, rows: ROWS }));
+      const input = vi.fn();
+      pipe.onInput(input);
+      const client = await connectClient(pipe.getPipeName(), TOKEN);
+      clients.push(client);
+      client.socket.write('ready');
+      await waitFor(() => input.mock.calls.length > 0);
+      client.socket.destroy();
+      await waitFor(() => !pipe.isConnected);
+      const small = new RingBuffer(1024);
+      small.write(Buffer.from('prompt> '));
+      const smallPipe = await startPipe(uniqueSessionId('small-queued'), small, () => ({ cols: COLS, rows: ROWS }));
+      const smallClient = await connectClient(smallPipe.getPipeName(), TOKEN);
+      clients.push(smallClient);
+      await waitFor(() => replaySegment(smallClient.wire())?.toString() === 'prompt> ');
+    } finally {
+      release();
+      await gate;
+      await enqueueSnapshotJob(async () => undefined);
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('large buffer + dims → compact snapshot with screen parity, then FLUSH_DONE', async () => {
     // Redraw-heavy history (4× the threshold): the repaints collapse to a few
     // final rows, the real big-ring shape this path exists for. (Pure-append

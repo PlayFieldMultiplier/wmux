@@ -233,6 +233,9 @@ describe('HeadlessSnapshot — fidelity round-trips', () => {
     const res = await generateSnapshot({ cols: 80, rows: 24, initial: big, budgetMs: 0 });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe('budget');
+    // The detail says where the parse stopped: one slice in, not the whole ring
+    // the single feed() call handed over.
+    if (!res.ok) expect(res.detail).toMatch(new RegExp(`^parsed=${FEED_SLICE_BYTES}/${big.length} elapsedMs=\\d+$`));
   }, 20000);
 
   it('smoke: serializes several MB of text within a generous budget', async () => {

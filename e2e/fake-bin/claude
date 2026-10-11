@@ -3,6 +3,8 @@
 # --version answers like the real CLI. Started as a fan-out worker (its cwd
 # is a git worktree), it runs the scenario's script $WMUX_E2E_WORKER_SCRIPT
 # (or $HOME/.e2e-worker.sh) once, then idles like an interactive session.
+# Started anywhere else while $HOME/.e2e-parent.sh exists, it runs that in the
+# foreground instead (a scripted parent agent reading its prompts from stdin).
 case "${1:-}" in
   --version|-v) echo "2.1.300 (Claude Code)"; exit 0 ;;
 esac
@@ -12,6 +14,9 @@ script="${WMUX_E2E_WORKER_SCRIPT:-$HOME/.e2e-worker.sh}"
 if [ -f "$PWD/.git" ] && [ -f "$script" ]; then
   bash "$script" >> "$log" 2>&1
   echo "$(date +%s) worker script exit=$?" >> "$log"
+elif [ ! -f "$PWD/.git" ] && [ -f "$HOME/.e2e-parent.sh" ]; then
+  bash "$HOME/.e2e-parent.sh" 2>> "$log"
+  echo "$(date +%s) parent script exit=$?" >> "$log"
 fi
 echo "fake claude idle"
 exec sleep 3600

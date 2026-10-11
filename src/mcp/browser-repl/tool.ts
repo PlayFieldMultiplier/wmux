@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { ACTION_RING_CAPACITY } from '../../shared/browserReplay/actionTrace';
 import { getConnectionScope } from '../connectionScope';
 import { IDLE_SWEEP_INTERVAL_MS, IDLE_TIMEOUT_MS } from '../repl/replRegistry';
-import { MAX_TIMEOUT_MS } from '../repl/tools';
+import { MAX_TIMEOUT_MS, codeToolRefusal, type CodeToolGate } from '../repl/tools';
 import type { CollectedTool } from '../playwright/toolCollector';
 import {
   defineWmuxTool,
@@ -251,6 +251,7 @@ const maxBytesParam = z
 
 export function createBrowserReplCatalog(
   tools: ReadonlyMap<string, CollectedTool>,
+  gate: CodeToolGate,
 ): readonly WmuxToolSpec[] {
   const browserRepl = defineWmuxTool({
     name: 'browser_repl',
@@ -270,6 +271,11 @@ export function createBrowserReplCatalog(
     strictInput: true,
     profiles: ['full'],
     invoke: async ({ code, timeout, surfaceId }) => {
+      // The snippet runs in this process, outside the per-call browser checks
+      // its browser.X steps get, so a protected pane is refused before any
+      // runtime exists (see assertCodeToolAllowed).
+      const refused = await codeToolRefusal(gate, 'browser_repl', disposeBrowserRepl);
+      if (refused) return refused;
       // Captured HERE, inside the MCP dispatch, and re-entered per call: the
       // worker's messages arrive outside this AsyncLocalStorage context.
       const scope = getConnectionScope();
@@ -297,6 +303,7 @@ export function registerBrowserReplTool(
   server: McpServer,
   tools: ReadonlyMap<string, CollectedTool>,
   options: RegisterWmuxToolsOptions,
+  gate: CodeToolGate,
 ): void {
-  registerWmuxTools(server, createBrowserReplCatalog(tools), options);
+  registerWmuxTools(server, createBrowserReplCatalog(tools, gate), options);
 }

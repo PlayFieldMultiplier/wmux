@@ -69,24 +69,48 @@ type Handler = (arg: unknown) => void;
  * and the popup navigates a beat later, so each read returns the next entry.
  * `clickThrows` exercises the listener-cleanup path.
  */
-function makePage(opts: { popupUrl?: string; popupUrls?: string[]; clickThrows?: boolean } = {}) {
+function makePage(
+  opts: {
+    popupUrl?: string;
+    popupUrls?: string[];
+    clickThrows?: boolean;
+    /**
+     * What Playwright's click does AFTER the popup fired: on macOS the opener
+     * is behind the popup's tab and produces no frames, so the click either
+     * never settles or rejects at its action timeout.
+     */
+    afterPopup?: 'hang' | 'timeout';
+    /**
+     * The popup fires while the click is still approaching the element (an
+     * earlier click's window.open timer), before anything was pressed.
+     */
+    popupBeforePress?: boolean;
+  } = {},
+) {
   const handlers = new Map<string, Set<Handler>>();
   const urls = opts.popupUrls ?? (opts.popupUrl !== undefined ? [opts.popupUrl] : undefined);
   let read = 0;
+  const firePopup = () => {
+    if (!urls) return;
+    const popup = {
+      url: () => urls[Math.min(read++, urls.length - 1)],
+    };
+    for (const fn of handlers.get('popup') ?? []) fn(popup);
+  };
   const el = {
     click: vi.fn(async () => {
-      if (urls) {
-        const popup = {
-          url: () => urls[Math.min(read++, urls.length - 1)],
-        };
-        for (const fn of handlers.get('popup') ?? []) fn(popup);
-      }
+      if (!opts.popupBeforePress) firePopup();
       if (opts.clickThrows) throw new Error('Element is not attached to the DOM');
+      if (opts.afterPopup === 'hang') await new Promise<never>(() => undefined);
+      if (opts.afterPopup === 'timeout') throw new Error('Timeout 1500ms exceeded.');
     }),
     dblclick: vi.fn(async () => undefined),
     // The click path walks the pointer to the element's box before pressing,
     // so a stand-in element has to have one.
-    boundingBox: vi.fn(async () => ({ x: 10, y: 20, width: 100, height: 40 })),
+    boundingBox: vi.fn(async () => {
+      if (opts.popupBeforePress) firePopup();
+      return { x: 10, y: 20, width: 100, height: 40 };
+    }),
   };
   return {
     el,
@@ -194,6 +218,46 @@ describe('browser_click new-tab detection', () => {
     const text = (await click({ ref: '3' })).content[0].text;
     expect(text).not.toContain('hunter2');
     expect(text.length).toBeLessThan(400);
+  });
+
+  it('returns once the popup fires, without waiting for a click that never settles (macOS background tab)', async () => {
+    const watched = makePage({ popupUrl: 'https://popup.example/a', afterPopup: 'hang' });
+    getPage.mockResolvedValue(watched.page);
+    resolveWorkspaceBackend.mockResolvedValue('chrome');
+    resolveRefMock.mockResolvedValue(watched.el);
+
+    const result = await click({ ref: '3' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain('opened a popup (page: https://popup.example/a)');
+    expect(watched.el.click).toHaveBeenCalledTimes(1);
+    expect(watched.listenerCount()).toBe(0);
+  });
+
+  it('does not press the element a second time when the click times out after its popup fired', async () => {
+    const watched = makePage({ popupUrl: 'https://popup.example/b', afterPopup: 'timeout' });
+    getPage.mockResolvedValue(watched.page);
+    resolveWorkspaceBackend.mockResolvedValue('chrome');
+    resolveRefMock.mockResolvedValue(watched.el);
+
+    const result = await click({ ref: '3' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain('opened a popup (page: https://popup.example/b)');
+    // One press: the fallback centre click would have opened a second popup.
+    expect(watched.el.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a popup that fired before the press as this click landing', async () => {
+    const watched = makePage({ popupUrl: 'https://popup.example/early', popupBeforePress: true, clickThrows: true });
+    getPage.mockResolvedValue(watched.page);
+    resolveWorkspaceBackend.mockResolvedValue('chrome');
+    resolveRefMock.mockResolvedValue(watched.el);
+
+    const result = await click({ ref: '3' });
+    // The press failed, so the click is reported as failed, after the one
+    // centre-click retry a click that never landed is owed.
+    expect(result.isError).toBe(true);
+    expect(watched.el.click).toHaveBeenCalledTimes(2);
+    expect(watched.listenerCount()).toBe(0);
   });
 
   it('[CRIT] detaches the listener when the click itself throws', async () => {

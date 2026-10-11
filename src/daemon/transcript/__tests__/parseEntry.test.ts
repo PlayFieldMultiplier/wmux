@@ -333,6 +333,50 @@ describe('parseTranscriptLine — tool-error.jsonl', () => {
   });
 });
 
+describe('parseTranscriptLine — image-tool-result.jsonl (screenshot and image Read results)', () => {
+  // Structure of real Claude Code 2.1.296 lines; the base64 is a placeholder.
+  const raw = fs.readFileSync(path.join(FIXTURES, 'image-tool-result.jsonl'), 'utf8');
+  const detailed = raw.split('\n').map((line) => parseTranscriptLineDetailed(line, 0));
+  const events = detailed.flatMap((d) => d.events);
+  const results = events.filter((e) => e.kind === 'tool_result');
+  const result = (id: string) => results.find((e) => e.toolUseId === id);
+
+  it('pairs every image-bearing result with its tool_use', () => {
+    const uses = events.filter((e) => e.kind === 'tool_use').map((e) => e.toolUseId);
+    expect(uses).toEqual(['toolu_read_image', 'toolu_snapshot', 'toolu_snapshot_err']);
+    expect(results.map((e) => e.toolUseId)).toEqual(uses);
+  });
+
+  it('an image-only result is ok and carries the placeholder as its body', () => {
+    expect(result('toolu_read_image')).toMatchObject({ ok: true, bytes: 7, output: { n: 1, bytes: 7, inline: '[image]' } });
+  });
+
+  it('text and image keep their order, the image as a placeholder', () => {
+    const body = 'Focused app: Redacted\n[image]\nList of interactive elements: redacted';
+    expect(result('toolu_snapshot')).toMatchObject({ ok: true, bytes: body.length, output: { inline: body } });
+    expect(result('toolu_snapshot')?.output?.truncated).toBeUndefined();
+  });
+
+  it('an error result with an image stays an error', () => {
+    expect(result('toolu_snapshot_err')).toMatchObject({ ok: false, output: { inline: 'Snapshot failed: redacted\n[image]' } });
+  });
+
+  it('never carries the image data, on the wire or in the expand table', () => {
+    expect(JSON.stringify(events)).not.toContain('PLACEHOLDERBASE64DATA');
+    for (const d of detailed) {
+      for (const bodies of d.bodies.values()) {
+        for (const body of bodies.values()) expect(body).not.toContain('PLACEHOLDERBASE64DATA');
+      }
+    }
+  });
+
+  it('the pr-link entry between them is a pr_link row, not unknown', () => {
+    expect(events.filter((e) => e.kind === 'meta')).toMatchObject([
+      { kind: 'meta', subtype: 'pr_link', url: 'https://github.com/owner/repo/pull/145', number: 145, repo: 'owner/repo' },
+    ]);
+  });
+});
+
 describe('parseTranscriptLine — sidechain.jsonl', () => {
   const events = parseFixture('sidechain.jsonl');
 

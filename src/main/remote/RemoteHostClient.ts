@@ -30,6 +30,7 @@ import type {
   RemoteWorkspacesResponse,
 } from '../../shared/remoteHosts';
 import { isRemoteAgentStatus, parseRemoteResumeInfo } from '../../shared/remoteHosts';
+import { isAgentSlug } from '../../shared/agentIdentity';
 import { isCredentialSafeOriginString } from '../../shared/remotePairInput';
 import {
   REMOTE_LIMITS,
@@ -331,6 +332,14 @@ export function normalizeWorkspaces(body: unknown): RemoteWorkspaceSummary[] {
               ...(Number.isFinite(at) && at > 0 ? { lastActivityAt: at } : {}),
             };
           })(),
+          // #1754 — the mirror's Alt+Enter inputs. Kept only when well-formed:
+          // a platform is a short `process.platform` id, and a slug this build
+          // does not know is dropped, which leaves the plain newline bytes.
+          ...(typeof pane.hostPlatform === 'string' && /^[a-z0-9]{1,16}$/.test(pane.hostPlatform)
+            ? { hostPlatform: pane.hostPlatform }
+            : {}),
+          ...(typeof pane.wsl === 'boolean' ? { wsl: pane.wsl } : {}),
+          ...(isAgentSlug(pane.agentSlug) ? { agentSlug: pane.agentSlug } : {}),
         });
       }
     }

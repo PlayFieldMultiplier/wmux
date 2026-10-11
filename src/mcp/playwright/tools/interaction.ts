@@ -548,8 +548,10 @@ export async function clickWithApproach(
   el: ApproachTarget,
   double: boolean,
   tap?: (point: { x: number; y: number }) => Promise<void>,
+  popup?: Pick<PopupWatch, 'arm' | 'fired'>,
 ): Promise<'touch' | 'mouse'> {
   const plainClick = async (): Promise<'mouse'> => {
+    popup?.arm();
     if (double) await el.dblclick();
     else await el.click();
     return 'mouse';
@@ -607,9 +609,12 @@ export async function clickWithApproach(
       return plainClick();
     }
     try {
+      popup?.arm();
       await tap(target);
       return 'touch';
     } catch {
+      // The tap opened its popup: it landed, so don't press again.
+      if (popup?.fired()) return 'touch';
       // Touch dispatch refused (a transport without it, a target that went
       // away mid-tap). A click that lands is worth more than one that matches
       // the emulated hardware, so fall through rather than fail.
@@ -625,9 +630,14 @@ export async function clickWithApproach(
   setLastPointer(page, target);
 
   try {
+    popup?.arm();
     if (double) await el.dblclick({ position });
     else await el.click({ position });
   } catch {
+    // The press already reached the page (it opened a popup): the error is
+    // from Playwright's wait AFTER the press, not a missed click. A second
+    // click would press the element again — a second popup, a second submit.
+    if (popup?.fired()) return 'mouse';
     // The element moved, something now covers the point we aimed at, or the
     // element is rotated so a point inside its axis-aligned box is outside the
     // element itself. Playwright's own centre-targeted click resolves all
@@ -1153,6 +1163,44 @@ function isBlankUrl(url: string | undefined): boolean {
   return !url || url === 'about:blank';
 }
 
+interface PopupWatch {
+  note: () => Promise<string>;
+  dispose: () => void;
+  /**
+   * Called right before the press is dispatched. Only a popup that fires after
+   * this counts as this click's: the approach (scroll, pointer path) runs with
+   * the listener already attached, and a popup from an earlier click's timer
+   * landing then must not pass for this click, which has pressed nothing yet.
+   */
+  arm: () => void;
+  /** Resolves when a popup fires after `arm()`; never rejects. */
+  opened: Promise<void>;
+  /** A popup fired after `arm()`. */
+  fired: () => boolean;
+}
+
+/**
+ * A click whose popup has fired has landed: the page ran the click handler or
+ * followed the target=_blank link, which only happens once the press reached
+ * it. Return then, instead of waiting for Playwright to finish the action.
+ *
+ * Why this is not a nicety: a popup that opens as the active tab takes the
+ * foreground from the opener, and on macOS Chrome stops producing frames for a
+ * tab behind another. Playwright's mouse-up waits for the renderer's input ack
+ * and its click then re-checks the page, both frame-driven, so a click that
+ * already opened its popup sat until the action timeout and failed — and
+ * clickWithApproach's fallback then pressed the element a second time. Linux
+ * Chrome keeps rendering the background tab, which is why only macos-14 saw it.
+ *
+ * The abandoned action keeps running to its own timeout; its rejection is
+ * swallowed here because its outcome is already known.
+ */
+async function untilClickLands<T>(click: Promise<T>, watch: PopupWatch | null, landedAs: T): Promise<T> {
+  if (!watch) return click;
+  click.catch(() => undefined);
+  return Promise.race([click, watch.opened.then(() => landedAs)]);
+}
+
 /**
  * Watch one click for a popup (window.open / target=_blank).
  *
@@ -1177,15 +1225,20 @@ function isBlankUrl(url: string | undefined): boolean {
  * the listener — and the closure holding the popup handle — attached to the
  * page for the rest of its life.
  */
-function watchForPopup(page: { on: Function; off: Function }): {
-  note: () => Promise<string>;
-  dispose: () => void;
-} {
+function watchForPopup(page: { on: Function; off: Function }): PopupWatch {
   let popup: { url?: () => string } | undefined;
   let fired = false;
-  const onPopup = (opened: { url?: () => string }) => {
+  let armed = false;
+  let firedArmed = false;
+  let markOpened!: () => void;
+  const opened = new Promise<void>((resolve) => (markOpened = resolve));
+  const onPopup = (openedPage: { url?: () => string }) => {
     fired = true;
-    popup = opened;
+    popup = openedPage;
+    if (armed) {
+      firedArmed = true;
+      markOpened();
+    }
   };
   page.on('popup', onPopup);
 
@@ -1198,6 +1251,11 @@ function watchForPopup(page: { on: Function; off: Function }): {
   };
 
   return {
+    arm: () => {
+      armed = true;
+    },
+    opened,
+    fired: () => firedArmed,
     dispose: () => {
       try {
         page.off('popup', onPopup);
@@ -1328,11 +1386,16 @@ export function registerInteractionTools(server: McpServer, deps: BrowserToolDep
               : null;
           try {
             await settledDispatch(effect, page, () =>
-              withModifiers(page, modifierKeys, () =>
-                page.mouse.click(clickX as number, clickY as number, {
-                  ...(double && { clickCount: 2 }),
-                }),
-              ),
+              withModifiers(page, modifierKeys, () => {
+                coordWatch?.arm();
+                return untilClickLands(
+                  page.mouse.click(clickX as number, clickY as number, {
+                    ...(double && { clickCount: 2 }),
+                  }),
+                  coordWatch,
+                  undefined,
+                );
+              }),
             );
             // Keep the tracker honest: the next ref click should approach from
             // here, not from wherever the pointer was before this one.
@@ -1389,7 +1452,11 @@ export function registerInteractionTools(server: McpServer, deps: BrowserToolDep
               const locator = await resolveSmartRefLocator(page, smartRef, { notes: refNotes });
               const dispatch = await settledDispatch(effect, page, () =>
                 withModifiers(page, modifierKeys, () =>
-                  clickWithApproach(page as unknown as ApproachPage, locator, !!double, tap),
+                  untilClickLands(
+                    clickWithApproach(page as unknown as ApproachPage, locator, !!double, tap, popupWatch ?? undefined),
+                    popupWatch,
+                    tap ? 'touch' : 'mouse',
+                  ),
                 ),
               );
               // A ref axis, not the css axis this used to record: the CDP
@@ -1422,7 +1489,11 @@ export function registerInteractionTools(server: McpServer, deps: BrowserToolDep
             if (!el) throw refMissing(ref, page);
             const dispatch = await settledDispatch(effect, page, () =>
               withModifiers(page, modifierKeys, () =>
-                clickWithApproach(page as unknown as ApproachPage, el, !!double, tap),
+                untilClickLands(
+                  clickWithApproach(page as unknown as ApproachPage, el, !!double, tap, popupWatch ?? undefined),
+                  popupWatch,
+                  tap ? 'touch' : 'mouse',
+                ),
               ),
             );
             if (!modifierKeys) {

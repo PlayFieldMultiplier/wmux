@@ -14,6 +14,7 @@ import { markRetentionMigrationDone } from '../retentionMigration';
 import { DEFAULT_BROWSER_BACKEND, isBrowserBackend, type BrowserBackend } from '../../../shared/browserBackend';
 import { CHROME_PRESET_VALUES } from '../../../shared/chromePresets';
 import { sanitizeShortcutOverrides, type ShortcutActionId, type ShortcutOverrides } from '../../../shared/keymap';
+import { FILE_TREE_DEFAULT_WIDTH, clampFileTreeWidth } from '../../utils/fileTreeLayout';
 import { SIDEBAR_DEFAULT_WIDTH, clampSidebarWidth, isNestedTask, togglePinned, type SidebarSortMode } from '../../utils/sidebarLayout';
 
 /**
@@ -209,6 +210,10 @@ export interface UISlice {
   // persisted, so a reload starts unfiltered.
   sidebarFilter: WorkspaceFilter;
   setSidebarFilter: (filter: WorkspaceFilter) => void;
+  // The sidebar's search text. Session-only like the facets, and in the
+  // store so Ctrl+N can number the same narrowed list the sidebar shows.
+  sidebarSearch: string;
+  setSidebarSearch: (search: string) => void;
 
   // The Git page's scope, tab, filter, selection and list scroll, kept here
   // so they survive leaving the page. Session-only.
@@ -897,6 +902,9 @@ export interface UISlice {
   fileTreeVisible: boolean;
   toggleFileTree: () => void;
   setFileTreeVisible: (visible: boolean) => void;
+  /** File tree column width in px (fileTreeLayout.ts). Clamped on set. */
+  fileTreeWidth: number;
+  setFileTreeWidth: (width: number) => void;
 
   // ─── Company mode ──────────────────────────────────────────────────────
   sidebarMode: 'workspaces' | 'company';
@@ -1200,6 +1208,10 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   sidebarFilter: EMPTY_FILTER,
   setSidebarFilter: (filter) => set((state) => {
     state.sidebarFilter = filter;
+  }),
+  sidebarSearch: '',
+  setSidebarSearch: (search) => set((state) => {
+    state.sidebarSearch = search;
   }),
   gitPage: initialGitPageState(),
   setGitPage: (patch) => set((state) => {
@@ -2126,6 +2138,12 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setFileTreeVisible: (visible) => set((state) => {
     state.fileTreeVisible = visible;
+  }),
+
+  fileTreeWidth: FILE_TREE_DEFAULT_WIDTH,
+
+  setFileTreeWidth: (width) => set((state) => {
+    state.fileTreeWidth = clampFileTreeWidth(width);
   }),
 
   // ─── Company mode ──────────────────────────────────────────────────────

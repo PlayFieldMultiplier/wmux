@@ -140,6 +140,7 @@ export default function RemotePaneSurface({ hostId, sessionId, surfaceId, shell,
           readOnly={allowInput === false}
           hostLabel={hostLabel}
           hostId={hostId}
+          sessionId={sessionId}
           onTitleChange={(title) => onTitleChange(surfaceId, title)}
           fixedFont={fixedFont}
         />

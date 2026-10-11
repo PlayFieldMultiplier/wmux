@@ -41,7 +41,10 @@ export function git(args, cwd) {
 /** A fresh HOME with the fake claude first on PATH, and a project cloned from
  *  a local bare remote. */
 export function makeSandbox(name) {
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `wmux-e2e-${name}-`)));
+  // macOS: the per-user temp dir is long enough that HOME/.wmux-e2e/session-<uuid>.sock
+  // passes the 104-byte Unix socket limit, and the daemon cannot listen.
+  const base = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(base, `wmux-e2e-${name}-`)));
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
   for (const tool of ['claude', 'gh']) {
@@ -106,7 +109,9 @@ export async function launchApp(sb) {
   delete env.WMUX_AUTH_TOKEN;
   const app = await _electron.launch({
     executablePath: require('electron'),
-    args: [ROOT, '--no-sandbox'],
+    // On macOS Electron puts userData under the real ~/Library, not $HOME, so
+    // every run would restore the previous run's session.json.
+    args: [ROOT, '--no-sandbox', `--user-data-dir=${path.join(sb.home, 'electron-user-data')}`],
     env,
     timeout: 90_000,
   });
@@ -126,12 +131,22 @@ export async function launchApp(sb) {
  *  (they carry WMUX_E2E_RUN in their environment). */
 export function killRun(sb) {
   const mine = [];
-  for (const pid of fs.readdirSync('/proc').filter((p) => /^\d+$/.test(p))) {
-    try {
-      const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
-      if (env.includes(`WMUX_E2E_RUN=${sb.runId}`) || env.includes(`HOME=${sb.home}\0`)) mine.push(Number(pid));
-    } catch {
-      /* gone or not ours */
+  if (fs.existsSync('/proc')) {
+    for (const pid of fs.readdirSync('/proc').filter((p) => /^\d+$/.test(p))) {
+      try {
+        const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
+        if (env.includes(`WMUX_E2E_RUN=${sb.runId}`) || env.includes(`HOME=${sb.home}\0`)) mine.push(Number(pid));
+      } catch {
+        /* gone or not ours */
+      }
+    }
+  } else {
+    // macOS: no /proc. `ps -E` appends each own process's environment to its command.
+    const ps = execFileSync('ps', ['-AEww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    for (const line of ps.split('\n')) {
+      if (!line.includes(`WMUX_E2E_RUN=${sb.runId}`) && !line.includes(`HOME=${sb.home} `)) continue;
+      const pid = Number(line.trim().split(/\s+/)[0]);
+      if (pid && pid !== process.pid) mine.push(pid);
     }
   }
   for (const pid of mine) {

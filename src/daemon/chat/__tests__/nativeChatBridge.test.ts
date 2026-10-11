@@ -7,10 +7,12 @@ import type { TranscriptPage, TranscriptStatus } from '../../../shared/transcrip
 import { ChatSendReceiptStore } from '../ChatSendReceiptStore';
 import { ChatCancelReceiptStore } from '../ChatCancelReceiptStore';
 import { ChatQueueStore } from '../ChatQueue';
+import { atomicWriteJSONSync } from '../../util/atomicWrite';
 import { withChosenAccountEnv } from '../../phone/paneAccountSpawn';
 import { createChatBridge, QUEUE_WATCH_CLIENT, WEB_BRIDGE_CLIENT, type ChatAgentState, type ChatPane, type NativeChatBridgeDeps } from '../nativeChatBridge';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
 import { cancelResponse } from '../../web/chatWire';
+import { agentAliveVerdict } from '../../canonicalAgent';
 import { OPENCODE_MAX_SEND_BYTES, fileHistoryEpoch, projectChatBlocked, tuiHistoryEpoch, type ChatQueueEvent } from '../chatBridge';
 
 const dirs: string[] = [];
@@ -152,6 +154,27 @@ describe('resolve', () => {
     expect(await f.bridge.resolve('pane')).not.toHaveProperty('epoch');
     f.state.agent.agentVerified = false;
     expect(await f.bridge.resolve('pane')).toMatchObject({ source: 'file', status: { terminal: { capabilities: { send: false } } } });
+  });
+
+  it('/turns agentAlive never contradicts the /api/sessions verdict for the same pane state', async () => {
+    const f = fixture(); f.liveClaude();
+    const alive = async () => { const r = await f.bridge.resolve('pane'); return r.status.agentAlive; };
+    // Live Claude: both true.
+    expect(agentAliveVerdict(f.state.agent)).toBe(true);
+    expect(await alive()).toBe(true);
+    // Claude exited while its transcript is still bound: both false.
+    f.state.agent = { ...f.state.agent, agentName: null, agentVerified: false, agentStatus: 'idle' };
+    expect(agentAliveVerdict(f.state.agent)).toBe(false);
+    expect(await alive()).toBe(false);
+    // Named but unproven: the row omits the field, /turns stays closed (false).
+    f.state.agent = { ...f.state.agent, agentName: 'Claude Code', agentVerified: false };
+    expect(agentAliveVerdict(f.state.agent)).toBeUndefined();
+    expect(await alive()).toBe(false);
+    // A live Claude with no conversation of its own bound yet: the row says an
+    // agent runs, /turns says this conversation's agent does not. Never the reverse.
+    f.liveClaude(); f.state.projector = { available: false, reason: 'no-hook' };
+    expect(agentAliveVerdict(f.state.agent)).toBe(true);
+    expect(await alive()).not.toBe(true);
   });
 
   it('serves the running episode only through turn(), never on the shared status', async () => {
@@ -1386,6 +1409,7 @@ describe('cancel outcome (Esc path)', () => {
       f.end();
       await f.bridge.kickQueue?.('pane');
       expect(f.written).toEqual([]);
+      expect(f.bridge.queue?.('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'cancel-check' });
       await vi.advanceTimersByTimeAsync(1_000);
       expect(f.outcome()).toMatchObject({ promptRestored: true, inputCleared: true });
       expect(f.written[0]).toBe('\x15');
@@ -1742,9 +1766,9 @@ describe('daemon queue (chat-queue)', () => {
   const RULE = '─'.repeat(40);
   const IDLE = ['● done', RULE, '❯ ', RULE];
   const allow = async () => true;
-  const queued = (f: ReturnType<typeof fixture>, opts: { authorized?: (stage?: string) => Promise<boolean>; ttl?: number; now?: () => number } = {}) => {
+  const queued = (f: ReturnType<typeof fixture>, opts: { authorized?: (stage?: string) => Promise<boolean>; ttl?: number; now?: () => number; store?: ChatQueueStore } = {}) => {
     const events: ChatQueueEvent[] = [];
-    const bridge = createChatBridge({ ...f.deps, queue: new ChatQueueStore(f.dir), onQueueEvent: (e) => events.push(e),
+    const bridge = createChatBridge({ ...f.deps, queue: opts.store ?? new ChatQueueStore(f.dir), onQueueEvent: (e) => events.push(e),
       queueTickMs: 3_600_000, ...(opts.ttl !== undefined ? { queueTtlMs: opts.ttl } : {}), ...(opts.now ? { now: opts.now } : {}) });
     const send = (text: string, extra: Record<string, unknown> = {}) =>
       bridge.send(phoneSend(text, { queue: { authorized: opts.authorized ?? allow }, ...extra }));
@@ -1782,7 +1806,9 @@ describe('daemon queue (chat-queue)', () => {
     expect(q.bridge.queue('device:a', 'pane').map((item) => [item.preview, item.state]))
       .toEqual([['one', 'delivered'], ['two', 'delivered'], ['three', 'delivered']]);
     const first = answers[0].clientMessageId;
-    expect(q.events.filter((e) => e.clientMessageId === first).map((e) => e.state)).toEqual(['queued', 'delivering', 'delivered']);
+    // Held once for the running turn (a same-state event naming why), then delivered.
+    expect(q.events.filter((e) => e.clientMessageId === first).map((e) => [e.state, e.holdReason]))
+      .toEqual([['queued', undefined], ['queued', 'turn-running'], ['delivering', undefined], ['delivered', undefined]]);
     // The delivered message has a v1 send receipt; a re-post replays the queue's state.
     expect(q.bridge.receipt('device:a', 'pane', first)).toMatchObject({ state: 'submitted', result: 'sent', queue: { state: 'delivered' } });
     expect(await q.bridge.send(phoneSend('one', { clientMessageId: first }))).toMatchObject({ replayed: true, queueState: 'delivered' });
@@ -1948,10 +1974,94 @@ describe('daemon queue (chat-queue)', () => {
     f.state.agent = { ...f.state.agent, inputQuiet: false };
     await q.bridge.kickQueue('pane');
     const states = () => q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => e.state);
-    expect(states()).toEqual(['queued']);
+    // Only `queued` events (the second and third name the hold: the turn, then the typing).
+    expect(states()).toEqual(['queued', 'queued', 'queued']);
+    expect(q.events.map((e) => e.holdReason)).toEqual([undefined, 'turn-running', 'busy']);
     f.state.agent = { ...f.state.agent, inputQuiet: true };
     await q.bridge.kickQueue('pane');
-    expect(states()).toEqual(['queued', 'delivering', 'delivered']);
+    expect(states()).toEqual(['queued', 'queued', 'queued', 'delivering', 'delivered']);
+  });
+
+  it('names every hold on the item (holdReason), and drops it once the item is final', async () => {
+    const f = fixture(); f.liveClaude(); runningTurn(f, 1);
+    const q = queued(f);
+    const { clientMessageId } = await q.send('one');
+    const item = () => q.bridge.queue('device:a', 'pane')[0];
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ clientMessageId, state: 'queued', holdReason: 'turn-running' });
+    idleTurn(f, 1);
+    f.state.pendingApproval = 'apr_1';
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'approval' });
+    f.state.pendingApproval = undefined;
+    f.state.screen = ['Select model', '❯ 1. Sonnet', '  2. Opus', 'Esc to cancel'];
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'dialog' });
+    f.state.screen = ['  Total cost: $0.12', '  Press any key to continue'];
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'no-composer' });
+    f.state.screen = IDLE;
+    f.state.agent = { ...f.state.agent, inputQuiet: false };
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'busy' });
+    f.state.agent = { ...f.state.agent, inputQuiet: true };
+    const projector = f.state.projector;
+    f.state.projector = { available: false, reason: 'no-hook' };
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'queued', holdReason: 'unavailable' });
+    // The same hold again on the next tick is silent on the live events.
+    const before = q.events.length;
+    await q.bridge.kickQueue('pane');
+    expect(q.events).toHaveLength(before);
+    f.state.projector = projector;
+    await q.send('two');
+    await q.bridge.kickQueue('pane');
+    expect(item()).toMatchObject({ state: 'delivered' });
+    expect(item()).not.toHaveProperty('holdReason');
+    // The next item waits for the turn the delivery opened to be seen.
+    expect(q.bridge.queue('device:a', 'pane')[1]).toMatchObject({ state: 'queued', holdReason: 'turn-starting' });
+    expect(q.events.slice(before).map((e) => [e.state, e.holdReason]))
+      .toEqual([['queued', undefined], ['delivering', undefined], ['delivered', undefined], ['queued', 'turn-starting']]);
+    expect(q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => e.holdReason).filter(Boolean))
+      .toEqual(['turn-running', 'approval', 'dialog', 'no-composer', 'busy', 'unavailable']);
+  });
+
+  it('a failed durable write holds the item as retry', async () => {
+    const f = fixture(); f.liveClaude(); runningTurn(f, 1);
+    let failDelivering = false;
+    const store = new ChatQueueStore(f.dir, { write: (file, data) => {
+      const entries = (data as { entries: Array<{ state: string }> }).entries;
+      if (failDelivering && entries.some((row) => row.state === 'delivering')) throw new Error('disk full');
+      fs.writeFileSync(file, JSON.stringify(data));
+    } });
+    const bridge = createChatBridge({ ...f.deps, queue: store, queueTickMs: 3_600_000 });
+    await bridge.send(phoneSend('one', { queue: { authorized: allow } }));
+    idleTurn(f, 1);
+    failDelivering = true;
+    await bridge.kickQueue('pane');
+    expect(f.written).toEqual([]);
+    expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'retry' });
+  });
+
+  it('a held item drains on the backup tick once its hold clears, with no hook, and the tick stops with the queue empty', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(); f.liveClaude(); runningTurn(f, 1);
+      const bridge = createChatBridge({ ...f.deps, queue: new ChatQueueStore(f.dir), queueTickMs: 5_000 });
+      await bridge.send(phoneSend('one', { queue: { authorized: allow } }));
+      idleTurn(f, 1);
+      f.state.screen = ['Select model', '❯ 1. Sonnet', '  2. Opus', 'Esc to cancel'];
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'dialog' });
+      // The dialog closes; nothing kicks the queue but its own tick.
+      f.state.screen = IDLE;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pastes(f)).toEqual(['\x1b[200~one\x1b[201~']);
+      expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'delivered' });
+      // Nothing active: the next tick clears itself and none is left.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 
   it('OpenCode: the queue watches the plugin while an item waits, and ignores the daemon detector', async () => {
@@ -1967,6 +2077,27 @@ describe('daemon queue (chat-queue)', () => {
     await q.bridge.kickQueue('pane');
     expect(f.tuiSend).toHaveBeenCalledTimes(1);
     expect(f.unsubscribe).toHaveBeenCalledWith(QUEUE_WATCH_CLIENT, 'pane');
+  });
+
+  it('an item held after the phone saw it delivering is always announced back as queued', async () => {
+    const f = fixture();
+    f.state.native = { status: { ...TUI_STATUS, agentStatus: 'running' }, page: page('raw:ses_one') };
+    const q = queued(f);
+    const { clientMessageId } = await q.bridge.send({ owner: 'device:a', id: 'pane', agentSessionId: 'ses_one', historyEpoch: tuiHistoryEpoch('raw:ses_one'),
+      clientMessageId: msgId(), text: 'tui', managedReadOnly: true, queue: { authorized: allow } });
+    // The plugin takes the authorized request, then answers busy: twice, the same hold.
+    f.tuiSend.mockImplementation(async (...args: unknown[]) => {
+      await (args[4] as { authorized: (stage: string) => Promise<boolean> }).authorized('first-write');
+      return { result: 'busy' } as never;
+    });
+    f.state.native = { status: TUI_STATUS, page: page('raw:ses_one') };
+    await q.bridge.kickQueue('pane');
+    await q.bridge.kickQueue('pane');
+    // Every `delivering` is followed by `queued` naming the hold, the same reason each time included.
+    const seen = q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => `${e.state}:${e.holdReason ?? ''}`);
+    const tries = seen.filter((e) => e === 'delivering:').length;
+    expect(tries).toBeGreaterThanOrEqual(2);
+    expect(seen.slice(seen.indexOf('delivering:'))).toEqual(Array.from({ length: tries }, () => ['delivering:', 'queued:busy']).flat());
   });
 
   it('a draft in a complete (not idle) Claude composer still fails the item', async () => {
@@ -2059,7 +2190,10 @@ describe('daemon queue (chat-queue)', () => {
 
   it('drops the memory half when the store prunes a record', async () => {
     const f = fixture(); f.liveClaude(); runningTurn(f, 1);
-    const q = queued(f);
+    // 34 queue writes: pruning is what is checked here, not crash durability.
+    // The default store fsyncs every write, which on windows-latest pushed
+    // this case past 5 s. Same atomic write and file format, without the fsync.
+    const q = queued(f, { store: new ChatQueueStore(f.dir, { write: (file, data) => atomicWriteJSONSync(file, data) }) });
     const first = (await q.send('first')).clientMessageId;
     q.bridge.dequeue('device:a', 'pane', first);
     for (let i = 0; i < 16; i++) { const { clientMessageId } = await q.send(`m${i}`); q.bridge.dequeue('device:a', 'pane', clientMessageId); }
@@ -2192,8 +2326,9 @@ describe('steer and passive input (a send into a running Claude turn)', () => {
     await q.bridge.kickQueue('pane');
     expect(pastes(f)).toEqual(['\x1b[200~now\x1b[201~']);
     expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ clientMessageId, state: 'delivered', deliver: 'steer' });
-    expect(q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => [e.state, e.deliver]))
-      .toEqual([['queued', 'steer'], ['delivering', 'steer'], ['delivered', 'steer']]);
+    expect(q.events.filter((e) => e.clientMessageId === clientMessageId).map((e) => [e.state, e.deliver, e.holdReason]))
+      .toEqual([['queued', 'steer', undefined], ['queued', 'steer', 'dialog'],
+        ['delivering', 'steer', undefined], ['delivered', 'steer', undefined]]);
     // The other owner's next-turn item still waits for the turn's end.
     expect(q.bridge.queue('device:b', 'pane')[0]).toMatchObject({ state: 'queued', deliver: 'next-turn' });
   });
@@ -2213,6 +2348,25 @@ describe('steer and passive input (a send into a running Claude turn)', () => {
     expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'delivered', deliver: 'steer' });
     expect(q.bridge.steer('device:a', 'pane', clientMessageId)).toEqual({ ok: false, error: 'already-delivered', state: 'delivered' });
     expect(await q.bridge.send(phoneSend('mine', { clientMessageId }))).toMatchObject({ replayed: true, queueState: 'delivered', queueDeliver: 'steer' });
+  });
+
+  it('a steer item for a turn that ended with background agents still running goes in as a normal send', async () => {
+    const f = fixture(); f.liveClaude(); running(f);
+    const q = withQueue(f);
+    // Someone types in Terminal through the rest of the turn: the steer waits.
+    f.state.agent = { ...f.state.agent, inputQuiet: false };
+    const { clientMessageId } = await q.send('how many lines?', { queue: { authorized: allow, deliver: 'steer' } });
+    await q.bridge.kickQueue('pane');
+    expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'queued', holdReason: 'busy' });
+    // The turn ends; Claude waits on its background agents at an empty prompt,
+    // the session name run through the composer's top rule (captured 2026-10-11).
+    f.state.agent = { ...f.state.agent, inputQuiet: true, agentStatus: 'idle', turn: { id: 't1:n.1', state: 'idle', startedAt: 1 } };
+    f.state.screen = ['✻ Waiting for 3 background agents to finish', '', `${'─'.repeat(9)} workspace-identity-card-plan ─`, '❯ ', RULE,
+      '  ⏵⏵ bypass permissions on · 2 shells · ← 2 agents'];
+    await q.bridge.kickQueue('pane');
+    expect(pastes(f)).toEqual(['\x1b[200~how many lines?\x1b[201~']);
+    expect(q.bridge.queue('device:a', 'pane')[0]).toMatchObject({ clientMessageId, state: 'delivered', deliver: 'steer' });
+    expect(q.bridge.receipt('device:a', 'pane', clientMessageId)).not.toMatchObject({ queued: true });
   });
 
   it('Codex: steer falls back to next-turn', async () => {

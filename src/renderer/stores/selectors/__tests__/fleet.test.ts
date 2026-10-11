@@ -531,11 +531,35 @@ describe('selectLatestCompletionEvidenceTask', () => {
     expect(selectLatestCompletionEvidenceTask(s, 'ws-1', 'p1', true)).toBeUndefined();
   });
 
-  it('ignores a completed task with no evidence or empty items', () => {
+  it('returns a completed task with no evidence so the absence can be shown', () => {
     const none = store(task('t1', { noEvidence: true }));
-    expect(selectLatestCompletionEvidenceTask(none, 'ws-1', 'p1', true)).toBeUndefined();
+    expect(selectLatestCompletionEvidenceTask(none, 'ws-1', 'p1', true)).toBe(none.t1);
     const empty = store(task('t2', { items: [] }));
-    expect(selectLatestCompletionEvidenceTask(empty, 'ws-1', 'p1', true)).toBeUndefined();
+    expect(selectLatestCompletionEvidenceTask(empty, 'ws-1', 'p1', true)).toBe(empty.t2);
+  });
+
+  it.each<TaskState>(['submitted', 'working', 'input-required', 'failed', 'canceled'])('does not reuse older success after a newer %s task', (state) => {
+    const s = store(task('old'), task('new', { state, timestamp: '2026-07-10T09:00:00.000Z' }));
+    expect(selectLatestCompletionEvidenceTask(s, 'ws-1', 'p1', true)).toBeUndefined();
+  });
+
+  it('does not reuse older proof when the latest completion has none', () => {
+    const s = store(task('old'), task('new', { noEvidence: true, timestamp: '2026-07-10T09:00:00.000Z' }));
+    expect(selectLatestCompletionEvidenceTask(s, 'ws-1', 'p1', true)).toBe(s.new);
+  });
+
+  it('does not let a newer sibling task hide this pane’s completion', () => {
+    const s = store(task('mine', { to: { workspaceId: 'ws-1', name: 'to', paneId: 'p1' } }),
+      task('sibling', { state: 'failed', timestamp: '2026-07-10T09:00:00.000Z', to: { workspaceId: 'ws-1', name: 'to', paneId: 'p2' } }));
+    expect(selectLatestCompletionEvidenceTask(s, 'ws-1', 'p1', true)).toBe(s.mine);
+  });
+
+  it('withholds success for simultaneous conflicting updates in either insertion order', () => {
+    const success = task('success');
+    const failure = task('failure', { state: 'failed' });
+    for (const s of [store(success, failure), store(failure, success)]) {
+      expect(selectLatestCompletionEvidenceTask(s, 'ws-1', 'p1', true)).toBeUndefined();
+    }
   });
 
   it('picks the most recently completed task by status timestamp', () => {

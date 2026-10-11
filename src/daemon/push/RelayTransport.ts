@@ -75,6 +75,16 @@ export class RelayTransport {
   private dropped = 0;
   /** Last terminal failure status, so a steady outage logs once, not per send. */
   private lastFailureStatus: number | null | undefined = undefined;
+  /** Reason that accompanied it, so a 403 whose reason changes logs again. */
+  private lastFailureReason: string | undefined = undefined;
+  /**
+   * What the relay said alongside the status `post` last returned. A side
+   * channel rather than a wider return type, so callers keep comparing a plain
+   * status. The queue is serial, so `post` and the `noteFailure` that follows
+   * it never interleave with another send; `noteFailure` still checks the
+   * status matches before trusting it.
+   */
+  private lastAnswer: RelayAnswer | null = null;
 
   constructor(deps: RelayTransportDeps) {
     this.deps = deps;
@@ -156,24 +166,32 @@ export class RelayTransport {
     if (this.lastFailureStatus === undefined) return;
     this.deps.log?.('info', `${this.tag} relay is answering again`);
     this.lastFailureStatus = undefined;
+    this.lastFailureReason = undefined;
   }
 
   /**
-   * Remember the last terminal failure, and log a distinct one only when it
-   * CHANGES.
+   * Remember the last terminal failure, and log a distinct one only when its
+   * status or reason CHANGES.
    *
    * A relay that is down fails identically for every send, and one line per
-   * attempt would bury the change that matters — a 401 turning into a 200, or a
-   * 500 turning into a 429.
+   * attempt would bury the change that matters — a 401 turning into a 200, a
+   * 500 turning into a 429, or a 403 for a bad device token turning into a 403
+   * for an expired provider token.
    */
   noteFailure(subject: string, status: number | null): void {
-    if (status === this.lastFailureStatus) return;
+    const answer = status !== null && this.lastAnswer?.status === status ? this.lastAnswer : null;
+    const reason = answer?.reason;
+    // A missing reason on a repeat status is not news: a body that could not be
+    // read must not make a steady outage log once per send.
+    if (status === this.lastFailureStatus && (reason === undefined || reason === this.lastFailureReason)) return;
     this.lastFailureStatus = status;
+    this.lastFailureReason = reason;
+    const detail = answer ? describeAnswer(answer) : '';
     this.deps.log?.(
       'warn',
       status === null
         ? `${this.tag} no response from the relay for ${subject} (after one retry)`
-        : `${this.tag} relay answered ${status} for ${subject}`,
+        : `${this.tag} relay answered ${status}${detail} for ${subject}`,
     );
   }
 
@@ -201,6 +219,7 @@ export class RelayTransport {
     body: Record<string, unknown>,
   ): Promise<number | null> {
     const url = `${String(this.deps.relayUrl).replace(/\/+$/, '')}${routePath}`;
+    this.lastAnswer = null;
     try {
       const res = await this.fetchImpl(url, {
         method: 'POST',
@@ -213,6 +232,7 @@ export class RelayTransport {
         redirect: 'manual',
         signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
       });
+      this.lastAnswer = res.status === 200 ? null : await readAnswer(res);
       return res.status;
     } catch {
       // Never log the body or the URL's query — there is none, but the habit is
@@ -220,6 +240,75 @@ export class RelayTransport {
       return null;
     }
   }
+}
+
+/** Longest error body worth reading. The relay's are a few dozen bytes. */
+const RELAY_ANSWER_MAX_BYTES = 1024;
+
+/**
+ * Shape of a reason worth repeating in a log line: Apple's closed enum
+ * (`BadDeviceToken`) or the relay's own (`bad-json`, a field name). Anything
+ * else — spaces, newlines, length — is dropped rather than echoed. So is a run
+ * of hex: no reason looks like one, and a device token does.
+ */
+const SAFE_REASON = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const HEX_RUN = /^[0-9A-Fa-f]{16,}$/;
+
+interface RelayAnswer {
+  status: number;
+  reason?: string;
+  stage?: 'relay' | 'apns';
+}
+
+/**
+ * Pull the reason and stage out of a refusal. Bounded, and best effort: a body
+ * that is too long, not JSON, or carries a reason of the wrong shape yields the
+ * status alone. Nothing else from the body is kept, so nothing else can reach a
+ * log.
+ */
+async function readAnswer(res: Response): Promise<RelayAnswer> {
+  const answer: RelayAnswer = { status: res.status };
+  const stage = res.headers.get('x-wmux-relay-stage');
+  if (stage === 'relay' || stage === 'apns') answer.stage = stage;
+  try {
+    const text = await readBounded(res, RELAY_ANSWER_MAX_BYTES);
+    if (text === null) return answer;
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const reason = (parsed as { reason?: unknown }).reason;
+      if (typeof reason === 'string' && SAFE_REASON.test(reason) && !HEX_RUN.test(reason)) answer.reason = reason;
+    }
+  } catch {
+    // An unreadable body costs the detail, never the status.
+  }
+  return answer;
+}
+
+/** The body as text, or null when it is longer than `max` bytes. */
+async function readBounded(res: Response, max: number): Promise<string | null> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) return null;
+      chunks.push(value);
+    }
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function describeAnswer(answer: RelayAnswer): string {
+  if (answer.stage && answer.reason) return ` (${answer.stage}: ${answer.reason})`;
+  if (answer.reason) return ` (${answer.reason})`;
+  if (answer.stage) return ` (${answer.stage})`;
+  return '';
 }
 
 /**

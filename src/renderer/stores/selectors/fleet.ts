@@ -762,9 +762,10 @@ export function sortFleetPanes(
 // The Fleet cockpit's promise is "trust an agent to run unattended". Completion
 // evidence (§6.M) is the durable proof an agent left when it finished a
 // delegated A2A task; surfacing it on the card is what makes that trust
-// legible. This selector answers, per card, "what is the most recent COMPLETED
-// A2A task addressed to this pane that carries evidence?" — read straight off
-// the existing a2aTasks store (no new store/RPC).
+// legible. First find the most recently updated task addressed to the pane,
+// then show its evidence only if it completed. Filtering for success first
+// would let an older success mask newer working, failed or canceled work.
+// A completion without evidence is returned too, so it can say so explicitly.
 //
 // It returns the STORE's own Task reference (never a fresh object) so a
 // card-local `useStore` subscription stays reference-stable across unrelated
@@ -785,20 +786,18 @@ export function selectLatestCompletionEvidenceTask(
 ): Task | undefined {
   let best: Task | undefined;
   for (const task of Object.values(a2aTasks)) {
-    if (task.status.state !== 'completed') continue;
-    const evidence = task.status.evidence;
-    if (!evidence || evidence.items.length === 0) continue;
     const to = task.metadata.to;
     if (to.workspaceId !== workspaceId) continue;
     // Pane precision: a pinned receiver pane must BE this card; an unpinned
     // (ws-only) task lands on the active pane only.
     if (to.paneId ? to.paneId !== paneId : !isActivePane) continue;
-    // "Most recent" = latest completion timestamp (status.timestamp is stamped
-    // at the completed transition). Lexicographic compare is chronological for
-    // canonical ISO-8601 UTC strings (both produced by isoNow()).
-    if (!best || task.status.timestamp > best.status.timestamp) best = task;
+    // Status timestamps are canonical ISO-8601 UTC strings. If updates share
+    // a timestamp, an unfinished/failed task wins over a success: the order
+    // is ambiguous, so it must not produce a reassuring badge.
+    if (!best || task.status.timestamp > best.status.timestamp
+      || (task.status.timestamp === best.status.timestamp && task.status.state !== 'completed')) best = task;
   }
-  return best;
+  return best?.status.state === 'completed' ? best : undefined;
 }
 
 // Panes that need you, by the shared class (fleetAttentionClass): a dialog is
@@ -1279,7 +1278,8 @@ export function groupFleetPanes(panes: FleetPane[], ctx: FleetGroupContext = {})
 export function fleetTitle(pane: FleetPane, mission?: WorkTask): string {
   if (pane.paneLabel?.trim()) return pane.paneLabel.trim();
   if (mission?.title.trim()) return mission.title.trim();
-  const title = pane.title.replace(/^[✳✻✽✶✢*]\s*/, '').trim();
+  // `✳` marks a finished Claude Code turn; `◐` / `◑` alternate while one runs.
+  const title = pane.title.replace(/^[✳✻✽✶✢◐◑*]\s*/, '').trim();
   const generic = /^(claude(?: code)?|codex(?: cli)?|gemini(?: cli)?|agy|antigravity(?: cli)?|terminal|shell|zsh|bash|pwsh|powershell|cmd(?:\.exe)?)$/i;
   if (title && !generic.test(title) && title.toLowerCase() !== pane.agentName?.toLowerCase()) return title;
   return pane.workspaceName;

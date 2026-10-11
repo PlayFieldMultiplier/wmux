@@ -121,12 +121,16 @@ function readStates(): Array<{ sig: string; ok: boolean; at: number }> {
     .map((f) => JSON.parse(fs.readFileSync(path.join(stateDir(), f), 'utf8')) as { sig: string; ok: boolean; at: number });
 }
 
-async function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
-  const until = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > until) throw new Error('timed out waiting');
-    await new Promise((r) => setTimeout(r, 20));
-  }
+/**
+ * Wait for what the detached push child does (a request reaching the fake
+ * main, the state file it writes when done). It has no deadline of its own:
+ * the old 3 s cap was shorter than the case's own budget, and on
+ * windows-latest a detached `node --push` child (spawn + module load) can
+ * take most of that, so the helper threw "timed out waiting" while the child
+ * was still on its way. The case timeout is the bound, and it names the case.
+ */
+async function waitFor(cond: () => boolean): Promise<void> {
+  while (!cond()) await new Promise((r) => setTimeout(r, 20));
 }
 
 /** A fake main pipe answering every request with `result`. */

@@ -463,6 +463,8 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     sidebarPinnedIds: state.sidebarPinnedIds,
     sidebarBookmarkedIds: state.sidebarBookmarkedIds,
     sidebarWidth: state.sidebarWidth,
+    fileTreeVisible: state.fileTreeVisible,
+    fileTreeWidth: state.fileTreeWidth,
     sidebarTaskGroupExpanded: state.sidebarTaskGroupExpanded,
     // A dismissed question must stay dismissed across a restart: the PTY
     // lives on in the daemon and its next Stop re-reads the same question.
@@ -793,7 +795,11 @@ export default function AppLayout() {
   // was open when it collapsed.
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const sidebarWidthPx = sidebarVisible ? sidebarWidth : 0;
-  const [dockMode, shellRef] = useDockMode(sidebarWidthPx);
+  // The file tree column takes its width from the panes too, so it counts
+  // toward the floor the inline dock must leave them.
+  const fileTreeVisible = useStore((s) => s.fileTreeVisible);
+  const fileTreeWidth = useStore((s) => s.fileTreeWidth);
+  const [dockMode, shellRef] = useDockMode(sidebarWidthPx + (fileTreeVisible ? fileTreeWidth : 0));
   const dockAutoCollapsed = useRef(false);
   useEffect(() => {
     const st = useStore.getState();
@@ -810,7 +816,6 @@ export default function AppLayout() {
     // Only a mode change collapses or restores; opening the overlay later
     // must not be undone.
   }, [dockMode]);
-  const fileTreeVisible = useStore((s) => s.fileTreeVisible);
   const companyViewVisible = useStore((s) => s.companyViewVisible);
   const setCompanyViewVisible = useStore((s) => s.setCompanyViewVisible);
   // PERF (2026-07-13): AppLayout does NOT subscribe to the whole `workspaces`
@@ -1834,6 +1839,14 @@ export default function AppLayout() {
     return () => off?.();
   }, []);
 
+  // A macOS copy run outside Applications uses separate data; say so once per
+  // portable data dir so an empty app is not mistaken for data loss.
+  useEffect(() => {
+    void window.electronAPI.claimPortableDataNotice?.().then((show) => {
+      if (show) useStore.getState().pushToast({ level: 'info', persist: true, message: t('app.portableData.notice') });
+    }).catch(() => undefined);
+  }, []);
+
   // X8 pane supervision — keep the renderer supervision slice in sync with the
   // daemon's PaneSupervisor. Three inputs:
   //   - pty.onSupervisionChanged: sticky status flip (guard-trip / rearm /
@@ -2175,6 +2188,16 @@ export default function AppLayout() {
           chevron, ~85% of it empty; one button on a row that already exists
           costs the terminals nothing. */}
       </div>
+      {/* The file tree column: Workspaces-page chrome between the panes and
+          Moa's dock, so a rail page (which stops at the dock) covers it with
+          the panes. */}
+      <div className="contents" inert={appRoute !== 'workspaces' && !inspectModeActive} data-workspaces-page>
+      {fileTreeVisible && (
+        <ErrorBoundary name="FileTree">
+          <FileTreePanel position={sidebarPosition === 'left' ? 'right' : 'left'} />
+        </ErrorBoundary>
+      )}
+      </div>
       {/* The dock stays interactive beside every rail page but Settings (they
           cover only the sidebar and the panes, so Moa is in reach); Settings
           covers it, inert, like the rest of the Workspaces page. Both dock
@@ -2198,13 +2221,6 @@ export default function AppLayout() {
             <ChannelDock />
           </ErrorBoundary>
         </div>
-      )}
-      </div>
-      <div className="contents" inert={appRoute !== 'workspaces' && !inspectModeActive} data-workspaces-page>
-      {fileTreeVisible && (
-        <ErrorBoundary name="FileTree">
-          <FileTreePanel position={sidebarPosition === 'left' ? 'right' : 'left'} />
-        </ErrorBoundary>
       )}
       </div>
       {/* Fleet, Schedules, Remote or Settings, swapped in by the rail. */}

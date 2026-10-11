@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DELIVERABLE_BRANCH_RE, deliverGoal, prNumberOf, revertDelivery, runDueMerges, type ExecResult, type MoaGoalDeliveryPorts } from '../moaGoalDelivery';
+import { DELIVERABLE_BRANCH_RE, deliverGoal, prBody, reviewGuide, prNumberOf, revertDelivery, runDueMerges, type ExecResult, type MoaGoalDeliveryPorts } from '../moaGoalDelivery';
 import { MOA_GOAL_AUTO_MERGE, MOA_GOAL_DEFAULT_HUMAN_ONLY, type MoaGoalContract, type MoaGoalVerification } from '../../../shared/moaGoal';
 
 let dir: string;
@@ -83,6 +83,31 @@ describe('deliverGoal — push the verified commit, open the PR', () => {
     expect(body).toContain(head);
     expect(d.revertRecipe[0]).toMatch(/^gh pr close 42/);
     expect(d.items[0].mergeAfter).toBeUndefined();
+  });
+
+  it('opens the body with a review order guide built from the verification', async () => {
+    const { p, gh } = ports();
+    await deliverGoal(contract(), verification(), p);
+    const create = gh.mock.calls[0][0];
+    const body = create[create.indexOf('--body') + 1] as string;
+    expect(body.indexOf('### Review order')).toBeLessThan(body.indexOf('### Done criteria'));
+    expect(body).toContain(`Passed: project checks on version \`${head.slice(0, 12)}\``);
+    const g = reviewGuide(contract(), verification(), { taskId: 't1', headSha: head });
+    expect(g.gate).toBe('passed');
+    expect(g.steps.map((s) => s.target)).toEqual(['criteria', 'evidence', 'files']);
+    expect(g.steps[0].items).toEqual(['(1) a.txt says fixed']);
+    expect(g.steps[1].items).toEqual([`(1) \`/e/a.txt\` (sha256 ${'d'.repeat(12)})`, '`npm test`']);
+  });
+
+  it('says Not verified, never Passed, when the gate result is missing or for another commit', () => {
+    const none = { ...verification(), gates: [] };
+    expect(reviewGuide(contract(), none, { taskId: 't1', headSha: head }).gate).toBe('missing');
+    expect(prBody(contract(), none, { taskId: 't1', headSha: head })).not.toContain('Passed:');
+    expect(prBody(contract(), none, { taskId: 't1', headSha: head })).toContain('Not verified');
+    expect(reviewGuide(contract(), verification('e'.repeat(40)), { taskId: 't1', headSha: head }).gate).toBe('missing');
+    const failed = verification();
+    failed.gates[0].exitCode = 1;
+    expect(reviewGuide(contract(), failed, { taskId: 't1', headSha: head }).gate).toBe('failed');
   });
 
   it('never force-pushes: a remote that moved ahead rejects the push, and the item says so', async () => {

@@ -693,6 +693,11 @@ const V2_STATE: Record<Exclude<ChatV2Status, 'handed-off'>, { agentStatus: Agent
   failed: { agentStatus: 'error', agentAlive: false, phase: 'disconnected' },
 };
 
+/** A live v2 record's `agentAlive`, as its `/turns` reads it; undefined for no record or a handed-off one (the TUI owns the pane). */
+export function chatV2AgentAlive(binding: ChatV2Binding | null | undefined): boolean | undefined {
+  return binding && binding.status !== 'handed-off' ? V2_STATE[binding.status].agentAlive : undefined;
+}
+
 /**
  * `/turns` `chat` for a v2 record: the managed object's keys exactly, plus
  * `streaming:false`. Read + approve only: `send` stays false (the route answers

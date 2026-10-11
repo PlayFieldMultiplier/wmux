@@ -19,16 +19,40 @@ export function registerComputerRpc(
   resolvePtyWorkspace: (ptyId: string) => Promise<string | null>,
   /** The name the person gave a workspace, for the consent prompt. */
   workspaceName: (workspaceId: string) => string | undefined = () => undefined,
+  /**
+   * Protected browser panes (browser.rpc.ts CallerBrowserProtection): null
+   * when the caller may use the desktop, otherwise why not. Absent means no
+   * pane can be protected (older wirings, tests).
+   */
+  callerProtection?: (method: string, ctx: RpcContext | undefined) => Promise<string | null>,
 ): void {
   // Listing apps needs no identity beyond a named client; getAppState and act
   // are what consent, the lock and snapshots key on. listWindows uses the
   // identity when the caller sends one (titles of consented apps) and
   // otherwise gets an agent with an empty key, for which every title is blank.
   type Identity = 'none' | 'required' | 'optional';
-  const wrap = <T>(fn: (params: Record<string, unknown>, agent: ComputerAgent) => Promise<T>, identity: Identity = 'none') =>
+  const wrap = <T>(
+    method: string,
+    fn: (params: Record<string, unknown>, agent: ComputerAgent) => Promise<T>,
+    identity: Identity = 'none',
+  ) =>
     async (params: Record<string, unknown>, ctx?: RpcContext): Promise<T> => {
       try {
         const name = requireClient(ctx);
+        // A protected pane's agent does not get the desktop: its own Chrome
+        // window is one more app it could drive around the pane's browser
+        // checks. Asked before anything else; a check that fails refuses.
+        if (callerProtection && method !== 'computer.capabilities') {
+          let refusal: string | null;
+          try {
+            refusal = await callerProtection(method, ctx);
+          } catch (err) {
+            refusal = `wmux could not check the calling pane's browser protection (${err instanceof Error ? err.message : String(err)})`;
+          }
+          if (refusal !== null) {
+            throw new ComputerError('policy_denied', `computer use is not available from a protected browser pane: ${refusal}`);
+          }
+        }
         // A present but malformed identity is refused, never quietly treated
         // as no identity.
         for (const field of ['senderPtyId', 'callerInstance'] as const) {
@@ -48,14 +72,14 @@ export function registerComputerRpc(
       }
     };
 
-  router.register('computer.capabilities', wrap(() => getService().capabilities()));
+  router.register('computer.capabilities', wrap('computer.capabilities', () => getService().capabilities()));
 
-  router.register('computer.listApps', wrap(() => getService().listApps()));
+  router.register('computer.listApps', wrap('computer.listApps', () => getService().listApps()));
 
-  router.register('computer.listWindows', wrap((params, agent) =>
+  router.register('computer.listWindows', wrap('computer.listWindows', (params, agent) =>
     getService().listWindows(agent, typeof params.app === 'string' ? params.app : undefined), 'optional'));
 
-  router.register('computer.getAppState', wrap((params, agent) => {
+  router.register('computer.getAppState', wrap('computer.getAppState', (params, agent) => {
     if (typeof params.app !== 'string' || params.app.length === 0) {
       throw new ComputerError('invalid_argument', 'app is required');
     }
@@ -66,7 +90,7 @@ export function registerComputerRpc(
     });
   }, 'required'));
 
-  router.register('computer.act', wrap((params, agent): Promise<unknown> => {
+  router.register('computer.act', wrap('computer.act', (params, agent): Promise<unknown> => {
     if (typeof params.action !== 'string' || !isControlAction(params.action)) {
       throw new ComputerError('invalid_argument', `action must be one of ${COMPUTER_CONTROL_ACTIONS.join(', ')}`);
     }

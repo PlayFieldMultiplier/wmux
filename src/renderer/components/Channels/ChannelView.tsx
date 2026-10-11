@@ -874,9 +874,11 @@ export function ChannelView(): React.ReactElement | null {
       // doesn't mark messages received. NOTE: the flip is persisted on the daemon
       // and visible to the sender's NEXT poll/reopen (agents poll getMessages, so
       // they see it); live push to an already-open sender view is a follow-up.
-      // W1: on an OBSERVED channel this ack is an intentional no-op (ws-human has
-      // no member row → the daemon rejects it, swallowed by the catch below); the
-      // local unread badge still clears via setActiveChannel, so nothing piles up.
+      // W1/#1318: on a channel the human reads without a seat (observed private,
+      // or public unjoined) there are no receipts to flip; the daemon advances
+      // the human's observer cursor instead, which is what clears that channel's
+      // unread mentions on the phone too. The local badge clears via
+      // setActiveChannel either way.
       if (disposed || !loaded) return;
       // Compute uptoSeq from the messages ACTUALLY in the store, not the catalog
       // row's nextSeq: appendMessageFromEvent/hydrateChannelMessages never advance
@@ -900,6 +902,31 @@ export function ChannelView(): React.ReactElement | null {
       disposed = true;
     };
   }, [activeChannelId]);
+
+  // #1318: a mention of the human that arrives while a seatless channel is open
+  // is read on arrival — ack it then, so the observer cursor (and the phone's
+  // count) follows instead of waiting for the next open.
+  const readsAsObserver = channel?.observerUnreadMentions !== undefined;
+  const latestHumanMentionSeq = useMemo(() => {
+    let seq = 0;
+    for (const m of messages) {
+      if (m.seq > seq && m.mentions?.some((mn) => mn.workspaceId === HUMAN_WORKSPACE_ID)) seq = m.seq;
+    }
+    return seq;
+  }, [messages]);
+  useEffect(() => {
+    if (!activeChannelId || !readsAsObserver || latestHumanMentionSeq < 1) return;
+    const bridge = useStore.getState().channelsRpc();
+    if (!bridge) return;
+    void bridge
+      .mutateLocal('a2a.channel.ack', {
+        channelId: activeChannelId,
+        workspaceId: HUMAN_WORKSPACE_ID,
+        verifiedWorkspaceId: HUMAN_WORKSPACE_ID,
+        uptoSeq: latestHumanMentionSeq,
+      })
+      .catch(() => undefined);
+  }, [activeChannelId, readsAsObserver, latestHumanMentionSeq]);
 
   if (!activeChannelId || !channel) {
     // The activeChannelId-but-channel-undefined case can fire on a

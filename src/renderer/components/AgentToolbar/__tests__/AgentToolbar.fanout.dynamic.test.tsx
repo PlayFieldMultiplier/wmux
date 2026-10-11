@@ -12,6 +12,7 @@ import { createRoot, type Root } from 'react-dom/client';
 vi.mock('../inject', () => ({
   injectText: () => Promise.resolve(),
   attachFilesToPty: () => Promise.resolve(),
+  insertPathsIntoPty: () => Promise.resolve(),
   quotePathsForPrompt: (paths: string[]) => paths.join(' '),
 }));
 
