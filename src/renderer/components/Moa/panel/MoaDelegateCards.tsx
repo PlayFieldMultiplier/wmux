@@ -30,7 +30,8 @@ export const LANE_REASONS = [
   'required-check', 'package-manifest', 'dependency-patch', 'build-config', 'changelog', 'ci-config',
   'release-script', 'packaging', 'license', 'files-truncated', 'no-files', 'windows-path',
   'labels-truncated', 'needs-windows-verify', 'no-author', 'external-author', 'cross-repository',
-  'no-head-branch', 'branch-not-bound',
+  'no-head-branch', 'branch-not-bound', 'no-verdict', 'verdict-stale-head', 'verdict-fail', 'self-verified',
+  'verdicts-unreadable', 'author-unknown',
 ] as const;
 
 /**
@@ -168,6 +169,7 @@ export function MoaDelegateTicketRow({
           suggestGo={judge?.verdict === 'go' ? { ruleId: judge.ruleId, why: judge.why } : null}
           busy={busy}
           onAnswer={(approve) => void send({ type: 'merge', approve, expectHead: body.expectHead })}
+          workspaceName={workspaceName}
           t={t}
         />
       )}
@@ -280,7 +282,7 @@ function QuestionBody({ titleId, question, options, context, suggested, suggesti
   );
 }
 
-function MergeBody({ titleId, decision, prNumber, expectHead, context, suggestGo, busy, onAnswer, t }: {
+function MergeBody({ titleId, decision, prNumber, expectHead, context, suggestGo, busy, onAnswer, workspaceName, t }: {
   titleId: string;
   decision: MoaDecision;
   prNumber: number;
@@ -289,9 +291,16 @@ function MergeBody({ titleId, decision, prNumber, expectHead, context, suggestGo
   suggestGo: { ruleId?: string; why: string } | null;
   busy: boolean;
   onAnswer: (approve: boolean) => void;
+  workspaceName: (id: string) => string | undefined;
   t: T;
 }) {
   const failures = laneReasonsOf(decision);
+  const verifier = decision.lane?.verifiedBy;
+  const verified = verifier ? (
+    <p className="m-0 text-[11px] leading-snug text-[var(--text-main)]" data-moa-delegate-verified>
+      {t('moa.delegate.verifiedBy', { who: workspaceName(verifier.workspaceId) || verifier.workspaceId, sha: shortHead(verifier.headSha) })}
+    </p>
+  ) : null;
   return (
     <>
       <p id={titleId} className="m-0 mt-0.5 text-[13px] font-medium leading-snug text-[var(--text-main)] break-words">
@@ -304,11 +313,13 @@ function MergeBody({ titleId, decision, prNumber, expectHead, context, suggestGo
           <ul className="m-0 pl-4 text-[11px] leading-snug text-[var(--text-main)]" data-moa-delegate-lane>
             {failures.map((r) => <li key={r} data-lane-failure={r}>{laneReasonText(r, t)}</li>)}
           </ul>
+          {verified}
         </div>
       ) : decision.lane?.ok ? (
         <div className="mt-1" data-moa-delegate-lane-block>
           <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-sub)]">{t('moa.delegate.checkedByWmux')}</div>
           <p className="m-0 text-[11px] leading-snug text-[var(--text-main)]" data-moa-delegate-lane-ok>{t('moa.delegate.laneOk')}</p>
+          {verified}
         </div>
       ) : null}
       {suggestGo

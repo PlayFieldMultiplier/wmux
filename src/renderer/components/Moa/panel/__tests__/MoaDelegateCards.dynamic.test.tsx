@@ -185,6 +185,23 @@ describe('merge card', () => {
     expect(laneReasonsOf({ reasonCode: 'judge-failed', why: 'timeout' })).toEqual([]);
     expect(laneReasonText('required-check-cancel', t)).toBe('moa.delegate.lane.required-check');
     expect(laneReasonText('something-new', t)).toBe('something-new');
+    expect(laneReasonText('self-verified', t)).toBe('moa.delegate.lane.self-verified');
+  });
+
+  it('names the verifier and the head it verified, by workspace name or id', async () => {
+    const verifiedBy = { workspaceId: 'ws-verifier', agent: 'codex', headSha: HEAD };
+    const d = mergeTicket(11, { lane: { ok: true, reasons: [], verifiedBy }, reasonCode: 'suggested', why: 'recorded' });
+    await act(async () => root.render(createElement('ul', null, createElement(MoaDelegateTicketRow, { decision: d, resolve: vi.fn(), onDone: vi.fn(), workspaceName: () => 'Review bot', t }))));
+    expect(container.querySelector('[data-moa-delegate-verified]')!.textContent).toBe('moa.delegate.verifiedBy(Review bot,0123456)');
+    await act(async () => root.render(createElement('ul', null, createElement(MoaDelegateTicketRow, { decision: d, resolve: vi.fn(), onDone: vi.fn(), workspaceName: () => undefined, t }))));
+    expect(container.querySelector('[data-moa-delegate-verified]')!.textContent).toBe('moa.delegate.verifiedBy(ws-verifier,0123456)');
+  });
+
+  it('shows no verifier line without one; a missing verdict reads as a lane reason', async () => {
+    const d = mergeTicket(12, { lane: { ok: false, reasons: ['no-verdict'] }, reasonCode: 'lane-no-verdict', why: 'x' });
+    await act(async () => root.render(createElement('ul', null, createElement(MoaDelegateTicketRow, { decision: d, resolve: vi.fn(), onDone: vi.fn(), workspaceName: name, t }))));
+    expect(container.querySelector('[data-moa-delegate-verified]')).toBeNull();
+    expect(container.textContent).toContain('moa.delegate.lane.no-verdict');
   });
 });
 
