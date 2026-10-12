@@ -435,4 +435,32 @@ describe('hooks.signal — local verdict gate (CompletionAlarm)', () => {
     expect(sendNotificationMock).not.toHaveBeenCalled();
     expect(broadcastMetadataUpdateMock).not.toHaveBeenCalled();
   });
+
+  it('drops an interrupted Stop that lands after the next prompt', async () => {
+    const r = rig();
+    vi.setSystemTime(10_000);
+    await r.dispatch({ kind: 'agent.user_prompt_submit' });
+    await primeWorking(r);
+    const interrupted = { wmux_turn_reason: 'aborted' };
+
+    // Interrupted at 10_500, after that prompt: the pane settles silently.
+    await r.dispatch({ payload: { ...interrupted, wmux_turn_ended_at: 10_500 } });
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(broadcastMetadataUpdateMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentStatus: 'complete' }));
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    eventBus.reset();
+
+    // Interrupted at 11_500, but a prompt landed at 12_000: no effect at all.
+    vi.setSystemTime(12_000);
+    await r.dispatch({ kind: 'agent.user_prompt_submit' });
+    await primeWorking(r);
+    await r.dispatch({ payload: { ...interrupted, wmux_turn_ended_at: 11_500 } });
+    expect(broadcastMetadataUpdateMock).not.toHaveBeenCalled();
+    expect(pollLifecycle()).toEqual([]);
+
+    // The new turn's own Stop still announces.
+    await r.dispatch({ kind: 'agent.stop' });
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+  });
 });
