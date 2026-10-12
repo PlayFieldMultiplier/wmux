@@ -26,6 +26,8 @@ import { detectRemote } from '../github/PrProvider';
 import { ghPrReviewService } from '../github/GhPrReviewService';
 import { ghIssueEnv, ghIssueService, splitRepoKey } from '../github/GhIssueService';
 import { getTaskLedger } from './taskLedgerHost';
+import { authorWorkspaces, parseWorktreeList } from './authorWorkspaces';
+import { getPrVerdictStore } from '../github/prVerdictStore';
 import { getMoaConfig, onHqStoreWritten, setMoaAutoRules } from './deckHqStore';
 import { loadPolicyBook } from './deckPolicy';
 import { setMoaDelegateService } from './moaDelegatePorts';
@@ -167,6 +169,30 @@ async function askerBranches(getDaemonClient: () => DaemonClient | null, asker: 
   return [...out];
 }
 
+/** The PR's author workspaces (authorWorkspaces.ts). Throws when unknown. */
+function prAuthorWorkspaces(getDaemonClient: () => DaemonClient | null, asker: MoaAsker, repoPath: string, headRefName: string): Promise<string[]> {
+  return authorWorkspaces({
+    listLedger: () => getTaskLedger().list({}),
+    daemonRpc: () => {
+      const dc = getDaemonClient();
+      return dc?.isConnected ? (method, params) => dc.rpc(method, params) : null;
+    },
+    worktrees: async (cwd) => {
+      const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true });
+      return parseWorktreeList(stdout);
+    },
+    paneCwds: () => {
+      const mirror = getWorkspaceMirror();
+      const entries = mirror.getEntries();
+      if (!entries) return null;
+      return entries.flatMap((e) => (mirror.getFleetSnapshot(e.id)?.panes ?? []).map((p) => ({ workspaceId: e.id, cwd: p.cwd ?? '' })));
+    },
+    realpath: (p) => {
+      try { return fs.realpathSync(p); } catch { return p; }
+    },
+  }, { askerWorkspaceId: asker.workspaceId, repoPath, headRefName });
+}
+
 /** The asker's pane as the fleet mirror sees it. A stale or missing
  *  snapshot is `unknown` (wait), never `gone`. */
 export function askerPaneState(asker: MoaAsker): AskerPaneState {
@@ -228,7 +254,7 @@ function build(d: MoaDelegateWiringDeps): MoaAskService {
         expectHead: e.expectHead, subject: moaMergeSubject(head.ok ? head.value.head.title : '', e.prNumber), body: '',
       });
     },
-    laneContext: (e) => (service as MoaAskService).laneContext(e),
+    laneContext: (e, f) => (service as MoaAskService).laneContext(e, f),
     authorize: (e) => (service as MoaAskService).authorize(e),
     identity: (e) => (service as MoaAskService).identity(e),
     emit: (e) => service?.emitEffect(e),
@@ -254,6 +280,8 @@ function build(d: MoaDelegateWiringDeps): MoaAskService {
       return { key: remote.key, path: cwd };
     },
     askerBranches: (asker, repoPath) => askerBranches(d.getDaemonClient, asker, repoPath),
+    verdicts: (repoKey, prNumber) => getPrVerdictStore(dir).list(repoKey, prNumber),
+    authorWorkspaces: (asker, repoPath, headRefName) => prAuthorWorkspaces(d.getDaemonClient, asker, repoPath, headRefName),
     // Per-PR facts come from the lane read; squash permission is per repo,
     // and the login is read now, as the executor's identity gate reads it.
     mergeFactsExtras: async (repo) => {

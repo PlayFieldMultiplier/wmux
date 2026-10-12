@@ -58,7 +58,7 @@ function build(opts: {
     effects,
     facts: { readFresh },
     merge: async () => ({ ok: true }),
-    laneContext: (e) => (service as MoaAskService).laneContext(e),
+    laneContext: (e, f) => (service as MoaAskService).laneContext(e, f),
     authorize: (e) => (service as MoaAskService).authorize(e),
     emit: () => undefined,
     log: () => undefined,
@@ -73,6 +73,8 @@ function build(opts: {
     loadBook: () => ({ ...parsePolicyBook(BOOK), text: BOOK }),
     judge: async () => ESCALATE,
     readScreen: async () => [],
+    verdicts: async () => [],
+    authorWorkspaces: async () => [],
     resolveRepo: async () => null,
     askerBranches: async () => [],
     answerPane: {

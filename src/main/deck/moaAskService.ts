@@ -49,11 +49,12 @@ import {
 } from '../../shared/moaDecision';
 import type { PrMergeFacts } from '../../shared/phoneGitWrite';
 import type { PrLaneFacts } from '../../shared/prReview';
+import type { PrVerdictRecord } from '../../shared/prVerdict';
 import type { MoaDelegateEvents, MoaDelegateServicePort } from './moaDelegatePorts';
 import type { MoaDecisionStore, MoaSettlement } from './moaDecisionStore';
 import type { MoaEffectStore } from './moaEffectStore';
 import type { MoaMergeExecutor } from './moaMergeExecutor';
-import { evaluateMergeLane, type MergeLaneFactsReader, type LaneVerdict } from './moaMergeLane';
+import { evaluateMergeLane, type MergeLaneContext, type MergeLaneFactsReader, type LaneVerdict } from './moaMergeLane';
 import { buildMergeFacts, type MergeFactsExtras } from './moaMergeFacts';
 import { moaAutoEligibility, type PolicyBook } from './deckPolicy';
 import {
@@ -98,6 +99,12 @@ export interface MoaAskServicePorts {
   /** Branches bound to the asker: the one checked out at `repoPath` and its
    *  task ledger rows' branches. */
   askerBranches: (asker: MoaAsker, repoPath: string) => Promise<string[]>;
+  /** The verdicts recorded for a PR (pr_verdict), read from disk now. Throws
+   *  when unreadable. */
+  verdicts: (repoKey: string, prNumber: number) => Promise<PrVerdictRecord[]>;
+  /** The workspaces that authored a PR on `headRefName` (authorWorkspaces).
+   *  Throws when any part could not be read. */
+  authorWorkspaces: (asker: MoaAsker, repoPath: string, headRefName: string) => Promise<string[]>;
   /** A verdict the shadow judge already recorded for this question hash. */
   priorJudgment?: (questionHash: string) => MoaJudgeResult | null;
   /** What the decision's PrMergeFacts need beside the lane read: squash
@@ -358,7 +365,11 @@ export class MoaAskService implements MoaDelegateServicePort {
     const laneFacts = { passed: lane.ok, failed: lane.failures.map((f) => f.reason) };
     const withLane = (r: { settlement: MoaSettlement; auto: boolean }) => ({
       ...r,
-      settlement: { ...r.settlement, lane: { ok: lane.ok, reasons: laneFacts.failed }, ...(mergeFacts ? { facts: mergeFacts } : {}) },
+      settlement: {
+        ...r.settlement,
+        lane: { ok: lane.ok, reasons: laneFacts.failed, ...(lane.verifiedBy ? { verifiedBy: lane.verifiedBy } : {}) },
+        ...(mergeFacts ? { facts: mergeFacts } : {}),
+      },
     });
     const book = this.ports.loadBook();
     if (!book || book.rules.size === 0) return withLane({ settlement: esc('no-policy-book', 'the policy book has no rules; the owner answers it in the Moa panel'), auto: false });
@@ -406,8 +417,22 @@ export class MoaAskService implements MoaDelegateServicePort {
 
   private async evaluateLane(d: MoaDecision, facts: PrLaneFacts): Promise<LaneVerdict> {
     if (d.body.type !== 'merge' || !d.repo) return { ok: false, failures: [{ predicate: 'head-unchanged', reason: 'not-a-merge' }] };
-    const askerBranches = await this.ports.askerBranches(d.asker, d.repo.path).catch(() => [] as string[]);
-    return evaluateMergeLane(facts, { expectHead: d.body.expectHead, trustedAuthors: this.ports.getConfig().trustedAuthors, askerBranches });
+    const [askerBranches, verdicts, authorWorkspaces] = await Promise.all([
+      this.ports.askerBranches(d.asker, d.repo.path).catch(() => [] as string[]),
+      this.readVerdicts(d.repo.key, facts.number),
+      this.readAuthors(d.asker, d.repo.path, facts.headRefName),
+    ]);
+    return evaluateMergeLane(facts, { expectHead: d.body.expectHead, trustedAuthors: this.ports.getConfig().trustedAuthors, askerBranches, verdicts, authorWorkspaces });
+  }
+
+  /** Null (the lane fails closed) when the store cannot be read. */
+  private readVerdicts(repoKey: string, prNumber: number): Promise<PrVerdictRecord[] | null> {
+    return this.ports.verdicts(repoKey, prNumber).catch(() => null);
+  }
+
+  /** Null (the lane fails closed) when any author source cannot be read. */
+  private readAuthors(asker: MoaAsker, repoPath: string, headRefName: string): Promise<string[] | null> {
+    return this.ports.authorWorkspaces(asker, repoPath, headRefName).catch(() => null);
   }
 
   private judgeCallsToday(): number {
@@ -475,11 +500,17 @@ export class MoaAskService implements MoaDelegateServicePort {
     return now.toLowerCase() === shown.toLowerCase() ? null : 'identity-changed';
   }
 
-  /** The lane context for an effect's asker, read now. */
-  async laneContext(effect: MergeEffect): Promise<{ trustedAuthors: readonly string[]; askerBranches: readonly string[] }> {
+  /** The lane context for an effect's asker, read now on the executor's
+   *  fresh read (`facts`). */
+  async laneContext(effect: MergeEffect, facts: PrLaneFacts): Promise<Omit<MergeLaneContext, 'expectHead'>> {
     const d = this.ports.decisions.get(effect.decisionId);
-    const askerBranches = d ? await this.ports.askerBranches(d.asker, effect.repoPath).catch(() => [] as string[]) : [];
-    return { trustedAuthors: this.ports.getConfig().trustedAuthors, askerBranches };
+    const [askerBranches, verdicts, authorWorkspaces] = await Promise.all([
+      d ? this.ports.askerBranches(d.asker, effect.repoPath).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+      this.readVerdicts(effect.repoKey, effect.prNumber),
+      // Without its decision the asker is unknown, so the authors are too.
+      d ? this.readAuthors(d.asker, effect.repoPath, facts.headRefName) : Promise.resolve(null),
+    ]);
+    return { trustedAuthors: this.ports.getConfig().trustedAuthors, askerBranches, verdicts, authorWorkspaces };
   }
 
   // ── Startup and the periodic tick ──────────────────────────────────────────

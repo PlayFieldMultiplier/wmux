@@ -592,6 +592,9 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   //     `off` while the delegate is off.
   'moa.ask':       { capability: 'wmux.internal' },
   'moa.askStatus': { capability: 'wmux.internal' },
+  // pr_verdict (pipe/handlers/verify.rpc.ts): same lane; the principal is
+  // stamped from senderPtyId.
+  'verify.recordVerdict': { capability: 'wmux.internal' },
 
   // --- Task lifecycle (pipe/handlers/worktask.rpc.ts) ---
   // The reads answer "what did this task produce"; the writes run the task's

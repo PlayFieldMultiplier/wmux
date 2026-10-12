@@ -49,14 +49,17 @@ describe('moa_ask MCP tools', () => {
     const names = await toolNames();
     expect(names).not.toContain('moa_ask');
     expect(names).not.toContain('moa_ask_status');
+    expect(names).not.toContain('pr_verdict');
   });
 
   it('are appended last in full when on, and never in core or commander', async () => {
     enabled.value = true;
     const full = await toolNames();
-    expect(full.slice(-2)).toEqual(['moa_ask', 'moa_ask_status']);
+    expect(full.slice(-3)).toEqual(['moa_ask', 'moa_ask_status', 'pr_verdict']);
     expect(await toolNames({ coreMode: true })).not.toContain('moa_ask');
     expect(await toolNames({ commanderMode: true })).not.toContain('moa_ask');
+    expect(await toolNames({ coreMode: true })).not.toContain('pr_verdict');
+    expect(await toolNames({ commanderMode: true })).not.toContain('pr_verdict');
   });
 
   it('sends the walked pane as senderPtyId, never the env hint', async () => {
@@ -71,6 +74,21 @@ describe('moa_ask MCP tools', () => {
     await client.close();
     const call = mockSendRpc.mock.calls.find((c) => c[0] === 'moa.ask');
     expect(call?.[1]).toMatchObject({ question: 'Reuse it?', senderPtyId: 'pty-walked' });
+    expect(JSON.stringify(call?.[1])).not.toContain('pty-env-hint');
+  });
+
+  it('pr_verdict sends the walked pane as senderPtyId, never the env hint', async () => {
+    enabled.value = true;
+    mockSendRpc.mockImplementation(async (method: string) => {
+      if (method === 'a2a.resolve.identity') return { mappings: {}, resolved: { workspaceId: 'ws-walked', ptyId: 'pty-walked' } };
+      if (method === 'verify.recordVerdict') return { ok: false, code: 'head-mismatch', message: 'm' };
+      return {};
+    });
+    const client = await connect();
+    await client.callTool({ name: 'pr_verdict', arguments: { prNumber: 7, headSha: 'a'.repeat(40), verdict: 'pass', summary: 'ok' } });
+    await client.close();
+    const call = mockSendRpc.mock.calls.find((c) => c[0] === 'verify.recordVerdict');
+    expect(call?.[1]).toMatchObject({ prNumber: 7, verdict: 'pass', senderPtyId: 'pty-walked' });
     expect(JSON.stringify(call?.[1])).not.toContain('pty-env-hint');
   });
 });

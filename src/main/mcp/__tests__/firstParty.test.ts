@@ -157,6 +157,10 @@ describe('FIRST_PARTY_METHODS source invariant', () => {
       // `off` while the delegate is off.
       'moa.ask',
       'moa.askStatus',
+      // pr_verdict: reserved so no plugin can declare it. It records one
+      // verdict for the verified calling pane, after main re-reads the PR head
+      // and that pane's own checkout; it merges nothing by itself.
+      'verify.recordVerdict',
       // `company.a2a.*` was here for the six company_a2a_* tools; both the
       // tools and the grants are gone (the least-privilege assertion below is
       // what would have caught them lingering).

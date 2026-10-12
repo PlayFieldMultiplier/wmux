@@ -345,6 +345,8 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   // when the owner turned the ask mode on).
   'moa.ask',
   'moa.askStatus',
+  // pr_verdict (registered beside moa_ask).
+  'verify.recordVerdict',
   // Task lifecycle — the eight commander-only tools (task_gate_run,
   // task_gate_cancel, task_adopt, task_close, task_pr, git_status, git_log,
   // gh_pr_view).

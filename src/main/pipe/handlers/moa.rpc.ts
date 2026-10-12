@@ -50,27 +50,36 @@ export function agentSlugOf(clientName: string | undefined): AgentSlug | 'unknow
 const PARAM_KEYS_OF_IDENTITY = ['senderPtyId'];
 
 /** The input the caller sent, without the identity fields the MCP layer adds. */
-function bodyOf(params: Record<string, unknown>): Record<string, unknown> {
+export function bodyOf(params: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(params)) if (!PARAM_KEYS_OF_IDENTITY.includes(k)) out[k] = v;
   return out;
 }
 
+/** The calling pane, its workspace now, its agent and its own cwd, from the
+ *  verified senderPtyId only; null for a brain, a hosted workspace or a
+ *  caller wmux cannot tie to a pane. Shared with verify.rpc.ts. */
+export async function resolvePaneCaller(
+  deps: Pick<MoaRpcDeps, 'resolvePtyWorkspace' | 'paneCwd'>,
+  params: Record<string, unknown>,
+  ctx?: RpcContext,
+): Promise<{ asker: MoaAsker; cwd: string } | null> {
+  // A brain has no pane: it asks the owner through its own decision card.
+  if (ctx?.commanderWorkspace || ctx?.hostedWorkspace !== undefined) return null;
+  const ptyId = typeof params.senderPtyId === 'string' ? params.senderPtyId.trim() : '';
+  if (!ptyId) return null;
+  let workspaceId: string | null;
+  try {
+    workspaceId = await deps.resolvePtyWorkspace(ptyId);
+  } catch {
+    workspaceId = null;
+  }
+  if (!workspaceId) return null;
+  return { asker: { ptyId, workspaceId, agent: agentSlugOf(ctx?.clientName) }, cwd: deps.paneCwd(ptyId, workspaceId) };
+}
+
 export function registerMoaRpc(router: RpcRouter, deps: MoaRpcDeps): void {
-  const resolveAsker = async (params: Record<string, unknown>, ctx?: RpcContext): Promise<{ asker: MoaAsker; cwd: string } | null> => {
-    // A brain has no pane: it asks the owner through its own decision card.
-    if (ctx?.commanderWorkspace || ctx?.hostedWorkspace !== undefined) return null;
-    const ptyId = typeof params.senderPtyId === 'string' ? params.senderPtyId.trim() : '';
-    if (!ptyId) return null;
-    let workspaceId: string | null;
-    try {
-      workspaceId = await deps.resolvePtyWorkspace(ptyId);
-    } catch {
-      workspaceId = null;
-    }
-    if (!workspaceId) return null;
-    return { asker: { ptyId, workspaceId, agent: agentSlugOf(ctx?.clientName) }, cwd: deps.paneCwd(ptyId, workspaceId) };
-  };
+  const resolveAsker = (params: Record<string, unknown>, ctx?: RpcContext) => resolvePaneCaller(deps, params, ctx);
 
   router.register(MOA_ASK_RPC, async (params, ctx): Promise<MoaAskResult> => {
     const service = deps.getService();

@@ -33,8 +33,9 @@ export interface MoaMergeExecutorPorts {
   facts: MergeLaneFactsReader;
   /** The squash merge itself (GhPrReviewService.merge with expectHead). */
   merge: (effect: MergeEffect) => Promise<PrWriteResult>;
-  /** trustedAuthors and askerBranches for this effect, read by main now. */
-  laneContext: (effect: MergeEffect) => Promise<Omit<MergeLaneContext, 'expectHead'>>;
+  /** trustedAuthors, askerBranches, the PR's verdicts and its author
+   *  workspaces for this effect, read by main now (never cached). */
+  laneContext: (effect: MergeEffect, facts: PrLaneFacts) => Promise<Omit<MergeLaneContext, 'expectHead'>>;
   /** Null when the effect may run now, else the refusal reason. */
   authorize: (effect: MergeEffect) => string | null;
   /** Null when the gh login the merge goes out as now is the one the
@@ -100,7 +101,7 @@ export class MoaMergeExecutor {
       // Not open (or another head) is settled from the read, never merged.
       const pre = reconcileMergeEffect({ expectHead: claimed.expectHead, attempt: 0 }, facts);
       if (pre.status !== 'pending') return await end(pre.status === 'done' ? 'done' : pre.status === 'refused' ? 'refused' : 'uncertain', pre.reason, pre.mergeCommitOid);
-      const ctx = await this.ports.laneContext(claimed);
+      const ctx = await this.ports.laneContext(claimed, facts);
       const verdict = evaluateMergeLane(
         facts,
         { ...ctx, expectHead: claimed.expectHead },

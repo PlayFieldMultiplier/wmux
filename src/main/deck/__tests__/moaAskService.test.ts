@@ -16,6 +16,7 @@ import { MoaAskService, type MoaAskConfig } from '../moaAskService';
 import { parsePolicyBook } from '../deckPolicy';
 import type { JudgeRunResult } from '../moaShadowJudge';
 import type { MergeFactsExtras } from '../moaMergeFacts';
+import type { PrVerdictRecord } from '../../../shared/prVerdict';
 
 const FIXTURES = path.join(__dirname, '../../github/__tests__/fixtures/moaMergeLane');
 const MERGED = mapLaneFacts(JSON.parse(fs.readFileSync(path.join(FIXTURES, 'lane-pr1858.json'), 'utf8'))) as PrLaneFacts;
@@ -79,7 +80,17 @@ interface World {
   extras?: MergeFactsExtras | null;
   /** The currentLogin port's answer; absent: no port. */
   login?: string | null;
+  /** The verdict store's records; 'throw': unreadable. */
+  verdicts: PrVerdictRecord[] | 'throw';
+  /** The PR's author workspaces; 'throw': unknown. */
+  authors: string[] | 'throw';
 }
+
+/** A PASS at HEAD from a workspace that did not write the PR. */
+const VERIFIED: PrVerdictRecord = {
+  version: 1, repoKey: 'github.com/openwong2kim/wmux', prNumber: 1858, headSha: HEAD, verdict: 'pass',
+  principal: { workspaceId: 'ws-verifier', ptyId: 'pty-v', agent: 'codex' }, summary: 'checks pass', at: 1,
+};
 
 function world(over: Partial<World> = {}): World {
   return {
@@ -90,6 +101,8 @@ function world(over: Partial<World> = {}): World {
     screen: [],
     branches: [BRANCH],
     onMerge: async () => ({ ok: true }),
+    verdicts: [VERIFIED],
+    authors: [ASKER.workspaceId],
     ...over,
   };
 }
@@ -113,7 +126,7 @@ function build(w: World) {
     effects,
     facts: { readFresh },
     merge,
-    laneContext: (e) => (service as MoaAskService).laneContext(e),
+    laneContext: (e, f) => (service as MoaAskService).laneContext(e, f),
     authorize: (e) => (service as MoaAskService).authorize(e),
     identity: (e) => (service as MoaAskService).identity(e),
     emit: (e) => service?.emitEffect(e),
@@ -131,6 +144,14 @@ function build(w: World) {
     readScreen,
     resolveRepo: async () => ({ key: 'github.com/openwong2kim/wmux', path: '/repo' }),
     askerBranches: async () => w.branches,
+    verdicts: async (key, n) => {
+      if (w.verdicts === 'throw') throw new Error('unreadable');
+      return w.verdicts.filter((v) => v.repoKey === key && v.prNumber === n);
+    },
+    authorWorkspaces: async () => {
+      if (w.authors === 'throw') throw new Error('daemon down');
+      return w.authors;
+    },
     ...(w.extras !== undefined ? { mergeFactsExtras: async () => w.extras ?? null } : {}),
     ...(w.login !== undefined ? { currentLogin: async () => w.login ?? null } : {}),
     log: () => undefined,
@@ -202,7 +223,7 @@ describe('the auto merge lane', () => {
     const lane = JSON.parse(/=== MERGE LANE \(checked by wmux[^\n]*\n(.*)/.exec(prompt)![1]);
     expect(lane).toEqual({ passed: true, failed: [] });
     // Kept on the decision for the owner's card.
-    expect(h.decisions.list()[0]?.lane).toEqual({ ok: true, reasons: [] });
+    expect(h.decisions.list()[0]?.lane).toEqual({ ok: true, reasons: [], verifiedBy: { workspaceId: 'ws-verifier', agent: 'codex', headSha: HEAD } });
   });
 
   it('a failing lane reaches the judge as failed, with its reasons', async () => {
@@ -210,7 +231,7 @@ describe('the auto merge lane', () => {
     await askAndSettle(h);
     const prompt = String((h.judge.mock.calls[0] as unknown[] | undefined)?.[0]);
     expect(JSON.parse(/=== MERGE LANE \(checked by wmux[^\n]*\n(.*)/.exec(prompt)![1])).toEqual({ passed: false, failed: ['branch-not-bound'] });
-    expect(h.decisions.list()[0]?.lane).toEqual({ ok: false, reasons: ['branch-not-bound'] });
+    expect(h.decisions.list()[0]?.lane).toEqual({ ok: false, reasons: ['branch-not-bound'], verifiedBy: { workspaceId: 'ws-verifier', agent: 'codex', headSha: HEAD } });
   });
 
   it('a judge timeout keeps the lane reasons on the escalation', async () => {
@@ -220,7 +241,24 @@ describe('the auto merge lane', () => {
     expect(view.reasonCode).toBe('lane-branch-not-bound');
     expect(view.why).toContain('the judge call failed: timeout');
     expect(view.why).toContain('(lane: branch-not-bound)');
-    expect(h.decisions.list()[0]?.lane).toEqual({ ok: false, reasons: ['branch-not-bound'] });
+    expect(h.decisions.list()[0]?.lane).toEqual({ ok: false, reasons: ['branch-not-bound'], verifiedBy: { workspaceId: 'ws-verifier', agent: 'codex', headSha: HEAD } });
+  });
+
+  it('an auto merge without a non-author PASS at the head escalates and never merges', async () => {
+    const cases: Array<[Partial<World>, string]> = [
+      [{ verdicts: [] }, 'lane-no-verdict'],
+      [{ verdicts: [{ ...VERIFIED, principal: { ...VERIFIED.principal, workspaceId: ASKER.workspaceId } }] }, 'lane-self-verified'],
+      [{ verdicts: 'throw' }, 'lane-verdicts-unreadable'],
+      [{ authors: 'throw' }, 'lane-author-unknown'],
+    ];
+    for (const [over, code] of cases) {
+      const h = build(world(over));
+      const { view } = await askAndSettle(h);
+      expect(view.status, code).toBe('escalated');
+      expect(view.reasonCode).toBe(code);
+      expect(h.merge).not.toHaveBeenCalled();
+      fs.rmSync(path.join(dir, 'moa-delegate'), { recursive: true, force: true });
+    }
   });
 
   it('shadow and suggest record the judge but answer nothing', async () => {
@@ -248,11 +286,14 @@ describe('the auto merge lane', () => {
 
 describe('the daily cap under concurrency', () => {
   it('one slot left and two auto merges judged together: exactly one is answered', async () => {
-    const w = world({ config: { mode: 'auto', autoRules: ['R-merge-green'], trustedAuthors: ['openwong2kim'], autoDailyCap: 1 } });
+    const other = 'f'.repeat(40);
+    const w = world({
+      config: { mode: 'auto', autoRules: ['R-merge-green'], trustedAuthors: ['openwong2kim'], autoDailyCap: 1 },
+      verdicts: [VERIFIED, { ...VERIFIED, prNumber: 1859, headSha: other }],
+    });
     const h = build(w);
     const releases: Array<() => void> = [];
     h.judge.mockImplementation(() => new Promise<JudgeRunResult>((r) => { releases.push(() => r(GO)); }));
-    const other = 'f'.repeat(40);
     // Both PRs read green on their own head.
     h.readFresh.mockImplementation(async (_p: string, _k: string, n: number) => (n === 1858 ? OPEN_GREEN : { ...OPEN_GREEN, number: n, headRefOid: other, checksHeadOid: other }));
     await h.service.ask(ASKER, '/repo', MERGE_REQ);
@@ -452,6 +493,7 @@ describe('idempotency', () => {
       getConfig: () => w.config, setAutoRules: async () => true,
       loadBook: () => ({ ...parsePolicyBook(BOOK), text: BOOK }),
       judge, readScreen: async () => [], resolveRepo: async () => null, askerBranches: async () => [],
+      verdicts: async () => [], authorWorkspaces: async () => [],
       priorJudgment: () => ({ verdict: 'answer', choiceKey: '1', ruleId: 'R-reuse', reasonCode: 'shadow', why: 'seen', tokens: { input: 0, output: 0 }, ms: 0 }),
       log: () => undefined,
     });
@@ -499,7 +541,7 @@ describe('owner resolution', () => {
       const h = build(world({ config: { mode: 'suggest', autoRules: [], trustedAuthors: ['openwong2kim'] }, extras }));
       await askAndSettle(h);
       expect(h.decisions.list()[0]?.facts).toBeUndefined();
-      expect(h.decisions.list()[0]?.lane).toEqual({ ok: true, reasons: [] });
+      expect(h.decisions.list()[0]?.lane).toEqual({ ok: true, reasons: [], verifiedBy: { workspaceId: 'ws-verifier', agent: 'codex', headSha: HEAD } });
       fs.rmSync(path.join(dir, 'moa-delegate'), { recursive: true, force: true });
     }
   });
@@ -632,6 +674,7 @@ describe('audit', () => {
       decisions: h.decisions, effects: h.effects, executor: h.executor, facts: { readFresh: h.readFresh },
       getConfig: () => world().config, setAutoRules: async () => true, loadBook: () => null,
       judge: h.judge, readScreen: async () => [], resolveRepo: async () => null, askerBranches: async () => [],
+      verdicts: async () => [], authorWorkspaces: async () => [],
       mergedSince: async () => [
         { prNumber: 1858, title: 'lane merge', mergedAt: '2026-10-07T00:00:00Z', headRefOid: HEAD },
         { prNumber: 1900, title: 'by hand', mergedAt: '2026-10-07T01:00:00Z', headRefOid: 'e'.repeat(40) },

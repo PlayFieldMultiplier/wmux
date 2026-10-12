@@ -21,8 +21,14 @@
 // Path tokens split on separators AND camelCase, so `winSnapshotNative.ts`
 // counts; an Electron `auxiliaryWindows.ts` also counts — over-firing only
 // sends a merge to the owner.
+//
+// Decided from the verdict store (shared/prVerdict.ts), read fresh by main:
+//   verifier-pass-at-head  a workspace other than the PR's authors recorded
+//                    PASS at exactly the head being merged, and nobody
+//                    recorded FAIL there.
 
 import type { PrLaneFacts } from '../../shared/prReview';
+import type { PrVerdictRecord } from '../../shared/prVerdict';
 
 export type LanePredicate =
   | 'head-unchanged'
@@ -31,7 +37,8 @@ export type LanePredicate =
   | 'not-windows-path'
   | 'no-needs-windows-verify-label'
   | 'author-trusted'
-  | 'pr-branch-bound-to-asker';
+  | 'pr-branch-bound-to-asker'
+  | 'verifier-pass-at-head';
 
 /** Evaluation order, and every predicate a 'moa-auto' merge must pass. */
 export const LANE_PREDICATES: readonly LanePredicate[] = [
@@ -42,6 +49,7 @@ export const LANE_PREDICATES: readonly LanePredicate[] = [
   'no-needs-windows-verify-label',
   'author-trusted',
   'pr-branch-bound-to-asker',
+  'verifier-pass-at-head',
 ];
 
 /** What an owner-approved merge re-checks (mergeBlock runs inside merge()). */
@@ -66,12 +74,27 @@ export interface MergeLaneContext {
   /** Branches bound to the asker, read by main: the branch checked out in the
    *  asker's cwd and the branches of its task ledger rows. */
   askerBranches: readonly string[];
+  /** This PR's verdict records, read fresh by main; null when unreadable. */
+  verdicts: readonly PrVerdictRecord[] | null;
+  /** The workspaces that authored the PR, read by main: the asker, the
+   *  workspaces of tasks on the head branch, and those with a pane in a
+   *  worktree of it. Null when any part could not be read. */
+  authorWorkspaces: readonly string[] | null;
+}
+
+/** The verifier a passing `verifier-pass-at-head` rests on. */
+export interface LaneVerifier {
+  workspaceId: string;
+  agent: string;
+  headSha: string;
 }
 
 export interface LaneVerdict {
   ok: boolean;
   /** Every failed predicate, in LANE_PREDICATES order. */
   failures: LaneFailure[];
+  /** Set when verifier-pass-at-head ran and passed. */
+  verifiedBy?: LaneVerifier;
 }
 
 /** The gh I/O half (built later). Must read fresh: never a cached answer. */
@@ -175,6 +198,24 @@ export function prBranchBoundToAsker(facts: PrLaneFacts, askerBranches: readonly
   return askerBranches.includes(facts.headRefName) ? pass : fail('branch-not-bound');
 }
 
+/**
+ * A PASS at exactly `expectHead` from a workspace that is not one of the PR's
+ * authors, and no FAIL there from anyone. This guards against an author
+ * verifying its own work; a per-bot identity arrives with the bot runtime.
+ */
+export function verifierPassAtHead(facts: PrLaneFacts, ctx: MergeLaneContext): { check: LaneCheck; by?: LaneVerifier } {
+  if (ctx.verdicts === null) return { check: fail('verdicts-unreadable') };
+  if (ctx.authorWorkspaces === null) return { check: fail('author-unknown') };
+  const forPr = ctx.verdicts.filter((r) => r.prNumber === facts.number);
+  const atHead = facts.headRefOid === ctx.expectHead ? forPr.filter((r) => r.headSha === ctx.expectHead) : [];
+  if (atHead.some((r) => r.verdict === 'fail')) return { check: fail('verdict-fail') };
+  if (atHead.length === 0) return { check: fail(forPr.length > 0 ? 'verdict-stale-head' : 'no-verdict') };
+  const authors = ctx.authorWorkspaces;
+  const pass = atHead.find((r) => r.verdict === 'pass' && !authors.includes(r.principal.workspaceId));
+  if (!pass) return { check: fail('self-verified') };
+  return { check: { ok: true }, by: { workspaceId: pass.principal.workspaceId, agent: pass.principal.agent, headSha: pass.headSha } };
+}
+
 function runPredicate(p: LanePredicate, facts: PrLaneFacts, ctx: MergeLaneContext): LaneCheck {
   switch (p) {
     case 'head-unchanged': return headUnchanged(facts, ctx.expectHead);
@@ -184,6 +225,7 @@ function runPredicate(p: LanePredicate, facts: PrLaneFacts, ctx: MergeLaneContex
     case 'no-needs-windows-verify-label': return noNeedsWindowsVerifyLabel(facts);
     case 'author-trusted': return authorTrusted(facts, ctx.trustedAuthors);
     case 'pr-branch-bound-to-asker': return prBranchBoundToAsker(facts, ctx.askerBranches);
+    case 'verifier-pass-at-head': return verifierPassAtHead(facts, ctx).check;
   }
 }
 
@@ -199,5 +241,6 @@ export function evaluateMergeLane(
     const r = runPredicate(p, facts, ctx);
     if (!r.ok) failures.push({ predicate: p, reason: r.reason });
   }
-  return { ok: failures.length === 0, failures };
+  const verifiedBy = predicates.includes('verifier-pass-at-head') ? verifierPassAtHead(facts, ctx).by : undefined;
+  return { ok: failures.length === 0, failures, ...(verifiedBy ? { verifiedBy } : {}) };
 }

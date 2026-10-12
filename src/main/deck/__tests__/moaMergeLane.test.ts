@@ -14,6 +14,7 @@ import {
   requiredChecksGreen,
   type MergeLaneContext,
 } from '../moaMergeLane';
+import type { PrVerdictRecord } from '../../../shared/prVerdict';
 
 // Recorded GraphQL answers to LANE_PR_QUERY (2026-10-07), contributor logins
 // replaced: #1858 merged by the owner; #1829 open from a fork with the
@@ -41,17 +42,30 @@ function openWithRequired(overrides: Partial<PrLaneFacts> = {}): PrLaneFacts {
   };
 }
 
+const verdict = (facts: PrLaneFacts, over: Partial<PrVerdictRecord> & { workspaceId?: string } = {}): PrVerdictRecord => {
+  const { workspaceId = 'ws-verifier', ...rest } = over;
+  return {
+    version: 1, repoKey: 'github.com/openwong2kim/wmux', prNumber: facts.number, headSha: facts.headRefOid, verdict: 'pass',
+    principal: { workspaceId, ptyId: `pty-${workspaceId}`, agent: 'claude' }, summary: 'all checks passed', at: 1, ...rest,
+  };
+};
+
+/** A non-author PASS at the head and the asker's workspace as the author, unless overridden. */
 const ctx = (facts: PrLaneFacts, over: Partial<MergeLaneContext> = {}): MergeLaneContext => ({
   expectHead: facts.headRefOid,
   trustedAuthors: ['openwong2kim'],
   askerBranches: [facts.headRefName],
+  verdicts: [verdict(facts)],
+  authorWorkspaces: ['ws-author'],
   ...over,
-});
+} as MergeLaneContext);
 
 describe('merge lane predicates on recorded fixtures', () => {
-  it('passes every predicate for a trusted, bound, green PR', () => {
+  it('passes every predicate for a trusted, bound, green, independently verified PR', () => {
     const facts = openWithRequired();
-    expect(evaluateMergeLane(facts, ctx(facts))).toEqual({ ok: true, failures: [] });
+    expect(evaluateMergeLane(facts, ctx(facts))).toEqual({
+      ok: true, failures: [], verifiedBy: { workspaceId: 'ws-verifier', agent: 'claude', headSha: facts.headRefOid },
+    });
   });
 
   it('an EMPTY required set blocks (the repo as it is today)', () => {
@@ -157,6 +171,51 @@ describe('merge lane predicates on recorded fixtures', () => {
     expect(OWNER_APPROVED_PREDICATES).toEqual(['head-unchanged']);
     expect(evaluateMergeLane(FORK, ctx(FORK), OWNER_APPROVED_PREDICATES)).toEqual({ ok: true, failures: [] });
     expect(evaluateMergeLane(FORK, ctx(FORK, { expectHead: 'b'.repeat(40) }), OWNER_APPROVED_PREDICATES).ok).toBe(false);
-    expect(LANE_PREDICATES).toHaveLength(7);
+    expect(LANE_PREDICATES).toHaveLength(8);
+  });
+});
+
+describe('verifier-pass-at-head', () => {
+  const facts = openWithRequired();
+  const reasons = (over: Partial<MergeLaneContext>) => evaluateMergeLane(facts, ctx(facts, over)).failures
+    .filter((f) => f.predicate === 'verifier-pass-at-head').map((f) => f.reason);
+
+  it('passes on a non-author PASS at the exact head', () => {
+    expect(reasons({})).toEqual([]);
+  });
+
+  it('no verdict at all blocks', () => {
+    expect(reasons({ verdicts: [] })).toEqual(['no-verdict']);
+  });
+
+  it('verdicts only on another head block as stale', () => {
+    expect(reasons({ verdicts: [verdict(facts, { headSha: 'b'.repeat(40) })] })).toEqual(['verdict-stale-head']);
+    // The PR moved after the decision: a PASS on the decided head no longer counts.
+    const moved = { ...facts, headRefOid: 'c'.repeat(40) };
+    expect(evaluateMergeLane(moved, ctx(facts)).failures.map((f) => f.reason)).toContain('verdict-stale-head');
+  });
+
+  it('any FAIL at the head blocks, even when the same principal later passed it', () => {
+    expect(reasons({ verdicts: [verdict(facts), verdict(facts, { workspaceId: 'ws-other', verdict: 'fail' })] })).toEqual(['verdict-fail']);
+    expect(reasons({ verdicts: [verdict(facts, { verdict: 'fail', at: 1 }), verdict(facts, { verdict: 'pass', at: 2 })] })).toEqual(['verdict-fail']);
+  });
+
+  it('a PASS only from an author workspace is self-verified', () => {
+    expect(reasons({ verdicts: [verdict(facts, { workspaceId: 'ws-author' })] })).toEqual(['self-verified']);
+    expect(reasons({ verdicts: [verdict(facts, { workspaceId: 'ws-task' })], authorWorkspaces: ['ws-author', 'ws-task'] })).toEqual(['self-verified']);
+  });
+
+  it('an unreadable store or unknown authors block', () => {
+    expect(reasons({ verdicts: null })).toEqual(['verdicts-unreadable']);
+    expect(reasons({ authorWorkspaces: null })).toEqual(['author-unknown']);
+  });
+
+  it('a verdict for another PR number does not count', () => {
+    expect(reasons({ verdicts: [verdict(facts, { prNumber: facts.number + 1 })] })).toEqual(['no-verdict']);
+  });
+
+  it('an owner-approved merge is not gated by it', () => {
+    expect(evaluateMergeLane(facts, ctx(facts, { verdicts: null, authorWorkspaces: null }), OWNER_APPROVED_PREDICATES)).toEqual({ ok: true, failures: [] });
+    expect(OWNER_APPROVED_PREDICATES).not.toContain('verifier-pass-at-head');
   });
 });

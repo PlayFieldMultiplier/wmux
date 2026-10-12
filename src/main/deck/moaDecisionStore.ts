@@ -128,8 +128,14 @@ export function isMoaDecisionRecord(v: unknown): v is MoaDecision {
     && (d.judge === null || isJudgeResult(d.judge))
     && (d.answer === undefined || isStoredAnswer(d.answer, d.kind))
     && (d.delivery === undefined || isDelivery(d.delivery))
-    && (d.lane === undefined || (!!d.lane && typeof d.lane.ok === 'boolean' && Array.isArray(d.lane.reasons) && d.lane.reasons.every((r) => typeof r === 'string')))
+    && (d.lane === undefined || (!!d.lane && typeof d.lane.ok === 'boolean' && Array.isArray(d.lane.reasons) && d.lane.reasons.every((r) => typeof r === 'string')
+      && (d.lane.verifiedBy === undefined || isLaneVerifier(d.lane.verifiedBy))))
     && (d.facts === undefined || isMergeFacts(d.facts));
+}
+
+function isLaneVerifier(v: unknown): boolean {
+  const b = v as { workspaceId?: unknown; agent?: unknown; headSha?: unknown };
+  return !!b && typeof b === 'object' && typeof b.workspaceId === 'string' && typeof b.agent === 'string' && typeof b.headSha === 'string';
 }
 
 /** Display-only facts: every field's type, not its value (one bad row refuses the file). */
@@ -300,7 +306,7 @@ export class MoaDecisionStore {
       reasonCode: s.reasonCode,
       why: s.why,
       ...(s.status === 'answered' && s.answer ? { answer: s.answer } : {}),
-      ...(s.lane ? { lane: { ok: s.lane.ok, reasons: [...s.lane.reasons] } } : {}),
+      ...(s.lane ? { lane: { ok: s.lane.ok, reasons: [...s.lane.reasons], ...(s.lane.verifiedBy ? { verifiedBy: { ...s.lane.verifiedBy } } : {}) } } : {}),
       ...(s.facts ? { facts: s.facts } : {}),
       resolvedBy: s.status === 'answered' ? 'moa-auto' : s.status === 'refused' ? 'refused' : null,
       resolvedAt: s.status === 'escalated' ? null : at,

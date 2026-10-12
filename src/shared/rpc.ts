@@ -669,6 +669,9 @@ export type RpcMethod =
   // from senderPtyId; `off` (nothing recorded) while the delegate is off.
   | 'moa.ask'
   | 'moa.askStatus'
+  // A verifier's PASS/FAIL on one PR head (pipe/handlers/verify.rpc.ts,
+  // shared/prVerdict.ts); the principal is stamped from senderPtyId.
+  | 'verify.recordVerdict'
   // Task lifecycle on the pipe (pipe/handlers/worktask.rpc.ts) — the half of
   // fan-out that finishes a task. Local-origin only, owner-scoped against
   // `task.mission.list`, and `task.close` / `task.pr` additionally raise a
@@ -922,6 +925,7 @@ export const ALL_RPC_METHODS = [
   'ledger.update',
   'moa.ask',
   'moa.askStatus',
+  'verify.recordVerdict',
   'task.gate.run',
   'task.gate.cancel',
   'task.adopt',

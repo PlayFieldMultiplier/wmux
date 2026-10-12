@@ -41,6 +41,7 @@ import { registerComputerTools } from './computer/tool';
 import { readComputerUseEnabled } from '../shared/computer/config';
 import { readMoaAskEnabled } from '../shared/moaAskSwitch';
 import { registerMoaAskTools } from './moaAsk';
+import { registerPrVerdictTool } from './prVerdict';
 import { registerReplayTools } from './browser-replay/tool';
 import { ActionRing } from './browser-replay/actionRing';
 import { collectingServer, type CollectedTool } from './playwright/toolCollector';
@@ -2534,22 +2535,28 @@ registerComputerTools(server, MCP_CATALOG_OPTIONS, {
   },
 });
 
-// moa_ask / moa_ask_status — Moa's delegate (src/mcp/moaAsk.ts). Same opt-in
-// pattern as computer use: only when the owner turned the ask mode on
-// (moa-ask.json), only in the full profile, appended after every other
+// moa_ask / moa_ask_status — Moa's delegate (src/mcp/moaAsk.ts) — and
+// pr_verdict (src/mcp/prVerdict.ts), the verifier verdict its merge lane reads.
+// Same opt-in pattern as computer use: only when the owner turned the ask mode
+// on (moa-ask.json), only in the full profile, appended after every other
 // full-profile tool, so the published surface is byte-identical for everyone
 // else. Main re-checks its own config on every call.
 if (SURFACE_PROFILE === 'full' && readMoaAskEnabled()) {
+  // Hit-only, like computer use: resolve the workspace first so the
+  // PID-map walk has run, then send the verified pane (never the env hint).
+  const getSenderPtyId = async (): Promise<string> => {
+    if (!verifiedPtyId()) {
+      try { await requireWorkspaceId(); } catch { /* not-attributed in main */ }
+    }
+    return verifiedPtyId();
+  };
   registerMoaAskTools(server, {
     callRpc: (method, params) => callRpc(method, params),
-    // Hit-only, like computer use: resolve the workspace first so the
-    // PID-map walk has run, then send the verified pane (never the env hint).
-    getSenderPtyId: async () => {
-      if (!verifiedPtyId()) {
-        try { await requireWorkspaceId(); } catch { /* not-attributed in main */ }
-      }
-      return verifiedPtyId();
-    },
+    getSenderPtyId,
+  });
+  registerPrVerdictTool(server, {
+    callRpc: (method, params, timeoutMs) => callRpc(method, params, timeoutMs),
+    getSenderPtyId,
   });
 }
 

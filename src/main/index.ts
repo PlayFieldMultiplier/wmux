@@ -109,6 +109,8 @@ import { getWorkerTempDirSweeper, liveTempDirsFromSessions } from './worktask/fa
 import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
 import { registerMoaRpc } from './pipe/handlers/moa.rpc';
+import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
+import { prVerdictHostPorts } from './github/prVerdictHost';
 import { registerAutomationRpc } from './pipe/handlers/automation.rpc';
 import { registerWorktaskHandlers, type WorktaskServices } from './ipc/handlers/worktask.handler';
 import { registerWorktaskRpc } from './pipe/handlers/worktask.rpc';
@@ -1186,6 +1188,12 @@ registerMoaRpc(rpcRouter, {
   resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
   // The pane's own cwd only: a workspace's cwd is not the asker's repo.
   paneCwd: paneOwnCwdOf,
+});
+// pr_verdict: a verifier's PASS/FAIL on one PR head, read by Moa's merge lane.
+registerVerifyRpc(rpcRouter, {
+  resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
+  paneCwd: paneOwnCwdOf,
+  ...prVerdictHostPorts(),
 });
 // Scheduled runs for agents: draft-only propose + redacted reads, relayed to
 // the daemon over main's first-party connection (pipe/handlers/automation.rpc.ts).
