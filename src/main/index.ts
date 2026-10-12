@@ -110,6 +110,9 @@ import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
 import { registerMoaRpc } from './pipe/handlers/moa.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
+import { registerFactoryRpc } from './factory/factoryHost';
+// The agent factory's modules register themselves on import.
+import './factory/modules';
 import { prVerdictHostPorts } from './github/prVerdictHost';
 import { registerAutomationRpc } from './pipe/handlers/automation.rpc';
 import { registerWorktaskHandlers, type WorktaskServices } from './ipc/handlers/worktask.handler';
@@ -1194,6 +1197,17 @@ registerVerifyRpc(rpcRouter, {
   resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
   paneCwd: paneOwnCwdOf,
   ...prVerdictHostPorts(),
+});
+// Agent factory: every factory RPC method (fail-closed until its module
+// registers it), started once the pipe server is up, disposed on quit.
+const factoryHost = registerFactoryRpc(rpcRouter, {
+  getMainWindow: () => mainWindow,
+  getDaemonClient: () => daemonClient,
+  fanOutService,
+  invokeRendererRpc,
+  resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
+  paneCwd: paneOwnCwdOf,
+  wmuxDir: () => getWmuxDir(),
 });
 // Scheduled runs for agents: draft-only propose + redacted reads, relayed to
 // the daemon over main's first-party connection (pipe/handlers/automation.rpc.ts).
@@ -2649,6 +2663,7 @@ app.on('ready', async () => {
     await mcpRegistrar.register(authToken);
   }
   pipeServer.start();
+  void factoryHost.start();
   autoUpdater.start();
   markBoot('ready-end');
   // Log sink is up by now, so the summary line (unlike the early per-mark
@@ -3009,6 +3024,7 @@ app.on('before-quit', async (e) => {
   };
 
   safeStep('cleanupHandlers', () => cleanupHandlers());
+  safeStep('disposeFactory', () => { void factoryHost.dispose(); });
   safeStep('disposeFirstRunHandlers', () => disposeFirstRunHandlers());
   safeStep('disposeDeckHandler', () => disposeDeckHandler());
   safeStep('disposeWorkspaceMirrorHandler', () => disposeWorkspaceMirrorHandler());
