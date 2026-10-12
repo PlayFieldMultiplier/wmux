@@ -10,12 +10,32 @@
 //             reconcileMergeEffect (MERGED with headRefOid === expectHead →
 //             done); a row that comes back `pending` runs again from the top.
 //
-// Nothing stored authorizes a merge. `authorize` is asked on every try, right
-// after the claim (a refusal then ends the claimed row `refused`): the
-// decision behind the effect must read answered/go NOW (a forged outbox row has
-// no such decision), and a 'moa-auto' effect must still be auto-eligible (book
-// attribute, the owner's toggle, the kill switch). A failure after the claim
-// that may or may not have reached GitHub ends `uncertain`, never `done`.
+// Nothing stored authorizes a merge. The approver picks the predicates
+// (PREDICATES_BY_APPROVER); an approver not in that table is refused. Then an
+// authorize port is asked on every try, right after the claim (a refusal then
+// ends the claimed row `refused`):
+//   owner / moa-auto  `authorize`: the decision behind the effect must read
+//                     answered/go NOW (a forged outbox row has no such
+//                     decision), and a 'moa-auto' effect must still be
+//                     auto-eligible (book attribute, the owner's toggle, the
+//                     kill switch).
+//   lane              `lane.inputs` (laneAuthorize): the factory is on, the
+//                     lane's kill switch is off, and today's lane merges are
+//                     under the daily cap. With no lane port nothing merges
+//                     as 'lane' (`lane-not-wired`). Lane runs go one at a
+//                     time, so the cap is counted with no other lane run
+//                     between its read and its merge; an uncertain lane row
+//                     counts against it (it may have merged).
+// A failure after the claim that may or may not have reached GitHub ends
+// `uncertain`, never `done`.
+//
+// update-branch (lane only): when every predicate passes but GitHub says the
+// branch is BEHIND its base, a same-repo `wtask/*` branch is updated
+// (`updateBranch`) and the try ends `refused: behind-updated` — the new head
+// needs its own checks and verdict, so it is a new effect. Lane runs are
+// serialized, so at most one update is in flight (per repo and overall).
+// Owner and moa-auto effects, forks and other branches go to the merge as
+// before (mergeBlock refuses them as behind).
 
 import type { MergeEffect } from '../../shared/moaDecision';
 import type { PrLaneFacts, PrWriteResult } from '../../shared/prReview';
@@ -24,9 +44,60 @@ import {
   LANE_PREDICATES,
   OWNER_APPROVED_PREDICATES,
   evaluateMergeLane,
+  type LanePredicate,
   type MergeLaneContext,
   type MergeLaneFactsReader,
 } from './moaMergeLane';
+
+/** The predicates each approver's merge re-runs on every try. An approver
+ *  missing here is refused (`unknown-approver`), never treated as the owner. */
+export const PREDICATES_BY_APPROVER: Readonly<Record<MergeEffect['approvedBy'], readonly LanePredicate[]>> = {
+  owner: OWNER_APPROVED_PREDICATES,
+  'moa-auto': LANE_PREDICATES,
+  lane: LANE_PREDICATES,
+};
+
+function predicatesFor(approvedBy: unknown): readonly LanePredicate[] | null {
+  return typeof approvedBy === 'string' && Object.prototype.hasOwnProperty.call(PREDICATES_BY_APPROVER, approvedBy)
+    ? PREDICATES_BY_APPROVER[approvedBy as MergeEffect['approvedBy']]
+    : null;
+}
+
+/** What the factory host reads now for a lane effect's authorize. */
+export interface LaneAuthorizeInputs {
+  /** factory.enabled. */
+  factoryEnabled: boolean;
+  /** The lane's kill switch: true stops every lane merge. */
+  killSwitch: boolean;
+  /** Most lane merges per local day. */
+  dailyCap: number;
+}
+
+/** The lane's own gate (not the Moa decision's). Null = may run. Pure.
+ *  `mergedToday` counts lane effects done (or uncertain) since local
+ *  midnight. */
+export function laneAuthorize(inputs: LaneAuthorizeInputs | null, mergedToday: number): string | null {
+  if (!inputs) return 'lane-inputs-unreadable';
+  if (inputs.factoryEnabled !== true) return 'factory-disabled';
+  if (inputs.killSwitch !== false) return 'lane-paused';
+  if (!Number.isSafeInteger(inputs.dailyCap) || inputs.dailyCap < 0 || mergedToday >= inputs.dailyCap) return 'lane-daily-cap';
+  return null;
+}
+
+/** The lane's ports, wired by the factory host. */
+export interface LaneMergePort {
+  /** The authorize inputs, read now; null when they cannot be read. */
+  inputs: () => LaneAuthorizeInputs | null;
+  /** The lane context for a lane effect (it has no decision or asker), read
+   *  now on the executor's fresh read. */
+  laneContext: (effect: MergeEffect, facts: PrLaneFacts) => Promise<Omit<MergeLaneContext, 'expectHead'>>;
+}
+
+function startOfLocalDay(t: number): number {
+  const d = new Date(t);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
 
 export interface MoaMergeExecutorPorts {
   effects: MoaEffectStore;
@@ -36,8 +107,17 @@ export interface MoaMergeExecutorPorts {
   /** trustedAuthors, askerBranches, the PR's verdicts and its author
    *  workspaces for this effect, read by main now (never cached). */
   laneContext: (effect: MergeEffect, facts: PrLaneFacts) => Promise<Omit<MergeLaneContext, 'expectHead'>>;
-  /** Null when the effect may run now, else the refusal reason. */
+  /** Null when an 'owner' or 'moa-auto' effect may run now, else the refusal
+   *  reason. Never asked for a 'lane' effect. */
   authorize: (effect: MergeEffect) => string | null;
+  /** The lane's authorize inputs and context. Absent: a 'lane' effect is
+   *  refused `lane-not-wired`. */
+  lane?: LaneMergePort;
+  /** `gh pr update-branch` for a lane effect whose same-repo `wtask/*` branch
+   *  is BEHIND (GhPrReviewService.updateBranch). Absent: the merge runs and
+   *  is refused as behind, as for every other effect. */
+  updateBranch?: (effect: MergeEffect) => Promise<PrWriteResult>;
+  now?: () => number;
   /** Null when the gh login the merge goes out as now is the one the
    *  decision's card showed, else the refusal reason. Asked right before
    *  the merge. */
@@ -46,8 +126,13 @@ export interface MoaMergeExecutorPorts {
   log?: (line: string) => void;
 }
 
+/** A head branch the lane may update: one fan-out made. */
+const LANE_UPDATABLE_BRANCH = /^wtask\/[^\s]+$/;
+
 export class MoaMergeExecutor {
   private readonly running = new Map<string, Promise<MergeEffect | null>>();
+  /** The last queued lane run: lane runs go one at a time. */
+  private laneTail: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly ports: MoaMergeExecutorPorts) {}
 
@@ -55,7 +140,15 @@ export class MoaMergeExecutor {
   run(id: string): Promise<MergeEffect | null> {
     const live = this.running.get(id);
     if (live) return live;
-    const p = this.runOnce(id).finally(() => this.running.delete(id));
+    const go = (): Promise<MergeEffect | null> => this.runOnce(id);
+    let started: Promise<MergeEffect | null>;
+    if (this.ports.effects.get(id)?.approvedBy === 'lane') {
+      started = this.laneTail.then(go, go);
+      this.laneTail = started.catch(() => undefined);
+    } else {
+      started = go();
+    }
+    const p = started.finally(() => this.running.delete(id));
     this.running.set(id, p);
     return p;
   }
@@ -93,7 +186,12 @@ export class MoaMergeExecutor {
       return row;
     };
     try {
-      const denied = this.ports.authorize(claimed);
+      const predicates = predicatesFor(claimed.approvedBy);
+      if (!predicates) return await end('refused', 'unknown-approver');
+      const isLane = claimed.approvedBy === 'lane';
+      const lane = this.ports.lane;
+      if (isLane && !lane) return await end('refused', 'lane-not-wired');
+      const denied = isLane ? this.authorizeLane(claimed) : this.ports.authorize(claimed);
       if (denied) return await end('refused', denied);
       const facts = await this.read(claimed);
       if (!facts) return await end('uncertain', 'read-failed');
@@ -101,15 +199,16 @@ export class MoaMergeExecutor {
       // Not open (or another head) is settled from the read, never merged.
       const pre = reconcileMergeEffect({ expectHead: claimed.expectHead, attempt: 0 }, facts);
       if (pre.status !== 'pending') return await end(pre.status === 'done' ? 'done' : pre.status === 'refused' ? 'refused' : 'uncertain', pre.reason, pre.mergeCommitOid);
-      const ctx = await this.ports.laneContext(claimed, facts);
-      const verdict = evaluateMergeLane(
-        facts,
-        { ...ctx, expectHead: claimed.expectHead },
-        claimed.approvedBy === 'moa-auto' ? LANE_PREDICATES : OWNER_APPROVED_PREDICATES,
-      );
+      const ctx = isLane && lane ? await lane.laneContext(claimed, facts) : await this.ports.laneContext(claimed, facts);
+      const verdict = evaluateMergeLane(facts, { ...ctx, expectHead: claimed.expectHead }, predicates);
       if (!verdict.ok) {
         const f = verdict.failures[0];
         return await end('refused', f ? `${f.predicate}:${f.reason}` : 'lane');
+      }
+      if (isLane && this.ports.updateBranch && facts.mergeStateStatus === 'BEHIND'
+        && !facts.isCrossRepository && LANE_UPDATABLE_BRANCH.test(facts.headRefName)) {
+        const r = await this.ports.updateBranch(claimed).catch((err): PrWriteResult => ({ ok: false, code: 'error', message: String(err) }));
+        return await end('refused', r.ok ? 'behind-updated' : r.code === 'moved' ? 'head-moved' : `behind-update-${r.code}`);
       }
       const wrongIdentity = await this.ports.identity?.(claimed);
       if (wrongIdentity) return await end('refused', wrongIdentity);
@@ -128,6 +227,22 @@ export class MoaMergeExecutor {
       this.ports.log?.(`[moa-merge] ${id} failed: ${String(err)}`);
       return end('uncertain', 'executor-error');
     }
+  }
+
+  /** The lane's gate: its inputs read now, and today's lane merges counted
+   *  from the outbox. */
+  private authorizeLane(effect: MergeEffect): string | null {
+    let inputs: LaneAuthorizeInputs | null;
+    try {
+      inputs = this.ports.lane?.inputs() ?? null;
+    } catch {
+      inputs = null;
+    }
+    const since = startOfLocalDay((this.ports.now ?? Date.now)());
+    // Done, or uncertain (it may have merged): either uses up the cap.
+    const mergedToday = this.ports.effects.list()
+      .filter((r) => r.approvedBy === 'lane' && (r.status === 'done' || r.status === 'uncertain') && r.id !== effect.id && r.updatedAt >= since).length;
+    return laneAuthorize(inputs, mergedToday);
   }
 
   private async read(e: MergeEffect): Promise<PrLaneFacts | null> {

@@ -68,6 +68,11 @@ export interface LedgerGateResult {
    *  (`deps_missing`, `gate_unavailable`) are NOT recorded at all: there a gate
    *  existed and the environment stopped it, which is a human's problem. */
   skipped?: 'no_gate_command';
+  /** The worktree HEAD the gate ran on: read by the gate runner before the
+   *  run and again after it, and set only when both reads agree. Absent when
+   *  HEAD could not be read or moved during the run — such a result is not
+   *  evidence about any commit. */
+  headSha?: string;
 }
 
 export interface LedgerEntry {

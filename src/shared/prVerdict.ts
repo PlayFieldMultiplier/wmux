@@ -34,20 +34,43 @@ const PR_NUMBER_MAX = 99_999_999;
 
 export type PrVerdictKind = 'pass' | 'fail';
 
-/** Who recorded a verdict. The comparison unit is `workspaceId` for now. */
+/** Bound on `principal.botId` and `evidence.taskId`. */
+export const PR_VERDICT_ID_MAX = 200;
+
+/** Who recorded a verdict. A pane verifier is `workspaceId` + `ptyId`; a bot
+ *  verifier is `workspaceId` + `botId` and may have no pane (a v2 record
+ *  carries at least one of the two). */
 export interface PrVerdictPrincipal {
   workspaceId: string;
-  ptyId: string;
+  /** Absent only on a v2 record from a bot. */
+  ptyId?: string;
+  botId?: string;
   agent: string;
 }
 
+/** What a v2 verdict rests on: the verify task whose system-recorded gate ran
+ *  at the head. The merge lane resolves `taskId` to its ledger row and checks
+ *  the row, never this claim alone. */
+export interface PrVerdictEvidence {
+  taskId: string;
+  gateHeadSha: string;
+}
+
+/**
+ * One verdict. v1 records (pane verifiers, before bots) are still read; a v2
+ * record may carry a bot principal and evidence. The store holds both and
+ * reads them as one shape: a v1 record is a v2 record without `botId` and
+ * `evidence`.
+ */
 export interface PrVerdictRecord {
-  version: 1;
+  version: 1 | 2;
   repoKey: string;
   prNumber: number;
   headSha: string;
   verdict: PrVerdictKind;
   principal: PrVerdictPrincipal;
+  /** v2 only. */
+  evidence?: PrVerdictEvidence;
   summary: string;
   at: number;
 }
@@ -100,17 +123,28 @@ export function parsePrVerdictInput(raw: unknown): PrVerdictParse<PrVerdictInput
   return { ok: true, value: { prNumber: raw.prNumber, headSha: raw.headSha, verdict: raw.verdict, summary } };
 }
 
-/** A stored record's shape check (strict: one bad record refuses the file). */
+const isId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= PR_VERDICT_ID_MAX;
+
+/** A stored record's shape check, v1 or v2 (strict: one bad record refuses
+ *  the file). */
 export function isPrVerdictRecord(v: unknown): v is PrVerdictRecord {
   if (!isRecord(v) || !isRecord(v.principal)) return false;
   const p = v.principal;
-  return v.version === 1
+  const principalOk = v.version === 1
+    ? typeof p.ptyId === 'string' && p.ptyId.length > 0 && p.botId === undefined && v.evidence === undefined
+    : v.version === 2
+      && (p.ptyId === undefined || (typeof p.ptyId === 'string' && p.ptyId.length > 0))
+      && (p.botId === undefined || isId(p.botId))
+      && (p.ptyId !== undefined || p.botId !== undefined)
+      && (v.evidence === undefined || (isRecord(v.evidence)
+        && isId(v.evidence.taskId)
+        && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)));
+  return principalOk
     && typeof v.repoKey === 'string' && v.repoKey.length > 0
     && isPrNumber(v.prNumber)
     && typeof v.headSha === 'string' && COMMIT_SHA_RE.test(v.headSha)
     && (v.verdict === 'pass' || v.verdict === 'fail')
     && typeof p.workspaceId === 'string' && p.workspaceId.length > 0
-    && typeof p.ptyId === 'string' && p.ptyId.length > 0
     && typeof p.agent === 'string'
     && typeof v.summary === 'string' && v.summary.length <= PR_VERDICT_SUMMARY_MAX
     && typeof v.at === 'number' && Number.isSafeInteger(v.at);

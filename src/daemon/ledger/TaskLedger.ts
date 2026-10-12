@@ -201,6 +201,8 @@ function boundGate(gate: LedgerGateResult): LedgerGateResult {
     recordedBy: 'system',
     // Carry the no-gate label through so the persisted entry says why exitCode is 0.
     ...(gate.skipped === 'no_gate_command' ? { skipped: 'no_gate_command' as const } : {}),
+    // The HEAD the gate ran on, kept only when it is a full commit SHA.
+    ...(typeof gate.headSha === 'string' && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(gate.headSha) ? { headSha: gate.headSha } : {}),
   };
 }
 

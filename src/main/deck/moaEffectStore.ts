@@ -1,7 +1,9 @@
 // ─── Moa's merge outbox — MergeEffect records ────────────────────────────────
 //
 // `<wmuxDir>/moa-delegate/effects.json`. One row per decision that allowed a
-// merge (`effect:<decisionId>:pr.merge`); kind 'pr.merge' only.
+// merge (`effect:<decisionId>:pr.merge`), or per PR head the factory's merge
+// lane put up (`lane:<repoKey>#<pr>:<headSha>`, no decision); kind 'pr.merge'
+// only.
 //
 //   pending ──claim──▶ inFlight ──finish──▶ done | refused | uncertain
 //   uncertain ──reconcile(fresh read)──▶ done | refused | pending | uncertain
@@ -25,6 +27,7 @@ import {
   MOA_DECISION_ID_RE,
   MOA_DELEGATE_DIRNAME,
   MOA_EFFECTS_FILENAME,
+  laneEffectId,
   mergeEffectId,
   type MergeEffect,
 } from '../../shared/moaDecision';
@@ -35,14 +38,21 @@ const STATUSES: ReadonlySet<string> = new Set(['pending', 'inFlight', 'done', 'r
 /** A stored row's shape check (strict: one bad row refuses the file). */
 export function isMergeEffectRecord(v: unknown): v is MergeEffect {
   const e = v as MergeEffect;
-  return !!e && typeof e === 'object'
+  if (!e || typeof e !== 'object') return false;
+  // A decision's effect names its decision; a lane effect has none and is
+  // keyed by the PR head it was put up for.
+  const bound = e.approvedBy === 'lane'
+    ? e.decisionId === undefined
+      && typeof e.repoKey === 'string' && Number.isSafeInteger(e.prNumber) && typeof e.expectHead === 'string'
+      && e.id === laneEffectId(e.repoKey, e.prNumber, e.expectHead)
+    : (e.approvedBy === 'owner' || e.approvedBy === 'moa-auto')
+      && typeof e.decisionId === 'string' && MOA_DECISION_ID_RE.test(e.decisionId)
+      && e.id === mergeEffectId(e.decisionId);
+  return bound
     && e.kind === 'pr.merge'
-    && typeof e.decisionId === 'string' && MOA_DECISION_ID_RE.test(e.decisionId)
-    && e.id === mergeEffectId(e.decisionId)
     && typeof e.repoKey === 'string' && e.repoKey.length > 0 && typeof e.repoPath === 'string' && e.repoPath.length > 0
     && Number.isSafeInteger(e.prNumber) && e.prNumber > 0
     && isCommitSha(e.expectHead)
-    && (e.approvedBy === 'owner' || e.approvedBy === 'moa-auto')
     && STATUSES.has(e.status)
     && Number.isSafeInteger(e.attempt) && e.attempt >= 0
     && (e.reason === undefined || typeof e.reason === 'string')
@@ -96,8 +106,18 @@ export class MoaEffectStore {
   }
 
   /** Add the effect for a decision, or return the one it already has. */
-  async enqueue(input: Pick<MergeEffect, 'decisionId' | 'repoKey' | 'repoPath' | 'prNumber' | 'expectHead' | 'approvedBy'>): Promise<MergeEffect> {
-    const id = mergeEffectId(input.decisionId);
+  enqueue(input: Pick<MergeEffect, 'repoKey' | 'repoPath' | 'prNumber' | 'expectHead'> & { decisionId: string; approvedBy: 'owner' | 'moa-auto' }): Promise<MergeEffect> {
+    return this.add(mergeEffectId(input.decisionId), input);
+  }
+
+  /** Add the lane effect for one PR head, or return the one that head
+   *  already has (whatever its status): one effect per head. */
+  enqueueLane(input: Pick<MergeEffect, 'repoKey' | 'repoPath' | 'prNumber' | 'expectHead'>): Promise<MergeEffect> {
+    const { repoKey, repoPath, prNumber, expectHead } = input;
+    return this.add(laneEffectId(repoKey, prNumber, expectHead), { repoKey, repoPath, prNumber, expectHead, approvedBy: 'lane' });
+  }
+
+  private async add(id: string, input: Pick<MergeEffect, 'decisionId' | 'repoKey' | 'repoPath' | 'prNumber' | 'expectHead' | 'approvedBy'>): Promise<MergeEffect> {
     const existing = this.rows.get(id);
     if (existing) return existing;
     const at = this.now();

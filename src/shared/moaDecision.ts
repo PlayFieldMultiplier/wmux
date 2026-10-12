@@ -142,18 +142,22 @@ export interface MoaAnswerDelivery {
 export const MERGE_EFFECT_MAX_ATTEMPTS = 3;
 
 export interface MergeEffect {
-  /** `effect:<decisionId>:pr.merge`. */
+  /** `effect:<decisionId>:pr.merge`, or `lane:<repoKey>#<pr>:<headSha>` for a
+   *  lane effect (laneEffectId). */
   id: string;
   kind: 'pr.merge';
-  decisionId: string;
+  /** The decision behind an 'owner' or 'moa-auto' effect. A 'lane' effect has
+   *  none: the factory's merge lane creates it from facts, not a decision. */
+  decisionId?: string;
   repoKey: string;
   repoPath: string;
   prNumber: number;
   expectHead: string;
-  /** Who allowed it. 'moa-auto' re-runs every lane predicate before each try;
-   *  'owner' re-runs head-unchanged (and mergeBlock) — the owner may approve
-   *  what the lane would not, e.g. an outside contributor's PR. */
-  approvedBy: 'owner' | 'moa-auto';
+  /** Who allowed it. 'moa-auto' and 'lane' re-run every lane predicate
+   *  before each try; 'owner' re-runs head-unchanged (and mergeBlock) — the
+   *  owner may approve what the lane would not, e.g. an outside contributor's
+   *  PR. Any other value is refused by the executor. */
+  approvedBy: 'owner' | 'moa-auto' | 'lane';
   status: MergeEffectStatus;
   attempt: number;
   reason?: string;
@@ -167,6 +171,12 @@ export interface MergeEffect {
 
 export function mergeEffectId(decisionId: string): string {
   return `effect:${decisionId}:pr.merge`;
+}
+
+/** A lane effect's id: one per PR head, so facts that arrive together (CI
+ *  green, a verdict) enqueue one effect, never two. */
+export function laneEffectId(repoKey: string, prNumber: number, headSha: string): string {
+  return `lane:${repoKey}#${prNumber}:${headSha}`;
 }
 
 /**

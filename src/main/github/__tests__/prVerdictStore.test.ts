@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { PrVerdictStore } from '../prVerdictStore';
-import { PR_VERDICT_RETENTION_MS, type PrVerdictRecord } from '../../../shared/prVerdict';
+import { PR_VERDICT_RETENTION_MS, isPrVerdictRecord, type PrVerdictRecord } from '../../../shared/prVerdict';
 
 const HEAD = 'a'.repeat(40);
 const rec = (over: Partial<PrVerdictRecord> = {}): PrVerdictRecord => ({
@@ -78,5 +78,42 @@ describe('PrVerdictStore', () => {
     const file = path.join(dir, 'pr-verdicts.json');
     fs.writeFileSync(`${file}.bak`, JSON.stringify({ version: 1, verdicts: [rec({ verdict: 'fail' })] }));
     expect((await store.list('github.com/o/r', 7)).map((r) => r.verdict)).toEqual(['fail']);
+  });
+});
+
+describe('verdict records v2', () => {
+  const v2 = (over: Partial<PrVerdictRecord> = {}): PrVerdictRecord => ({
+    ...rec(), version: 2, principal: { workspaceId: 'ws-v', botId: 'bot-v', agent: 'claude' },
+    evidence: { taskId: 'task-1', gateHeadSha: HEAD }, ...over,
+  });
+
+  it('a version-1 file with v1 records reads as v2 without throwing; the next write stores v2', async () => {
+    fs.writeFileSync(path.join(dir, 'pr-verdicts.json'), JSON.stringify({ version: 1, verdicts: [rec()] }));
+    const store = new PrVerdictStore(dir, () => 1_000);
+    expect(await store.list('github.com/o/r', 7)).toEqual([{ ...rec(), version: 2 }]);
+    await store.record(v2());
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'pr-verdicts.json'), 'utf8')) as { version: number; verdicts: PrVerdictRecord[] };
+    expect(saved.version).toBe(2);
+    expect(saved.verdicts.map((r) => r.version)).toEqual([2, 2]);
+    expect((await store.list('github.com/o/r', 7))[1]).toEqual(v2());
+  });
+
+  it('a v1 record handed to record() is stored as v2', async () => {
+    const store = new PrVerdictStore(dir, () => 1_000);
+    await store.record(rec());
+    expect(await store.list('github.com/o/r', 7)).toEqual([{ ...rec(), version: 2 }]);
+  });
+
+  it('shape: a bot principal needs no pane; a v2 record needs a pane or a bot; v1 stays strict', () => {
+    expect(isPrVerdictRecord(v2())).toBe(true);
+    expect(isPrVerdictRecord(v2({ evidence: undefined }))).toBe(true);
+    expect(isPrVerdictRecord(v2({ principal: { workspaceId: 'ws-v', ptyId: 'pty-v', agent: 'claude' } }))).toBe(true);
+    expect(isPrVerdictRecord(v2({ principal: { workspaceId: 'ws-v', agent: 'claude' } }))).toBe(false);
+    expect(isPrVerdictRecord(v2({ principal: { workspaceId: 'ws-v', botId: '', agent: 'claude' } }))).toBe(false);
+    expect(isPrVerdictRecord(v2({ evidence: { taskId: 'task-1', gateHeadSha: 'not-a-sha' } }))).toBe(false);
+    expect(isPrVerdictRecord(v2({ evidence: { taskId: '', gateHeadSha: HEAD } }))).toBe(false);
+    expect(isPrVerdictRecord(rec({ principal: { workspaceId: 'ws-v', agent: 'claude' } }))).toBe(false);
+    expect(isPrVerdictRecord(rec({ evidence: { taskId: 'task-1', gateHeadSha: HEAD } }))).toBe(false);
+    expect(isPrVerdictRecord({ ...rec(), version: 3 })).toBe(false);
   });
 });

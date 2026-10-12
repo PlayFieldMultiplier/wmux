@@ -122,6 +122,28 @@ describe('merge', () => {
   });
 });
 
+describe('updateBranch', () => {
+  it('updates the branch only at the expected head, and tells GitHub that head', async () => {
+    const { svc, calls } = make((a) => (a[1] === 'view' ? headJson({ mergeStateStatus: 'BEHIND' }) : '{"message":"Updating pull request branch."}'));
+    expect(await svc.updateBranch('/r', KEY, 7, SHA)).toEqual({ ok: true });
+    expect(gh(calls, 'api')[0].args).toEqual([
+      'api', '--hostname', 'github.com', '-X', 'PUT', 'repos/Acme/Widgets/pulls/7/update-branch', '-f', `expected_head_sha=${SHA}`,
+    ]);
+    expect(gh(calls, 'api')[0].timeout).toBe(60_000);
+  });
+
+  it('a moved head or a closed PR is refused, nothing sent; a gh failure is an error', async () => {
+    const moved = make((a) => (a[1] === 'view' ? headJson({ headRefOid: OTHER }) : '{}'));
+    expect(await moved.svc.updateBranch('/r', KEY, 7, SHA)).toMatchObject({ ok: false, code: 'moved' });
+    expect(gh(moved.calls, 'api')).toHaveLength(0);
+    const closed = make((a) => (a[1] === 'view' ? headJson({ state: 'CLOSED' }) : '{}'));
+    expect(await closed.svc.updateBranch('/r', KEY, 7, SHA)).toMatchObject({ ok: false, code: 'blocked', reason: 'not-open' });
+    expect(gh(closed.calls, 'api')).toHaveLength(0);
+    const failing = make((a) => (a[1] === 'view' ? headJson() : errWith({ stderr: 'HTTP 422: expected head sha did not match' })));
+    expect(await failing.svc.updateBranch('/r', KEY, 7, SHA)).toMatchObject({ ok: false, code: 'error', message: expect.stringContaining('422') });
+  });
+});
+
 describe('the diff is the head\'s', () => {
   const DIFF = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-x\n+y\n';
 
