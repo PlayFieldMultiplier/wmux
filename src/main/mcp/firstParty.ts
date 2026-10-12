@@ -347,6 +347,22 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   'moa.askStatus',
   // pr_verdict (registered beside moa_ask).
   'verify.recordVerdict',
+  // Agent factory bot tools (shared/botSurface.ts BOT_TOOL_RPC), registered
+  // only in `--bot=<role>` mode. Operator-only factory methods (bot.create,
+  // room.resolve, handoff.answer, fact.emit, ...) are deliberately absent.
+  'fact.poll',
+  'room.post',
+  'room.read',
+  'handoff.send',
+  'ask.person',
+  'pr.read',
+  'issue.read',
+  'ci.read',
+  'verdict.read',
+  'trustMetrics.read',
+  'plan.propose',
+  'bot.list',
+  'bot.park',
   // Task lifecycle — the eight commander-only tools (task_gate_run,
   // task_gate_cancel, task_adopt, task_close, task_pr, git_status, git_log,
   // gh_pr_view).

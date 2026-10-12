@@ -26,7 +26,7 @@ returns `EPERM`. Wire framing: newline-delimited JSON, one object per line.
 
 ## RPC methods
 
-Total: **238** methods (`ALL_RPC_METHODS` in
+Total: **263** methods (`ALL_RPC_METHODS` in
 `src/shared/rpc.ts`). Capability and risk class are read from
 `src/main/mcp/methodCapabilityMap.ts`:
 
@@ -358,6 +358,31 @@ Total: **238** methods (`ALL_RPC_METHODS` in
 | `moa.ask` | `wmux.internal` |  |
 | `moa.askStatus` | `wmux.internal` |  |
 | `verify.recordVerdict` | `wmux.internal` |  |
+| `fact.poll` | `wmux.internal` |  |
+| `fact.emit` | `wmux.internal` |  |
+| `bot.list` | `wmux.internal` |  |
+| `bot.create` | `wmux.internal` |  |
+| `bot.update` | `wmux.internal` |  |
+| `bot.remove` | `wmux.internal` |  |
+| `bot.status` | `wmux.internal` |  |
+| `bot.wake` | `wmux.internal` |  |
+| `bot.park` | `wmux.internal` |  |
+| `bot.resume` | `wmux.internal` |  |
+| `bot.interrupt` | `wmux.internal` |  |
+| `room.post` | `wmux.internal` |  |
+| `room.read` | `wmux.internal` |  |
+| `room.threads` | `wmux.internal` |  |
+| `room.resolve` | `wmux.internal` |  |
+| `handoff.send` | `wmux.internal` |  |
+| `handoff.answer` | `wmux.internal` |  |
+| `handoff.list` | `wmux.internal` |  |
+| `ask.person` | `wmux.internal` |  |
+| `pr.read` | `wmux.internal` |  |
+| `issue.read` | `wmux.internal` |  |
+| `ci.read` | `wmux.internal` |  |
+| `verdict.read` | `wmux.internal` |  |
+| `trustMetrics.read` | `wmux.internal` |  |
+| `plan.propose` | `wmux.internal` |  |
 | `task.gate.run` | `task.write` | `a2a` |
 | `task.gate.cancel` | `task.write` | `a2a` |
 | `task.adopt` | `task.write` | `a2a` |

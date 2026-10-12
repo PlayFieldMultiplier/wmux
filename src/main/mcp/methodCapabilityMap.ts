@@ -596,6 +596,37 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // stamped from senderPtyId.
   'verify.recordVerdict': { capability: 'wmux.internal' },
 
+  // --- Agent factory (main/factory/factoryHost.ts; shared/botSurface.ts) ---
+  // Reserved: no plugin may declare any of these. A bot reaches the ones on
+  // its role surface through the bot lane (its validated token), the bundled
+  // server through the first-party lane for the ones its bot tools call, the
+  // renderer through the operator lane. Handlers scope on ctx.bot.
+  'fact.poll':         { capability: 'wmux.internal' },
+  'fact.emit':         { capability: 'wmux.internal' },
+  'bot.list':          { capability: 'wmux.internal' },
+  'bot.create':        { capability: 'wmux.internal' },
+  'bot.update':        { capability: 'wmux.internal' },
+  'bot.remove':        { capability: 'wmux.internal' },
+  'bot.status':        { capability: 'wmux.internal' },
+  'bot.wake':          { capability: 'wmux.internal' },
+  'bot.park':          { capability: 'wmux.internal' },
+  'bot.resume':        { capability: 'wmux.internal' },
+  'bot.interrupt':     { capability: 'wmux.internal' },
+  'room.post':         { capability: 'wmux.internal' },
+  'room.read':         { capability: 'wmux.internal' },
+  'room.threads':      { capability: 'wmux.internal' },
+  'room.resolve':      { capability: 'wmux.internal' },
+  'handoff.send':      { capability: 'wmux.internal' },
+  'handoff.answer':    { capability: 'wmux.internal' },
+  'handoff.list':      { capability: 'wmux.internal' },
+  'ask.person':        { capability: 'wmux.internal' },
+  'pr.read':           { capability: 'wmux.internal' },
+  'issue.read':        { capability: 'wmux.internal' },
+  'ci.read':           { capability: 'wmux.internal' },
+  'verdict.read':      { capability: 'wmux.internal' },
+  'trustMetrics.read': { capability: 'wmux.internal' },
+  'plan.propose':      { capability: 'wmux.internal' },
+
   // --- Task lifecycle (pipe/handlers/worktask.rpc.ts) ---
   // The reads answer "what did this task produce"; the writes run the task's
   // own gate script, patch the parent repository, push a branch or remove a
