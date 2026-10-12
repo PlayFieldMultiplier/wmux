@@ -79,16 +79,18 @@
 // A caller may name a base ref (`gateBaseRef`, e.g. the PR's base branch). The
 // gate is then chosen from that ref, not from the worktree: package.json's
 // lint/test scripts are read with `git show <ref>:package.json`, and the
-// worktree must declare exactly the same ones; a declared verify script must
-// be the same blob at the ref as in the worktree. Any difference is a refusal,
-// so the steps that run are the base's own. Which gate a trusted wmux.json
+// worktree must declare exactly the same ones and carry the ref's `.npmrc`
+// (npm reads it when it runs them); a declared verify script must be the same
+// blob at the ref as in the worktree. Any difference is a refusal, so the
+// steps that run are the base's own. Which gate a trusted wmux.json
 // picks is still read at the parent root, as above. Off by default.
 //
 // ── THE HEAD A GATE RAN ON ──────────────────────────────────────────────────
 //
-// `git rev-parse HEAD` is read in the worktree before the gate and again
-// before the result is recorded; the result carries `headSha` only when both
-// reads agree, so a recorded gate names the commit it graded or none.
+// The worktree's HEAD is read before the gate and again before the result is
+// recorded, each time only if the tree is clean (no tracked change, no
+// untracked file outside .gitignore); the result carries `headSha` only when
+// both reads agree, so a recorded gate names the commit it graded or none.
 //
 // Ledger writes go through LedgerPort (see ledgerPort.ts) as a `system` actor —
 // the daemon ran the gate, not the worker whose code it graded — and a ledger
@@ -210,8 +212,9 @@ export interface TaskGateRunnerOptions {
   depsState?: (worktreePath: string) => 'ok' | 'missing' | 'symlink';
   /** Injected for tests; defaults to fs.existsSync. */
   fileExists?: (p: string) => boolean;
-  /** Injected for tests; defaults to `git rev-parse HEAD` in the worktree.
-   *  Null when it cannot be read. */
+  /** Injected for tests; defaults to `git rev-parse HEAD` in the worktree
+   *  when `git status --porcelain` is empty. Null when it cannot be read or
+   *  the tree has changes of its own. */
   readHead?: (worktreePath: string) => Promise<string | null>;
   /** Injected for tests; defaults to `git show <ref>:<file>` in the worktree.
    *  Null when the ref has no such file; throws when the ref cannot be read. */
@@ -342,8 +345,13 @@ const defaultSpawn: GateSpawn = (cmd, args, opts) => {
 };
 
 async function defaultReadHead(worktreePath: string): Promise<string | null> {
-  const r = await git(['rev-parse', 'HEAD'], worktreePath);
+  const [r, status] = await Promise.all([
+    git(['rev-parse', 'HEAD'], worktreePath),
+    git(['status', '--porcelain', '--untracked-files=all'], worktreePath),
+  ]);
   const sha = r.stdout.trim();
+  // A tree with changes of its own is not the commit: name none.
+  if (status.code !== 0 || status.stdout.trim() !== '') return null;
   return r.code === 0 && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null;
 }
 
@@ -526,6 +534,17 @@ export class TaskGateRunner {
       const differs = GATE_NPM_SCRIPTS.filter((s) => base[s] !== scripts?.[s]);
       if (differs.length > 0) {
         return { refused: `the task worktree's npm ${differs.join(' and ')} ${differs.length > 1 ? 'scripts differ' : 'script differs'} from ${baseRef}'s; the gate runs the base's own` };
+      }
+      if (GATE_NPM_SCRIPTS.some((s) => typeof base[s] === 'string')) {
+        let npmrc: string | null;
+        try {
+          npmrc = await this.readBaseFile(worktreePath, baseRef, '.npmrc');
+        } catch (err) {
+          return { unavailable: `.npmrc on ${baseRef} could not be read (${err instanceof Error ? err.message : String(err)})` };
+        }
+        const here = this.fileExists(path.join(worktreePath, '.npmrc'));
+        const same = npmrc === null ? !here : here && (await this.sameAsBase(worktreePath, baseRef, '.npmrc').catch(() => false));
+        if (!same) return { refused: `.npmrc in the task worktree is not the one on ${baseRef}; npm reads it when it runs the gate` };
       }
       scripts = base;
     }

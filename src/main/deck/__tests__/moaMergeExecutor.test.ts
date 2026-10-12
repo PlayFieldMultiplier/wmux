@@ -252,6 +252,26 @@ describe('lane effects', () => {
     }
   });
 
+  it('the daily cap holds for lane effects run concurrently', async () => {
+    const verdicts = [7, 8, 9].map((prNumber) => ({ ...BOT_PASS, prNumber }));
+    const { effects, exec, merge } = await laneSetup({ inputs: { factoryEnabled: true, killSwitch: false, dailyCap: 1 }, verdicts });
+    (exec as unknown as { ports: MoaMergeExecutorPorts }).ports.facts = { readFresh: async (_p, _k, n) => ({ ...LANE_FACTS, number: n }) };
+    const ids = await Promise.all([7, 8, 9].map(async (n) => (await enqueue(effects, n)).id));
+    const out = await Promise.all(ids.map((id) => exec.run(id)));
+    expect(out.map((r) => r?.status).sort()).toEqual(['done', 'refused', 'refused']);
+    expect(out.filter((r) => r?.status === 'refused').every((r) => r?.reason === 'lane-daily-cap')).toBe(true);
+    expect(merge).toHaveBeenCalledTimes(1);
+  });
+
+  it('an uncertain lane merge counts against the cap', async () => {
+    const { effects, exec, merge } = await laneSetup({ inputs: { factoryEnabled: true, killSwitch: false, dailyCap: 1 } });
+    merge.mockResolvedValueOnce({ ok: false, code: 'error', message: 'network' });
+    const first = await enqueue(effects, 7);
+    expect(await exec.run(first.id)).toMatchObject({ status: 'uncertain' });
+    const second = await enqueue(effects, 8);
+    expect(await exec.run(second.id)).toMatchObject({ status: 'refused', reason: 'lane-daily-cap' });
+  });
+
   it('the daily cap counts lane merges done today', async () => {
     const { effects, exec, merge } = await laneSetup({ inputs: { factoryEnabled: true, killSwitch: false, dailyCap: 1 } });
     const first = await enqueue(effects, 7);
@@ -315,7 +335,7 @@ describe('lane effects', () => {
       }
     });
 
-    it('one update per repo at a time', async () => {
+    it('one update at a time: lane runs are serialized, per repo and overall', async () => {
       let live = 0;
       let peak = 0;
       const releases: Array<() => void> = [];
@@ -334,13 +354,13 @@ describe('lane effects', () => {
       // Each PR reads as its own number.
       (exec as unknown as { ports: MoaMergeExecutorPorts }).ports.facts = { readFresh: async (_p, _k, n) => ({ ...BEHIND, number: n }) };
       const runs = [a, b, c].map((e) => exec.run(e.id));
-      await vi.waitFor(() => expect(updateBranch).toHaveBeenCalledTimes(2));
-      expect(peak).toBe(2); // o/r and o/other in parallel, never two on o/r
+      await vi.waitFor(() => expect(updateBranch).toHaveBeenCalledTimes(1));
       while (updateBranch.mock.calls.length < 3 || releases.length > 0) {
         releases.shift()?.();
-        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 5));
       }
       const done = await Promise.all(runs);
+      expect(peak).toBe(1);
       expect(done.map((r) => r?.reason)).toEqual(['behind-updated', 'behind-updated', 'behind-updated']);
       const repos = updateBranch.mock.calls.map((call) => (call as unknown as [MergeEffect])[0].repoKey);
       expect(repos.filter((k) => k === 'github.com/o/r')).toHaveLength(2);

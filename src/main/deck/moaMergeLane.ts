@@ -17,8 +17,8 @@
 //                    go to the owner), CHANGELOG.md (changelog.d/ fragments are
 //                    fine), .github/, release and notice scripts, packaging.
 //   gate-definition-changed  the files that define the gate a verifier runs
-//                    (scripts/verify.sh, package.json, wmux.json, vitest,
-//                    eslint and tsconfig files): a PR that changes them is
+//                    (scripts/verify.sh, package.json, .npmrc, wmux.json,
+//                    vitest, eslint and tsconfig files): a PR that changes them is
 //                    not graded by its own gate without the owner. A
 //                    package.json change also fails not-release-pr; each
 //                    predicate reports its own reason.
@@ -196,6 +196,7 @@ export function notReleasePr(facts: PrLaneFacts): LaneCheck {
 const GATE_DEFINITION_PATHS: ReadonlyArray<[string, (p: string) => boolean]> = [
   ['verify-script', (p) => p === 'scripts/verify.sh'],
   ['package-manifest', (p) => /(?:^|\/)package\.json$/.test(p)],
+  ['npm-config', (p) => /(?:^|\/)\.npmrc$/.test(p)],
   ['project-config', (p) => /(?:^|\/)wmux\.json$/.test(p)],
   ['test-config', (p) => /(?:^|\/)vitest(?:\.[\w-]+)*\.config\.[cm]?[jt]s$/.test(p) || /(?:^|\/)vitest\.workspace\.[\w.]+$/.test(p)],
   ['lint-config', (p) => /(?:^|\/)(?:eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.[\w]+)?|\.eslintignore)$/.test(p)],

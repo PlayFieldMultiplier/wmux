@@ -19,19 +19,23 @@
 //                     decision), and a 'moa-auto' effect must still be
 //                     auto-eligible (book attribute, the owner's toggle, the
 //                     kill switch).
-//   lane              `lane.authorize` (laneAuthorize): the factory is on, the
+//   lane              `lane.inputs` (laneAuthorize): the factory is on, the
 //                     lane's kill switch is off, and today's lane merges are
 //                     under the daily cap. With no lane port nothing merges
-//                     as 'lane' (`lane-not-wired`).
+//                     as 'lane' (`lane-not-wired`). Lane runs go one at a
+//                     time, so the cap is counted with no other lane run
+//                     between its read and its merge; an uncertain lane row
+//                     counts against it (it may have merged).
 // A failure after the claim that may or may not have reached GitHub ends
 // `uncertain`, never `done`.
 //
 // update-branch (lane only): when every predicate passes but GitHub says the
 // branch is BEHIND its base, a same-repo `wtask/*` branch is updated
 // (`updateBranch`) and the try ends `refused: behind-updated` — the new head
-// needs its own checks and verdict, so it is a new effect. One update per
-// repo runs at a time. Owner and moa-auto effects, forks and other branches
-// go to the merge as before (mergeBlock refuses them as behind).
+// needs its own checks and verdict, so it is a new effect. Lane runs are
+// serialized, so at most one update is in flight (per repo and overall).
+// Owner and moa-auto effects, forks and other branches go to the merge as
+// before (mergeBlock refuses them as behind).
 
 import type { MergeEffect } from '../../shared/moaDecision';
 import type { PrLaneFacts, PrWriteResult } from '../../shared/prReview';
@@ -70,7 +74,8 @@ export interface LaneAuthorizeInputs {
 }
 
 /** The lane's own gate (not the Moa decision's). Null = may run. Pure.
- *  `mergedToday` counts lane effects done since local midnight. */
+ *  `mergedToday` counts lane effects done (or uncertain) since local
+ *  midnight. */
 export function laneAuthorize(inputs: LaneAuthorizeInputs | null, mergedToday: number): string | null {
   if (!inputs) return 'lane-inputs-unreadable';
   if (inputs.factoryEnabled !== true) return 'factory-disabled';
@@ -126,8 +131,8 @@ const LANE_UPDATABLE_BRANCH = /^wtask\/[^\s]+$/;
 
 export class MoaMergeExecutor {
   private readonly running = new Map<string, Promise<MergeEffect | null>>();
-  /** The update-branch in flight per repoKey (at most one). */
-  private readonly updating = new Map<string, Promise<unknown>>();
+  /** The last queued lane run: lane runs go one at a time. */
+  private laneTail: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly ports: MoaMergeExecutorPorts) {}
 
@@ -135,7 +140,15 @@ export class MoaMergeExecutor {
   run(id: string): Promise<MergeEffect | null> {
     const live = this.running.get(id);
     if (live) return live;
-    const p = this.runOnce(id).finally(() => this.running.delete(id));
+    const go = (): Promise<MergeEffect | null> => this.runOnce(id);
+    let started: Promise<MergeEffect | null>;
+    if (this.ports.effects.get(id)?.approvedBy === 'lane') {
+      started = this.laneTail.then(go, go);
+      this.laneTail = started.catch(() => undefined);
+    } else {
+      started = go();
+    }
+    const p = started.finally(() => this.running.delete(id));
     this.running.set(id, p);
     return p;
   }
@@ -194,7 +207,7 @@ export class MoaMergeExecutor {
       }
       if (isLane && this.ports.updateBranch && facts.mergeStateStatus === 'BEHIND'
         && !facts.isCrossRepository && LANE_UPDATABLE_BRANCH.test(facts.headRefName)) {
-        const r = await this.updateBranchSerialized(claimed, this.ports.updateBranch);
+        const r = await this.ports.updateBranch(claimed).catch((err): PrWriteResult => ({ ok: false, code: 'error', message: String(err) }));
         return await end('refused', r.ok ? 'behind-updated' : r.code === 'moved' ? 'head-moved' : `behind-update-${r.code}`);
       }
       const wrongIdentity = await this.ports.identity?.(claimed);
@@ -226,26 +239,10 @@ export class MoaMergeExecutor {
       inputs = null;
     }
     const since = startOfLocalDay((this.ports.now ?? Date.now)());
+    // Done, or uncertain (it may have merged): either uses up the cap.
     const mergedToday = this.ports.effects.list()
-      .filter((r) => r.approvedBy === 'lane' && r.status === 'done' && r.id !== effect.id && r.updatedAt >= since).length;
+      .filter((r) => r.approvedBy === 'lane' && (r.status === 'done' || r.status === 'uncertain') && r.id !== effect.id && r.updatedAt >= since).length;
     return laneAuthorize(inputs, mergedToday);
-  }
-
-  /** One update-branch per repo at a time: a second waits for the first. */
-  private async updateBranchSerialized(effect: MergeEffect, update: (e: MergeEffect) => Promise<PrWriteResult>): Promise<PrWriteResult> {
-    const key = effect.repoKey;
-    let prev = this.updating.get(key);
-    while (prev) {
-      await prev.catch(() => undefined);
-      prev = this.updating.get(key);
-    }
-    const p = update(effect).catch((err): PrWriteResult => ({ ok: false, code: 'error', message: String(err) }));
-    this.updating.set(key, p);
-    try {
-      return await p;
-    } finally {
-      if (this.updating.get(key) === p) this.updating.delete(key);
-    }
   }
 
   private async read(e: MergeEffect): Promise<PrLaneFacts | null> {

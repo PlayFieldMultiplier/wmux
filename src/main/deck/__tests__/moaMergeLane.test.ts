@@ -229,6 +229,8 @@ describe('gate-definition-changed', () => {
     expect(gateDefinitionPathReason('scripts/verify.sh')).toBe('verify-script');
     expect(gateDefinitionPathReason('package.json')).toBe('package-manifest');
     expect(gateDefinitionPathReason('relay/package.json')).toBe('package-manifest');
+    expect(gateDefinitionPathReason('.npmrc')).toBe('npm-config');
+    expect(gateDefinitionPathReason('relay/.npmrc')).toBe('npm-config');
     expect(gateDefinitionPathReason('wmux.json')).toBe('project-config');
     expect(gateDefinitionPathReason('vitest.config.ts')).toBe('test-config');
     expect(gateDefinitionPathReason('vitest.runtime.config.ts')).toBe('test-config');

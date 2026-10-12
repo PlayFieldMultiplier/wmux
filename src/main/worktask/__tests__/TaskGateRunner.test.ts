@@ -680,6 +680,9 @@ describe('TaskGateRunner — the head a gate ran on', () => {
 describe('TaskGateRunner — gate from a base ref', () => {
   const base = { ledger: fakeLedger(), spawn: fakeSpawn({ code: 0 }), depsState: () => 'ok' as const, now: () => 1, readHead: async () => null };
   const pkg = (scripts: Record<string, string>) => JSON.stringify({ name: 'x', scripts });
+  /** A base with `package.json` and, when given, `.npmrc`. */
+  const baseFiles = (pkgText: string | null, npmrc: string | null = null) =>
+    vi.fn(async (_wt: string, _ref: string, file: string) => (file === 'package.json' ? pkgText : file === '.npmrc' ? npmrc : null));
 
   it('default off: the base is never read', async () => {
     const readBaseFile = vi.fn(async () => pkg(npmProject));
@@ -689,7 +692,7 @@ describe('TaskGateRunner — gate from a base ref', () => {
   });
 
   it('runs the base ref\'s npm steps when the worktree declares the same scripts', async () => {
-    const readBaseFile = vi.fn(async () => pkg(npmProject));
+    const readBaseFile = baseFiles(pkg(npmProject));
     const runner = new TaskGateRunner({ ...base, readPackageScripts: () => npmProject, readBaseFile });
     const r = await runner.resolveSteps(WT, REPO, 'origin/main');
     expect(r).toMatchObject({ steps: [{ label: expect.stringMatching(/run lint$/) }, { label: expect.stringMatching(/test$/) }] });
@@ -702,9 +705,21 @@ describe('TaskGateRunner — gate from a base ref', () => {
       [{ lint: 'eslint .' }, npmProject],
       [npmProject, { lint: 'eslint .' }],
     ] as const) {
-      const runner = new TaskGateRunner({ ...base, readPackageScripts: () => ({ ...here }), readBaseFile: async () => pkg({ ...there }) });
+      const runner = new TaskGateRunner({ ...base, readPackageScripts: () => ({ ...here }), readBaseFile: baseFiles(pkg({ ...there })) });
       expect(await runner.resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ refused: expect.stringContaining('origin/main') });
     }
+  });
+
+  it('the worktree must carry the base\'s .npmrc (or neither has one)', async () => {
+    const noneHere = { ...base, readPackageScripts: () => npmProject, fileExists: () => false };
+    expect(await new TaskGateRunner({ ...noneHere, readBaseFile: baseFiles(pkg(npmProject)) }).resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ steps: [{}, {}] });
+    expect(await new TaskGateRunner({ ...noneHere, readBaseFile: baseFiles(pkg(npmProject), 'x=1') }).resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ refused: expect.stringContaining('.npmrc') });
+    const added = { ...base, readPackageScripts: () => npmProject, fileExists: (p: string) => p.endsWith('.npmrc') };
+    expect(await new TaskGateRunner({ ...added, readBaseFile: baseFiles(pkg(npmProject)) }).resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ refused: expect.stringContaining('.npmrc') });
+    expect(await new TaskGateRunner({ ...added, readBaseFile: baseFiles(pkg(npmProject), 'x=1'), sameAsBase: async () => false }).resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ refused: expect.stringContaining('.npmrc') });
+    expect(await new TaskGateRunner({ ...added, readBaseFile: baseFiles(pkg(npmProject), 'x=1'), sameAsBase: async () => true }).resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ steps: [{}, {}] });
+    const unreadable = vi.fn(async (_wt: string, _ref: string, file: string) => { if (file === '.npmrc') throw new Error('git'); return pkg(npmProject); });
+    expect(await new TaskGateRunner({ ...noneHere, readBaseFile: unreadable }).resolveSteps(WT, REPO, 'origin/main')).toMatchObject({ unavailable: expect.stringContaining('.npmrc') });
   });
 
   it('a base without a gate and a worktree without one is the recorded no-gate skip', async () => {
@@ -756,6 +771,15 @@ describe('TaskGateRunner — base ref and HEAD on a real repository', () => {
       const res = await runner.run({ taskId: 'wtask-1', worktreePath: dir, systemWorkspaceId: 'ws-daemon', gateBaseRef: 'HEAD' });
       if (res.status !== 'completed') throw new Error(`unexpected ${res.status}`);
       expect(res.result.headSha).toBe(head);
+      // A tree with changes of its own names no commit.
+      fs.writeFileSync(path.join(dir, 'untracked.test.ts'), 'x');
+      const dirty = await runner.run({ taskId: 'wtask-1', worktreePath: dir, systemWorkspaceId: 'ws-daemon', gateBaseRef: 'HEAD' });
+      if (dirty.status !== 'completed') throw new Error(`unexpected ${dirty.status}`);
+      expect('headSha' in dirty.result).toBe(false);
+      fs.rmSync(path.join(dir, 'untracked.test.ts'));
+      fs.writeFileSync(path.join(dir, '.npmrc'), 'script-shell=/usr/bin/true\n');
+      expect(await runner.resolveSteps(dir, dir, 'HEAD')).toMatchObject({ refused: expect.stringContaining('.npmrc') });
+      fs.rmSync(path.join(dir, '.npmrc'));
       fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { ...npmProject, test: 'true' } }));
       expect(await runner.resolveSteps(dir, dir, 'HEAD')).toMatchObject({ refused: expect.stringContaining('test script differs') });
       expect(await runner.resolveSteps(dir, dir, 'no-such-ref')).toMatchObject({ unavailable: expect.any(String) });
