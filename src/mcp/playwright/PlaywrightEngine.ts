@@ -465,13 +465,18 @@ export class PlaywrightEngine {
     }
   }
 
+  /** Close URL of the blank tab connectOverCdp opened to attach through. */
+  private bootstrapTabCloseUrl: string | null = null;
+
   /**
    * A Chrome with every window closed but the app still running (the macOS
    * default) has no browser context, and connectOverCDP refuses it with
    * "Browser context management is not supported". For a port endpoint (a
-   * dedicated wmux Chrome) open one blank tab to attach through and close it
-   * once attached: a live connection keeps working with no window. A ws
-   * endpoint is the user's own Chrome, which wmux does not open windows in.
+   * dedicated wmux Chrome) open one blank tab to attach through; the caller
+   * closes it with closeBootstrapTab() once the attach is complete (a
+   * protected pane's download deny needs the context too). A live connection
+   * keeps working with no window. A ws endpoint is the user's own Chrome,
+   * which wmux does not open windows in.
    */
   private async connectOverCdp(
     chromium: ReturnType<typeof loadPlaywright>['chromium'],
@@ -486,13 +491,19 @@ export class PlaywrightEngine {
     // Chrome 111+ requires PUT for /json/new.
     const resp = await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: 'PUT' });
     const bootstrap = (await resp.json()) as { id?: string };
+    if (bootstrap?.id) this.bootstrapTabCloseUrl = `http://127.0.0.1:${cdpPort}/json/close/${bootstrap.id}`;
     try {
       return await chromium.connectOverCDP(endpoint);
-    } finally {
-      if (bootstrap?.id) {
-        await fetch(`http://127.0.0.1:${cdpPort}/json/close/${bootstrap.id}`).catch(() => { /* already gone */ });
-      }
+    } catch (err) {
+      await this.closeBootstrapTab();
+      throw err;
     }
+  }
+
+  private async closeBootstrapTab(): Promise<void> {
+    const url = this.bootstrapTabCloseUrl;
+    this.bootstrapTabCloseUrl = null;
+    if (url) await fetch(url).catch(() => { /* already gone */ });
   }
 
   async disconnect(): Promise<void> {
@@ -629,7 +640,11 @@ export class PlaywrightEngine {
         this.connectedWorkspaceId = workspaceId;
         this.connectedProfile = profile;
         this.connectedPolicyEpoch = policyEpoch;
-        if (policyEpoch !== undefined) await this.denyDownloads();
+        try {
+          if (policyEpoch !== undefined) await this.denyDownloads();
+        } finally {
+          await this.closeBootstrapTab();
+        }
         return;
       } catch (err) {
         if (err instanceof CdpAttachInfoUnavailableError) throw err;
