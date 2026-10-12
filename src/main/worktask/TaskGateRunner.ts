@@ -74,6 +74,22 @@
 // again: neither "no gate" nor "a gate that failed", but a gate whose existence
 // is unknown. That answers `gate_unavailable` (unrecorded) rather than guessing.
 //
+// ── GATE FROM A BASE REF (opt-in) ───────────────────────────────────────────
+//
+// A caller may name a base ref (`gateBaseRef`, e.g. the PR's base branch). The
+// gate is then chosen from that ref, not from the worktree: package.json's
+// lint/test scripts are read with `git show <ref>:package.json`, and the
+// worktree must declare exactly the same ones; a declared verify script must
+// be the same blob at the ref as in the worktree. Any difference is a refusal,
+// so the steps that run are the base's own. Which gate a trusted wmux.json
+// picks is still read at the parent root, as above. Off by default.
+//
+// ── THE HEAD A GATE RAN ON ──────────────────────────────────────────────────
+//
+// `git rev-parse HEAD` is read in the worktree before the gate and again
+// before the result is recorded; the result carries `headSha` only when both
+// reads agree, so a recorded gate names the commit it graded or none.
+//
 // Ledger writes go through LedgerPort (see ledgerPort.ts) as a `system` actor —
 // the daemon ran the gate, not the worker whose code it graded — and a ledger
 // that is unreachable does not fail the gate: the run happened, only its receipt
@@ -84,6 +100,7 @@ import * as path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { getExecEnv } from '../../shared/execEnv';
 import { LEDGER_GATE_TAIL_MAX_BYTES, type LedgerGateResult } from '../../shared/ledger';
+import { git } from '../git/git';
 import type { LedgerPort } from './ledgerPort';
 
 /** 15 minutes. A gate is a lint+test run, not a build farm; past this the
@@ -193,6 +210,15 @@ export interface TaskGateRunnerOptions {
   depsState?: (worktreePath: string) => 'ok' | 'missing' | 'symlink';
   /** Injected for tests; defaults to fs.existsSync. */
   fileExists?: (p: string) => boolean;
+  /** Injected for tests; defaults to `git rev-parse HEAD` in the worktree.
+   *  Null when it cannot be read. */
+  readHead?: (worktreePath: string) => Promise<string | null>;
+  /** Injected for tests; defaults to `git show <ref>:<file>` in the worktree.
+   *  Null when the ref has no such file; throws when the ref cannot be read. */
+  readBaseFile?: (worktreePath: string, ref: string, file: string) => Promise<string | null>;
+  /** Injected for tests; defaults to comparing `git hash-object <file>` with
+   *  the ref's blob. False when either side is missing or unreadable. */
+  sameAsBase?: (worktreePath: string, ref: string, file: string) => Promise<boolean>;
 }
 
 // ── Results ──────────────────────────────────────────────────────────────────
@@ -238,7 +264,13 @@ export interface GateRunInput {
    * behaviour: no verdict, npm only.
    */
   projectRoot?: string;
+  /** Choose the gate from this ref (e.g. `origin/main`) instead of the
+   *  worktree; see GATE FROM A BASE REF above. Omitted = the worktree. */
+  gateBaseRef?: string;
 }
+
+/** A ref this runner passes to git: a plain ref name, never an option. */
+const BASE_REF_RE = /^(?!-)[A-Za-z0-9._/-]{1,200}$/;
 
 // ── Tail bounding ────────────────────────────────────────────────────────────
 
@@ -309,6 +341,47 @@ const defaultSpawn: GateSpawn = (cmd, args, opts) => {
   };
 };
 
+async function defaultReadHead(worktreePath: string): Promise<string | null> {
+  const r = await git(['rev-parse', 'HEAD'], worktreePath);
+  const sha = r.stdout.trim();
+  return r.code === 0 && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null;
+}
+
+async function defaultReadBaseFile(worktreePath: string, ref: string, file: string): Promise<string | null> {
+  const commit = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], worktreePath);
+  if (commit.code !== 0) throw new Error(`the base ref ${ref} cannot be read`);
+  const exists = await git(['cat-file', '-e', `${ref}:${file}`], worktreePath);
+  if (exists.code !== 0) return null;
+  const r = await git(['show', `${ref}:${file}`], worktreePath);
+  if (r.code !== 0) throw new Error(`${ref}:${file} cannot be read`);
+  return r.stdout;
+}
+
+async function defaultSameAsBase(worktreePath: string, ref: string, file: string): Promise<boolean> {
+  // Blob ids, not bytes: hash-object applies the same clean filters (line
+  // endings) the ref's blob went through.
+  const [base, here] = await Promise.all([
+    git(['rev-parse', '--verify', '--quiet', `${ref}:${file}`], worktreePath),
+    git(['hash-object', '--', file], worktreePath),
+  ]);
+  return base.code === 0 && here.code === 0 && base.stdout.trim() !== '' && base.stdout.trim() === here.stdout.trim();
+}
+
+/** package.json text → its string scripts; null when it is not JSON. */
+function scriptsOf(raw: string): Record<string, string> | null {
+  let parsed: { scripts?: Record<string, unknown> } | null;
+  try {
+    parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> } | null;
+  } catch {
+    return null;
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed?.scripts ?? {})) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
+}
+
 function defaultDepsState(worktreePath: string): 'ok' | 'missing' | 'symlink' {
   try {
     const st = fs.lstatSync(path.join(worktreePath, 'node_modules'));
@@ -336,17 +409,7 @@ function defaultReadPackageScripts(root: string): Record<string, string> | null 
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? {} : null;
   }
-  let parsed: { scripts?: Record<string, unknown> } | null;
-  try {
-    parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> } | null;
-  } catch {
-    return null;
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(parsed?.scripts ?? {})) {
-    if (typeof v === 'string') out[k] = v;
-  }
-  return out;
+  return scriptsOf(raw);
 }
 
 // ── The runner ───────────────────────────────────────────────────────────────
@@ -364,6 +427,9 @@ export class TaskGateRunner {
   private readonly readPackageScripts: (root: string) => Record<string, string> | null;
   private readonly depsState: (worktreePath: string) => 'ok' | 'missing' | 'symlink';
   private readonly fileExists: (p: string) => boolean;
+  private readonly readHead: (worktreePath: string) => Promise<string | null>;
+  private readonly readBaseFile: (worktreePath: string, ref: string, file: string) => Promise<string | null>;
+  private readonly sameAsBase: (worktreePath: string, ref: string, file: string) => Promise<boolean>;
   /** One gate per task — the second concurrent call is `busy`, not a second
    *  npm install fighting the first over the same node_modules. */
   private readonly active = new Map<string, ActiveGate>();
@@ -383,6 +449,9 @@ export class TaskGateRunner {
     this.readPackageScripts = opts.readPackageScripts ?? defaultReadPackageScripts;
     this.depsState = opts.depsState ?? defaultDepsState;
     this.fileExists = opts.fileExists ?? ((p) => fs.existsSync(p));
+    this.readHead = opts.readHead ?? defaultReadHead;
+    this.readBaseFile = opts.readBaseFile ?? defaultReadBaseFile;
+    this.sameAsBase = opts.sameAsBase ?? defaultSameAsBase;
   }
 
   isRunning(taskId: string): boolean {
@@ -402,12 +471,17 @@ export class TaskGateRunner {
    * Resolve the steps for a worktree. Exported behaviour, tested directly:
    * a trusted project declaring the well-known id wins; anything else it
    * declares under that id is a refusal; otherwise npm, filtered by the scripts
-   * package.json actually has.
+   * package.json actually has. With `baseRef`, the steps come from that ref
+   * and the worktree must agree with it (see GATE FROM A BASE REF).
    */
   async resolveSteps(
     worktreePath: string,
     configRoot: string = worktreePath,
+    baseRef?: string,
   ): Promise<{ steps: GateStep[] } | { refused: string } | { unavailable: string }> {
+    if (baseRef !== undefined && !BASE_REF_RE.test(baseRef)) {
+      return { refused: `'${baseRef.slice(0, 80)}' is not a ref name the gate runner reads` };
+    }
     // The verdict is read at the PARENT root (that is where the user approved a
     // wmux.json); the script runs in the worktree.
     const declared = await this.declaredVerifyCommand(configRoot);
@@ -420,7 +494,12 @@ export class TaskGateRunner {
         };
       }
       const scriptPath = path.join(worktreePath, GATE_VERIFY_SCRIPT);
-      if (this.fileExists(scriptPath)) return { steps: [step(['bash', scriptPath])] };
+      if (this.fileExists(scriptPath)) {
+        if (baseRef !== undefined && !(await this.sameAsBase(worktreePath, baseRef, GATE_VERIFY_SCRIPT).catch(() => false))) {
+          return { refused: `${GATE_VERIFY_SCRIPT} in the task worktree is not the one on ${baseRef}; the gate runs the base's own script` };
+        }
+        return { steps: [step(['bash', scriptPath])] };
+      }
       // Declared and trusted, but this worktree does not have the file. Falling
       // through to npm would grade the task by a gate the project did not
       // choose, so say so instead.
@@ -429,11 +508,26 @@ export class TaskGateRunner {
       };
     }
 
-    const scripts = this.readPackageScripts(worktreePath);
+    let scripts = this.readPackageScripts(worktreePath);
     if (scripts === null) {
       return {
         unavailable: `the package.json in ${worktreePath} could not be read or parsed, so whether this project has a gate is unknown`,
       };
+    }
+    if (baseRef !== undefined) {
+      let raw: string | null;
+      try {
+        raw = await this.readBaseFile(worktreePath, baseRef, 'package.json');
+      } catch (err) {
+        return { unavailable: `package.json on ${baseRef} could not be read (${err instanceof Error ? err.message : String(err)})` };
+      }
+      const base = raw === null ? {} : scriptsOf(raw);
+      if (base === null) return { unavailable: `package.json on ${baseRef} could not be parsed, so whether this project has a gate is unknown` };
+      const differs = GATE_NPM_SCRIPTS.filter((s) => base[s] !== scripts?.[s]);
+      if (differs.length > 0) {
+        return { refused: `the task worktree's npm ${differs.join(' and ')} ${differs.length > 1 ? 'scripts differ' : 'script differs'} from ${baseRef}'s; the gate runs the base's own` };
+      }
+      scripts = base;
     }
     const steps: GateStep[] = [];
     if (typeof scripts['lint'] === 'string') steps.push(step([npmBin(), 'run', 'lint']));
@@ -491,12 +585,13 @@ export class TaskGateRunner {
       // every gate answered `deps_missing` — unrecorded — and the task could
       // never reach `completed`. That is the exact blockage the no-gate record
       // exists to remove, reintroduced one step earlier.
-      const resolved = await this.resolveSteps(worktreePath, input.projectRoot ?? worktreePath);
+      const before = await this.readHead(worktreePath).catch(() => null);
+      const resolved = await this.resolveSteps(worktreePath, input.projectRoot ?? worktreePath, input.gateBaseRef);
       if ('refused' in resolved) return { ok: false, status: 'refused', taskId, error: resolved.refused };
       if ('unavailable' in resolved) {
         return { ok: true, status: 'skipped', taskId, skipped: 'gate_unavailable', detail: resolved.unavailable };
       }
-      if (resolved.steps.length === 0) return this.noGateVerdict(input);
+      if (resolved.steps.length === 0) return this.noGateVerdict(input, before);
 
       const deps = this.depsState(worktreePath);
       if (deps !== 'ok') {
@@ -580,11 +675,13 @@ export class TaskGateRunner {
         if (exitCode !== 0) break;
       }
 
+      const headSha = await this.pinnedHead(worktreePath, before);
       const result: LedgerGateResult = {
         exitCode,
         tail: boundTail(output),
         at: this.now(),
         command: label,
+        ...(headSha ? { headSha } : {}),
       };
       const recorded = await this.record(taskId, input.systemWorkspaceId, result);
       return { ok: true, status: 'completed', taskId, result, recorded };
@@ -606,9 +703,11 @@ export class TaskGateRunner {
    * answers alone — that is the task-runs-in-the-main-checkout case, where the
    * two trees are the same tree.
    */
-  private async noGateVerdict(input: GateRunInput): Promise<GateRunResult> {
+  private async noGateVerdict(input: GateRunInput, before: string | null): Promise<GateRunResult> {
     const { taskId, worktreePath } = input;
     const parentRoot = input.projectRoot ?? worktreePath;
+    const headSha = await this.pinnedHead(worktreePath, before);
+    const pinned = headSha ? { headSha } : {};
     if (path.resolve(parentRoot) !== path.resolve(worktreePath)) {
       const parentScripts = this.readPackageScripts(parentRoot);
       if (parentScripts === null) {
@@ -626,7 +725,7 @@ export class TaskGateRunner {
           `the parent repository declares npm ${declared.join(' and ')} ` +
           `${declared.length > 1 ? 'scripts' : 'script'}, and the task worktree's package.json declares neither — ` +
           'the gate is missing from the tree it was supposed to grade, which is a failed gate and not a waiver';
-        const result: LedgerGateResult = { exitCode: 1, tail: detail, at: this.now(), command: 'none' };
+        const result: LedgerGateResult = { exitCode: 1, tail: detail, at: this.now(), command: 'none', ...pinned };
         const recorded = await this.record(taskId, input.systemWorkspaceId, result);
         return { ok: true, status: 'completed', taskId, result, recorded };
       }
@@ -644,8 +743,17 @@ export class TaskGateRunner {
       at: this.now(),
       command: 'none',
       skipped: 'no_gate_command',
+      ...pinned,
     });
     return { ok: true, status: 'skipped', taskId, skipped: 'no_gate_command', detail, recorded };
+  }
+
+  /** `before` when HEAD reads the same again now; else undefined (the gate
+   *  graded no single commit, or HEAD could not be read). */
+  private async pinnedHead(worktreePath: string, before: string | null): Promise<string | undefined> {
+    if (!before) return undefined;
+    const after = await this.readHead(worktreePath).catch(() => null);
+    return after === before ? before : undefined;
   }
 
   /** Compare-and-swap write of the verdict. A ledger that is missing or
