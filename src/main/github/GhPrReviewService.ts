@@ -590,6 +590,26 @@ export class GhPrReviewService {
     });
   }
 
+  /**
+   * Bring the PR's branch up to date with its base (a merge of the base into
+   * it, as GitHub's "Update branch" does), only while its head is still
+   * `expectHead`: checked here and sent as `expected_head_sha`, so GitHub
+   * refuses a head that moved in between. Only the merge lane calls this.
+   */
+  updateBranch(repoPath: string, key: string, number: number, expectHead: string): Promise<PrWriteResult> {
+    return this.write(async () => {
+      const refused = await this.moved(repoPath, key, number, expectHead);
+      if (refused) return refused;
+      const { host, owner, repo } = this.repo(key);
+      await this.gh(host, [
+        'api', '--hostname', host, '-X', 'PUT', `repos/${owner}/${repo}/pulls/${number}/update-branch`,
+        '-f', `expected_head_sha=${expectHead}`,
+      ], repoPath, true);
+      this.checksCache.delete(`${key}#${number}`);
+      return { ok: true };
+    });
+  }
+
   /** The failed jobs' log of a run, as a capped plain-text tail. */
   runLog(repoPath: string, key: string, runId: string): Promise<PrReviewRead<PrRunLog>> {
     return this.read(() => this.cached(this.logCache, `${key}@${runId}`, LOG_TTL_MS, false, async () => {

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { MERGE_EFFECT_MAX_ATTEMPTS } from '../../../shared/moaDecision';
-import { MoaEffectStore, reconcileMergeEffect } from '../moaEffectStore';
+import { MoaEffectStore, isMergeEffectRecord, reconcileMergeEffect } from '../moaEffectStore';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-moa-effects-')); });
@@ -79,6 +79,42 @@ describe('MoaEffectStore', () => {
   it('a malformed file refuses to load', () => {
     fs.mkdirSync(path.join(dir, 'moa-delegate'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'moa-delegate', 'effects.json'), JSON.stringify({ version: 1, effects: [{ ...INPUT, id: 'x', kind: 'approval.press' }] }));
+    expect(() => new MoaEffectStore(dir)).toThrow('Invalid moa effect entry');
+  });
+});
+
+describe('lane rows', () => {
+  const LANE = { repoKey: 'github.com/openwong2kim/wmux', repoPath: '/repo', prNumber: 1858, expectHead: HEAD };
+  const laneId = `lane:github.com/openwong2kim/wmux#1858:${HEAD}`;
+
+  it('one effect per head, with no decision; it reloads from disk', async () => {
+    const store = new MoaEffectStore(dir);
+    const a = await store.enqueueLane(LANE);
+    expect(a).toMatchObject({ id: laneId, approvedBy: 'lane', status: 'pending', attempt: 0 });
+    expect('decisionId' in a).toBe(false);
+    expect(await store.enqueueLane(LANE)).toBe(a);
+    const other = await store.enqueueLane({ ...LANE, expectHead: 'c'.repeat(40) });
+    expect(other.id).not.toBe(a.id);
+    await store.flush();
+    expect(new MoaEffectStore(dir).list().map((r) => r.id).sort()).toEqual([laneId, other.id].sort());
+  });
+
+  it('validation binds the id to the approver kind', () => {
+    const base = { kind: 'pr.merge', ...LANE, status: 'pending', attempt: 0, createdAt: 1, updatedAt: 1 };
+    expect(isMergeEffectRecord({ ...base, id: laneId, approvedBy: 'lane' })).toBe(true);
+    // A lane row carries no decision, and its id is its head's.
+    expect(isMergeEffectRecord({ ...base, id: laneId, approvedBy: 'lane', decisionId: D_ID })).toBe(false);
+    expect(isMergeEffectRecord({ ...base, id: `lane:github.com/openwong2kim/wmux#1859:${HEAD}`, approvedBy: 'lane' })).toBe(false);
+    // An owner / moa-auto row needs its decision.
+    expect(isMergeEffectRecord({ ...base, id: laneId, approvedBy: 'owner' })).toBe(false);
+    expect(isMergeEffectRecord({ ...base, id: `effect:${D_ID}:pr.merge`, approvedBy: 'moa-auto', decisionId: D_ID })).toBe(true);
+    expect(isMergeEffectRecord({ ...base, id: `effect:${D_ID}:pr.merge`, approvedBy: 'admin', decisionId: D_ID })).toBe(false);
+  });
+
+  it('a stored lane row with a decision id refuses the file', () => {
+    fs.mkdirSync(path.join(dir, 'moa-delegate'), { recursive: true });
+    const row = { id: laneId, kind: 'pr.merge', ...LANE, approvedBy: 'lane', decisionId: D_ID, status: 'pending', attempt: 0, createdAt: 1, updatedAt: 1 };
+    fs.writeFileSync(path.join(dir, 'moa-delegate', 'effects.json'), JSON.stringify({ version: 1, effects: [row] }));
     expect(() => new MoaEffectStore(dir)).toThrow('Invalid moa effect entry');
   });
 });

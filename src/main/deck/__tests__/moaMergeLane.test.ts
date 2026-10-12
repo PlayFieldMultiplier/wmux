@@ -7,11 +7,15 @@ import {
   LANE_PREDICATES,
   OWNER_APPROVED_PREDICATES,
   evaluateMergeLane,
+  gateDefinitionPathReason,
+  gateDefinitionUnchanged,
   isWindowsPath,
   notReleasePr,
   notWindowsPath,
   releasePathReason,
   requiredChecksGreen,
+  verdictEvidenceCheck,
+  type LaneEvidenceRow,
   type MergeLaneContext,
 } from '../moaMergeLane';
 import type { PrVerdictRecord } from '../../../shared/prVerdict';
@@ -171,7 +175,7 @@ describe('merge lane predicates on recorded fixtures', () => {
     expect(OWNER_APPROVED_PREDICATES).toEqual(['head-unchanged']);
     expect(evaluateMergeLane(FORK, ctx(FORK), OWNER_APPROVED_PREDICATES)).toEqual({ ok: true, failures: [] });
     expect(evaluateMergeLane(FORK, ctx(FORK, { expectHead: 'b'.repeat(40) }), OWNER_APPROVED_PREDICATES).ok).toBe(false);
-    expect(LANE_PREDICATES).toHaveLength(8);
+    expect(LANE_PREDICATES).toHaveLength(9);
   });
 });
 
@@ -217,5 +221,130 @@ describe('verifier-pass-at-head', () => {
   it('an owner-approved merge is not gated by it', () => {
     expect(evaluateMergeLane(facts, ctx(facts, { verdicts: null, authorWorkspaces: null }), OWNER_APPROVED_PREDICATES)).toEqual({ ok: true, failures: [] });
     expect(OWNER_APPROVED_PREDICATES).not.toContain('verifier-pass-at-head');
+  });
+});
+
+describe('gate-definition-changed', () => {
+  it('names each gate-definition path class', () => {
+    expect(gateDefinitionPathReason('scripts/verify.sh')).toBe('verify-script');
+    expect(gateDefinitionPathReason('package.json')).toBe('package-manifest');
+    expect(gateDefinitionPathReason('relay/package.json')).toBe('package-manifest');
+    expect(gateDefinitionPathReason('wmux.json')).toBe('project-config');
+    expect(gateDefinitionPathReason('vitest.config.ts')).toBe('test-config');
+    expect(gateDefinitionPathReason('vitest.runtime.config.ts')).toBe('test-config');
+    expect(gateDefinitionPathReason('.eslintrc.json')).toBe('lint-config');
+    expect(gateDefinitionPathReason('eslint.config.mjs')).toBe('lint-config');
+    expect(gateDefinitionPathReason('tsconfig.json')).toBe('ts-config');
+    expect(gateDefinitionPathReason('tsconfig.mcp.json')).toBe('ts-config');
+    expect(gateDefinitionPathReason('relay/tsconfig.json')).toBe('ts-config');
+    for (const p of ['src/main/deck/moaMergeLane.ts', 'scripts/verify-wmux.sh', 'docs/package.json.md', 'src/vitest.ts']) {
+      expect(gateDefinitionPathReason(p)).toBeNull();
+    }
+  });
+
+  it('fails closed on a truncated or empty file list', () => {
+    const facts = openWithRequired();
+    expect(gateDefinitionUnchanged({ ...facts, filesTruncated: true })).toEqual({ ok: false, reason: 'files-truncated' });
+    expect(gateDefinitionUnchanged({ ...facts, files: [] })).toEqual({ ok: false, reason: 'no-files' });
+  });
+
+  it('is a lane predicate with its own reason; package.json trips both it and not-release-pr', () => {
+    const facts = openWithRequired({ files: ['src/a.ts', 'vitest.config.ts'] });
+    expect(evaluateMergeLane(facts, ctx(facts)).failures).toEqual([{ predicate: 'gate-definition-changed', reason: 'test-config' }]);
+    const pkg = openWithRequired({ files: ['package.json'] });
+    expect(evaluateMergeLane(pkg, ctx(pkg)).failures).toEqual([
+      { predicate: 'not-release-pr', reason: 'package-manifest' },
+      { predicate: 'gate-definition-changed', reason: 'package-manifest' },
+    ]);
+  });
+
+  it('an owner-approved merge does not run it', () => {
+    const facts = openWithRequired({ files: ['scripts/verify.sh'] });
+    expect(evaluateMergeLane(facts, ctx(facts), OWNER_APPROVED_PREDICATES).ok).toBe(true);
+  });
+});
+
+describe('verifier-pass-at-head with botVerdictsOnly (evidence binding)', () => {
+  const facts = openWithRequired();
+  const head = facts.headRefOid;
+  const botVerdict = (over: Partial<PrVerdictRecord> = {}): PrVerdictRecord => ({
+    ...verdict(facts),
+    version: 2,
+    principal: { workspaceId: 'ws-verifier', botId: 'bot-verifier', agent: 'claude' },
+    evidence: { taskId: 'task-1', gateHeadSha: head },
+    ...over,
+  });
+  const GATE = { exitCode: 0, tail: '', at: 1, command: 'bash scripts/verify.sh', recordedBy: 'system' as const, headSha: head };
+  const row = (over: Partial<LaneEvidenceRow> = {}): LaneEvidenceRow => ({
+    taskId: 'task-1',
+    origin: { kind: 'bot', botId: 'bot-verifier' },
+    preset: 'verify',
+    checkout: { sha: head, detached: true },
+    gate: GATE,
+    ...over,
+  });
+  const rows = (r: LaneEvidenceRow = row()) => new Map([[r.taskId, r]]);
+  const botCtx = (over: Partial<MergeLaneContext> = {}) => ctx(facts, { botVerdictsOnly: true, verdicts: [botVerdict()], evidenceRows: rows(), ...over });
+  const reasonOf = (c: MergeLaneContext) => evaluateMergeLane(facts, c).failures.find((f) => f.predicate === 'verifier-pass-at-head')?.reason;
+
+  it('a bot PASS backed by its own verify task gate at the head counts', () => {
+    expect(evaluateMergeLane(facts, botCtx())).toEqual({
+      ok: true, failures: [],
+      verifiedBy: { workspaceId: 'ws-verifier', agent: 'claude', headSha: head, botId: 'bot-verifier', taskId: 'task-1' },
+    });
+  });
+
+  it('off (default): a pane PASS without evidence still counts, as in stage 2', () => {
+    expect(evaluateMergeLane(facts, ctx(facts)).ok).toBe(true);
+    expect(evaluateMergeLane(facts, ctx(facts, { botVerdictsOnly: false })).ok).toBe(true);
+  });
+
+  it('on: a PASS without evidence does not count', () => {
+    expect(reasonOf(botCtx({ verdicts: [verdict(facts)] }))).toBe('verdict-no-evidence');
+  });
+
+  it('on: unreadable evidence rows refuse', () => {
+    expect(reasonOf(botCtx({ evidenceRows: null }))).toBe('evidence-unreadable');
+    expect(reasonOf(botCtx({ evidenceRows: undefined }))).toBe('evidence-unreadable');
+  });
+
+  it('on: every mismatch between the verdict and its task row refuses', () => {
+    const cases: Array<[string, MergeLaneContext]> = [
+      ['missing row', botCtx({ evidenceRows: new Map() })],
+      ['human origin', botCtx({ evidenceRows: rows(row({ origin: { kind: 'human' } })) })],
+      ['another bot', botCtx({ evidenceRows: rows(row({ origin: { kind: 'bot', botId: 'bot-lead' } })) })],
+      ['no botId on the verdict', botCtx({ verdicts: [botVerdict({ principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } })] })],
+      ['not the verify preset', botCtx({ evidenceRows: rows(row({ preset: 'repro' })) })],
+      ['branch checkout', botCtx({ evidenceRows: rows(row({ checkout: { sha: head, detached: false } })) })],
+      ['no checkout', botCtx({ evidenceRows: rows(row({ checkout: null })) })],
+      ['checkout at another sha', botCtx({ evidenceRows: rows(row({ checkout: { sha: 'c'.repeat(40), detached: true } })) })],
+      ['evidence names another gate head', botCtx({ verdicts: [botVerdict({ evidence: { taskId: 'task-1', gateHeadSha: 'c'.repeat(40) } })] })],
+      ['gate ran on another head', botCtx({ evidenceRows: rows(row({ gate: { ...GATE, headSha: 'c'.repeat(40) } })) })],
+      ['gate without a head', botCtx({ evidenceRows: rows(row({ gate: { ...GATE, headSha: undefined } })) })],
+      ['no gate', botCtx({ evidenceRows: rows(row({ gate: null })) })],
+      ['gate not system-recorded', botCtx({ evidenceRows: rows(row({ gate: { ...GATE, recordedBy: 'worker' } })) })],
+    ];
+    for (const [name, c] of cases) expect(reasonOf(c), name).toBe('evidence-mismatch');
+  });
+
+  it('on: a skipped gate is not a pass, even with exit 0', () => {
+    const skipped = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    expect(reasonOf(botCtx({ evidenceRows: rows(skipped) }))).toBe('gate-skipped');
+    expect(verdictEvidenceCheck(botVerdict(), rows(skipped))).toBe('gate-skipped');
+  });
+
+  it('on: a failing or killed gate refuses', () => {
+    expect(reasonOf(botCtx({ evidenceRows: rows(row({ gate: { ...GATE, exitCode: 1 } })) }))).toBe('gate-failed');
+    expect(reasonOf(botCtx({ evidenceRows: rows(row({ gate: { ...GATE, exitCode: null } })) }))).toBe('gate-failed');
+  });
+
+  it('on: any valid bot PASS is enough; a FAIL from anyone still blocks', () => {
+    const bad = botVerdict({ evidence: { taskId: 'task-x', gateHeadSha: head } });
+    expect(evaluateMergeLane(facts, botCtx({ verdicts: [bad, botVerdict()] })).ok).toBe(true);
+    expect(reasonOf(botCtx({ verdicts: [botVerdict(), verdict(facts, { verdict: 'fail', workspaceId: 'ws-human' })] }))).toBe('verdict-fail');
+  });
+
+  it('on: an author bot workspace is still self-verified', () => {
+    expect(reasonOf(botCtx({ authorWorkspaces: ['ws-verifier'] }))).toBe('self-verified');
   });
 });

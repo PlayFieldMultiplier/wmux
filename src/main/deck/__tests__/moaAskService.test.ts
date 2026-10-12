@@ -316,6 +316,13 @@ describe('the daily cap under concurrency', () => {
     w.config = { ...w.config, autoDailyCap: 0 };
     expect(h.service.authorize(effect)).toBe('auto-daily-cap');
   });
+
+  it('a lane effect (no decision) is never authorized by a Moa decision, and has no asker context', async () => {
+    const h = build(world());
+    const lane = await h.effects.enqueueLane({ repoKey: 'github.com/o/r', repoPath: '/repo', prNumber: 9, expectHead: 'c'.repeat(40) });
+    expect(h.service.authorize(lane)).toBe('no-decision');
+    expect(await h.service.identity(lane)).toBeNull();
+  });
 });
 
 describe('red team: every one ends escalated or refused', () => {

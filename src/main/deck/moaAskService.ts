@@ -447,7 +447,7 @@ export class MoaAskService implements MoaDelegateServicePort {
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
-  private async enqueueAndRun(d: MoaDecision, approvedBy: MergeEffect['approvedBy']): Promise<MergeEffect | null> {
+  private async enqueueAndRun(d: MoaDecision, approvedBy: 'owner' | 'moa-auto'): Promise<MergeEffect | null> {
     if (d.body.type !== 'merge' || !d.repo) return null;
     const effect = await this.ports.effects.enqueue({
       decisionId: d.id, repoKey: d.repo.key, repoPath: d.repo.path, prNumber: d.body.prNumber, expectHead: d.body.expectHead, approvedBy,
@@ -463,6 +463,7 @@ export class MoaAskService implements MoaDelegateServicePort {
    * auto-eligible (book, toggle, kill switch). Null = may run.
    */
   authorize(effect: MergeEffect): string | null {
+    if (!effect.decisionId) return 'no-decision';
     const d = this.ports.decisions.get(effect.decisionId);
     if (!d || d.kind !== 'merge' || d.body.type !== 'merge') return 'no-decision';
     if (d.status !== 'answered' || !d.answer || !('actionVerdict' in d.answer) || d.answer.actionVerdict !== 'go') return 'not-approved';
@@ -493,7 +494,7 @@ export class MoaAskService implements MoaDelegateServicePort {
    * Decisions without facts (stored before them) showed no login: null.
    */
   async identity(effect: MergeEffect): Promise<string | null> {
-    const shown = this.ports.decisions.get(effect.decisionId)?.facts?.identity.login;
+    const shown = effect.decisionId ? this.ports.decisions.get(effect.decisionId)?.facts?.identity.login : undefined;
     if (!shown) return null;
     const now = await this.ports.currentLogin?.({ key: effect.repoKey, path: effect.repoPath }).catch(() => null) ?? null;
     if (!now) return 'identity-unknown';
@@ -503,7 +504,7 @@ export class MoaAskService implements MoaDelegateServicePort {
   /** The lane context for an effect's asker, read now on the executor's
    *  fresh read (`facts`). */
   async laneContext(effect: MergeEffect, facts: PrLaneFacts): Promise<Omit<MergeLaneContext, 'expectHead'>> {
-    const d = this.ports.decisions.get(effect.decisionId);
+    const d = effect.decisionId ? this.ports.decisions.get(effect.decisionId) : null;
     const [askerBranches, verdicts, authorWorkspaces] = await Promise.all([
       d ? this.ports.askerBranches(d.asker, effect.repoPath).catch(() => [] as string[]) : Promise.resolve([] as string[]),
       this.readVerdicts(effect.repoKey, effect.prNumber),
