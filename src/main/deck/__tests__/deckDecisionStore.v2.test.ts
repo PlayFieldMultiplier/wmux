@@ -9,6 +9,7 @@ import path from 'node:path';
 import {
   clearDecision,
   clearThreadDecision,
+  clearWorkspaceDecisions,
   getDeckDecisionPath,
   hasPendingDecision,
   isMainOwnedDecision,
@@ -79,7 +80,7 @@ describe('deckDecisionStore v2', () => {
     expect(await resolveDecision('ws-1', other?.id ?? "", 'A', dir)).toBeNull();
   });
 
-  it('clears one thread, or every thread of a workspace', async () => {
+  it('clears one thread, the general thread, or every thread of a workspace', async () => {
     const a = await raiseThreadDecisionIfFree('ws-1', 'task:a', { question: 'A?' }, dir);
     await raiseThreadDecisionIfFree('ws-1', 'task:b', { question: 'B?' }, dir);
     await raiseDecisionIfFree('ws-1', { question: 'G?' }, dir);
@@ -87,7 +88,10 @@ describe('deckDecisionStore v2', () => {
     expect(await clearThreadDecision('ws-1', 'task:a', a?.id ?? "", dir)).toBe(true);
     expect(loadThreadDecision('ws-1', 'task:a', dir)).toBeNull();
     expect(loadWorkspaceDecisions('ws-1', dir)).toHaveLength(2);
+    // The original clear (a loop reset) takes the general thread only.
     await clearDecision('ws-1', dir);
+    expect(loadWorkspaceDecisions('ws-1', dir).map((d) => d.threadId)).toEqual(['task:b']);
+    await clearWorkspaceDecisions('ws-1', dir);
     expect(loadWorkspaceDecisions('ws-1', dir)).toEqual([]);
     expect(loadAllDeckDecisions(dir)).toEqual({});
   });

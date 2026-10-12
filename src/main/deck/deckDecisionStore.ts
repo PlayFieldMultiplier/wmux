@@ -31,8 +31,8 @@
 // unchanged, so readers of the keys alone keep working. The original API
 // (loadWorkspaceDecision, raise*, replaceStaleDecision, resolveDecision,
 // clear*Decision, loadDeckDecisions) addresses the `general` thread and keeps
-// its one-per-workspace behaviour there; `clearDecision` removes every thread
-// of the workspace. The *Thread* API addresses any thread.
+// its one-per-workspace behaviour there. The *Thread* API addresses any
+// thread; `clearWorkspaceDecisions` removes every thread (teardown).
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -568,9 +568,14 @@ export async function resolveDecision(
   return transitioned ? result : null;
 }
 
-/** Remove a workspace's decisions entirely, every thread (called when its
- *  loop is cleared, on teardown, or as a hard reset). */
+/** Remove a workspace's `general` decision (called when its loop is cleared,
+ *  or as a hard reset). Other threads are left alone. */
 export async function clearDecision(workspaceId: string, dir?: string): Promise<void> {
+  await mutate(workspaceId, () => null, dir);
+}
+
+/** Remove every decision of a workspace, all threads (workspace teardown). */
+export async function clearWorkspaceDecisions(workspaceId: string, dir?: string): Promise<void> {
   await mutateWorkspace(workspaceId, () => ({ next: [], result: undefined }), undefined, dir);
 }
 

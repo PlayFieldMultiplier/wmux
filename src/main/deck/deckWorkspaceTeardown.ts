@@ -35,7 +35,7 @@ import { loadWorkspaceLoopState, clearLoop } from './deckLoopStateStore';
 import { mutateDeckSchedules } from './deckScheduleStore';
 import {
   loadWorkspaceDecision,
-  clearDecision,
+  clearWorkspaceDecisions,
   hasPendingDecision,
   raiseDecision,
 } from './deckDecisionStore';
@@ -265,7 +265,7 @@ export async function teardownWorkspaceDeckState(
   // 5. Decision Store: clear pending / resolved decision
   try {
     const dec = loadWorkspaceDecision(id, dir);
-    await clearDecision(id, dir);
+    await clearWorkspaceDecisions(id, dir);
     if (dec) {
       report.decisionCleared = true;
       log(`[decision] cleared decision ${dec.id} for ${id}`);
