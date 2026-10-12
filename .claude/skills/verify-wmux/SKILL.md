@@ -102,6 +102,14 @@ node scripts/control-wmux.mjs stop --purge  # also delete the suffixed data this
 
 `stop` SIGTERMs the launched app PID (SIGKILL after 10 s), then stops the daemon that instance spawned (a normal quit only detaches from it): first `wmux daemon stop` over the instance's own suffixed socket, then, only if still alive, SIGTERM to the PID in `~/.wmux<suffix>/daemon.pid`. It boots out finished launchd jobs labelled `com.wmux.daemon<suffix>.*` (macOS). `--purge` removes only suffixed paths that did not exist before `launch`. Never `pkill`, `killall`, or kill by name. Evidence is never removed; `stop` lists what survived. Run `stop` after every attempt, failed ones included; the state moves to `.run/stopped-<run-id>.json`.
 
+## Record the verdict (verifying a PR)
+
+When the claim is a pull request, the last step is recording the result with the `pr_verdict` MCP tool (listed when the owner turned Moa's ask mode on). Moa merges a PR by itself only when an agent that did not write it recorded `pass` at exactly the head being merged, and nobody recorded `fail` there.
+
+1. Verify from a separate checkout of the PR head, detached: `git worktree add --detach <path> <headSha>` and run from there. wmux refuses a verdict when your pane's cwd does not have `headSha` checked out, is on the PR's own branch, or the PR has moved on.
+2. Call `pr_verdict {prNumber, headSha, verdict, summary}`: `pass` only if every check passed and the verdict above is `VERIFIED`; anything else (`NOT VERIFIED`, `INCONCLUSIVE`, a skipped entry point you could not justify) is `fail`. `summary` restates the claim and the evidence in a line or two.
+3. Order: verify → `pr_verdict` → then `moa_ask` for the merge. The merge question reads the verdicts when it is decided; a `pass` recorded after the question was asked does not re-open it. A new head needs a new verdict.
+
 ## Helpers
 
 | Command | Purpose |
