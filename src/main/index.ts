@@ -2910,6 +2910,9 @@ const QUIT_HARD_DEADLINE_MS = 20_000;
  */
 const RENDERER_SAVE_TIMEOUT_MS = 3_000;
 
+/** How long the agent factory's modules get to dispose on quit. */
+const FACTORY_DISPOSE_TIMEOUT_MS = 3_000;
+
 app.on('before-quit', async (e) => {
   if (isQuitting) return; // second pass — let quit proceed
   e.preventDefault();
@@ -2995,6 +2998,13 @@ app.on('before-quit', async (e) => {
     }
   }
 
+  // Agent factory: its modules persist and release what they hold. Bounded
+  // like the renderer save above; never throws.
+  await Promise.race([
+    factoryHost.dispose(),
+    new Promise((resolve) => setTimeout(resolve, FACTORY_DISPOSE_TIMEOUT_MS)),
+  ]);
+
   // Every teardown step below is ISOLATED in its own try/catch. Two guarantees
   // ride on this:
   //
@@ -3024,7 +3034,6 @@ app.on('before-quit', async (e) => {
   };
 
   safeStep('cleanupHandlers', () => cleanupHandlers());
-  safeStep('disposeFactory', () => { void factoryHost.dispose(); });
   safeStep('disposeFirstRunHandlers', () => disposeFirstRunHandlers());
   safeStep('disposeDeckHandler', () => disposeDeckHandler());
   safeStep('disposeWorkspaceMirrorHandler', () => disposeWorkspaceMirrorHandler());

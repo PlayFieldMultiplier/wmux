@@ -101,6 +101,65 @@ describe('registerFactoryRpc', () => {
     errSpy.mockRestore();
   });
 
+  it('a module that registers and then throws leaves nothing behind', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const heard = vi.fn();
+    registerFactoryRpcModule('half', (router) => {
+      router.register('room.post', async () => ({ ok: true }));
+      router.onBotRefused(heard);
+      throw new Error('late');
+    });
+    const router = new RpcRouter();
+    registerFactoryRpc(router, deps());
+    expect(await operatorCall(router, 'room.post')).toMatchObject({ result: { code: 'not_implemented' } });
+    errSpy.mockRestore();
+  });
+
+  it('a committed module\'s refusal listener is subscribed, and its unsubscribe works', () => {
+    let off: (() => void) | undefined;
+    registerFactoryRpcModule('facts', (router) => {
+      off = router.onBotRefused(() => undefined);
+    });
+    const router = new RpcRouter();
+    const spy = vi.spyOn(router, 'onBotRefused');
+    registerFactoryRpc(router, deps());
+    expect(spy).toHaveBeenCalledTimes(1);
+    off?.();
+  });
+
+  it('dispose during start stops further starts and disposes after the in-flight one', async () => {
+    const calls: string[] = [];
+    let release: () => void = () => undefined;
+    registerFactoryRpcModule('slow', () => ({
+      start: () => new Promise<void>((resolve) => { calls.push('start slow'); release = resolve; }),
+      dispose: () => { calls.push('dispose slow'); },
+    }));
+    registerFactoryRpcModule('next', () => ({
+      start: () => { calls.push('start next'); },
+      dispose: () => { calls.push('dispose next'); },
+    }));
+    const host = registerFactoryRpc(new RpcRouter(), deps());
+    const starting = host.start();
+    await Promise.resolve();
+    const disposing = host.dispose();
+    release();
+    await starting;
+    await disposing;
+    await host.start();
+    expect(calls).toEqual(['start slow', 'dispose next', 'dispose slow']);
+  });
+
+  it('starts no module when the migrations fail', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(factoryMigrationMarkerPath(dir), JSON.stringify({ version: 'x' }));
+    const started = vi.fn();
+    registerFactoryRpcModule('a', () => ({ start: started }));
+    await registerFactoryRpc(new RpcRouter(), deps()).start();
+    expect(started).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it('refuses a module name registered twice', () => {
     registerFactoryRpcModule('x', () => undefined);
     expect(() => registerFactoryRpcModule('x', () => undefined)).toThrow(/twice/);

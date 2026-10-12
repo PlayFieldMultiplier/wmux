@@ -17,7 +17,7 @@ import { CORE_TOOL_SURFACE } from '../shared/coreSurface';
 import { ROLE_TOOL_SURFACES, resolveRoleName } from '../shared/roleSurfaces';
 import { isBotRole, type BotRole } from '../shared/bot';
 import { ROLE_SURFACES } from '../shared/botSurface';
-import { installBotTools } from './toolModules';
+import { installBotTools, pinToolName } from './toolModules';
 // The factory's bot tool modules register themselves on import.
 import './botModules';
 import type { RpcMethod } from '../shared/rpc';
@@ -937,7 +937,7 @@ if (BOT_SURFACE) {
     if (!BOT_SURFACE.has(name)) return undefined;
     const handle = raw(name, ...rest);
     if (handle !== undefined) botRegistered.add(name);
-    return handle;
+    return pinToolName(handle, name);
   };
   (server as { tool: typeof server.tool }).tool = gate(tool as (...a: unknown[]) => unknown) as typeof server.tool;
   (server as { registerTool: typeof server.registerTool }).registerTool =
@@ -2627,7 +2627,7 @@ if (COMMANDER_MODE) {
     if (BOT_SURFACE && !BOT_SURFACE.has(name)) return undefined as unknown as ReturnType<typeof server.tool>;
     const handle = (registerToolUnfiltered as (...a: unknown[]) => ReturnType<typeof server.tool>)(name, ...rest);
     if (BOT_SURFACE && handle !== undefined) botRegistered.add(name);
-    return handle;
+    return BOT_SURFACE ? pinToolName(handle, name) : handle;
   }) as typeof server.tool;
   registerLedgerListTool(registerCommanderOnly);
   // The brain's ledger_update: the worker registration of that name was

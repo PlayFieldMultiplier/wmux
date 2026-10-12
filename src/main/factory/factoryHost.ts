@@ -9,11 +9,13 @@
 // Fail closed: every factory RPC method (shared/botSurface.ts
 // FACTORY_RPC_METHODS) is registered first with a handler that answers a
 // typed `not_implemented` refusal; a module's own `router.register` for the
-// same method replaces it. A module that throws while registering is logged
-// and skipped — its methods keep answering `not_implemented`.
+// same method replaces it. A module's registrations and subscriptions take
+// effect only once its register function returned: one that throws is logged
+// and skipped whole, and its methods keep answering `not_implemented`. If the
+// factory migrations fail, no module is started.
 
 import type { BrowserWindow } from 'electron';
-import type { RpcRouter } from '../pipe/RpcRouter';
+import type { BotRefusalListener, RpcRouter } from '../pipe/RpcRouter';
 import type { DaemonClient } from '../DaemonClient';
 import type { FanOutService } from '../worktask/FanOutService';
 import { FACTORY_RPC_METHODS, factoryNotImplemented } from '../../shared/botSurface';
@@ -45,7 +47,10 @@ export interface FactoryModuleHandle {
   dispose?: () => void | Promise<void>;
 }
 
-export type FactoryRpcModule = (router: RpcRouter, deps: FactoryHostDeps) => void | FactoryModuleHandle;
+/** The part of the RPC router a module uses. */
+export type FactoryRouter = Pick<RpcRouter, 'register' | 'onBotRefused'>;
+
+export type FactoryRpcModule = (router: FactoryRouter, deps: FactoryHostDeps) => void | FactoryModuleHandle;
 
 interface ModuleEntry { name: string; register: FactoryRpcModule; }
 
@@ -86,36 +91,63 @@ export function registerFactoryRpc(router: RpcRouter, deps: FactoryHostDeps): Fa
   }
   const loaded: { name: string; handle: FactoryModuleHandle }[] = [];
   for (const entry of modules) {
+    // Staged: nothing the module registers or subscribes reaches the router
+    // unless its register function returns.
+    const handlers: Array<Parameters<RpcRouter['register']>> = [];
+    const listeners: { listener: BotRefusalListener; off: (() => void) | null; cancelled: boolean }[] = [];
+    const staged: FactoryRouter = {
+      register: (method, handler) => {
+        handlers.push([method, handler]);
+      },
+      onBotRefused: (listener) => {
+        const sub = { listener, off: null as (() => void) | null, cancelled: false };
+        listeners.push(sub);
+        return () => {
+          sub.cancelled = true;
+          sub.off?.();
+        };
+      },
+    };
     try {
-      const handle = entry.register(router, deps) ?? {};
+      const handle = entry.register(staged, deps) ?? {};
+      for (const [method, handler] of handlers) router.register(method, handler);
+      for (const sub of listeners) {
+        if (!sub.cancelled) sub.off = router.onBotRefused(sub.listener);
+      }
       loaded.push({ name: entry.name, handle });
     } catch (err) {
       logError(`module ${entry.name} failed to register`, err);
     }
   }
-  let started = false;
   let disposed = false;
+  let starting: Promise<void> | null = null;
   return {
     modules: loaded.map((l) => l.name),
-    async start() {
-      if (started || disposed) return;
-      started = true;
-      try {
-        runFactoryMigrations(deps.wmuxDir());
-      } catch (err) {
-        logError('migration failed', err);
-      }
-      for (const { name, handle } of loaded) {
+    start() {
+      if (disposed) return Promise.resolve();
+      starting ??= (async () => {
         try {
-          await handle.start?.();
+          runFactoryMigrations(deps.wmuxDir());
         } catch (err) {
-          logError(`module ${name} failed to start`, err);
+          logError('migration failed; the factory modules are not started', err);
+          return;
         }
-      }
+        for (const { name, handle } of loaded) {
+          if (disposed) return;
+          try {
+            await handle.start?.();
+          } catch (err) {
+            logError(`module ${name} failed to start`, err);
+          }
+        }
+      })();
+      return starting;
     },
     async dispose() {
       if (disposed) return;
       disposed = true;
+      // Let an in-flight start reach a module boundary first.
+      await starting?.catch(() => undefined);
       for (const { name, handle } of [...loaded].reverse()) {
         try {
           await handle.dispose?.();

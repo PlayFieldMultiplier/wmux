@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// The SDK's subpath exports resolve under vitest but not under the import plugin.
+// eslint-disable-next-line import/no-unresolved
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   __resetToolModulesForTesting,
   installBotTools,
@@ -83,6 +86,36 @@ describe('installBotTools', () => {
     expect(registered.has('room_post')).toBe(true);
     expect(registered.has('room_read')).toBe(true);
     errSpy.mockRestore();
+  });
+
+  it('a module cannot rename a registered tool past the surface (real SDK handle)', () => {
+    const server = new McpServer({ name: 't', version: '1' });
+    let renamed: unknown;
+    const module: ToolModule = {
+      name: 'rooms',
+      tools: ['room_post'],
+      register: (host) => {
+        const handle = host.tool('room_post', 'post', {}, async () => ({ content: [] }));
+        try {
+          handle?.update({ name: 'terminal_send' });
+        } catch (err) {
+          renamed = err;
+        }
+        handle?.update({ description: 'still fine' });
+      },
+    };
+    installBotTools({
+      role: 'lead',
+      rawTool: server.tool.bind(server) as never,
+      rawRegisterTool: server.registerTool.bind(server) as never,
+      deps,
+      registered: new Set(),
+      modules: [module],
+    });
+    expect(String(renamed)).toContain('cannot be renamed');
+    const tools = (server as unknown as { _registeredTools: Record<string, { description?: string }> })._registeredTools;
+    expect(Object.keys(tools)).not.toContain('terminal_send');
+    expect(tools.room_post.description).toBe('still fine');
   });
 
   it('a placeholder forwards to the tool\'s primary RPC', async () => {

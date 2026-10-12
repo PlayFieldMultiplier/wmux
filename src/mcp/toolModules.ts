@@ -81,6 +81,26 @@ export const BOT_PLACEHOLDER_DESCRIPTION_SUFFIX =
 
 type RawTool = (name: string, ...rest: unknown[]) => unknown;
 
+/**
+ * Keep a registered tool on the name it was registered under: the SDK handle's
+ * `update({name})` would otherwise re-key the tool past every name filter. A
+ * rename to another name throws; removal (`name: null`) and every other
+ * update pass through. Returns the same handle.
+ */
+export function pinToolName<T>(handle: T, name: string): T {
+  if (!handle || typeof handle !== 'object') return handle;
+  const h = handle as { update?: (updates: { name?: string | null }) => void };
+  if (typeof h.update !== 'function') return handle;
+  const update = h.update;
+  h.update = (updates) => {
+    if (updates && typeof updates.name === 'string' && updates.name !== name) {
+      throw new Error(`[wmux-mcp] bot tool ${name} cannot be renamed to ${updates.name}`);
+    }
+    update(updates);
+  };
+  return handle;
+}
+
 export interface InstallBotToolsInput {
   role: BotRole;
   /** server.tool / server.registerTool WITHOUT any profile filter. */
@@ -107,7 +127,7 @@ export function installBotTools(input: InstallBotToolsInput): void {
       if (!surface.has(name) || input.registered.has(name)) return undefined;
       const handle = raw(name, ...rest);
       if (handle !== undefined) input.registered.add(name);
-      return handle;
+      return pinToolName(handle, name);
     };
     const host = { tool: gate(input.rawTool), registerTool: gate(input.rawRegisterTool) } as unknown as ToolModuleHost;
     try {
@@ -127,5 +147,6 @@ export function installBotTools(input: InstallBotToolsInput): void {
       async ({ args }: { args?: Record<string, unknown> }) => input.deps.callRpc(method, args ?? {}),
     );
     if (handle !== undefined) input.registered.add(name);
+    pinToolName(handle, name);
   }
 }
