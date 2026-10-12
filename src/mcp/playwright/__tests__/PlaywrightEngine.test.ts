@@ -188,6 +188,45 @@ describe('PlaywrightEngine CDP session lifecycle', () => {
     expect(sessions[0].detach).toHaveBeenCalledTimes(1);
   });
 
+  it('attaches to a Chrome with no window through a blank tab it closes again', async () => {
+    const sessions: FakeSession[] = [];
+    const browser = makeFakeBrowser(sessions);
+    mockConnectOverCDP
+      .mockRejectedValueOnce(new Error(
+        'browserType.connectOverCDP: Protocol error (Browser.setDownloadBehavior): Browser context management is not supported.',
+      ))
+      .mockResolvedValueOnce(browser);
+    const fetchMock = vi.fn(async (url: string) => ({
+      json: async () => (url.includes('/json/new') ? { id: 'BOOT' } : {}),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const engine = PlaywrightEngine.getInstance();
+      await engine.connect(9222);
+
+      expect(mockConnectOverCDP).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:9222/json/new?about:blank', { method: 'PUT' });
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:9222/json/close/BOOT');
+      expect(sessions).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens no tab in a live Chrome (ws endpoint) that refuses the attach', async () => {
+    mockConnectOverCDP.mockRejectedValue(new Error('Browser context management is not supported.'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const engine = PlaywrightEngine.getInstance();
+      await expect(engine.connect('ws://127.0.0.1:9222/devtools/browser/x')).rejects.toThrow(/context management/);
+      expect(mockConnectOverCDP).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('detaches the prior auto-attach session when reconnecting to a new CDP port', async () => {
     const sessions: FakeSession[] = [];
     mockConnectOverCDP.mockImplementation(async () => makeFakeBrowser(sessions));

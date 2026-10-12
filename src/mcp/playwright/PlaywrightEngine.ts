@@ -441,7 +441,7 @@ export class PlaywrightEngine {
     await this.disconnect();
     // B0: first real use — initialize playwright-core's module graph now.
     const { chromium } = loadPlaywright();
-    this.browser = await chromium.connectOverCDP(endpoint);
+    this.browser = await this.connectOverCdp(chromium, endpoint, isPort ? cdpPortOrWsEndpoint : null);
     // cdpPort stays null on ws connections: findViaJsonEndpoint (HTTP /json)
     // has no surface to talk to there and is gated on this.cdpPort.
     this.cdpPort = isPort ? cdpPortOrWsEndpoint : null;
@@ -462,6 +462,36 @@ export class PlaywrightEngine {
       console.error(`[PlaywrightEngine] Auto-attach enabled`);
     } catch (err) {
       console.error('[PlaywrightEngine] setAutoAttach warning:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * A Chrome with every window closed but the app still running (the macOS
+   * default) has no browser context, and connectOverCDP refuses it with
+   * "Browser context management is not supported". For a port endpoint (a
+   * dedicated wmux Chrome) open one blank tab to attach through and close it
+   * once attached: a live connection keeps working with no window. A ws
+   * endpoint is the user's own Chrome, which wmux does not open windows in.
+   */
+  private async connectOverCdp(
+    chromium: ReturnType<typeof loadPlaywright>['chromium'],
+    endpoint: string,
+    cdpPort: number | null,
+  ): Promise<Browser> {
+    try {
+      return await chromium.connectOverCDP(endpoint);
+    } catch (err) {
+      if (cdpPort === null || !/Browser context management is not supported/.test(String(err))) throw err;
+    }
+    // Chrome 111+ requires PUT for /json/new.
+    const resp = await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: 'PUT' });
+    const bootstrap = (await resp.json()) as { id?: string };
+    try {
+      return await chromium.connectOverCDP(endpoint);
+    } finally {
+      if (bootstrap?.id) {
+        await fetch(`http://127.0.0.1:${cdpPort}/json/close/${bootstrap.id}`).catch(() => { /* already gone */ });
+      }
     }
   }
 
