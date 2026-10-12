@@ -64,6 +64,7 @@ import {
 } from './permissionGrammar';
 import { FIRST_PARTY_METHODS, isFirstPartyClient } from './firstParty';
 import { COMMANDER_RPC_METHODS } from '../../shared/commanderSurface';
+import { ROLE_SURFACES } from '../../shared/botSurface';
 import { WMUX_CLI_METHODS, isInternalCliClient } from './internalCli';
 import { HOOK_BRIDGE_METHODS, isHookBridgeClient } from './hookBridge';
 import { STATUSLINE_PUSH_METHODS, isStatuslinePushClient } from './statuslinePush';
@@ -205,6 +206,15 @@ export function check(input: EnforcerInput): EnforcerOutcome {
   // not the clientName" is only true if a commander with empty clientInfo
   // still reaches this check. Ordering is load-bearing, not cosmetic.
   if (input.ctx.commanderWorkspace && COMMANDER_RPC_METHODS.has(input.method)) {
+    return { kind: 'allow' };
+  }
+
+  // Bot lane (agent factory). ctx.bot is set ONLY by RpcRouter after the
+  // token resolved to a BotBinding, and the router has already refused every
+  // method off the role's surface — so this allows exactly that surface,
+  // whatever clientName the bot's agent host reports. Same ordering reason as
+  // the commander lane above.
+  if (input.ctx.bot && ROLE_SURFACES[input.ctx.bot.role]?.rpc.has(input.method)) {
     return { kind: 'allow' };
   }
 
