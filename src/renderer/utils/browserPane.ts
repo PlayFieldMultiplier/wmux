@@ -125,6 +125,9 @@ export interface OpenUrlOptions {
    * entry points (Ctrl+Shift+L / palette) keep their create-new semantics so
    * a second browser pane stays possible. */
   forceNew?: boolean;
+  /** Open a new tab in the existing browser pane instead of navigating its
+   * tab (#2140). With no browser pane yet, a new pane is split as usual. */
+  newTab?: boolean;
 }
 
 export type OpenUrlResult =
@@ -198,9 +201,20 @@ export function openUrlInBrowserPaneImpl(
   if (!opts.forceNew) {
     const existing = findFirstBrowserSurface(ws.rootPane, isPrivateBrowserPartition(opts.partition));
     if (existing) {
-      const { paneId, surface } = existing;
-      if (targetUrl) state.updateBrowserUrl(surface.id, targetUrl);
-      if (opts.partition) state.updateBrowserPartition(opts.partition, surface.id);
+      const { paneId } = existing;
+      let surface = existing.surface;
+      if (opts.newTab) {
+        // The new tab keeps the pane's session unless the caller named one.
+        state.addBrowserSurface(paneId, targetUrl, opts.partition ?? surface.browserPartition, targetWsId);
+        const ws2 = deps.getState().workspaces.find((w) => w.id === targetWsId);
+        const leaf = ws2 ? findLeafById(ws2.rootPane, paneId) : null;
+        const added = leaf?.surfaces.find((s) => s.id === leaf.activeSurfaceId);
+        if (!added || added.id === surface.id) return { ok: false, error: 'workspace-not-found' };
+        surface = added;
+      } else {
+        if (targetUrl) state.updateBrowserUrl(surface.id, targetUrl);
+        if (opts.partition) state.updateBrowserPartition(opts.partition, surface.id);
+      }
       state.setActiveSurface(paneId, surface.id, targetWsId);
 
       // Un-zoom only when another pane of THIS workspace hides the browser.
@@ -218,13 +232,14 @@ export function openUrlInBrowserPaneImpl(
       if (focusPane && targetWsId === state.activeWorkspaceId) {
         deps.getState().setActivePane(paneId);
       }
-      if (targetUrl) deps.dispatchNavigate({ surfaceId: surface.id, url: targetUrl });
+      // A new tab mounts on its initial url; only a reused tab needs the event.
+      if (targetUrl && !opts.newTab) deps.dispatchNavigate({ surfaceId: surface.id, url: targetUrl });
       return {
         ok: true,
         surfaceId: surface.id,
         paneId,
         url: targetUrl || surface.browserUrl || DEFAULT_BROWSER_URL,
-        reused: true,
+        reused: !opts.newTab,
       };
     }
   }

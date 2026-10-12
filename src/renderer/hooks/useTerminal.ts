@@ -1318,11 +1318,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       : new FitAddon();
     const searchAddon = new SearchAddon();
     // Smart link routing (X3): localhost URLs open in the embedded browser
-    // pane, external ones in the system browser; Ctrl/Cmd+click inverts. The
-    // ptyId identifies the owning workspace (multiview-safe reverse lookup).
+    // pane, external ones in the system browser; Ctrl/Cmd+click inverts, and
+    // Ctrl/Cmd+Shift+click opens a new browser tab (#2140). The ptyId
+    // identifies the owning workspace (multiview-safe reverse lookup).
     const activateTerminalUrl = (event: MouseEvent, uri: string) => {
       openTerminalUrl(uri, {
         modifierHeld: event.ctrlKey || event.metaKey,
+        newTab: (event.ctrlKey || event.metaKey) && event.shiftKey,
         ptyId: ptyIdRef.current || undefined,
       });
     };

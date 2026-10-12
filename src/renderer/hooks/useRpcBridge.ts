@@ -2766,6 +2766,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       workspaceId: targetWsId,
       partition,
       focusPane: false,
+      ...(params.newTab === true && { newTab: true }),
     });
 
     if (!result.ok) {

@@ -451,11 +451,11 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
     ).catch((err) => console.error('[wmux:terminal-drop] paste failed:', err));
   }, [ptyId, terminalRef]);
 
-  const handleOpenLink = useCallback((url: string) => {
+  const handleOpenLink = useCallback((url: string, newTab?: boolean) => {
     // Smart routing: localhost → browser pane, external → system browser.
     // The owning workspace is passed explicitly — in multiview this terminal
     // may live in a non-active tile where activeWorkspaceId would lie.
-    openTerminalUrl(url, { workspaceId: ownerWorkspaceId, ptyId: ptyId ?? undefined });
+    openTerminalUrl(url, { workspaceId: ownerWorkspaceId, ptyId: ptyId ?? undefined, newTab });
   }, [ownerWorkspaceId, ptyId]);
 
   const handleCopyLink = useCallback((url: string) => {

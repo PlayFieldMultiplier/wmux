@@ -371,6 +371,7 @@ export const zh = {
   'contextMenu.copy': '复制',
   'contextMenu.paste': '粘贴',
   'contextMenu.openLink': '打开链接',
+  'contextMenu.openLinkNewTab': '在新标签页中打开链接',
   'contextMenu.copyLink': '复制链接',
 
   // Browser

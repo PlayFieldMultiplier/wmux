@@ -365,6 +365,37 @@ describe('openUrlInBrowserPaneImpl', () => {
       expect(dispatched).toEqual([{ surfaceId, url: 'http://localhost:3000' }]);
     });
 
+    it('newTab adds a tab to the existing browser pane and leaves its tab alone (#2140)', () => {
+      const { deps, dispatched } = makeDeps(store);
+      const rootId = activeWs(store).rootPane.id;
+      store.getState().addBrowserSurface(rootId, 'https://old.example', 'persist:wmux-special');
+      const oldId = firstBrowser(activeWs(store)).surface.id;
+
+      const result = openUrlInBrowserPaneImpl('http://localhost:3000', { newTab: true }, deps);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.reused).toBe(false);
+      expect(result.paneId).toBe(rootId);
+      expect(result.surfaceId).not.toBe(oldId);
+      const ws = activeWs(store);
+      expect(getLeafPanes(ws.rootPane)).toHaveLength(1);
+      const leaf = getLeafPanes(ws.rootPane)[0];
+      const browsers = leaf.surfaces.filter((s) => s.surfaceType === 'browser');
+      expect(browsers.map((s) => s.browserUrl)).toEqual(['https://old.example', 'http://localhost:3000']);
+      // The new tab keeps the pane's session; the old tab is not navigated.
+      expect(browsers[1].browserPartition).toBe('persist:wmux-special');
+      expect(leaf.activeSurfaceId).toBe(result.surfaceId);
+      expect(dispatched).toHaveLength(0);
+    });
+
+    it('newTab with no browser pane yet splits one as usual', () => {
+      const { deps } = makeDeps(store);
+      const result = openUrlInBrowserPaneImpl('http://localhost:3000', { newTab: true }, deps);
+      expect(result.ok).toBe(true);
+      expect(getLeafPanes(activeWs(store).rootPane)).toHaveLength(2);
+    });
+
     it('applies the partition only when explicitly provided', () => {
       const { deps } = makeDeps(store);
       const rootId = activeWs(store).rootPane.id;

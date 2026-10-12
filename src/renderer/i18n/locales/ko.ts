@@ -717,6 +717,7 @@ export const ko = {
   'contextMenu.copy': '복사',
   'contextMenu.paste': '붙여넣기',
   'contextMenu.openLink': '링크 열기',
+  'contextMenu.openLinkNewTab': '새 탭에서 링크 열기',
   'contextMenu.copyLink': '링크 복사',
 
   // Supervision (X8)

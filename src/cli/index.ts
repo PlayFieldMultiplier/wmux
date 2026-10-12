@@ -61,7 +61,8 @@ INPUT COMMANDS
   pane explicitly, --active to target the UI-focused pane instead.
 
 BROWSER PANE
-  open <url> [--workspace <id>]     Open/reuse a browser pane at <url>
+  open <url> [--new] [--workspace <id>]
+                                    Open/reuse a browser pane at <url> (--new: in a new tab)
 
 DAEMON (headless lifecycle, no Electron/GUI required)
   daemon start                      Start the daemon if not already running

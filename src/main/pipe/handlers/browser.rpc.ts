@@ -2913,6 +2913,7 @@ export function registerBrowserRpc(
     const opened = await sendToRenderer(getWindow, 'browser.open', {
       partition: wantPrivate ? PRIVATE_BROWSER_PARTITION : getActivePartition(),
       ...(url && { url }),
+      ...(params['newTab'] === true && { newTab: true }),
       // The workspace now comes from `scopeFor` above, not straight from the
       // request. It is still dropped when absent, and the renderer then falls
       // back to the UI-active workspace — but under `mcp.mode: enforce` an

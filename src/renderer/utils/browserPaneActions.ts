@@ -9,6 +9,7 @@ import { findSurfaceByPtyId } from './paneTraversal';
 import {
   BROWSER_NAVIGATE_EVENT,
   DEFAULT_BROWSER_URL,
+  isSafeBrowserUrl,
   openUrlInBrowserPaneImpl,
   resolveTerminalUrlAction,
   type BrowserNavigateDetail,
@@ -60,13 +61,16 @@ export function openUrlInBrowserPane(url?: string, opts: OpenUrlOptions = {}): O
  * menu). Smart policy: localhost → browser pane, everything else → system
  * browser; Ctrl/Cmd inverts. The owning workspace is resolved explicitly or
  * by ptyId reverse lookup — in multiview the clicked terminal may belong to a
- * non-active tile, where activeWorkspaceId would lie.
+ * non-active tile, where activeWorkspaceId would lie. `newTab` (Ctrl/Cmd+
+ * Shift-click, or "Open Link in New Tab") opens any http(s) URL in a new tab
+ * of the browser pane (#2140).
  */
 export function openTerminalUrl(
   url: string,
-  opts: { modifierHeld?: boolean; ptyId?: string; workspaceId?: string } = {},
+  opts: { modifierHeld?: boolean; newTab?: boolean; ptyId?: string; workspaceId?: string } = {},
 ): void {
-  if (resolveTerminalUrlAction(url, opts.modifierHeld === true) === 'external') {
+  const newTab = opts.newTab === true && isSafeBrowserUrl(url);
+  if (!newTab && resolveTerminalUrlAction(url, opts.modifierHeld === true) === 'external') {
     void window.electronAPI.shell.openExternal(url);
     return;
   }
@@ -82,7 +86,7 @@ export function openTerminalUrl(
     }
   }
 
-  const result = openUrlInBrowserPane(url, { workspaceId });
+  const result = openUrlInBrowserPane(url, { workspaceId, ...(newTab && { newTab }) });
   // pane-cap already surfaced its own toast; any other failure falls back to
   // the system browser so the click never dies silently.
   if (!result.ok && result.error !== 'pane-cap') {

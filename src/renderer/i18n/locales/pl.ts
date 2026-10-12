@@ -975,6 +975,7 @@ export const pl = {
   'contextMenu.copy': 'Kopiuj',
   'contextMenu.paste': 'Wklej',
   'contextMenu.openLink': 'Otwórz link',
+  'contextMenu.openLinkNewTab': 'Otwórz link w nowej karcie',
   'contextMenu.copyLink': 'Kopiuj link',
 
   // Supervision (X8) — pane badge tooltips + pane-menu actions.
