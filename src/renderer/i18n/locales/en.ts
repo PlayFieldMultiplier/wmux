@@ -984,7 +984,6 @@ export const en = {
   'contextMenu.copy': 'Copy',
   'contextMenu.paste': 'Paste',
   'contextMenu.openLink': 'Open Link',
-  'contextMenu.openLinkNewTab': 'Open Link in New Tab',
   'contextMenu.copyLink': 'Copy Link',
 
   // Supervision (X8) — pane badge tooltips + pane-menu actions.

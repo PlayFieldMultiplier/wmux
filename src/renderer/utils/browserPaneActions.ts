@@ -62,8 +62,7 @@ export function openUrlInBrowserPane(url?: string, opts: OpenUrlOptions = {}): O
  * browser; Ctrl/Cmd inverts. The owning workspace is resolved explicitly or
  * by ptyId reverse lookup — in multiview the clicked terminal may belong to a
  * non-active tile, where activeWorkspaceId would lie. `newTab` (Ctrl/Cmd+
- * Shift-click, or "Open Link in New Tab") opens any http(s) URL in a new tab
- * of the browser pane (#2140).
+ * Shift-click) opens any http(s) URL in a new tab of the browser pane (#2140).
  */
 export function openTerminalUrl(
   url: string,

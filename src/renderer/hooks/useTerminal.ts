@@ -1322,9 +1322,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // Ctrl/Cmd+Shift+click opens a new browser tab (#2140). The ptyId
     // identifies the owning workspace (multiview-safe reverse lookup).
     const activateTerminalUrl = (event: MouseEvent, uri: string) => {
+      const newTab = (event.ctrlKey || event.metaKey) && event.shiftKey;
+      // Shift also extends xterm's selection on that click. Drop it, which also
+      // cancels the debounced copy-on-select before it overwrites the clipboard.
+      if (newTab) terminal.clearSelection();
       openTerminalUrl(uri, {
         modifierHeld: event.ctrlKey || event.metaKey,
-        newTab: (event.ctrlKey || event.metaKey) && event.shiftKey,
+        newTab,
         ptyId: ptyIdRef.current || undefined,
       });
     };

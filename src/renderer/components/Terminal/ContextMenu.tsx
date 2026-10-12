@@ -10,8 +10,7 @@ interface ContextMenuProps {
   linkUrl: string | null;
   onCopy: () => void;
   onPaste: () => void;
-  /** `newTab` opens the link in a new browser tab (#2140). */
-  onOpenLink: (url: string, newTab?: boolean) => void;
+  onOpenLink: (url: string) => void;
   onCopyLink: (url: string) => void;
   /** X8 — supervision status of this surface's pty. `undefined` for
    *  unsupervised panes (both supervision items hidden). */
@@ -114,10 +113,6 @@ export default function ContextMenu({ x, y, hasSelection, selectedText, linkUrl,
             onClick={() => handleAction(() => onOpenLink(linkUrl))}
           />
           <MenuItem
-            label={t('contextMenu.openLinkNewTab')}
-            onClick={() => handleAction(() => onOpenLink(linkUrl, true))}
-          />
-          <MenuItem
             label={t('contextMenu.copyLink')}
             onClick={() => handleAction(() => onCopyLink(linkUrl))}
           />
@@ -130,10 +125,6 @@ export default function ContextMenu({ x, y, hasSelection, selectedText, linkUrl,
           <MenuItem
             label={t('contextMenu.openLink')}
             onClick={() => handleAction(() => onOpenLink(selectedText.trim()))}
-          />
-          <MenuItem
-            label={t('contextMenu.openLinkNewTab')}
-            onClick={() => handleAction(() => onOpenLink(selectedText.trim(), true))}
           />
         </>
       )}
