@@ -12,7 +12,11 @@ function deps(over: Partial<AuthorWorkspacesDeps> = {}): AuthorWorkspacesDeps {
       { id: 't1', taskWorkspaceId: 'ws-task1', ownerWorkspaceId: 'ws-lead' },
       { id: 't2', taskWorkspaceId: 'ws-task2', ownerWorkspaceId: 'ws-lead' },
     ],
-    daemonRpc: () => async () => ({ ok: true, tasks: [{ id: 't1', branch: 'feat/x' }, { id: 't2', branch: 'feat/y' }] }),
+    daemonRpc: () => async (_m, p) => ({
+      ok: true,
+      tasks: p.verifiedWorkspaceId === 'ws-lead' ? [{ id: 't1', branch: 'feat/x' }, { id: 't2', branch: 'feat/y' }] : [],
+    }),
+    workspaceIds: () => ['ws-asker', 'ws-pane', 'ws-verifier', 'ws-main'],
     worktrees: async () => [
       { path: '/repo', branch: 'main' },
       { path: '/wt/feat-x', branch: 'feat/x' },
@@ -30,6 +34,16 @@ function deps(over: Partial<AuthorWorkspacesDeps> = {}): AuthorWorkspacesDeps {
 describe('authorWorkspaces', () => {
   it('unions the asker, task workspaces on the branch and panes in its worktree', async () => {
     expect((await authorWorkspaces(deps(), INPUT)).sort()).toEqual(['ws-asker', 'ws-pane', 'ws-task1']);
+  });
+
+  it('a task on the branch counts by its own workspace even without a ledger row', async () => {
+    const d = deps({
+      listLedger: () => [],
+      daemonRpc: () => async (_m, p) => ({
+        ok: true, tasks: p.verifiedWorkspaceId === 'ws-main' ? [{ id: 't9', branch: 'feat/x', paneGroupId: 'ws-task9' }] : [],
+      }),
+    });
+    expect((await authorWorkspaces(d, INPUT)).sort()).toEqual(['ws-asker', 'ws-pane', 'ws-task9']);
   });
 
   it('a pane in a worktree nested inside the branch checkout counts by its own worktree', async () => {
@@ -50,6 +64,7 @@ describe('authorWorkspaces', () => {
   it('git or the workspace mirror failing is unknown', async () => {
     await expect(authorWorkspaces(deps({ worktrees: async () => { throw new Error('git'); } }), INPUT)).rejects.toThrow('git');
     await expect(authorWorkspaces(deps({ paneCwds: () => null }), INPUT)).rejects.toThrow('workspace mirror unknown');
+    await expect(authorWorkspaces(deps({ workspaceIds: () => null }), INPUT)).rejects.toThrow('workspace mirror unknown');
   });
 
   it('parses git worktree list --porcelain', () => {

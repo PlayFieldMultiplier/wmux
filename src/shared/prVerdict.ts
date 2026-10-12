@@ -25,7 +25,8 @@ export const PR_VERDICT_TOOL = 'pr_verdict';
 export const PR_VERDICT_RPC = 'verify.recordVerdict';
 
 export const PR_VERDICT_SUMMARY_MAX = 500;
-/** Verdicts for a head with no record newer than this are pruned on write. */
+/** Verdicts for a head with no FAIL and no record newer than this are pruned
+ *  on write. */
 export const PR_VERDICT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const COMMIT_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;

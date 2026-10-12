@@ -1,8 +1,10 @@
 // ─── The workspaces that authored a PR — the merge lane's "who is not a verifier"
 //
 // authorWorkspaces = the asker of the merge
-//                  ∪ the task workspaces of task ledger rows whose task branch
-//                    (daemon task.mission.list) is the PR's head branch
+//                  ∪ the workspaces of tasks whose branch is the PR's head
+//                    branch (daemon task.mission.list for every owner the
+//                    task ledger names and every open workspace: the task's
+//                    own workspace, and its ledger row's task workspace)
 //                  ∪ the workspaces with a pane whose cwd lies in a worktree
 //                    that has the head branch checked out.
 //
@@ -21,6 +23,8 @@ export interface AuthorWorkspacesDeps {
   /** Every worktree of `repoPath` and the branch it has checked out (null:
    *  detached). Throws when git cannot answer. */
   worktrees: (repoPath: string) => Promise<Array<{ path: string; branch: string | null }>>;
+  /** Every open workspace's id, or null when the mirror is unknown. */
+  workspaceIds: () => string[] | null;
   /** Every pane's cwd by workspace, or null when the mirror is unknown. */
   paneCwds: () => Array<{ workspaceId: string; cwd: string }> | null;
   /** A path with its symlinks resolved (identity when it cannot be). */
@@ -43,14 +47,18 @@ export async function authorWorkspaces(
   const out = new Set<string>([askerWorkspaceId]);
 
   const rows = deps.listLedger();
-  if (rows.length > 0) {
+  const open = deps.workspaceIds();
+  if (!open) throw new Error('workspace mirror unknown');
+  const owners = new Set([...rows.map((r) => r.ownerWorkspaceId), ...open]);
+  if (owners.size > 0) {
     const rpc = deps.daemonRpc();
     if (!rpc) throw new Error('daemon not connected');
-    for (const owner of new Set(rows.map((r) => r.ownerWorkspaceId))) {
+    for (const owner of owners) {
       const res = (await rpc('task.mission.list', { verifiedWorkspaceId: owner })) as { ok?: unknown; tasks?: unknown };
       if (!res || res.ok === false || !Array.isArray(res.tasks)) throw new Error('task.mission.list failed');
-      for (const t of res.tasks as Array<{ id?: unknown; branch?: unknown }>) {
+      for (const t of res.tasks as Array<{ id?: unknown; branch?: unknown; paneGroupId?: unknown }>) {
         if (t.branch !== headRefName) continue;
+        if (typeof t.paneGroupId === 'string' && t.paneGroupId) out.add(t.paneGroupId);
         for (const r of rows) if (r.id === t.id && r.ownerWorkspaceId === owner) out.add(r.taskWorkspaceId);
       }
     }

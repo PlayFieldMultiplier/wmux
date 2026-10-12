@@ -33,15 +33,25 @@ describe('PrVerdictStore', () => {
     expect((await store.list('github.com/o/r', 7)).map((r) => r.verdict)).toEqual(['fail', 'pass']);
   });
 
-  it('prunes a head whose newest record is past retention, whole', async () => {
+  it('prunes a head with no FAIL past retention, whole; a head holding a FAIL never', async () => {
     let now = 1_000;
     const store = new PrVerdictStore(dir, () => now);
-    await store.record(rec({ headSha: 'b'.repeat(40), verdict: 'fail', at: 1_000 }));
+    await store.record(rec({ headSha: 'b'.repeat(40), verdict: 'pass', at: 1_000 }));
     await store.record(rec({ verdict: 'fail', at: 1_000 }));
     now = 1_000 + PR_VERDICT_RETENTION_MS + 1;
-    // A fresh PASS keeps its head's old FAIL; the other head goes.
+    await store.record(rec({ headSha: 'c'.repeat(40), at: now }));
+    expect((await store.list('github.com/o/r', 7)).map((r) => `${r.headSha[0]}:${r.verdict}`)).toEqual(['a:fail', 'c:pass']);
+    // A later PASS at the old FAIL's head still sits beside it.
     await store.record(rec({ verdict: 'pass', at: now }));
-    expect((await store.list('github.com/o/r', 7)).map((r) => `${r.headSha[0]}:${r.verdict}`)).toEqual(['a:fail', 'a:pass']);
+    expect((await store.list('github.com/o/r', 7)).filter((r) => r.headSha === HEAD).map((r) => r.verdict)).toEqual(['fail', 'pass']);
+  });
+
+  it('a read waits for the appends queued before it', async () => {
+    const store = new PrVerdictStore(dir);
+    const pending = store.record(rec({ verdict: 'fail', at: Date.now() }));
+    const read = store.list('github.com/o/r', 7);
+    expect((await read).map((r) => r.verdict)).toEqual(['fail']);
+    await pending;
   });
 
   it('an unreadable or invalid file throws and is never overwritten', async () => {

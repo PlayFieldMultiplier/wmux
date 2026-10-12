@@ -2,14 +2,16 @@
 //
 // `<wmuxDir>/pr-verdicts.json`: `{version: 1, verdicts: PrVerdictRecord[]}`,
 // append-only per (repoKey, prNumber, headSha). A FAIL is never erased: a
-// later PASS is one more record beside it, and a new head needs a verdict of
-// its own anyway. A head whose newest record is older than
-// PR_VERDICT_RETENTION_MS is pruned, with all its records, on the next write.
+// later PASS is one more record beside it, a head holding a FAIL is never
+// pruned, and a new head needs a verdict of its own anyway. A head with no
+// FAIL whose newest record is older than PR_VERDICT_RETENTION_MS is pruned,
+// with all its records, on the next write.
 //
-// Every read goes to disk (the merge lane reads fresh before each try) and
-// reads the primary file: never a fallback to an older generation while the
-// primary exists, which may predate the newest FAIL. No file is empty;
-// anything else that does not parse into valid records throws. Writes are serialized in-process and go through
+// Every read goes to disk (the merge lane reads fresh before each try), waits
+// for the appends queued before it, and reads the primary file: never a
+// fallback to an older generation while the primary exists, which may predate
+// the newest FAIL. No file is empty; anything else that does not parse into
+// valid records throws. Writes are serialized in-process and go through
 // atomicWriteJSON. Nothing is created until the first verdict is recorded.
 
 import fs from 'node:fs';
@@ -32,6 +34,7 @@ export class PrVerdictStore {
 
   /** Every record for one PR, read from disk now. Throws when unreadable. */
   async list(repoKey: string, prNumber: number): Promise<PrVerdictRecord[]> {
+    await this.writes;
     return (await this.readAll()).filter((r) => r.repoKey === repoKey && r.prNumber === prNumber);
   }
 
@@ -43,9 +46,13 @@ export class PrVerdictStore {
       const all = await this.readAll();
       all.push(rec);
       const newest = new Map<string, number>();
-      for (const r of all) newest.set(headKey(r), Math.max(newest.get(headKey(r)) ?? 0, r.at));
+      const failed = new Set<string>();
+      for (const r of all) {
+        newest.set(headKey(r), Math.max(newest.get(headKey(r)) ?? 0, r.at));
+        if (r.verdict === 'fail') failed.add(headKey(r));
+      }
       const cutoff = this.now() - PR_VERDICT_RETENTION_MS;
-      const kept = all.filter((r) => (newest.get(headKey(r)) ?? 0) >= cutoff);
+      const kept = all.filter((r) => failed.has(headKey(r)) || (newest.get(headKey(r)) ?? 0) >= cutoff);
       await atomicWriteJSON(this.file, { version: 1, verdicts: kept });
     });
     this.writes = run.catch(() => undefined);

@@ -181,6 +181,7 @@ function prAuthorWorkspaces(getDaemonClient: () => DaemonClient | null, asker: M
       const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true });
       return parseWorktreeList(stdout);
     },
+    workspaceIds: () => getWorkspaceMirror().getEntries()?.map((e) => e.id) ?? null,
     paneCwds: () => {
       const mirror = getWorkspaceMirror();
       const entries = mirror.getEntries();
