@@ -210,6 +210,19 @@ export function openUrlInBrowserPaneImpl(
         const leaf = ws2 ? findLeafById(ws2.rootPane, paneId) : null;
         const added = leaf?.surfaces.find((s) => s.id === leaf.activeSurfaceId);
         if (!added || added.id === surface.id) return { ok: false, error: 'workspace-not-found' };
+        if (!focusPane) {
+          // A background tab: an active new tab's webview takes keyboard focus
+          // once it loads, and focusPane:false means the user keeps typing in
+          // their terminal (`wmux open --new`).
+          state.setActiveSurface(paneId, surface.id, targetWsId);
+          return {
+            ok: true,
+            surfaceId: added.id,
+            paneId,
+            url: targetUrl || added.browserUrl || DEFAULT_BROWSER_URL,
+            reused: false,
+          };
+        }
         surface = added;
       } else {
         if (targetUrl) state.updateBrowserUrl(surface.id, targetUrl);

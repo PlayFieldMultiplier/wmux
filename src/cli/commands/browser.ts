@@ -60,7 +60,7 @@ export async function handleOpen(args: string[], jsonMode: boolean): Promise<voi
     printResult(response);
   } else {
     ensureOk(response);
-    console.log(`Opened in browser pane: ${url}`);
+    console.log(params.newTab ? `Opened in a new browser tab: ${url}` : `Opened in browser pane: ${url}`);
   }
 }
 

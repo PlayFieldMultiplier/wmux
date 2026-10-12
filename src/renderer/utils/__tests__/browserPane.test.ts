@@ -389,6 +389,23 @@ describe('openUrlInBrowserPaneImpl', () => {
       expect(dispatched).toHaveLength(0);
     });
 
+    it('newTab with focusPane:false opens a background tab (#2140)', () => {
+      const { deps } = makeDeps(store);
+      const rootId = activeWs(store).rootPane.id;
+      store.getState().addBrowserSurface(rootId, 'https://old.example');
+      const oldId = firstBrowser(activeWs(store)).surface.id;
+
+      const result = openUrlInBrowserPaneImpl('http://localhost:3000', { newTab: true, focusPane: false }, deps);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.surfaceId).not.toBe(oldId);
+      const leaf = getLeafPanes(activeWs(store).rootPane)[0];
+      expect(leaf.surfaces.filter((s) => s.surfaceType === 'browser')).toHaveLength(2);
+      // The tab the user was on stays active, so the new webview takes no focus.
+      expect(leaf.activeSurfaceId).toBe(oldId);
+    });
+
     it('newTab with no browser pane yet splits one as usual', () => {
       const { deps } = makeDeps(store);
       const result = openUrlInBrowserPaneImpl('http://localhost:3000', { newTab: true }, deps);
