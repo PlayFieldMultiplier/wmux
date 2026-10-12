@@ -14,6 +14,7 @@ import * as path from 'path';
 import { FIRST_PARTY_CLIENT_NAMES, FIRST_PARTY_METHODS, isFirstPartyClient } from '../firstParty';
 import { METHOD_CAPABILITY, resolveRequiredCapability } from '../methodCapabilityMap';
 import type { RpcMethod } from '../../../shared/rpc';
+import { BOT_TOOL_RPC } from '../../../shared/botSurface';
 
 // src/main/mcp/__tests__ -> src/mcp
 const MCP_DIR = path.resolve(__dirname, '..', '..', '..', 'mcp');
@@ -53,6 +54,11 @@ function extractCalledMethods(): Set<string> {
       called.add(m[1]);
     }
   }
+  // The bot placeholder lane (src/mcp/toolModules.ts) forwards every bot
+  // surface tool that no module registers to that tool's primary method — a
+  // call through a variable the regex above cannot see.
+  expect(fs.readFileSync(path.join(MCP_DIR, 'toolModules.ts'), 'utf8')).toContain('BOT_TOOL_RPC');
+  for (const methods of Object.values(BOT_TOOL_RPC)) called.add(methods[0]);
   return called;
 }
 
@@ -161,6 +167,24 @@ describe('FIRST_PARTY_METHODS source invariant', () => {
       // verdict for the verified calling pane, after main re-reads the PR head
       // and that pane's own checkout; it merges nothing by itself.
       'verify.recordVerdict',
+      // Agent factory bot tools (registered only in `--bot=<role>` mode).
+      // Reserved so no plugin can declare them; each handler scopes the call
+      // on the caller's validated bot binding. The operator-only factory
+      // methods (bot.create/update/remove/wake/..., room.resolve,
+      // handoff.answer/list, fact.emit) stay out of this set.
+      'fact.poll',
+      'room.post',
+      'room.read',
+          'handoff.send',
+      'ask.person',
+      'pr.read',
+      'issue.read',
+      'ci.read',
+      'verdict.read',
+      'trustMetrics.read',
+      'plan.propose',
+      'bot.list',
+      'bot.park',
       // `company.a2a.*` was here for the six company_a2a_* tools; both the
       // tools and the grants are gone (the least-privilege assertion below is
       // what would have caught them lingering).

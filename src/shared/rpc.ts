@@ -2,6 +2,7 @@ import type { WslTarget } from './wslTarget';
 // === JSON-RPC Protocol Types ===
 
 import type { ResumeBinding } from './agentResume';
+import type { BotBinding } from './bot';
 
 export interface RpcRequest {
   id: string;
@@ -263,6 +264,16 @@ export interface RpcContext {
    * envelope field — validation is the only writer.
    */
   commanderWorkspace?: string;
+  /**
+   * Agent factory — the bot a VALIDATED bot token is bound to. Set by
+   * RpcRouter only after commanderTrust resolved the token to a BotBinding
+   * (`commanderWorkspace` is then that binding's workspace). Its presence
+   * means the router already confined the call to the role's surface
+   * (shared/botSurface.ts); handlers that stamp a principal or grant a
+   * role-specific power read the bot and its role from here. Never set from
+   * a raw envelope field.
+   */
+  bot?: BotBinding;
   /**
    * #922 — the workspace the PLUGIN HOST derived for this caller, not one the
    * caller named. Set by RpcRouter only from the `hostedWorkspace` dispatch
@@ -672,6 +683,35 @@ export type RpcMethod =
   // A verifier's PASS/FAIL on one PR head (pipe/handlers/verify.rpc.ts,
   // shared/prVerdict.ts); the principal is stamped from senderPtyId.
   | 'verify.recordVerdict'
+  // Agent factory (shared/botSurface.ts FACTORY_RPC_METHODS). Registered in
+  // main by registerFactoryRpc (main/factory/factoryHost.ts), answering
+  // `not_implemented` until the owning module registers the real handler.
+  // A bot token reaches only the methods on its role surface.
+  | 'fact.poll'
+  | 'fact.emit'
+  | 'bot.list'
+  | 'bot.create'
+  | 'bot.update'
+  | 'bot.remove'
+  | 'bot.status'
+  | 'bot.wake'
+  | 'bot.park'
+  | 'bot.resume'
+  | 'bot.interrupt'
+  | 'room.post'
+  | 'room.read'
+  | 'room.threads'
+  | 'room.resolve'
+  | 'handoff.send'
+  | 'handoff.answer'
+  | 'handoff.list'
+  | 'ask.person'
+  | 'pr.read'
+  | 'issue.read'
+  | 'ci.read'
+  | 'verdict.read'
+  | 'trustMetrics.read'
+  | 'plan.propose'
   // Task lifecycle on the pipe (pipe/handlers/worktask.rpc.ts) — the half of
   // fan-out that finishes a task. Local-origin only, owner-scoped against
   // `task.mission.list`, and `task.close` / `task.pr` additionally raise a
@@ -926,6 +966,31 @@ export const ALL_RPC_METHODS = [
   'moa.ask',
   'moa.askStatus',
   'verify.recordVerdict',
+  'fact.poll',
+  'fact.emit',
+  'bot.list',
+  'bot.create',
+  'bot.update',
+  'bot.remove',
+  'bot.status',
+  'bot.wake',
+  'bot.park',
+  'bot.resume',
+  'bot.interrupt',
+  'room.post',
+  'room.read',
+  'room.threads',
+  'room.resolve',
+  'handoff.send',
+  'handoff.answer',
+  'handoff.list',
+  'ask.person',
+  'pr.read',
+  'issue.read',
+  'ci.read',
+  'verdict.read',
+  'trustMetrics.read',
+  'plan.propose',
   'task.gate.run',
   'task.gate.cancel',
   'task.adopt',

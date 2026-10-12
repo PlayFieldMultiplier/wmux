@@ -110,6 +110,9 @@ import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
 import { registerMoaRpc } from './pipe/handlers/moa.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
+import { registerFactoryRpc } from './factory/factoryHost';
+// The agent factory's modules register themselves on import.
+import './factory/modules';
 import { prVerdictHostPorts } from './github/prVerdictHost';
 import { registerAutomationRpc } from './pipe/handlers/automation.rpc';
 import { registerWorktaskHandlers, type WorktaskServices } from './ipc/handlers/worktask.handler';
@@ -1194,6 +1197,17 @@ registerVerifyRpc(rpcRouter, {
   resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
   paneCwd: paneOwnCwdOf,
   ...prVerdictHostPorts(),
+});
+// Agent factory: every factory RPC method (fail-closed until its module
+// registers it), started once the pipe server is up, disposed on quit.
+const factoryHost = registerFactoryRpc(rpcRouter, {
+  getMainWindow: () => mainWindow,
+  getDaemonClient: () => daemonClient,
+  fanOutService,
+  invokeRendererRpc,
+  resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
+  paneCwd: paneOwnCwdOf,
+  wmuxDir: () => getWmuxDir(),
 });
 // Scheduled runs for agents: draft-only propose + redacted reads, relayed to
 // the daemon over main's first-party connection (pipe/handlers/automation.rpc.ts).
@@ -2649,6 +2663,7 @@ app.on('ready', async () => {
     await mcpRegistrar.register(authToken);
   }
   pipeServer.start();
+  void factoryHost.start();
   autoUpdater.start();
   markBoot('ready-end');
   // Log sink is up by now, so the summary line (unlike the early per-mark
@@ -2895,6 +2910,9 @@ const QUIT_HARD_DEADLINE_MS = 20_000;
  */
 const RENDERER_SAVE_TIMEOUT_MS = 3_000;
 
+/** How long the agent factory's modules get to dispose on quit. */
+const FACTORY_DISPOSE_TIMEOUT_MS = 3_000;
+
 app.on('before-quit', async (e) => {
   if (isQuitting) return; // second pass — let quit proceed
   e.preventDefault();
@@ -2979,6 +2997,13 @@ app.on('before-quit', async (e) => {
       // Renderer unavailable, or too slow to answer — rely on last periodic save
     }
   }
+
+  // Agent factory: its modules persist and release what they hold. Bounded
+  // like the renderer save above; never throws.
+  await Promise.race([
+    factoryHost.dispose(),
+    new Promise((resolve) => setTimeout(resolve, FACTORY_DISPOSE_TIMEOUT_MS)),
+  ]);
 
   // Every teardown step below is ISOLATED in its own try/catch. Two guarantees
   // ride on this:

@@ -15,6 +15,11 @@ import {
 import { COMMANDER_TOOL_SURFACE, COMMANDER_ONLY_TOOLS } from '../shared/commanderSurface';
 import { CORE_TOOL_SURFACE } from '../shared/coreSurface';
 import { ROLE_TOOL_SURFACES, resolveRoleName } from '../shared/roleSurfaces';
+import { isBotRole, type BotRole } from '../shared/bot';
+import { ROLE_SURFACES } from '../shared/botSurface';
+import { installBotTools, pinToolName } from './toolModules';
+// The factory's bot tool modules register themselves on import.
+import './botModules';
 import type { RpcMethod } from '../shared/rpc';
 import { EXECUTE_SEND_CLIENT_TIMEOUT_MS } from '../shared/executeApprovalBounds';
 import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS, TERMINAL_SEND_NEW_TASK_TIMEOUT_MS } from '../shared/freshContext';
@@ -105,6 +110,10 @@ export interface WmuxServerCtx {
   /** --role=<Role> value (from argv / shim handshake), unvalidated. Narrows the
    *  core surface to that role's tools (src/shared/roleSurfaces.ts). */
   roleSurface?: string;
+  /** --bot=<role> value (from argv), unvalidated. Bot mode: the commander
+   *  lane narrowed to that factory role's surface (shared/botSurface.ts);
+   *  `commanderToken` is then the bot token. */
+  botRole?: string;
   /** The pid identity walks start from (self pid, or the shim's pid). */
   callerPid: number;
   /** That pid's parent when already known (process.ppid); null → resolve lazily. */
@@ -746,6 +755,21 @@ function logIdentityEnvOnce(): void {
 // changes nothing else — no token, no role claim, no RPC allow lane, no
 // PermissionEnforcer difference. A core-mode process keeps exactly the
 // authority an ordinary pane agent has.
+// --bot=<role> (agent factory): a bot claims its role with its token on every
+// RPC exactly like a commander brain, so it runs the commander lane, and its
+// tools/list is then narrowed to the role's surface (below). An unknown role
+// lists no tools at all and still claims the role, so main refuses its calls.
+const BOT_ROLE: BotRole | null | undefined =
+  ctx.botRole === undefined ? undefined : isBotRole(ctx.botRole) ? ctx.botRole : null;
+if (BOT_ROLE === null) {
+  console.error(`[wmux-mcp] unknown --bot=${ctx.botRole}; registering no tools`);
+}
+if (BOT_ROLE !== undefined) {
+  if (ctx.coreMode || ctx.roleSurface !== undefined) {
+    console.error('[wmux-mcp] --bot was given with --core or --role; using the bot surface (--core/--role ignored)');
+  }
+  ctx = { ...ctx, commanderMode: true, coreMode: false, roleSurface: undefined };
+}
 const COMMANDER_MODE = ctx.commanderMode;
 // Fail closed on a contradictory launch: commander is the security role, so
 // it wins over the optimization flag and the operator is told, rather than
@@ -859,6 +883,8 @@ if (COMMANDER_MODE) {
 // tool that is deliberately absent from COMMANDER_TOOL_SURFACE (which is a
 // filter of the full surface) — see COMMANDER_ONLY_TOOLS.
 const registerToolUnfiltered = server.tool.bind(server);
+// The same for the catalog path, for the bot tool modules.
+const registerCatalogToolUnfiltered = server.registerTool.bind(server);
 const LEGACY_SURFACE: readonly string[] | null =
   SURFACE_PROFILE === 'commander'
     ? COMMANDER_TOOL_SURFACE
@@ -896,6 +922,26 @@ if (ROLE_SURFACE) {
     if (!allowed.has(name)) return undefined as unknown as ReturnType<typeof registerTool>;
     return (registerTool as (...a: unknown[]) => ReturnType<typeof registerTool>)(name, ...rest);
   }) as typeof server.registerTool;
+}
+
+// Bot surface: the outermost name filter over both registration paths. Only
+// the role's tools register; every name that does is recorded, so the bot
+// tool lane at the end can serve the rest of the surface.
+const BOT_SURFACE: ReadonlySet<string> | null =
+  BOT_ROLE === undefined ? null : BOT_ROLE === null ? new Set<string>() : ROLE_SURFACES[BOT_ROLE].tools;
+const botRegistered = new Set<string>();
+if (BOT_SURFACE) {
+  const tool = server.tool.bind(server);
+  const registerTool = server.registerTool.bind(server);
+  const gate = (raw: (...a: unknown[]) => unknown) => (name: string, ...rest: unknown[]) => {
+    if (!BOT_SURFACE.has(name)) return undefined;
+    const handle = raw(name, ...rest);
+    if (handle !== undefined) botRegistered.add(name);
+    return pinToolName(handle, name);
+  };
+  (server as { tool: typeof server.tool }).tool = gate(tool as (...a: unknown[]) => unknown) as typeof server.tool;
+  (server as { registerTool: typeof server.registerTool }).registerTool =
+    gate(registerTool as (...a: unknown[]) => unknown) as typeof server.registerTool;
 }
 
 // Detect an RPC outcome that means our cached workspace identity is stale
@@ -2577,7 +2623,11 @@ if (COMMANDER_MODE) {
     if (!commanderOnly.has(name)) {
       throw new Error(`[wmux-mcp] ${name} is not listed in COMMANDER_ONLY_TOOLS`);
     }
-    return (registerToolUnfiltered as (...a: unknown[]) => ReturnType<typeof server.tool>)(name, ...rest);
+    // Bot mode: only the role's surface, recorded like the filter above.
+    if (BOT_SURFACE && !BOT_SURFACE.has(name)) return undefined as unknown as ReturnType<typeof server.tool>;
+    const handle = (registerToolUnfiltered as (...a: unknown[]) => ReturnType<typeof server.tool>)(name, ...rest);
+    if (BOT_SURFACE && handle !== undefined) botRegistered.add(name);
+    return BOT_SURFACE ? pinToolName(handle, name) : handle;
   }) as typeof server.tool;
   registerLedgerListTool(registerCommanderOnly);
   // The brain's ledger_update: the worker registration of that name was
@@ -2650,6 +2700,21 @@ if (COMMANDER_MODE) {
   registerMoaGoalTools(registerCommanderOnly, {
     callRpc,
     getCommanderToken: () => ctx.commanderToken,
+  });
+}
+
+// === Bot tool lane ===
+// Bot mode only: the factory tool modules (src/mcp/toolModules.ts) register
+// their tools, and every other tool of the role's surface that nothing
+// registered gets a placeholder forwarding to its RPC, so tools/list is
+// exactly the role's surface. Full, core and commander never reach this.
+if (BOT_ROLE) {
+  installBotTools({
+    role: BOT_ROLE,
+    rawTool: registerToolUnfiltered as (name: string, ...rest: unknown[]) => unknown,
+    rawRegisterTool: registerCatalogToolUnfiltered as (name: string, ...rest: unknown[]) => unknown,
+    deps: { role: BOT_ROLE, callRpc: (method, params, timeoutMs) => callRpc(method, params, timeoutMs) },
+    registered: botRegistered,
   });
 }
 

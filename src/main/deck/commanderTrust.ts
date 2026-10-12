@@ -28,17 +28,48 @@
 // (D2's tool allow-list still gates WHAT it may do — destructive tools stay
 // denied).
 
-import { randomUUID } from 'node:crypto';
+//
+// Agent factory: a token may instead be bound to a bot (`mintBotToken`), i.e.
+// to {workspaceId, botId, role}. Such a token is a commander token for every
+// existing check (same map, same envelope field, same workspace confinement)
+// and additionally resolves to its BotBinding, which RpcRouter puts on
+// RpcContext.bot and confines to the role's surface (shared/botSurface.ts).
 
-/** token → the workspaceId the brain serves. An empty-string binding is a
- *  registered but unroutable token (fail-closed everywhere). */
-const live = new Map<string, string>();
+import { randomUUID } from 'node:crypto';
+import { isBotBinding, type BotBinding } from '../../shared/bot';
+
+/** What a live token is bound to. */
+export interface CommanderTokenBinding {
+  /** The workspace the brain or bot serves. Empty = registered but
+   *  unroutable (fail-closed everywhere). */
+  workspaceId: string;
+  /** Present only for a bot token. */
+  bot?: BotBinding;
+}
+
+/** token → its binding. */
+const live = new Map<string, CommanderTokenBinding>();
+
+function newToken(): string {
+  return `${randomUUID()}${randomUUID()}`;
+}
 
 /** Mint and register a commander token bound to `workspaceId` (one per brain
  *  adapter spawn). */
 export function mintCommanderToken(workspaceId: string): string {
-  const token = `${randomUUID()}${randomUUID()}`;
-  live.set(token, workspaceId);
+  const token = newToken();
+  live.set(token, { workspaceId });
+  return token;
+}
+
+/** Mint and register a bot token bound to `binding` (one per bot session
+ *  spawn). Throws on a malformed binding: a bot token is never minted
+ *  without a workspace, a bot id and a known role. */
+export function mintBotToken(binding: BotBinding): string {
+  if (!isBotBinding(binding)) throw new Error('mintBotToken: malformed bot binding');
+  const token = newToken();
+  const bot: BotBinding = { workspaceId: binding.workspaceId, botId: binding.botId, role: binding.role };
+  live.set(token, { workspaceId: bot.workspaceId, bot });
   return token;
 }
 
@@ -56,9 +87,21 @@ export function isCommanderToken(token: unknown): boolean {
 /** The workspace a live token is bound to, or null for a missing/stale token
  *  (and for a token minted with an empty binding — fail closed). */
 export function commanderTokenWorkspace(token: unknown): string | null {
+  return resolveCommanderToken(token)?.workspaceId ?? null;
+}
+
+/** The full binding of a live, routable token (a copy), or null for a
+ *  missing/stale/unroutable one. RpcRouter's single lookup. */
+export function resolveCommanderToken(token: unknown): CommanderTokenBinding | null {
   if (typeof token !== 'string' || token.length === 0) return null;
-  const ws = live.get(token);
-  return ws ? ws : null;
+  const b = live.get(token);
+  if (!b || !b.workspaceId) return null;
+  return b.bot ? { workspaceId: b.workspaceId, bot: { ...b.bot } } : { workspaceId: b.workspaceId };
+}
+
+/** The bot a live token is bound to, or null (also for a commander token). */
+export function botTokenBinding(token: unknown): BotBinding | null {
+  return resolveCommanderToken(token)?.bot ?? null;
 }
 
 /** Test-only: clear all registered tokens. */
