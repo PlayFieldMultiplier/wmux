@@ -28,6 +28,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { lockGhState, writeGhStateFile } from './gh-state-lock.mjs';
 
 const STATE = process.env.FACTORY_E2E_GH_STATE;
 const LOG = process.env.FACTORY_E2E_GH_LOG;
@@ -50,43 +51,17 @@ function readState() {
   }
 }
 
-/** The calls that change the state hold this lock from their read to their
- *  write, so two of them never lose one's change. The lock names its holder's
- *  pid: it is taken over only when that process is gone, and a holder
- *  removes only its own lock. */
+/** The calls that change the state hold the state lock (gh-state-lock.mjs)
+ *  from their read to their write, until this process exits. */
 function lockState() {
   if (!STATE) return;
-  const lock = `${STATE}.lock`;
-  const mine = String(process.pid);
-  const wait = new Int32Array(new SharedArrayBuffer(4));
-  for (const until = Date.now() + 30_000; Date.now() < until;) {
-    try {
-      fs.writeFileSync(lock, mine, { flag: 'wx' });
-      process.on('exit', () => {
-        try {
-          if (fs.readFileSync(lock, 'utf8') === mine) fs.unlinkSync(lock);
-        } catch { /* already gone */ }
-      });
-      return;
-    } catch {
-      try {
-        const holder = Number(fs.readFileSync(lock, 'utf8'));
-        let alive = true;
-        if (Number.isSafeInteger(holder) && holder > 0) {
-          try { process.kill(holder, 0); } catch (err) { alive = err?.code === 'EPERM'; }
-        }
-        if (!alive) fs.unlinkSync(lock);
-      } catch { /* released meanwhile */ }
-      Atomics.wait(wait, 0, 0, 10);
-    }
-  }
-  fail('fake-gh: the state lock was not released', true);
+  const release = lockGhState(STATE);
+  if (!release) fail('fake-gh: the state lock was not released', true);
+  process.on('exit', release);
 }
 
 function writeState(state) {
-  const tmp = `${STATE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
-  fs.renameSync(tmp, STATE);
+  writeGhStateFile(STATE, state);
 }
 
 function out(value, handled = true) {

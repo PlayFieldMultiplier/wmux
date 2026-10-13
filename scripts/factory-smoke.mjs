@@ -37,6 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claimOwnedBy, suffixRefusal, suffixedPaths } from './lib/control-wmux-lib.mjs';
+import { lockGhState, writeGhStateFile } from './factory-e2e/gh-state-lock.mjs';
 import {
   appLogExcerpt,
   buildSnapshot,
@@ -209,7 +210,7 @@ function makeRepo(ctx) {
 }
 
 function writeGhState(ctx, state) {
-  fs.writeFileSync(ctx.ghState, `${JSON.stringify(state, null, 2)}\n`);
+  writeGhStateFile(ctx.ghState, state);
 }
 
 function readGhState(ctx) {
@@ -462,6 +463,18 @@ function originBranch(ctx, prefix) {
 
 /** Scripted-GitHub edits (the PR/issue state the fake gh serves). */
 function ghAction(ctx, a) {
+  // The fake gh writes this file too (a merge, a PR it creates): the edit
+  // holds the same lock from its read to its write.
+  const release = lockGhState(ctx.ghState);
+  if (!release) throw new HarnessError('the fake gh state lock was not released');
+  try {
+    ghEdit(ctx, a);
+  } finally {
+    release();
+  }
+}
+
+function ghEdit(ctx, a) {
   const state = readGhState(ctx);
   const repo = state.repos[REPO_KEY];
   const now = new Date().toISOString();
