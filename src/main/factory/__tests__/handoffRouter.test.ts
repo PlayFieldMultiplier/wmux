@@ -140,7 +140,7 @@ describe('handoff.send — addressee, attribution, delivery', () => {
     expect(botSeesFact(verifier, received)).toBe(false);
     expect(h.rooms.read('ws1').cards.map((c) => c.kind)).toEqual(['fact']);
     expect(h.rooms.read('hq').cards).toHaveLength(1);
-    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'moa (moa)', title: 'Fix the login bug', body: 'details' });
+    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'moa (moa)', title: 'Fix the login bug', body: 'details', fromWorkspaceId: 'hq' });
   });
 
   it('any bot may dispatch into another workspace (messaging is every bot\'s); its chain starts at depth 1', async () => {

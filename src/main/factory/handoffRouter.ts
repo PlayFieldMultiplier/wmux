@@ -174,6 +174,8 @@ export interface HandoffWakeSummary {
   /** An answer the owner gave by closing the question, with no words of
    *  their own. */
   dismissed?: true;
+  /** The sender's workspace, when the sender is a bot. */
+  fromWorkspaceId?: string;
 }
 
 // ── Decision store port (the real store, bound to one data dir) ────────────
@@ -481,6 +483,7 @@ export class HandoffRouter {
       handoffId: h.id, kind: h.kind, from: this.partyLabel(h.from), title: h.payload.title, body: h.payload.body,
       ...(h.kind === 'answer' ? { ownerWords: true } : {}),
       ...(h.kind === 'answer' && h.from.kind === 'human' && h.payload.body === DISMISSED_ANSWER ? { dismissed: true as const } : {}),
+      ...(h.from.kind === 'bot' ? { fromWorkspaceId: h.from.workspaceId } : {}),
     };
   }
 
