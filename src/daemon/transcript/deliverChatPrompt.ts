@@ -59,15 +59,15 @@ export async function deliverChatPrompt(
   if (attachments.length && !claudeEmpty) return 'unconfirmed';
   // Codex's empty composer is a known placeholder. A draft, menu, picker or
   // unknown CLI layout cannot inherit permission from an idle status.
-  if (initial.slug === 'codex' && !codexComposerEmpty(rows)) return 'unconfirmed';
-  // A hook's idle can arrive while Codex keeps working (compaction, a follow-up
-  // step), and a transcript scrolled back hides the `esc to interrupt` row. The
-  // spinner Codex keeps in the window title is the evidence that survives both:
-  // Enter now would land in the running turn, not start the next one.
-  if (initial.slug === 'codex' && initial.status !== 'running') {
+  if (initial.slug === 'codex') {
+    if (!codexComposerEmpty(rows)) return 'unconfirmed';
+    // A hook's idle can arrive while Codex keeps working (compaction, a follow-up
+    // step), and a transcript scrolled back hides the `esc to interrupt` row. The
+    // spinner Codex keeps in the window title is the evidence that survives both:
+    // Enter now would land in the running turn, not start the next one.
     let title: { title: string; at: number } | null = null;
     try { title = deps.readTitle?.() ?? null; } catch { /* no title = no title evidence */ }
-    if (titleShowsRunningTurn(title, 'codex', Date.now())) return 'busy';
+    if (titleShowsRunningTurn(title, initial.slug, Date.now())) return 'busy';
   }
   let keyboardOwned = true;
   return deliverScheduledPrompt(initial.slug, initial.incarnationId, text, {
