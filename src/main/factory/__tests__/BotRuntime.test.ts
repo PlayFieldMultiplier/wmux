@@ -634,6 +634,30 @@ describe('BotRuntime', () => {
     expect(r.runtime.status(id)?.presence).toBe('unknown');
   });
 
+  it('a bot\'s session follows its repository: another repository, or none, starts a fresh session', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.store.update(id, { repo: { repoKey: 'github.com/o/old', repoPath: '/old' } });
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath)).toEqual(['/old']);
+    r.store.update(id, { repo: { repoKey: 'github.com/o/new', repoPath: '/new' } });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[0].disposed).toBe(true);
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[1].end();
+    await settle();
+    r.store.update(id, { repo: null });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[1].disposed).toBe(true);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual(['/old', '/new', null]);
+  });
+
   it('a timed-out turn ends its session: the retry runs on a fresh one', async () => {
     const timers: Array<{ fn: () => void; ms: number }> = [];
     const store = new BotStore(botsFilePath(dir), { now: () => clock });

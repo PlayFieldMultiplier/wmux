@@ -161,9 +161,16 @@ export interface BotRuntimeDeps {
   onStatus?: (status: BotStatus) => void;
 }
 
+/** What a live session is bound to: its engine and the repository it
+ *  reads (botEngines.ts gives the adapter the root at spawn). */
+function sessionKey(profile: Pick<BotProfile, 'engine' | 'repo'>): string {
+  return JSON.stringify([profile.engine, profile.repo?.repoPath ?? null]);
+}
+
 interface LiveSession {
   adapter: BrainAdapter;
-  /** The engine it was spawned for: a profile edit to another engine respawns. */
+  /** The engine and repository it was spawned for (sessionKey): a profile
+   *  edit to another engine or repository respawns. */
   engineKey: string;
   /** A turn completed on it in this app run. */
   attached: boolean;
@@ -396,7 +403,7 @@ export class BotRuntime {
   }
 
   /** A profile changed (bot.update): a disabled bot loses its session and
-   *  its queue; an engine change respawns on the next turn. */
+   *  its queue; an engine or repository change respawns on the next turn. */
   profileChanged(botId: string): void {
     const profile = this.deps.store.get(botId);
     if (!profile || !profile.enabled) {
@@ -407,7 +414,7 @@ export class BotRuntime {
     } else {
       this.lifecycle(botId, 'enabled');
       const live = this.live.get(botId);
-      if (live && live.engineKey !== JSON.stringify(profile.engine) && !this.running.has(botId)) this.endSession(botId);
+      if (live && live.engineKey !== sessionKey(profile) && !this.running.has(botId)) this.endSession(botId);
     }
     this.kick();
     this.pushStatus(botId);
@@ -641,7 +648,7 @@ export class BotRuntime {
   }
 
   private session(profile: BotProfile): { ok: true; live: LiveSession } | { ok: false; message: string } {
-    const engineKey = JSON.stringify(profile.engine);
+    const engineKey = sessionKey(profile);
     const cur = this.live.get(profile.id);
     if (cur && cur.engineKey === engineKey) return { ok: true, live: cur };
     if (cur) this.endSession(profile.id);
