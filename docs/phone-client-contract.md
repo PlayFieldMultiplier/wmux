@@ -4279,7 +4279,8 @@ card whose `refs.approvalId` names it. The owner answers it here.
   run before the body is read and again once it is in, on the credential the
   request carries: it must still be the same caller (the operator token, or
   the same device), not revoked and still granted, or the decision is refused
-  and nothing is decided. The desktop records which device decided.
+  and nothing is decided. The desktop logs which device decided; the view's
+  `decidedBy` stays `owner`.
 
 `/api/config` carries `botApprovals: true` for every caller when the attached
 desktop answers these routes (omitted otherwise). It does not say whether
