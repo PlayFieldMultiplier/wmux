@@ -85,4 +85,14 @@ describe('fake gh', () => {
     expect(state().repos['github.com/acme/app'].prs).toHaveLength(7);
     expect(fs.existsSync(path.join(dir, 'state.json.lock'))).toBe(false);
   });
+
+  it('a lock left by a process that is gone is taken over; a live holder\'s lock is never removed by another call', () => {
+    fs.writeFileSync(path.join(dir, 'state.json.lock'), '2147483646');
+    expect(gh('pr', 'create', '-R', 'acme/app', '--head', 'b9', '--title', 't9').code).toBe(0);
+    expect(fs.existsSync(path.join(dir, 'state.json.lock'))).toBe(false);
+    // A read takes no lock and leaves another holder's lock in place.
+    fs.writeFileSync(path.join(dir, 'state.json.lock'), String(process.pid));
+    expect(gh('pr', 'view', '1', '-R', 'acme/app', '--json', 'number').code).toBe(0);
+    expect(fs.readFileSync(path.join(dir, 'state.json.lock'), 'utf8')).toBe(String(process.pid));
+  });
 });

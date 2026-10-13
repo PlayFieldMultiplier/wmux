@@ -51,23 +51,31 @@ function readState() {
 }
 
 /** The calls that change the state hold this lock from their read to their
- *  write, so two of them never lose one's change. A lock older than
- *  LOCK_STALE_MS was left by a call that died, and is taken over. */
-const LOCK_STALE_MS = 10_000;
+ *  write, so two of them never lose one's change. The lock names its holder's
+ *  pid: it is taken over only when that process is gone, and a holder
+ *  removes only its own lock. */
 function lockState() {
   if (!STATE) return;
   const lock = `${STATE}.lock`;
+  const mine = String(process.pid);
   const wait = new Int32Array(new SharedArrayBuffer(4));
   for (const until = Date.now() + 30_000; Date.now() < until;) {
     try {
-      fs.closeSync(fs.openSync(lock, 'wx'));
+      fs.writeFileSync(lock, mine, { flag: 'wx' });
       process.on('exit', () => {
-        try { fs.unlinkSync(lock); } catch { /* already gone */ }
+        try {
+          if (fs.readFileSync(lock, 'utf8') === mine) fs.unlinkSync(lock);
+        } catch { /* already gone */ }
       });
       return;
     } catch {
       try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(lock);
+        const holder = Number(fs.readFileSync(lock, 'utf8'));
+        let alive = true;
+        if (Number.isSafeInteger(holder) && holder > 0) {
+          try { process.kill(holder, 0); } catch (err) { alive = err?.code === 'EPERM'; }
+        }
+        if (!alive) fs.unlinkSync(lock);
       } catch { /* released meanwhile */ }
       Atomics.wait(wait, 0, 0, 10);
     }

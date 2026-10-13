@@ -116,15 +116,30 @@ function withoutBreaks(text: string): { t: string; at: number[] } {
   return { t, at };
 }
 
+/** A whole line at least this long that lies inside a value is masked. */
+const INNER_LINE_MIN = 16;
+
 /**
  * `text` redacted, and also a piece of a stored value it starts or ends
  * with (at least EDGE_FRAGMENT_MIN characters, line breaks inside it
- * skipped): a window cut from a longer text, such as the last rows of a
- * terminal, may begin or end inside a value. Identity when nothing matches.
+ * skipped), and any line of at least INNER_LINE_MIN characters that lies
+ * inside a value: a window cut from a longer text, such as the last rows of
+ * a terminal or some lines of a file, may begin, end or lie wholly inside a
+ * value. Identity when nothing matches.
  */
 export function redactStoredSecretEdges(text: string): string {
   let out = redactStoredSecrets(text);
   if (needles.length === 0 || typeof out !== 'string' || out.length < EDGE_FRAGMENT_MIN) return out;
+  out = out.split(/(\r\n|\r|\n)/).map((line) => {
+    // The line's text without its indent, or after a search result's
+    // `path:line:` prefix.
+    for (const core of [line.trim(), /^.*?[:-]\d+[:-](.*)$/.exec(line)?.[1]?.trim() ?? '']) {
+      if (core.length < INNER_LINE_MIN) continue;
+      const n = needles.find((x) => x.text.length > core.length && x.text.includes(core));
+      if (n) return line.replace(core, n.marker);
+    }
+    return line;
+  }).join('');
   for (const n of needles) {
     let { t, at } = withoutBreaks(out);
     if (t.length < EDGE_FRAGMENT_MIN) break;

@@ -179,6 +179,25 @@ describe('SecretStore', () => {
     expect(redactStoredSecrets('npm_SecondValue987654321')).toBe('[secret:NPM_TOKEN]');
   });
 
+  it('a retired value is kept while this run cannot decrypt it, and masked again once one can', () => {
+    const crypto = fakeCrypto();
+    const store = new SecretStore({ file, crypto });
+    store.load();
+    store.set('NPM_TOKEN', VALUE);
+    store.set('NPM_TOKEN', 'npm_SecondValue987654321');
+    __resetRedactedSecretsForTesting();
+    // A run where the keychain is unavailable: nothing decrypts, nothing is lost.
+    const locked = fakeCrypto('unavailable');
+    const blind = new SecretStore({ file, crypto: locked, log: () => undefined });
+    blind.load();
+    locked.setState('ok');
+    blind.set('GH_TOKEN', 'ghp_ThirdValue1234567890');
+    __resetRedactedSecretsForTesting();
+    const again = new SecretStore({ file, crypto: fakeCrypto() });
+    again.load();
+    expect(redactStoredSecrets(VALUE)).toBe('[secret:NPM_TOKEN]');
+  });
+
   it('never keeps a label that holds the value, and refuses a value that is not well-formed text', () => {
     const store = new SecretStore({ file, crypto: fakeCrypto() });
     store.load();
@@ -253,6 +272,14 @@ describe('redaction', () => {
     expect(redactStoredSecretEdges(`a ${VALUE} b`)).toBe('a [secret:NPM_TOKEN] b');
     expect(redactStoredSecretEdges('xyz plain text')).toBe('xyz plain text');
     expect(redactStoredSecretEdges(`${VALUE.slice(-5)} next`)).toBe(`${VALUE.slice(-5)} next`);
+    // A one-row window of the middle of a value.
+    expect(redactStoredSecretEdges(VALUE.slice(2, 20))).toBe('[secret:NPM_TOKEN]');
+    // A window wholly inside a long value: its lines are masked.
+    setRedactedSecrets([{ name: 'DEPLOY_KEY', value: `-----BEGIN KEY-----\n${'A1b2C3d4'.repeat(8)}\n${'Z9y8X7w6'.repeat(8)}\n-----END KEY-----` }]);
+    expect(redactStoredSecretEdges(`  ${'Z9y8X7w6'.repeat(8)}\nnext`)).toBe('  [secret:DEPLOY_KEY]\nnext');
+    expect(redactStoredSecretEdges(`cfg.ts:12:${'A1b2C3d4'.repeat(8)}`)).toBe('cfg.ts:12:[secret:DEPLOY_KEY]');
+    expect(redactStoredSecretEdges(`${'A1b2C3d4'.repeat(2)}`.slice(2, 12))).toBe(`${'A1b2C3d4'.repeat(2)}`.slice(2, 12));
+    setRedactedSecrets([{ name: 'NPM_TOKEN', value: VALUE }]);
     // Only on request in the deep walk: a screen read asks for it.
     expect(redactStoredSecretsDeep({ lines: [VALUE.slice(9)] })).toEqual({ lines: [VALUE.slice(9)] });
     expect(redactStoredSecretsDeep({ lines: [VALUE.slice(9)] }, { edges: true })).toEqual({ lines: ['[secret:NPM_TOKEN]'] });

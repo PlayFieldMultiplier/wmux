@@ -1007,7 +1007,9 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       const redacted = (): Record<string, unknown> => {
         let out: unknown;
         try {
-          out = redactStoredSecretsDeep(hookInput.tool_response);
+          // A read may be a window of a file (offset/limit): pieces of a
+          // value at its edges, and lines inside one, are masked too.
+          out = redactStoredSecretsDeep(hookInput.tool_response, { edges: true });
         } catch {
           out = null;
         }

@@ -83,7 +83,9 @@ const RETIRED_MAX = 64;
 /** A retired value stays redacted this long after it was replaced. */
 const RETIRED_KEEP_MS = 30 * 24 * 3600_000;
 
-interface Retired { name: string; value: string; cipher: string; at: number }
+/** `value` null: not decryptable in this run; its ciphertext is kept for a
+ *  run that can read it. */
+interface Retired { name: string; value: string | null; cipher: string; at: number }
 
 function isStoredRetired(raw: unknown): raw is { name: string; cipher: string; at: number } {
   if (!raw || typeof raw !== 'object') return false;
@@ -201,13 +203,17 @@ export class SecretStore {
     }
     const retired = readable ? (raw as { retired?: unknown }).retired : undefined;
     const since = this.now() - RETIRED_KEEP_MS;
-    for (const item of canDecrypt && Array.isArray(retired) ? retired.slice(-RETIRED_MAX) : []) {
+    for (const item of Array.isArray(retired) ? retired.slice(-RETIRED_MAX) : []) {
       if (!isStoredRetired(item) || item.at < since) continue;
-      try {
-        this.retired.push({ name: item.name, value: this.opts.crypto.decrypt(Buffer.from(item.cipher, 'base64')), cipher: item.cipher, at: item.at });
-      } catch {
-        /* not decryptable here: nothing to match */
+      let value: string | null = null;
+      if (canDecrypt) {
+        try {
+          value = this.opts.crypto.decrypt(Buffer.from(item.cipher, 'base64'));
+        } catch {
+          value = null;
+        }
       }
+      this.retired.push({ name: item.name, value, cipher: item.cipher, at: item.at });
     }
     this.loaded = true;
     this.publish(false);
@@ -265,7 +271,7 @@ export class SecretStore {
     });
     const next = new Map(this.held);
     next.set(name, { record, value });
-    const retired = prior?.value != null && prior.value !== value ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
+    const retired = prior && prior.value !== value ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
     if (!this.persist(next, retired)) return { ok: false, code: 'write_failed', message: 'The key could not be written to disk.' };
     this.retired = retired;
     this.held = next;
@@ -279,7 +285,7 @@ export class SecretStore {
     const prior = this.held.get(name);
     const next = new Map(this.held);
     next.delete(name);
-    const retired = prior?.value != null ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
+    const retired = prior ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
     if (!this.persist(next, retired)) return false;
     this.retired = retired;
     this.held = next;
@@ -318,14 +324,16 @@ export class SecretStore {
 
   /** The retired list with one more value (the newest kept, one entry per
    *  value). */
-  private retiring(name: string, value: string, cipher: string): Retired[] {
+  private retiring(name: string, value: string | null, cipher: string): Retired[] {
     const since = this.now() - RETIRED_KEEP_MS;
-    const next = [...this.retired.filter((r) => r.value !== value && r.at >= since), { name, value, cipher, at: this.now() }];
+    const same = (r: Retired) => r.cipher === cipher || (value !== null && r.value === value);
+    const next = [...this.retired.filter((r) => !same(r) && r.at >= since), { name, value, cipher, at: this.now() }];
     return next.slice(-RETIRED_MAX);
   }
 
   private publish(changed: boolean): void {
-    const entries: Array<{ name: string; value: string }> = this.retired.map((r) => ({ name: r.name, value: r.value }));
+    const entries: Array<{ name: string; value: string }> = [];
+    for (const r of this.retired) if (r.value != null) entries.push({ name: r.name, value: r.value });
     for (const [name, h] of this.held) if (h.value != null) entries.push({ name, value: h.value });
     setRedactedSecrets(entries);
     if (changed) {
