@@ -479,7 +479,7 @@ describe('owner message → exactly one turn', () => {
     const r = postHumanMessage(writer, { factLog: log, wakes: queue, bots }, { workspaceId: 'ws-1', title: 'Look at #5', clientPostId: 'cp-1', source: 'desktop' });
     expect(r).toMatchObject({ ok: true, addressee: { botId: l.id } });
     expect(log.readSince('0').facts.map((f) => f.kind)).toEqual(['human.message']);
-    expect(queue.list({ botId: l.id }).filter((i) => i.state !== 'dropped')).toMatchObject([{ reason: { kind: 'human', clientMessageId: 'cp-1' } }]);
+    expect(queue.list({ botId: l.id }).filter((i) => i.state !== 'dropped')).toMatchObject([{ reason: { kind: 'human', clientMessageId: (r as { card: { id: string } }).card.id } }]);
     // The trigger engine itself refuses the directed fact.
     expect(engine.route(log.readSince('0').facts[0])).toEqual([]);
     engine.dispose();
@@ -504,6 +504,19 @@ describe('owner message → exactly one turn', () => {
     expect(queue.list({ states: ['queued'] })).toHaveLength(1);
     // One fact for the one message.
     expect(log.readSince('0').facts.filter((f) => f.kind === 'human.message')).toHaveLength(1);
+  });
+
+  it('the same clientPostId in two rooms is two messages: each wakes the bot with its own text', () => {
+    const l = lead();
+    const queue = newQueue();
+    const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms') });
+    const ports = { factLog: log, wakes: queue, bots: dirOf([l]) };
+    const a = postHumanMessage(writer, ports, { workspaceId: 'ws-1', title: 'First', clientPostId: 'message-1', toBotId: l.id, source: 'desktop' });
+    const b = postHumanMessage(writer, ports, { workspaceId: 'ws-2', title: 'Second', clientPostId: 'message-1', toBotId: l.id, source: 'desktop' });
+    expect(a).toMatchObject({ ok: true, wakeId: expect.any(String) });
+    expect(b).toMatchObject({ ok: true, wakeId: expect.any(String) });
+    expect((a as { wakeId: string }).wakeId).not.toBe((b as { wakeId: string }).wakeId);
+    expect(queue.list({ botId: l.id, states: ['queued'] }).map((i) => (i.reason as { text: string }).text)).toEqual(['First', 'Second']);
   });
 
   it('desktop: a lead whose queue is at the cap still takes the owner\'s message', () => {

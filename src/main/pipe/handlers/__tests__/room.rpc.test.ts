@@ -163,7 +163,7 @@ describe('room.post', () => {
     const runId = `run-${r.card.id}`;
     expect(s.wakes).toEqual([lead, verifier].map((b) => ({
       botId: b.id, workspaceId: 'ws1',
-      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: 'cm-1', runId, room: true },
+      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: r.card.id, runId, room: true },
       priority: 0, threadId: 'general', overCap: true,
     })));
     // Same client id: the same card, no second fact or wake.

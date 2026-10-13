@@ -173,7 +173,9 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
           kind: 'human',
           text: said.slice(0, HUMAN_WAKE_TEXT_MAX),
           source,
-          clientMessageId: card.clientPostId ?? card.id,
+          // The card's own id: a clientPostId is unique within one room
+          // only, and the queue dedupes per bot across rooms.
+          clientMessageId: card.id,
           runId: humanRunId(card.id),
           ...(room ? { room: true as const } : {}),
         },
