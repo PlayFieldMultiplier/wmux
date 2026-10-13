@@ -15,6 +15,7 @@ import { formatElementHandoff, parseInspectedElement, HANDOFF_NOTE_MAX, type Ins
 import { findWorkspaceSurfaceById } from '../../utils/paneTraversal';
 import { findLeaf } from '../../../shared/paneUtils';
 import { injectText } from '../AgentToolbar/inject';
+import { IconX } from '../icons';
 
 // The <webview> intrinsic comes from @types/react's built-in
 // WebViewHTMLAttributes — with the automatic JSX runtime (React.JSX
@@ -119,8 +120,11 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
   // the pane's agent (or copied), and the note going with it.
   const [handoff, setHandoff] = useState<InspectedElement | null>(null);
   const [handoffNote, setHandoffNote] = useState('');
-  // Fresh per inspector session: only a result carrying it is accepted, so a
-  // page cannot raise the hand-off bar by logging a lookalike message.
+  // Fresh per inspector session: only a result carrying it is accepted, and
+  // only once, so a stale or unsolicited message cannot raise the bar outside
+  // a pick. It does not make the result trustworthy — the script runs in the
+  // page's world, so the page can read and rewrite what it reports; the bar
+  // shows the result and everything in it is treated as page text.
   const inspectNonceRef = useRef('');
 
   // browser_request_help — the open ask for THIS surface, if any. The record is
@@ -392,7 +396,16 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
     // (테마 토큰 승격 대상 아님 — 외부 페이지 위 오버레이).
     wv.executeJavaScript(`
       (function() {
-        if (window.__wmuxInspector) return;
+        // A leftover from a session whose removal never ran would keep
+        // swallowing clicks under an old nonce: replace it.
+        const prev = window.__wmuxInspector;
+        if (prev) {
+          document.removeEventListener('mousemove', prev.onMove, true);
+          document.removeEventListener('click', prev.onClick, true);
+          prev.overlay.remove();
+          prev.label.remove();
+          delete window.__wmuxInspector;
+        }
         const overlay = document.createElement('div');
         overlay.id = '__wmux_inspector_overlay';
         overlay.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #3b82f6;background:rgba(59,130,246,0.08);transition:all 0.05s;display:none;';
@@ -485,16 +498,14 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
   }, [isReady]);
 
   const handleToggleInspect = useCallback(() => {
-    setInspecting(prev => {
-      if (!prev) {
-        injectInspector();
-      } else {
-        removeInspector();
-        inspectNonceRef.current = '';
-      }
-      return !prev;
-    });
-  }, [injectInspector, removeInspector]);
+    if (!inspecting) {
+      injectInspector();
+    } else {
+      removeInspector();
+      inspectNonceRef.current = '';
+    }
+    setInspecting(!inspecting);
+  }, [inspecting, injectInspector, removeInspector]);
 
   // Listen for inspector click results from webview console
   useEffect(() => {
@@ -518,17 +529,21 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
     return () => { wv.removeEventListener('console-message', onConsole as EventListener); };
   }, [removeInspector, discarded, sessionReady]);
 
-  // The terminal the hand-off goes to: the one focused in this browser's own
-  // pane, else that pane's first local terminal. A string key, so the selector
-  // only re-renders this panel when the answer changes.
+  // The terminal the hand-off goes to: the one this browser's pane shows (its
+  // focused terminal, else its first), and only while an agent runs in it —
+  // the line is a prompt for the agent, never a command for a bare shell.
+  // Resolved only while the bar is open, as a string key so the selector
+  // re-renders this panel only when the answer changes.
   const handoffTargetKey = useStore((s) => {
+    if (!handoff) return '';
     const ws = s.workspaces.find((w) => w.id === workspaceId);
     const at = ws ? findWorkspaceSurfaceById(ws, surfaceId) : null;
     const leaf = ws && at && !at.stashed ? findLeaf(ws.rootPane, at.paneId) : null;
     if (!leaf) return '';
-    const terminals = leaf.surfaces.filter((x) => (!x.surfaceType || x.surfaceType === 'terminal') && x.ptyId);
-    const target = terminals.find((x) => x.id === leaf.activeSurfaceId) ?? terminals[0];
-    return target ? JSON.stringify([leaf.id, target.id, target.ptyId, target.title || '']) : '';
+    const terminals = leaf.surfaces.filter((x) => !x.surfaceType || x.surfaceType === 'terminal');
+    const shown = terminals.find((x) => x.id === leaf.activeSurfaceId) ?? terminals[0];
+    const agent = shown?.ptyId ? s.surfaceAgent[shown.ptyId] : undefined;
+    return shown && agent ? JSON.stringify([leaf.id, shown.id, shown.ptyId, agent.name]) : '';
   });
   const handoffTarget = handoffTargetKey
     ? (JSON.parse(handoffTargetKey) as [string, string, string, string])
@@ -700,6 +715,9 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
           role="group"
           aria-label={t('browser.handoff.barLabel')}
           className="flex flex-col gap-1.5 px-3 py-2 shrink-0"
+          // The panel root hands every click to the webview; a click here must
+          // keep the focus in the note.
+          onClick={(e) => e.stopPropagation()}
           style={{
             backgroundColor: 'var(--bg-surface)',
             borderBottom: '1px solid color-mix(in srgb, var(--text-main) 6%, transparent)',
@@ -789,7 +807,7 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
                 }}
                 title={t('browser.handoff.sendHint')}
               >
-                {t('browser.handoff.send', { name: handoffTarget[3] || t('surface.terminal') })}
+                {t('browser.handoff.send', { name: handoffTarget[3] })}
               </button>
             )}
             <button
@@ -800,7 +818,7 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
               title={t('browser.handoff.close')}
               aria-label={t('browser.handoff.close')}
             >
-              ✕
+              <IconX size={12} />
             </button>
           </div>
         </div>
