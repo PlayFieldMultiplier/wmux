@@ -106,8 +106,10 @@ export interface MoaDecision {
   delivery?: MoaAnswerDelivery;
   /** A merge's lane verdict (moaMergeLane.ts) on the fresh read it was
    *  decided on: wmux's own check, shown to the owner as checked facts.
-   *  Display only: the executor re-reads and re-checks before any merge. */
-  lane?: { ok: boolean; reasons: string[] };
+   *  Display only: the executor re-reads and re-checks before any merge.
+   *  `verifiedBy`: the non-author verifier whose PASS at this head the lane
+   *  accepted (verifier-pass-at-head). */
+  lane?: { ok: boolean; reasons: string[]; verifiedBy?: { workspaceId: string; agent: string; headSha: string } };
   /** A merge's facts on that same read: the phone merge preview's object
    *  without its confirm grant, so one sheet serves both. Display only, like
    *  `lane`; absent on decisions recorded before it existed, or when a field
@@ -140,18 +142,26 @@ export interface MoaAnswerDelivery {
 export const MERGE_EFFECT_MAX_ATTEMPTS = 3;
 
 export interface MergeEffect {
-  /** `effect:<decisionId>:pr.merge`. */
+  /** `effect:<decisionId>:pr.merge`, or `lane:<repoKey>#<pr>:<headSha>` for a
+   *  lane effect (laneEffectId). */
   id: string;
   kind: 'pr.merge';
-  decisionId: string;
+  /** The decision behind an 'owner' or 'moa-auto' effect, or the approval
+   *  request (`apr-…`, shared/botApproval.ts) behind an 'owner' or 'rule' one.
+   *  A 'lane' effect has none: the factory's merge lane creates it from
+   *  facts, not a decision. */
+  decisionId?: string;
   repoKey: string;
   repoPath: string;
   prNumber: number;
   expectHead: string;
-  /** Who allowed it. 'moa-auto' re-runs every lane predicate before each try;
-   *  'owner' re-runs head-unchanged (and mergeBlock) — the owner may approve
-   *  what the lane would not, e.g. an outside contributor's PR. */
-  approvedBy: 'owner' | 'moa-auto';
+  /** Who allowed it. 'moa-auto' and 'lane' re-run every lane predicate
+   *  before each try; 'owner' re-runs head-unchanged (and mergeBlock) — the
+   *  owner may approve what the lane would not, e.g. an outside contributor's
+   *  PR. 'rule' is an owner's remembered "always allow" applied to a bot's
+   *  approval request: every lane predicate, and the lane's own gate. Any
+   *  other value is refused by the executor. */
+  approvedBy: 'owner' | 'moa-auto' | 'lane' | 'rule';
   status: MergeEffectStatus;
   attempt: number;
   reason?: string;
@@ -165,6 +175,12 @@ export interface MergeEffect {
 
 export function mergeEffectId(decisionId: string): string {
   return `effect:${decisionId}:pr.merge`;
+}
+
+/** A lane effect's id: one per PR head, so facts that arrive together (CI
+ *  green, a verdict) enqueue one effect, never two. */
+export function laneEffectId(repoKey: string, prNumber: number, headSha: string): string {
+  return `lane:${repoKey}#${prNumber}:${headSha}`;
 }
 
 /**

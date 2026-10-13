@@ -15,8 +15,6 @@ import type { ChannelMention } from '../../../shared/channels';
 import { HUMAN_WORKSPACE_ID, CHANNEL_MENTIONS_MAX } from '../../../shared/channels';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { buildDiffAskContext } from '../../../shared/diffAskContext';
-import { moaOwnsPanel, moaQuestionBlock } from '../Moa/panel/moaPanelMode';
 import { unwrapRpc } from '../../utils/unwrapRpc';
 import { HunkLines } from './HunkLines';
 
@@ -364,11 +362,6 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
   // J3 §1·§2: close·PR 진행 상태(중복 클릭 방지).
   const [lifecycleBusy, setLifecycleBusy] = useState<'close' | 'pr' | null>(null);
   const pushToast = useStore((s) => s.pushToast);
-  // When Moa runs, the question goes to Moa (the panel is pinned to its HQ).
-  const askMoa = useStore((s) => moaOwnsPanel(s.moa));
-  // Moa off or its HQ down: the panel is only a card, so a question would sit
-  // queued until Moa came back. Ask is disabled instead, saying why.
-  const askBlock = useStore((s) => moaQuestionBlock(s.moa));
   const t = useT();
 
   // Bumped by every load() and by a successful Close. A load whose generation
@@ -701,38 +694,6 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
     }
   }, [lifecycleBusy, taskId, verifiedWorkspaceId, meta, pushToast, t]);
 
-  // diff→오케스트레이터 질문: hunk 컨텍스트 블록 + 질문을 단일 메시지로
-  // 조립해 pendingBrainPrompt 릴레이에 싣고 Orchestrator 탭으로 전환한다
-  // (CommanderView가 정상 send 경로로 발사 — 턴을 바로 관전하게 된다).
-  // 입력은 인라인 폼: window.prompt는 Electron 렌더러에서 미지원(dogfood 실측
-  // — 호출이 throw라 질문이 조용히 무산됐다).
-  const [askTarget, setAskTarget] = useState<string | null>(null); // `${path}#${idx}`
-  const [askText, setAskText] = useState('');
-  const handleAskOrchestrator = useCallback(
-    (file: string, hunkHeader: string, hunkBody: string) => {
-      const question = askText.trim();
-      if (!question) return;
-      const st = useStore.getState();
-      // The form can be open when Moa switches off; never queue into a card.
-      if (moaQuestionBlock(st.moa)) return;
-      setAskTarget(null);
-      setAskText('');
-      const prompt = buildDiffAskContext({
-        repoLabel: isTask ? meta?.worktreePath || taskId : repoPath,
-        branch: meta?.branch || data?.snapshot.targetBranch || '',
-        file,
-        hunkHeader,
-        hunkBody,
-        question,
-      });
-      st.setPendingBrainPrompt(prompt);
-      // 덱이 접혀 있거나 다른 탭이면 열고 전환 — 발사된 턴이 바로 보여야 한다.
-      st.setChannelDockVisible(true);
-      st.setActiveDeckTab('commander');
-    },
-    [askText, isTask, meta, taskId, repoPath, data],
-  );
-
   // J3 §2 — 1클릭 PR(확인 1회 포함). gh 4중 게이트·멱등 재진입은 main이 수행.
   const handleCreatePr = useCallback(async () => {
     if (lifecycleBusy) return;
@@ -964,25 +925,6 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
                           <span className="text-[10px] text-[var(--accent-red)]">{t('diff.nonAdoptable')}</span>
                         )}
                         <div className="flex-1" />
-                        {/* diff→오케스트레이터 질문 — 양 모드 공통(hunk 컨텍스트 동봉). */}
-                        <button
-                          className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
-                          disabled={askBlock !== null}
-                          onClick={() => {
-                            setAskText('');
-                            setAskTarget((prev) => (prev === key ? null : key));
-                          }}
-                          title={
-                            askBlock === 'off'
-                              ? t('moa.panel.diffAskOff')
-                              : askBlock === 'hq-problem'
-                                ? t('moa.panel.diffAskHqProblem')
-                                : askMoa ? t('moa.panel.diffAskTitle') : t('diff.askOrchestrator') || 'Ask the orchestrator about this hunk'
-                          }
-                          data-diff-ask
-                        >
-                          {t('diff.ask') || 'Ask'}
-                        </button>
                         {!meta?.channelArchived && meta?.missionChannelId && (
                           <button
                             className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-main)]"
@@ -1002,42 +944,6 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
                           </span>
                         )}
                       </div>
-                      {/* 인라인 질문 폼 — Enter 발사, Esc 닫기. */}
-                      {askTarget === key && askBlock === null && (
-                        <div
-                          className="flex items-center gap-1.5 px-2 py-1 bg-[var(--bg-base)] border-t border-[var(--bg-mantle)]"
-                          data-diff-ask-form
-                        >
-                          <input
-                            type="text"
-                            autoFocus
-                            value={askText}
-                            onChange={(e) => setAskText(e.target.value)}
-                            onKeyDown={(e) => {
-                              // IME 조합 중 Enter(한/일/중)는 조합 확정이지 제출이 아님 —
-                              // isComposing/keyCode 229를 가드(Codex P2).
-                              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-                                handleAskOrchestrator(activeFile.path, hunk.header, hunk.bodyLines.join('\n'));
-                              } else if (e.key === 'Escape') {
-                                setAskTarget(null);
-                                setAskText('');
-                              }
-                            }}
-                            placeholder={askMoa ? t('moa.panel.diffAskPrompt') : t('diff.askPrompt') || 'Ask the orchestrator — hunk context attaches automatically'}
-                            spellCheck={false}
-                            className="flex-1 min-w-0 bg-transparent text-[11px] text-[var(--text-main)] placeholder-[var(--text-muted)] outline-none px-1"
-                          />
-                          <button
-                            className="px-1.5 py-0.5 rounded text-[10px] text-[var(--text-sub)] hover:text-[var(--text-main)] border border-[var(--bg-mantle)] disabled:opacity-40"
-                            disabled={!askText.trim()}
-                            onClick={() =>
-                              handleAskOrchestrator(activeFile.path, hunk.header, hunk.bodyLines.join('\n'))
-                            }
-                          >
-                            {t('diff.ask') || 'Ask'}
-                          </button>
-                        </div>
-                      )}
                       {/* 인라인 코멘트 폼 — Enter 발사, Esc 닫기 (죽은 window.prompt 대체). */}
                       {commentTarget === key && (
                         <div

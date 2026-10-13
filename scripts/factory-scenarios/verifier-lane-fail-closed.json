@@ -1,0 +1,247 @@
+{
+  "name": "verifier-lane-fail-closed",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The full verifier loop on a bot PR: a lead's worker pushes a wtask branch, the PR opens on the scripted GitHub, the verifier fans out a verify worker at the head, main records the gate, the verifier records a PASS with that evidence, and the merge lane refuses fail-closed (no required checks). The owner then merges by hand.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "commit": true,
+      "delayMs": 1500
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "feat: add widget"
+                    ],
+                    "prompt": "Add a widget file to the repository.",
+                    "preset": "default"
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "noted"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "pr_read",
+                  "args": {
+                    "pr_number": 1
+                  },
+                  "save": {
+                    "head": "\"head(?:Sha|RefOid)\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "verify PR #1"
+                    ],
+                    "prompt": "Grade pull request #1 at its head.",
+                    "preset": "verify",
+                    "checkout": {
+                      "sha": "{{head}}",
+                      "fetch_ref": "pull/1/head"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "task": "\"taskId\": \"(wtask-[^\"]+)\"",
+                    "gateHead": "\"headSha\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "pr_verdict",
+                  "args": {
+                    "pr_number": 1,
+                    "head_sha": "{{gateHead}}",
+                    "verdict": "pass",
+                    "summary": "The recorded gate is green at this head.",
+                    "evidence": {
+                      "task_id": "{{task}}"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "nothing to do"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "waitFor",
+      "label": "repo watch baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "ask-lead",
+      "post": {
+        "title": "Widget",
+        "body": "Please add the widget.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "worker pushed its branch",
+      "cond": {
+        "workers": {
+          "event": "commit"
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addPr",
+      "fromBranch": "wtask/",
+      "pr": {
+        "number": 1,
+        "title": "feat: add widget",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": []
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "pr.opened",
+      "cond": {
+        "facts": {
+          "kind": "pr.opened"
+        }
+      },
+      "timeoutMs": 100000
+    },
+    {
+      "do": "waitFor",
+      "label": "verdict recorded",
+      "cond": {
+        "facts": {
+          "kind": "verdict.recorded"
+        }
+      },
+      "timeoutMs": 300000
+    },
+    {
+      "do": "waitFor",
+      "label": "lane outcome",
+      "cond": {
+        "facts": {
+          "kind": "merge.refused"
+        }
+      },
+      "timeoutMs": 120000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "api",
+      "label": "owner-merge",
+      "fn": "github.prMerge",
+      "args": [
+        "{{repoPath}}",
+        "https://github.com/acme/app/pull/1",
+        {
+          "expectHead": "{{saved.pr1Head}}",
+          "subject": "feat: add widget (#1)",
+          "body": ""
+        }
+      ],
+      "record": true
+    },
+    {
+      "do": "waitFor",
+      "label": "pr.merged seen",
+      "cond": {
+        "facts": {
+          "kind": "pr.merged"
+        }
+      },
+      "timeoutMs": 100000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "ledger",
+      "verdicts",
+      "ghCalls",
+      "workers"
+    ],
+    "pr": 1,
+    "verifier": "verifier",
+    "laneReason": "no-required-checks"
+  }
+}

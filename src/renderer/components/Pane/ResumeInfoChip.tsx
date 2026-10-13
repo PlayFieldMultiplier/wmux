@@ -168,7 +168,11 @@ export default function ResumeInfoChip(props: {
     // No trailing \r — the user presses Enter to run (D6: bypass is re-granted
     // only by an explicit keystroke, never automatically).
     if (onSend) onSend(command);
-    else window.electronAPI.pty.write(ptyId, command);
+    else {
+      window.electronAPI.pty.writeLaunch(ptyId, command, false).catch((err: unknown) => {
+        console.warn('[wmux:resume] the resume line was not typed', String(err));
+      });
+    }
     setOpen(false);
   };
 

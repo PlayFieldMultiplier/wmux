@@ -1,6 +1,5 @@
 import { useId, useState } from 'react';
 import type { MoaMascotState } from '../../../shared/moa';
-import { useStore } from '../../stores';
 import { usePrefersReducedMotion } from '../ui/MediaPreview';
 import './moa.css';
 
@@ -15,12 +14,9 @@ export interface MoaMascotProps {
 /** At or under this size only the body and the face are drawn. */
 export const MOA_MASCOT_SMALL_MAX = 28;
 
-/** True when Moa should hold still: the OS asks for reduced motion, or Moa's
- *  own Reduce motion setting is on. */
+/** True when Moa should hold still: the OS asks for reduced motion. */
 export function useMoaReducedMotion(): boolean {
-  const os = usePrefersReducedMotion();
-  const setting = useStore((s) => s.moa?.config.reduceMotion === true);
-  return os || setting;
+  return usePrefersReducedMotion();
 }
 
 // SPDX-License-Identifier: MIT — original wmux SVG artwork and interaction.

@@ -13,7 +13,6 @@ import Badge from '../ui/Badge';
 import { FOCUS_RING } from '../focusRing';
 import { autoPickPane, rankExposedPanes, repoMismatch, type RankedPane } from './a2aLinkModel';
 import Select from '../ui/Select';
-import { isMoaHqWorkspace } from '../../stores/slices/moaSlice';
 import { activeAgentSlug, leafDisplayName } from '../../utils/paneNaming';
 import { buildPaneSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 
@@ -273,17 +272,14 @@ export interface A2aLinkDialogProps {
 
 export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: A2aLinkDialogProps) {
   // This PC's panes, for the picker shown when no end was handed in. The
-  // Moa HQ is left out: Moa links through its own entry.
   const workspaces = useStore((s) => s.workspaces);
   const paneLabels = useStore((s) => s.paneLabel);
   const agents = useStore((s) => s.surfaceAgent);
-  const hqView = useStore(useShallow((s) => ({ moa: s.moa, moaHqSeed: s.moaHqSeed })));
   const localChoices = useMemo(() => (fixed ? undefined : workspaces
-    .filter((ws) => !isMoaHqWorkspace(hqView, ws.id))
     .flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => ({
       key: `${ws.id}/${leaf.id}`,
       label: `${ws.name} / ${leafDisplayName(paneLabels, ws, leaf, activeAgentSlug(agents, leaf))}`,
-    })))), [fixed, workspaces, paneLabels, agents, hqView]);
+    })))), [fixed, workspaces, paneLabels, agents]);
   const [pickedKey, setPickedKey] = useState<string | null>(() => {
     if (fixed) return null;
     const s = useStore.getState();

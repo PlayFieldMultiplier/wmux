@@ -12,6 +12,7 @@ import {
 } from './quietInput';
 import type { RpcRouter } from '../RpcRouter';
 import { isHostedCaller, type RpcContext } from '../../../shared/rpc';
+import type { BotBinding } from '../../../shared/bot';
 import type { PTYManager } from '../../pty/PTYManager';
 import type { DaemonClient } from '../../DaemonClient';
 import { sendToRenderer } from './_bridge';
@@ -56,6 +57,7 @@ import {
 } from '../../workspace/ptyOwnership';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { getWorkerResumePorts, workerWorkspaceOf } from '../../factory/workerReclaim';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 
 type GetWindow = () => BrowserWindow | null;
@@ -966,6 +968,9 @@ export interface InputRpcDeps {
   /** Injected in tests; the daemon's open a2a tasks for a workspace (see
    *  a2aOpenTasks). Defaults to the daemon's `a2a.task.query`. */
   queryDaemonTasks?: (workspaceId: string) => Promise<unknown[] | null>;
+  /** Injected in tests; the workspaces of a bot's reclaimed workers (ended
+   *  tasks it started, factory/workerReclaim.ts), for its own reads. */
+  reclaimedWorkerWorkspaces?: (botId: string, ownerWorkspaceId: string) => string[];
 }
 
 /** Budget for one daemon state read while a fresh-context step polls. */
@@ -1006,6 +1011,10 @@ export function registerInputRpc(
   deliveryGate: (ptyId: string) => Promise<GatedSubmitRefusal | null>;
 } {
   const ledgerOf = deps.getLedger ?? getTaskLedger;
+  const reclaimedOf = deps.reclaimedWorkerWorkspaces ?? ((botId: string, owner: string): string[] =>
+    (getWorkerResumePorts()?.store.all() ?? [])
+      .filter((r) => r.botId === botId && r.ownerWorkspaceId === owner)
+      .map((r) => workerWorkspaceOf(r)));
 
   /**
    * The fresh-context step for one new-task send (#1680), against the live
@@ -1113,6 +1122,24 @@ export function registerInputRpc(
           .filter((ws) => typeof ws === 'string' && ws.length > 0),
     };
   };
+
+  /** A bot's owner lane: the open tasks of its workspace that it started
+   *  (the ledger row's dispatch origin names the bot). */
+  // Its open tasks, and the panes of ended tasks whose worker main reclaimed
+  // (a resume may run there, in the task's own or a new workspace).
+  const botTaskLane = (bot: BotBinding): TaskOwnerLane => ({
+    commanderWorkspace: bot.workspaceId,
+    openTaskWorkspacesOf: (owner) =>
+      owner !== bot.workspaceId
+        ? []
+        : [
+          ...ledgerOf()
+            .list({ ownerWorkspaceId: owner, openOnly: true })
+            .filter((e) => e.dispatch?.origin.kind === 'bot' && e.dispatch.origin.botId === bot.botId)
+            .map((e) => e.taskWorkspaceId),
+          ...reclaimedOf(bot.botId, owner),
+        ].filter((ws) => typeof ws === 'string' && ws.length > 0 && ws !== owner),
+  });
 
   /** The untrusted label, only on a pane reached through the owner lane. */
   const untrustedLabel = (access: PtyAccess): Record<string, unknown> =>
@@ -1530,7 +1557,10 @@ export function registerInputRpc(
    * the result is labeled untrusted.
    */
   router.register('input.readScreen', async (params, ctx?: RpcContext) => {
-    const p = params ?? {};
+    // A factory bot reads its own workspace and the task panes it started,
+    // nothing else: its workspace comes from its binding, never a param.
+    const bot = ctx?.bot;
+    const p = bot ? { ...(params ?? {}), workspaceId: bot.workspaceId } : params ?? {};
     const callerWs = typeof p['workspaceId'] === 'string' ? p['workspaceId'] : undefined;
 
     if (typeof p['ptyId'] === 'string' && p['ptyId'].length > 0) {
@@ -1539,7 +1569,7 @@ export function registerInputRpc(
         p['ptyId'],
         callerWs,
         'input.readScreen',
-        taskOwnerLane(p, ctx),
+        bot ? botTaskLane(bot) : taskOwnerLane(p, ctx),
       );
       if (access.lane !== 'task-owner') {
         return sendToRenderer(getWindow, 'input.readScreen', p);

@@ -19,7 +19,8 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { withDelegateSpawnSettings } from '../../agents/delegateSpawnPolicy';
+import { botWorkerForCreate, forgetBotWorkerSession, guardSessionLaunch, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
+import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
 import { withheldCredentialNames } from '../../../shared/envFilter';
@@ -60,7 +61,6 @@ import { getDefaultWslDistro } from '../../pty/defaultWslDistro';
 import { SessionPromptScheduler } from '../../pty/SessionPromptScheduler';
 import { stampFanoutTaskPane } from '../../worktask/fanoutGuards';
 import type { FanoutOrigin } from '../../../shared/fanoutOrigin';
-import { forgetGoalWorkerSession, noteGoalWorkerSpawn } from '../../deck/goalWorkerSessions';
 import {
   removeSessionPromptSchedulesForPty,
 } from '../../pty/sessionPromptScheduleStore';
@@ -134,6 +134,8 @@ type PtyCreateOptions = {
   fanoutOrigin?: FanoutOrigin;
   /** Role binding's wmux MCP tool level (main/agents/toolSurfaceLaunch). */
   wmuxTools?: unknown;
+  /** A bot worker's single-use secret grant (main/factory/secretGrants). */
+  secretGrant?: string;
 };
 
 
@@ -414,7 +416,13 @@ export function registerPTYHandlers(
       // create and before the PTY (and the agent) exists. A failed stamp fails
       // the create; the renderer rolls the workspace back.
       stampFanoutTaskPane(options);
-      options = withLaunchSessionPin(withDelegateSpawnSettings(withWmuxTools(await withAccountQuota(options))));
+      // A bot's fan-out worker launches with the merge-lane guard or not at
+      // all (botWorkerMergeGuard.ts); a throw fails the create.
+      const botWorker = botWorkerForCreate(options);
+      // A bot worker's named secrets, from its single-use grant: they go to
+      // the daemon apart from `env` (DaemonCreateSessionParams.secretEnv).
+      const secretEnv = secretEnvForCreate(options, botWorker);
+      options = withLaunchSessionPin(withBotWorkerMergeGuard(withWmuxTools(await withAccountQuota(options)), botWorker));
 
       // X8 exec-style unit: a supervised wmux.json leaf runs its command as the
       // pane's root process under a daemon-chosen wrapper shell (the daemon
@@ -454,6 +462,8 @@ export function registerPTYHandlers(
       const crypto = require('crypto');
       const sessionId = `daemon-${crypto.randomUUID().slice(0, 8)}`;
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
+      // Recorded before the session exists, so a restart always knows it.
+      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId);
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -569,7 +579,6 @@ export function registerPTYHandlers(
         undoLocal: () => {
           daemonClient.disconnectSessionPipe(sessionId).catch(() => undefined);
           forgetPtyShell(sessionId);
-          forgetGoalWorkerSession(sessionId);
         },
       }, async () => {
         result = await daemonClient.rpc('daemon.createSession', {
@@ -581,6 +590,7 @@ export function registerPTYHandlers(
           cols: options?.cols || 80,
           rows: options?.rows || 24,
           env: resolvedEnv,
+          ...(secretEnv ? { secretEnv } : {}),
           ...(execCommand !== undefined ? { exec: { command: execCommand } } : {}),
           ...(supervisionPolicy !== undefined ? { supervision: supervisionPolicy } : {}),
         }, isWslShell(shell) ? { timeoutMs: WSL_RPC_TIMEOUT_MS } : undefined);
@@ -590,11 +600,6 @@ export function registerPTYHandlers(
 
         // Attach to the session (makes daemon start the SessionPipe server)
         await daemonClient.rpc('daemon.attachSession', { id: sessionId });
-
-        // Under a Moa goal, Moa may type only into a session spawned with the goal
-        // worker profile. Recorded from the env main just handed the daemon and
-        // the launch line it will type, never from what the pane reports.
-        noteGoalWorkerSpawn(sessionId, { env: resolvedEnv, initialCommand: options?.initialCommand, fanoutTaskOf: options?.fanoutTaskOf });
 
         // Daemon sessions have no PTYInstance in this process, so the shell would
         // otherwise be unknowable to main — record it for the clipboard handler's
@@ -670,7 +675,15 @@ export function registerPTYHandlers(
       // create and before the PTY (and the agent) exists. A failed stamp fails
       // the create; the renderer rolls the workspace back.
       stampFanoutTaskPane(options);
-      options = withLaunchSessionPin(withDelegateSpawnSettings(withWmuxTools(await withAccountQuota(options))));
+      // A bot's fan-out worker launches with the merge-lane guard or not at
+      // all (botWorkerMergeGuard.ts); a throw fails the create.
+      const botWorker = botWorkerForCreate(options);
+      // Secrets reach a worker only through the daemon's spawn-only field.
+      if (options?.secretGrant !== undefined) {
+        revokeSecretGrant(typeof options.secretGrant === 'string' ? options.secretGrant : null);
+        throw new Error('PTY_CREATE: a worker with secrets needs the wmux daemon');
+      }
+      options = withLaunchSessionPin(withBotWorkerMergeGuard(withWmuxTools(await withAccountQuota(options)), botWorker));
 
       // X8 — supervision lives inside the daemon (decision ②). In local mode it
       // can't be honored, but a silent drop would be a trust violation: the user
@@ -712,6 +725,14 @@ export function registerPTYHandlers(
       const wslArgs = wslDistroArgs(shell, getDefaultWslDistro());
       const instance = await ptyManager.createAsync({ shell, ...(wslArgs ? { shellArgs: wslArgs } : {}), cols, rows, workspaceId, surfaceId, env, cwd: effectiveCwd, spawnKind });
       logCwdResolution(instance.id, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
+      if (botWorker) {
+        try {
+          noteBotWorkerSession(instance.id, botWorker.workspaceId);
+        } catch (err) {
+          ptyManager.dispose(instance.id);
+          throw err;
+        }
+      }
       ptyBridge.setupDataForwarding(instance.id);
       const actualCwd = instance.cwd || effectiveCwd || homedir();
       updateCwd(instance.id, actualCwd);
@@ -827,6 +848,24 @@ export function registerPTYHandlers(
     };
     ipcMain.on(IPC.PTY_WRITE, onPtyWrite);
   }
+
+  // pty:write-launch — a whole launch line (a resume) typed into a pane, with
+  // Enter when `submit`. In a bot worker's session the line carries the merge
+  // guard or nothing is typed (botWorkerMergeGuard.ts); everywhere else it is
+  // written as given.
+  ipcMain.removeHandler(IPC.PTY_WRITE_LAUNCH);
+  ipcMain.handle(IPC.PTY_WRITE_LAUNCH, wrapHandler(IPC.PTY_WRITE_LAUNCH, async (_event: Electron.IpcMainInvokeEvent, id: unknown, text: unknown, submit: unknown) => {
+    if (typeof id !== 'string' || typeof text !== 'string' || text.length > PTY_WRITE_BACKSTOP) {
+      throw new Error('PTY_WRITE_LAUNCH: an id and a line are required');
+    }
+    const line = sanitizePtyText(guardSessionLaunch(id, text)) + (submit === true ? '\r' : '');
+    if (useDaemon && daemonClient) {
+      if (!daemonClient.writeToSession(id, line)) throw new Error('PTY_WRITE_LAUNCH: the session is not live');
+    } else {
+      if (!ptyManager.get(id)) throw new Error('PTY_WRITE_LAUNCH: no such session');
+      ptyManager.write(id, line);
+    }
+  }));
 
   // Per-session scheduled prompts. Unlike Command Deck schedules, these
   // target one immutable daemon PTY. Local fallback mode intentionally refuses
@@ -1001,6 +1040,7 @@ export function registerPTYHandlers(
       await daemonClient.disconnectSessionPipe(id);
       sessionDecoders.delete(id);
       forgetPtyShell(id);
+      forgetBotWorkerSession(id);
       // Drop the data forwarding listener for this session so a future
       // create or reconnect doesn't pile new listeners on top of dead ones.
       clearSessionDataListener(id);
@@ -1014,6 +1054,7 @@ export function registerPTYHandlers(
   } else {
     ipcMain.handle(IPC.PTY_DISPOSE, wrapHandler(IPC.PTY_DISPOSE, async (_event: Electron.IpcMainInvokeEvent, id: string) => {
       ptyManager.dispose(id);
+      forgetBotWorkerSession(id);
       await pruneSessionSchedules(id);
     }));
   }
@@ -1490,7 +1531,6 @@ export function registerPTYHandlers(
       // explicit close would otherwise leave its entry behind for the life of
       // the process (and a recycled id would inherit the dead pane's shell).
       forgetPtyShell(payload.sessionId);
-      forgetGoalWorkerSession(payload.sessionId);
     };
     daemonClient.on('session:died', onDaemonSessionDied);
   }
@@ -1525,8 +1565,6 @@ export function registerPTYHandlers(
     | null = null;
   if (useDaemon && daemonClient) {
     onDaemonSessionRestarted = (payload) => {
-      // A restarted session is a fresh process: no longer the goal worker spawn.
-      forgetGoalWorkerSession(payload.sessionId);
       // P1-3 ordering rule: the old PTY's trailing output must precede the
       // restart marker (the renderer re-attaches on it).
       dataBatcher.finishSession(payload.sessionId);
@@ -1576,6 +1614,7 @@ export function registerPTYHandlers(
     sessionPromptScheduler.stop();
     ipcMain.removeHandler(IPC.PTY_CREATE);
     ipcMain.removeAllListeners(IPC.PTY_WRITE);
+    ipcMain.removeHandler(IPC.PTY_WRITE_LAUNCH);
     ipcMain.removeHandler(IPC.PTY_RESIZE);
     ipcMain.removeAllListeners(IPC.PTY_SET_VIEWER_VISIBILITY);
     ipcMain.removeHandler(IPC.PTY_DISPOSE);

@@ -14,9 +14,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { teardownWorkspaceDeckState, surfaceStrandedWork } from '../deckWorkspaceTeardown';
 import { setWorkspaceMode, loadDeckAutonomy, getDeckAutonomyPath } from '../deckAutonomyStore';
-import * as deckLoopStateStore from '../deckLoopStateStore';
-import { startLoop, loadWorkspaceLoopState, getDeckLoopStatePath } from '../deckLoopStateStore';
-import { saveDeckSchedules, loadDeckSchedules, getDeckSchedulesPath, mutateDeckSchedules } from '../deckScheduleStore';
 import {
   beginOrContinueDeckWork,
   recordDeckWorkA2aTask,
@@ -29,12 +26,8 @@ import {
   type ActiveDeckWork,
 } from '../deckWorkStore';
 import { raiseDecision, loadWorkspaceDecision, getDeckDecisionPath } from '../deckDecisionStore';
-import {
-  saveCommanderSession,
-  loadCommanderSession,
-  getCommanderSessionPath,
-} from '../commanderSessionStore';
-import { setHqWorkspaceId } from '../deckHqStore';
+import * as deckDecisionStore from '../deckDecisionStore';
+
 
 let dir: string;
 
@@ -48,78 +41,16 @@ afterEach(() => {
 
 describe('deckWorkspaceTeardown — teardownWorkspaceDeckState', () => {
   it('tears down all Deck state for target workspace, leaves other workspace untouched', async () => {
-    // 1. Autonomy
     await setWorkspaceMode('ws-x', 'danger', dir);
     await setWorkspaceMode('ws-y', 'assist', dir);
-
-    // 2. Schedule
-    await saveDeckSchedules(
-      [
-        {
-          id: 'sched-loop-x',
-          workspaceId: 'ws-x',
-          prompt: 'loop prompt x',
-          nextRunAt: Date.now() + 10000,
-          enabled: true,
-          createdAt: Date.now(),
-        },
-        {
-          id: 'sched-extra-x',
-          workspaceId: 'ws-x',
-          prompt: 'extra prompt x',
-          nextRunAt: Date.now() + 20000,
-          enabled: true,
-          createdAt: Date.now(),
-        },
-        {
-          id: 'sched-y',
-          workspaceId: 'ws-y',
-          prompt: 'prompt y',
-          nextRunAt: Date.now() + 30000,
-          enabled: true,
-          createdAt: Date.now(),
-        },
-      ],
-      dir,
-    );
-
-    // 3. Loop
-    await startLoop(
-      'ws-x',
-      {
-        objective: 'loop objective x',
-        taskTexts: ['task 1'],
-        tier: 'continue',
-        iterations: 5,
-        scheduleId: 'sched-loop-x',
-      },
-      dir,
-    );
-    await startLoop(
-      'ws-y',
-      {
-        objective: 'loop objective y',
-        taskTexts: ['task 2'],
-        tier: 'continue',
-        iterations: 5,
-      },
-      dir,
-    );
-
-    // 4. Work
     beginOrContinueDeckWork('ws-x', 'request x', dir);
     recordDeckWorkA2aTask('ws-x', { taskId: 'task-1', to: 'worker', state: 'working', ts: Date.now() }, dir);
     beginOrContinueDeckWork('ws-y', 'request y', dir);
-
-    // 5. Decision
     await raiseDecision('ws-x', { question: 'question x?' }, dir);
     await raiseDecision('ws-y', { question: 'question y?' }, dir);
-
-    // 6. Commander sessions
-    await saveCommanderSession('ws-x', 'sess-claude-x', dir);
-    await saveCommanderSession('ws-x::claude-pty', 'sess-pty-x', dir);
-    await saveCommanderSession('ws-y', 'sess-y', dir);
-    await saveCommanderSession('ws-y::hermes', 'sess-hermes-y', dir);
+    // A retired brain store an earlier version wrote: left on disk, unread.
+    const loopFile = path.join(dir, 'deck-loop-state.json');
+    fs.writeFileSync(loopFile, JSON.stringify({ 'ws-x': { objective: 'old loop' } }));
 
     const strandedReports: ActiveDeckWork[] = [];
     const logLines: string[] = [];
@@ -130,144 +61,81 @@ describe('deckWorkspaceTeardown — teardownWorkspaceDeckState', () => {
       log: (line) => logLines.push(line),
     });
 
-    // Report asserts
     expect(report.workspaceId).toBe('ws-x');
-    expect(report.scheduleDeleted).toBe(true);
-    expect(report.scheduleIds).toContain('sched-loop-x');
-    expect(report.scheduleIds).toContain('sched-extra-x');
-    expect(report.loopCleared).toBe(true);
     expect(report.workCleared).toBe(true);
-    expect(report.strandedWork).not.toBeNull();
     expect(report.strandedWork?.objective).toBe('request x');
     expect(report.autonomyDeleted).toBe(true);
     expect(report.decisionCleared).toBe(true);
-    expect(report.commanderSessionsCleared).toContain('ws-x');
-    expect(report.commanderSessionsCleared).toContain('ws-x::claude-pty');
-
-    // onStrandedWork received the removed work
     expect(strandedReports).toHaveLength(1);
     expect(strandedReports[0].id).toBe(report.strandedWork?.id);
 
-    // Log lines assert: exactly one line per store (6 stores)
-    expect(logLines).toHaveLength(6);
-    expect(logLines.some((l) => l.startsWith('[schedule]'))).toBe(true);
-    expect(logLines.some((l) => l.startsWith('[loop]'))).toBe(true);
+    // Exactly one log line per store (3 stores)
+    expect(logLines).toHaveLength(3);
     expect(logLines.some((l) => l.startsWith('[work]'))).toBe(true);
     expect(logLines.some((l) => l.startsWith('[autonomy]'))).toBe(true);
     expect(logLines.some((l) => l.startsWith('[decision]'))).toBe(true);
-    expect(logLines.some((l) => l.startsWith('[commander]'))).toBe(true);
 
-    // Verify all 6 stores via their getters
-    expect(loadWorkspaceLoopState('ws-x', dir)).toBeNull();
     expect(loadActiveDeckWork('ws-x', dir)).toBeNull();
     expect(loadDeckAutonomy(dir)['ws-x']).toBeUndefined();
     expect(loadWorkspaceDecision('ws-x', dir)).toBeNull();
-    expect(loadCommanderSession('ws-x', dir)).toBeNull();
-    expect(loadCommanderSession('ws-x::claude-pty', dir)).toBeNull();
-    const schedulesAfter = loadDeckSchedules(dir);
-    expect(schedulesAfter.some((s) => s.workspaceId === 'ws-x')).toBe(false);
-
-    // Verify ws-y is untouched in all stores
-    expect(loadWorkspaceLoopState('ws-y', dir)?.objective).toBe('loop objective y');
     expect(loadActiveDeckWork('ws-y', dir)?.objective).toBe('request y');
     expect(loadDeckAutonomy(dir)['ws-y']?.mode).toBe('assist');
     expect(loadWorkspaceDecision('ws-y', dir)?.question).toBe('question y?');
-    expect(loadCommanderSession('ws-y', dir)?.sessionId).toBe('sess-y');
-    expect(loadCommanderSession('ws-y::hermes', dir)?.sessionId).toBe('sess-hermes-y');
-    expect(schedulesAfter.some((s) => s.workspaceId === 'ws-y')).toBe(true);
 
-    // Direct JSON file inspections: ws-x has no key in any of the six files
     const autonomyJson = JSON.parse(fs.readFileSync(getDeckAutonomyPath(dir), 'utf8'));
     expect(autonomyJson['ws-x']).toBeUndefined();
     expect(autonomyJson['ws-y']).toBeDefined();
-
-    const loopJson = JSON.parse(fs.readFileSync(getDeckLoopStatePath(dir), 'utf8'));
-    expect(loopJson['ws-x']).toBeUndefined();
-    expect(loopJson['ws-y']).toBeDefined();
-
-    const schedulesJson = JSON.parse(fs.readFileSync(getDeckSchedulesPath(dir), 'utf8'));
-    expect(schedulesJson.find((s: { workspaceId?: string }) => s.workspaceId === 'ws-x')).toBeUndefined();
-    expect(schedulesJson.find((s: { workspaceId?: string }) => s.workspaceId === 'ws-y')).toBeDefined();
-
     const workJson = JSON.parse(fs.readFileSync(getDeckWorkPath(dir), 'utf8'));
     expect(workJson.active['ws-x']).toBeUndefined();
     expect(workJson.active['ws-y']).toBeDefined();
-
     const decisionsJson = JSON.parse(fs.readFileSync(getDeckDecisionPath(dir), 'utf8'));
     expect(decisionsJson['ws-x']).toBeUndefined();
     expect(decisionsJson['ws-y']).toBeDefined();
-
-    const commanderJson = JSON.parse(fs.readFileSync(getCommanderSessionPath(dir), 'utf8'));
-    expect(commanderJson.sessions['ws-x']).toBeUndefined();
-    expect(commanderJson.sessions['ws-x::claude-pty']).toBeUndefined();
-    expect(commanderJson.sessions['ws-y']).toBeDefined();
-    expect(commanderJson.sessions['ws-y::hermes']).toBeDefined();
+    expect(JSON.parse(fs.readFileSync(loopFile, 'utf8'))).toHaveProperty('ws-x');
 
     // Second call is a no-op without error (idempotent)
     const logLines2: string[] = [];
-    const report2 = await teardownWorkspaceDeckState('ws-x', {
-      dir,
-      log: (line) => logLines2.push(line),
-    });
-    expect(report2.workspaceId).toBe('ws-x');
-    expect(report2.scheduleDeleted).toBe(false);
-    expect(report2.loopCleared).toBe(false);
-    expect(report2.workCleared).toBe(false);
-    expect(report2.autonomyDeleted).toBe(false);
-    expect(report2.decisionCleared).toBe(false);
-    expect(report2.commanderSessionsCleared).toEqual([]);
-    expect(logLines2).toHaveLength(6);
-
-    // ws-y is still intact after second call
-    expect(loadWorkspaceLoopState('ws-y', dir)?.objective).toBe('loop objective y');
+    const report2 = await teardownWorkspaceDeckState('ws-x', { dir, log: (line) => logLines2.push(line) });
+    expect(report2).toMatchObject({ workspaceId: 'ws-x', workCleared: false, autonomyDeleted: false, decisionCleared: false });
+    expect(logLines2).toHaveLength(3);
     expect(loadActiveDeckWork('ws-y', dir)?.objective).toBe('request y');
   });
 
   it('refuses an empty or non-string workspace id and returns a report with nothing done', async () => {
+    await setWorkspaceMode('ws-keep', 'danger', dir);
+    const nothing = { workCleared: false, autonomyDeleted: false, decisionCleared: false };
     const r1 = await teardownWorkspaceDeckState('', { dir });
-    expect(r1.workspaceId).toBe('');
-    expect(r1.scheduleDeleted).toBe(false);
-    expect(r1.loopCleared).toBe(false);
-    expect(r1.workCleared).toBe(false);
-
-    const r2 = await teardownWorkspaceDeckState('   ', { dir });
-    expect(r2.scheduleDeleted).toBe(false);
-
-    const r3 = await teardownWorkspaceDeckState(null as unknown as string, { dir });
-    expect(r3.scheduleDeleted).toBe(false);
-
-    const r4 = await teardownWorkspaceDeckState(undefined as unknown as string, { dir });
-    expect(r4.scheduleDeleted).toBe(false);
+    expect(r1).toMatchObject({ workspaceId: '', ...nothing });
+    for (const bad of ['   ', null, undefined]) {
+      expect(await teardownWorkspaceDeckState(bad as unknown as string, { dir })).toMatchObject(nothing);
+    }
+    expect(loadDeckAutonomy(dir)['ws-keep']?.mode).toBe('danger');
   });
 
   it('continues remaining store steps when one store step fails (corrupt / unwritable file)', async () => {
-    // Write valid state in autonomy and decision
     await setWorkspaceMode('ws-fail', 'danger', dir);
+    beginOrContinueDeckWork('ws-fail', 'work', dir);
     await raiseDecision('ws-fail', { question: 'will it survive?' }, dir);
 
-    // Mock loop clear failure (e.g. unwritable / locked file)
-    vi.spyOn(deckLoopStateStore, 'clearLoop').mockRejectedValueOnce(
+    // Mock the decision clear failing (e.g. unwritable / locked file)
+    vi.spyOn(deckDecisionStore, 'clearWorkspaceDecisions').mockRejectedValueOnce(
       new Error('EACCES: permission denied, unwritable file'),
     );
 
     const logLines: string[] = [];
-    const report = await teardownWorkspaceDeckState('ws-fail', {
-      dir,
-      log: (line) => logLines.push(line),
-    });
+    const report = await teardownWorkspaceDeckState('ws-fail', { dir, log: (line) => logLines.push(line) });
 
-    // Loop store failed, but autonomy and decision succeeded!
-    expect(report.loopCleared).toBe(false);
+    // The decision step failed, but work and autonomy succeeded
+    expect(report.decisionCleared).toBe(false);
+    expect(report.workCleared).toBe(true);
     expect(report.autonomyDeleted).toBe(true);
-    expect(report.decisionCleared).toBe(true);
     expect(loadDeckAutonomy(dir)['ws-fail']).toBeUndefined();
-    expect(loadWorkspaceDecision('ws-fail', dir)).toBeNull();
-
-    // Exactly 6 log lines recorded, with loop logging failure
-    expect(logLines).toHaveLength(6);
-    expect(logLines.some((l) => l.startsWith('[loop]') && l.includes('failed'))).toBe(true);
+    expect(loadActiveDeckWork('ws-fail', dir)).toBeNull();
+    expect(logLines).toHaveLength(3);
+    expect(logLines.some((l) => l.startsWith('[decision]') && l.includes('failed'))).toBe(true);
     expect(logLines.some((l) => l.startsWith('[autonomy]') && l.includes('deleted'))).toBe(true);
   });
+
 });
 
 describe('surfaceStrandedWork shared function', () => {
@@ -390,51 +258,30 @@ describe('deckWorkspaceTeardown — archive before clearing (workspace removal)'
 });
 
 describe('deckWorkspaceTeardown — concurrent writers', () => {
-  it('a teardown racing setters for another workspace drops neither side', async () => {
+  it('a teardown racing a setter for another workspace drops neither side', async () => {
     await setWorkspaceMode('ws-a', 'assist', dir);
     await setWorkspaceMode('ws-b', 'danger', dir);
-    await saveCommanderSession('ws-a', 'sess-a', dir);
-    const sched = (id: string, workspaceId: string) => ({
-      id, workspaceId, prompt: 'p', nextRunAt: Date.now() + 10_000, enabled: true, createdAt: Date.now(),
-    });
-    await saveDeckSchedules([sched('s-a', 'ws-a')], dir);
 
     // Unserialized, each writer read the same snapshot and the later write won:
-    // the teardown would resurrect ws-b's old danger mode, or drop s-b / sess-b.
+    // the teardown would resurrect ws-b's old danger mode.
     await Promise.all([
       teardownWorkspaceDeckState('ws-a', { dir, log: () => undefined }),
       setWorkspaceMode('ws-b', 'off', dir),
-      mutateDeckSchedules((list) => [...list, sched('s-b', 'ws-b')], dir),
-      saveCommanderSession('ws-b', 'sess-b', dir),
     ]);
 
     const autonomy = loadDeckAutonomy(dir);
     expect(autonomy['ws-a']).toBeUndefined();
     expect(autonomy['ws-b']?.mode).toBe('off');
-    expect(loadDeckSchedules(dir).map((s) => s.id)).toEqual(['s-b']);
-    expect(loadCommanderSession('ws-a', dir)).toBeNull();
-    expect(loadCommanderSession('ws-b', dir)?.sessionId).toBe('sess-b');
   });
 });
 
-describe('deckWorkspaceTeardown — the HQ workspace', () => {
-  it('refuses to tear down the HQ (purge path) and still tears down others', async () => {
-    await setHqWorkspaceId('ws-hq', dir);
-    for (const ws of ['ws-hq', 'ws-a']) {
-      await setWorkspaceMode(ws, 'danger', dir);
-      beginOrContinueDeckWork(ws, `${ws} work`, dir);
-      await raiseDecision(ws, { question: 'q', options: [], context: '' }, dir);
-    }
-    const lines: string[] = [];
-
-    const hq = await teardownWorkspaceDeckState('ws-hq', { dir, log: (l) => lines.push(l) });
-    expect(hq).toMatchObject({ workspaceId: 'ws-hq', workCleared: false, autonomyDeleted: false, decisionCleared: false });
-    expect(lines).toEqual(['refused teardown of ws-hq: it is the HQ workspace']);
-    expect(loadDeckAutonomy(dir)['ws-hq']?.mode).toBe('danger');
-    expect(loadActiveDeckWork('ws-hq', dir)).not.toBeNull();
-    expect(loadWorkspaceDecision('ws-hq', dir)).not.toBeNull();
-
-    const other = await teardownWorkspaceDeckState('ws-a', { dir, log: () => undefined });
-    expect(other).toMatchObject({ autonomyDeleted: true, decisionCleared: true, workCleared: true });
+describe('deckWorkspaceTeardown — an earlier version\'s HQ workspace', () => {
+  it('is torn down like any other; deck-hq.json is not read', async () => {
+    fs.writeFileSync(path.join(dir, 'deck-hq.json'), JSON.stringify({ hqWorkspaceId: 'ws-hq' }));
+    await setWorkspaceMode('ws-hq', 'danger', dir);
+    beginOrContinueDeckWork('ws-hq', 'hq work', dir);
+    const report = await teardownWorkspaceDeckState('ws-hq', { dir, log: () => undefined });
+    expect(report).toMatchObject({ workspaceId: 'ws-hq', workCleared: true, autonomyDeleted: true });
+    expect(fs.readFileSync(path.join(dir, 'deck-hq.json'), 'utf8')).toContain('ws-hq');
   });
 });

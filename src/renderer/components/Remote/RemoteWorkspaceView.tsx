@@ -11,7 +11,7 @@ import Button from '../ui/Button';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 import { FOCUS_RING } from '../focusRing';
 import { IconGrid } from '../icons';
-import { listedWorkspaces, moaHqId } from '../Moa/moaHqGuard';
+import { listedWorkspaces } from '../Moa/moaHqGuard';
 import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjections';
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { focusNotificationTarget } from '../../hooks/useNotificationListener';
@@ -60,7 +60,7 @@ function OpenAsTabDialog({ session, hostLabel, onPick, onClose }: {
   onClose: () => void;
 }) {
   const t = useT();
-  const workspaces = useStore(useShallow((s) => listedWorkspaces(selectWorkspaceIdName(s), moaHqId(s))));
+  const workspaces = useStore(useShallow((s) => listedWorkspaces(selectWorkspaceIdName(s))));
   return (
     <Dialog onClose={onClose} closeOnBackdrop width={380} zIndexClassName="z-[var(--z-modal)]">
       <DialogHeader

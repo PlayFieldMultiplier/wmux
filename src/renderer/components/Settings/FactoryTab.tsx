@@ -1,0 +1,769 @@
+// ─── Settings › Factory ──────────────────────────────────────────────────────
+//
+// The agent factory's few switches (factory/settings.json, owned by the bot
+// runtime), read and written through the factory settings port: on/off, the
+// HQ workspace, trusted PR authors, the morning report time, whether the
+// Verifier runs on the owner's own PRs, the engine new bots run on, the
+// factory-wide cap on bots in a turn and the merge lane's auto-merge switch
+// and daily cap — then each workspace's bots (named as the bot port lists
+// them, each with its avatar and template), with a
+// small profile editor when the bot port can update them (name, job,
+// picture, switch and budget; the repository is shown, not changed), and
+// "Add bot" (workspace and name; optionally a picture, a template chip that
+// prefills the job, the job and a repository) when the bot port can create
+// them. A workspace works on one repository: once a bot there has one, a new
+// bot takes it; before that, main suggests the workspace's own folder, and
+// the owner picks a folder only to change it or when there is no
+// suggestion. A picture is
+// picked in main's image dialog and comes back as a preview; it is saved
+// with the new bot, or on the editor's Save. Without the
+// factory in this build the rows are shown switched off, and one note says
+// so. Turning the factory on or off re-reads the room dock's gate.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useStore } from '../../stores';
+import { useT } from '../../hooks/useT';
+import { isMoaHqWorkspace } from '../../stores/slices/moaSlice';
+import { BOT_JOB_MAX, BOT_NAME_MAX, TEMPLATE_LEGACY_ROLE, normalizeBotJob, normalizeBotName, type BotRole, type BotTemplate } from '../../../shared/bot';
+import type { FactoryBotAvatarPickResult, FactoryBotRepoSuggestion } from '../../../shared/botCreate';
+import { FACTORY_LANE_DAILY_CAP_MAX } from '../../../shared/factorySettings';
+import { refreshRoomStatus } from '../../hooks/useRoomSync';
+import {
+  getFactoryBotPort,
+  getFactorySettingsPort,
+  type BotProfilePatch,
+  type FactoryBotPort,
+  type FactoryBotRow,
+  type FactorySettingsPort,
+  type FactorySettingsView,
+} from '../Room/factoryPorts';
+import { useFactoryBots } from '../Room/useFactoryBots';
+import { PresenceDot, botPresence } from '../Room/BotChips';
+import BotAvatar from '../Room/BotAvatar';
+import { botKindLabel, templateLabel } from '../Room/roomFormat';
+import { SettingsSection, SettingRow, SettingNote } from './SettingsLayout';
+import { ApprovalRules } from './ApprovalRules';
+import Button from '../ui/Button';
+import Switch from '../ui/Switch';
+import Select from '../ui/Select';
+import Input from '../ui/Input';
+import { FOCUS_RING } from '../focusRing';
+import { BotSecretsSection, PhoneBotSelect } from './BotSecretsSection';
+
+type T = (key: string, vars?: Record<string, string | number>) => string;
+
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
+const CONCURRENCY = [1, 2, 3, 4, 5];
+/** shared/factorySettings.ts FACTORY_MAX_AGENTS_MIN..MAX. */
+const MAX_AGENTS = Array.from({ length: 15 }, (_, i) => i + 2);
+
+/** A comma / space separated list of logins → the list. */
+export function parseAuthors(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/).map((s) => s.trim().replace(/^@/, '')).filter(Boolean))];
+}
+
+/** The daily cap typed in the field → a whole number in range, or null. */
+export function parseDailyCap(text: string): number | null {
+  const n = Number(text.trim());
+  if (!text.trim() || !Number.isInteger(n) || n < 0) return null;
+  return Math.min(n, FACTORY_LANE_DAILY_CAP_MAX);
+}
+
+/** A failed pick as the line the form shows (cancelled: none). */
+export function avatarPickError(r: FactoryBotAvatarPickResult, t: T): string | null {
+  if (r.ok || r.code === 'cancelled') return null;
+  return t(r.code === 'too_large' ? 'settings.factory.pictureTooLarge' : 'settings.factory.pictureUnreadable');
+}
+
+/** Choose / preview / remove a picture. `avatar` is the picture shown now
+ *  (a preview or the saved one). */
+function PicturePicker({ bot, avatar, port, t, busy, onPicked, onRemove, onError, chooseLabel, removeLabel }: {
+  bot: { id: string; name: string; role: BotRole };
+  avatar: string | undefined;
+  port: FactoryBotPort;
+  t: T;
+  busy: boolean;
+  onPicked: (avatar: string) => void;
+  onRemove: () => void;
+  onError: (message: string | null) => void;
+  chooseLabel: string;
+  removeLabel: string;
+}) {
+  const pick = async () => {
+    if (!port.pickAvatar) return;
+    try {
+      const r = await port.pickAvatar();
+      if (r.ok) { onPicked(r.avatar); onError(null); }
+      else { const msg = avatarPickError(r, t); if (msg) onError(msg); }
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <div className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+      <span className="w-[120px] shrink-0">{t('settings.factory.picture')}</span>
+      <span data-testid="factory-picture-preview" className="inline-flex"><BotAvatar bot={{ ...bot, avatar }} size={32} t={t} /></span>
+      <Button size="sm" variant="secondary" data-testid="factory-picture-choose" onClick={() => void pick()} disabled={busy}>
+        {chooseLabel}
+      </Button>
+      {avatar && (
+        <Button size="sm" variant="ghost" data-testid="factory-picture-remove" onClick={onRemove} disabled={busy}>
+          {removeLabel}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** `github.com/acme/app` → `acme/app`; a repo on another host keeps it. */
+export function repoKeyLabel(repoKey: string): string {
+  return repoKey.startsWith('github.com/') ? repoKey.slice('github.com/'.length) : repoKey;
+}
+
+/** "acme/app · ~/code/app": the repository, then its folder (mono). */
+function RepoLine({ repoKey, folder, testId }: { repoKey: string; folder: string; testId: string }) {
+  return (
+    <span data-testid={testId} title={`${repoKey} · ${folder}`} className="flex min-w-0 items-baseline gap-1.5 text-[13px] text-[var(--text-main)]">
+      <span className="shrink-0">{repoKeyLabel(repoKey)}</span>
+      <span aria-hidden="true" className="text-[var(--text-muted)]">·</span>
+      <span className="min-w-0 truncate font-mono text-[11px] text-[var(--text-sub)]">{folder}</span>
+    </span>
+  );
+}
+
+function BotProfileEditor({ row, port, t, onDone }: { row: FactoryBotRow; port: FactoryBotPort; t: T; onDone: () => void }) {
+  const [name, setName] = useState(row.bot.name);
+  const [job, setJob] = useState(row.bot.job ?? '');
+  const [enabled, setEnabled] = useState(row.bot.enabled);
+  // Empty: no hourly cap.
+  const [perHour, setPerHour] = useState(row.bot.budget.maxTurnsPerHour === undefined ? '' : String(row.bot.budget.maxTurnsPerHour));
+  const [perDay, setPerDay] = useState(String(row.bot.budget.maxTurnsPerDay));
+  const [workers, setWorkers] = useState(String(row.bot.budget.maxConcurrentWorkers));
+  // undefined = unchanged, a string = the new picture, null = remove it.
+  const [picture, setPicture] = useState<string | null | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const shownAvatar = picture === undefined ? row.bot.avatar : picture ?? undefined;
+
+  const save = async () => {
+    if (!port.update) return;
+    const n = (v: string) => (v.trim() !== '' && Number.isInteger(Number(v)) && Number(v) >= 0 ? Number(v) : undefined);
+    // An hourly cap is 1 or more; empty (or 0) removes it.
+    const hour = n(perHour);
+    const nextHour = hour === undefined || hour === 0 ? null : hour;
+    const nextJob = job.trim() === '' ? null : job.trim();
+    const patch: BotProfilePatch = {
+      ...(name.trim() && name.trim() !== row.bot.name ? { name: name.trim() } : {}),
+      ...(nextJob !== (row.bot.job ?? null) ? { job: nextJob } : {}),
+      ...(enabled !== row.bot.enabled ? { enabled } : {}),
+      budget: {
+        ...(nextHour !== (row.bot.budget.maxTurnsPerHour ?? null) ? { maxTurnsPerHour: nextHour } : {}),
+        ...(n(perDay) !== undefined ? { maxTurnsPerDay: n(perDay) } : {}),
+        ...(n(workers) !== undefined ? { maxConcurrentWorkers: n(workers) } : {}),
+      },
+    };
+    setBusy(true);
+    setError(null);
+    try {
+      // The profile first: a refused profile saves no picture either.
+      const r = await port.update(row.bot.id, patch);
+      if (!r.ok) { setError(r.message ?? t('settings.factory.saveFailed')); return; }
+      if (picture !== undefined && port.setAvatar) {
+        const saved = await port.setAvatar(row.bot.id, picture);
+        if (!saved.ok) { setError(saved.message || t('settings.factory.saveFailed')); return; }
+        setPicture(undefined);
+      }
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div data-testid="factory-bot-editor" className="flex flex-col gap-2 px-3 py-2">
+      <label className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0">{t('settings.factory.botName')}</span>
+        <Input value={name} maxLength={BOT_NAME_MAX} onChange={(e) => setName(e.target.value)} className="flex-1 text-[13px]" />
+      </label>
+      <label className="flex items-start gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0 pt-[5px]">{t('settings.factory.addBotJob')}</span>
+        <textarea
+          data-testid="factory-bot-job"
+          value={job}
+          rows={3}
+          maxLength={BOT_JOB_MAX}
+          onChange={(e) => setJob(e.target.value)}
+          onKeyDown={(e) => e.stopPropagation()}
+          className={`min-w-0 flex-1 rounded-[6px] border border-[var(--line)] focus:border-[var(--line-strong)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--text-main)] outline-none ${FOCUS_RING}`}
+        />
+      </label>
+      {port.pickAvatar && port.setAvatar && (
+        <PicturePicker
+          bot={{ id: row.bot.id, name: name.trim() || row.bot.name, role: row.bot.role }}
+          avatar={shownAvatar}
+          port={port}
+          t={t}
+          busy={busy}
+          onPicked={setPicture}
+          onRemove={() => setPicture(null)}
+          onError={setError}
+          chooseLabel={t('settings.factory.changePicture')}
+          removeLabel={t('settings.factory.removePicture')}
+        />
+      )}
+      <label className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0">{t('settings.factory.botEnabled')}</span>
+        <Switch checked={enabled} onCheckedChange={setEnabled} aria-label={t('settings.factory.botEnabled')} />
+      </label>
+      {([
+        ['settings.factory.turnsPerHour', perHour, setPerHour],
+        ['settings.factory.turnsPerDay', perDay, setPerDay],
+        ['settings.factory.workers', workers, setWorkers],
+      ] as const).map(([key, value, setter]) => (
+        <label key={key} className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+          <span className="w-[120px] shrink-0">{t(key)}</span>
+          <Input
+            type="number"
+            min={0}
+            value={value}
+            {...(key === 'settings.factory.turnsPerHour' ? { placeholder: t('settings.factory.noHourlyLimit') } : {})}
+            onChange={(e) => setter(e.target.value)}
+            className="w-[80px] text-[13px]"
+          />
+        </label>
+      ))}
+      {row.bot.repo && (
+        <div className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+          <span className="w-[120px] shrink-0">{t('settings.factory.addBotRepo')}</span>
+          <RepoLine repoKey={row.bot.repo.repoKey} folder={row.bot.repo.repoPath} testId="factory-bot-repo" />
+        </div>
+      )}
+      <div className="text-[11px] text-[var(--text-muted)]">
+        {t('settings.factory.botTriggers', { count: row.bot.triggers.length })}
+      </div>
+      {error && <SettingNote tone="danger">{error}</SettingNote>}
+      <div className="flex justify-end gap-1.5">
+        <Button size="sm" variant="ghost" onClick={onDone} disabled={busy}>{t('settings.factory.cancel')}</Button>
+        <Button size="sm" variant="primary" onClick={() => void save()} disabled={busy}>{t('settings.factory.save')}</Button>
+      </div>
+    </div>
+  );
+}
+
+/** The templates "Add bot" offers as chips, in order (Custom is the
+ *  default when none is picked). */
+export const ADDABLE_TEMPLATES: readonly BotTemplate[] = ['coordinator', 'developer', 'reviewer', 'issue', 'researcher'];
+
+/** The job text a template chip prefills (none for Custom). */
+export function templateJob(template: BotTemplate | null, t: T): string {
+  return template && template !== 'custom' ? t(`botsPage.templateJob.${template}`) : '';
+}
+
+/** The repository a workspace's listed bots already work on (the oldest
+ *  repo bot's), or null. Main holds the same rule (botCreate.ts
+ *  workspaceRepo) and enforces it. */
+export function workspaceRepoOf(rows: readonly FactoryBotRow[], workspaceId: string): { repoKey: string; repoPath: string } | null {
+  const withRepo = rows.filter((r) => r.bot.workspaceId === workspaceId && r.bot.repo).sort((a, b) => a.bot.createdAt - b.bot.createdAt);
+  return withRepo[0]?.bot.repo ?? null;
+}
+
+/** What "Add bot" shows for the repository: the workspace's (inherited, no
+ *  picker), main's suggestion (with Change…), the folder the owner picked,
+ *  or nothing yet (the picker is required). */
+export type AddBotRepoView =
+  | { kind: 'inherited'; repoKey: string; root: string; displayRoot: string }
+  | { kind: 'suggested'; repoKey: string; root: string; displayRoot: string }
+  | { kind: 'picked'; folder: string }
+  | { kind: 'none' };
+
+export function addBotRepoView(
+  rows: readonly FactoryBotRow[],
+  workspaceId: string,
+  suggestion: FactoryBotRepoSuggestion | null,
+  folder: string | null,
+): AddBotRepoView {
+  const s = suggestion?.ok ? suggestion : null;
+  const own = workspaceRepoOf(rows, workspaceId);
+  if (own) {
+    const displayRoot = s?.inherited && s.root === own.repoPath ? s.displayRoot : own.repoPath;
+    return { kind: 'inherited', repoKey: own.repoKey, root: own.repoPath, displayRoot };
+  }
+  if (s?.inherited) return { kind: 'inherited', repoKey: s.repoKey, root: s.root, displayRoot: s.displayRoot };
+  if (folder) return { kind: 'picked', folder };
+  if (s) return { kind: 'suggested', repoKey: s.repoKey, root: s.root, displayRoot: s.displayRoot };
+  return { kind: 'none' };
+}
+
+/** The folder picker: the app's own dialog, the first folder or null. */
+async function pickFolderDialog(): Promise<string | null> {
+  const api = (globalThis as { electronAPI?: { dialog?: { pickFolder?: () => Promise<string[]> } } }).electronAPI;
+  const picked = await api?.dialog?.pickFolder?.();
+  return picked && picked.length > 0 ? picked[0] : null;
+}
+
+type Workspaces = readonly { id: string; name: string }[];
+
+/** A port that lists nothing (the form was handed its rows). */
+const NO_LIST_PORT: FactoryBotPort = { available: false, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: false }) };
+
+export interface AddBotFormProps {
+  /** Called after a bot was added, and on Cancel. */
+  onDone: () => void;
+  /** The rest default to the app's own: the bot port, its bots, the store's
+   *  workspaces (the active one first picked) and the folder dialog. */
+  t?: T;
+  port?: FactoryBotPort;
+  rows?: readonly FactoryBotRow[];
+  workspaces?: Workspaces;
+  defaultWorkspaceId?: string;
+  pickFolder?: () => Promise<string | null>;
+}
+
+/** "Add bot": a workspace and a name, optionally a picture, a template
+ *  chip that prefills the job, the job itself and the repository
+ *  (addBotRepoView; optional). Main derives the repo from the folder sent
+ *  (none for an inherited one), creates the bot and wakes it once to greet
+ *  the owner. Self-contained, so any page can host it. */
+export function AddBotForm(props: AddBotFormProps): React.ReactElement {
+  const ownT = useT();
+  const t = props.t ?? ownT;
+  const port = props.port ?? getFactoryBotPort();
+  const listed = useFactoryBots(null, props.rows ? NO_LIST_PORT : port);
+  const rows = props.rows ?? listed;
+  const storeWorkspaces = useStore((s) => s.workspaces);
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const workspaces = props.workspaces ?? storeWorkspaces;
+  const wanted = props.defaultWorkspaceId ?? activeWorkspaceId;
+  const defaultWorkspaceId = workspaces.some((w) => w.id === wanted) ? wanted : workspaces[0]?.id ?? '';
+  const pickFolder = props.pickFolder ?? pickFolderDialog;
+  const onDone = props.onDone;
+  const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId);
+  const [template, setTemplate] = useState<BotTemplate | null>(null);
+  const [job, setJob] = useState('');
+  // The text the last chip put in the job field: a chip replaces the job
+  // only while the owner has not written their own.
+  const prefilled = useRef('');
+  const [folder, setFolder] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<FactoryBotRepoSuggestion | null>(null);
+  const [name, setName] = useState('');
+  const [avatar, setAvatar] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const own = workspaceRepoOf(rows, workspaceId);
+  const ownKey = own ? `${own.repoKey}\n${own.repoPath}` : '';
+  // A folder picked for one workspace is not another's.
+  useEffect(() => { setFolder(null); }, [workspaceId]);
+  // Main's suggestion for the workspace, asked again when its bots' repo or
+  // its folder changes (the folder only triggers the ask; main reads its own).
+  const shownCwd = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.metadata?.cwd ?? '');
+  useEffect(() => {
+    setSuggestion(null);
+    if (!port.suggestRepo || !workspaceId) return;
+    let live = true;
+    port.suggestRepo(workspaceId).then((s) => { if (live) setSuggestion(s); }, () => undefined);
+    return () => { live = false; };
+  }, [port, workspaceId, ownKey, shownCwd]);
+  const repoView = addBotRepoView(rows, workspaceId, suggestion, folder);
+  const repoFolder = repoView.kind === 'picked' ? repoView.folder : repoView.kind === 'suggested' ? repoView.root : undefined;
+  // A name is required; a job is optional but, when written, one the store keeps.
+  const typedName = normalizeBotName(name);
+  const typedJob = normalizeBotJob(job);
+  const jobOk = job.trim() === '' || typedJob !== undefined;
+
+  const pickTemplate = (next: BotTemplate) => {
+    const picked = template === next ? null : next;
+    setTemplate(picked);
+    if (job.trim() === '' || job === prefilled.current) {
+      const fill = templateJob(picked, t);
+      setJob(fill);
+      prefilled.current = fill;
+    }
+  };
+
+  const choose = async () => {
+    try {
+      const picked = await pickFolder();
+      if (picked) { setFolder(picked); setError(null); }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const add = async () => {
+    if (!port.create || !typedName) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await port.create({
+        workspaceId,
+        name: typedName,
+        ...(template ? { template } : {}),
+        ...(typedJob ? { job: typedJob } : {}),
+        ...(repoFolder ? { repoFolder } : {}),
+        ...(avatar ? { avatar } : {}),
+      });
+      if (r.ok) onDone();
+      else setError(r.message || t('settings.factory.addBotFailed'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div data-testid="factory-add-bot" className="flex flex-col gap-2 px-3 py-2">
+      <label className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0">{t('settings.factory.addBotWorkspace')}</span>
+        <Select
+          data-testid="factory-add-bot-workspace"
+          value={workspaceId}
+          onChange={(e) => setWorkspaceId(e.target.value)}
+        >
+          {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </Select>
+      </label>
+      <label className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0">{t('settings.factory.botName')}</span>
+        <Input
+          data-testid="factory-add-bot-name"
+          value={name}
+          maxLength={BOT_NAME_MAX}
+          placeholder={t('settings.factory.addBotNamePlaceholder')}
+          onChange={(e) => setName(e.target.value)}
+          className="flex-1 text-[13px]"
+        />
+      </label>
+      {port.pickAvatar && (
+        <PicturePicker
+          bot={{ id: `new-${workspaceId}`, name: typedName ?? '', role: TEMPLATE_LEGACY_ROLE[template ?? 'custom'] }}
+          avatar={avatar}
+          port={port}
+          t={t}
+          busy={busy}
+          onPicked={setAvatar}
+          onRemove={() => setAvatar(undefined)}
+          onError={setError}
+          chooseLabel={t('settings.factory.choosePicture')}
+          removeLabel={t('settings.factory.removePicture')}
+        />
+      )}
+      <div className="flex items-start gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0 pt-[3px]">{t('settings.factory.addBotTemplate')}</span>
+        <div role="group" aria-label={t('settings.factory.addBotTemplate')} className="flex flex-1 flex-wrap items-center gap-1">
+          {ADDABLE_TEMPLATES.map((tpl) => (
+            <button
+              key={tpl}
+              type="button"
+              data-testid="factory-add-bot-template"
+              data-template={tpl}
+              aria-pressed={template === tpl}
+              onClick={() => pickTemplate(tpl)}
+              className={`h-[24px] px-2 rounded-[var(--chip-radius)] text-[12px] ${template === tpl ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)]'} ${FOCUS_RING}`}
+            >
+              {templateLabel(tpl, t)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="flex items-start gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0 pt-[5px]">{t('settings.factory.addBotJob')}</span>
+        <textarea
+          data-testid="factory-add-bot-job"
+          value={job}
+          rows={3}
+          maxLength={BOT_JOB_MAX}
+          onChange={(e) => setJob(e.target.value)}
+          onKeyDown={(e) => e.stopPropagation()}
+          className={`min-w-0 flex-1 rounded-[6px] border border-[var(--line)] focus:border-[var(--line-strong)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--text-main)] outline-none ${FOCUS_RING}`}
+        />
+      </label>
+      <div className="pl-[128px] text-[11px] text-[var(--text-muted)]">{t('settings.factory.addBotJobHint')}</div>
+      <div className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+        <span className="w-[120px] shrink-0">{t('settings.factory.addBotRepo')}</span>
+        {(repoView.kind === 'inherited' || repoView.kind === 'suggested') && (
+          <RepoLine repoKey={repoView.repoKey} folder={repoView.displayRoot} testId="factory-add-bot-repo" />
+        )}
+        {repoView.kind !== 'inherited' && (
+          <Button size="sm" variant="secondary" data-testid="factory-add-bot-folder" onClick={() => void choose()} disabled={busy} className="shrink-0">
+            {t(repoView.kind === 'none' ? 'settings.factory.addBotChooseFolder' : 'settings.factory.addBotChangeFolder')}
+          </Button>
+        )}
+        {repoView.kind === 'picked' && <span data-testid="factory-add-bot-path" className="min-w-0 truncate font-mono text-[11px] text-[var(--text-main)]" title={repoView.folder}>{repoView.folder}</span>}
+      </div>
+      <div className="text-[11px] text-[var(--text-muted)]">
+        {t(repoView.kind === 'inherited' ? 'settings.factory.addBotRepoInherited' : 'settings.factory.addBotRepoHint')}
+      </div>
+      {error && <SettingNote tone="danger" role="alert" data-testid="factory-add-bot-error">{error}</SettingNote>}
+      <div className="flex justify-end gap-1.5">
+        <Button size="sm" variant="ghost" onClick={onDone} disabled={busy}>{t('settings.factory.cancel')}</Button>
+        <Button
+          size="sm"
+          variant="primary"
+          data-testid="factory-add-bot-submit"
+          onClick={() => void add()}
+          disabled={busy || !port.create || !workspaceId || !typedName || !jobOk}
+        >
+          {t('settings.factory.addBotSubmit')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pickFolder }: {
+  t: T;
+  port: FactoryBotPort;
+  workspaceName: (id: string) => string;
+  workspaces: Workspaces;
+  defaultWorkspaceId: string;
+  pickFolder: () => Promise<string | null>;
+}) {
+  const rows = useFactoryBots(null, port);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const groups = useMemo(() => {
+    const by = new Map<string, FactoryBotRow[]>();
+    for (const r of rows) by.set(r.bot.workspaceId, [...(by.get(r.bot.workspaceId) ?? []), r]);
+    return [...by.entries()];
+  }, [rows]);
+  if (!port.available) return <SettingNote>{t('settings.factory.botsUnavailable')}</SettingNote>;
+  const canAdd = !!port.create && workspaces.length > 0;
+  const addRow = adding && canAdd ? (
+    <AddBotForm
+      t={t}
+      port={port}
+      rows={rows}
+      workspaces={workspaces}
+      defaultWorkspaceId={defaultWorkspaceId}
+      pickFolder={pickFolder}
+      onDone={() => setAdding(false)}
+    />
+  ) : canAdd ? (
+    <div className="flex justify-end px-3 py-2">
+      <Button size="sm" variant="secondary" data-testid="factory-add-bot-open" onClick={() => { setEditing(null); setAdding(true); }}>
+        {t('settings.factory.addBot')}
+      </Button>
+    </div>
+  ) : null;
+  if (rows.length === 0) {
+    return (
+      <div className="flex flex-col">
+        <SettingNote>{t('settings.factory.noBots')}</SettingNote>
+        {addRow}
+      </div>
+    );
+  }
+  return (
+    <div data-testid="factory-bots" className="flex flex-col">
+      {groups.map(([ws, list]) => (
+        <div key={ws} className="flex flex-col">
+          <div className="px-3 pt-2 text-[11px] text-[var(--text-muted)]">{workspaceName(ws)}</div>
+          {list.map((row) => (
+            <div key={row.bot.id}>
+              <button
+                type="button"
+                data-testid="factory-bot-row"
+                data-bot-id={row.bot.id}
+                aria-expanded={editing === row.bot.id}
+                disabled={!port.update}
+                onClick={() => { setAdding(false); setEditing((cur) => (cur === row.bot.id ? null : row.bot.id)); }}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] rounded-[6px] hover:bg-[var(--hover-fill)] disabled:hover:bg-transparent ${FOCUS_RING}`}
+              >
+                <BotAvatar bot={row.bot} size={20} t={t} />
+                <PresenceDot presence={botPresence(row)} />
+                <span className="truncate text-[var(--text-main)]">{row.bot.name}</span>
+                <span className="text-[11px] text-[var(--text-muted)]">{botKindLabel(row.bot, t)}</span>
+                {!row.bot.enabled && <span className="ml-auto text-[11px] text-[var(--text-muted)]">{t('settings.factory.botOff')}</span>}
+              </button>
+              {editing === row.bot.id && <BotProfileEditor row={row} port={port} t={t} onDone={() => setEditing(null)} />}
+            </div>
+          ))}
+        </div>
+      ))}
+      {addRow}
+    </div>
+  );
+}
+
+export interface FactoryTabProps {
+  /** Tests: the ports (default: the preload's factory bridge). */
+  settingsPort?: FactorySettingsPort;
+  botPort?: FactoryBotPort;
+  /** Tests: the folder picker for "Add bot" (default: the app's dialog). */
+  pickFolder?: () => Promise<string | null>;
+}
+
+export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProps): React.ReactElement {
+  const t = useT();
+  const sPort = settingsPort ?? getFactorySettingsPort();
+  const bPort = botPort ?? getFactoryBotPort();
+  const [settings, setSettings] = useState<FactorySettingsView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [authorsDraft, setAuthorsDraft] = useState<string | null>(null);
+  const [capDraft, setCapDraft] = useState<string | null>(null);
+  const workspaces = useStore((s) => s.workspaces);
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const hqHidden = (id: string) => isMoaHqWorkspace(useStore.getState(), id);
+  const workspaceName = useCallback((id: string) => useStore.getState().workspaces.find((w) => w.id === id)?.name ?? id, []);
+  // Names for the always-allow rules' scopes.
+  const ruleBots = useFactoryBots(null, bPort);
+  const botName = useCallback((id: string) => ruleBots.find((r) => r.bot.id === id)?.bot.name ?? null, [ruleBots]);
+
+  useEffect(() => {
+    let live = true;
+    if (!sPort.available) return;
+    sPort.get().then((s) => { if (live) setSettings(s); }, () => undefined);
+    return () => { live = false; };
+  }, [sPort]);
+
+  const patch = async (p: Partial<FactorySettingsView>) => {
+    setError(null);
+    try {
+      const next = await sPort.set(p);
+      if (next) setSettings(next);
+      else setError(t('settings.factory.notStarted'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    if ('enabled' in p || 'hqWorkspaceId' in p) void refreshRoomStatus();
+  };
+
+  const off = !sPort.available || !settings;
+
+  return (
+    <div data-testid="factory-tab" className="flex flex-col">
+      {!sPort.available && (
+        <SettingsSection>
+          <SettingNote data-testid="factory-not-installed">{t('settings.factory.notInstalled')}</SettingNote>
+        </SettingsSection>
+      )}
+      <SettingsSection title={t('settings.factory.section')}>
+        <SettingRow id="factoryswitch" label={t('settings.factory.enabled')} description={t('settings.factory.enabledDesc')}>
+          <Switch checked={settings?.enabled === true} disabled={off} onCheckedChange={(v) => void patch({ enabled: v })} data-testid="factory-enabled" />
+        </SettingRow>
+        <SettingRow id="factoryhq" label={t('settings.factory.hq')} description={t('settings.factory.hqDesc')}>
+          <Select
+            disabled={off}
+            value={settings?.hqWorkspaceId ?? ''}
+            onChange={(e) => void patch({ hqWorkspaceId: e.target.value || null })}
+          >
+            <option value="">{t('settings.factory.hqNone')}</option>
+            {workspaces.filter((w) => !hqHidden(w.id) || w.id === settings?.hqWorkspaceId).map((w) => (
+              <option key={w.id} value={w.id}>{w.name}</option>
+            ))}
+          </Select>
+        </SettingRow>
+        <SettingRow id="factorytrustedauthors" label={t('settings.factory.trustedAuthors')} description={t('settings.factory.trustedAuthorsDesc')}>
+          <Input
+            disabled={off}
+            value={authorsDraft ?? (settings?.trustedAuthors ?? []).join(', ')}
+            placeholder="octocat, hubot"
+            onChange={(e) => setAuthorsDraft(e.target.value)}
+            onBlur={() => {
+              if (authorsDraft === null) return;
+              void patch({ trustedAuthors: parseAuthors(authorsDraft) });
+              setAuthorsDraft(null);
+            }}
+            className="w-[220px] text-[13px]"
+          />
+        </SettingRow>
+        <SettingRow id="factorymorning" label={t('settings.factory.morning')} description={t('settings.factory.morningDesc')} layout="stacked">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Select
+              disabled={off}
+              aria-label={t('settings.factory.morningHour')}
+              value={String(settings?.morning.hour ?? 9)}
+              onChange={(e) => settings && void patch({ morning: { ...settings.morning, hour: Number(e.target.value) } })}
+            >
+              {HOURS.map((h) => <option key={h} value={h}>{`${String(h).padStart(2, '0')}:00`}</option>)}
+            </Select>
+            {WEEKDAYS.map((d) => {
+              const on = settings?.morning.weekdays.includes(d) === true;
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  disabled={off}
+                  aria-pressed={on}
+                  data-weekday={d}
+                  onClick={() => settings && void patch({
+                    morning: { ...settings.morning, weekdays: on ? settings.morning.weekdays.filter((x) => x !== d) : [...settings.morning.weekdays, d].sort((a, b) => a - b) },
+                  })}
+                  className={`h-[26px] min-w-[34px] px-1.5 rounded-[var(--chip-radius)] text-[12px] disabled:opacity-40 ${on ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)]'} ${FOCUS_RING}`}
+                >
+                  {t(`settings.factory.weekday.${d}`)}
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
+        <SettingRow id="factoryverifierownprs" label={t('settings.factory.verifierOwnPrs')} description={t('settings.factory.verifierOwnPrsDesc')}>
+          <Switch checked={settings?.verifierOnOwnerPrs === true} disabled={off} onCheckedChange={(v) => void patch({ verifierOnOwnerPrs: v })} />
+        </SettingRow>
+        <SettingRow id="factoryengine" label={t('settings.factory.engine')} description={t('settings.factory.engineDesc')}>
+          <span data-testid="factory-engine" className="text-[13px] text-[var(--text-main)]">{t('settings.factory.engineSdk')}</span>
+        </SettingRow>
+        <SettingRow id="factoryconcurrency" label={t('settings.factory.concurrency')} description={t('settings.factory.concurrencyDesc')}>
+          <Select
+            disabled={off}
+            value={String(settings?.globalConcurrentBots ?? 2)}
+            onChange={(e) => void patch({ globalConcurrentBots: Number(e.target.value) })}
+          >
+            {CONCURRENCY.map((n) => <option key={n} value={n}>{n}</option>)}
+          </Select>
+        </SettingRow>
+        <SettingRow id="factorymaxagents" label={t('settings.factory.maxAgents')} description={t('settings.factory.maxAgentsDesc')}>
+          <Select
+            disabled={off}
+            data-testid="factory-max-agents"
+            value={String(settings?.maxConcurrentAgents ?? 6)}
+            onChange={(e) => void patch({ maxConcurrentAgents: Number(e.target.value) })}
+          >
+            {MAX_AGENTS.map((n) => <option key={n} value={n}>{n}</option>)}
+          </Select>
+        </SettingRow>
+        <SettingRow id="factorylaneautomerge" label={t('settings.factory.laneAutoMerge')} description={t('settings.factory.laneAutoMergeDesc')}>
+          <Switch checked={settings?.laneAutoMerge === true} disabled={off} onCheckedChange={(v) => void patch({ laneAutoMerge: v })} data-testid="factory-lane-auto-merge" />
+        </SettingRow>
+        <SettingRow id="factorylanedailycap" label={t('settings.factory.laneDailyCap')} description={t('settings.factory.laneDailyCapDesc', { max: FACTORY_LANE_DAILY_CAP_MAX })}>
+          <Input
+            type="number"
+            min={0}
+            max={FACTORY_LANE_DAILY_CAP_MAX}
+            data-testid="factory-lane-daily-cap"
+            aria-label={t('settings.factory.laneDailyCap')}
+            disabled={off}
+            value={capDraft ?? String(settings?.laneDailyCap ?? 5)}
+            onChange={(e) => setCapDraft(e.target.value)}
+            onBlur={() => {
+              if (capDraft === null) return;
+              const cap = parseDailyCap(capDraft);
+              if (cap !== null && cap !== settings?.laneDailyCap) void patch({ laneDailyCap: cap });
+              setCapDraft(null);
+            }}
+            className="w-[80px] text-[13px]"
+          />
+        </SettingRow>
+        <SettingRow id="factoryphonebot" label={t('settings.factory.phoneBot')} description={t('settings.factory.phoneBotDesc')}>
+          <PhoneBotSelect t={t} disabled={off} value={settings?.phoneBotId ?? undefined} onChange={(id) => void patch({ phoneBotId: id })} />
+        </SettingRow>
+        {error && <SettingNote tone="danger" role="alert">{error}</SettingNote>}
+      </SettingsSection>
+      <SettingsSection id="factorybots" title={t('settings.factory.bots')} description={t('settings.factory.botsDesc')}>
+        <BotsList
+          t={t}
+          port={bPort}
+          workspaceName={workspaceName}
+          workspaces={workspaces}
+          defaultWorkspaceId={activeWorkspaceId}
+          pickFolder={pickFolder ?? pickFolderDialog}
+        />
+      </SettingsSection>
+      <ApprovalRules t={t} botName={botName} workspaceName={workspaceName} />
+      <BotSecretsSection t={t} />
+    </div>
+  );
+}

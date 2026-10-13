@@ -30,8 +30,6 @@ describe('TokenUsageView after a saved profile is applied', () => {
         bindings: { Planner: { agent: 'claude' } },
         onApply: () => undefined,
         onOpenTab: () => undefined,
-        deckBrainModel: '',
-        deckBrainEffort: '',
         t: translate as unknown as TokenUsageViewProps['t'],
       }));
     });

@@ -1,7 +1,4 @@
 import type { BrowserWindow } from 'electron';
-import { getHqWorkspaceId } from '../../deck/deckHqStore';
-import { getTaskLedger } from '../../deck/taskLedgerHost';
-import { getMoaHandoffService } from '../../deck/moaHandoff';
 import { refuseHandoffMarker } from '../handoffMarkerTripwire';
 import type { RpcRouter } from '../RpcRouter';
 import type { RpcContext } from '../../../shared/rpc';
@@ -36,7 +33,6 @@ import {
 import type { OwningAnchor } from '../../pty/serverSidePidWalk';
 import { recordSentTask, recordTaskState, reopenedState, stateOfTask, workLinkFromSentTask } from '../../workLink/a2aProducer';
 import { noteTrackReply } from '../../deck/trackRecordFeed';
-import { moaGoalSendScope } from '../../deck/moaLevelGate';
 import { A2A_BRAIN_ALIAS, isRemoteTaskId } from '../../../shared/a2aRemote';
 import {
   isRemoteWorkspaceId,
@@ -80,7 +76,6 @@ const INTERNAL_RENDERER_FIELDS = [
   'deliveryDeadlineAt',
   'deliveryGuardKey',
   'presetTaskId',
-  'hqHandoffOnly',
   // Cross-host A2A: only main's RemoteA2aBridge sets these, calling the
   // renderer directly (never through this router).
   'remoteFrom',
@@ -155,16 +150,6 @@ type CallerPane =
  * the same resolution the renderer's update path makes (stashed panes count, a
  * ptyId the workspace does not own is treated as absent).
  */
-/** Why the HQ could not close a hand-off task (requesterComplete codes). */
-const HANDOFF_CLOSE_REFUSAL: Record<string, string> = {
-  not_requester: 'this HQ did not propose it, or it was never delivered',
-  ended: 'the task already ended',
-  needs_input: 'the worker is waiting on the operator; relay its question instead',
-  turn_not_ended: "the worker's turn has not ended yet; wait for its stop",
-  target_working: 'the worker is mid-turn again; wait for its next stop',
-  error: 'the task could not be moved',
-};
-
 async function resolveCallerPane(
   getWindow: () => BrowserWindow | null,
   workspaceId: unknown,
@@ -356,7 +341,7 @@ export function registerA2aRpc(
           : {
             error:
               `a2a.task.send: Moa does not send work straight to an agent ("${alias}" is a remote pane). ` +
-              'Ask its PC\'s Moa instead (its <PC>/Moa alias from a2a_discover), or propose the work to the operator with moa_propose_handoff.',
+              'Ask its PC\'s Moa instead (its <PC>/Moa alias from a2a_discover).',
           };
       }
       if (!brainLink.allowOutbound) return { error: `a2a.task.send: the link to "${alias}" does not allow sending from this side` };
@@ -989,23 +974,6 @@ export function registerA2aRpc(
         return { error: `a2a.task.update: ${e instanceof Error ? e.message : 'invalid'}` };
       }
     }
-    // A Moa hand-off is the operator's task, so its receiver never closes it
-    // through this lane. The HQ that proposed it may close it as completed once
-    // the worker's turn has ended; main moves it, with the worker's closing
-    // words as the result. The caller proves it is that HQ by its own pane
-    // there (or its commander token). Any other caller falls through to the
-    // receiver rules below, which refuse it.
-    if (params.status === 'completed' && typeof params.taskId === 'string' && typeof params.workspaceId === 'string') {
-      const handoffs = getMoaHandoffService();
-      if (handoffs && handoffs.byTask(params.taskId)?.hqWorkspaceId === params.workspaceId) {
-        const proven = ctx?.commanderWorkspace === params.workspaceId
-          || (await resolveCallerPane(getWindow, params.workspaceId, params.senderPtyId)).kind === 'resolved';
-        if (!proven) return { error: 'a2a.task.update: only the HQ that proposed this hand-off may close it' };
-        const done = await handoffs.requesterComplete(params.workspaceId, params.taskId);
-        if (done.ok) return { ok: true, taskId: params.taskId, status: 'completed', result: done.result };
-        return { error: `a2a.task.update: hand-off not closed (${done.code}): ${HANDOFF_CLOSE_REFUSAL[done.code]}${done.message ? ` (${done.message})` : ''}` };
-      }
-    }
     // External callers must prove their pane to move a pane-pinned task; the
     // human operator and in-process first-party lanes are trusted as before.
     const trustedLane = ctx?.operator === true || (ctx?.firstParty === true && !isHostedCaller(ctx));
@@ -1132,26 +1100,6 @@ export function registerA2aRpc(
     if (ctx?.commanderWorkspace) {
       sendParams.commanderWorkspaceId = ctx.commanderWorkspace;
       sendParams.workspaceId = ctx.commanderWorkspace;
-      // Moa (the HQ brain) gives work to another workspace only through a
-      // hand-off the operator approves (moa_propose_handoff). A new task from
-      // it may go to its own workspace and its own fan-out tasks; the renderer
-      // refuses any other target after it resolves `to`.
-      if (!params.taskId && ctx.commanderWorkspace === getHqWorkspaceId()) {
-        let own: string[] = [];
-        try {
-          own = getTaskLedger().list({ ownerWorkspaceId: ctx.commanderWorkspace }).map((e) => e.taskWorkspaceId);
-        } catch {
-          // a ledger we cannot read grants nothing extra
-        }
-        // While a goal is active, only the goal's own workspaces (owner
-        // decision 2, moaLevelGate.ts): an older fan-out task outside the
-        // contract is not reachable directly either.
-        const goalScope = moaGoalSendScope(ctx.commanderWorkspace);
-        const allowed = [ctx.commanderWorkspace, ...own];
-        sendParams.hqHandoffOnly = {
-          allowedTargets: goalScope ? allowed.filter((w) => goalScope.includes(w)) : allowed,
-        };
-      }
     }
     // A NEW execute send's reply is held until the user answers the approval
     // prompt, which the 5 s bridge default gave up on long before (#1462). The

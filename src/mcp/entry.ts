@@ -15,17 +15,24 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { COMMANDER_MODE_ARG } from '../shared/commanderSurface';
 import { CORE_MODE_ARG } from '../shared/coreSurface';
 import { roleArgValue } from '../shared/roleSurfaces';
+import { botArgValue } from '../shared/bot';
+import { readBotTokenFromArgv } from './botTokenHandoff';
 import { clearClientIdentity } from './wmux-client';
 import { PlaywrightEngine } from './playwright/PlaywrightEngine';
 import { createWmuxServer } from './index';
 import { disposeReplRegistry } from './repl/replRegistry';
 
 async function main(): Promise<void> {
+  // Bot mode: the token is read once from the hand-off file named in argv
+  // (never from the environment); a missing one claims the role with '' and
+  // main refuses every call.
+  const botRole = botArgValue(process.argv);
   const server = createWmuxServer({
     envWorkspaceHint: process.env.WMUX_WORKSPACE_ID || '',
     envPtyHint: process.env.WMUX_PTY_ID || '',
-    commanderToken: process.env.WMUX_COMMANDER_TOKEN,
+    commanderToken: botRole !== undefined ? readBotTokenFromArgv(process.argv) : process.env.WMUX_COMMANDER_TOKEN,
     commanderMode: process.argv.includes(COMMANDER_MODE_ARG),
+    botRole,
     coreMode: process.argv.includes(CORE_MODE_ARG),
     roleSurface: roleArgValue(process.argv),
     callerPid: process.pid,

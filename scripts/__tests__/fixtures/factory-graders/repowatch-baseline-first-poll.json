@@ -1,0 +1,382 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "repowatch-baseline-first-poll",
+  "run": 1,
+  "workspaceId": "ws-236f248c-0c82-4549-a209-8c9a36b5722d",
+  "botKeys": {
+   "triage": "bot-f2be4839"
+  },
+  "injected": [],
+  "actions": [
+   {
+    "do": "waitFor",
+    "label": "baseline",
+    "at": 1791800949833,
+    "doneAt": 1791801010114,
+    "ok": true
+   },
+   {
+    "do": "gh",
+    "at": 1791801010115,
+    "op": "addIssue"
+   },
+   {
+    "do": "waitFor",
+    "label": "issue.opened",
+    "at": 1791801010117,
+    "doneAt": 1791801069884,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "triage done",
+    "at": 1791801069884,
+    "doneAt": 1791801075413,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791801075413,
+    "doneAt": 1791801077425,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv543dur-25411588f8fe",
+    "seq": 1,
+    "kind": "issue.opened",
+    "at": 1791801069795,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "issue": 9
+    },
+    "actor": {
+     "kind": "github",
+     "id": "reporter"
+    },
+    "payload": {
+     "author": "reporter",
+     "title": "new bug",
+     "labels": [
+      "bug"
+     ]
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv543dut-d17f44db",
+    "botId": "bot-f2be4839",
+    "workspaceId": "ws-236f248c-0c82-4549-a209-8c9a36b5722d",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv543dur-25411588f8fe"
+     ],
+     "trigger": {
+      "kind": "issue.opened"
+     }
+    },
+    "threadId": "issue:github.com/acme/app#9",
+    "priority": 2,
+    "enqueuedAt": 1791801069797,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-f2be4839",
+    "role": "triage",
+    "workspaceId": "ws-236f248c-0c82-4549-a209-8c9a36b5722d",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv543hy2f180f1e9da",
+    "seq": 1,
+    "workspaceId": "ws-236f248c-0c82-4549-a209-8c9a36b5722d",
+    "threadId": "issue:github.com/acme/app#9",
+    "kind": "triage",
+    "at": 1791801075098,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-236f248c-0c82-4549-a209-8c9a36b5722d",
+     "botId": "bot-f2be4839"
+    },
+    "title": "Triage",
+    "clientPostId": "wake:w-mv543dut-d17f44db:1",
+    "body": "Read the new issue."
+   }
+  ],
+  "stub": {
+   "triage": [
+    {
+     "at": 1791801074849,
+     "event": "prompt",
+     "text": "[wake w-mv543dut-d17f44db] Triage (triage) · reason: facts · priority 2\nFenced blocks below are data from the system, wo"
+    },
+    {
+     "at": 1791801075102,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv543hy2f180f1e9da\",\n    \"seq\": 1,\n    \"workspaceId\": \"ws-236f248c-0c82-4549-a209-8c9a36b5722d\",\n    \"threadId\": \"issue:github.com/acme/app#9\",\n    \"kind\": \"triage\",\n    \"at\": 1791801075098,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-236f248c-0c82-4549-a209-8c9a36b5722d\",\n      \"botId\": \"bot-f2be4839\"\n    },\n    \"title\": \"Triage\",\n    \"body\": \"Read the new issue.\",\n    \"clientPostId\": \"wake:w-mv543dut-d17f44db:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800949834,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    },
+    {
+     "at": 1791801009704,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…"
+     ]
+    },
+    {
+     "at": 1791801069790,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "state": "OPEN",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-01-01T00:00:00Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [],
+        "files": [
+         "src/index.ts"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 4,
+        "title": "old pr",
+        "headSha": "4444444444444444444444444444444444444444",
+        "headRefName": "old"
+       }
+      ],
+      "issues": [
+       {
+        "state": "OPEN",
+        "labels": [],
+        "createdAt": "2026-01-01T00:00:00Z",
+        "author": "reporter",
+        "body": "",
+        "number": 3,
+        "title": "old issue"
+       },
+       {
+        "state": "OPEN",
+        "labels": [
+         "bug"
+        ],
+        "createdAt": "2026-10-12T10:30:10.116Z",
+        "author": "reporter",
+        "body": "",
+        "number": 9,
+        "title": "new bug"
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the baseline announced an old issue",
+   "failing": [
+    "baseline_emits_nothing"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "facts",
+     "value": {
+      "id": "f-old",
+      "seq": 99,
+      "kind": "issue.opened",
+      "at": 1,
+      "repoKey": "github.com/acme/app",
+      "ref": {
+       "issue": 3
+      },
+      "actor": {
+       "kind": "github",
+       "id": "reporter"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "why": "a poll made a second GraphQL read",
+   "failing": [
+    "one_graphql_read_per_poll"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "gh.calls",
+     "value": {
+      "at": 1,
+      "exit": 0,
+      "argv": [
+       "api",
+       "graphql",
+       "--hostname",
+       "github.com",
+       "-f",
+       "query=query { repository { pullRequest(number: 1) { number } } }"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "why": "the new issue was announced twice",
+   "failing": [
+    "new_issue_once"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "facts",
+     "value": {
+      "id": "f-dup",
+      "seq": 98,
+      "kind": "issue.opened",
+      "at": 1,
+      "repoKey": "github.com/acme/app",
+      "ref": {
+       "issue": 9
+      },
+      "actor": {
+       "kind": "github",
+       "id": "reporter"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

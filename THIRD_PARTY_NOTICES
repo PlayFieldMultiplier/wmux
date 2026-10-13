@@ -11919,3 +11919,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
+
+PROJECTS THAT INSPIRED THE DESIGN
+
+wmux's agent features were inspired by ideas from the projects below. No code
+or text was taken from them; they are listed as an acknowledgement.
+
+OpenBot (MIT License) - https://github.com/CopilotKit/OpenBot
+Bot-to-bot handoffs routed by the system rather than the model, with a
+depth cap and a per-run cap that refuse instead of truncating, an always
+available ask_person exit, and refusals that are recorded.
+
+OpenClaw (MIT License) - https://github.com/openclaw/openclaw
+An "always allow" for a scheduled job that holds only for the job's
+current configuration, so editing the job resets it.
+
+Paperclip (MIT License) - https://github.com/paperclipai/paperclip
+Agents that wake on events through a queue that merges duplicate wakes,
+per-agent budgets, and owner approval of work-level decisions.
+
+Buzz (Apache License 2.0) - https://github.com/block/buzz
+Humans and agents sharing threaded rooms, and grading agent scenarios from
+an evidence snapshot taken after the run.
+
+Gas Town (MIT License) - https://github.com/steveyegge/gastown
+A dedicated merge step that lands agent work in order.
+
+Anneal (MIT License) - https://github.com/mosonlab/anneal
+A mechanical, model-free merge step and a review that does not see the
+earlier review.
+
+================================================================================

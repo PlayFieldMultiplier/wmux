@@ -1,6 +1,6 @@
 // Shared plumbing for the wmux Electron e2e suite: an isolated HOME, the plain
-// electron binary on the .vite build, a fake `claude`, a pipe RPC client that
-// plays Moa's brain, and process cleanup (the app's daemon is detached).
+// electron binary on the .vite build, a fake `claude`, a pipe RPC client, and
+// process cleanup (the app's daemon is detached).
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -102,7 +102,6 @@ export async function launchApp(sb) {
     HOME: sb.home,
     PATH: `${sb.bin}:${process.env.PATH}`,
     WMUX_DATA_SUFFIX: SUFFIX,
-    WMUX_E2E_HOOKS: '1',
     WMUX_E2E_RUN: sb.runId,
   };
   delete env.WMUX_SOCKET_PATH;
@@ -166,7 +165,7 @@ export async function shot(win, name) {
   return p;
 }
 
-/** One pipe RPC, framed like src/mcp/wmux-client.ts, as Moa's brain. */
+/** One pipe RPC, framed like src/mcp/wmux-client.ts. */
 export function rpc(sb, method, params, { commanderToken, timeout = 60_000 } = {}) {
   const auth = fs.readFileSync(path.join(sb.home, `.wmux${SUFFIX}-auth-token`), 'utf8').trim();
   const sock = path.join(sb.home, `.wmux${SUFFIX}.sock`);

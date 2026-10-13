@@ -10,7 +10,7 @@ import { createWorkspaceSlice, type WorkspaceSlice } from '../workspaceSlice';
 import { createUISlice, type UISlice } from '../uiSlice';
 import { createWorkspace, type SessionData, type Workspace } from '../../../../shared/types';
 
-type TestState = WorkspaceSlice & UISlice & { multiviewIds: string[]; moa: unknown; moaHqSeed?: string | null };
+type TestState = WorkspaceSlice & UISlice & { multiviewIds: string[]; moa: unknown };
 
 function createTestStore(initialWorkspaces: Workspace[], activeId: string) {
   return create<TestState>()(
@@ -23,7 +23,6 @@ function createTestStore(initialWorkspaces: Workspace[], activeId: string) {
       activeWorkspaceId: activeId,
       multiviewIds: [],
       moa: null,
-      moaHqSeed: null,
     })),
   );
 }
@@ -55,10 +54,8 @@ describe('workspace bookmarks', () => {
     expect(store.getState().sidebarPinnedIds).toEqual([]);
   });
 
-  it('refuses an unknown id and Moa\'s HQ', () => {
+  it('refuses an unknown id', () => {
     store.getState().toggleSidebarBookmark('nope');
-    store.setState({ moaHqSeed: b.id });
-    store.getState().toggleSidebarBookmark(b.id);
     expect(store.getState().sidebarBookmarkedIds).toEqual([]);
   });
 

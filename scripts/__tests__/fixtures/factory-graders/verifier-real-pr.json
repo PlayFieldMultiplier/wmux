@@ -1,0 +1,274 @@
+{
+ "note": "Synthetic (hand-written): the real-model scenarios are run by hand; this pins the grading rule.",
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "verifier-real-pr",
+  "run": 1,
+  "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+  "botKeys": {
+   "lead": "bot-cccc0002",
+   "verifier": "bot-cccc0001"
+  },
+  "injected": [],
+  "actions": [],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "facts": [
+   {
+    "id": "f-1",
+    "seq": 1,
+    "kind": "verdict.recorded",
+    "at": 1,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "botId": "bot-cccc0001",
+     "taskId": "wtask-v"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-cccc0001"
+    },
+    "payload": {
+     "verdict": "pass"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-0001fa",
+    "botId": "bot-cccc0001",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0"
+     ],
+     "trigger": {
+      "kind": "pr.opened"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1,
+    "attempts": 1,
+    "state": "done",
+    "threadId": "pr:github.com/acme/app#1"
+   },
+   {
+    "id": "w-0001fa",
+    "botId": "bot-cccc0001",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-v@3"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1,
+    "attempts": 1,
+    "state": "done",
+    "threadId": "task:wtask-v"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-cccc0002",
+    "role": "lead",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "enabled": true
+   },
+   {
+    "id": "bot-cccc0001",
+    "role": "verifier",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "enabled": true
+   }
+  ],
+  "ledger": [
+   {
+    "id": "wtask-v",
+    "status": "review_requested",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-cccc0001"
+     },
+     "preset": "verify",
+     "checkout": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "detached": true
+     }
+    },
+    "gate": {
+     "exitCode": 0,
+     "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "recordedBy": "system"
+    }
+   }
+  ],
+  "verdicts": [
+   {
+    "version": 2,
+    "repoKey": "github.com/acme/app",
+    "prNumber": 1,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "verdict": "pass",
+    "principal": {
+     "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+     "botId": "bot-cccc0001"
+    },
+    "evidence": {
+     "taskId": "wtask-v",
+     "gateHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "summary": "ok",
+    "at": 1
+   }
+  ],
+  "effects": null,
+  "cards": [],
+  "stub": {},
+  "workers": [],
+  "gh": {
+   "calls": [],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "number": 1,
+        "state": "OPEN",
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headRefName": "wtask/x"
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  },
+  "records": []
+ },
+ "fail": [
+  {
+   "why": "the evidence gate is at another head",
+   "failing": [
+    "evidence_at_head",
+    "evidence_is_system_gate_on_verify_task"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "verdicts.0.evidence.gateHeadSha",
+     "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+     "op": "set",
+     "path": "ledger.0.gate.headSha",
+     "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+   ]
+  },
+  {
+   "why": "the verdict is on a head the PR no longer has",
+   "failing": [
+    "verdict_at_pr_head"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "gh.state.repos",
+     "value": {
+      "github.com/acme/app": {
+       "prs": [
+        {
+         "number": 1,
+         "state": "OPEN",
+         "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+        }
+       ],
+       "issues": []
+      }
+     }
+    }
+   ]
+  },
+  {
+   "why": "the evidence task is not a system-gated verify task",
+   "failing": [
+    "evidence_is_system_gate_on_verify_task"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "ledger.0.gate.recordedBy",
+     "value": "worker"
+    }
+   ]
+  },
+  {
+   "why": "no verdict",
+   "failing": [
+    "verdict_recorded",
+    "verdict_at_pr_head",
+    "evidence_at_head",
+    "evidence_is_system_gate_on_verify_task"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "facts",
+     "value": []
+    },
+    {
+     "op": "set",
+     "path": "verdicts",
+     "value": []
+    }
+   ]
+  }
+ ]
+}

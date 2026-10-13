@@ -10,9 +10,9 @@ import { sanitizeClientDisplayName } from '../../shared/rpc';
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
 import { isAlwaysEnforcedMethod } from '../mcp/methodCapabilityMap';
 import { isLocalExternalWireContext } from '../mcp/rpcProvenance';
-import { commanderTokenWorkspace } from '../deck/commanderTrust';
+import { resolveCommanderToken } from '../deck/commanderTrust';
 import { COMMANDER_TEARDOWN_DENY } from '../../shared/commanderSurface';
-import { commanderLevelRefusal, commanderScopeRefusal } from '../deck/moaLevelGate';
+import { botSurfaceRefusal, type BotRefusal } from '../../shared/botSurface';
 import type { EnforcementMode } from '../mcp/enforcementMode';
 import type { ApprovalQueue } from '../mcp/ApprovalQueue';
 import {
@@ -22,6 +22,7 @@ import {
 import type { HostedScopeAuditInput } from '../audit/shadowRejectionLog';
 import { lookupWorkspaceClaim } from '../workspace/workspaceClaimTrust';
 import { isIdentityRunPty } from '../automation/runIdentity';
+import { redactStoredSecrets, redactStoredSecretsDeep } from '../factory/secretRedaction';
 
 // Handlers receive a per-request context as an optional second argument.
 // Existing handlers `(params) => ...` keep compiling because the extra
@@ -81,6 +82,13 @@ type ShadowRejectionSink = (input: {
  */
 type HostedScopeSink = (input: HostedScopeAuditInput) => void;
 
+/**
+ * Agent factory — told about every bot call the role gate refused. The fact
+ * log subscribes (a `bot.refused` fact per refusal); listeners are
+ * best-effort and can never change a dispatch.
+ */
+export type BotRefusalListener = (refusal: BotRefusal) => void;
+
 // Methods that handle plugin identity themselves — they must NOT trigger
 // a parallel legacy write because their own handlers do the right thing
 // (record an `unconfirmed` contact via the resolved name).
@@ -137,6 +145,7 @@ export class RpcRouter {
   private trustLookup: TrustLookup | undefined;
   private shadowSink: ShadowRejectionSink | undefined;
   private hostedScopeSink: HostedScopeSink | undefined;
+  private readonly botRefusalListeners = new Set<BotRefusalListener>();
   /**
    * Phase 2.2 pre-commit 6: enforcement mode. Default is `shadow` so a
    * router that was never explicitly set up (unit tests, transitional
@@ -221,6 +230,27 @@ export class RpcRouter {
    */
   setHostedScopeSink(sink: HostedScopeSink | undefined): void {
     this.hostedScopeSink = sink;
+  }
+
+  /**
+   * Subscribe to bot role-gate refusals (see BotRefusalListener). Returns the
+   * unsubscribe function.
+   */
+  onBotRefused(listener: BotRefusalListener): () => void {
+    this.botRefusalListeners.add(listener);
+    return () => {
+      this.botRefusalListeners.delete(listener);
+    };
+  }
+
+  private notifyBotRefused(refusal: BotRefusal): void {
+    for (const listener of this.botRefusalListeners) {
+      try {
+        listener(refusal);
+      } catch {
+        /* a refusal listener must never affect dispatch */
+      }
+    }
   }
 
   /**
@@ -354,31 +384,40 @@ export class RpcRouter {
     // MCP workspace — eng review P1). A validated token pins the commander's
     // one workspace onto ctx and refuses teardown-effect methods outright.
     if ('commanderToken' in request && request.commanderToken !== undefined) {
-      const boundWorkspace = commanderTokenWorkspace(request.commanderToken);
-      if (!boundWorkspace) {
+      const binding = resolveCommanderToken(request.commanderToken);
+      if (!binding) {
         return {
           id: request.id,
           ok: false,
           error: 'commander token invalid or revoked — brain requests fail closed',
         };
       }
+      const boundWorkspace = binding.workspaceId;
       ctx.commanderWorkspace = boundWorkspace;
+      // Agent factory bot gate (deny by default). A bot token reaches exactly
+      // the methods on the shared bot surface (shared/botSurface.ts); everything
+      // else is refused here, before trust lookup and permission enforcement,
+      // in shadow and enforce mode alike.
+      if (binding.bot) {
+        ctx.bot = binding.bot;
+        const botRefusal = botSurfaceRefusal(binding.bot.role, request.method);
+        if (botRefusal) {
+          this.notifyBotRefused({ at: Date.now(), bot: { ...binding.bot }, method: request.method, reason: botRefusal });
+          return {
+            id: request.id,
+            ok: false,
+            error: botRefusal === 'teardown'
+              ? `method ${request.method} is denied for bots (teardown gate)`
+              : `method ${request.method} is not on the bot surface`,
+          };
+        }
+      }
       if (COMMANDER_TEARDOWN_DENY.has(request.method)) {
         return {
           id: request.id,
           ok: false,
           error: `method ${request.method} is denied for orchestrator brains (teardown gate)`,
         };
-      }
-      // Moa's autonomy level (moaLevelGate.ts): refuse-only, HQ token only.
-      const levelRefusal = commanderLevelRefusal(request.method, boundWorkspace, request.params);
-      if (levelRefusal) {
-        return { id: request.id, ok: false, error: levelRefusal };
-      }
-      // While a goal is active, Moa's direct sends stay inside its contract.
-      const scopeRefusal = await commanderScopeRefusal(request.method, boundWorkspace, request.params);
-      if (scopeRefusal) {
-        return { id: request.id, ok: false, error: scopeRefusal };
       }
     }
 
@@ -651,14 +690,16 @@ export class RpcRouter {
       return {
         id: request.id,
         ok: true,
-        result,
+        // A bot never reads a stored bot secret back (a worker pane's screen
+        // among them): factory/secretRedaction.ts.
+        result: ctx.bot ? redactStoredSecretsDeep(result) : result,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         id: request.id,
         ok: false,
-        error: message,
+        error: ctx.bot ? redactStoredSecrets(message) : message,
       };
     }
   }

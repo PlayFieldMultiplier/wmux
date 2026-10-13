@@ -960,6 +960,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-schedules-row:hover { background: var(--hover-fill); }
 .wmux-schedules-row[aria-current="true"], .wmux-schedules-row[aria-pressed="true"] { background: var(--selection); }
 .wmux-schedules-row[data-off="true"] { color: var(--text-muted); }
+.wmux-schedules-row-static:hover { background: transparent; }
 .wmux-schedules-new { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-sub); }
 .wmux-schedules-row-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; font-weight: 500; }
 .wmux-schedules-row-meta { font-size: 11px; color: var(--text-muted); }

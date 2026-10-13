@@ -21,6 +21,7 @@ import { isUsableResumeBinding, withLaunchSessionId, type ResumeBinding } from '
 import { CHATV2_PROVIDER_SESSION_ID } from '../../shared/chatv2/ipc';
 import { classifyShell } from '../shell-integration';
 import { inResumeCwd, type ResumeShell } from './v2/handoff';
+import { guardBotWorkerLaunch } from './botWorkerLaunchGuard';
 import type { TerminalChatFailure, TerminalChatService } from '../transcript/TerminalChatService';
 import type { ChatSessionService } from './ChatSessionService';
 import { ChatSendReceiptStore, type StoredChatOutcome } from './ChatSendReceiptStore';
@@ -133,6 +134,9 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
   panesBoundTo?(agent: TerminalLaunchAgent, sessionId: string): string[];
   /** Whether the agent takes a first message on its resume line (default RESUME_TAKES_PROMPT). */
   resumeTakesPrompt?(agent: TerminalLaunchAgent): boolean;
+  /** The launch line for a pane, guarded when it is a bot's fan-out worker
+   *  (default guardBotWorkerLaunch); null: type nothing. */
+  botWorkerLaunch?(id: string, line: string, head: string): string | null;
   relays: {
     retire(id: string): Promise<void>;
     prepare(id: string, pane: P): Promise<LaunchRelay>;
@@ -1699,10 +1703,19 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     // for such a pane, so a client gating on it never sends the request.
     if (resume && boundOf(deps.pane(id))?.agent !== agent) return fail('resume-unavailable');
     if (resume && req.prompt !== undefined && !(deps.resumeTakesPrompt?.(agent) ?? RESUME_TAKES_PROMPT[agent])) return fail('resume-prompt-unsupported');
-    try { command = terminalLaunchCommand(agent, req.prompt, req.mode); } catch { return fail('invalid-chat-request'); }
+    // `head`: the same line without the first message (the bot-worker guard reads only it).
+    let head: string;
+    try {
+      command = terminalLaunchCommand(agent, req.prompt, req.mode);
+      head = terminalLaunchCommand(agent, undefined, req.mode);
+    } catch { return fail('invalid-chat-request'); }
     // A fresh Claude is pinned to a minted id, so the pane's exact conversation is
     // on its command line from the start (the daemon binds it from there).
-    if (!resume) command = withLaunchSessionId(command, randomUUID());
+    if (!resume) {
+      const launchId = randomUUID();
+      command = withLaunchSessionId(command, launchId);
+      head = withLaunchSessionId(head, launchId);
+    }
     if (launching.has(id)) return fail('launch-pending');
     launching.add(id);
     let relay: LaunchRelay | undefined;
@@ -1751,9 +1764,17 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
         if (heldElsewhere(id, agent, sessionId)) return fail('resume-in-use');
       }
       if (bound && boundShell) {
-        try { command = boundResumeCommand(agent, bound.sessionId, req.prompt, req.mode, boundShell); }
+        try {
+          command = boundResumeCommand(agent, bound.sessionId, req.prompt, req.mode, boundShell);
+          head = boundResumeCommand(agent, bound.sessionId, undefined, req.mode, boundShell);
+        }
         catch { return fail('resume-unavailable'); }
       }
+      // A bot's fan-out worker merges only through the merge lane: its claude
+      // line carries the worker settings, or nothing is typed.
+      const guarded = (deps.botWorkerLaunch ?? guardBotWorkerLaunch)(id, command, head);
+      if (guarded === null) return fail('launch-unsupported');
+      command = guarded;
       if (agent === 'codex' && boundShell !== 'pwsh') {
         // Hook session_id can name an invocation rather than the conversation.
         // Observe the existing native TUI transport for authoritative thread IDs.

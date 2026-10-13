@@ -10,6 +10,8 @@ import { ChatQueueStore } from '../ChatQueue';
 import { atomicWriteJSONSync } from '../../util/atomicWrite';
 import { withChosenAccountEnv } from '../../phone/paneAccountSpawn';
 import { createChatBridge, QUEUE_WATCH_CLIENT, WEB_BRIDGE_CLIENT, type ChatAgentState, type ChatPane, type NativeChatBridgeDeps } from '../nativeChatBridge';
+import { guardBotWorkerLaunch } from '../botWorkerLaunchGuard';
+import { BOT_WORKER_DENY, botWorkerSessionsPath, botWorkerSettingsPath } from '../../../shared/botWorkerGuard';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
 import { cancelResponse } from '../../web/chatWire';
 import { agentAliveVerdict } from '../../canonicalAgent';
@@ -91,6 +93,8 @@ function fixture() {
     log, notify,
     delay: async () => undefined,
     platform: 'darwin',
+    // The bot-worker guard reads this test's own data dir, never the home one.
+    botWorkerLaunch: (id, line, head) => guardBotWorkerLaunch(id, line, head, dir),
   };
   const liveClaude = () => {
     state.projector = FILE;
@@ -453,6 +457,78 @@ describe('launch', () => {
     expect(f.typed).toEqual(["claude --session-id PIN -- 'it'\\''s done'\r"]);
     expect(await f.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'again' }))
       .toMatchObject({ ok: false, error: 'launch-not-ready', reason: 'shell-not-empty', effect: 'none' });
+  });
+
+  describe('a pane that is a bot\'s fan-out worker (main\'s sessions record)', () => {
+    const SID = '0f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b';
+    const record = (dir: string, body: unknown) => {
+      fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+      fs.writeFileSync(botWorkerSessionsPath(dir), typeof body === 'string' ? body : JSON.stringify(body));
+    };
+    const botWorker = (dir: string) => record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1 } } });
+
+    it('a fresh claude launch carries the worker settings right after the launcher, first message kept', async () => {
+      const f = fixture();
+      botWorker(f.dir);
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude', prompt: "it's done" })).toEqual({ ok: true, effect: 'submitted' });
+      const settings = botWorkerSettingsPath(f.dir);
+      expect(f.typed).toEqual([`claude --settings="${settings}" --session-id PIN -- 'it'\\''s done'\r`]);
+      expect(JSON.parse(fs.readFileSync(settings, 'utf8'))).toEqual({ permissions: { deny: [...BOT_WORKER_DENY] } });
+    });
+
+    it('a phone resume of its exact session carries them too', async () => {
+      const f = fixture();
+      botWorker(f.dir);
+      f.state.projector = FILE;
+      f.state.pane!.meta.resumeBinding = { agent: 'claude', sessionId: SID, cwd: '/proj', transcriptPath: '/t.jsonl', ts: 1 };
+      f.state.pane!.meta.cmd = '/bin/zsh';
+      f.deps.boundSessionLives = async () => true;
+      const go = (extra: Record<string, unknown>) => createChatBridge(f.deps).launch({ id: 'pane', agent: 'claude', resume: true, refuseConversation: true, ...extra });
+      expect(await go({ prompt: 'next' })).toEqual({ ok: true, effect: 'submitted' });
+      f.shell.empty = true;
+      expect(await go({ mode: 'bypass' })).toMatchObject({ ok: true });
+      const settings = botWorkerSettingsPath(f.dir);
+      expect(f.typed).toEqual([
+        `cd -- '/proj' && claude --settings="${settings}" --resume ${SID} -- 'next'\r`,
+        `cd -- '/proj' && claude --settings="${settings}" --resume ${SID} --dangerously-skip-permissions\r`,
+      ]);
+    });
+
+    it('an unreadable record guards every pane', async () => {
+      const f = fixture();
+      record(f.dir, '{not json');
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toMatchObject({ ok: true });
+      expect(f.typed[0]).toContain(`claude --settings="${botWorkerSettingsPath(f.dir)}"`);
+    });
+
+    it('fails closed: settings that cannot be written, or a path that cannot be quoted, type nothing', async () => {
+      const f = fixture();
+      botWorker(f.dir);
+      // The settings file's place is taken by a folder.
+      fs.mkdirSync(path.join(botWorkerSettingsPath(f.dir), 'x'), { recursive: true });
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      const odd = path.join(f.dir, 'a$b');
+      botWorker(odd);
+      f.deps.botWorkerLaunch = (id, line, head) => guardBotWorkerLaunch(id, line, head, odd);
+      expect(await createChatBridge(f.deps).launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      expect(f.typed).toEqual([]);
+    });
+
+    it('another pane, and a line that starts no claude, pass unchanged', async () => {
+      const f = fixture();
+      record(f.dir, { version: 1, sessions: { other: { workspaceId: 'ws-task', at: 1 } } });
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toMatchObject({ ok: true });
+      expect(f.typed).toEqual(['claude --session-id PIN\r']);
+      expect(guardBotWorkerLaunch('other', "codex -- 'go'", 'codex', f.dir)).toBe("codex -- 'go'");
+    });
+
+    it('the guard reads only the launcher part: a line that does not start with it is refused', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guard-')); dirs.push(dir);
+      botWorker(dir);
+      expect(guardBotWorkerLaunch('pane', "claude -- 'x'", 'claude --resume y', dir)).toBeNull();
+      expect(guardBotWorkerLaunch('pane', "claude -- 'x'; echo more", 'claude', dir)).toBeNull();
+      expect(guardBotWorkerLaunch('pane', "claude -- 'x'", 'claude', dir)).toBe(`claude --settings="${botWorkerSettingsPath(dir)}" -- 'x'`);
+    });
   });
 
   it('routes Codex through the relay', async () => {

@@ -6,7 +6,6 @@ import { Icon, IconGear, IconKeyboard, IconRefresh } from '../icons';
 import PaneActionsMenu, { PANE_ACTIONS_MENU_WIDTH, type PaneActionItem } from '../Pane/PaneActionsMenu';
 import { effectiveBindings } from '../../../shared/keymap';
 import { shortcutLabel } from '../../utils/shortcutLabel';
-import { selectMoaOn } from '../Layout/moaDockGate';
 
 /** Focus an element once it is on screen. Settings mounts lazily, so it is
  *  looked for over the next frames (about a second), then given up. */
@@ -37,11 +36,6 @@ export default function RailMoreMenu() {
   const t = useT();
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   const overrides = useStore((s) => s.shortcutOverrides);
-  // With Moa off there is no right panel and no titlebar toggle: this entry
-  // (and Settings › Moa) is where Moa is turned on.
-  // Same answer as the dock gate, including the boot moment before main
-  // has said whether Moa is on.
-  const moaOff = useStore((s) => !selectMoaOn(s));
   const platform = (typeof window === 'undefined' ? undefined : window.electronAPI?.platform) ?? 'linux';
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [anchor, setAnchor] = useState<{ top: number; left: number; right: number; bottom: number } | null>(null);
@@ -76,13 +70,6 @@ export default function RailMoreMenu() {
       icon: <IconGear size={13} />,
       onSelect: () => useStore.getState().setSettingsPanelVisible(true),
     },
-    ...(moaOff ? [{
-      key: 'turn-on-moa',
-      label: t('rail.turnOnMoa'),
-      // A power mark, not Moa's mascot: the mascot is Moa's own titlebar icon.
-      icon: <Icon size={13}><path d="M7 2v5" /><path d="M4.2 4.2a4 4 0 1 0 5.6 0" /></Icon>,
-      onSelect: () => useStore.getState().openSettingsTab('moa'),
-    }] : []),
     {
       key: 'shortcuts',
       label: t('settings.shortcuts'),

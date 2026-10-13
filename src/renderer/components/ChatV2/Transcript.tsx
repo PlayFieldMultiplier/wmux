@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { renderBrainMarkdown } from '../Deck/BrainMarkdown';
+import { renderBrainMarkdown } from '../shared/BrainMarkdown';
 import type { AgentStep, Block, ToolPreview } from '../../../shared/chatv2/session';
 import { claudeModelLabel } from '../../../shared/claudeModels';
 import { displayPath } from '../../../shared/chatv2/paths';

@@ -450,8 +450,6 @@ describe('buildBrainSettingsProfile', () => {
       bridgePath: `${dir}\\wmux-bridge.mjs`,
       nodePath,
       denyScriptPath: `${dir}\\deny-1.js`,
-      proposalGateScriptPath: `${dir}\\proposal-gate-1.cjs`,
-      readGate: { scriptPath: `${dir}\\read-gate-1.cjs` },
     });
     const leaves = Object.values(all.hooks as Record<string, Array<{ hooks: Leaf[] }>>)
       .flatMap((groups) => groups.flatMap((g) => g.hooks));
@@ -476,22 +474,6 @@ describe('buildBrainSettingsProfile', () => {
   it('omits the signal hooks when no bridge could be located', () => {
     const noBridge = buildBrainSettingsProfile({ bridgePath: null, nodePath: '/usr/bin/node' });
     expect((noBridge.hooks as Record<string, unknown>).Stop).toBeUndefined();
-  });
-
-  it('Moa\'s read gate hooks Read, Grep and Glob, and only when given', () => {
-    type Entry = { matcher: string; hooks: Array<{ command: string; args?: string[] }> };
-    const withGate = buildBrainSettingsProfile({
-      bridgePath: null,
-      nodePath: '/usr/bin/node',
-      readGate: { scriptPath: '/tmp/brain-profiles/read-gate-1.cjs' },
-    });
-    const pre = (withGate.hooks as { PreToolUse: Entry[] }).PreToolUse;
-    const gate = pre.find((e) => e.matcher === 'Read|Grep|Glob');
-    expect(gate?.hooks[0].args).toEqual(['/tmp/brain-profiles/read-gate-1.cjs']);
-    // Reads are never added to the deny list: the gate allows or asks.
-    expect((withGate.permissions as { deny: string[] }).deny).not.toContain('Read');
-    const without = buildBrainSettingsProfile({ bridgePath: null, nodePath: '/usr/bin/node' });
-    expect((without.hooks as { PreToolUse: Entry[] }).PreToolUse.some((e) => e.matcher === 'Read|Grep|Glob')).toBe(false);
   });
 });
 
@@ -1802,56 +1784,7 @@ it('allows every commander surface tool in the PTY runtime and settings profile'
   }
 });
 
-// ── Moa: proposal gate and first-turn memory ─────────────────────────────────
-
-describe('the Moa proposal gate in the profile', () => {
-  type Pre = { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string; args?: string[] }> }> };
-  const base = { bridgePath: null, nodePath: '/usr/bin/node', denyScriptPath: '/tmp/deny.js' };
-
-  it('is absent by default: Write and Edit stay hard-denied, no gate hook', () => {
-    const profile = buildBrainSettingsProfile(base);
-    const deny = (profile.permissions as { deny: string[] }).deny;
-    expect(deny).toContain('Write');
-    expect(deny).toContain('Edit');
-    expect((profile.hooks as Pre).PreToolUse.some((g) => g.hooks[0].args?.some((a) => a.includes('proposal-gate')))).toBe(false);
-  });
-
-  it('moves Write and Edit from the deny list to the gate script; everything else stays denied', () => {
-    const profile = buildBrainSettingsProfile({ ...base, proposalGateScriptPath: '/tmp/proposal-gate-1.cjs' });
-    const deny = (profile.permissions as { deny: string[] }).deny;
-    expect(deny).toEqual(['Agent', 'Task', 'Bash', 'MultiEdit', 'NotebookEdit', 'AskUserQuestion']);
-    const groups = (profile.hooks as Pre).PreToolUse;
-    const gate = groups.find((g) => g.matcher === 'Write|Edit')!;
-    expect(gate.hooks[0]).toEqual({ type: 'command', command: '/usr/bin/node', args: ['/tmp/proposal-gate-1.cjs'] });
-    expect(groups.some((g) => g.matcher === 'Write' || g.matcher === 'Edit')).toBe(false);
-  });
-
-  it('writes the gate script and proposals folder at spawn only when asked', async () => {
-    const proposalsDir = path.join(tmpDir, 'memory', '_proposals');
-    const host = makeHost();
-    const adapter = makeAdapter(host, { proposalGate: { proposalsDir } });
-    const turn = collect(adapter.send('hi'));
-    await host.until(() => host.created.length === 1);
-    const dir = path.join(tmpDir, 'brain-profiles');
-    const gateFile = fs.readdirSync(dir).find((f) => f.startsWith('proposal-gate-'));
-    expect(gateFile).toBeDefined();
-    expect(fs.readFileSync(path.join(dir, gateFile!), 'utf8')).toContain(JSON.stringify(proposalsDir));
-    expect(fs.statSync(proposalsDir).isDirectory()).toBe(true);
-    const settings = fs.readdirSync(dir).find((f) => f.startsWith('settings-'))!;
-    expect(fs.readFileSync(path.join(dir, settings), 'utf8')).toContain('proposal-gate-');
-    adapter.dispose();
-    await turn;
-
-    const plainHost = makeHost();
-    const plain = makeAdapter(plainHost, { workspaceId: 'ws-2' });
-    const plainTurn = collect(plain.send('hi'));
-    await plainHost.until(() => plainHost.created.length === 1);
-    // The first brain's dispose unlinked its gate; this one never wrote one.
-    expect(fs.readdirSync(dir).filter((f) => f.startsWith('proposal-gate-'))).toEqual([]);
-    plain.dispose();
-    await plainTurn;
-  });
-});
+// ── First-turn memory ────────────────────────────────────────────────────────
 
 describe('first-turn memory', () => {
   it('rides the first prompt of a fresh conversation only, and a throw costs nothing', async () => {
@@ -2189,7 +2122,7 @@ describe('a cold-start prompt that reaches the TUI incomplete (#1787)', () => {
   });
 });
 
-describe('the Moa delegate (contract file + merge deny)', () => {
+describe('the brain contract', () => {
   const contractFile = (): string => path.join(tmpDir, 'brains', 'ws-1', '.claude', 'CLAUDE.md');
   const profileDeny = (): string[] => {
     const dir = path.join(tmpDir, 'brain-profiles');
@@ -2199,9 +2132,9 @@ describe('the Moa delegate (contract file + merge deny)', () => {
   let lastDeny: string[] = [];
   /** The first typed turn; the profile's deny list is captured before
    *  dispose() unlinks the profile. */
-  async function firstTurn(over: Record<string, unknown>): Promise<string> {
+  async function firstTurn(): Promise<string> {
     const host = makeHost();
-    const adapter = makeAdapter(host, { loadMemory: () => 'MEMORY-X', ...over });
+    const adapter = makeAdapter(host, { loadMemory: () => 'MEMORY-X' });
     adapter.start({ systemPrompt: 'CONTRACT-BODY' });
     const turn = collect(adapter.send('task'));
     await host.until(() => host.writes.length > 0);
@@ -2213,65 +2146,27 @@ describe('the Moa delegate (contract file + merge deny)', () => {
     return typed;
   }
 
-  it('off: the contract rides the first turn, no contract file, the deny list is unchanged', async () => {
-    const typed = await firstTurn({ moaDelegateOn: () => false, isHqBrain: () => true });
+  it('rides the first turn, writes no contract file, and leaves the deny list as built', async () => {
+    const typed = await firstTurn();
     expect(typed).toContain('CONTRACT-BODY');
+    expect(typed).toContain('MEMORY-X');
     expect(fs.existsSync(contractFile())).toBe(false);
     expect(lastDeny).toEqual((buildBrainSettingsProfile({ bridgePath: null, nodePath: 'n' }) as { permissions: { deny: string[] } }).permissions.deny);
-    expect(lastDeny).not.toContain('Bash(gh pr merge*)');
   });
 
-  it('off by default: no switch file in the data dir means no file and no change', async () => {
-    const typed = await firstTurn({});
-    expect(typed).toContain('CONTRACT-BODY');
+  it('removes a contract file an earlier version wrote', async () => {
+    fs.mkdirSync(path.dirname(contractFile()), { recursive: true });
+    fs.writeFileSync(contractFile(), `${WMUX_CONTRACT_MARKER}\nOLD CONTRACT`);
+    const typed = await firstTurn();
     expect(fs.existsSync(contractFile())).toBe(false);
-    expect(lastDeny).not.toContain('Bash(gh pr merge*)');
-  });
-
-  it('on, HQ: the contract is a file and the first turn carries no contract body', async () => {
-    const typed = await firstTurn({ moaDelegateOn: () => true, isHqBrain: () => true });
-    expect(typed).not.toContain('CONTRACT-BODY');
-    expect(typed).toContain('MEMORY-X');
-    expect(typed).toContain('task');
-    const body = fs.readFileSync(contractFile(), 'utf8');
-    expect(body.startsWith(WMUX_CONTRACT_MARKER)).toBe(true);
-    expect(body).toContain('CONTRACT-BODY');
-    expect(lastDeny).toEqual(expect.arrayContaining(['Bash(gh pr merge*)', 'Bash(gh api*merge*)']));
-    // The operator's own CLAUDE.md beside it is never created or touched.
-    expect(fs.existsSync(path.join(tmpDir, 'brains', 'ws-1', 'CLAUDE.md'))).toBe(false);
-  });
-
-  it('on, not the HQ: no contract file, but the merge deny still applies', async () => {
-    const typed = await firstTurn({ moaDelegateOn: () => true, isHqBrain: () => false });
     expect(typed).toContain('CONTRACT-BODY');
-    expect(fs.existsSync(contractFile())).toBe(false);
-    expect(lastDeny).toContain('Bash(gh pr merge*)');
   });
 
-  it("on, HQ, with the operator's own .claude/CLAUDE.md: kept, and the contract rides the first turn", async () => {
+  it("keeps the operator's own .claude/CLAUDE.md", async () => {
     fs.mkdirSync(path.dirname(contractFile()), { recursive: true });
     fs.writeFileSync(contractFile(), 'MY OWN NOTES');
-    const typed = await firstTurn({ moaDelegateOn: () => true, isHqBrain: () => true });
+    const typed = await firstTurn();
     expect(typed).toContain('CONTRACT-BODY');
     expect(fs.readFileSync(contractFile(), 'utf8')).toBe('MY OWN NOTES');
-  });
-
-  it('turning it off removes the contract file an earlier spawn wrote', async () => {
-    await firstTurn({ moaDelegateOn: () => true, isHqBrain: () => true });
-    expect(fs.existsSync(contractFile())).toBe(true);
-    const typed = await firstTurn({ moaDelegateOn: () => false, isHqBrain: () => true });
-    expect(fs.existsSync(contractFile())).toBe(false);
-    expect(typed).toContain('CONTRACT-BODY');
-  });
-
-  it('a resolver that throws reads as off', async () => {
-    const typed = await firstTurn({ moaDelegateOn: () => { throw new Error('torn'); }, isHqBrain: () => true });
-    expect(typed).toContain('CONTRACT-BODY');
-    expect(fs.existsSync(contractFile())).toBe(false);
-  });
-
-  it('buildBrainSettingsProfile without mergeDeny is byte-identical to mergeDeny:false', () => {
-    const base = { bridgePath: '/b.mjs', nodePath: '/n', denyScriptPath: '/d.js' };
-    expect(JSON.stringify(buildBrainSettingsProfile(base))).toBe(JSON.stringify(buildBrainSettingsProfile({ ...base, mergeDeny: false })));
   });
 });

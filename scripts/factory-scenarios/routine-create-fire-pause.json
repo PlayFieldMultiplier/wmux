@@ -1,0 +1,183 @@
+{
+  "name": "routine-create-fire-pause",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner asks the lead for a recurring check: the lead sets a routine (a routine card in the room), the routine fires for the lead only (a directed schedule.fired fact and a routine wake), the operator lists it, and when the owner says stop the lead's stop_my_work pauses it; no slot fires after that. The interval floor is lowered to one minute for this isolated instance only.",
+  "setup": {
+    "env": {
+      "WMUX_TEST_ROUTINE_MIN_MS": "60000"
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "routine_set",
+                  "args": {
+                    "title": "Check PRs",
+                    "prompt": "List the open PRs and say what needs the owner.",
+                    "schedule": {
+                      "kind": "interval",
+                      "every_minutes": 1
+                    }
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Routine set",
+                    "body": "Every minute."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Checked the PRs",
+                    "body": "Nothing waits."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "stop_my_work",
+                  "args": {},
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Stopped",
+                    "body": "My routine is paused."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "say": "woke"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "set",
+      "post": {
+        "title": "Check the PRs every minute",
+        "body": "Check the open PRs every minute.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "routine card",
+      "cond": {
+        "cards": {
+          "kind": "routine"
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "fired",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "reason": "routine",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 150000,
+      "required": true
+    },
+    {
+      "do": "rpc",
+      "label": "routines",
+      "method": "routine.list",
+      "params": {}
+    },
+    {
+      "do": "post",
+      "label": "stop",
+      "post": {
+        "title": "Stop everything",
+        "body": "Stop your work now.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "paused",
+      "cond": {
+        "routines": {
+          "state": "paused",
+          "reason": "stop"
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "sleep",
+      "ms": 75000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "routines"
+    ],
+    "bot": "lead",
+    "everyMs": 60000,
+    "record": "routines"
+  }
+}

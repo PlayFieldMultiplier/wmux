@@ -3,6 +3,10 @@ import type { ChatBridgeApi } from '../shared/transcript/turnEvents';
 import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2ResyncPush } from '../shared/chatv2/ipc';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from '../shared/constants';
+import { ROOM_EVENT } from '../shared/room';
+import { BOT_EVENT } from '../shared/bot';
+import { BOT_APPROVAL_IPC } from '../shared/botApproval';
+import { BOT_SECRET_IPC } from '../shared/botSecret';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
 import {
@@ -131,6 +135,16 @@ export interface McpRegisterTargetResult {
   status: McpStatusPayload;
 }
 
+
+/** A bot.* call as the operator, with the router's envelope and the
+ *  handler's refusal flattened to {ok, message?}. */
+async function factoryBotCall(method: string, params: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> {
+  const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, method, params)) as { ok?: unknown; result?: unknown; error?: unknown } | null;
+  if (!resp || resp.ok !== true) return { ok: false, message: typeof resp?.error === 'string' ? resp.error : 'the bot call failed' };
+  const result = (resp.result ?? {}) as { ok?: unknown; message?: unknown };
+  return result.ok === false ? { ok: false, message: typeof result.message === 'string' ? result.message : 'refused' } : { ok: true };
+}
+
 const chat: ChatBridgeApi = {
   settings: (args) => ipcRenderer.invoke(CHAT_IPC.settings, args),
   skills: (args) => ipcRenderer.invoke(CHAT_IPC.skills, args),
@@ -216,11 +230,15 @@ const electronAPI = {
     // wmux.json leaf — `exec` runs the command as the pane's ROOT process and
     // `supervision` arms the daemon's PaneSupervisor (daemon mode only; the
     // local branch ignores them with a one-time warning toast).
-    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: { kind: 'pane' | 'orchestrator' | 'gui'; paneId?: string; surfaceId?: string; label?: string } }) =>
+    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string }) =>
       ipcRenderer.invoke(IPC.PTY_CREATE, options),
     write: (id: string, data: string) => {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
     },
+    /** Type a launch line (a resume) into the pane, Enter too when `submit`.
+     *  Rejects when main refuses the line (a bot worker's line it cannot guard). */
+    writeLaunch: (id: string, text: string, submit: boolean) =>
+      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit) as Promise<void>,
     schedules: {
       list: (ptyId: string) =>
         ipcRenderer.invoke(IPC.SESSION_PROMPT_SCHEDULES_LIST, { ptyId }) as Promise<{
@@ -834,291 +852,16 @@ const electronAPI = {
       >,
   },
   deck: {
-    // M1.5: one orchestrator per workspace — every call names the workspace
-    // whose brain it addresses. `model` is the orchestrator model override
-    // ('' / undefined = the subscription's default). Passed on every send;
-    // main swaps that workspace's brain adapter between turns when it changes
-    // (the conversation itself survives via the persisted session id).
-    send: (args: { workspaceId: string; text: string; fleetContext?: string; model?: string }) =>
-      ipcRenderer.invoke(IPC.DECK_SEND, args) as Promise<{
-        ok: boolean;
-        code?: 'busy' | 'disposed' | 'empty' | 'invalid_workspace' | 'mode_off' | 'task_workspace' | 'moa_off' | 'not_hq' | 'hq_missing' | 'hq_unknown';
-      }>,
-    interrupt: (workspaceId: string) =>
-      ipcRenderer.invoke(IPC.DECK_INTERRUPT, { workspaceId }) as Promise<{ ok: true }>,
-    // The dock's Wake button (the pty layout has no composer): run one ambient
-    // turn on this workspace's orchestrator right now. Busy-rejects like any
-    // other ambient driver.
-    wake: (workspaceId: string) =>
-      ipcRenderer.invoke(IPC.DECK_WAKE, { workspaceId }) as Promise<{ ok: boolean; code?: string }>,
-    fullPowerSet: (enabled: boolean) =>
-      ipcRenderer.invoke(IPC.DECK_FULLPOWER_SET, { enabled }) as Promise<{
-        ok: true;
-        enabled: boolean;
-      }>,
-    brainVendorSet: (vendor: import('../shared/types').BrainVendor) =>
-      ipcRenderer.invoke(IPC.DECK_BRAIN_VENDOR_SET, { vendor }) as Promise<{
-        ok: true;
-        vendor: import('../shared/types').BrainVendor;
-      }>,
-    status: (workspaceId: string) =>
-      ipcRenderer.invoke(IPC.DECK_STATUS, { workspaceId }) as Promise<{
-        status: 'idle' | 'busy' | 'disposed';
-        sessionId: string | null;
-        /** Present only while a designated HQ cannot run. */
-        hq?: 'hq-missing' | 'hq-unknown' | 'hq-store-corrupt';
-      }>,
-    // The designated HQ workspace (main bot). Read-only from the renderer.
-    hq: {
-      get: () =>
-        ipcRenderer.invoke(IPC.DECK_HQ_GET) as Promise<{
-          workspaceId: string | null;
-          state: 'unset' | 'ok' | 'hq-missing' | 'hq-unknown' | 'hq-store-corrupt';
-        }>,
-    },
-    // The main bot's master switch (default on).
+    // Every workspace's pending decision (Fleet's tickets, the phone sidebar);
+    // onChanged says one moved.
     moa: {
-      get: () => ipcRenderer.invoke(IPC.DECK_MOA_GET) as Promise<{ enabled: boolean }>,
-      set: (enabled: boolean) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_SET, { enabled }) as Promise<{ ok: boolean; enabled?: boolean; code?: string }>,
-      // Settings → Moa: one read for the switch, its settings, the HQ and the
-      // archived-decision notice; onChanged says it moved.
-      state: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_STATE) as Promise<import('../shared/moa').MoaState>,
-      setConfig: (patch: import('../shared/moa').MoaConfigPatch) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_CONFIG_SET, patch) as Promise<{ ok: boolean; code?: string }>,
-      setup: (workspaceId: string, opts?: { rebind?: boolean }) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_SETUP, { workspaceId, ...(opts?.rebind ? { rebind: true } : {}) }) as Promise<import('../shared/moa').MoaSetupResult>,
-      archiveList: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_ARCHIVE_LIST) as Promise<{ decisions: import('../shared/moa').MoaArchivedDecision[] }>,
-      archiveAck: () => ipcRenderer.invoke(IPC.DECK_MOA_ARCHIVE_ACK) as Promise<{ ok: boolean }>,
-      resetStore: () => ipcRenderer.invoke(IPC.DECK_MOA_STORE_RESET) as Promise<{ ok: boolean }>,
-      endGoal: () => ipcRenderer.invoke(IPC.DECK_MOA_GOAL_END) as Promise<{ ok: boolean; code?: string }>,
-      answerDraft: (id: string, answer: 'approve' | 'dismiss') =>
-        ipcRenderer.invoke(IPC.DECK_MOA_DRAFT_ANSWER, { id, answer }) as Promise<{ ok: boolean; code?: string; goalId?: string }>,
-      revertGoal: (goalId: string) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_GOAL_REVERT, goalId) as Promise<{ ok: boolean; code?: string; notes?: string[] }>,
-      shadowStats: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_SHADOW_STATS) as Promise<import('../shared/moa').MoaShadowStats>,
-      memoryList: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_MEMORY_LIST) as Promise<{ items: import('../shared/moa').MoaMemoryItem[] }>,
-      memoryDelete: (kind: import('../shared/moa').MoaMemoryItem['kind'], name: string) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_MEMORY_DELETE, { kind, name }) as Promise<{ ok: boolean }>,
-      memoryCard: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_MEMORY_CARD) as Promise<{ card: import('../shared/moa').MoaMemoryCard | null }>,
-      memoryResolve: (args: { id: string; answer: 'save' | 'discard'; fullTextShown: boolean }) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_MEMORY_RESOLVE, args) as Promise<{ ok: boolean; code?: string }>,
-      // Moa's own permission prompt (the HQ brain's dialog as an approval
-      // record), and pressing one of its choices from the Moa chat.
-      approval: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_APPROVAL) as Promise<{ approval: import('../shared/moa').MoaApproval | null }>,
-      approvalAnswer: (args: { approvalId: string; choiceKey: string; promptFingerprint: string }) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_APPROVAL_ANSWER, args) as Promise<import('../shared/moa').MoaApprovalAnswerResult>,
-      // Every workspace's pending decision ("Waiting on you").
       decisions: () =>
         ipcRenderer.invoke(IPC.DECK_MOA_DECISIONS) as Promise<{ decisions: import('../shared/moa').MoaPendingDecision[] }>,
-      taskResult: (args: { workspaceId: string; taskId: string }) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_TASK_RESULT, args) as Promise<{ result: import('../shared/moaResult').MoaTaskResult | null }>,
-      // Work exchanged with other PCs' Moa (cross-host A2A brain links).
-      remoteTasks: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_REMOTE_TASKS) as Promise<{ tasks: import('../shared/a2aRemoteDelivery').MoaRemoteTask[] }>,
-      delegatedApprovals: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_DELEGATED_APPROVALS) as Promise<{ approvals: import('../shared/moa').MoaDelegatedApproval[] }>,
-      delegatedAnswer: (args: { approvalId: string; choiceKey: string; promptFingerprint: string }) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_DELEGATED_ANSWER, args) as Promise<import('../shared/moa').MoaApprovalAnswerResult>,
-      // Moa's delegate (moa_ask tickets): list, answer an escalated one, the
-      // per-rule auto toggle, and main's change events. Owner-only: no pipe
-      // route reaches these.
-      delegateList: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_DELEGATE_LIST) as Promise<import('../shared/moaDecision').MoaDelegateListResult>,
-      delegateResolve: (args: import('../shared/moaDecision').MoaResolveRequest) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_DELEGATE_RESOLVE, args) as Promise<import('../shared/moaDecision').MoaResolveResult>,
-      delegateAutoSet: (args: import('../shared/moaDecision').MoaAutoRuleSetRequest) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_DELEGATE_AUTO_SET, args) as Promise<import('../shared/moaDecision').MoaAutoRuleSetResult>,
-      // Decision events; the lane audit's MoaAuditEvent rides the same channel.
-      onDelegateDecision: (callback: (event: import('../shared/moaDecision').MoaDecisionEvent | import('../shared/moaDecision').MoaAuditEvent) => void) => {
-        const listener = (_e: Electron.IpcRendererEvent, data: import('../shared/moaDecision').MoaDecisionEvent | import('../shared/moaDecision').MoaAuditEvent): void => callback(data);
-        ipcRenderer.on(IPC.DECK_MOA_DELEGATE_DECISION_EVENT, listener);
-        return () => { ipcRenderer.removeListener(IPC.DECK_MOA_DELEGATE_DECISION_EVENT, listener); };
-      },
-      onDelegateEffect: (callback: (event: import('../shared/moaDecision').MoaEffectEvent) => void) => {
-        const listener = (_e: Electron.IpcRendererEvent, data: import('../shared/moaDecision').MoaEffectEvent): void => callback(data);
-        ipcRenderer.on(IPC.DECK_MOA_DELEGATE_EFFECT_EVENT, listener);
-        return () => { ipcRenderer.removeListener(IPC.DECK_MOA_DELEGATE_EFFECT_EVENT, listener); };
-      },
-      // Moa's hand-offs: answer a hand-off card (a body only when the operator
-      // edited it), the recent auto hand-offs, and stopping one of them.
-      handoffResolve: (args: import('../shared/moaHandoff').MoaHandoffResolveRequest) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_HANDOFF_RESOLVE, args) as Promise<import('../shared/moaHandoff').MoaHandoffResolveResult>,
-      handoffReceipts: () =>
-        ipcRenderer.invoke(IPC.DECK_MOA_HANDOFF_RECEIPTS) as Promise<{ receipts: import('../shared/moaHandoff').MoaAutoHandoffReceipt[] }>,
-      handoffStop: (args: { id: string }) =>
-        ipcRenderer.invoke(IPC.DECK_MOA_HANDOFF_STOP, args) as Promise<{ ok: boolean }>,
-      // The HQ brain's transcript as turn events (chat look over the terminal brain).
-      transcript: {
-        status: () =>
-          ipcRenderer.invoke(IPC.DECK_MOA_TRANSCRIPT_STATUS) as Promise<import('../shared/transcript/turnEvents').TranscriptStatus>,
-        snapshot: (opts?: { before?: number }) =>
-          ipcRenderer.invoke(IPC.DECK_MOA_TRANSCRIPT_SNAPSHOT, opts ?? {}) as Promise<import('../shared/transcript/turnEvents').TranscriptPage | null>,
-        // `client` names who listens ('panel', 'notice'): appends flow while
-        // any client is subscribed, so one cannot unsubscribe the other.
-        subscribe: (client?: string) =>
-          ipcRenderer.invoke(IPC.DECK_MOA_TRANSCRIPT_SUBSCRIBE, client) as Promise<import('../shared/transcript/turnEvents').TranscriptStatus>,
-        unsubscribe: (client?: string) => ipcRenderer.invoke(IPC.DECK_MOA_TRANSCRIPT_UNSUBSCRIBE, client) as Promise<void>,
-        codeBlock: (args: { srcOffset: number; n: number; eventId?: string }) =>
-          ipcRenderer.invoke(IPC.DECK_MOA_TRANSCRIPT_CODEBLOCK, args) as Promise<{ body: string } | null>,
-        onAppend: (callback: (data: import('../shared/transcript/turnEvents').TranscriptAppendData) => void) => {
-          const listener = (_e: Electron.IpcRendererEvent, data: import('../shared/transcript/turnEvents').TranscriptAppendData): void => callback(data);
-          ipcRenderer.on(IPC.DECK_MOA_TRANSCRIPT_APPEND, listener);
-          return () => { ipcRenderer.removeListener(IPC.DECK_MOA_TRANSCRIPT_APPEND, listener); };
-        },
-      },
       onChanged: (callback: () => void) => {
         const listener = (): void => callback();
         ipcRenderer.on(IPC.DECK_MOA_CHANGED, listener);
         return () => { ipcRenderer.removeListener(IPC.DECK_MOA_CHANGED, listener); };
       },
-    },
-    // P3d — persisted orchestrator schedules (fire as ordinary brain turns on
-    // their own workspace's orchestrator).
-    schedules: {
-      list: () =>
-        ipcRenderer.invoke(IPC.DECK_SCHEDULES_LIST) as Promise<{
-          schedules: import('../main/deck/deckScheduleStore').DeckSchedule[];
-        }>,
-      create: (args: {
-        workspaceId: string;
-        prompt: string;
-        nextRunAt: number;
-        intervalMinutes?: number;
-      }) =>
-        ipcRenderer.invoke(IPC.DECK_SCHEDULES_CREATE, args) as Promise<{
-          ok: boolean;
-          schedule?: import('../main/deck/deckScheduleStore').DeckSchedule;
-          code?: string;
-        }>,
-      update: (args: { id: string; enabled?: boolean; workspaceId?: string }) =>
-        ipcRenderer.invoke(IPC.DECK_SCHEDULES_UPDATE, args) as Promise<{ ok: boolean; code?: string }>,
-      remove: (id: string) =>
-        ipcRenderer.invoke(IPC.DECK_SCHEDULES_DELETE, { id }) as Promise<{ ok: boolean }>,
-    },
-    // Loop engineering v1 — the one-click loop. START = loop-state + autonomy
-    // caps + optional cadence schedule in one action; STOP/PAUSE = the
-    // fail-closed OFF contract. Tier caps at 'continue' (no approval-press
-    // from this surface).
-    loop: {
-      get: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_GET, { workspaceId }) as Promise<{
-          loop: import('../main/deck/deckLoopStateStore').WorkspaceLoopState | null;
-          wakeBudget: { remaining: number; total: number } | null;
-        }>,
-      // The human ticks a done-when item (the only writer of `passes`).
-      setTask: (args: { workspaceId: string; taskId: string; passes: boolean }) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_TASK, args) as Promise<{
-          ok: boolean;
-          loop?: import('../main/deck/deckLoopStateStore').WorkspaceLoopState;
-        }>,
-      start: (args: {
-        workspaceId: string;
-        objective: string;
-        /** Per-iteration procedure (the HOW; may reference pane skills "/qa"). */
-        steps?: string[];
-        taskTexts?: string[];
-        tier?: 'report' | 'continue';
-        intervalMinutes?: number;
-        /** Iteration budget (Ralph max-iterations) — auto-wakes allowed while
-         *  the loop runs before the human must weigh in. */
-        iterations?: number;
-      }) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_START, args) as Promise<{
-          ok: boolean;
-          loop?: import('../main/deck/deckLoopStateStore').WorkspaceLoopState;
-          code?: string;
-        }>,
-      stop: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_STOP, { workspaceId }) as Promise<{ ok: boolean }>,
-      pause: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_PAUSE, { workspaceId }) as Promise<{ ok: boolean }>,
-      resume: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_RESUME, { workspaceId }) as Promise<{ ok: boolean }>,
-      // 스킬 픽커 재료 — pane 에이전트의 스킬/커맨드 카탈로그(읽기 전용 스캔).
-      skills: (cwd: string) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_SKILLS, cwd) as Promise<{
-          skills: import('../main/deck/skillCatalogScan').SkillCatalogEntry[];
-        }>,
-    },
-    // Global auto-wake switch — the event-push kill switch (Settings toggle).
-    // OFF suppresses the ambient wake-turns (unrequested event summaries);
-    // a running loop still wakes.
-    autoWake: {
-      get: () =>
-        ipcRenderer.invoke(IPC.DECK_AUTOWAKE_GET) as Promise<{ enabled: boolean }>,
-      set: (enabled: boolean) =>
-        ipcRenderer.invoke(IPC.DECK_AUTOWAKE_SET, { enabled }) as Promise<{ enabled: boolean }>,
-    },
-    // `deck.ledgerGate` — the experimental Stop gate that reads the task
-    // ledger instead of inferring open work from pane snapshots. Backed by the
-    // same file the gate reads, so the toggle survives a restart.
-    ledgerGate: {
-      get: () =>
-        ipcRenderer.invoke(IPC.DECK_LEDGER_GATE_GET) as Promise<{ enabled: boolean }>,
-      set: (enabled: boolean) =>
-        ipcRenderer.invoke(IPC.DECK_LEDGER_GATE_SET, { enabled }) as Promise<{ enabled: boolean }>,
-    },
-    // `deck.fleetFastPath` — answer short read-only Fleet questions from the
-    // local Fleet board instead of a Moa turn. Persisted in main, default off.
-    fleetFastPath: {
-      get: () =>
-        ipcRenderer.invoke(IPC.DECK_FLEET_FAST_PATH_GET) as Promise<{ enabled: boolean }>,
-      set: (enabled: boolean) =>
-        ipcRenderer.invoke(IPC.DECK_FLEET_FAST_PATH_SET, { enabled }) as Promise<{ enabled: boolean }>,
-    },
-    // The Deck status panel's ledger read + its "re-read now" ping. The push
-    // carries only the owner workspace: `summary` is the single projection.
-    ledger: {
-      summary: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_LEDGER_SUMMARY, { workspaceId }) as Promise<
-          import('../main/deck/deckLedgerSummary').DeckLedgerSummary
-        >,
-      onChanged: (callback: (envelope: { workspaceId: string }) => void) => {
-        const listener = (
-          _e: Electron.IpcRendererEvent,
-          envelope: { workspaceId: string },
-        ) => callback(envelope);
-        ipcRenderer.on(IPC.DECK_LEDGER_PUSH, listener);
-        return () => { ipcRenderer.removeListener(IPC.DECK_LEDGER_PUSH, listener); };
-      },
-    },
-    // Per-workspace agent mode — off/assist/auto. The single
-    // autonomy knob; 'off' also tears down running loops + schedules.
-    mode: {
-      get: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_MODE_GET, { workspaceId }) as Promise<{
-          mode: import('../main/deck/deckAutonomyStore').AgentMode | null;
-        }>,
-      set: (workspaceId: string, mode: import('../main/deck/deckAutonomyStore').AgentMode) =>
-        ipcRenderer.invoke(IPC.DECK_MODE_SET, { workspaceId, mode }) as Promise<{
-          ok: boolean;
-          mode?: import('../main/deck/deckAutonomyStore').AgentMode;
-          code?: string;
-        }>,
-    },
-    // Orchestrator model picker → main-side authority, so scheduled and
-    // event-woken turns (and the composer-less terminal brain) all see it.
-    modelSet: (model: string, effort?: string) =>
-      ipcRenderer.invoke(IPC.DECK_MODEL_SET, { model, effort }) as Promise<{
-        ok: true;
-        model: string;
-        effort: string;
-      }>,
-    // The operator's `/clear` — resets one workspace orchestrator's brain
-    // context (fresh SDK conversation on the next turn). Transcript stays.
-    conversation: {
-      clear: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_CONVERSATION_CLEAR, { workspaceId }) as Promise<{
-          ok: boolean;
-          code?: string;
-        }>,
     },
     // Claude Code hook bridge (in-app `wmux setup-hooks`). STATUS feeds the
     // install prompt (launch + off→assist/auto mode switch); INSTALL is the
@@ -1160,82 +903,6 @@ const electronAPI = {
         ipcRenderer.invoke(IPC.STATUSLINE_BRIDGE_INSTALL, opts) as Promise<
           import('../cli/commands/setupStatusline').StatuslineOutcome
         >,
-    },
-    // Brain-raised decision gate. GET hydrates the pending decision on mount (so
-    // it shows after a reboot); RESOLVE is the human's answer, which clears the
-    // block and resumes the loop.
-    decision: {
-      get: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_DECISION_GET, { workspaceId }) as Promise<{
-          decision: import('../main/deck/deckDecisionStore').WorkspaceDecision | null;
-        }>,
-      resolve: (args: { workspaceId: string; id: string; resolution: string; dismiss?: boolean }) =>
-        ipcRenderer.invoke(IPC.DECK_DECISION_RESOLVE, args) as Promise<{
-          ok: boolean;
-          code?: string;
-          decision?: import('../main/deck/deckDecisionStore').WorkspaceDecision;
-        }>,
-    },
-    // Deterministic "welcome home" briefing — a synchronous main-process READ of
-    // existing judgment state (no brain turn). GET builds the summary + delta and
-    // is PURE; `seen` is the acknowledge that advances the last-viewed baseline,
-    // sent only when the briefing is actually rendered expanded. CONFIG get/set
-    // are the Settings toggles.
-    briefing: {
-      get: (workspaceId: string) =>
-        ipcRenderer.invoke(IPC.DECK_BRIEFING_GET, { workspaceId }) as Promise<{
-          briefing: import('../main/deck/deckBriefing').WorkspaceBriefing | null;
-          autoShow?: boolean;
-          mirrorReady?: boolean;
-        }>,
-      seen: (workspaceId: string, builtAt: number) =>
-        ipcRenderer.invoke(IPC.DECK_BRIEFING_SEEN, { workspaceId, builtAt }) as Promise<{
-          ok: boolean;
-        }>,
-      getConfig: () =>
-        ipcRenderer.invoke(IPC.DECK_BRIEFING_CONFIG_GET) as Promise<
-          import('../main/deck/deckBriefingStore').DeckBriefingConfig
-        >,
-      setConfig: (patch: Partial<import('../main/deck/deckBriefingStore').DeckBriefingConfig>) =>
-        ipcRenderer.invoke(IPC.DECK_BRIEFING_CONFIG_SET, patch) as Promise<
-          import('../main/deck/deckBriefingStore').DeckBriefingConfig
-        >,
-    },
-    // Normalized BrainEvent push, enveloped with the workspace whose
-    // orchestrator produced it (see BrainAdapter.BrainEvent).
-    onStream: (
-      callback: (envelope: {
-        workspaceId: string;
-        event: import('../main/deck/BrainAdapter').BrainEvent;
-      }) => void,
-    ) => {
-      const listener = (
-        _e: Electron.IpcRendererEvent,
-        envelope: {
-          workspaceId: string;
-          event: import('../main/deck/BrainAdapter').BrainEvent;
-        },
-      ) => callback(envelope);
-      ipcRenderer.on(IPC.DECK_STREAM, listener);
-      return () => { ipcRenderer.removeListener(IPC.DECK_STREAM, listener); };
-    },
-    // Mount-time hydration for the above: main's CURRENT brain pty per
-    // workspace. The push is one-way, so a reloaded renderer has no other way
-    // to learn about a terminal that spawned before it subscribed.
-    listBrainPtys: () =>
-      ipcRenderer.invoke(IPC.DECK_BRAIN_PTY_LIST) as Promise<{ ptyIds: Record<string, string> }>,
-    // `claude-pty` brain only: the daemon session id of the embedded TUI for
-    // one workspace (null retires it). Separate from onStream because it is
-    // pane wiring, not conversation content.
-    onBrainPty: (
-      callback: (envelope: { workspaceId: string; ptyId: string | null }) => void,
-    ) => {
-      const listener = (
-        _e: Electron.IpcRendererEvent,
-        envelope: { workspaceId: string; ptyId: string | null },
-      ) => callback(envelope);
-      ipcRenderer.on(IPC.DECK_BRAIN_PTY, listener);
-      return () => { ipcRenderer.removeListener(IPC.DECK_BRAIN_PTY, listener); };
     },
     // A fan-out worker of a brain-less owner ended its turn: a pointer for
     // the requester pane's one-line nudge (renderer/hooks/fanoutCallerNudge).
@@ -1454,6 +1121,91 @@ const electronAPI = {
       ipcRenderer.on(IPC.GH_LOGIN_EVENT, listener);
       return () => { ipcRenderer.removeListener(IPC.GH_LOGIN_EVENT, listener); };
     },
+  },
+  // Agent factory rooms (main/ipc/handlers/room.handler.ts): the owner's
+  // reads, posts and answers; onEvent carries every card main writes.
+  rooms: {
+    status: () => ipcRenderer.invoke(IPC.ROOM_STATUS) as Promise<import('../main/ipc/handlers/room.handler').RoomStatus | import('../main/ipc/handlers/room.handler').RoomRefusal>,
+    read: (params: import('../shared/room').RoomReadParams & { workspaceId: string }) =>
+      ipcRenderer.invoke(IPC.ROOM_READ, params) as Promise<import('../shared/room').RoomReadResult | import('../main/ipc/handlers/room.handler').RoomRefusal>,
+    threads: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.ROOM_THREADS, { workspaceId }) as Promise<{ ok: true; workspaceId: string; threads: import('../shared/room').ThreadSummary[] } | import('../main/ipc/handlers/room.handler').RoomRefusal>,
+    post: (params: { workspaceId: string; threadId?: import('../shared/room').ThreadId; title: string; body?: string; mentions?: string[]; to?: import('../shared/bot').BotRole; replyTo?: string; clientPostId?: string }) =>
+      ipcRenderer.invoke(IPC.ROOM_POST, { ...params, kind: 'human' }) as Promise<import('../main/ipc/handlers/room.handler').RoomPostResponse>,
+    resolve: (params: import('../shared/room').RoomResolveParams) =>
+      ipcRenderer.invoke(IPC.ROOM_RESOLVE, params) as Promise<{ ok: true; card: import('../shared/room').RoomCard } | import('../main/ipc/handlers/room.handler').RoomRefusal>,
+    decision: (workspaceId: string, cardId: string) =>
+      ipcRenderer.invoke(IPC.ROOM_DECISION, { workspaceId, cardId }) as Promise<{ decision: import('../main/deck/deckDecisionStore').WorkspaceDecision | null } | import('../main/ipc/handlers/room.handler').RoomRefusal>,
+    actors: () =>
+      ipcRenderer.invoke(IPC.ROOM_ACTORS) as Promise<{ actors: Record<string, import('../main/ipc/handlers/room.handler').RoomActor> } | import('../main/ipc/handlers/room.handler').RoomRefusal>,
+    onEvent: (callback: (payload: import('../main/factory/roomWriter').RoomEventPayload) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, payload: import('../main/factory/roomWriter').RoomEventPayload) => callback(payload);
+      ipcRenderer.on(ROOM_EVENT, listener);
+      return () => { ipcRenderer.removeListener(ROOM_EVENT, listener); };
+    },
+  },
+  // Agent factory bots and settings (the room dock's chips, the HQ strip and
+  // Settings › Factory; shapes in renderer/components/Room/factoryPorts.ts).
+  // Bot actions go through the pipe router as the operator (bot.* handlers
+  // are the gate); a refusal comes back as {ok:false, message}.
+  factory: {
+    listBots: (req?: { workspaceId?: string }) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_LIST, req ?? {}) as Promise<{ bots: import('../main/ipc/handlers/factory.handler').FactoryBotRow[] }>,
+    onBotEvent: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(BOT_EVENT, listener);
+      return () => { ipcRenderer.removeListener(BOT_EVENT, listener); };
+    },
+    botAction: (action: 'wake' | 'park' | 'resume' | 'interrupt', botId: string) =>
+      factoryBotCall(`bot.${action}`, { botId }),
+    updateBot: (botId: string, patch: Record<string, unknown>) =>
+      factoryBotCall('bot.update', { botId, patch }),
+    createBot: (req: import('../shared/botCreate').FactoryBotCreateRequest) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_CREATE, req) as Promise<import('../shared/botCreate').FactoryBotCreateResult>,
+    pickBotAvatar: () =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_PICK_AVATAR) as Promise<import('../shared/botCreate').FactoryBotAvatarPickResult>,
+    setBotAvatar: (botId: string, avatar: string | null) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_SET_AVATAR, { botId, avatar }) as Promise<import('../shared/botCreate').FactoryBotAvatarSetResult>,
+    suggestBotRepo: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_SUGGEST_REPO, { workspaceId }) as Promise<import('../shared/botCreate').FactoryBotRepoSuggestion>,
+    getSettings: () => ipcRenderer.invoke(IPC.FACTORY_SETTINGS_GET) as Promise<import('../shared/factorySettings').FactorySettings>,
+    setSettings: (patch: Partial<import('../shared/factorySettings').FactorySettings>) =>
+      ipcRenderer.invoke(IPC.FACTORY_SETTINGS_SET, patch) as Promise<import('../shared/factorySettings').FactorySettings | null>,
+    // The owner's stop of running bot work: every bot, or one bot.
+    stopAll: () => ipcRenderer.invoke(IPC.FACTORY_STOP_ALL) as Promise<import('../main/factory/factoryStop').FactoryStopResult>,
+    stopBot: (botId: string) =>
+      ipcRenderer.invoke(IPC.FACTORY_STOP_BOT, { botId }) as Promise<import('../main/factory/factoryStop').FactoryStopResult>,
+    // The owner resumes the stopped worker of an ended bot task.
+    resumeWorker: (taskId: string) =>
+      ipcRenderer.invoke(IPC.FACTORY_WORKER_RESUME, { taskId }) as Promise<import('../main/factory/workerReclaim').WorkerResumeResult>,
+    // Every bot's routines, read-only (routine.list as the operator).
+    listRoutines: async (): Promise<import('../shared/botRoutine').BotRoutine[]> => {
+      const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, 'routine.list', {})) as { ok?: unknown; result?: { ok?: unknown; routines?: unknown } } | null;
+      return resp?.ok === true && resp.result?.ok === true && Array.isArray(resp.result.routines)
+        ? (resp.result.routines as import('../shared/botRoutine').BotRoutine[])
+        : [];
+    },
+    // Bot secrets and logins (renderer/components/Room/botSecrets.ts): names
+    // and use come back, never a value.
+    secrets: {
+      list: () => ipcRenderer.invoke(BOT_SECRET_IPC.list) as Promise<import('../renderer/components/Room/botSecrets').SecretListResult>,
+      set: (req: { name: string; value: string; workspaceId?: string; cardId?: string }) =>
+        ipcRenderer.invoke(BOT_SECRET_IPC.set, req) as Promise<import('../renderer/components/Room/botSecrets').SecretSetResult>,
+      delete: (name: string) => ipcRenderer.invoke(BOT_SECRET_IPC.delete, { name }) as Promise<{ ok: boolean }>,
+      login: (req: { workspaceId: string; cardId: string; done?: boolean }) =>
+        ipcRenderer.invoke(BOT_SECRET_IPC.login, req) as Promise<import('../renderer/components/Room/botSecrets').LoginResult>,
+    },
+  },
+  // Owner approvals of what bots ask for (main/ipc/handlers/approval.handler.ts:
+  // main-window only). Changes arrive as BOT_EVENT (factory.onBotEvent).
+  approvals: {
+    list: (workspaceId?: string) =>
+      ipcRenderer.invoke(BOT_APPROVAL_IPC.list, workspaceId ? { workspaceId } : {}) as Promise<import('../main/ipc/handlers/approval.handler').ApprovalListResponse>,
+    decide: (req: import('../shared/botApproval').ApprovalDecideRequest) =>
+      ipcRenderer.invoke(BOT_APPROVAL_IPC.decide, req) as Promise<import('../main/ipc/handlers/approval.handler').ApprovalDecideResponse>,
+    rules: () => ipcRenderer.invoke(BOT_APPROVAL_IPC.rules) as Promise<import('../main/ipc/handlers/approval.handler').ApprovalRulesResponse>,
+    revokeRule: (ruleId: string) =>
+      ipcRenderer.invoke(BOT_APPROVAL_IPC.revokeRule, { ruleId }) as Promise<{ ok: true } | { ok: false; code: string; message: string }>,
   },
   // Work links (docs/work-links.md): read-only here, main is the only writer.
   // onChanged hands over the changed link ids; re-read what you show.

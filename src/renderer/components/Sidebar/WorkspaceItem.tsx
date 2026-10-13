@@ -88,9 +88,6 @@ interface WorkspaceItemProps {
   renderTask?: (id: string) => React.ReactNode;
   /** Sidebar's workspace close, for a pane group's "Close finished tasks". */
   onCloseTask?: (id: string) => void;
-  /** Moa's app-owned HQ workspace: Close and Archive are shown but disabled
-   *  (with the reason), and it is not a reorder or pin target. */
-  moaHq?: boolean;
   /** This row is the list's one Tab stop (roving tabindex, Sidebar owns it);
    *  every other row is reached with the arrow keys. */
   tabStop?: boolean;
@@ -453,7 +450,7 @@ function shortenPath(path: string, maxLen = 25): string {
   return `.../${parts.slice(-2).join('/')}`;
 }
 
-function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumber, onSelect, onCtrlSelect, onRename, onClose, onArchive, onCopyInfo, onDuplicate, onReorder, taskRow = false, shortcutHintHidden = false, nestedTaskIds, renderTask, onCloseTask, moaHq = false, tabStop = false }: WorkspaceItemProps) {
+function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumber, onSelect, onCtrlSelect, onRename, onClose, onArchive, onCopyInfo, onDuplicate, onReorder, taskRow = false, shortcutHintHidden = false, nestedTaskIds, renderTask, onCloseTask, tabStop = false }: WorkspaceItemProps) {
   const t = useT();
   // A1: 자기 ws만 구독 — 배경 ws churn/다른 항목 변경에는 리렌더되지 않는다.
   const workspace = useRowStore(selectWorkspaceById(workspaceId));
@@ -502,7 +499,7 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
   // A bookmark is a mark for the sidebar filter, never an order: no reorder
   // or settle rule reads it.
   const bookmarked = useRowStore((s) => s.sidebarBookmarkedIds.includes(workspaceId));
-  const reorderOff = taskRow || moaHq || (sortPaused && !pinned);
+  const reorderOff = taskRow || (sortPaused && !pinned);
   const setTerminalTextDropDragActive = useRowStore((s) => s.setTerminalTextDropDragActive);
 
   const metadata = workspace?.metadata;
@@ -564,7 +561,7 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
   // keyboard is on this row, so Tab walks rows' actions one row at a time
   // instead of every hidden button in the list.
   const [rowFocusWithin, setRowFocusWithin] = useState(false);
-  const innerTab = rowFocusWithin || moaHq ? 0 : -1;
+  const innerTab = rowFocusWithin ? 0 : -1;
   // A pane here is waiting out a usage limit: when nothing louder is going on
   // the workspace row draws the waiting clock instead of nothing (or a red ✕).
   const usageWaiting = useRowStore((s) => workspaceHasUsageLimitWaiting(s, workspaceId));
@@ -1200,17 +1197,13 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
             the cluster: a pointer overshooting it to the right leaves the
             cluster instead of landing on the one control here that kills a
             workspace. */}
-        {/* Moa's HQ: present but disabled, focusable so the reason can be
-            read (aria-disabled, not `disabled`). */}
         <button
           data-workspace-action="close"
           tabIndex={innerTab}
-          className={`${HIT_TARGET_24_IN_CLUSTER} rounded-md text-[color-mix(in_srgb,var(--text-main)_50%,transparent)] text-[10px] font-mono ${moaHq ? 'opacity-50 cursor-default' : 'hover:bg-[var(--selection)] hover:text-[var(--accent-red)]'}`}
-          onClick={(e) => { e.stopPropagation(); if (moaHq) return; setMenuPos(null); setCloseConfirmPos(anchorOf(e.currentTarget)); }}
-          title={moaHq ? t('moa.guard.reason') : t('workspace.close')}
+          className={`${HIT_TARGET_24_IN_CLUSTER} rounded-md text-[color-mix(in_srgb,var(--text-main)_50%,transparent)] text-[10px] font-mono hover:bg-[var(--selection)] hover:text-[var(--accent-red)]`}
+          onClick={(e) => { e.stopPropagation(); setMenuPos(null); setCloseConfirmPos(anchorOf(e.currentTarget)); }}
+          title={t('workspace.close')}
           aria-label={t('workspace.close')}
-          aria-disabled={moaHq || undefined}
-          aria-description={moaHq ? t('moa.guard.reason') : undefined}
         >
           <IconX size={11} />
         </button>
@@ -1284,17 +1277,14 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
             ring sits on the line, never on the roster below it. */}
         <div
           className={`${hover.group} -mx-2.5 -my-2 flex min-w-0 items-start gap-2 px-2.5 py-2`}
-          // Moa's HQ row sits above the list, outside the tree: a labelled
-          // group whose own buttons take Tab directly, no row stop.
-          role={moaHq ? 'group' : 'treeitem'}
-          aria-level={moaHq ? undefined : taskRow ? 2 : 1}
-          aria-selected={moaHq ? undefined : isActive}
-          aria-expanded={!moaHq && expandable && !editing ? rosterShown : undefined}
-          aria-current={moaHq && isActive ? 'true' : undefined}
+          role="treeitem"
+          aria-level={taskRow ? 2 : 1}
+          aria-selected={isActive}
+          aria-expanded={expandable && !editing ? rosterShown : undefined}
           aria-label={rowLabel}
-          tabIndex={moaHq ? undefined : tabStop ? 0 : -1}
-          data-sidebar-row={moaHq ? undefined : workspaceId}
-          onKeyDown={moaHq ? undefined : handleRowKeyDown}
+          tabIndex={tabStop ? 0 : -1}
+          data-sidebar-row={workspaceId}
+          onKeyDown={handleRowKeyDown}
           onFocus={() => setRowFocusWithin(true)}
           onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setRowFocusWithin(false); }}
         >
@@ -1359,7 +1349,7 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
                     Ctrl+9 is the last workspace, so past eight rows only the last
                     one shows 9 and the rows between show nothing. A nested task
                     row, Moa's HQ and a row in the Snoozed/Settled group have none. */}
-                {!taskRow && !moaHq && !shortcutHintHidden && shortcutNumber !== undefined && (
+                {!taskRow && !shortcutHintHidden && shortcutNumber !== undefined && (
                   // Drawn by CSS so the digit is not part of the row's text
                   // (selection, copy, accessible name).
                   <span
@@ -1390,7 +1380,7 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
                   </span>
                 )}
                 {/* Neutral like the pin: a bookmark is the user's own mark, not a state. */}
-                {bookmarked && !moaHq && (
+                {bookmarked && (
                   <span className="flex-none text-[var(--text-muted)]" role="img" aria-label={t('sidebar.bookmarked')} title={t('sidebar.bookmarked')} data-sidebar-bookmarked>
                     <IconBookmark size={10} />
                   </span>
@@ -1610,20 +1600,16 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
           {/* #1011 — the non-destructive exit: same session teardown as Close,
               but the workspace comes back from the Archived section intact. */}
           <button
-            className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${moaHq ? 'opacity-50 cursor-default' : 'hover:bg-[var(--bg-overlay)]'}`}
+            className="w-full text-left px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
             style={{ color: 'var(--text-main)' }}
-            onClick={() => { if (moaHq) return; setMenuPos(null); onArchive(workspaceId); }}
+            onClick={() => { setMenuPos(null); onArchive(workspaceId); }}
             data-workspace-action="archive"
-            title={moaHq ? t('moa.guard.reason') : undefined}
-            aria-disabled={moaHq || undefined}
-            aria-description={moaHq ? t('moa.guard.reason') : undefined}
           >
             {t('workspace.archive')}
           </button>
           {/* Pinned to top (2026-09-26): offered in every order. A task row
-              renders under its owner, so it has no top to pin to; Moa's HQ
-              is not in the list at all. */}
-          {!taskRow && !moaHq && (
+              renders under its owner, so it has no top to pin to. */}
+          {!taskRow && (
             <button
               className="w-full text-left px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
               style={{ color: 'var(--text-main)' }}
@@ -1635,16 +1621,14 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
           )}
           {/* Bookmark: a mark the filter's "Bookmarked only" narrows to. Unlike
               a pin it never moves the row, so a task row can carry one too. */}
-          {!moaHq && (
-            <button
-              className="w-full text-left px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
-              style={{ color: 'var(--text-main)' }}
-              onClick={() => { setMenuPos(null); toggleSidebarBookmark(workspaceId); }}
-              data-workspace-action="bookmark"
-            >
-              {bookmarked ? t('sidebar.unbookmark') : t('sidebar.bookmark')}
-            </button>
-          )}
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
+            style={{ color: 'var(--text-main)' }}
+            onClick={() => { setMenuPos(null); toggleSidebarBookmark(workspaceId); }}
+            data-workspace-action="bookmark"
+          >
+            {bookmarked ? t('sidebar.unbookmark') : t('sidebar.bookmark')}
+          </button>
           {/* Settle / snooze: visibility only — the workspace moves to the
               sidebar's Settled or Snoozed group, nothing is closed. A task row
               rides with its owner, so it has no verbs of its own. */}

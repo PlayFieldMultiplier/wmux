@@ -1,0 +1,151 @@
+// What a bot worker's deny rules cover, read the way Claude Code reads a
+// `Bash(<pattern>)` rule: the whole command matches the pattern, `*` standing
+// for any run of characters. (The rules' behaviour inside claude itself was
+// measured for the merge rules; see main/agents/botWorkerMergeGuard.ts.)
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  BOT_WORKER_DENY, BOT_WORKER_MERGE_DENY, BOT_WORKER_PUBLIC_DENY, BOT_WORKER_PUSH_DENY, buildBotWorkerSettings, botWorkerDefaultBranchesPath,
+  isDenyableBranchName, readBotWorkerDefaultBranches, recordBotWorkerDefaultBranch, writeBotWorkerSettings,
+} from '../botWorkerGuard';
+
+function denied(command: string, rules: readonly string[] = BOT_WORKER_DENY): boolean {
+  return rules.some((rule) => {
+    const m = /^Bash\((.*)\)$/.exec(rule);
+    if (!m) return false;
+    const re = new RegExp(`^${m[1].split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+    return re.test(command);
+  });
+}
+
+describe('bot worker deny rules', () => {
+  it('the settings document carries every rule, merge rules first', () => {
+    expect(buildBotWorkerSettings()).toEqual({ permissions: { deny: [...BOT_WORKER_DENY] } });
+    expect(BOT_WORKER_DENY.slice(0, BOT_WORKER_MERGE_DENY.length)).toEqual([...BOT_WORKER_MERGE_DENY]);
+    expect(BOT_WORKER_DENY).toEqual(expect.arrayContaining([...BOT_WORKER_PUSH_DENY, ...BOT_WORKER_PUBLIC_DENY]));
+  });
+
+  it.each([
+    'gh pr merge 3 --squash',
+    'gh api -X PUT repos/o/r/pulls/3/merge',
+    'git push --force origin wtask/a',
+    'git push origin wtask/a --force-with-lease',
+    'git push -f origin wtask/a',
+    'git push origin wtask/a -f',
+    'git push -fu origin wtask/a',
+    'git -C /w push --force',
+    'git push origin +wtask/a',
+    'git push origin main',
+    'git push origin HEAD:main',
+    'git push origin wtask/a:main',
+    'git push origin HEAD:refs/heads/master',
+    'git push origin master --tags',
+    'gh issue create --title x --body y',
+    'gh issue close 4',
+    'gh issue comment 4 --body hi',
+    'gh pr comment 3 --body hi',
+    'gh pr review 3 --approve',
+    'gh pr close 3',
+    'gh release create v1.0.0',
+    'gh api -X POST repos/o/r/issues',
+    'gh api --method PATCH repos/o/r/issues/4',
+    'gh api -XDELETE repos/o/r/git/refs/heads/x',
+    'gh api -X post repos/o/r/issues',
+    'gh api repos/o/r/issues -f title=x',
+    'gh api graphql -F query=@q.graphql',
+    'gh api repos/o/r/issues --raw-field title=x',
+    'gh api repos/o/r/issues --input body.json',
+    'git push --mirror origin',
+    'git push origin --all',
+    'git push -uf origin wtask/a',
+    'git push -vuf origin wtask/a',
+    'git push origin --delete wtask/a',
+    'git push origin :wtask/a',
+    'gh issue delete 4',
+    'gh issue reopen 4',
+    'gh issue edit 4 --title x',
+    'gh pr edit 3 --title x',
+    'gh release delete v1',
+    'gh repo delete o/r --yes',
+    'gh secret set TOKEN',
+    'git push',
+    'git push origin',
+    'git push -u origin',
+    'git push --set-upstream origin',
+    'git push origin HEAD',
+    'git push -u origin HEAD',
+    'git config remote.origin.push refs/heads/*:refs/heads/develop',
+    'git config push.default upstream',
+    'git config branch.wtask/a.merge refs/heads/develop',
+    'git -c push.default=upstream push origin',
+    'git -c remote.origin.push=HEAD:develop push origin wtask/a',
+    'git branch --set-upstream-to=origin/develop',
+    'git branch wtask/a -u origin/develop',
+    // Collateral of the no-destination rule: `git stash` (no "push") still works.
+    'git stash push',
+  ])('refuses %s', (cmd) => {
+    expect(denied(cmd)).toBe(true);
+  });
+
+  it.each([
+    'git push origin wtask/fix-main-menu',
+    'git push -u origin wtask/a',
+    'git push origin wtask/maintenance',
+    'gh pr create --title x --body y',
+    'gh pr view 3 --json headRefOid',
+    'gh pr checks 3',
+    'gh issue view 4',
+    'gh api repos/o/r/pulls/3',
+    'gh api repos/o/r/issues --jq .[].title',
+    'gh release view v1.0.0',
+    'gh release list',
+    'gh release download v1.0.0',
+    'gh api repos/o/r/contents/POST.md',
+    'git push -u origin wtask/feature',
+    'git push origin HEAD:wtask/a',
+    'git config user.name bot',
+    'git branch -a',
+    'git stash',
+  ])('lets %s through', (cmd) => {
+    expect(denied(cmd)).toBe(false);
+  });
+});
+
+describe('a repository\'s own default branch', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-default-branch-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+  const rulesOf = (doc: Record<string, unknown>) => (doc as { permissions: { deny: string[] } }).permissions.deny;
+
+  it('a recorded default branch gets the push rules main and master have', () => {
+    const rules = rulesOf(buildBotWorkerSettings(['develop']));
+    for (const cmd of ['git push origin develop', 'git push origin HEAD:develop', 'git push origin wtask/a:refs/heads/develop', 'git push origin develop --tags']) {
+      expect(denied(cmd, rules)).toBe(true);
+      expect(denied(cmd)).toBe(false);
+    }
+    expect(denied('git push origin wtask/develop-docs', rules)).toBe(false);
+    expect(denied('git push -u origin wtask/a', rules)).toBe(false);
+    expect(rulesOf(buildBotWorkerSettings(['main', 'master']))).toEqual([...BOT_WORKER_DENY]);
+  });
+
+  it('only a plain ref name can become a rule', () => {
+    for (const ok of ['develop', 'trunk', 'release/2.x', 'v1.0', '_trunk', 'dévelop', '개발', 'x'.repeat(255)]) expect(isDenyableBranchName(ok)).toBe(true);
+    for (const bad of ['', '*', 'dev*', 'a b', 'x)', '-f', '.x', 'a..b', 'a/', 'a.lock', 'a@{1}', 'a:b', 'a~1', 'a$b', 'x'.repeat(256), 42]) expect(isDenyableBranchName(bad)).toBe(false);
+    expect(rulesOf(buildBotWorkerSettings(['dev*', 'x) Bash(*']))).toEqual([...BOT_WORKER_DENY]);
+  });
+
+  it('main records it once; the settings main and the daemon write carry it; an unreadable file means main/master only', () => {
+    expect(recordBotWorkerDefaultBranch(dir, 'develop')).toBe(true);
+    expect(recordBotWorkerDefaultBranch(dir, 'develop')).toBe(true);
+    expect(recordBotWorkerDefaultBranch(dir, 'main')).toBe(true);
+    expect(recordBotWorkerDefaultBranch(dir, 'dev*')).toBe(false);
+    expect(readBotWorkerDefaultBranches(dir)).toEqual(['develop']);
+    const settings = JSON.parse(fs.readFileSync(writeBotWorkerSettings(dir), 'utf8'));
+    expect(denied('git push origin develop', rulesOf(settings))).toBe(true);
+    fs.writeFileSync(botWorkerDefaultBranchesPath(dir), '{nope');
+    expect(readBotWorkerDefaultBranches(dir)).toEqual([]);
+    expect(rulesOf(JSON.parse(fs.readFileSync(writeBotWorkerSettings(dir), 'utf8')))).toEqual([...BOT_WORKER_DENY]);
+  });
+});

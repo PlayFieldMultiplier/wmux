@@ -5,7 +5,7 @@ import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { activeAgentSlug, leafDisplayName } from '../../utils/paneNaming';
 import Checkbox from '../ui/Checkbox';
 import { moaBrainEnd } from '../../hooks/useA2aRemoteSnapshot';
-import { listedWorkspaces, moaHqId } from '../../stores/slices/moaSlice';
+import { listedWorkspaces } from '../../stores/slices/moaSlice';
 import type { A2aExposureV1 } from '../../../shared/a2aRemote';
 import { togglePaneExposure, toggleWorkspaceExposure, type ExposureLists } from '../Remote/a2aLinkModel';
 
@@ -109,7 +109,7 @@ export function A2aExposureChecklist({ hostId, pcName, t }: { hostId: string; pc
   const latest = useRef<ExposureLists>({ workspaceIds: [], paneIds: {} });
   const queue = useRef<Promise<void>>(Promise.resolve());
   const moaAvailable = useStore((s) => moaBrainEnd(s) !== null);
-  const shape = useStore(useShallow((s) => listedWorkspaces(s.workspaces, moaHqId(s)).map((ws) =>
+  const shape = useStore(useShallow((s) => listedWorkspaces(s.workspaces).map((ws) =>
     JSON.stringify({
       id: ws.id,
       name: ws.name,

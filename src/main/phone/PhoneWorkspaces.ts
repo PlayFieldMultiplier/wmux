@@ -12,6 +12,8 @@ import {
   withoutTicketTranscript,
 } from '../../shared/phoneFleetTickets';
 import { getPhoneFleetTicketStore } from './PhoneFleetTicketStore';
+import { handlePhoneRoomCommand, withPhoneFactory } from './PhoneFactory';
+import { handlePhoneBotApprovalCommand } from './PhoneBotApprovals';
 
 /** How long the list waits for the optional sidebar projection. */
 const PHONE_SIDEBAR_RENDERER_TIMEOUT_MS = 1500;
@@ -81,6 +83,12 @@ async function phoneFleetTicketDetail(payload: Record<string, unknown>, getWindo
 /** Named workspace operations only; never forward an arbitrary phone RPC. */
 export async function handlePhoneWorkspaces(command: string, payload: Record<string, unknown>, getWindow: () => BrowserWindow | null): Promise<unknown> {
   if (command === FLEET_TICKET_DETAIL_COMMAND) return phoneFleetTicketDetail(payload, getWindow);
+  // The agent factory's rooms (read-only); null for any other command.
+  const room = handlePhoneRoomCommand(command, payload);
+  if (room) return room;
+  // A bot's approval request: read or decided by the phone's operator.
+  const approval = handlePhoneBotApprovalCommand(command, payload);
+  if (approval) return approval;
   if (command === 'workspaces.list') {
     // The sidebar projection rides along, fetched in parallel and optional: a
     // failure or a slow renderer omits it and the list answers as before.
@@ -103,7 +111,9 @@ export async function handlePhoneWorkspaces(command: string, payload: Record<str
         ...(settle[row.id]?.snoozedUntil !== undefined ? { snoozedUntil: settle[row.id].snoozedUntil } : {}),
       })),
     };
-    const sidebar = takeSidebar(sidebarRaw, drops.report);
+    // The agent factory's fields are main's own (bots, rooms, handoffs).
+    const parsed = takeSidebar(sidebarRaw, drops.report);
+    const sidebar = parsed ? withPhoneFactory(parsed) : null;
     if (!sidebar && sidebarRaw !== null) drops.report('renderer.notSnapshot');
     const fitted = sidebar ? fitSidebarToBudget(reply, sidebar, PHONE_WORKSPACES_REPLY_BUDGET_BYTES, drops.report) : null;
     if (fitted) reply.sidebar = fitted;
@@ -134,8 +144,9 @@ export async function handlePhoneWorkspaces(command: string, payload: Record<str
  * which would turn every list call into a timeout, so the sidebar must fit.
  * It degrades in steps, cheapest loss first. The per-workspace layout trees
  * go first (largest first; the phone draws that workspace flat), then Moa's
- * delegated-job list, then the pending hand-off notices (both bounded). Fleet
- * tickets, the newest field, go before all of it: their text, then the list. The pane placement (every pane
+ * delegated-job list, then the pending hand-off notices (both bounded). The
+ * factory's per-workspace bots and question counts go first of all, then Fleet
+ * tickets: their text, then the list. The pane placement (every pane
  * id and every task's pane group) goes before anything the reply carried
  * before it existed, so a sidebar that fit without it still arrives whole;
  * then tab titles, then the pane rows, and only then the whole sidebar. With
@@ -150,6 +161,16 @@ export function fitSidebarToBudget(
 ): PhoneSidebarSnapshot | null {
   const fits = (candidate: PhoneSidebarSnapshot) => Buffer.byteLength(JSON.stringify({ ...base, sidebar: candidate })) <= budget;
   if (fits(sidebar)) return sidebar;
+  // The factory's per-workspace bots and question counts are the newest
+  // fields: they go first, all at once (the small `factory` block stays).
+  if (sidebar.workspaces.some((row) => row.bots !== undefined || row.openQuestions !== undefined)) {
+    onDrop('budget.factoryRows');
+    const withoutBots: PhoneSidebarSnapshot = {
+      ...sidebar,
+      workspaces: sidebar.workspaces.map(({ bots: _bots, openQuestions: _open, ...row }) => row),
+    };
+    return fitSidebarToBudget(base, withoutBots, budget, onDrop);
+  }
   // The tickets go before anything older: a phone whose reply fit before they
   // existed keeps all of it. Their text first, then the list whole — a cut
   // list would read as jobs that are not there.

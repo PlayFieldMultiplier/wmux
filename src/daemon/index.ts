@@ -205,6 +205,7 @@ import { LANLINK_SENTINEL_SESSION_ID } from '../shared/lanlink';
 import { classifyTasklistOutput, classifyKillOutcome, lockOwnerIsReclaimable, type ProcessLiveness } from '../shared/processLiveness';
 import { deliverScheduledPrompt, deliveryInputFence, type ScheduledPromptDeliveryDeps } from './sessionPromptDelivery';
 import { deliverCallerNudge } from './callerNudgeDelivery';
+import { stopAgentTree } from './agentStop';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -2428,6 +2429,8 @@ function registerRpcHandlers(
       args: p.args,
       cwd: p.cwd,
       env: p.env,
+      // Spawn-only (see DaemonCreateSessionParams.secretEnv): never on meta.
+      ...(p.secretEnv !== undefined ? { secretEnv: p.secretEnv } : {}),
       cols: p.cols,
       rows: p.rows,
       agent: p.agent,
@@ -8156,6 +8159,27 @@ async function main(): Promise<void> {
       && !!sessionManager.getSession(id)?.meta.wslTarget
       && agentProcessTracker.hasLiveWslAgent(id);
     return { live };
+  });
+  // main's stop of a factory worker whose task ended: the pane's verified
+  // claude and everything below it stop; the shell, the session and its
+  // resume binding stay (agentStop.ts). The app's own process only.
+  pipeServer.onRpc('session.stopAgent', async (rawParams, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false, code: 'not_authorized' };
+    const id = typeof (rawParams as { sessionId?: unknown }).sessionId === 'string'
+      ? (rawParams as { sessionId: string }).sessionId
+      : '';
+    const managed = id ? sessionManager.getSession(id) : undefined;
+    if (!managed) return { ok: false, code: 'no_session' };
+    if (managed.meta.wslTarget || managed.meta.exec) return { ok: false, code: 'unsupported' };
+    try {
+      return await stopAgentTree({
+        tree: () => agentProcessTracker.agentProcessTree(id, 'claude'),
+        stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
+        kill: (pid, signal) => process.kill(pid, signal),
+      });
+    } catch {
+      return { ok: false, code: 'unknown' };
+    }
   });
   // #919 — re-evaluate canonical identity OUTSIDE `session:agent`: the tier
   // inputs change (attribution completes; a watched process dies) while no

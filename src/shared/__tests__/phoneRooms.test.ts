@@ -1,0 +1,142 @@
+import { describe, it, expect } from 'vitest';
+import {
+  PHONE_ROOM_LIMITS,
+  fitPhoneRoomPage,
+  fitPhoneRoomThreads,
+  isPhoneRoomWorkspaceId,
+  parsePhoneRoomCard,
+  parsePhoneRoomCardsReply,
+  parsePhoneRoomThreadsReply,
+  phoneRoomCard,
+  type PhoneRoomCardsReply,
+} from '../phoneRooms';
+import type { RoomCard } from '../room';
+
+const card = (seq: number, over: Partial<RoomCard> = {}): RoomCard => ({
+  version: 1, id: `c-${seq}`, seq, workspaceId: 'ws-1', threadId: 'general', kind: 'status', at: 1000 + seq,
+  actor: { kind: 'bot', workspaceId: 'ws-1', botId: 'bot-1111bbbb' }, title: `card ${seq}`, ...over,
+});
+
+describe('phone room cards', () => {
+  it('projects a card: bot role and name resolved, idempotency key and workspace left out', () => {
+    const out = phoneRoomCard(card(3, { clientPostId: 'phone:abc:1', body: 'line 1\nline 2‮', refs: { pr: 7, url: 'javascript:alert(1)', check: 'ci' } }), () => ({ role: 'lead', name: 'Lead' }));
+    expect(out).toEqual({
+      id: 'c-3', seq: 3, threadId: 'general', kind: 'status', at: 1003,
+      actor: { kind: 'bot', botId: 'bot-1111bbbb', role: 'lead', name: 'Lead' },
+      title: 'card 3', body: 'line 1\nline 2', refs: { pr: 7, check: 'ci' },
+    });
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+  });
+
+  it("gives an owner card a phone sent its clientMessageId, and no other card any id", () => {
+    const human = { kind: 'human' as const, actor: { kind: 'human' as const } };
+    const owner = phoneRoomCard(card(4, { ...human, clientPostId: 'phone:0123456789abcdef:msg-1' }), () => null);
+    expect(owner?.clientMessageId).toBe('msg-1');
+    expect(parsePhoneRoomCard(owner)).toEqual(owner);
+    expect(phoneRoomCard(card(5, { ...human, clientPostId: 'desktop-7' }), () => null)?.clientMessageId).toBeUndefined();
+    expect(phoneRoomCard(card(6, { kind: 'human', clientPostId: 'phone:0123456789abcdef:msg-2' }), () => null)?.clientMessageId).toBeUndefined();
+    expect(parsePhoneRoomCard({ ...owner, clientMessageId: 'a\nb' })?.clientMessageId).toBeUndefined();
+  });
+
+  it('refuses a card without identity, a known kind or a valid thread', () => {
+    expect(parsePhoneRoomCard({ ...card(1), kind: 'secret' })).toBeNull();
+    expect(parsePhoneRoomCard({ ...card(1), threadId: 'nope' })).toBeNull();
+    expect(parsePhoneRoomCard({ ...card(1), id: 'a b' })).toBeNull();
+    expect(parsePhoneRoomCard({ ...card(1), actor: { kind: 'bot' } })).toBeNull();
+  });
+
+  it('the cards reply must answer the workspace and thread asked for; cards out of seq order or thread are dropped', () => {
+    const reply = { workspaceId: 'ws-1', threadId: 'general', nextSinceSeq: 3, hasMore: false, cards: [card(1), card(1), card(2, { threadId: 'task:t1' }), card(3)] };
+    expect(parsePhoneRoomCardsReply(reply, 'ws-2', 'general')).toBeNull();
+    expect(parsePhoneRoomCardsReply(reply, 'ws-1', null)).toBeNull();
+    expect(parsePhoneRoomCardsReply(reply, 'ws-1', 'general')?.cards.map((c) => c.seq)).toEqual([1, 3]);
+  });
+
+  it('the threads reply is bounded and marks truncation', () => {
+    const t = { threadId: 'general', title: 'General', lastAt: 0, lastSeq: 0, cardCount: 0, openQuestions: 0, lastKind: 'fact', status: 'open', unread: null };
+    const many = Array.from({ length: PHONE_ROOM_LIMITS.threads + 5 }, (_, i) => ({ ...t, threadId: `task:t${i}` }));
+    const out = parsePhoneRoomThreadsReply({ workspaceId: 'ws-1', threads: many }, 'ws-1');
+    expect(out?.threads).toHaveLength(PHONE_ROOM_LIMITS.threads);
+    expect(out?.truncated).toBe(true);
+  });
+
+  it('workspace ids follow the room store rule', () => {
+    expect(isPhoneRoomWorkspaceId('ws-1')).toBe(true);
+    for (const bad of ['', '..', 'a/b', 'x'.repeat(81), 5]) expect(isPhoneRoomWorkspaceId(bad)).toBe(false);
+  });
+});
+
+describe('fitPhoneRoomPage', () => {
+  const big = (seq: number) => parsePhoneRoomCard(card(seq, { body: 'x'.repeat(8000) }))!;
+  const page = (n: number): PhoneRoomCardsReply => ({
+    workspaceId: 'ws-1', threadId: null, cards: Array.from({ length: n }, (_, i) => big(i + 1)), nextSinceSeq: n, hasMore: false,
+  });
+  const size = (r: unknown) => new TextEncoder().encode(JSON.stringify(r)).length;
+
+  it('a forward page keeps its oldest cards under the budget and says hasMore at the last kept seq', () => {
+    const out = fitPhoneRoomPage(page(40), true);
+    expect(size(out)).toBeLessThanOrEqual(PHONE_ROOM_LIMITS.replyBytes);
+    expect(out.cards[0].seq).toBe(1);
+    expect(out.hasMore).toBe(true);
+    expect(out.nextSinceSeq).toBe(out.cards[out.cards.length - 1].seq);
+  });
+
+  it('the newest page keeps its newest cards', () => {
+    const out = fitPhoneRoomPage(page(40), false);
+    expect(size(out)).toBeLessThanOrEqual(PHONE_ROOM_LIMITS.replyBytes);
+    expect(out.cards[out.cards.length - 1].seq).toBe(40);
+    expect(out.nextSinceSeq).toBe(40);
+  });
+
+  it('a page that fits is unchanged', () => {
+    const small = page(2);
+    expect(fitPhoneRoomPage(small, true)).toBe(small);
+  });
+});
+
+describe('fitPhoneRoomThreads', () => {
+  const t = (id: string, title = 't') => ({ threadId: id as never, title, lastAt: 1, lastSeq: 1, cardCount: 1, openQuestions: 1, lastKind: 'question' as const, status: 'open' as const, unread: null });
+
+  it('keeps general even when 100 other threads rank ahead of it, and marks truncation', () => {
+    const threads = [...Array.from({ length: 120 }, (_, i) => t(`task:t${i}`)), t('general')];
+    const out = fitPhoneRoomThreads({ workspaceId: 'ws-1', threads });
+    expect(out.threads).toHaveLength(PHONE_ROOM_LIMITS.threads);
+    expect(out.threads[out.threads.length - 1].threadId).toBe('general');
+    expect(out.truncated).toBe(true);
+  });
+
+  it('stays under the byte budget when titles escape to six bytes a unit', () => {
+    const lone = '\ud800'.repeat(200);
+    const threads = [t('general'), ...Array.from({ length: 99 }, (_, i) => t(`task:t${i}`, lone))];
+    const out = fitPhoneRoomThreads({ workspaceId: 'ws-1', threads });
+    expect(new TextEncoder().encode(JSON.stringify(out)).length).toBeLessThanOrEqual(PHONE_ROOM_LIMITS.replyBytes);
+    expect(out.threads[0].threadId).toBe('general');
+    expect(out.truncated).toBe(true);
+  });
+
+  it('a list that fits is whole and not truncated', () => {
+    const out = fitPhoneRoomThreads({ workspaceId: 'ws-1', threads: [t('general'), t('task:a')] });
+    expect(out).toEqual({ workspaceId: 'ws-1', threads: [t('general'), t('task:a')] });
+  });
+});
+
+describe('docs/phone-client-contract.md — the agent factory examples', () => {
+  // The JSON examples of the section, with the doc's `…` placeholders filled in.
+  const examples = async (): Promise<unknown[]> => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const doc = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'phone-client-contract.md'), 'utf8');
+    const start = doc.indexOf('#### The agent factory (`factory`, `rooms`, `/api/rooms`)');
+    const section = doc.slice(start, doc.indexOf('\n#### ', start + 10));
+    return [...section.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => JSON.parse(m[1].replace(/\[ … \]/g, '[]').replace(/…/g, 'x')));
+  };
+
+  it('every example parses to itself through the allowlists the code uses', async () => {
+    const [row, threads, cards] = await examples() as [Record<string, unknown>, { workspaceId: string }, { workspaceId: string; threadId: string }];
+    const { parsePhoneSidebarSnapshot } = await import('../phoneFleetSidebar');
+    const snap = parsePhoneSidebarSnapshot({ activeWorkspaceId: null, panes: [], workspaces: [{ id: row.id, order: 0, pinned: false, bots: row.bots, openQuestions: row.openQuestions }] });
+    expect(snap?.workspaces[0]).toEqual({ id: row.id, order: 0, pinned: false, bots: row.bots, openQuestions: row.openQuestions });
+    expect(parsePhoneRoomThreadsReply(threads, threads.workspaceId)).toEqual(threads);
+    expect(parsePhoneRoomCardsReply(cards, cards.workspaceId, cards.threadId as never)).toEqual(cards);
+  });
+});

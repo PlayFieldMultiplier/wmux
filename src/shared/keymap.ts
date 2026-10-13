@@ -57,7 +57,7 @@ export const SHORTCUT_ACTION_IDS = [
   'nextSurface', 'prevSurface', 'nextPane', 'prevPane',
   'focusUp', 'focusDown', 'focusLeft', 'focusRight',
   'focusUpAlt', 'focusDownAlt', 'focusLeftAlt', 'focusRightAlt',
-  'toggleSidebar', 'toggleFileTree', 'openSettings', 'toggleFleetView', 'toggleCompanyView',
+  'toggleSidebar', 'toggleFileTree', 'openSettings', 'toggleFleetView', 'toggleCompanyView', 'toggleBotsView',
   'clearMultiview', 'openBrowser', 'openPrivateBrowser', 'addBookmark', 'toggleMessageFeed',
   'zoomIn', 'zoomOut', 'zoomReset',
   'mentionAgent',
@@ -185,6 +185,7 @@ export const WMUX_KEYMAP: readonly KeymapEntry[] = [
   { action: 'openSettings', combo: 'Ctrl+,', descriptionKey: 'settings.sc.openSettings' },
   { action: 'toggleFleetView', combo: 'Ctrl+Shift+A', descriptionKey: 'settings.sc.toggleFleetView' },
   { action: 'toggleCompanyView', combo: 'Ctrl+Shift+O', descriptionKey: 'settings.sc.toggleCompanyView' },
+  { action: 'toggleBotsView', combo: 'Ctrl+Shift+J', descriptionKey: 'settings.sc.toggleBotsView' },
   { action: 'clearMultiview', combo: 'Ctrl+Shift+G', descriptionKey: 'settings.sc.clearMultiview' },
   { action: 'openBrowser', combo: 'Ctrl+Shift+L', descriptionKey: 'settings.sc.openBrowser' },
   // Chrome's incognito key (⌘⇧N on macOS).

@@ -71,8 +71,9 @@ describe('useRpcBridge — fan-out task roles', () => {
     // with, so the role rewrite, the marker decision and the workspace profile
     // are all already in it.
     expect(block).toMatch(/const launchCommand = createOptions\.initialCommand \?\? ''/);
-    // (Spread with only the lineage owner and origin added — the command is unchanged.)
-    expect(block).toMatch(/pty\.create\(\s*fanoutTaskOf \? \{ \.\.\.createOptions, fanoutTaskOf, \.\.\.\(fanoutOrigin \? \{ fanoutOrigin \} : \{\}\) \} : createOptions,?\s*\)/);
+    // (Spread with only the lineage owner, origin and a bot worker's secret
+    // grant added — the command is unchanged.)
+    expect(block).toMatch(/pty\.create\(\s*fanoutTaskOf \? \{ \.\.\.createOptions, fanoutTaskOf, \.\.\.\(fanoutOrigin \? \{ fanoutOrigin \} : \{\}\), \.\.\.\(secretGrant \? \{ secretGrant \} : \{\}\) \} : createOptions,?\s*\)/);
   });
 
   it('applies the binding to the launch command via withRoleBinding', () => {
@@ -148,7 +149,7 @@ describe('useRpcBridge — fan-out task roles', () => {
 
   it('hands the lineage owner to pty.create (main stamps it inside the create), with no await before it', () => {
     const block = fanoutSpawnBlock();
-    expect(block).toMatch(/pty\.create\(\s*fanoutTaskOf \? \{ \.\.\.createOptions, fanoutTaskOf, \.\.\.\(fanoutOrigin \? \{ fanoutOrigin \} : \{\}\) \} : createOptions/);
+    expect(block).toMatch(/pty\.create\(\s*fanoutTaskOf \? \{ \.\.\.createOptions, fanoutTaskOf, \.\.\.\(fanoutOrigin \? \{ fanoutOrigin \} : \{\}\), \.\.\.\(secretGrant \? \{ secretGrant \} : \{\}\) \} : createOptions/);
     // The requester arrives resolved (main resolved it once, at request
     // time): the spawn only sanitizes it and never re-resolves a ptyId
     // against the layout, which may have moved on since.
@@ -169,7 +170,7 @@ describe('useRpcBridge — fan-out task roles', () => {
   it('appends the worker permission flags after the role rewrite and before the marker goes back on', () => {
     const block = fanoutSpawnBlock();
     const bind = block.indexOf('withRoleBinding(seeded, roleBinding, role');
-    const flags = block.indexOf('applyWorkerPermissionFlags(roleBound.initialCommand, workerMode, goalWorker ? goalWorkerDenyRules() : [])');
+    const flags = block.indexOf('applyWorkerPermissionFlags(roleBound.initialCommand, workerMode)');
     const marker = block.indexOf('reattachModelEnvMarker(marker, bound.initialCommand');
     expect(bind).toBeGreaterThan(-1);
     expect(flags).toBeGreaterThan(bind);

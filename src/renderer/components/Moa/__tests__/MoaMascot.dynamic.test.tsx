@@ -1,21 +1,14 @@
 // @vitest-environment jsdom
 // Moa companion: four supported states, the small-size cut (body
-// and face only), per-instance gradient ids, and motion that stops under both
-// the OS reduced-motion preference and Moa's own Reduce motion setting.
+// and face only), per-instance gradient ids, and motion that stops under the
+// OS reduced-motion preference.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MoaMascot } from '../MoaMascot';
-import { useStore } from '../../../stores';
-import type { MoaMascotState, MoaState } from '../../../../shared/moa';
+import type { MoaMascotState } from '../../../../shared/moa';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-const moa = (reduceMotion: boolean): MoaState => ({
-  config: { enabled: true, onboarded: true, level: 1, maxTurnsPerHour: 20, bubbles: true, reduceMotion, defaultReason: null },
-  hq: { workspaceId: 'hq', state: 'ok' },
-  archive: { unacked: 0, total: 0 },
-});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -36,7 +29,6 @@ function setOsReducedMotion(reduce: boolean) {
 
 beforeEach(() => {
   setOsReducedMotion(false);
-  useStore.setState({ moa: moa(false) } as never);
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -45,7 +37,6 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   window.matchMedia = savedMatchMedia;
-  useStore.setState({ moa: null } as never);
 });
 
 const svg = () => container.querySelector('svg')!;
@@ -92,10 +83,6 @@ describe('MoaMascot', () => {
     expect(container.querySelector('[data-moa-gaze]')?.getAttribute('style')).toContain('translate(2px, 1.5px)');
     act(() => svg().dispatchEvent(new MouseEvent('pointerout', { bubbles: true })));
     expect(container.querySelector('[data-moa-gaze]')?.getAttribute('style')).toContain('translate(0px, 0px)');
-    act(() => useStore.setState({ moa: moa(true) } as never));
-    act(() => svg().dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 96, clientY: 96 })));
-    expect(container.querySelector('[data-moa-gaze]')?.getAttribute('style')).toContain('transition: none');
-    expect(container.querySelector('[data-moa-gaze]')?.getAttribute('style')).toContain('translate(0px, 0px)');
   });
 
   it('is decorative without a label and an image with one', () => {
@@ -125,11 +112,4 @@ describe('MoaMascot', () => {
     expect(animated()).toBe(0);
   });
 
-  it("holds still under Moa's own Reduce motion setting", () => {
-    act(() => root.render(<MoaMascot state="needs-you" size={96} />));
-    expect(animated()).toBeGreaterThan(0);
-    act(() => useStore.setState({ moa: moa(true) } as never));
-    expect(svg().getAttribute('data-motion')).toBe('reduced');
-    expect(animated()).toBe(0);
-  });
 });

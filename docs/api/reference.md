@@ -26,7 +26,7 @@ returns `EPERM`. Wire framing: newline-delimited JSON, one object per line.
 
 ## RPC methods
 
-Total: **237** methods (`ALL_RPC_METHODS` in
+Total: **270** methods (`ALL_RPC_METHODS` in
 `src/shared/rpc.ts`). Capability and risk class are read from
 `src/main/mcp/methodCapabilityMap.ts`:
 
@@ -342,12 +342,8 @@ Total: **237** methods (`ALL_RPC_METHODS` in
 | `deck.completeWork` | `null` |  |
 | `deck.requestDecision` | `null` |  |
 | `deck.resolveDecision` | `null` |  |
-| `deck.proposeHandoff` | `null` |  |
-| `deck.proposeGoal` | `null` |  |
-| `deck.goal` | `null` |  |
 | `deck.state.prune` | `wmux.internal` |  |
 | `usage.rateLimits` | `wmux.internal` |  |
-| `deck.moaReadRoots` | `wmux.internal` |  |
 | `task.mission.start` | `a2a.channel.send` | `a2a` |
 | `task.mission.close` | `a2a.channel.send` | `a2a` |
 | `task.mission.list` | `a2a.channel.read` | `a2a` |
@@ -355,8 +351,45 @@ Total: **237** methods (`ALL_RPC_METHODS` in
 | `task.fanout.start` | `a2a.execute` | `a2a` |
 | `ledger.list` | `ledger.read` | `a2a` |
 | `ledger.update` | `ledger.write` | `a2a` |
-| `moa.ask` | `wmux.internal` |  |
-| `moa.askStatus` | `wmux.internal` |  |
+| `verify.recordVerdict` | `wmux.internal` |  |
+| `fact.poll` | `wmux.internal` |  |
+| `fact.emit` | `wmux.internal` |  |
+| `bot.list` | `wmux.internal` |  |
+| `bot.create` | `wmux.internal` |  |
+| `bot.update` | `wmux.internal` |  |
+| `bot.remove` | `wmux.internal` |  |
+| `bot.status` | `wmux.internal` |  |
+| `bot.wake` | `wmux.internal` |  |
+| `bot.park` | `wmux.internal` |  |
+| `bot.resume` | `wmux.internal` |  |
+| `bot.interrupt` | `wmux.internal` |  |
+| `room.post` | `wmux.internal` |  |
+| `room.read` | `wmux.internal` |  |
+| `room.threads` | `wmux.internal` |  |
+| `room.resolve` | `wmux.internal` |  |
+| `handoff.send` | `wmux.internal` |  |
+| `handoff.answer` | `wmux.internal` |  |
+| `handoff.list` | `wmux.internal` |  |
+| `ask.person` | `wmux.internal` |  |
+| `pr.read` | `wmux.internal` |  |
+| `issue.read` | `wmux.internal` |  |
+| `ci.read` | `wmux.internal` |  |
+| `verdict.read` | `wmux.internal` |  |
+| `trustMetrics.read` | `wmux.internal` |  |
+| `plan.propose` | `wmux.internal` |  |
+| `bot.setJob` | `wmux.internal` |  |
+| `bot.stopMyWork` | `wmux.internal` |  |
+| `bot.resumeWorker` | `wmux.internal` |  |
+| `bot.workerMessage` | `wmux.internal` |  |
+| `bot.questionClose` | `wmux.internal` |  |
+| `routine.set` | `wmux.internal` |  |
+| `routine.list` | `wmux.internal` |  |
+| `routine.pause` | `wmux.internal` |  |
+| `botApproval.request` | `wmux.internal` |  |
+| `botApproval.list` | `wmux.internal` |  |
+| `botSecret.request` | `wmux.internal` |  |
+| `botSecret.list` | `wmux.internal` |  |
+| `botLogin.request` | `wmux.internal` |  |
 | `task.gate.run` | `task.write` | `a2a` |
 | `task.gate.cancel` | `task.write` | `a2a` |
 | `task.adopt` | `task.write` | `a2a` |

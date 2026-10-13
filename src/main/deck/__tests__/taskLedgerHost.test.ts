@@ -4,22 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import {
-  routeWorkerEventToOwner,
-  parkDelegatedEvents,
-  peekOrphanBacklog,
-  ackOrphanBacklog,
   noteWorkTaskClosed,
   createWorkTaskReconciler,
   getMissionChannelId,
   rememberMissionChannel,
-  readLedgerGateInput,
   formatLedgerTransition,
   installLedgerChannelEmitter,
   setTaskLedgerForTests,
 } from '../taskLedgerHost';
-import { overrideLedgerGateForTests } from '../deckLedgerGateStore';
 import { raiseDecision, composeDecisionContext, DECISION_LEDGER_PREFIX_MAX_CHARS, DECISION_LIMITS } from '../deckDecisionStore';
-import type { CoalescerInput } from '../CommanderEventCoalescer';
 
 let dir: string;
 let ledger: TaskLedger;
@@ -32,112 +25,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   setTaskLedgerForTests(null);
-  overrideLedgerGateForTests(null);
   fs.rmSync(dir, { recursive: true, force: true });
-});
-
-function ev(over: Partial<CoalescerInput> = {}): CoalescerInput {
-  return { workspaceId: 'ws-task', ptyId: 'pty-1', kind: 'agent.stop', source: 'hook', agent: 'claude', seq: 5, ts: 0, ...over };
-}
-
-describe('routeWorkerEventToOwner', () => {
-  it('copies a task-workspace event to the owner, tagged, when the owner has a brain', () => {
-    const pushed: CoalescerInput[] = [];
-    routeWorkerEventToOwner(ev(), { hasBrain: () => true, push: (e) => pushed.push(e) });
-    expect(pushed).toHaveLength(1);
-    expect(pushed[0].workspaceId).toBe('ws-parent');
-    expect(pushed[0].task).toEqual({ taskId: 'wtask-1', taskWorkspaceId: 'ws-task' });
-    expect(pushed[0].ptyId).toBe('pty-1');
-  });
-
-  it('leaves a non-task workspace event alone', () => {
-    const pushed: CoalescerInput[] = [];
-    routeWorkerEventToOwner(ev({ workspaceId: 'ws-human' }), { hasBrain: () => true, push: (e) => pushed.push(e) });
-    expect(pushed).toHaveLength(0);
-  });
-
-  it('parks the event as an orphan backlog when the owner has no brain; peek is non-destructive, ack releases', async () => {
-    const pushed: CoalescerInput[] = [];
-    routeWorkerEventToOwner(ev(), { hasBrain: () => false, push: (e) => pushed.push(e) });
-    await ledger.flush();
-    expect(pushed).toHaveLength(0);
-    const backlog = peekOrphanBacklog('ws-parent');
-    expect(backlog).toHaveLength(1);
-    expect(backlog[0].task?.taskId).toBe('wtask-1');
-    expect(peekOrphanBacklog('ws-parent')).toHaveLength(1);
-    await ackOrphanBacklog('ws-parent', 5);
-    expect(peekOrphanBacklog('ws-parent')).toHaveLength(0);
-  });
-
-  it('does not route events from a finished task workspace (completed/cancelled entries stop waking the brain)', async () => {
-    await ledger.closeTask('wtask-1');
-    const pushed: CoalescerInput[] = [];
-    let reconciled = 0;
-    routeWorkerEventToOwner(ev(), { hasBrain: () => true, push: (e) => pushed.push(e), reconcile: async () => { reconciled += 1; } });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(pushed).toHaveLength(0);
-    expect(reconciled).toBe(0);
-    expect(peekOrphanBacklog('ws-parent')).toHaveLength(0);
-  });
-
-  it('noteWorkTaskClosed cancels the entry immediately and drops its channel mapping', async () => {
-    rememberMissionChannel('wtask-1', 'ch-1');
-    await noteWorkTaskClosed('wtask-1');
-    expect(ledger.get('wtask-1')?.status).toBe('cancelled');
-    expect(getMissionChannelId('wtask-1')).toBeNull();
-    await noteWorkTaskClosed('wtask-unknown');
-  });
-
-  it('reconciles once for an unknown workspace and delivers if the task appears', async () => {
-    const pushed: CoalescerInput[] = [];
-    const reconcile = async () => {
-      await ledger.register({ id: 'wtask-2', taskWorkspaceId: 'ws-task-2', ownerWorkspaceId: 'ws-parent', title: 'late' });
-    };
-    routeWorkerEventToOwner(ev({ workspaceId: 'ws-task-2' }), { hasBrain: () => true, push: (e) => pushed.push(e), reconcile });
-    for (let i = 0; i < 50 && pushed.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
-    expect(pushed).toHaveLength(1);
-    expect(pushed[0].task?.taskId).toBe('wtask-2');
-  });
-
-  it('tells the caller beside the park, and never when a brain takes the event', async () => {
-    const calls: unknown[][] = [];
-    const notifyCaller = (...args: unknown[]): void => { calls.push(args); };
-    routeWorkerEventToOwner(ev(), { hasBrain: () => true, push: () => undefined, notifyCaller });
-    expect(calls).toHaveLength(0);
-    routeWorkerEventToOwner(ev({ kind: 'agent.stop_failure', seq: 6 }), { hasBrain: () => false, push: () => undefined, notifyCaller });
-    expect(calls).toEqual([['ws-parent', 'ws-task', 'wtask-1', 'agent.stop_failure', 6]]);
-    await ledger.flush();
-    expect(peekOrphanBacklog('ws-parent')).toHaveLength(1);
-  });
-
-  it('still tells the caller when the park backlog is over its cap (owner off)', async () => {
-    const cappedDir = path.join(dir, 'capped');
-    fs.mkdirSync(cappedDir);
-    const capped = new TaskLedger({ dir: cappedDir, orphanMaxCount: 2, log: () => undefined });
-    await capped.register({ id: 'wtask-1', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-parent', title: 'lane' });
-    const calls: unknown[][] = [];
-    for (let seq = 1; seq <= 4; seq++) {
-      routeWorkerEventToOwner(ev({ seq }), {
-        hasBrain: () => false,
-        push: () => undefined,
-        ledger: capped,
-        notifyCaller: (...args) => { calls.push(args); },
-      });
-    }
-    await capped.flush();
-    expect(capped.peekOrphanedEvents('ws-parent').map((o) => o.seq)).toEqual([3, 4]);
-    expect(calls.map((c) => c[4])).toEqual([1, 2, 3, 4]);
-  });
-
-  it('a throwing caller notify does not disturb the park', async () => {
-    routeWorkerEventToOwner(ev(), {
-      hasBrain: () => false,
-      push: () => undefined,
-      notifyCaller: () => { throw new Error('boom'); },
-    });
-    await ledger.flush();
-    expect(peekOrphanBacklog('ws-parent')).toHaveLength(1);
-  });
 });
 
 describe('createWorkTaskReconciler', () => {
@@ -174,39 +62,18 @@ describe('createWorkTaskReconciler', () => {
   });
 });
 
-describe('readLedgerGateInput (step 4)', () => {
-  it('reports disabled with no read while the flag is off', () => {
-    overrideLedgerGateForTests(false);
-    expect(readLedgerGateInput('ws-parent')).toEqual({ enabled: false, openTasks: null });
-  });
-
-  it('lists only this owner\'s open tasks when on, and null when the ledger throws', async () => {
-    overrideLedgerGateForTests(true);
-    await ledger.register({ id: 'wtask-2', taskWorkspaceId: 'ws-t2', ownerWorkspaceId: 'ws-other', title: 'not mine' });
-    await ledger.update({ id: 'wtask-1', status: 'input_required', actor: { kind: 'worker', workspaceId: 'ws-task' }, expectedRev: 1 });
-    expect(readLedgerGateInput('ws-parent')).toEqual({
-      enabled: true,
-      openTasks: [{ id: 'wtask-1', title: 'lane', status: 'input_required' }],
-    });
-    const broken = { list: () => { throw new Error('disk'); } } as unknown as TaskLedger;
-    expect(readLedgerGateInput('ws-parent', broken)).toEqual({ enabled: true, openTasks: null });
-  });
-
-  it('deck_ask_decision context is prefixed with the open-task list while the gate is on', async () => {
-    overrideLedgerGateForTests(true);
+describe('decision context', () => {
+  it('a raised decision carries its own context, capped to the limit', async () => {
     const d = await raiseDecision('ws-parent', { question: 'merge?', context: 'details' }, dir);
-    expect(d?.context).toBe('[open tasks in the ledger: wtask-1 "lane" (working)]\ndetails');
-    // A long open-task list gets its own budget and never evicts the brain's context.
+    expect(d?.context).toBe('details');
+    expect(d?.question).toBe('merge?');
+    // A long prefix gets its own budget and never evicts the context.
     const longPrefix = `[open tasks in the ledger: ${'wtask-x "very long title" (working), '.repeat(40)}]\n`;
     const composed = composeDecisionContext(longPrefix, 'the question context');
     expect(composed.length).toBeLessThanOrEqual(DECISION_LIMITS.MAX_CONTEXT_CHARS);
     expect(composed.endsWith('the question context')).toBe(true);
     expect(composed.indexOf('the question context')).toBeLessThanOrEqual(DECISION_LEDGER_PREFIX_MAX_CHARS);
     expect(composeDecisionContext('', 'x'.repeat(2000)).length).toBe(DECISION_LIMITS.MAX_CONTEXT_CHARS);
-    expect(d?.question).toBe('merge?');
-    overrideLedgerGateForTests(false);
-    const off = await raiseDecision('ws-parent', { question: 'merge?', context: 'details' }, dir);
-    expect(off?.context).toBe('details');
   });
 });
 
@@ -244,46 +111,5 @@ describe('ledger → mission channel emitter (step 5)', () => {
       summary: 'need the "API key"',
     });
     expect(quoted).toBe('[ledger] wtask-9 working→input_required worker@ws-t worker: "need the ”API key”"');
-  });
-});
-
-// Wave 3, finding 12 — the events a PENDING DECISION blocks go to the same
-// durable backlog a brain-less owner's do. Durable is the whole point: the
-// decision that shut the gate is precisely the thing that survives a restart,
-// so an in-memory hold would lose exactly the events the operator came back for.
-describe('parkDelegatedEvents', () => {
-  const blocked = (seq: number): CoalescerInput =>
-    ev({ workspaceId: 'ws-parent', seq, task: { taskId: 'wtask-1', taskWorkspaceId: 'ws-task' } });
-
-  it('parks to disk: a FRESH ledger over the same dir replays the event', async () => {
-    parkDelegatedEvents('ws-parent', [blocked(7)]);
-    await ledger.flush();
-    const reopened = new TaskLedger({ dir });
-    const parked = reopened.peekOrphanedEvents('ws-parent');
-    expect(parked).toHaveLength(1);
-    expect(parked[0].seq).toBe(7);
-    expect((parked[0].payload as CoalescerInput).task?.taskId).toBe('wtask-1');
-  });
-
-  it('is readable through the same peek the brain-boot replay uses', async () => {
-    parkDelegatedEvents('ws-parent', [blocked(7), blocked(8)]);
-    await ledger.flush();
-    expect(peekOrphanBacklog('ws-parent').map((e) => e.seq)).toEqual([7, 8]);
-    await ackOrphanBacklog('ws-parent', 8);
-    expect(peekOrphanBacklog('ws-parent')).toHaveLength(0);
-  });
-
-  it('does not duplicate a seq already parked (a human send re-parks the replay)', async () => {
-    parkDelegatedEvents('ws-parent', [blocked(7)]);
-    await ledger.flush();
-    parkDelegatedEvents('ws-parent', [blocked(7), blocked(9)]);
-    await ledger.flush();
-    expect(peekOrphanBacklog('ws-parent').map((e) => e.seq)).toEqual([7, 9]);
-  });
-
-  it('never throws when the ledger is unusable', () => {
-    setTaskLedgerForTests(null);
-    fs.rmSync(dir, { recursive: true, force: true });
-    expect(() => parkDelegatedEvents('ws-parent', [blocked(7)])).not.toThrow();
   });
 });

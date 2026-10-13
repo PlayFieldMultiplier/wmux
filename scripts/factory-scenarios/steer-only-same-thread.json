@@ -1,0 +1,29 @@
+{
+  "name": "steer-only-same-thread",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Two owner messages arrive while the lead runs a turn in task:alpha: one in the same thread, one in task:beta. Neither is folded into the running turn; each becomes its own queued wake pinned to its own thread, run in arrival order.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "budget": { "turnTimeoutMs": 120000 },
+        "script": { "turns": [
+          { "steps": [
+            { "tool": "room_post", "args": { "kind": "status", "title": "Busy", "body": "Long turn started." } },
+            { "sleep": 8000 }
+          ] },
+          { "steps": [ { "tool": "room_post", "args": { "kind": "status", "title": "Next", "body": "Picked up a queued message." } } ] }
+        ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "first", "post": { "threadId": "task:alpha", "title": "Long job", "body": "Start the long job.", "to": "lead" } },
+    { "do": "waitFor", "label": "first running", "cond": { "wakes": { "bot": "lead", "state": "running" } }, "timeoutMs": 30000, "required": true },
+    { "do": "sleep", "ms": 1000 },
+    { "do": "post", "label": "same", "post": { "threadId": "task:alpha", "title": "Add to it", "body": "Same job, one more thing.", "to": "lead" } },
+    { "do": "post", "label": "other", "post": { "threadId": "task:beta", "title": "Other job", "body": "Different job.", "to": "lead" } },
+    { "do": "waitFor", "label": "all done", "cond": { "wakes": { "bot": "lead", "state": "done", "min": 3 } }, "timeoutMs": 60000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 2000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "bot": "lead", "first": "first", "queued": ["same", "other"], "threads": { "first": "task:alpha", "same": "task:alpha", "other": "task:beta" } }
+}

@@ -14,6 +14,7 @@
  */
 
 import { maskInlineCredentials } from '../../shared/redactSecrets';
+import { redactStoredSecrets } from '../factory/secretRedaction';
 
 export type IpcErrorCode =
   | 'DAEMON_DISCONNECTED'
@@ -313,8 +314,9 @@ export function wrapHandler<Args extends unknown[], Ret>(
         event: 'ipc_error',
         channel,
         error_code: code,
-        stack: err instanceof Error && err.stack ? maskInlineCredentials(err.stack) : undefined,
-        args_summary: summary,
+        // A stored bot secret is never logged (factory/secretRedaction.ts).
+        stack: err instanceof Error && err.stack ? redactStoredSecrets(maskInlineCredentials(err.stack)) : undefined,
+        args_summary: summary === undefined ? undefined : redactStoredSecrets(summary),
       };
       emit(entry);
 

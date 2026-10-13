@@ -1,0 +1,1431 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "chat-stop-all",
+  "run": 1,
+  "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-b1b445df",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/x"
+    },
+    "enabled": true,
+    "createdAt": 1791881764764,
+    "updatedAt": 1791881764764
+   },
+   {
+    "version": 1,
+    "id": "bot-5c4afddc",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "role": "triage",
+    "template": "issue",
+    "name": "Triage",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/x"
+    },
+    "enabled": true,
+    "createdAt": 1791881764772,
+    "updatedAt": 1791881764772
+   },
+   {
+    "version": 1,
+    "id": "bot-8323aac0",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881769908,
+    "updatedAt": 1791881769908
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-b1b445df",
+   "triage": "bot-5c4afddc",
+   "moa": "bot-8323aac0"
+  },
+  "injected": [
+   {
+    "label": "go",
+    "kind": "card",
+    "id": "c-mv6g52gna65bcd68f3",
+    "threadId": "general",
+    "at": 1791881769909
+   },
+   {
+    "label": "stop",
+    "kind": "card",
+    "id": "c-mv6g5azy939f099a93",
+    "threadId": "general",
+    "at": 1791881780969
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881769909,
+    "do": "post",
+    "label": "go",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6g52gna65bcd68f3",
+      "seq": 1,
+      "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881769911,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Start",
+      "body": "Each of you: start your task and set your hourly check.",
+      "refs": {
+       "botIds": [
+        "bot-b1b445df",
+        "bot-5c4afddc",
+        "bot-8323aac0"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-b1b445df",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6g52go-7bb31202",
+     "addressees": [
+      {
+       "botId": "bot-b1b445df",
+       "role": "lead",
+       "wakeId": "w-mv6g52go-7bb31202"
+      },
+      {
+       "botId": "bot-5c4afddc",
+       "role": "triage",
+       "wakeId": "w-mv6g52go-dac98ee6"
+      },
+      {
+       "botId": "bot-8323aac0",
+       "role": "moa",
+       "wakeId": "w-mv6g52go-b1a62a53"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881769916,
+    "do": "waitFor",
+    "label": "workers",
+    "ok": true,
+    "doneAt": 1791881775944
+   },
+   {
+    "at": 1791881775944,
+    "do": "waitFor",
+    "label": "routines",
+    "ok": true,
+    "doneAt": 1791881775945
+   },
+   {
+    "at": 1791881775945,
+    "do": "waitFor",
+    "label": "settled",
+    "ok": true,
+    "doneAt": 1791881780969
+   },
+   {
+    "at": 1791881780969,
+    "do": "post",
+    "label": "stop",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6g5azy939f099a93",
+      "seq": 8,
+      "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881780974,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "모두 정지해",
+      "body": "응 일단 모두 정지해라",
+      "refs": {
+       "botIds": [
+        "bot-b1b445df",
+        "bot-5c4afddc",
+        "bot-8323aac0"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-b1b445df",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6g5azy-72f2cbc4",
+     "addressees": [
+      {
+       "botId": "bot-b1b445df",
+       "role": "lead",
+       "wakeId": "w-mv6g5azy-72f2cbc4"
+      },
+      {
+       "botId": "bot-5c4afddc",
+       "role": "triage",
+       "wakeId": "w-mv6g5azy-c57e25c7"
+      },
+      {
+       "botId": "bot-8323aac0",
+       "role": "moa",
+       "wakeId": "w-mv6g5azy-100f6798"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881780979,
+    "do": "waitFor",
+    "label": "paused",
+    "ok": true,
+    "doneAt": 1791881781484
+   },
+   {
+    "at": 1791881781484,
+    "do": "waitFor",
+    "label": "cancelled",
+    "ok": true,
+    "doneAt": 1791881781484
+   },
+   {
+    "at": 1791881781484,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881786512
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6g52gn-e7da667b1d03",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881769911,
+    "dedupeKey": "human.message:c-mv6g52gna65bcd68f3:bot-b1b445df",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "botId": "bot-b1b445df",
+     "messageId": "c-mv6g52gna65bcd68f3:bot-b1b445df"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Each of you: start your task and set your hourly check.",
+     "cardId": "c-mv6g52gna65bcd68f3",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g52gn-7447d6d5298f",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791881769911,
+    "dedupeKey": "human.message:c-mv6g52gna65bcd68f3:bot-5c4afddc",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "botId": "bot-5c4afddc",
+     "messageId": "c-mv6g52gna65bcd68f3:bot-5c4afddc"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Each of you: start your task and set your hourly check.",
+     "cardId": "c-mv6g52gna65bcd68f3",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g52gn-27c558641fae",
+    "seq": 3,
+    "kind": "human.message",
+    "at": 1791881769911,
+    "dedupeKey": "human.message:c-mv6g52gna65bcd68f3:bot-8323aac0",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "botId": "bot-8323aac0",
+     "messageId": "c-mv6g52gna65bcd68f3:bot-8323aac0"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Each of you: start your task and set your hourly check.",
+     "cardId": "c-mv6g52gna65bcd68f3",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g5azy-9a82f5f76ea6",
+    "seq": 4,
+    "kind": "human.message",
+    "at": 1791881780974,
+    "dedupeKey": "human.message:c-mv6g5azy939f099a93:bot-b1b445df",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "botId": "bot-b1b445df",
+     "messageId": "c-mv6g5azy939f099a93:bot-b1b445df"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "응 일단 모두 정지해라",
+     "cardId": "c-mv6g5azy939f099a93",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g5azy-4b99375ac00f",
+    "seq": 5,
+    "kind": "human.message",
+    "at": 1791881780974,
+    "dedupeKey": "human.message:c-mv6g5azy939f099a93:bot-5c4afddc",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "botId": "bot-5c4afddc",
+     "messageId": "c-mv6g5azy939f099a93:bot-5c4afddc"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "응 일단 모두 정지해라",
+     "cardId": "c-mv6g5azy939f099a93",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g5azy-c5af0a88ccb2",
+    "seq": 6,
+    "kind": "human.message",
+    "at": 1791881780974,
+    "dedupeKey": "human.message:c-mv6g5azy939f099a93:bot-8323aac0",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "botId": "bot-8323aac0",
+     "messageId": "c-mv6g5azy939f099a93:bot-8323aac0"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "응 일단 모두 정지해라",
+     "cardId": "c-mv6g5azy939f099a93",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g5b02-7397d5c80539",
+    "seq": 7,
+    "kind": "task.failed",
+    "at": 1791881780978,
+    "dedupeKey": "task.failed:wtask-mv6g56rh-3d9pg8pv",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "taskId": "wtask-mv6g56rh-3d9pg8pv",
+     "botId": "bot-b1b445df"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-adcfc95f-983f-4ff2-97e8-dd8d9b80c01e",
+     "title": "lead long task",
+     "status": "cancelled",
+     "from": "working",
+     "by": "system",
+     "summary": "stopped by owner"
+    }
+   },
+   {
+    "id": "f-0mv6g5b07-60eb476be030",
+    "seq": 8,
+    "kind": "task.failed",
+    "at": 1791881780983,
+    "dedupeKey": "task.failed:wtask-mv6g56rr-ruqa1olk",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "ref": {
+     "taskId": "wtask-mv6g56rr-ruqa1olk",
+     "botId": "bot-5c4afddc"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-25b509ca-d3eb-49cf-ab50-09eeb6663d85",
+     "title": "triage long task",
+     "status": "cancelled",
+     "from": "working",
+     "by": "system",
+     "summary": "stopped by owner"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6g52go-7bb31202",
+    "botId": "bot-b1b445df",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "reason": {
+     "kind": "human",
+     "text": "Each of you: start your task and set your hourly check.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g52gna65bcd68f3",
+     "runId": "run-c-mv6g52gna65bcd68f3",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881769912,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g52go-dac98ee6",
+    "botId": "bot-5c4afddc",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "reason": {
+     "kind": "human",
+     "text": "Each of you: start your task and set your hourly check.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g52gna65bcd68f3",
+     "runId": "run-c-mv6g52gna65bcd68f3",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881769912,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g52go-b1a62a53",
+    "botId": "bot-8323aac0",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "reason": {
+     "kind": "human",
+     "text": "Each of you: start your task and set your hourly check.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g52gna65bcd68f3",
+     "runId": "run-c-mv6g52gna65bcd68f3",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881769912,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g5azy-72f2cbc4",
+    "botId": "bot-b1b445df",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "reason": {
+     "kind": "human",
+     "text": "응 일단 모두 정지해라",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g5azy939f099a93",
+     "runId": "run-c-mv6g5azy939f099a93",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881780974,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g5azy-c57e25c7",
+    "botId": "bot-5c4afddc",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "reason": {
+     "kind": "human",
+     "text": "응 일단 모두 정지해라",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g5azy939f099a93",
+     "runId": "run-c-mv6g5azy939f099a93",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881780974,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g5azy-100f6798",
+    "botId": "bot-8323aac0",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "reason": {
+     "kind": "human",
+     "text": "응 일단 모두 정지해라",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g5azy939f099a93",
+     "runId": "run-c-mv6g5azy939f099a93",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881780974,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "ledger": [
+   {
+    "schemaVersion": 1,
+    "id": "wtask-mv6g56rh-3d9pg8pv",
+    "taskWorkspaceId": "ws-adcfc95f-983f-4ff2-97e8-dd8d9b80c01e",
+    "ownerWorkspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "title": "lead long task",
+    "status": "cancelled",
+    "rev": 2,
+    "updatedAt": 1791881780978,
+    "updatedBy": {
+     "kind": "system",
+     "workspaceId": "ws-daemon"
+    },
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-b1b445df"
+     },
+     "preset": "default"
+    },
+    "summary": "stopped by owner"
+   },
+   {
+    "schemaVersion": 1,
+    "id": "wtask-mv6g56rr-ruqa1olk",
+    "taskWorkspaceId": "ws-25b509ca-d3eb-49cf-ab50-09eeb6663d85",
+    "ownerWorkspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "title": "triage long task",
+    "status": "cancelled",
+    "rev": 2,
+    "updatedAt": 1791881780983,
+    "updatedBy": {
+     "kind": "system",
+     "workspaceId": "ws-daemon"
+    },
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-5c4afddc"
+     },
+     "preset": "default"
+    },
+    "summary": "stopped by owner"
+   }
+  ],
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": [
+   {
+    "id": "r-1793399c78517cfc",
+    "botId": "bot-8323aac0",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "title": "moa hourly check",
+    "prompt": "Check your open work.",
+    "schedule": {
+     "kind": "interval",
+     "everyMs": 3600000
+    },
+    "state": "paused",
+    "createdAt": 1791881775156,
+    "updatedAt": 1791881780979,
+    "clientRoutineId": "wake:w-mv6g52go-b1a62a53:r1",
+    "paused": {
+     "reason": "stop",
+     "at": 1791881780979
+    }
+   },
+   {
+    "id": "r-9314702fa294bde2",
+    "botId": "bot-b1b445df",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "title": "lead hourly check",
+    "prompt": "Check your open work.",
+    "schedule": {
+     "kind": "interval",
+     "everyMs": 3600000
+    },
+    "state": "paused",
+    "createdAt": 1791881775277,
+    "updatedAt": 1791881781096,
+    "clientRoutineId": "wake:w-mv6g52go-7bb31202:r1",
+    "paused": {
+     "reason": "stop",
+     "at": 1791881781096
+    }
+   },
+   {
+    "id": "r-cd9ae1cb30557459",
+    "botId": "bot-5c4afddc",
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "title": "triage hourly check",
+    "prompt": "Check your open work.",
+    "schedule": {
+     "kind": "interval",
+     "everyMs": 3600000
+    },
+    "state": "paused",
+    "createdAt": 1791881775279,
+    "updatedAt": 1791881781117,
+    "clientRoutineId": "wake:w-mv6g52go-dac98ee6:r1",
+    "paused": {
+     "reason": "stop",
+     "at": 1791881781117
+    }
+   }
+  ],
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6g52gna65bcd68f3",
+    "seq": 1,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881769911,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Start",
+    "body": "Each of you: start your task and set your hourly check.",
+    "refs": {
+     "botIds": [
+      "bot-b1b445df",
+      "bot-5c4afddc",
+      "bot-8323aac0"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g56icb478dc2d9a",
+    "seq": 2,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881775156,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-8323aac0"
+    },
+    "title": "Routine created: moa hourly check",
+    "body": "every 1 h\n\nCheck your open work.",
+    "refs": {
+     "botId": "bot-8323aac0",
+     "routineId": "r-1793399c78517cfc"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g56if2ff55925f1",
+    "seq": 3,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881775159,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-8323aac0"
+    },
+    "title": "Started",
+    "body": "Task and hourly check set.",
+    "clientPostId": "wake:w-mv6g52go-b1a62a53:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g56lp862fc371d4",
+    "seq": 4,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881775277,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-b1b445df"
+    },
+    "title": "Routine created: lead hourly check",
+    "body": "every 1 h\n\nCheck your open work.",
+    "refs": {
+     "botId": "bot-b1b445df",
+     "routineId": "r-9314702fa294bde2"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g56lr0a0c0a1eec",
+    "seq": 5,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881775279,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-5c4afddc"
+    },
+    "title": "Routine created: triage hourly check",
+    "body": "every 1 h\n\nCheck your open work.",
+    "refs": {
+     "botId": "bot-5c4afddc",
+     "routineId": "r-cd9ae1cb30557459"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g56lva6e9758d6e",
+    "seq": 6,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881775283,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-b1b445df"
+    },
+    "title": "Started",
+    "body": "Task and hourly check set.",
+    "clientPostId": "wake:w-mv6g52go-7bb31202:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g56m06495990d58",
+    "seq": 7,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881775288,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-5c4afddc"
+    },
+    "title": "Started",
+    "body": "Task and hourly check set.",
+    "clientPostId": "wake:w-mv6g52go-dac98ee6:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5azy939f099a93",
+    "seq": 8,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881780974,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "모두 정지해",
+    "body": "응 일단 모두 정지해라",
+    "refs": {
+     "botIds": [
+      "bot-b1b445df",
+      "bot-5c4afddc",
+      "bot-8323aac0"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b0339a66cc9e3",
+    "seq": 9,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881780979,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Routine paused (stopped): moa hourly check",
+    "body": "every 1 h\n\nCheck your open work.",
+    "refs": {
+     "botId": "bot-8323aac0",
+     "routineId": "r-1793399c78517cfc"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b0654b0255cde",
+    "seq": 10,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "task:wtask-mv6g56rh-3d9pg8pv",
+    "kind": "fact",
+    "at": 1791881780978,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task failed: lead long task",
+    "body": "stopped by owner",
+    "refs": {
+     "taskId": "wtask-mv6g56rh-3d9pg8pv",
+     "botId": "bot-b1b445df",
+     "factId": "f-0mv6g5b02-7397d5c80539"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b0de869cbf601",
+    "seq": 11,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881780989,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-8323aac0"
+    },
+    "title": "Stopped",
+    "body": "My workers are stopped and my routines paused.",
+    "clientPostId": "wake:w-mv6g5azy-100f6798:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b0f0f87ac26eb",
+    "seq": 12,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "task:wtask-mv6g56rr-ruqa1olk",
+    "kind": "fact",
+    "at": 1791881780983,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task failed: triage long task",
+    "body": "stopped by owner",
+    "refs": {
+     "taskId": "wtask-mv6g56rr-ruqa1olk",
+     "botId": "bot-5c4afddc",
+     "factId": "f-0mv6g5b07-60eb476be030"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b3cee02ef9282",
+    "seq": 13,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881781096,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Routine paused (stopped): lead hourly check",
+    "body": "every 1 h\n\nCheck your open work.",
+    "refs": {
+     "botId": "bot-b1b445df",
+     "routineId": "r-9314702fa294bde2"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b3eccef900dbe",
+    "seq": 14,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881781098,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-b1b445df"
+    },
+    "title": "Stopped",
+    "body": "My workers are stopped and my routines paused.",
+    "clientPostId": "wake:w-mv6g5azy-72f2cbc4:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b3x7674813fdb",
+    "seq": 15,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881781117,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Routine paused (stopped): triage hourly check",
+    "body": "every 1 h\n\nCheck your open work.",
+    "refs": {
+     "botId": "bot-5c4afddc",
+     "routineId": "r-cd9ae1cb30557459"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5b3z1d56512109",
+    "seq": 16,
+    "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881781119,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+     "botId": "bot-5c4afddc"
+    },
+    "title": "Stopped",
+    "body": "My workers are stopped and my routines paused.",
+    "clientPostId": "wake:w-mv6g5azy-c57e25c7:1"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881769949,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881769950,
+     "event": "session/new",
+     "sessionId": "stub-58b987b4a283",
+     "cwd": "/home/owner/.wmux-verify-f929f081/factory/bots/bot-b1b445df"
+    },
+    {
+     "at": 1791881774951,
+     "event": "prompt",
+     "sessionId": "stub-58b987b4a283",
+     "text": "[wake w-mv6g52go-7bb31202] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881775273,
+     "event": "tool",
+     "sessionId": "stub-58b987b4a283",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv6g52go-7bb31202:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/tmp/x\",\n  \"ownerWorkspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n  \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\"\n}"
+    },
+    {
+     "at": 1791881775278,
+     "event": "tool",
+     "sessionId": "stub-58b987b4a283",
+     "name": "routine_set",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"routine\": {\n    \"id\": \"r-9314702fa294bde2\",\n    \"botId\": \"bot-b1b445df\",\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"title\": \"lead hourly check\",\n    \"prompt\": \"Check your open work.\",\n    \"schedule\": {\n      \"kind\": \"interval\",\n      \"everyMs\": 3600000\n    },\n    \"state\": \"active\",\n    \"createdAt\": 1791881775277,\n    \"updatedAt\": 1791881775277,\n    \"nextDueAt\": 1791885375277\n  }\n}"
+    },
+    {
+     "at": 1791881775286,
+     "event": "tool",
+     "sessionId": "stub-58b987b4a283",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g56lva6e9758d6e\",\n    \"seq\": 6,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881775283,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-b1b445df\"\n    },\n    \"title\": \"Started\",\n    \"body\": \"Task and hourly check set.\",\n    \"clientPostId\": \"wake:w-mv6g52go-7bb31202:1\"\n  }\n}"
+    },
+    {
+     "at": 1791881780975,
+     "event": "prompt",
+     "sessionId": "stub-58b987b4a283",
+     "text": "[wake w-mv6g5azy-72f2cbc4] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881781097,
+     "event": "tool",
+     "sessionId": "stub-58b987b4a283",
+     "name": "stop_my_work",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workersStopped\": 1,\n  \"gatesCancelled\": 0,\n  \"routinesPaused\": 1\n}"
+    },
+    {
+     "at": 1791881781098,
+     "event": "tool",
+     "sessionId": "stub-58b987b4a283",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g5b3eccef900dbe\",\n    \"seq\": 14,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881781098,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-b1b445df\"\n    },\n    \"title\": \"Stopped\",\n    \"body\": \"My workers are stopped and my routines paused.\",\n    \"clientPostId\": \"wake:w-mv6g5azy-72f2cbc4:1\"\n  }\n}"
+    }
+   ],
+   "triage": [
+    {
+     "at": 1791881769948,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881769950,
+     "event": "session/new",
+     "sessionId": "stub-d8749711b5e0",
+     "cwd": "/home/owner/.wmux-verify-f929f081/factory/bots/bot-5c4afddc"
+    },
+    {
+     "at": 1791881774951,
+     "event": "prompt",
+     "sessionId": "stub-d8749711b5e0",
+     "text": "[wake w-mv6g52go-dac98ee6] Triage (issue) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881775273,
+     "event": "tool",
+     "sessionId": "stub-d8749711b5e0",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv6g52go-dac98ee6:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/tmp/x\",\n  \"ownerWorkspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n  \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\"\n}"
+    },
+    {
+     "at": 1791881775284,
+     "event": "tool",
+     "sessionId": "stub-d8749711b5e0",
+     "name": "routine_set",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"routine\": {\n    \"id\": \"r-cd9ae1cb30557459\",\n    \"botId\": \"bot-5c4afddc\",\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"title\": \"triage hourly check\",\n    \"prompt\": \"Check your open work.\",\n    \"schedule\": {\n      \"kind\": \"interval\",\n      \"everyMs\": 3600000\n    },\n    \"state\": \"active\",\n    \"createdAt\": 1791881775279,\n    \"updatedAt\": 1791881775279,\n    \"nextDueAt\": 1791885375279\n  }\n}"
+    },
+    {
+     "at": 1791881775289,
+     "event": "tool",
+     "sessionId": "stub-d8749711b5e0",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g56m06495990d58\",\n    \"seq\": 7,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881775288,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-5c4afddc\"\n    },\n    \"title\": \"Started\",\n    \"body\": \"Task and hourly check set.\",\n    \"clientPostId\": \"wake:w-mv6g52go-dac98ee6:1\"\n  }\n}"
+    },
+    {
+     "at": 1791881780975,
+     "event": "prompt",
+     "sessionId": "stub-d8749711b5e0",
+     "text": "[wake w-mv6g5azy-c57e25c7] Triage (issue) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881781118,
+     "event": "tool",
+     "sessionId": "stub-d8749711b5e0",
+     "name": "stop_my_work",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workersStopped\": 1,\n  \"gatesCancelled\": 0,\n  \"routinesPaused\": 1\n}"
+    },
+    {
+     "at": 1791881781120,
+     "event": "tool",
+     "sessionId": "stub-d8749711b5e0",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g5b3z1d56512109\",\n    \"seq\": 16,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881781119,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-5c4afddc\"\n    },\n    \"title\": \"Stopped\",\n    \"body\": \"My workers are stopped and my routines paused.\",\n    \"clientPostId\": \"wake:w-mv6g5azy-c57e25c7:1\"\n  }\n}"
+    }
+   ],
+   "moa": [
+    {
+     "at": 1791881769951,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881769952,
+     "event": "session/new",
+     "sessionId": "stub-bd085bff3a3a",
+     "cwd": "/home/owner/.wmux-verify-f929f081/factory/bots/bot-8323aac0"
+    },
+    {
+     "at": 1791881774952,
+     "event": "prompt",
+     "sessionId": "stub-bd085bff3a3a",
+     "text": "[wake w-mv6g52go-b1a62a53] Moa (coordinator) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881775158,
+     "event": "tool",
+     "sessionId": "stub-bd085bff3a3a",
+     "name": "routine_set",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"routine\": {\n    \"id\": \"r-1793399c78517cfc\",\n    \"botId\": \"bot-8323aac0\",\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"title\": \"moa hourly check\",\n    \"prompt\": \"Check your open work.\",\n    \"schedule\": {\n      \"kind\": \"interval\",\n      \"everyMs\": 3600000\n    },\n    \"state\": \"active\",\n    \"createdAt\": 1791881775156,\n    \"updatedAt\": 1791881775156,\n    \"nextDueAt\": 1791885375156\n  }\n}"
+    },
+    {
+     "at": 1791881775160,
+     "event": "tool",
+     "sessionId": "stub-bd085bff3a3a",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g56if2ff55925f1\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881775159,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-8323aac0\"\n    },\n    \"title\": \"Started\",\n    \"body\": \"Task and hourly check set.\",\n    \"clientPostId\": \"wake:w-mv6g52go-b1a62a53:1\"\n  }\n}"
+    },
+    {
+     "at": 1791881780976,
+     "event": "prompt",
+     "sessionId": "stub-bd085bff3a3a",
+     "text": "[wake w-mv6g5azy-100f6798] Moa (coordinator) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881780980,
+     "event": "tool",
+     "sessionId": "stub-bd085bff3a3a",
+     "name": "stop_my_work",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workersStopped\": 0,\n  \"gatesCancelled\": 0,\n  \"routinesPaused\": 1\n}"
+    },
+    {
+     "at": 1791881780990,
+     "event": "tool",
+     "sessionId": "stub-bd085bff3a3a",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g5b0de869cbf601\",\n    \"seq\": 11,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881780989,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-8323aac0\"\n    },\n    \"title\": \"Stopped\",\n    \"body\": \"My workers are stopped and my routines paused.\",\n    \"clientPostId\": \"wake:w-mv6g5azy-100f6798:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [
+   {
+    "at": 1791881776278,
+    "pid": 6657,
+    "cwd": "/home/owner/.wmux-verify-f929f081/worktrees/e908242497dc/lead-long-task-3d9pg8pv",
+    "event": "start",
+    "taskId": "wtask-mv6g56rh-3d9pg8pv",
+    "args": [
+     "--session-id",
+     "30aa11a6-f011-41ed-a2f6-1f060c8b9cb1",
+     "--settings=/home/owner/.wmux-verify-f929f081/factory/worker-settings.json",
+     "# Task worker\n\nYou are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin's default branch.\n\nWhat you can do here: implement the task below within the files it name",
+     "--dangerously-skip-permissions",
+     "--allowedTools",
+     "mcp__wmux__ledger_update,mcp__wmux__channel_read,mcp__wmux__channel_unread,mcp__wmux__channel_ack,mcp__wmux__a2a_task_query,mcp__wmux__a2a_whoami",
+     "--disallowedTools",
+     "mcp__wmux__fanout_start,mcp__wmux__terminal_send,mcp__wmux__terminal_send_key,mcp__wmux__send_message,mcp__wmux__surface_new,mcp__wmux__pane_split,mcp__wmux__browser_*"
+    ]
+   },
+   {
+    "at": 1791881778910,
+    "pid": 6781,
+    "cwd": "/home/owner/.wmux-verify-f929f081/worktrees/e908242497dc/triage-long-task-ruqa1olk",
+    "event": "start",
+    "taskId": "wtask-mv6g56rr-ruqa1olk",
+    "args": [
+     "--session-id",
+     "25e346bc-6b87-46ff-9dc7-eec29e383e3b",
+     "--settings=/home/owner/.wmux-verify-f929f081/factory/worker-settings.json",
+     "# Task worker\n\nYou are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin's default branch.\n\nWhat you can do here: implement the task below within the files it name",
+     "--dangerously-skip-permissions",
+     "--allowedTools",
+     "mcp__wmux__ledger_update,mcp__wmux__channel_read,mcp__wmux__channel_unread,mcp__wmux__channel_ack,mcp__wmux__a2a_task_query,mcp__wmux__a2a_whoami",
+     "--disallowedTools",
+     "mcp__wmux__fanout_start,mcp__wmux__terminal_send,mcp__wmux__terminal_send_key,mcp__wmux__send_message,mcp__wmux__surface_new,mcp__wmux__pane_split,mcp__wmux__browser_*"
+    ]
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881764471,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791881775757,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ],
+     "cwd": "/home/owner/.wmux-verify-f929f081/worktrees/e908242497dc/lead-long-task-3d9pg8pv",
+     "handled": true,
+     "exit": 1,
+     "error": "no pull requests found for branch \"wtask/lead-long-task-3d9pg8pv\""
+    },
+    {
+     "at": 1791881775819,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ],
+     "cwd": "/home/owner/.wmux-verify-f929f081/worktrees/e908242497dc/triage-long-task-ruqa1olk",
+     "handled": true,
+     "exit": 1,
+     "error": "no pull requests found for branch \"wtask/triage-long-task-ruqa1olk\""
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-56-01-verify-f929f081",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-56-01-verify-f929f081"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the lead never got the message",
+   "failing": [
+    "reached_every_bot"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.3"
+    }
+   ]
+  },
+  {
+   "why": "a worker kept running",
+   "failing": [
+    "workers_cancelled_by_owner_stop"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "ledger.0.status",
+     "value": "running"
+    }
+   ]
+  },
+  {
+   "why": "a routine stayed active",
+   "failing": [
+    "routines_paused_by_stop"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "routines.0.state",
+     "value": "active"
+    }
+   ]
+  },
+  {
+   "why": "a turn was cut",
+   "failing": [
+    "no_turn_cut"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-cut",
+      "botId": "bot-b1b445df",
+      "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
+      "reason": {
+       "kind": "manual",
+       "by": "human"
+      },
+      "threadId": "general",
+      "priority": 0,
+      "enqueuedAt": 1791881780974,
+      "attempts": 1,
+      "state": "interrupted"
+     }
+    }
+   ]
+  },
+  {
+   "why": "triage paused nothing",
+   "failing": [
+    "triage_stopped_itself"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "stub.triage.7.text",
+     "value": "{\n  \"ok\": true,\n  \"workersStopped\": 1,\n  \"gatesCancelled\": 0,\n  \"routinesPaused\": 0\n}"
+    }
+   ]
+  },
+  {
+   "why": "the HQ bot said nothing",
+   "failing": [
+    "moa_one_line"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.10"
+    }
+   ]
+  },
+  {
+   "why": "a bot was prompted after the stop",
+   "failing": [
+    "no_prompt_after_stop"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "stub.lead",
+     "value": {
+      "at": 1,
+      "event": "prompt",
+      "text": "[wake w-late]"
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,1042 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "budget-stop",
+  "run": 1,
+  "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-9dbcc2aa",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000,
+     "maxTurnsPerHour": 1
+    },
+    "enabled": true,
+    "createdAt": 1791881291294,
+    "updatedAt": 1791881307368
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-9dbcc2aa"
+  },
+  "injected": [
+   {
+    "label": "first",
+    "kind": "card",
+    "id": "c-mv6fut5s836982f50d",
+    "threadId": "task:budget",
+    "at": 1791881291295
+   },
+   {
+    "label": "second",
+    "kind": "card",
+    "id": "c-mv6fuxfne429efdcb5",
+    "threadId": "general",
+    "at": 1791881296832
+   },
+   {
+    "label": "answer",
+    "kind": "resolution",
+    "id": "c-mv6fux5md42bb0a682",
+    "at": 1791881297343
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881291295,
+    "do": "post",
+    "label": "first",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fut5s836982f50d",
+      "seq": 1,
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "threadId": "task:budget",
+      "kind": "human",
+      "at": 1791881291296,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "One",
+      "body": "First.",
+      "refs": {
+       "botId": "bot-9dbcc2aa",
+       "botIds": [
+        "bot-9dbcc2aa"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-9dbcc2aa",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fut5t-6b5e7804",
+     "addressees": [
+      {
+       "botId": "bot-9dbcc2aa",
+       "role": "lead",
+       "wakeId": "w-mv6fut5t-6b5e7804"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881291299,
+    "do": "waitFor",
+    "label": "question",
+    "ok": true,
+    "doneAt": 1791881296832
+   },
+   {
+    "at": 1791881296832,
+    "do": "post",
+    "label": "second",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fuxfne429efdcb5",
+      "seq": 3,
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881296835,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Two",
+      "body": "Second.",
+      "refs": {
+       "botId": "bot-9dbcc2aa",
+       "botIds": [
+        "bot-9dbcc2aa"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-9dbcc2aa",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fuxfo-115252e4",
+     "addressees": [
+      {
+       "botId": "bot-9dbcc2aa",
+       "role": "lead",
+       "wakeId": "w-mv6fuxfo-115252e4"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881296838,
+    "do": "waitFor",
+    "label": "second ran",
+    "ok": true,
+    "doneAt": 1791881297343
+   },
+   {
+    "at": 1791881297343,
+    "do": "resolve",
+    "label": "answer",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fux5md42bb0a682",
+      "seq": 2,
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "threadId": "task:budget",
+      "kind": "question",
+      "at": 1791881296474,
+      "actor": {
+       "kind": "bot",
+       "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+       "botId": "bot-9dbcc2aa"
+      },
+      "title": "Which branch?",
+      "body": "Pick one.\n\nOptions: main / dev",
+      "refs": {
+       "handoffId": "h-mv6fux5l8cd8e325d300",
+       "decisionId": "c6749148-88c3-49a7-96c2-7d21d7a33636"
+      },
+      "state": "resolved"
+     }
+    },
+    "cardId": "c-mv6fux5md42bb0a682"
+   },
+   {
+    "at": 1791881297355,
+    "do": "waitFor",
+    "label": "budget fact",
+    "ok": true,
+    "doneAt": 1791881297356
+   },
+   {
+    "at": 1791881297356,
+    "do": "waitFor",
+    "label": "held card",
+    "ok": true,
+    "doneAt": 1791881297357
+   },
+   {
+    "at": 1791881297357,
+    "do": "sleep"
+   },
+   {
+    "at": 1791881300359,
+    "do": "rpc",
+    "label": "status",
+    "result": {
+     "ok": true,
+     "status": {
+      "botId": "bot-9dbcc2aa",
+      "presence": "parked",
+      "sessionId": "stub-c1996a372ef7",
+      "queueDepth": 1,
+      "budgetLeft": {
+       "turnsHour": 0,
+       "turnsDay": 198,
+       "workerHoursDay": 6
+      }
+     }
+    }
+   },
+   {
+    "at": 1791881300364,
+    "do": "restart"
+   },
+   {
+    "at": 1791881302331,
+    "do": "waitFor",
+    "label": "still held after restart",
+    "ok": true,
+    "doneAt": 1791881307364
+   },
+   {
+    "at": 1791881307365,
+    "do": "rpc",
+    "label": "resume",
+    "result": {
+     "ok": true,
+     "status": {
+      "botId": "bot-9dbcc2aa",
+      "presence": "unknown",
+      "sessionId": "stub-c1996a372ef7",
+      "queueDepth": 1,
+      "budgetLeft": {
+       "turnsHour": 0,
+       "turnsDay": 198,
+       "workerHoursDay": 6
+      }
+     }
+    }
+   },
+   {
+    "at": 1791881307375,
+    "do": "waitFor",
+    "label": "held ran",
+    "ok": true,
+    "doneAt": 1791881307879
+   },
+   {
+    "at": 1791881307879,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881310896
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6fut5s-7212eb680370",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881291296,
+    "dedupeKey": "human.message:c-mv6fut5s836982f50d:bot-9dbcc2aa",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "ref": {
+     "botId": "bot-9dbcc2aa",
+     "messageId": "c-mv6fut5s836982f50d:bot-9dbcc2aa"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "First.",
+     "cardId": "c-mv6fut5s836982f50d",
+     "threadId": "task:budget",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fuxfn-4e0c891404a3",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791881296835,
+    "dedupeKey": "human.message:c-mv6fuxfne429efdcb5:bot-9dbcc2aa",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "ref": {
+     "botId": "bot-9dbcc2aa",
+     "messageId": "c-mv6fuxfne429efdcb5:bot-9dbcc2aa"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Second.",
+     "cardId": "c-mv6fuxfne429efdcb5",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fuxty-2921a2a490a3",
+    "seq": 3,
+    "kind": "bot.budget_exhausted",
+    "at": 1791881297350,
+    "dedupeKey": "bot.budget_exhausted:bot-9dbcc2aa:497744",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "ref": {
+     "botId": "bot-9dbcc2aa"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9dbcc2aa"
+    },
+    "payload": {
+     "reason": "turns_hour",
+     "wakeId": "w-mv6fuxty-94e17563"
+    }
+   },
+   {
+    "id": "f-0mv6fuxu2-e4f559ffb0ae",
+    "seq": 4,
+    "kind": "handoff.received",
+    "at": 1791881297354,
+    "dedupeKey": "handoff.received:h-mv6fuxtyb8a7ebc81580",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "ref": {
+     "handoffId": "h-mv6fuxtyb8a7ebc81580",
+     "botId": "bot-9dbcc2aa"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "handoffKind": "answer",
+     "title": "Which branch?",
+     "threadId": "task:budget",
+     "runId": "run-mv6fux5l44e512d53950",
+     "depth": 0,
+     "hopsInRun": 2,
+     "fromLabel": "the owner",
+     "toLabel": "Lead (lead)",
+     "toWorkspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "answer": "main"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6fut5t-6b5e7804",
+    "botId": "bot-9dbcc2aa",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "reason": {
+     "kind": "human",
+     "text": "First.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fut5s836982f50d",
+     "runId": "run-c-mv6fut5s836982f50d"
+    },
+    "threadId": "task:budget",
+    "priority": 0,
+    "enqueuedAt": 1791881291297,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fuxfo-115252e4",
+    "botId": "bot-9dbcc2aa",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "reason": {
+     "kind": "human",
+     "text": "Second.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fuxfne429efdcb5",
+     "runId": "run-c-mv6fuxfne429efdcb5"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881296836,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fuxty-94e17563",
+    "botId": "bot-9dbcc2aa",
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fuxtyb8a7ebc81580"
+    },
+    "threadId": "task:budget",
+    "priority": 1,
+    "enqueuedAt": 1791881297350,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv6fux5l8cd8e325d300",
+    "runId": "run-mv6fux5l44e512d53950",
+    "threadId": "task:budget",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "botId": "bot-9dbcc2aa"
+    },
+    "to": {
+     "kind": "human"
+    },
+    "kind": "ask_person",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "botId": "bot-9dbcc2aa"
+     },
+     "chain": []
+    },
+    "landing": "room+phone",
+    "payload": {
+     "title": "Which branch?",
+     "body": "Pick one.",
+     "options": [
+      "main",
+      "dev"
+     ]
+    },
+    "status": "answered",
+    "clientHandoffId": "wake:w-mv6fut5t-6b5e7804:h1",
+    "createdAt": 1791881296474,
+    "updatedAt": 1791881297349
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fuxtyb8a7ebc81580",
+    "runId": "run-mv6fux5l44e512d53950",
+    "threadId": "task:budget",
+    "depth": 0,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "human"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "botId": "bot-9dbcc2aa"
+    },
+    "kind": "answer",
+    "replyTo": "h-mv6fux5l8cd8e325d300",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "botId": "bot-9dbcc2aa"
+     },
+     "chain": [
+      "h-mv6fux5l8cd8e325d300"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Which branch?",
+     "body": "main"
+    },
+    "status": "delivered",
+    "createdAt": 1791881297350,
+    "updatedAt": 1791881297354
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fv5p1d26f1186d36a",
+    "runId": "run-mv6fv5p13a12a00d03eb",
+    "threadId": "task:budget",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "botId": "bot-9dbcc2aa"
+    },
+    "to": {
+     "kind": "human"
+    },
+    "kind": "ask_person",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "botId": "bot-9dbcc2aa"
+     },
+     "chain": []
+    },
+    "landing": "room+phone",
+    "payload": {
+     "title": "Which branch?",
+     "body": "Pick one.",
+     "options": [
+      "main",
+      "dev"
+     ]
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fuxty-94e17563:h1",
+    "createdAt": 1791881307541,
+    "updatedAt": 1791881307542
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": {
+   "ws-57b56233-79ed-4255-8d70-c7426c310f08": [
+    {
+     "id": "de81f99c-4ffa-4d6e-91c1-b631cb37d5d5",
+     "question": "Which branch?",
+     "options": [
+      "main",
+      "dev"
+     ],
+     "context": "Pick one.",
+     "status": "pending",
+     "raisedAt": 1791881307541,
+     "origin": "ask_person",
+     "ref": "h-mv6fv5p1d26f1186d36a",
+     "threadId": "task:budget",
+     "handoffId": "h-mv6fv5p1d26f1186d36a"
+    }
+   ]
+  },
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6fut5s836982f50d",
+    "seq": 1,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "task:budget",
+    "kind": "human",
+    "at": 1791881291296,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "One",
+    "body": "First.",
+    "refs": {
+     "botId": "bot-9dbcc2aa",
+     "botIds": [
+      "bot-9dbcc2aa"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fux5md42bb0a682",
+    "seq": 2,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "task:budget",
+    "kind": "question",
+    "at": 1791881296474,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "botId": "bot-9dbcc2aa"
+    },
+    "title": "Which branch?",
+    "body": "Pick one.\n\nOptions: main / dev",
+    "refs": {
+     "handoffId": "h-mv6fux5l8cd8e325d300",
+     "decisionId": "c6749148-88c3-49a7-96c2-7d21d7a33636"
+    },
+    "state": "resolved"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fuxfne429efdcb5",
+    "seq": 3,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881296835,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Two",
+    "body": "Second.",
+    "refs": {
+     "botId": "bot-9dbcc2aa",
+     "botIds": [
+      "bot-9dbcc2aa"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fuxfr56aab342c4",
+    "seq": 4,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881296839,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "botId": "bot-9dbcc2aa"
+    },
+    "title": "On it",
+    "body": "Working.",
+    "clientPostId": "wake:w-mv6fuxfo-115252e4:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fuxtz2592cbdb51",
+    "seq": 5,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "general",
+    "kind": "budget",
+    "at": 1791881297350,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Lead is out of budget (turns_hour)",
+    "refs": {
+     "botId": "bot-9dbcc2aa",
+     "factId": "f-0mv6fuxty-2921a2a490a3"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fuxu0e12da42249",
+    "seq": 6,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "task:budget",
+    "kind": "budget",
+    "at": 1791881297352,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Queued: Lead is out of turns until 18:48; resume it in its profile",
+    "refs": {
+     "botId": "bot-9dbcc2aa"
+    },
+    "clientPostId": "held:w-mv6fuxty-94e17563"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fuxu28a85f233e9",
+    "seq": 7,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "task:budget",
+    "kind": "fact",
+    "at": 1791881297354,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Answered → Lead (lead): Which branch?",
+    "body": "main",
+    "refs": {
+     "botId": "bot-9dbcc2aa",
+     "handoffId": "h-mv6fuxtyb8a7ebc81580",
+     "factId": "f-0mv6fuxu2-e4f559ffb0ae"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fv5p28622b97679",
+    "seq": 8,
+    "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+    "threadId": "task:budget",
+    "kind": "question",
+    "at": 1791881307542,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+     "botId": "bot-9dbcc2aa"
+    },
+    "title": "Which branch?",
+    "body": "Pick one.\n\nOptions: main / dev",
+    "refs": {
+     "handoffId": "h-mv6fv5p1d26f1186d36a",
+     "decisionId": "de81f99c-4ffa-4d6e-91c1-b631cb37d5d5"
+    },
+    "state": "open"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881291320,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881291321,
+     "event": "session/new",
+     "sessionId": "stub-c1996a372ef7",
+     "cwd": "/home/owner/.wmux-verify-f9c6f4ac/factory/bots/bot-9dbcc2aa"
+    },
+    {
+     "at": 1791881296325,
+     "event": "prompt",
+     "sessionId": "stub-c1996a372ef7",
+     "text": "[wake w-mv6fut5t-6b5e7804] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881296475,
+     "event": "tool",
+     "sessionId": "stub-c1996a372ef7",
+     "name": "ask_person",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fux5l8cd8e325d300\",\n  \"status\": \"delivered\",\n  \"threadId\": \"task:budget\",\n  \"decisionId\": \"c6749148-88c3-49a7-96c2-7d21d7a33636\"\n}"
+    },
+    {
+     "at": 1791881296836,
+     "event": "prompt",
+     "sessionId": "stub-c1996a372ef7",
+     "text": "[wake w-mv6fuxfo-115252e4] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881296840,
+     "event": "tool",
+     "sessionId": "stub-c1996a372ef7",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fuxfr56aab342c4\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-57b56233-79ed-4255-8d70-c7426c310f08\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881296839,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-57b56233-79ed-4255-8d70-c7426c310f08\",\n      \"botId\": \"bot-9dbcc2aa\"\n    },\n    \"title\": \"On it\",\n    \"body\": \"Working.\",\n    \"clientPostId\": \"wake:w-mv6fuxfo-115252e4:1\"\n  }\n}"
+    },
+    {
+     "at": 1791881307417,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881307419,
+     "event": "session/load",
+     "sessionId": "stub-c1996a372ef7",
+     "refused": false
+    },
+    {
+     "at": 1791881307419,
+     "event": "prompt",
+     "sessionId": "stub-c1996a372ef7",
+     "text": "[wake w-mv6fuxty-94e17563] Lead (developer) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881307543,
+     "event": "tool",
+     "sessionId": "stub-c1996a372ef7",
+     "name": "ask_person",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fv5p1d26f1186d36a\",\n  \"status\": \"delivered\",\n  \"threadId\": \"task:budget\",\n  \"decisionId\": \"de81f99c-4ffa-4d6e-91c1-b631cb37d5d5\"\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881291609,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791881302235,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {
+   "presence": "parked"
+  },
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-48-08-verify-f9c6f4ac",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-48-08-verify-f9c6f4ac"
+   },
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-48-21-verify-f9c6f4ac",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-48-21-verify-f9c6f4ac"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the owner's second message was dropped over the cap",
+   "failing": [
+    "owner_message_ran_over_cap"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.1.state",
+     "value": "dropped"
+    },
+    {
+     "op": "set",
+     "path": "wakes.1.dropped",
+     "value": {
+      "code": "budget",
+      "at": 1
+     }
+    }
+   ]
+  },
+  {
+   "why": "the held answer was dropped",
+   "failing": [
+    "held_answer_not_dropped",
+    "held_ran_after_resume"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.2.state",
+     "value": "dropped"
+    }
+   ]
+  },
+  {
+   "why": "the bot was not parked",
+   "failing": [
+    "parked_on_budget"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "saved.presence",
+     "value": "idle"
+    }
+   ]
+  },
+  {
+   "why": "two budget facts",
+   "failing": [
+    "budget_fact"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "facts",
+     "value": {
+      "id": "f-dup",
+      "seq": 3,
+      "kind": "bot.budget_exhausted",
+      "at": 1791881297350,
+      "dedupeKey": "bot.budget_exhausted:bot-9dbcc2aa:497744",
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "ref": {
+       "botId": "bot-9dbcc2aa"
+      },
+      "actor": {
+       "kind": "bot",
+       "id": "bot-9dbcc2aa"
+      },
+      "payload": {
+       "reason": "turns_hour",
+       "wakeId": "w-mv6fuxty-94e17563"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "why": "the held card repeated",
+   "failing": [
+    "held_card_once"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "cards",
+     "value": {
+      "version": 1,
+      "id": "c-dup",
+      "seq": 6,
+      "workspaceId": "ws-57b56233-79ed-4255-8d70-c7426c310f08",
+      "threadId": "task:budget",
+      "kind": "budget",
+      "at": 1791881297352,
+      "actor": {
+       "kind": "system"
+      },
+      "title": "Queued: Lead is out of turns until 18:48; resume it in its profile",
+      "refs": {
+       "botId": "bot-9dbcc2aa"
+      },
+      "clientPostId": "held:w-mv6fuxty-94e17563"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the hold did not survive the restart",
+   "failing": [
+    "held_across_restart"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "actions.10.ok",
+     "value": false
+    }
+   ]
+  },
+  {
+   "why": "the engine was retried",
+   "failing": [
+    "held_ran_after_resume",
+    "no_retry_loop"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "stub.lead",
+     "value": {
+      "at": 1791882066285,
+      "event": "prompt",
+      "text": "[wake w-retry]"
+     }
+    }
+   ]
+  }
+ ]
+}

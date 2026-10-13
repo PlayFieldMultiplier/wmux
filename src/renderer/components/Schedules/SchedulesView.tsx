@@ -10,6 +10,7 @@ import { FOCUS_RING } from '../focusRing';
 import { describeTrigger, formatWhen, runStateLabel } from './format';
 import ScheduleDetail from './ScheduleDetail';
 import ScheduleEditor from './ScheduleEditor';
+import { BotRoutinesSection } from './BotRoutines';
 import { SCHEDULE_TEMPLATES, emptyForm, formFromTemplate, type ScheduleForm, type ScheduleTemplate } from './scheduleModel';
 import { useAccounts } from './useAccounts';
 import { workspaceProbeCwd } from '../../utils/projectConfigProbe';
@@ -21,8 +22,9 @@ type Pane =
 
 /**
  * Schedules — a rail page. The list of schedules on the left (drafts from
- * agents first); on the right the selected schedule, the composer, or —
- * with nothing selected — an empty state of templates to start from.
+ * agents first), then the bots' own routines, read-only; on the right the
+ * selected schedule, the composer, or — with nothing selected — an empty
+ * state of templates to start from.
  */
 export default function SchedulesView() {
   const t = useT();
@@ -138,6 +140,7 @@ export default function SchedulesView() {
           ))}
         </ul>
         {query.trim() && shown.length === 0 && <p className="ui-note px-3">{t('schedules.noMatches')}</p>}
+        <BotRoutinesSection />
       </aside>
 
       <div className="wmux-schedules-main">

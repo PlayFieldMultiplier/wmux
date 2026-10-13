@@ -32,7 +32,7 @@ describe('hand-off marker tripwire', () => {
   });
 
   it('a2a sends and updates: refused off the operator lane, allowed on it, ignored without the marker', () => {
-    expect(refuseHandoffMarker('a2a.task.send', marked, { origin: 'local' } as never)).toMatchObject({ error: expect.stringContaining('moa_propose_handoff') });
+    expect(refuseHandoffMarker('a2a.task.send', marked, { origin: 'local' } as never)).toMatchObject({ error: expect.stringContaining('operator-approved hand-offs') });
     expect(refuseHandoffMarker('a2a.task.send', marked, { origin: 'local', operator: true } as never)).toBeNull();
     expect(refuseHandoffMarker('a2a.task.update', 'all good', { origin: 'local' } as never)).toBeNull();
   });

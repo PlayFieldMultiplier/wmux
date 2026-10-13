@@ -1,0 +1,90 @@
+{
+  "name": "triage-real-issue",
+  "layer": "workflow",
+  "runs": 3,
+  "model": "real",
+  "description": "A real triage bot on a scratch repo with a seeded bug: issue.opened wakes it, it posts a triage card in the issue thread and starts one repro worker (a real agent) that opens a draft PR or reports no-repro.",
+  "setup": {
+    "repo": true,
+    "gh": {
+      "issues": []
+    },
+    "bots": [
+      {
+        "key": "triage",
+        "role": "triage",
+        "repo": true
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "waitFor",
+      "label": "baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addIssue",
+      "issue": {
+        "number": 21,
+        "title": "README title is misspelled",
+        "author": "octo",
+        "labels": [
+          "bug"
+        ],
+        "body": "The README heading says 'factory smoke scratch repo' but the project is called factory-smoke-app."
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "triage card",
+      "cond": {
+        "cards": {
+          "kind": "triage"
+        }
+      },
+      "timeoutMs": 600000
+    },
+    {
+      "do": "waitFor",
+      "label": "repro outcome",
+      "cond": {
+        "all": [
+          {
+            "ledger": {
+              "status": [
+                "review_requested",
+                "failed",
+                "input_required"
+              ]
+            }
+          },
+          {
+            "idle": true
+          }
+        ],
+        "quietMs": 10000
+      },
+      "timeoutMs": 1800000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes"
+    ],
+    "bot": "triage",
+    "thread": "issue:github.com/acme/app#21",
+    "bugPattern": "readme|title|heading",
+    "maxTurns": 6
+  }
+}

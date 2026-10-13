@@ -6,7 +6,7 @@ import type { StoreState } from '../../stores';
 import type { Workspace, Pane, PaneLeaf, Surface, AgentStatus } from '../../../shared/types';
 import type { WorkTask } from '../../../shared/workTask';
 import type { FanoutOrigin } from '../../../shared/fanoutOrigin';
-import type { MoaPendingDecision, MoaState } from '../../../shared/moa';
+import type { MoaPendingDecision } from '../../../shared/moa';
 import type { WorkLink } from '../../../shared/workLink';
 import { withoutTicketTranscript } from '../../../shared/phoneFleetTickets';
 
@@ -412,67 +412,16 @@ describe('buildPhoneSidebarSnapshot — layout tree', () => {
   });
 });
 
-describe('buildPhoneSidebarSnapshot — the Moa HQ', () => {
-  const moa = (hqWorkspaceId: string | null, enabled: boolean, hqState: MoaState['hq']['state'] = 'ok'): MoaState => ({
-    config: { enabled, onboarded: true, level: 2, maxTurnsPerHour: 30, bubbles: true, reduceMotion: false, defaultReason: null },
-    hq: { workspaceId: hqWorkspaceId, state: hqState },
-    archive: { unacked: 0, total: 0 },
-  });
-  const withMoa = (m: MoaState | null) => {
+describe('buildPhoneSidebarSnapshot — HQ and factory fields', () => {
+  it('names no HQ and says nothing about Moa or the factory: main folds those in (PhoneFactory), so the renderer never needs the deck autonomy store', async () => {
     const a = workspace('a', [leaf('pa', [surface('sa', 'pty-a')])]);
     const hq = workspace('hq', [leaf('ph', [surface('sh', 'pty-h')])]);
-    return { ...state({ workspaces: [a, hq] }), moa: m } as StoreState;
-  };
-
-  it('names the HQ once, at the snapshot level, and changes nothing else', () => {
-    const plain = buildPhoneSidebarSnapshot(withMoa(null));
-    const snap = buildPhoneSidebarSnapshot(withMoa(moa('hq', true)));
-    expect(snap.hqWorkspaceId).toBe('hq');
-    expect(snap.moa).toBe(true);
-    // toEqual reads an undefined key as absent: every other field is unchanged.
-    expect({ ...snap, hqWorkspaceId: undefined, moa: undefined }).toEqual(plain);
-    expect('hqWorkspaceId' in plain || 'moa' in plain).toBe(false);
-    expect(parsePhoneSidebarSnapshot(JSON.parse(JSON.stringify(snap)))).toEqual(snap);
-  });
-
-  it('keeps naming the HQ while Moa is off, as the desktop keeps it out of its list, but says moa only when on and present', () => {
-    const off = buildPhoneSidebarSnapshot(withMoa(moa('hq', false)));
-    expect(off.hqWorkspaceId).toBe('hq');
-    expect(off).not.toHaveProperty('moa');
-    const missing = buildPhoneSidebarSnapshot(withMoa(moa('hq', true, 'hq-missing')));
-    expect(missing.hqWorkspaceId).toBe('hq');
-    expect(missing).not.toHaveProperty('moa');
-    // Main says ok but the renderer holds no such workspace yet.
-    const notLive = buildPhoneSidebarSnapshot(withMoa(moa('gone', true)));
-    expect(notLive).not.toHaveProperty('moa');
-    const unset = buildPhoneSidebarSnapshot(withMoa(moa(null, true, 'unset')));
-    expect(unset).not.toHaveProperty('hqWorkspaceId');
-    expect(unset).not.toHaveProperty('moa');
-  });
-
-  it('names the remembered HQ before main\'s first answer (no flash on the phone), without claiming moa', () => {
-    const boot = buildPhoneSidebarSnapshot({ ...withMoa(null), moaHqSeed: 'hq' } as StoreState);
-    expect(boot.hqWorkspaceId).toBe('hq');
-    expect(boot).not.toHaveProperty('moa');
-    // Main's answer wins once it arrives.
-    const answered = buildPhoneSidebarSnapshot({ ...withMoa(moa(null, true, 'unset')), moaHqSeed: 'hq' } as StoreState);
-    expect(answered).not.toHaveProperty('hqWorkspaceId');
-  });
-
-  it('says a wake is blocked only when Moa is on and the HQ\'s agent mode reads off', () => {
-    const build = (m: MoaState | null, hqMode?: Parameters<typeof buildPhoneSidebarSnapshot>[4]) =>
-      buildPhoneSidebarSnapshot(withMoa(m), undefined, undefined, undefined, hqMode);
-    const blocked = build(moa('hq', true), { workspaceId: 'hq', mode: 'off' });
-    expect(blocked).toMatchObject({ moa: true, moaWakeBlocked: 'moa-mode-off' });
-    expect(parsePhoneSidebarSnapshot(JSON.parse(JSON.stringify(blocked)))).toEqual(blocked);
-    // Mode on, Moa off, a mode for some other workspace, or no read at all
-    // (a failed DECK_MODE_GET): no claim, so the daemon keeps today's answer.
-    expect(build(moa('hq', true), { workspaceId: 'hq', mode: 'assist' })).not.toHaveProperty('moaWakeBlocked');
-    expect(build(moa('hq', false), { workspaceId: 'hq', mode: 'off' })).not.toHaveProperty('moaWakeBlocked');
-    expect(build(moa('hq', true), { workspaceId: 'a', mode: 'off' })).not.toHaveProperty('moaWakeBlocked');
-    const unread = build(moa('hq', true));
-    expect(unread.moa).toBe(true);
-    expect(unread).not.toHaveProperty('moaWakeBlocked');
+    const snap = buildPhoneSidebarSnapshot(state({ workspaces: [a, hq] }));
+    for (const key of ['hqWorkspaceId', 'moa', 'moaWakeBlocked', 'factory']) expect(snap).not.toHaveProperty(key);
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'phoneSidebarSnapshot.ts'), 'utf8');
+    expect(src).not.toMatch(/deckAutonomyStore/);
   });
 });
 

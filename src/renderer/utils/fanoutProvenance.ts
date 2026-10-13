@@ -200,6 +200,8 @@ type RequesterState = {
   surfaceAgent?: Record<string, { name?: string } | undefined>;
   fanoutOrigin?: Record<string, FanoutOrigin | undefined>;
   fanoutProvenance?: Record<string, FanoutProvenance | undefined>;
+  /** Factory bots main knows, by id (roomSlice): a bot's task names it. */
+  roomActors?: Record<string, { name?: string } | undefined>;
 };
 
 type Leaf = ReturnType<typeof getWorkspaceLeafPanes>[number];
@@ -319,12 +321,19 @@ export type TaskRequester =
   | { kind: 'pane'; live: false; label?: string }
   | { kind: 'gui' }
   | { kind: 'orchestrator' }
+  /** A factory bot started it; `name` while main has listed the bot. */
+  | { kind: 'bot'; name?: string }
   | { kind: 'unknown' };
 
 /** Who asked for task workspace `taskWorkspaceId`. */
 export function resolveTaskRequester(state: RequesterState, taskWorkspaceId: string): TaskRequester {
   const origin = state.fanoutOrigin?.[taskWorkspaceId];
   if (origin) {
+    // A factory bot is an agent, not a pane: it is named, never "Orchestrator".
+    if (origin.kind === 'bot') {
+      const name = origin.botId ? state.roomActors?.[origin.botId]?.name?.trim() : undefined;
+      return name ? { kind: 'bot', name } : { kind: 'bot' };
+    }
     if (origin.kind !== 'pane') return { kind: origin.kind };
     const hit = findOriginSurface(state, origin);
     if (hit) return { kind: 'pane', live: true, ...hit };
@@ -345,6 +354,8 @@ export function requesterName(requester: TaskRequester, t: T): string | undefine
       return t('sidebar.provenance.callerGui');
     case 'orchestrator':
       return t('sidebar.requester.orchestrator');
+    case 'bot':
+      return requester.name ?? t('sidebar.requester.bot');
     case 'pane':
       if (requester.live) return requester.label;
       return t('sidebar.requester.closedPane', { name: requester.label ?? t('sidebar.provenance.callerPane') });

@@ -8,7 +8,7 @@ export type SettingsTabId =
   | 'notifications'
   | 'claude-integration'
   | 'accounts'
-  | 'moa'
+  | 'factory'
   | 'roles'
   | 'tokens'
   | 'browser'
@@ -45,7 +45,7 @@ export const SETTINGS_NAV_GROUPS: {
   {
     id: 'agents',
     labelKey: 'settings.navGroupAgents',
-    tabs: ['claude-integration', 'accounts', 'moa', 'roles', 'tokens', 'browser', 'computer-use'],
+    tabs: ['claude-integration', 'accounts', 'factory', 'roles', 'tokens', 'browser', 'computer-use'],
   },
   {
     id: 'connections',
@@ -60,14 +60,15 @@ export const SETTINGS_NAV_GROUPS: {
 
 /**
  * Tab ids that no longer exist, mapped to the tab that now holds their
- * settings. `agents` was split into Orchestrator and Roles & fan-out; the
- * orchestrator half kept the tab's first section, so an old deep link lands
- * there. Orchestrator then became Moa (the HQ main bot), which kept all of its
- * rows. Every other tab id kept its spelling, so it needs no alias.
+ * settings. `agents` was split into Orchestrator and Roles & fan-out;
+ * Orchestrator then became Moa (the HQ main bot), and Moa's tab gave way to
+ * the agent factory's. Every other tab id kept its spelling, so it needs no
+ * alias.
  */
 export const LEGACY_SETTINGS_TAB_ALIASES: Readonly<Record<string, SettingsTabId>> = {
-  agents: 'moa',
-  orchestrator: 'moa',
+  agents: 'factory',
+  orchestrator: 'factory',
+  moa: 'factory',
 };
 
 const TAB_IDS: ReadonlySet<string> = new Set(SETTINGS_NAV_GROUPS.flatMap((g) => g.tabs));
@@ -150,32 +151,19 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
 
   { id: 'claudeacct', tab: 'accounts', labelKey: 'accounts.title', synonyms: 'claude account login subscription max usage quota 계정' },
 
-  { id: 'moaswitch', tab: 'moa', labelKey: 'moa.settings.switch', descKey: 'moa.settings.switchDesc', synonyms: 'moa main bot hq orchestrator brain on off enable disable 모아 메인봇 오케스트레이터' },
-  { id: 'brain', tab: 'moa', labelKey: 'moa.settings.engine', descKey: 'moa.settings.engineDesc', synonyms: 'orchestrator brain engine runtime hermes claude acp sdk terminal' },
-  { id: 'model', tab: 'moa', labelKey: 'settings.orchestratorModel', descKey: 'settings.orchestratorModelDesc', synonyms: 'model opus sonnet haiku' },
-  { id: 'effort', tab: 'moa', labelKey: 'settings.orchestratorEffort', descKey: 'settings.orchestratorEffortDesc', synonyms: 'effort thinking reasoning budget low medium high max' },
-  { id: 'moahq', tab: 'moa', labelKey: 'moa.settings.hq', synonyms: 'hq headquarters workspace recreate reset setup' },
-  { id: 'moamodes', tab: 'moa', labelKey: 'moa.settings.modes', descKey: 'moa.settings.modesDesc', synonyms: 'mode off assist danger autonomy workspace 모드' },
-  { id: 'moaturncap', tab: 'moa', labelKey: 'moa.settings.turnCap', descKey: 'moa.settings.turnCapDesc', synonyms: 'turn cap limit rate hour budget usage' },
-  { id: 'moamemoryproposals', tab: 'moa', labelKey: 'moa.settings.memoryProposals', descKey: 'moa.settings.memoryProposalsDesc', synonyms: 'remember precedent skill proposal memory save 기억 판례 스킬' },
-  { id: 'moaapprovalpress', tab: 'moa', labelKey: 'moa.settings.approvalPress', descKey: 'moa.settings.approvalPressDesc', synonyms: 'approval approve press permission prompt auto yes danger worker 승인' },
-  { id: 'moashadowjudge', tab: 'moa', labelKey: 'moa.settings.shadowJudge', descKey: 'moa.settings.shadowJudgeDesc', synonyms: 'shadow judge policy rule delegate answer question agreement record 그림자 판정' },
-  { id: 'moaaskmode', tab: 'moa', labelKey: 'moa.settings.askMode', descKey: 'moa.settings.askModeDesc', synonyms: 'delegate moa_ask ask mode suggest auto off pause kill switch daily cap 위임 대리 자동 일시정지 한도' },
-  { id: 'moaretro', tab: 'moa', labelKey: 'moa.settings.retro', descKey: 'moa.settings.retroDesc', synonyms: 'retro retrospective weekly review summary interruptions stalls 회고' },
-  { id: 'moastats', tab: 'moa', labelKey: 'moa.settings.stats', descKey: 'moa.settings.statsDesc', synonyms: 'track record stats statistics clear reset delegation 실적' },
-  { id: 'moaissueproposals', tab: 'moa', labelKey: 'moa.settings.issueProposals', descKey: 'moa.settings.issueProposalsDesc', synonyms: 'issue pr pull request propose new hand off github contributor 이슈 제안' },
-  { id: 'moaautohandoff', tab: 'moa', labelKey: 'moa.settings.autoHandoff', descKey: 'moa.settings.autoHandoffDesc', synonyms: 'hand off handoff auto danger delegate without asking card 위임 자동 핸드오프' },
-  { id: 'moareadwithoutasking', tab: 'moa', labelKey: 'moa.settings.readWithoutAsking', descKey: 'moa.settings.readWithoutAskingDesc', synonyms: 'read grep glob files permission prompt ask repo delegated verify 읽기 권한' },
-  { id: 'moaissuepoll', tab: 'moa', labelKey: 'moa.settings.issuePoll', descKey: 'moa.settings.issuePollDesc', synonyms: 'poll interval minutes scan check github issue' },
-  { id: 'moatrustedauthors', tab: 'moa', labelKey: 'moa.settings.trustedAuthors', descKey: 'moa.settings.trustedAuthorsDesc', synonyms: 'trusted author login github auto label wmux:auto' },
-  { id: 'moaignoredrepos', tab: 'moa', labelKey: 'moa.settings.ignoredRepos', descKey: 'moa.settings.ignoredReposDesc', synonyms: 'ignore mute repo repository proposals' },
-  { id: 'moabubbles', tab: 'moa', labelKey: 'moa.settings.bubbles', descKey: 'moa.settings.bubblesDesc', synonyms: 'bubble notification popup titlebar dot moa 말풍선 알림' },
-  { id: 'moareducemotion', tab: 'moa', labelKey: 'moa.settings.reduceMotion', descKey: 'moa.settings.reduceMotionDesc', synonyms: 'reduce motion animation mascot still accessibility 애니메이션 동작 줄이기' },
-  { id: 'fullpower', tab: 'moa', labelKey: 'settings.orchestratorFullPower', synonyms: 'full power sdk settings sources tools' },
-  { id: 'autowake', tab: 'moa', labelKey: 'settings.autoWake', descKey: 'settings.autoWakeDesc', synonyms: 'autowake wake event push tokens' },
-  { id: 'ledgergate', tab: 'moa', labelKey: 'settings.ledgerGate', descKey: 'settings.ledgerGateDesc', synonyms: 'ledger gate stop task orchestrator delegated experimental' },
-  { id: 'fleetfastpath', tab: 'moa', labelKey: 'moa.settings.fleetFastPath', descKey: 'moa.settings.fleetFastPathDesc', synonyms: 'fleet status local fast answer who needs me read only 작업 상태 로컬' },
-  { id: 'briefing', tab: 'moa', labelKey: 'settings.briefing', descKey: 'settings.briefingDesc', synonyms: 'briefing welcome home summary' },
+  { id: 'factoryswitch', tab: 'factory', labelKey: 'settings.factory.enabled', descKey: 'settings.factory.enabledDesc', synonyms: 'bots run bots factory agent on off enable rooms 봇 실행 공장' },
+  { id: 'factoryhq', tab: 'factory', labelKey: 'settings.factory.hq', descKey: 'settings.factory.hqDesc', synonyms: 'hq headquarters moa room workspace' },
+  { id: 'factorytrustedauthors', tab: 'factory', labelKey: 'settings.factory.trustedAuthors', descKey: 'settings.factory.trustedAuthorsDesc', synonyms: 'trusted author login github verifier pr' },
+  { id: 'factorymorning', tab: 'factory', labelKey: 'settings.factory.morning', descKey: 'settings.factory.morningDesc', synonyms: 'morning report time schedule weekday wake 아침 보고' },
+  { id: 'factoryverifierownprs', tab: 'factory', labelKey: 'settings.factory.verifierOwnPrs', descKey: 'settings.factory.verifierOwnPrsDesc', synonyms: 'verifier own pull request owner verify' },
+  { id: 'factoryengine', tab: 'factory', labelKey: 'settings.factory.engine', descKey: 'settings.factory.engineDesc', synonyms: 'engine claude sdk pty acp hermes command bot runtime' },
+  { id: 'factoryconcurrency', tab: 'factory', labelKey: 'settings.factory.concurrency', descKey: 'settings.factory.concurrencyDesc', synonyms: 'concurrent bots limit cap parallel turn' },
+  { id: 'factorymaxagents', tab: 'factory', labelKey: 'settings.factory.maxAgents', descKey: 'settings.factory.maxAgentsDesc', synonyms: 'agents workers memory budget slots limit cap queue' },
+  { id: 'factorylaneautomerge', tab: 'factory', labelKey: 'settings.factory.laneAutoMerge', descKey: 'settings.factory.laneAutoMergeDesc', synonyms: 'merge lane auto merge automatic pull request verifier ci 자동 머지' },
+  { id: 'factorylanedailycap', tab: 'factory', labelKey: 'settings.factory.laneDailyCap', descKey: 'settings.factory.laneDailyCapDesc', synonyms: 'merge lane daily cap limit per day' },
+  { id: 'factoryphonebot', tab: 'factory', labelKey: 'settings.factory.phoneBot', descKey: 'settings.factory.phoneBotDesc', synonyms: 'phone mobile ios bot addressee moa coordinator 폰 휴대폰' },
+  { id: 'factorybots', tab: 'factory', labelKey: 'settings.factory.bots', descKey: 'settings.factory.botsDesc', synonyms: 'bots add bot profile lead triage verifier maintainer budget workspace repository 봇 추가' },
+  { id: 'factorykeys', tab: 'factory', labelKey: 'settings.factory.keys', descKey: 'settings.factory.keysDesc', synonyms: 'keys secrets api key token env environment variable credential 키 비밀 토큰' },
 
   { id: 'roles', tab: 'roles', labelKey: 'settings.roleBindings', descKey: 'settings.roleBindingsDesc', synonyms: 'role reviewer tester planner model bind' },
   { id: 'a2a', tab: 'roles', labelKey: 'settings.a2aAutoApproveExecute', descKey: 'settings.a2aAutoApproveExecuteDesc', synonyms: 'a2a execute approve' },

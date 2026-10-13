@@ -569,15 +569,16 @@ interface ClosedPaneTaskGroupProps {
 /**
  * The trailing group's name, from who asked for its tasks: tasks started
  * from the app (the GUI) or by the orchestrator never had a pane, so "From
- * closed pane" would be false for them. A pane origin, or none recorded (a
- * stamp older than origins), keeps the closed-pane name; a mix of kinds is
- * "Other tasks".
+ * closed pane" would be false for them, and so would it for a factory bot's
+ * tasks. A pane origin, or none recorded (a stamp older than origins), keeps
+ * the closed-pane name; a mix of kinds is "Other tasks".
  */
 export function closedGroupLabelKey(kinds: readonly (string | undefined)[]): TranslationKey {
-  const set = new Set(kinds.map((k) => (k === 'gui' || k === 'orchestrator' ? k : 'pane')));
+  const set = new Set(kinds.map((k) => (k === 'gui' || k === 'orchestrator' || k === 'bot' ? k : 'pane')));
   if (set.size > 1) return 'sidebar.tasks.otherGroup';
   if (set.has('gui')) return 'sidebar.tasks.guiGroup';
   if (set.has('orchestrator')) return 'sidebar.tasks.orchestratorGroup';
+  if (set.has('bot')) return 'sidebar.tasks.botGroup';
   return 'sidebar.tasks.closedPaneGroup';
 }
 

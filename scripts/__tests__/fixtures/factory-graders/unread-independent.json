@@ -1,0 +1,457 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "unread-independent",
+  "run": 1,
+  "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+  "botKeys": {
+   "lead": "bot-d3c617ba"
+  },
+  "injected": [
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv5498kkd65196910c",
+    "threadId": "task:alpha",
+    "at": 1791801342882
+   },
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv5498ko5d55e1d761",
+    "threadId": "task:alpha",
+    "at": 1791801342887
+   },
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv5498kqca78c45afe",
+    "threadId": "task:alpha",
+    "at": 1791801342889
+   },
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv5498ks230e7e5716",
+    "threadId": "task:beta",
+    "at": 1791801342891
+   },
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv5498ku0c8ebac062",
+    "threadId": "task:beta",
+    "at": 1791801342893
+   },
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv5498l37c260ab5f4",
+    "threadId": "task:alpha",
+    "at": 1791801342903
+   }
+  ],
+  "actions": [
+   {
+    "do": "loop",
+    "at": 1791801342882
+   },
+   {
+    "do": "post",
+    "at": 1791801342882
+   },
+   {
+    "do": "post",
+    "at": 1791801342887
+   },
+   {
+    "do": "post",
+    "at": 1791801342889
+   },
+   {
+    "do": "loop",
+    "at": 1791801342891
+   },
+   {
+    "do": "post",
+    "at": 1791801342891
+   },
+   {
+    "do": "post",
+    "at": 1791801342893
+   },
+   {
+    "do": "snapshotRead",
+    "label": "before",
+    "at": 1791801342895
+   },
+   {
+    "do": "markRead",
+    "at": 1791801342897
+   },
+   {
+    "do": "snapshotRead",
+    "label": "afterMark",
+    "at": 1791801342901
+   },
+   {
+    "do": "post",
+    "at": 1791801342903
+   },
+   {
+    "do": "snapshotRead",
+    "label": "afterNew",
+    "at": 1791801342905
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [
+   {
+    "label": "before",
+    "result": {
+     "ok": true,
+     "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+     "threads": [
+      {
+       "threadId": "task:beta",
+       "title": "beta 1",
+       "lastAt": 1791801342894,
+       "lastSeq": 5,
+       "cardCount": 2,
+       "openQuestions": 0,
+       "lastKind": "human",
+       "status": "open",
+       "unread": null
+      },
+      {
+       "threadId": "task:alpha",
+       "title": "alpha 1",
+       "lastAt": 1791801342890,
+       "lastSeq": 3,
+       "cardCount": 3,
+       "openQuestions": 0,
+       "lastKind": "human",
+       "status": "open",
+       "unread": null
+      },
+      {
+       "threadId": "general",
+       "title": "General",
+       "lastAt": 0,
+       "lastSeq": 0,
+       "cardCount": 0,
+       "openQuestions": 0,
+       "lastKind": "fact",
+       "status": "open",
+       "unread": null
+      }
+     ]
+    }
+   },
+   {
+    "label": "afterMark",
+    "result": {
+     "ok": true,
+     "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+     "threads": [
+      {
+       "threadId": "task:beta",
+       "title": "beta 1",
+       "lastAt": 1791801342894,
+       "lastSeq": 5,
+       "cardCount": 2,
+       "openQuestions": 0,
+       "lastKind": "human",
+       "status": "open",
+       "unread": null
+      },
+      {
+       "threadId": "task:alpha",
+       "title": "alpha 1",
+       "lastAt": 1791801342890,
+       "lastSeq": 3,
+       "cardCount": 3,
+       "openQuestions": 0,
+       "lastKind": "human",
+       "status": "open",
+       "unread": 0
+      },
+      {
+       "threadId": "general",
+       "title": "General",
+       "lastAt": 0,
+       "lastSeq": 0,
+       "cardCount": 0,
+       "openQuestions": 0,
+       "lastKind": "fact",
+       "status": "open",
+       "unread": null
+      }
+     ]
+    }
+   },
+   {
+    "label": "afterNew",
+    "result": {
+     "ok": true,
+     "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+     "threads": [
+      {
+       "threadId": "task:alpha",
+       "title": "alpha 1",
+       "lastAt": 1791801342903,
+       "lastSeq": 6,
+       "cardCount": 4,
+       "openQuestions": 0,
+       "lastKind": "human",
+       "status": "open",
+       "unread": 1
+      },
+      {
+       "threadId": "task:beta",
+       "title": "beta 1",
+       "lastAt": 1791801342894,
+       "lastSeq": 5,
+       "cardCount": 2,
+       "openQuestions": 0,
+       "lastKind": "human",
+       "status": "open",
+       "unread": null
+      },
+      {
+       "threadId": "general",
+       "title": "General",
+       "lastAt": 0,
+       "lastSeq": 0,
+       "cardCount": 0,
+       "openQuestions": 0,
+       "lastKind": "fact",
+       "status": "open",
+       "unread": null
+      }
+     ]
+    }
+   }
+  ],
+  "facts": [],
+  "wakes": null,
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-d3c617ba",
+    "role": "lead",
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv5498kkd65196910c",
+    "seq": 1,
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791801342884,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "alpha 1"
+   },
+   {
+    "id": "c-mv5498ko5d55e1d761",
+    "seq": 2,
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791801342888,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "alpha 2"
+   },
+   {
+    "id": "c-mv5498kqca78c45afe",
+    "seq": 3,
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791801342890,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "alpha 3"
+   },
+   {
+    "id": "c-mv5498ks230e7e5716",
+    "seq": 4,
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "threadId": "task:beta",
+    "kind": "human",
+    "at": 1791801342892,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "beta 1"
+   },
+   {
+    "id": "c-mv5498ku0c8ebac062",
+    "seq": 5,
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "threadId": "task:beta",
+    "kind": "human",
+    "at": 1791801342894,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "beta 2"
+   },
+   {
+    "id": "c-mv5498l37c260ab5f4",
+    "seq": 6,
+    "workspaceId": "ws-5c031f37-b262-4125-8264-9d3c5afd3a1a",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791801342903,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "alpha late"
+   }
+  ],
+  "stub": {
+   "lead": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791801343052,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "an unknown position reads 0",
+   "failing": [
+    "unknown_is_null_not_zero",
+    "other_thread_unchanged"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "records.0.result.threads.0.unread",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "why": "marking A moved B",
+   "failing": [
+    "other_thread_unchanged"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "records.1.result.threads.0.unread",
+     "value": 0
+    }
+   ]
+  }
+ ]
+}

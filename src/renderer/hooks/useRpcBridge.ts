@@ -33,7 +33,6 @@ import {
   reattachModelEnvMarker,
   splitModelEnvMarker,
 } from '../../shared/workerLaunch';
-import { goalWorkerDenyRules, isGoalWorkerLauncher } from '../../shared/moaGoalWorker';
 import { handleCompanyRpc } from '../../company/renderer/rpcHandlers';
 import { t } from '../i18n';
 import { formatA2aMessage, formatA2aBroadcast, sanitizeA2aName, type A2aFormatOptions } from '../utils/a2aFormat';
@@ -71,8 +70,6 @@ import { findActivePtyId, buildWorkspaceListEntries } from './workspaceMirrorSna
 import { buildPhoneSidebarSnapshot } from './phoneSidebarSnapshot';
 import type { MoaPendingDecision } from '../../shared/moa';
 import type { WorkLink } from '../../shared/workLink';
-import type { AgentMode } from '../../main/deck/deckAutonomyStore';
-import { moaHqId } from '../stores/slices/moaSlice';
 import { createSidebarDropLog } from '../../shared/phoneFleetSidebar';
 import { buildFleetTriage, fleetTriageScopeError } from '../utils/fleetTriage';
 import { workspaceCloseRefusal } from '../components/Moa/moaHqGuard';
@@ -1142,19 +1139,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     } catch {
       drops.report('moa.workLinks');
     }
-    // The HQ's agent mode: `off` means a wake from the phone would be refused.
-    // A failed read, or a null mode, makes no claim (the phone keeps `moaWake`).
-    let hqMode: { workspaceId: string; mode: AgentMode } | undefined;
-    const hqId = moaHqId(store);
-    if (hqId) {
-      try {
-        const reply = await window.electronAPI?.deck?.mode?.get(hqId);
-        if (reply?.mode) hqMode = { workspaceId: hqId, mode: reply.mode };
-      } catch {
-        drops.report('moa.mode');
-      }
-    }
-    const snapshot = buildPhoneSidebarSnapshot(store, drops.report, moaDecisions, workLinks, hqMode);
+    const snapshot = buildPhoneSidebarSnapshot(store, drops.report, moaDecisions, workLinks);
     const dropped = drops.summary();
     if (dropped) console.warn(`[phone] sidebar projection left out: ${dropped}`);
     return snapshot;
@@ -1218,18 +1203,10 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     if (!ws) {
       return { error: `workspace.close: no workspace with id "${id}"` };
     }
-    // The shared pre-close check (moaHqGuard): Moa's HQ is never closed, and
-    // the HQ does not count toward the last-workspace guard. With [HQ, A] the
-    // old total-count check let A through, disposed its sessions, and then
-    // removeWorkspace refused — A was left open, dead and empty.
+    // The shared pre-close check (moaHqGuard), asked before any dispose: a
+    // refusal after the sessions were torn down would leave the workspace
+    // open, dead and empty.
     const refusal = workspaceCloseRefusal(store, id);
-    if (refusal === 'moa-hq') {
-      return {
-        error:
-          `workspace.close: refusing to close "${id}" — it is Moa's workspace, ` +
-          'which Moa manages. Turn Moa off in Settings → Moa instead.',
-      };
-    }
     if (refusal === 'last-workspace') {
       return {
         error:
@@ -1496,19 +1473,6 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         error: `fanout.spawnWorkspace: could not launch ${agentChoice.agent} for this task${swap.note ? ` — ${swap.note}` : ''}`,
       };
     }
-    // A task under an approved Moa goal must carry the goal deny rules, and
-    // only claude takes them (shared/moaGoalWorker.ts). The launcher is final
-    // after the swap, so a role bound to agy or codex — which main cannot see —
-    // is refused here, before any workspace exists. So is a missing mode.
-    const goalWorker = params.goalWorker === true;
-    if (goalWorker && !isGoalWorkerLauncher(commandLauncherStem(swap.command))) {
-      return {
-        error: `fanout.spawnWorkspace: a task under a Moa goal runs only on claude (this one would launch ${commandLauncherStem(swap.command) || 'an unknown command'}), because only claude takes the goal's deny rules`,
-      };
-    }
-    if (goalWorker && !isFanoutWorkerPermissionMode(params.workerPermissionMode)) {
-      return { error: 'fanout.spawnWorkspace: a task under a Moa goal needs its worker permission mode' };
-    }
     if (swap.note) {
       // A refusal (unknown agent, or flags that would not survive the swap) is
       // fail-soft — the task still launches, so the reason must be visible
@@ -1560,6 +1524,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // here: an await between addWorkspace and pty.create would let the
     // empty-leaf funnel spawn a plain shell into this pane first.
     const fanoutTaskOf = typeof params.fanoutTaskOf === 'string' ? params.fanoutTaskOf : '';
+    // A bot worker's single-use secret grant: passed to pty.create unchanged
+    // (main resolves it there; it names no secret and holds no value).
+    const secretGrant = fanoutTaskOf && typeof params.secretGrant === 'string' ? params.secretGrant : '';
     // Quick launch in the person's own checkout: nested in the sidebar under
     // the workspace it was started from, but NOT stamped as a fan-out task —
     // it must not count toward the fan-out cap or the depth rule.
@@ -1604,7 +1571,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       : undefined;
     const bound =
       workerMode && roleBound.initialCommand
-        ? { ...roleBound, initialCommand: applyWorkerPermissionFlags(roleBound.initialCommand, workerMode, goalWorker ? goalWorkerDenyRules() : []) }
+        ? { ...roleBound, initialCommand: applyWorkerPermissionFlags(roleBound.initialCommand, workerMode) }
         : roleBound;
     // `bound.initialCommand` stays undefined for the "environment only" launch,
     // and it has to: withWorkspaceProfile fills a MISSING command from the
@@ -1630,7 +1597,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     let ptyId: string;
     try {
       const created = await window.electronAPI.pty.create(
-        fanoutTaskOf ? { ...createOptions, fanoutTaskOf, ...(fanoutOrigin ? { fanoutOrigin } : {}) } : createOptions,
+        fanoutTaskOf ? { ...createOptions, fanoutTaskOf, ...(fanoutOrigin ? { fanoutOrigin } : {}), ...(secretGrant ? { secretGrant } : {}) } : createOptions,
       );
       ptyId = created.id;
     } catch (err) {
@@ -3311,17 +3278,6 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     if (!target) {
       const available = store.workspaces.map((w) => w.name).join(', ');
       return { error: `a2a.task.send: target "${to}" not found. Available: ${available}` };
-    }
-    // Main stamps this on a new task from Moa, the HQ brain (never from the
-    // wire): work for another workspace goes through the operator's card.
-    const hqOnly = params.hqHandoffOnly as { allowedTargets?: unknown } | undefined;
-    if (!taskId && hqOnly && Array.isArray(hqOnly.allowedTargets) && !hqOnly.allowedTargets.includes(target.id)) {
-      return {
-        error:
-          `a2a.task.send: Moa does not send work straight to another workspace's agent ("${target.name}"). ` +
-          'Call moa_propose_handoff with that pane (ptyId from pane_list) and the task as plain instructions; ' +
-          'the operator approves it with one click and it arrives as their own instruction.',
-      };
     }
     // The same-workspace self-guard moved BELOW pane-address resolution (see
     // decideSameWsSend) so a precise sibling-pane address is honored. A same-ws

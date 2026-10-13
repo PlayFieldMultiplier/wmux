@@ -1,0 +1,177 @@
+// ─── Bot budgets — sliding windows over a bot's own usage ──────────────────
+//
+// A bot's budget (shared/bot.ts BotBudget) caps turns per day (and per hour
+// when the bot has an hourly cap: absent, or a stored 0, is none), workers
+// running at once and worker-hours per day. Usage is recorded here as
+// timestamps (a turn start, a worker's start and end) and persisted with the
+// bot (botStore, `bots.json` `usage`); every check reads the windows that end
+// now, so a refusal clears by itself as the window slides. All functions are
+// pure over the usage record they are given.
+//
+// A refusal is never retried in a loop: the runtime parks the bot, emits a
+// `bot.budget_exhausted` hook, and drops the wake with code `budget` — unless
+// the wake carries the owner's words, which wait queued until the window
+// allows a turn again (`nextTurnAllowedAt`) or the owner resumes the bot.
+
+import type { BotBudget } from '../../shared/bot';
+
+export const HOUR_MS = 3_600_000;
+export const DAY_MS = 24 * HOUR_MS;
+
+export interface BotWorkerUsage {
+  taskId: string;
+  startedAt: number;
+  /** Absent while the worker runs. */
+  endedAt?: number;
+}
+
+export interface BotUsage {
+  /** Turn start times inside the last day. */
+  turns: number[];
+  /** Workers that ran inside the last day, plus every one still running. */
+  workers: BotWorkerUsage[];
+}
+
+export type BudgetRefusalReason = 'turns_hour' | 'turns_day' | 'concurrent_workers' | 'worker_hours_day';
+
+export type BudgetCheck = { ok: true } | { ok: false; reason: BudgetRefusalReason };
+
+export function emptyUsage(): BotUsage {
+  return { turns: [], workers: [] };
+}
+
+/** Drop what no window can see any more. Mutates and returns `usage`. */
+export function pruneUsage(usage: BotUsage, now: number): BotUsage {
+  usage.turns = usage.turns.filter((t) => t > now - DAY_MS && t <= now);
+  usage.workers = usage.workers.filter((w) => w.endedAt === undefined || w.endedAt > now - DAY_MS);
+  return usage;
+}
+
+function turnsSince(usage: BotUsage, since: number, now: number): number {
+  return usage.turns.filter((t) => t > since && t <= now).length;
+}
+
+/** Worker time inside the last day, in hours (a running worker counts up to now). */
+export function workerHoursDay(usage: BotUsage, now: number): number {
+  const from = now - DAY_MS;
+  let ms = 0;
+  for (const w of usage.workers) {
+    const start = Math.max(w.startedAt, from);
+    const end = Math.min(w.endedAt ?? now, now);
+    if (end > start) ms += end - start;
+  }
+  return ms / HOUR_MS;
+}
+
+export function runningWorkers(usage: BotUsage): number {
+  return usage.workers.filter((w) => w.endedAt === undefined).length;
+}
+
+/** The bot's hourly turn cap, or null when it has none (absent, or a stored
+ *  0, which the contract never writes). */
+export function hourlyCap(budget: BotBudget): number | null {
+  const cap = budget.maxTurnsPerHour;
+  return typeof cap === 'number' && cap > 0 ? cap : null;
+}
+
+/** Turns the bot started inside the last day (the profile's "used today"). */
+export function turnsUsedDay(usage: BotUsage, now: number): number {
+  return turnsSince(usage, now - DAY_MS, now);
+}
+
+export interface BudgetLeft {
+  /** null: no hourly cap. */
+  turnsHour: number | null;
+  turnsDay: number;
+  workerHoursDay: number;
+}
+
+export function budgetLeft(budget: BotBudget, usage: BotUsage, now: number): BudgetLeft {
+  const perHour = hourlyCap(budget);
+  return {
+    turnsHour: perHour === null ? null : Math.max(0, perHour - turnsSince(usage, now - HOUR_MS, now)),
+    turnsDay: Math.max(0, budget.maxTurnsPerDay - turnsSince(usage, now - DAY_MS, now)),
+    workerHoursDay: Math.max(0, budget.maxWorkerHoursPerDay - workerHoursDay(usage, now)),
+  };
+}
+
+/** May the bot start one more turn now? */
+export function checkTurn(budget: BotBudget, usage: BotUsage, now: number): BudgetCheck {
+  const perHour = hourlyCap(budget);
+  if (perHour !== null && turnsSince(usage, now - HOUR_MS, now) >= perHour) return { ok: false, reason: 'turns_hour' };
+  if (turnsSince(usage, now - DAY_MS, now) >= budget.maxTurnsPerDay) return { ok: false, reason: 'turns_day' };
+  return { ok: true };
+}
+
+/** May the bot start `count` more workers now? `running` is the number of its
+ *  workers still running (the caller's authoritative count, e.g. open ledger
+ *  rows); usage supplies the worker-hours. */
+export function checkWorkers(budget: BotBudget, usage: BotUsage, running: number, count: number, now: number): BudgetCheck {
+  if (running + count > budget.maxConcurrentWorkers) return { ok: false, reason: 'concurrent_workers' };
+  if (workerHoursDay(usage, now) >= budget.maxWorkerHoursPerDay) return { ok: false, reason: 'worker_hours_day' };
+  return { ok: true };
+}
+
+/** The earliest time `checkTurn` allows a turn again if no other turn starts
+ *  meanwhile: `now` when it allows one now, Infinity when a cap is 0. */
+export function nextTurnAllowedAt(budget: BotBudget, usage: BotUsage, now: number): number {
+  const turns = usage.turns.filter((t) => t <= now).sort((a, b) => a - b);
+  // A window allows a turn once fewer than `max` of its turns are left in it:
+  // when the (n - max + 1)-th newest one leaves.
+  const freeAt = (span: number, max: number): number => {
+    const inWindow = turns.filter((t) => t > now - span);
+    if (inWindow.length < max) return now;
+    if (max <= 0) return Infinity;
+    return inWindow[inWindow.length - max] + span;
+  };
+  const perHour = hourlyCap(budget);
+  return Math.max(perHour === null ? now : freeAt(HOUR_MS, perHour), freeAt(DAY_MS, budget.maxTurnsPerDay));
+}
+
+export function recordTurn(usage: BotUsage, now: number): void {
+  pruneUsage(usage, now);
+  usage.turns.push(now);
+}
+
+export function recordWorkerStart(usage: BotUsage, taskId: string, now: number): void {
+  pruneUsage(usage, now);
+  if (usage.workers.some((w) => w.taskId === taskId)) return;
+  usage.workers.push({ taskId, startedAt: now });
+}
+
+/** Returns false when the worker was not running. */
+export function recordWorkerEnd(usage: BotUsage, taskId: string, now: number): boolean {
+  const w = usage.workers.find((x) => x.taskId === taskId && x.endedAt === undefined);
+  if (!w) return false;
+  w.endedAt = Math.max(now, w.startedAt);
+  return true;
+}
+
+const TASK_ID_MAX = 200;
+const USAGE_TURNS_MAX = 2_000;
+const USAGE_WORKERS_MAX = 500;
+
+/** Validate a usage record read from disk; malformed entries are dropped. */
+export function sanitizeUsage(raw: unknown): BotUsage {
+  const out = emptyUsage();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const r = raw as Record<string, unknown>;
+  if (Array.isArray(r.turns)) {
+    out.turns = r.turns.filter((t): t is number => Number.isSafeInteger(t) && (t as number) > 0).slice(-USAGE_TURNS_MAX);
+  }
+  if (Array.isArray(r.workers)) {
+    for (const w of r.workers.slice(-USAGE_WORKERS_MAX)) {
+      if (!w || typeof w !== 'object') continue;
+      const x = w as Record<string, unknown>;
+      if (typeof x.taskId !== 'string' || x.taskId.length === 0 || x.taskId.length > TASK_ID_MAX) continue;
+      if (!Number.isSafeInteger(x.startedAt)) continue;
+      if (x.endedAt !== undefined && !Number.isSafeInteger(x.endedAt)) continue;
+      out.workers.push({
+        taskId: x.taskId,
+        startedAt: x.startedAt as number,
+        ...(x.endedAt !== undefined ? { endedAt: x.endedAt as number } : {}),
+      });
+    }
+  }
+  return out;
+}

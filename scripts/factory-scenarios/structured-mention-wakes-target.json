@@ -1,0 +1,137 @@
+{
+  "name": "structured-mention-wakes-target",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The structured sibling of narrative-name-no-wake. The owner mentions the lead; the lead's card mentions the triage bot (its text names the verifier too). Exactly the lead and then the triage bot wake, the triage bot once and by a mention of that card; the verifier and the HQ bot never wake.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Triage, please look",
+                    "body": "Triage, please look; the verifier is idle.",
+                    "mentions": [
+                      "{{bot.triage}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "triage",
+        "role": "triage",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Looking",
+                    "body": "On it."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "say": "woke"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "say": "woke"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "to-lead",
+      "post": {
+        "title": "Get triage on it",
+        "body": "Lead: ask triage to look.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "triage done",
+      "cond": {
+        "wakes": {
+          "bot": "triage",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs"
+    ],
+    "speaker": "lead",
+    "target": "triage",
+    "silent": [
+      "verifier",
+      "moa"
+    ],
+    "message": "to-lead"
+  }
+}

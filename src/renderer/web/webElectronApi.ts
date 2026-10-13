@@ -51,6 +51,12 @@ export function lateBoundPty(get: () => Bridge | undefined): Record<string, (...
       return bridge ? bridge[name](...args) : notReady();
     };
   }
+  // The desktop types a resume line through main (pty.writeLaunch); the
+  // browser has no main, so the line goes out as typed input.
+  out.writeLaunch = (id, text, submit) => {
+    const bridge = get();
+    return bridge ? bridge.write(id, submit === true ? `${String(text)}\r` : text) : notReady();
+  };
   return out;
 }
 

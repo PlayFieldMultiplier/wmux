@@ -1,0 +1,25 @@
+{
+  "name": "callback-exactly-once",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Moa dispatches to the lead; the lead answers with two results in one turn (no replyTo: the router continues from the handoff that woke it). The first is delivered and wakes Moa once; the second is refused duplicate_result with a refusal card.",
+  "setup": {
+    "bots": [
+      { "key": "moa", "role": "moa", "script": { "turns": [
+        { "steps": [ { "tool": "handoff_send", "args": { "kind": "dispatch", "title": "Tidy the changelog", "body": "One small task." } } ] },
+        { "steps": [ { "say": "result read" } ] }
+      ] } },
+      { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [
+        { "tool": "handoff_send", "args": { "kind": "result", "title": "Done", "body": "The changelog is tidy." } },
+        { "tool": "handoff_send", "args": { "kind": "result", "title": "Done (again)", "body": "Reporting twice." } }
+      ] } ] } }
+    ]
+  },
+  "actions": [
+    { "do": "wake", "label": "kick-moa", "bot": "moa" },
+    { "do": "waitFor", "label": "moa woken by result", "cond": { "wakes": { "bot": "moa", "reason": "handoff", "state": "done" } }, "timeoutMs": 90000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 3000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes", "handoffs"], "sender": "lead", "receiver": "moa" }
+}

@@ -1,0 +1,100 @@
+{
+  "name": "thread-id-roundtrip",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Facts about one PR spelled with two repo keys (Acme/App and github.com/acme/app) write their room cards into one normalized PR thread; a human post naming the thread with the other spelling joins the same thread.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "triage",
+        "role": "triage",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "say": "nothing to do"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "emit",
+      "label": "refused-mixed-case",
+      "fact": {
+        "kind": "merge.refused",
+        "repoKey": "Acme/App",
+        "ref": {
+          "pr": 12,
+          "headSha": "1111111111111111111111111111111111111111"
+        },
+        "actor": {
+          "kind": "system"
+        },
+        "payload": {
+          "approvedBy": "lane",
+          "reason": "required-checks-green:no-required-checks"
+        }
+      }
+    },
+    {
+      "do": "emit",
+      "label": "merged-normalized",
+      "fact": {
+        "kind": "pr.merged",
+        "repoKey": "github.com/acme/app",
+        "ref": {
+          "pr": 12,
+          "headSha": "1111111111111111111111111111111111111111"
+        },
+        "actor": {
+          "kind": "github"
+        },
+        "payload": {
+          "author": "octo",
+          "labels": []
+        }
+      }
+    },
+    {
+      "do": "post",
+      "label": "human-mixed-case",
+      "post": {
+        "threadId": "pr:Acme/App#12",
+        "title": "note",
+        "body": "About this PR.",
+        "to": "maintainer"
+      },
+      "allowRefusal": true
+    },
+    {
+      "do": "waitFor",
+      "label": "fact cards",
+      "cond": {
+        "cards": {
+          "kind": "fact",
+          "min": 2
+        }
+      },
+      "timeoutMs": 20000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots"
+    ],
+    "pr": 12,
+    "thread": "pr:github.com/acme/app#12",
+    "humanLabel": "human-mixed-case"
+  }
+}

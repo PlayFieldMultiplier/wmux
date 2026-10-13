@@ -1,0 +1,483 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "steer-only-same-thread",
+  "run": 1,
+  "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+  "botKeys": {
+   "lead": "bot-5e9288da"
+  },
+  "injected": [
+   {
+    "label": "first",
+    "kind": "card",
+    "id": "c-mv548c6v051b501141",
+    "threadId": "task:alpha",
+    "at": 1791801300917
+   },
+   {
+    "label": "same",
+    "kind": "card",
+    "id": "c-mv548cyw1bfbee13f4",
+    "threadId": "task:alpha",
+    "at": 1791801301927
+   },
+   {
+    "label": "other",
+    "kind": "card",
+    "id": "c-mv548cz012a58e98df",
+    "threadId": "task:beta",
+    "at": 1791801301931
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "first",
+    "at": 1791801300917
+   },
+   {
+    "do": "waitFor",
+    "label": "first running",
+    "at": 1791801300924,
+    "doneAt": 1791801300924,
+    "ok": true
+   },
+   {
+    "do": "sleep",
+    "at": 1791801300924
+   },
+   {
+    "do": "post",
+    "label": "same",
+    "at": 1791801301927
+   },
+   {
+    "do": "post",
+    "label": "other",
+    "at": 1791801301931
+   },
+   {
+    "do": "waitFor",
+    "label": "all done",
+    "at": 1791801301934,
+    "doneAt": 1791801314493,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791801314493,
+    "doneAt": 1791801316505,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv548c6v-fc927a7eaf8d",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791801300919,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "ref": {
+     "botId": "bot-5e9288da",
+     "messageId": "c-mv548c6v051b501141"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Start the long job.",
+     "cardId": "c-mv548c6v051b501141",
+     "threadId": "task:alpha",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv548cyw-fd5de4ac01a3",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791801301928,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "ref": {
+     "botId": "bot-5e9288da",
+     "messageId": "c-mv548cyw1bfbee13f4"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Same job, one more thing.",
+     "cardId": "c-mv548cyw1bfbee13f4",
+     "threadId": "task:alpha",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv548cz0-82e79d3cc524",
+    "seq": 3,
+    "kind": "human.message",
+    "at": 1791801301932,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "ref": {
+     "botId": "bot-5e9288da",
+     "messageId": "c-mv548cz012a58e98df"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Different job.",
+     "cardId": "c-mv548cz012a58e98df",
+     "threadId": "task:beta",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv548c6w-5e6e1955",
+    "botId": "bot-5e9288da",
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "reason": {
+     "kind": "human",
+     "text": "Start the long job.",
+     "source": "desktop",
+     "clientMessageId": "c-mv548c6v051b501141"
+    },
+    "threadId": "task:alpha",
+    "priority": 0,
+    "enqueuedAt": 1791801300920,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv548cyx-044c5e91",
+    "botId": "bot-5e9288da",
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "reason": {
+     "kind": "human",
+     "text": "Same job, one more thing.",
+     "source": "desktop",
+     "clientMessageId": "c-mv548cyw1bfbee13f4"
+    },
+    "threadId": "task:alpha",
+    "priority": 0,
+    "enqueuedAt": 1791801301929,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv548cz1-f5b7dd22",
+    "botId": "bot-5e9288da",
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "reason": {
+     "kind": "human",
+     "text": "Different job.",
+     "source": "desktop",
+     "clientMessageId": "c-mv548cz012a58e98df"
+    },
+    "threadId": "task:beta",
+    "priority": 0,
+    "enqueuedAt": 1791801301933,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-5e9288da",
+    "role": "lead",
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv548c6v051b501141",
+    "seq": 1,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791801300919,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Long job",
+    "refs": {
+     "botId": "bot-5e9288da"
+    },
+    "body": "Start the long job."
+   },
+   {
+    "id": "c-mv548cyw1bfbee13f4",
+    "seq": 2,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791801301928,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Add to it",
+    "refs": {
+     "botId": "bot-5e9288da"
+    },
+    "body": "Same job, one more thing."
+   },
+   {
+    "id": "c-mv548cz012a58e98df",
+    "seq": 3,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "threadId": "task:beta",
+    "kind": "human",
+    "at": 1791801301932,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Other job",
+    "refs": {
+     "botId": "bot-5e9288da"
+    },
+    "body": "Different job."
+   },
+   {
+    "id": "c-mv548g7bfd47b33760",
+    "seq": 4,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "threadId": "task:alpha",
+    "kind": "status",
+    "at": 1791801306119,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+     "botId": "bot-5e9288da"
+    },
+    "title": "Busy",
+    "clientPostId": "wake:w-mv548c6w-5e6e1955:1",
+    "body": "Long turn started."
+   },
+   {
+    "id": "c-mv548mdpa4d64ef567",
+    "seq": 5,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "threadId": "task:alpha",
+    "kind": "status",
+    "at": 1791801314126,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+     "botId": "bot-5e9288da"
+    },
+    "title": "Next",
+    "clientPostId": "wake:w-mv548cyx-044c5e91:1",
+    "body": "Picked up a queued message."
+   },
+   {
+    "id": "c-mv548mdsd8714f59f8",
+    "seq": 6,
+    "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+    "threadId": "task:beta",
+    "kind": "status",
+    "at": 1791801314128,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b",
+     "botId": "bot-5e9288da"
+    },
+    "title": "Next",
+    "clientPostId": "wake:w-mv548cz1-f5b7dd22:1",
+    "body": "Picked up a queued message."
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791801305975,
+     "event": "prompt",
+     "text": "[wake w-mv548c6w-5e6e1955] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791801306120,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv548g7bfd47b33760\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b\",\n    \"threadId\": \"task:alpha\",\n    \"kind\": \"status\",\n    \"at\": 1791801306119,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b\",\n      \"botId\": \"bot-5e9288da\"\n    },\n    \"title\": \"Busy\",\n    \"body\": \"Long turn started.\",\n    \"clientPostId\": \"wake:w-mv548c6w-5e6e1955:1\"\n  }\n}"
+    },
+    {
+     "at": 1791801314124,
+     "event": "prompt",
+     "text": "[wake w-mv548cyx-044c5e91] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791801314126,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv548mdpa4d64ef567\",\n    \"seq\": 5,\n    \"workspaceId\": \"ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b\",\n    \"threadId\": \"task:alpha\",\n    \"kind\": \"status\",\n    \"at\": 1791801314126,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b\",\n      \"botId\": \"bot-5e9288da\"\n    },\n    \"title\": \"Next\",\n    \"body\": \"Picked up a queued message.\",\n    \"clientPostId\": \"wake:w-mv548cyx-044c5e91:1\"\n  }\n}"
+    },
+    {
+     "at": 1791801314127,
+     "event": "prompt",
+     "text": "[wake w-mv548cz1-f5b7dd22] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791801314129,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv548mdsd8714f59f8\",\n    \"seq\": 6,\n    \"workspaceId\": \"ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b\",\n    \"threadId\": \"task:beta\",\n    \"kind\": \"status\",\n    \"at\": 1791801314128,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-d580154f-46ea-43b3-8fb0-56a77dfa0f0b\",\n      \"botId\": \"bot-5e9288da\"\n    },\n    \"title\": \"Next\",\n    \"body\": \"Picked up a queued message.\",\n    \"clientPostId\": \"wake:w-mv548cz1-f5b7dd22:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791801301079,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the same-thread message was steered into the running turn",
+   "failing": [
+    "same_queued_during_turn",
+    "same_own_wake_in_its_thread",
+    "one_turn_per_message",
+    "runs_in_arrival_order"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.1"
+    },
+    {
+     "op": "remove",
+     "path": "stub.lead.5"
+    },
+    {
+     "op": "remove",
+     "path": "stub.lead.4"
+    }
+   ]
+  },
+  {
+   "why": "the queued wakes ran out of arrival order",
+   "failing": [
+    "runs_in_arrival_order"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "stub.lead.2.text",
+     "value": "[wake w-mv548cz1-f5b7dd22]"
+    },
+    {
+     "op": "set",
+     "path": "stub.lead.4.text",
+     "value": "[wake w-mv548cyx-044c5e91]"
+    }
+   ]
+  }
+ ]
+}

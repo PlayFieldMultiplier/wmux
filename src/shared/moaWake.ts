@@ -12,12 +12,22 @@
 /** The optional desktop-bridge command main announces at register. */
 export const MOA_WAKE_COMMAND = 'moa.wake';
 
+/** Announced alongside MOA_WAKE_COMMAND by a desktop whose agent factory can
+ *  take the phone's messages to Moa: the daemon then sends each message as
+ *  `moa.wake` with `mode: 'factory'` first, and falls back to the Moa pane /
+ *  wake path when main answers `factory_off`. */
+export const FACTORY_PHONE_MESSAGE_CAPABILITY = 'factory.message';
+
 export type MoaWakeRefusalCode =
   | 'moa_off' | 'mode_off' | 'not_hq' | 'hq_missing' | 'hq_unknown'
-  | 'unsupported_vendor' | 'busy' | 'duplicate';
+  | 'unsupported_vendor' | 'busy' | 'duplicate'
+  /** mode 'factory' only: the factory is off; nothing ran, use the Moa path. */
+  | 'factory_off';
 
 export type MoaWakeResult =
-  | { ok: true; accepted: true }
+  /** `queued`: the factory took the message as a wake for the HQ bot (its
+   *  reply is a room card; no Moa pane will appear). */
+  | { ok: true; accepted: true; queued?: true }
   | { ok: false; code: MoaWakeRefusalCode };
 
 /** Failures main learns only after it accepted, reported over `daemon.moa.wakeResult`. */
@@ -30,17 +40,20 @@ export interface MoaWakePayload {
   actor: string;
   /** Display only; the daemon already authenticated the caller. */
   deviceId?: string;
+  /** 'factory': deliver to the agent factory's HQ bot, or refuse
+   *  `factory_off` without touching the Moa brain. */
+  mode?: 'factory';
 }
 
 const REFUSAL_CODES: ReadonlySet<string> = new Set<MoaWakeRefusalCode>([
-  'moa_off', 'mode_off', 'not_hq', 'hq_missing', 'hq_unknown', 'unsupported_vendor', 'busy', 'duplicate',
+  'moa_off', 'mode_off', 'not_hq', 'hq_missing', 'hq_unknown', 'unsupported_vendor', 'busy', 'duplicate', 'factory_off',
 ]);
 
 /** Main's answer, or null for any shape outside the contract (the daemon reads that as uncertain). */
 export function parseMoaWakeResult(raw: unknown): MoaWakeResult | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
-  if (r.ok === true && r.accepted === true) return { ok: true, accepted: true };
+  if (r.ok === true && r.accepted === true) return r.queued === true ? { ok: true, accepted: true, queued: true } : { ok: true, accepted: true };
   if (r.ok === false && typeof r.code === 'string' && REFUSAL_CODES.has(r.code)) {
     return { ok: false, code: r.code as MoaWakeRefusalCode };
   }

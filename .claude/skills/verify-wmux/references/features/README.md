@@ -20,7 +20,7 @@ This directory is the maintained source for verifying the user-facing behavior o
   2. Onboarding tour (dialog "Every agent, one board", Step 1 / 4; it starts on the first Fleet visit): `control-wmux click --testid onboarding-skip`.
   3. "Keyboard shortcuts" card: `control-wmux click --testid keyboard-cheat-sheet-close`.
   4. Back on Workspaces: `control-wmux click --selector '[data-sidebar-nav="home"]'`.
-- Baseline then means: one workspace "Workspace 1", one pane with one zsh tab, Settings closed, file tree hidden, Moa off.
+- Baseline then means: one workspace "Workspace 1", one pane with one zsh tab, Settings closed, file tree hidden, the agent factory off.
 - Recipes that need a known folder first `cd` the terminal into a scratch directory you created (see [terminal.md](./terminal.md)); never point the app at private files you would not want in evidence.
 
 ## Driving conventions
@@ -64,8 +64,8 @@ One instance, driven serially, in this order (each leaves the baseline intact):
 5. [File tree](./file-tree.md): needs the terminal `cd` from step 4.
 6. [Browser panel](./browser-panel.md): needs network.
 7. [Settings](./settings.md)
-8. [Rail pages: Fleet, Schedules, Remote, Git](./rail-pages.md)
-9. [Moa panel and channels](./moa-channels.md)
+8. [Rail pages: Bots, Fleet, Schedules, Remote, Git](./rail-pages.md)
+9. [Rooms (agent factory dock)](./rooms.md)
 10. [PC switcher](./pc-switcher.md): absent-state check only, unless a second PC is paired.
 
 Then `control-wmux stop --purge` and confirm the evidence directory is listed in its output.
@@ -79,6 +79,6 @@ Then `control-wmux stop --purge` and confirm the evidence directory is listed in
 - [file-tree.md](./file-tree.md): file tree column, root selection, open file into the viewer, filter.
 - [browser-panel.md](./browser-panel.md): in-pane browser tab, toolbar, URL and title read-back.
 - [settings.md](./settings.md): open/close, tabs, search, theme and language, persistence.
-- [rail-pages.md](./rail-pages.md): Fleet, Schedules, Remote and Git pages and their empty states.
-- [moa-channels.md](./moa-channels.md): turning on Moa (read-only path), Moa settings, the right dock.
+- [rail-pages.md](./rail-pages.md): Bots, Fleet, Schedules, Remote and Git pages and their empty states.
+- [rooms.md](./rooms.md): the agent factory's room dock (threads, cards, questions, composer, HQ room) and Settings › Factory.
 - [pc-switcher.md](./pc-switcher.md): switching the sidebar to another PC.

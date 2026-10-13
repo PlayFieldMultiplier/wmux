@@ -443,6 +443,78 @@ export class TaskWorktreeManager {
     return { oid, ref, ...(staleWarning ? { warning: staleWarning } : {}) };
   }
 
+  /**
+   * The commit a detached task checkout starts at (a PR head for the verify
+   * preset): fetch `fetchRef` from origin when given (e.g. `pull/<n>/head`),
+   * then require `sha` to be a commit in the repository, with the same
+   * submodule / LFS refusal as resolveBase. Never throws.
+   */
+  async resolveCheckout(repoRoot: string, sha: string, fetchRef?: string): Promise<{ oid: string } | { error: string }> {
+    if (!/^[0-9a-f]{40}$/.test(sha)) return { error: 'checkout sha must be a 40-hex commit id' };
+    if (fetchRef !== undefined) {
+      let ref: string;
+      try {
+        ref = validateGitRef(fetchRef, 'fetchRef');
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+      // A plain source ref only: no refspec (`src:dst`, `+`), so the fetch
+      // updates FETCH_HEAD and never a local ref.
+      if (ref.includes(':') || ref.startsWith('+') || /\s/.test(ref)) return { error: 'fetchRef must be a single ref' };
+      let sshBatchMode = true;
+      try {
+        const { stdout } = await this.runGit(['config', '--get', 'core.sshCommand'], repoRoot);
+        if (stdout.trim()) sshBatchMode = false;
+      } catch {
+        // unset — batch mode applies.
+      }
+      try {
+        await this.runGit(['fetch', 'origin', ref], repoRoot, { timeoutMs: BASE_FETCH_TIMEOUT_MS, noPrompt: true, sshBatchMode });
+      } catch (err) {
+        return { error: `git fetch origin ${ref} failed (${gitErrorDetail(err)})` };
+      }
+    }
+    const oid = await this.commitOf(sha, repoRoot);
+    if (oid !== sha) return { error: `commit ${sha} is not in the repository` };
+    try {
+      await this.runGit(['cat-file', '-e', `${oid}:.gitmodules`], repoRoot);
+      return { error: `commit ${sha} contains submodules, which are not supported (J1)` };
+    } catch {
+      // no .gitmodules at the commit.
+    }
+    let attrs = '';
+    try {
+      attrs = (await this.runGit(['show', `${oid}:.gitattributes`], repoRoot)).stdout;
+    } catch {
+      // no .gitattributes at the commit.
+    }
+    if (/filter=lfs/.test(attrs)) return { error: `commit ${sha} uses git-LFS, which is not supported (J1)` };
+    return { oid };
+  }
+
+  /**
+   * A worktree checked out DETACHED at `sha` (`git worktree add --detach`):
+   * no branch is created, so the task never sits on, or pushes to, the branch
+   * it checks. Same lock and path validation as createWorktree; `branch` in
+   * the result is ''.
+   */
+  async createDetachedWorktree(plan: TaskWorktreePlan, sha: string): Promise<CreateResult> {
+    return this.withRepoLock(plan.repoHash, async () => {
+      const safePath = validatePath(plan.worktreePath, 'worktreePath');
+      try {
+        await this.runGit(['worktree', 'add', '--detach', safePath, validateGitRef(sha, 'checkout sha')], plan.repoRoot);
+      } catch (err) {
+        return { ok: false, error: `createWorktree: git worktree add --detach failed: ${(err as Error).message}` };
+      }
+      try {
+        this.onCreated?.(plan.repoRoot);
+      } catch {
+        /* best-effort: never fails a created worktree */
+      }
+      return { ok: true, worktreePath: safePath, branch: '' };
+    });
+  }
+
   /** `rev-parse --verify --quiet <ref>^{commit}` — the commit OID, or undefined. */
   private async commitOf(ref: string, cwd: string): Promise<string | undefined> {
     try {

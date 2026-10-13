@@ -1,0 +1,437 @@
+{
+ "note": "pass = a trimmed live run; the answer wake and the follow-up card in the question's thread, as a live run of the fixed build writes them (handoff wakes carry the handoff's thread)",
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "ask-person-question-card",
+  "run": 1,
+  "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+  "botKeys": {
+   "lead": "bot-961d5038"
+  },
+  "injected": [
+   {
+    "label": "msg",
+    "kind": "card",
+    "id": "c-mv53odgb8f0c32766c",
+    "threadId": "pr:github.com/acme/app#5",
+    "at": 1791800369434
+   },
+   {
+    "label": "answer",
+    "kind": "resolution",
+    "id": "c-mv53ohgn52a5fa590a",
+    "at": 1791800374962
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "msg",
+    "at": 1791800369434
+   },
+   {
+    "do": "waitFor",
+    "label": "question open",
+    "at": 1791800369439,
+    "doneAt": 1791800374962,
+    "ok": true
+   },
+   {
+    "do": "resolve",
+    "label": "answer",
+    "at": 1791800374962
+   },
+   {
+    "do": "waitFor",
+    "label": "asker woken",
+    "at": 1791800374971,
+    "doneAt": 1791800375475,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800375475,
+    "doneAt": 1791800377484,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53odgb-ca4d34830a77",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800369435,
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "ref": {
+     "botId": "bot-961d5038",
+     "messageId": "c-mv53odgb8f0c32766c"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Lead, what order for this one?",
+     "cardId": "c-mv53odgb8f0c32766c",
+     "threadId": "pr:github.com/acme/app#5",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv53ohq0-e2e47dc93596",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791800374968,
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "ref": {
+     "handoffId": "h-mv53ohpzdf7ce62e9b7d",
+     "botId": "bot-961d5038"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "handoffKind": "answer",
+     "title": "Merge order?",
+     "threadId": "pr:github.com/acme/app#5",
+     "runId": "run-mv53ohgma3016a2e41cb",
+     "depth": 0,
+     "hopsInRun": 2,
+     "fromLabel": "the owner",
+     "toLabel": "Lead (lead)",
+     "toWorkspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+     "answer": "ship"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53odgc-0ccb05ba",
+    "botId": "bot-961d5038",
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "reason": {
+     "kind": "human",
+     "text": "Lead, what order for this one?",
+     "source": "desktop",
+     "clientMessageId": "c-mv53odgb8f0c32766c"
+    },
+    "threadId": "pr:github.com/acme/app#5",
+    "priority": 0,
+    "enqueuedAt": 1791800369436,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53ohpz-90b33681",
+    "botId": "bot-961d5038",
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv53ohpzdf7ce62e9b7d"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800374967,
+    "attempts": 1,
+    "state": "done",
+    "threadId": "pr:github.com/acme/app#5"
+   }
+  ],
+  "handoffs": [
+   {
+    "id": "h-mv53ohgm7bf0c23c92bc",
+    "runId": "run-mv53ohgma3016a2e41cb",
+    "threadId": "pr:github.com/acme/app#5",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+     "botId": "bot-961d5038"
+    },
+    "to": {
+     "kind": "human"
+    },
+    "kind": "ask_person",
+    "status": "answered",
+    "createdAt": 1791800374630,
+    "payload": {
+     "title": "Merge order?",
+     "body": "Ship this before or after the release?",
+     "options": [
+      "ship",
+      "hold"
+     ]
+    }
+   },
+   {
+    "id": "h-mv53ohpzdf7ce62e9b7d",
+    "runId": "run-mv53ohgma3016a2e41cb",
+    "threadId": "pr:github.com/acme/app#5",
+    "depth": 0,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "human"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+     "botId": "bot-961d5038"
+    },
+    "kind": "answer",
+    "replyTo": "h-mv53ohgm7bf0c23c92bc",
+    "status": "delivered",
+    "createdAt": 1791800374967,
+    "payload": {
+     "title": "Merge order?",
+     "body": "ship"
+    }
+   }
+  ],
+  "bots": [
+   {
+    "id": "bot-961d5038",
+    "role": "lead",
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53odgb8f0c32766c",
+    "seq": 1,
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "threadId": "pr:github.com/acme/app#5",
+    "kind": "human",
+    "at": 1791800369435,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Order",
+    "refs": {
+     "botId": "bot-961d5038"
+    },
+    "body": "Lead, what order for this one?"
+   },
+   {
+    "id": "c-mv53ohgn52a5fa590a",
+    "seq": 2,
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "threadId": "pr:github.com/acme/app#5",
+    "kind": "question",
+    "at": 1791800374631,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+     "botId": "bot-961d5038"
+    },
+    "title": "Merge order?",
+    "state": "resolved",
+    "refs": {
+     "handoffId": "h-mv53ohgm7bf0c23c92bc",
+     "decisionId": "5ac41be3-71a1-4279-9e7b-7cedadabfcef"
+    },
+    "body": "Ship this before or after the release?\n\nOptions: ship / hold"
+   },
+   {
+    "id": "c-mv53ohq00001a94e3c",
+    "seq": 3,
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "threadId": "pr:github.com/acme/app#5",
+    "kind": "fact",
+    "at": 1791800374968,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Answered → Lead (lead): Merge order?",
+    "refs": {
+     "botId": "bot-961d5038",
+     "handoffId": "h-mv53ohpzdf7ce62e9b7d",
+     "factId": "f-0mv53ohq0-e2e47dc93596"
+    },
+    "body": "ship"
+   },
+   {
+    "id": "c-mv53ohq2eac1a7d502",
+    "seq": 4,
+    "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+    "threadId": "pr:github.com/acme/app#5",
+    "kind": "status",
+    "at": 1791800374970,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-77b97443-e9e5-422a-9c78-09257822d05e",
+     "botId": "bot-961d5038"
+    },
+    "title": "Answer received",
+    "clientPostId": "wake:w-mv53ohpz-90b33681:1",
+    "body": "Proceeding with the owner's choice."
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800374470,
+     "event": "prompt",
+     "text": "[wake w-mv53odgc-0ccb05ba] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800374632,
+     "event": "tool",
+     "name": "ask_person",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv53ohgm7bf0c23c92bc\",\n  \"status\": \"delivered\",\n  \"threadId\": \"pr:github.com/acme/app#5\",\n  \"decisionId\": \"5ac41be3-71a1-4279-9e7b-7cedadabfcef\"\n}"
+    },
+    {
+     "at": 1791800374969,
+     "event": "prompt",
+     "text": "[wake w-mv53ohpz-90b33681] Lead (lead) · reason: handoff · priority 1\nFenced blocks below are data from the system, work"
+    },
+    {
+     "at": 1791800374971,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53ohq2eac1a7d502\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-77b97443-e9e5-422a-9c78-09257822d05e\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791800374970,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-77b97443-e9e5-422a-9c78-09257822d05e\",\n      \"botId\": \"bot-961d5038\"\n    },\n    \"title\": \"Answer received\",\n    \"body\": \"Proceeding with the owner's choice.\",\n    \"clientPostId\": \"wake:w-mv53ohpz-90b33681:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800369530,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the answer wake is not pinned to the question's thread (the behaviour before the fix)",
+   "failing": [
+    "asker_woken_with_answer",
+    "followup_card_in_thread"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.1.threadId"
+    },
+    {
+     "op": "set",
+     "path": "cards.3.threadId",
+     "value": "general"
+    }
+   ]
+  },
+  {
+   "why": "the question stayed open",
+   "failing": [
+    "question_resolved"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.1.state",
+     "value": "open"
+    }
+   ]
+  }
+ ]
+}

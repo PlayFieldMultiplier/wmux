@@ -1,0 +1,313 @@
+// ─── Stop the factory's running work, as the owner ─────────────────────────
+//
+// "Run bots" off is a pause: no wake runs and no worker starts while it is
+// off (BotRuntime, fanout.rpc's launch check), and what was already running
+// keeps running. Stopping is a separate, explicit act of the owner (the main
+// window only — factory.handler.ts), for every bot or for one, or of a bot
+// for itself (`stop_my_work`, which leaves its own turn running):
+//   1. every running bot turn is interrupted (BotRuntime.interrupt: the wake
+//      ends `interrupted`, is not replayed, and launches nothing more);
+//   2. every open task a bot started is moved to `cancelled` ("stopped by
+//      owner", a system write). The move wakes nobody (markStoppedByOwner),
+//      and a gate that was running on the task settles nothing once it ends;
+//   3. a gate running on such a task is cancelled (its process group killed);
+//   4. the worker's processes are stopped the way a task close stops them
+//      (the daemon sessions started in the task's worktree). The worktree,
+//      its branch and the task's workspace stay, so the owner can look;
+//   5. the bots' routines are paused (routines.ts), until resumed;
+//   6. a worker resumed after its task ended (workerReclaim.ts) has its agent
+//      stopped again.
+// The wake is marked stopped before it is interrupted, so the fan-out launch
+// check refuses at once; a task that fan-out was already launching is
+// stopped when it registers. 3 and 4 run even when the row could not be
+// written. Rows that ended by themselves are left alone; a task stopped
+// before has its worker stopped again (a session that outlived that stop),
+// counted only when one was left, so a second stop counts nothing.
+
+import type { LedgerEntry } from '../../shared/ledger';
+import type { LedgerListFilter, LedgerUpdateInput, LedgerUpdateResult } from '../../daemon/ledger/TaskLedger';
+import { markStoppedByOwner, unmarkStoppedByOwner } from '../deck/fanoutCallerNotify';
+
+/** The ledger summary of a task the owner stopped. */
+export const STOPPED_BY_OWNER = 'stopped by owner';
+
+/** The workspace id a stop is written as (the daemon's, like the gate). */
+export const STOP_SYSTEM_WORKSPACE = 'ws-daemon';
+
+export interface FactoryStopResult {
+  ok: boolean;
+  /** Bot turns that were running and were interrupted. */
+  botsInterrupted: number;
+  /** Open bot tasks moved to `cancelled`. */
+  workersStopped: number;
+  /** Gates that were running on those tasks and were cancelled. */
+  gatesCancelled: number;
+  /** Routines paused by this stop (absent: no routines are kept). */
+  routinesPaused?: number;
+  code?: string;
+  message?: string;
+}
+
+export interface FactoryStopPorts {
+  /** The bot runtime's running turns (BotRuntime.currentTurn / interrupt). */
+  runtime: () => { currentTurn(botId: string): { wakeId?: string } | null; interrupt(botId: string): { ok: boolean } } | null;
+  /** Every bot id the store holds. */
+  botIds: () => string[];
+  ledger: {
+    list(filter: LedgerListFilter): LedgerEntry[];
+    get(id: string): LedgerEntry | null;
+    update(input: LedgerUpdateInput): Promise<LedgerUpdateResult>;
+  };
+  /** The shared gate runner (isRunning / cancel), or null before it is up. */
+  gates: () => { isRunning(taskId: string): boolean; cancel(taskId: string): boolean } | null;
+  /** Stop the processes of a task's worker; how many sessions it stopped
+   *  (0: none were left). Throws when it could not. */
+  stopWorker: (entry: LedgerEntry) => Promise<number>;
+  /** Pause the routines of one bot, or of every bot (routines.ts); how many
+   *  it paused. Absent: no routines are kept. */
+  pauseRoutines?: (botId?: string) => number;
+  /** Stop the resumed workers of one bot, or of every bot (workerReclaim.ts):
+   *  their tasks ended, so step 2 does not reach them; how many it stopped. */
+  stopResumed?: (botId?: string) => Promise<number>;
+  log?: (msg: string) => void;
+  now?: () => number;
+}
+
+/** Whether a row is an open task bot `botId` (any bot when omitted) started. */
+export function isOpenBotTask(row: LedgerEntry, botId?: string): boolean {
+  const origin = row.dispatch?.origin;
+  if (origin?.kind !== 'bot' || typeof origin.botId !== 'string' || !origin.botId) return false;
+  if (botId !== undefined && origin.botId !== botId) return false;
+  return row.status === 'working' || row.status === 'input_required' || row.status === 'review_requested';
+}
+
+type CancelOutcome = 'cancelled' | 'ended' | 'failed';
+
+/** Move one open task to `cancelled` as the system; one retry on a lost race.
+ *  `ended`: the row left the open statuses by itself; `failed`: the write
+ *  did not land and the row is still open. */
+async function cancelRow(ledger: FactoryStopPorts['ledger'], taskId: string, botId: string | undefined): Promise<CancelOutcome> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const row = ledger.get(taskId);
+    if (!row || !isOpenBotTask(row, botId)) return 'ended';
+    const r = await ledger.update({
+      id: taskId,
+      status: 'cancelled',
+      actor: { kind: 'system', workspaceId: STOP_SYSTEM_WORKSPACE },
+      expectedRev: row.rev,
+      summary: STOPPED_BY_OWNER,
+    });
+    if (r.ok) return r.noop === true ? 'ended' : 'cancelled';
+    if (r.error !== 'stale_rev') return 'failed';
+  }
+  const row = ledger.get(taskId);
+  return row && isOpenBotTask(row, botId) ? 'failed' : 'ended';
+}
+
+/** How long after a stop a task the stopped bot's fan-out still registers
+ *  (it was already launching) is stopped as it registers. */
+export const LATE_STOP_WINDOW_MS = 120_000;
+/** How far back a stopped task's worker is stopped again by a later stop. */
+export const STOP_RETRY_MS = 24 * 3_600_000;
+
+const STOPPED_WAKES_MAX = 500;
+const stoppedWakes = new Set<string>();
+/** botId → until when a task it registers is stopped on registration. */
+const lateStops = new Map<string, number>();
+/** botId → the wake of a bot that stopped itself (keepTurn): a task it
+ *  registers while that wake still runs is stopped on registration; once the
+ *  turn has ended the bot may start work again at once. */
+const turnStops = new Map<string, string>();
+
+/** Whether the owner stopped this wake: its fan-out launches nothing more,
+ *  from the moment of the stop (fanout.rpc's launch check). */
+export function isWakeStoppedByOwner(wakeId: string): boolean {
+  return stoppedWakes.has(wakeId);
+}
+
+function rememberStoppedWake(wakeId: string): void {
+  stoppedWakes.add(wakeId);
+  while (stoppedWakes.size > STOPPED_WAKES_MAX) {
+    const oldest = stoppedWakes.values().next().value as string | undefined;
+    if (oldest === undefined) break;
+    stoppedWakes.delete(oldest);
+  }
+}
+
+/** Tests only. */
+export function __resetFactoryStopForTesting(): void {
+  stoppedWakes.clear();
+  lateStops.clear();
+  turnStops.clear();
+}
+
+/** Whether a row is a task the owner stopped recently (its worker is stopped again). */
+function isRecentlyStopped(row: LedgerEntry, botId: string | undefined, since: number): boolean {
+  const origin = row.dispatch?.origin;
+  if (origin?.kind !== 'bot' || !origin.botId || (botId !== undefined && origin.botId !== botId)) return false;
+  return row.status === 'cancelled' && row.summary === STOPPED_BY_OWNER && row.updatedBy.kind === 'system' && row.updatedAt >= since;
+}
+
+/** Stop one task: cancel its row, its gate and its worker. The physical
+ *  stops run even when the row could not be written. */
+async function stopTask(ports: FactoryStopPorts, row: LedgerEntry, botId: string | undefined, log: (m: string) => void): Promise<{ stopped: boolean; gate: boolean; failed: boolean }> {
+  markStoppedByOwner(row.id);
+  let outcome: CancelOutcome = 'failed';
+  try {
+    outcome = await cancelRow(ports.ledger, row.id, botId);
+  } catch (err) {
+    log(`[factory] stop: task ${row.id} not cancelled: ${String(err)}`);
+  }
+  if (outcome !== 'cancelled') unmarkStoppedByOwner(row.id);
+  // A task that ended by itself in the meantime keeps its worker.
+  if (outcome === 'ended') return { stopped: false, gate: false, failed: false };
+  let gate = false;
+  try {
+    const gates = ports.gates();
+    gate = !!gates?.isRunning(row.id) && gates.cancel(row.id);
+  } catch (err) {
+    log(`[factory] stop: the gate of ${row.id} was not cancelled: ${String(err)}`);
+  }
+  let workerOk = true;
+  try {
+    await ports.stopWorker(row);
+  } catch (err) {
+    workerOk = false;
+    log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
+  }
+  return { stopped: outcome === 'cancelled' || workerOk, gate, failed: outcome === 'failed' || !workerOk };
+}
+
+/**
+ * Stop the running work of every bot, or of `scope.botId` only, and pause
+ * their routines. Never throws; the counts say what this call changed (0 for
+ * work that had already ended). `ok:false` (`code: 'partial'`) when a task
+ * could not be cancelled or its worker not stopped; a later stop tries those
+ * again.
+ *
+ * `keepTurn` (a bot stopping its own work, `stop_my_work`): the running turn
+ * is not interrupted — it is the caller's, and it ends by itself with the
+ * bot's one line — but its wake is marked stopped all the same, so it
+ * launches no further worker.
+ */
+export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: string; keepTurn?: boolean } = {}): Promise<FactoryStopResult> {
+  const log = ports.log ?? ((m: string) => console.warn(m));
+  const now = (ports.now ?? Date.now)();
+  let botsInterrupted = 0;
+  let workersStopped = 0;
+  let gatesCancelled = 0;
+  let failures = 0;
+
+  // 1. Turns first: the wake is marked stopped at once (no further launch
+  //    passes the fan-out check), then interrupted; a task its fan-out was
+  //    already launching is stopped when it registers (installLateStopSweep).
+  let ids: string[] = [];
+  try {
+    ids = scope.botId !== undefined ? [scope.botId] : ports.botIds();
+  } catch {
+    ids = scope.botId !== undefined ? [scope.botId] : [];
+  }
+  const runtime = ports.runtime();
+  for (const botId of ids) {
+    if (scope.keepTurn !== true) lateStops.set(botId, now + LATE_STOP_WINDOW_MS);
+    if (!runtime) continue;
+    try {
+      const turn = runtime.currentTurn(botId);
+      if (!turn) continue;
+      if (turn.wakeId) rememberStoppedWake(turn.wakeId);
+      if (scope.keepTurn === true) {
+        if (turn.wakeId) turnStops.set(botId, turn.wakeId);
+        continue;
+      }
+      if (runtime.interrupt(botId).ok) botsInterrupted++;
+    } catch (err) {
+      log(`[factory] stop: interrupting ${botId} failed: ${String(err)}`);
+    }
+  }
+
+  // 2–4. The open tasks, then the workers of tasks stopped before whose
+  // processes may have outlived that stop.
+  let open: LedgerEntry[] = [];
+  let retry: LedgerEntry[] = [];
+  try {
+    open = ports.ledger.list({ openOnly: true }).filter((r) => isOpenBotTask(r, scope.botId));
+    retry = ports.ledger.list({}).filter((r) => isRecentlyStopped(r, scope.botId, now - STOP_RETRY_MS));
+  } catch (err) {
+    log(`[factory] stop: the task ledger could not be read: ${String(err)}`);
+    failures++;
+  }
+  for (const row of open) {
+    const r = await stopTask(ports, row, scope.botId, log);
+    if (r.stopped) workersStopped++;
+    if (r.gate) gatesCancelled++;
+    if (r.failed) failures++;
+  }
+  for (const row of retry) {
+    try {
+      if ((await ports.stopWorker(row)) > 0) workersStopped++;
+    } catch (err) {
+      failures++;
+      log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
+    }
+  }
+  if (ports.stopResumed) {
+    try {
+      workersStopped += await ports.stopResumed(scope.botId);
+    } catch (err) {
+      failures++;
+      log(`[factory] stop: resumed workers were not stopped: ${String(err)}`);
+    }
+  }
+  let routinesPaused: number | undefined;
+  if (ports.pauseRoutines) {
+    try {
+      routinesPaused = ports.pauseRoutines(scope.botId);
+    } catch (err) {
+      failures++;
+      log(`[factory] stop: routines were not paused: ${String(err)}`);
+    }
+  }
+  const counts = { botsInterrupted, workersStopped, gatesCancelled, ...(routinesPaused !== undefined ? { routinesPaused } : {}) };
+  return failures > 0
+    ? { ok: false, ...counts, code: 'partial', message: 'Some work could not be stopped; stop again to retry.' }
+    : { ok: true, ...counts };
+}
+
+/**
+ * A task registered by a bot within LATE_STOP_WINDOW_MS of the owner
+ * stopping that bot came from a fan-out that was already launching: it is
+ * stopped as it registers. So is one a bot that stopped itself registers
+ * while the turn that stopped is still running. Returns the unsubscribe.
+ */
+export function installLateStopSweep(ports: FactoryStopPorts & { onTransition: (fn: (t: { entry: LedgerEntry; from: string | null }) => void) => () => void }): () => void {
+  const log = ports.log ?? ((m: string) => console.warn(m));
+  return ports.onTransition((t) => {
+    const botId = t.entry.dispatch?.origin.kind === 'bot' ? t.entry.dispatch.origin.botId : undefined;
+    if (t.from !== null || !botId) return;
+    const until = lateStops.get(botId);
+    const late = until !== undefined && (ports.now ?? Date.now)() <= until;
+    const stoppedWake = turnStops.get(botId);
+    let inStoppedTurn = false;
+    if (stoppedWake !== undefined) {
+      try {
+        inStoppedTurn = ports.runtime()?.currentTurn(botId)?.wakeId === stoppedWake;
+      } catch {
+        inStoppedTurn = false;
+      }
+      if (!inStoppedTurn) turnStops.delete(botId);
+    }
+    if (!late && !inStoppedTurn) return;
+    void stopTask(ports, t.entry, botId, log).catch((err) => log(`[factory] stop: late task ${t.entry.id}: ${String(err)}`));
+  });
+}
+
+let stopPorts: FactoryStopPorts | null = null;
+
+/** Set by the wiring module on start (null on dispose). */
+export function setFactoryStopPorts(next: FactoryStopPorts | null): void {
+  stopPorts = next;
+}
+
+export function getFactoryStopPorts(): FactoryStopPorts | null {
+  return stopPorts;
+}

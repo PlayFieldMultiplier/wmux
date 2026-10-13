@@ -31,7 +31,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import type { BrainAdapter, BrainEvent, BrainStartOptions, BrainUsage } from './BrainAdapter';
-import { mintCommanderToken, revokeCommanderToken } from './commanderTrust';
+import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './commanderTrust';
+import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
+import type { BotBinding } from '../../shared/bot';
 import { COMMANDER_MODE_ARG } from '../../shared/commanderSurface';
 import { getWmuxDir } from '../../daemon/config';
 
@@ -67,6 +69,15 @@ export interface AcpBrainAdapterDeps {
   requestTimeoutMs?: number;
   /** Fresh-session settle override (tests: 0). See NEW_SESSION_SETTLE_MS. */
   newSessionSettleMs?: number;
+  /** Agent factory bot mode: the session runs as this bot. The token is a
+   *  bot token, handed to each MCP child in a fresh 0600 file named in its
+   *  args (`--bot=<role>`, `--bot-token-file=`), never in its environment;
+   *  the agent process and its sessions run in `cwd` (the bot's own folder).
+   *  `workspaceId` is ignored. */
+  bot?: { binding: BotBinding; cwd: string; wmuxDir?: string };
+  /** Extra environment for the agent process (e.g. ELECTRON_RUN_AS_NODE for
+   *  a node script run on the Electron binary). */
+  spawnEnv?: Record<string, string>;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -98,6 +109,8 @@ export class AcpBrainAdapter implements BrainAdapter {
   private readonly deps: AcpBrainAdapterDeps;
   private readonly _commanderToken: string;
   private readonly _workspaceId: string;
+  /** Bot mode: the hand-off files written for MCP children, removed on dispose. */
+  private readonly handoffs: BotTokenHandoff[] = [];
 
   private child: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
@@ -123,9 +136,9 @@ export class AcpBrainAdapter implements BrainAdapter {
 
   constructor(deps: AcpBrainAdapterDeps) {
     this.deps = deps;
-    this._workspaceId = deps.workspaceId ?? '';
+    this._workspaceId = deps.bot ? deps.bot.binding.workspaceId : deps.workspaceId ?? '';
     // P4 token lifecycle contract: mint at construction, revoke at dispose.
-    this._commanderToken = mintCommanderToken(this._workspaceId);
+    this._commanderToken = deps.bot ? mintBotToken(deps.bot.binding) : mintCommanderToken(this._workspaceId);
   }
 
   get sessionId(): string | null {
@@ -156,7 +169,8 @@ export class AcpBrainAdapter implements BrainAdapter {
           // a git probe raced hermes's own spawn handling into a permanent
           // post-kill communicate() deadlock (py-spy, 2026-07-17). A non-repo
           // data-dir cwd makes the workspace probe a no-op.
-          cwd: getWmuxDir(),
+          cwd: this.sessionCwd(),
+          ...(this.deps.spawnEnv ? { env: { ...process.env, ...this.deps.spawnEnv } } : {}),
         }));
     const child = spawnFn(this.deps.spawnSpec.command, this.deps.spawnSpec.args);
     this.child = child;
@@ -381,11 +395,29 @@ export class AcpBrainAdapter implements BrainAdapter {
 
   // ── session lifecycle ───────────────────────────────────────────────────
 
+  /** The agent's process and session cwd: the bot's folder, else the data dir. */
+  private sessionCwd(): string {
+    return this.deps.bot?.cwd ?? getWmuxDir();
+  }
+
   private mcpServersParam(): Array<Record<string, unknown>> {
     if (!this.deps.mcpBundlePath) return [];
     const suffixEnv = process.env.WMUX_DATA_SUFFIX
       ? [{ name: 'WMUX_DATA_SUFFIX', value: process.env.WMUX_DATA_SUFFIX }]
       : [];
+    if (this.deps.bot) {
+      // One hand-off per MCP child: every session/new or session/load starts one.
+      const handoff = writeBotTokenHandoff(this.deps.bot.binding, this._commanderToken, { dir: this.deps.bot.wmuxDir });
+      this.handoffs.push(handoff);
+      return [
+        {
+          name: 'wmux',
+          command: process.execPath,
+          args: [this.deps.mcpBundlePath, ...handoff.mcpArgs],
+          env: [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }, ...suffixEnv],
+        },
+      ];
+    }
     return [
       {
         name: 'wmux',
@@ -422,7 +454,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       // caught at prompt time via _resumeUnvalidated (send()'s retry).
       const loaded = await this.request('session/load', {
         sessionId: this._sessionId,
-        cwd: getWmuxDir(),
+        cwd: this.sessionCwd(),
         mcpServers: this.mcpServersParam(),
       });
       if (!loaded.error) {
@@ -442,7 +474,7 @@ export class AcpBrainAdapter implements BrainAdapter {
     // workspace is the wmux FLEET, not whatever directory main happens to
     // run from.
     const created = await this.request('session/new', {
-      cwd: getWmuxDir(),
+      cwd: this.sessionCwd(),
       mcpServers: this.mcpServersParam(),
     });
     const sid = created.result?.sessionId;
@@ -635,6 +667,7 @@ export class AcpBrainAdapter implements BrainAdapter {
     // P4 token lifecycle: revoke FIRST so any straggling RPC from the child
     // fails closed at the router before the process winds down.
     revokeCommanderToken(this._commanderToken);
+    for (const h of this.handoffs.splice(0)) h.dispose();
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.resolve({ error: { message: 'adapter disposed' } });

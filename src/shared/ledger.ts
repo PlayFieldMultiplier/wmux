@@ -68,6 +68,11 @@ export interface LedgerGateResult {
    *  (`deps_missing`, `gate_unavailable`) are NOT recorded at all: there a gate
    *  existed and the environment stopped it, which is a human's problem. */
   skipped?: 'no_gate_command';
+  /** The worktree HEAD the gate ran on: read by the gate runner before the
+   *  run and again after it, and set only when both reads agree. Absent when
+   *  HEAD could not be read or moved during the run — such a result is not
+   *  evidence about any commit. */
+  headSha?: string;
 }
 
 export interface LedgerEntry {
@@ -88,6 +93,29 @@ export interface LedgerEntry {
   /** Epoch ms of the last transition. */
   updatedAt: number;
   updatedBy: LedgerActor;
+  /** How the task was dispatched, written once by main when the row is
+   *  registered (never by a worker or a brain): who started the fan-out, with
+   *  which preset, and on what checkout. Absent on rows registered before it
+   *  existed. */
+  dispatch?: LedgerDispatch;
+}
+
+/** See LedgerEntry.dispatch. */
+export interface LedgerDispatch {
+  /** `tainted`: whether the bot's wake that started it carried outside text
+   *  (issue or PR facts, a handoff from such a wake), set by main on every
+   *  bot task; the merge lane and remembered rules never merge what such a
+   *  task wrote, and a bot task without it counts as tainted. */
+  origin: { kind: string; botId?: string; tainted?: boolean };
+  /** The fan-out preset name; absent when none. */
+  preset?: string;
+  /** Set when the task worktree was created detached at a commit. */
+  checkout?: { sha: string; detached: true };
+  /** A bot's task: the room thread of the wake that started it, read from
+   *  main's own wake state at dispatch (never from the bot's arguments). The
+   *  task's wakes and cards go there; absent (no thread, `general`, or a row
+   *  written before it existed) = the task's own `task:<id>` thread. */
+  threadId?: string;
 }
 
 // Lifecycle rules the writer enforces (stated here so the three consumers

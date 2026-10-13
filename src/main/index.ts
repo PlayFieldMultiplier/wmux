@@ -8,8 +8,7 @@ import { handlePhoneBrowser } from './phone/PhoneBrowser';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
-import { handlePhoneMoaWake } from './deck/moaWake';
-import { clearGoalWorkerSessions } from './deck/goalWorkerSessions';
+import { handlePhoneMoaWake } from './factory/phoneMessage';
 import { MOA_WAKE_COMMAND } from '../shared/moaWake';
 import { handlePhoneAccounts } from './phone/PhoneAccounts';
 // #582: Suppress Electron's dev-only "Insecure Content-Security-Policy"
@@ -73,6 +72,7 @@ import { registerPerfRpc } from './pipe/handlers/perf.rpc';
 import { registerComputerRpc } from './pipe/handlers/computer.rpc';
 import { resolvePtyOwnerWorkspace } from './workspace/ptyOwnership';
 import { createFanoutCallerSubmit } from './deck/fanoutCallerSubmit';
+import { setWorkerPaneSubmit } from './factory/workerReportNudge';
 import { COMPUTER_ABORT_ACCELERATOR, createComputerService, disposeComputerUse, registerComputerUseIpc } from './computer';
 import { createComputerConsentRequester } from './computer/computerConsent';
 import type { ComputerService } from './computer/ComputerService';
@@ -108,30 +108,29 @@ import { createFanOutService } from './worktask/createFanOutService';
 import { getWorkerTempDirSweeper, liveTempDirsFromSessions } from './worktask/fanoutTempDir';
 import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
-import { registerMoaRpc } from './pipe/handlers/moa.rpc';
+import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
+import { registerFactoryRpc } from './factory/factoryHost';
+import { getFactorySettings, onFactorySettingsChanged } from './factory/factorySettings';
+// The agent factory's modules register themselves on import.
+import './factory/modules';
+import { prVerdictHostPorts } from './github/prVerdictHost';
 import { registerAutomationRpc } from './pipe/handlers/automation.rpc';
 import { registerWorktaskHandlers, type WorktaskServices } from './ipc/handlers/worktask.handler';
 import { registerWorktaskRpc } from './pipe/handlers/worktask.rpc';
 import { TaskAdoptService } from './worktask/TaskAdoptService';
-import { installE2EHooks } from './e2eHooks';
 import { TaskGateRunner, setSharedTaskGateRunner } from './worktask/TaskGateRunner';
 import { createHostedLedgerPort } from './worktask/ledgerPort';
 import { getProjectConfigStore } from './project/ProjectConfigStore';
 import { createWorkspaceFactsPublisher, invalidateAutonomyCache, registerWorkspaceFactsPublisher } from './workspace/workspaceFactsFeed';
-import { publishMoaPane, setMoaPanePush } from './deck/moaPaneFeed';
 import { reconcileOwnerDowngrades } from './worktask/taskAutonomy';
-import { createHqAutoPress, setHqAutoPress } from './deck/hqApprovalLane';
-import { paneOwnCwdOf, startMoaShadow } from './deck/moaShadowHost';
-import { startMoaDelegate } from './deck/moaDelegateWiring';
-import { getMoaDelegateService } from './deck/moaDelegatePorts';
+import { paneOwnCwdOf } from './workspace/paneCwd';
 import { getTaskLedger } from './deck/taskLedgerHost';
 import { createTrackRecordFeed, setTrackRecordFeed, type TrackApprovalRecord } from './deck/trackRecordFeed';
 import { getTrackRecordStore } from './deck/trackRecordStore';
 import { loadDeckDecisions, onDecisionsChanged } from './deck/deckDecisionStore';
 import { getWorkLinkStore } from './workLink/workLinkStore';
 import { agentSlug } from '../shared/trackRecord';
-import { onAutonomyWritten, loadWorkspaceMode } from './deck/deckAutonomyStore';
-import { getHqWorkspaceId, hqPresence, isHqApprovalPressEnabled, isMoaEnabled, onHqStoreWritten } from './deck/deckHqStore';
+import { onAutonomyWritten } from './deck/deckAutonomyStore';
 import { registerDeckHandler } from './ipc/handlers/deck.handler';
 import { registerWorkspaceMirrorHandler } from './ipc/handlers/workspaceMirror.handler';
 import { getWorkspaceMirror } from './workspace/WorkspaceMirror';
@@ -560,8 +559,6 @@ void app.whenReady().then(() => { try { warnOnInstallIntegrityGap(); } catch { /
 // Moa's claude lookup: read the login shell's PATH in the background (a Finder
 // launch misses nvm/fnm/volta). Never awaited; resolution works without it.
 void app.whenReady().then(() => { void warmLoginShellPath(); });
-// Dev-build-only e2e seam (e2e/): inert unless WMUX_E2E_HOOKS=1 on an unpackaged build.
-void app.whenReady().then(() => installE2EHooks());
 
 // ── Promoted browser flows: the idle sweep ─────────────────────────────────
 //
@@ -982,6 +979,10 @@ const fanoutCallerSubmit = createFanoutCallerSubmit({
   deliver: async (args) =>
     daemonClient ? daemonClient.deliverCallerNudge(args) : { result: 'unavailable', pasted: false },
 });
+// A factory worker's report reminder and a resumed worker's message
+// (factory/workerReportNudge.ts): the gated submit, held while someone types.
+setWorkerPaneSubmit(async (ptyId, text, guardKey) =>
+  (await inputRpc.gatedSubmit(ptyId, text, null, { waitQuiet: true, deadlineAt: Date.now() + 120_000, ...(guardKey ? { guardKey } : {}) })).ok === true);
 ipcMain.handle(IPC.DECK_FANOUT_CALLER_SESSION, (_e, ptyId: unknown) => fanoutCallerSubmit.session(ptyId));
 ipcMain.handle(IPC.DECK_FANOUT_CALLER_SUBMIT, (_e, payload: unknown) => fanoutCallerSubmit.submit(payload));
 registerApprovalsRpc(rpcRouter, () => daemonClient);
@@ -1179,13 +1180,22 @@ registerGitHandoffHandlers({
 });
 registerFanOutRpc(rpcRouter, fanOutService, () => mainWindow, { getDaemonClient: () => daemonClient });
 registerLedgerRpc(rpcRouter, () => mainWindow);
-// Moa's delegate (moa_ask). Answers `off` with nothing recorded until the
-// owner turns the ask mode on (startMoaDelegate registers the service).
-registerMoaRpc(rpcRouter, {
-  getService: getMoaDelegateService,
+// pr_verdict: a verifier's PASS/FAIL on one PR head, read by the merge lane.
+registerVerifyRpc(rpcRouter, {
   resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
-  // The pane's own cwd only: a workspace's cwd is not the asker's repo.
   paneCwd: paneOwnCwdOf,
+  ...prVerdictHostPorts(),
+});
+// Agent factory: every factory RPC method (fail-closed until its module
+// registers it), started once the pipe server is up, disposed on quit.
+const factoryHost = registerFactoryRpc(rpcRouter, {
+  getMainWindow: () => mainWindow,
+  getDaemonClient: () => daemonClient,
+  fanOutService,
+  invokeRendererRpc,
+  resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),
+  paneCwd: paneOwnCwdOf,
+  wmuxDir: () => getWmuxDir(),
 });
 // Scheduled runs for agents: draft-only propose + redacted reads, relayed to
 // the daemon over main's first-party connection (pipe/handlers/automation.rpc.ts).
@@ -1223,7 +1233,7 @@ registerWorktaskHandlers(() => daemonClient, (services: WorktaskServices) => {
         ledger: createHostedLedgerPort(),
         project: { getState: (cwd: string) => getProjectConfigStore().getState(cwd) },
       });
-      // Moa's goal verifier runs goal tasks' gates through the same runner.
+      // The factory's verify preset runs its gates through the same runner.
       setSharedTaskGateRunner(runner);
       return runner;
     })(),
@@ -1237,33 +1247,8 @@ registerWorktaskHandlers(() => daemonClient, (services: WorktaskServices) => {
 // cancelled) and an autonomy write. Until the first push lands the daemon
 // answers `scope-unavailable` and refuses, which is the safe direction.
 // See workspace/workspaceFactsFeed.ts.
-// The HQ approval lane (deck/hqApprovalLane.ts) presses by the facts this feed
-// publishes, so a lane pass runs right after each push lands — never before
-// the daemon holds the table it will judge by.
-// The HQ lane's policy as main sees it now; published beside the table.
-const hqLanePolicyNow = (): { open: boolean; hq: string | null } => {
-  const hq = getHqWorkspaceId();
-  return {
-    open: hq !== null && isMoaEnabled() && isHqApprovalPressEnabled() && hqPresence(hq) === 'present',
-    hq,
-  };
-};
-const hqAutoPress = createHqAutoPress({
-  facts: {
-    settled: () => workspaceFactsPublisher.settled(),
-    ackedSeq: () => workspaceFactsPublisher.ackedSeq(),
-    ackedLaneGeneration: () => workspaceFactsPublisher.ackedLaneGeneration(),
-  },
-  getHq: () => getHqWorkspaceId(),
-  isMoaEnabled: () => isMoaEnabled(),
-  presence: (hq) => hqPresence(hq),
-  isOptedIn: () => isHqApprovalPressEnabled(),
-  ledger: () => getTaskLedger(),
-  modeOf: (ws) => loadWorkspaceMode(ws),
-  nameOf: (ws) => getWorkspaceMirror().getEntries()?.find((e) => e.id === ws)?.name,
-  getDaemonClient: () => daemonClient,
-});
-setHqAutoPress(hqAutoPress);
+// No rule presses a worker's approval: the publisher's default tells the
+// daemon the HQ approval lane is shut beside every table.
 const workspaceFactsPublisher = createWorkspaceFactsPublisher({
   push: async (facts, seq, lane) => {
     if (!daemonClient) throw new Error('Daemon not connected');
@@ -1273,19 +1258,16 @@ const workspaceFactsPublisher = createWorkspaceFactsPublisher({
     // Refused outright (not merely raced by a newer table): the daemon does
     // not hold this, so the publisher must not count it as acknowledged.
     if (result?.ok === false) throw new Error(result.error ?? 'workspace fact table refused');
-    void hqAutoPress.run();
     return result;
   },
-  lanePolicy: hqLanePolicyNow,
 });
 registerWorkspaceFactsPublisher(workspaceFactsPublisher);
-// Any change to the lane's own inputs reaches the daemon at once.
-onHqStoreWritten(() => workspaceFactsPublisher.publishIfLaneChanged());
-// Moa's track record (deck/trackRecordFeed.ts): counts from wmux's own task
-// data, running only while Moa is on — the switch starts and stops it.
+// The track record (deck/trackRecordFeed.ts): counts from wmux's own task
+// data, running only while the agent factory is on — its switch starts and
+// stops it.
 const trackRecordFeed = createTrackRecordFeed({
   store: getTrackRecordStore(),
-  isMoaEnabled: () => isMoaEnabled(),
+  isMoaEnabled: () => getFactorySettings().enabled,
   workLinks: getWorkLinkStore(),
   decisions: { load: () => loadDeckDecisions(), onChanged: onDecisionsChanged },
   ledger: getTaskLedger(),
@@ -1303,17 +1285,10 @@ const trackRecordFeed = createTrackRecordFeed({
   },
 });
 setTrackRecordFeed(trackRecordFeed);
-onHqStoreWritten(() => trackRecordFeed.sync());
+onFactorySettingsChanged(() => trackRecordFeed.sync());
 getWorkspaceMirror().onSnapshot(() => workspaceFactsPublisher.publishIfLaneChanged());
 getTaskLedger().onTransition(() => {
   workspaceFactsPublisher.schedule();
-});
-// The phone's Moa pane (main → daemon): which daemon session is the HQ brain's
-// TUI, or null. The deck handler re-publishes on every change; see
-// deck/moaPaneFeed.ts.
-setMoaPanePush(async (pane, seq) => {
-  if (!daemonClient) throw new Error('Daemon not connected');
-  return daemonClient.rpc('daemon.moa.set', { pane, seq });
 });
 onAutonomyWritten(() => {
   // The store this feed reads was just rewritten, so the cached copy is stale
@@ -1326,21 +1301,13 @@ onAutonomyWritten(() => {
   void reconcileOwnerDowngrades(() => getTaskLedger().list({ openOnly: true }));
 });
 
-// Command Deck Phase 2 — the Commander brain. Renderer-only surface (same
-// process-boundary trust basis as channelLocal/fanout, pipe-unreachable): the
-// Agent-SDK orchestrator session runs in MAIN and drives the fleet via the wmux
-// MCP bundle. Lazily spawned on the first deck:send; disposed on before-quit.
-// getDaemonClient: the `claude-pty` brain vendor spawns its interactive TUI as
-// a daemon session, so it needs the live client (a getter, because the deck
-// handler registers before the daemon connects).
-// WMX-06: registerDeckHandler sweeps orphaned atomic-write temp files in the
-// data dir before the Deck stores are first read (once per registration).
+// The deck plumbing that serves human panes (fan-out caller and PR owner
+// nudges, the task ledger's reconcile and mission-channel posts, the legacy
+// HQ id and the pending-decision list). WMX-06: it sweeps orphaned
+// atomic-write temp files in the data dir before the stores are first read.
 const disposeDeckHandler = registerDeckHandler(() => mainWindow, {
   getDaemonClient: () => daemonClient,
-  invokeOperatorRpc: (method, params) => invokeRendererRpc(method, params),
 });
-// The track record's first start waits for the deck handler: it decides Moa's
-// switch for a new install (ensureMoaDefault), which reads as on until then.
 trackRecordFeed.sync();
 // WorkspaceMirror — renderer push (fire-and-forget) keeps a main-process cache
 // of the workspace tree + per-pane agent status warm, so routing / hook
@@ -2115,7 +2082,7 @@ app.on('ready', async () => {
           disposePhoneBridge?.();
           disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === MOA_WAKE_COMMAND
             // A failure main learns after the accept goes back on the receipt.
-            ? Promise.resolve(handlePhoneMoaWake(payload,report => { void client.rpc('daemon.moa.wakeResult',{...report}).catch(() => { /* receipt stays accepted */ }); }))
+            ? Promise.resolve(handlePhoneMoaWake(payload))
             : command.startsWith('browser.') ? handlePhoneBrowser(command,payload,{
             backend: () => browserBackendStore.get(),
             clearViewport: async id => {
@@ -2158,32 +2125,12 @@ app.on('ready', async () => {
       // process, so read it fresh.
       invalidateAutonomyCache();
       void workspaceFactsPublisher.publishNow();
-      // Same for the Moa pane: the daemon drops it with its publisher, so a
-      // fresh connection holds none until main says so again.
-      void publishMoaPane({ force: true });
-      // A new approval, or one settled elsewhere: the lane re-lists.
-      client.on('approvals:changed', () => { void hqAutoPress.run(); });
       client.on('approvals:changed', () => { void trackRecordFeed.onApprovalsChanged(); });
-      // Moa's shadow judge (records only); a first pass catches questions
-      // already waiting on this daemon.
-      const moaShadow = startMoaShadow(() => daemonClient);
-      client.on('approvals:changed', () => { void moaShadow.onApprovalsChanged(); });
-      void moaShadow.onApprovalsChanged();
-      // Moa's delegate: registers its service only while the ask mode is on.
-      startMoaDelegate({
-        getDaemonClient: () => daemonClient,
-        // An owner's answer reaches the asker's pane through the same gated
-        // paste as a hand-off: approval gate, typing guard, then Enter.
-        submit: (ptyId, text, agent, guardKey) => inputRpc.gatedSubmit(ptyId, text, agent, { waitQuiet: true, guardKey }),
-      });
       // Handler swap to daemon-routed mode. The microsecond window where
       // pty/* handlers are torn down and re-registered is the same
       // surface the original code used; the swap is logged for the
       // race-investigation breadcrumb trail kept by previous fixes.
       logLine('info', 'main', 'handler swap (daemon connect): cleanup begin');
-      // Sessions this daemon recovered are new processes, not the goal worker
-      // spawns main recorded (goalWorkerSessions.ts).
-      clearGoalWorkerSessions();
       cleanupHandlers();
       logLine('info', 'main', 'handler swap (daemon connect): cleanup done, register begin');
       cleanupHandlers = registerAllHandlers(ptyManager, ptyBridge, () => mainWindow, daemonClient, {
@@ -2284,7 +2231,6 @@ app.on('ready', async () => {
         mainWindow.webContents.send('daemon:disconnected');
       }
       logLine('warn', 'main', 'handler swap (daemon disconnect): cleanup begin');
-      clearGoalWorkerSessions();
       cleanupHandlers();
       logLine('warn', 'main', 'handler swap (daemon disconnect): cleanup done, register begin');
       cleanupHandlers = registerAllHandlers(ptyManager, ptyBridge, () => mainWindow, undefined, {
@@ -2641,6 +2587,7 @@ app.on('ready', async () => {
     await mcpRegistrar.register(authToken);
   }
   pipeServer.start();
+  void factoryHost.start();
   autoUpdater.start();
   markBoot('ready-end');
   // Log sink is up by now, so the summary line (unlike the early per-mark
@@ -2896,6 +2843,9 @@ const QUIT_HARD_DEADLINE_MS = 20_000;
  */
 const RENDERER_SAVE_TIMEOUT_MS = 3_000;
 
+/** How long the agent factory's modules get to dispose on quit. */
+const FACTORY_DISPOSE_TIMEOUT_MS = 3_000;
+
 app.on('before-quit', async (e) => {
   if (isQuitting) return; // second pass — let quit proceed
   e.preventDefault();
@@ -2980,6 +2930,13 @@ app.on('before-quit', async (e) => {
       // Renderer unavailable, or too slow to answer — rely on last periodic save
     }
   }
+
+  // Agent factory: its modules persist and release what they hold. Bounded
+  // like the renderer save above; never throws.
+  await Promise.race([
+    factoryHost.dispose(),
+    new Promise((resolve) => setTimeout(resolve, FACTORY_DISPOSE_TIMEOUT_MS)),
+  ]);
 
   // Every teardown step below is ISOLATED in its own try/catch. Two guarantees
   // ride on this:

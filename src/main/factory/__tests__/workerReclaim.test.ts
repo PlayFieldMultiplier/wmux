@@ -1,0 +1,298 @@
+// A bot worker whose task ended stops (its agent only, the pane stays) and
+// can resume the same conversation; nothing else is ever reclaimed.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LedgerEntry } from '../../../shared/ledger';
+import {
+  ReclaimedWorkers,
+  installWorkerReclaim,
+  isReclaimableEnd,
+  noteWorkerAgentExit,
+  reclaimWorker,
+  reclaimedWorkerState,
+  resumeLineFor,
+  resumeWorker,
+  stopResumedWorkers,
+  unreclaimedEndedWorkers,
+  RECLAIMED_WORKERS_MAX,
+  type WorkerReclaimPorts,
+  type WorkerResumePorts,
+  type WorkerSessionInfo,
+} from '../workerReclaim';
+import { STOPPED_BY_OWNER } from '../factoryStop';
+
+const BOT = 'bot-0000000a';
+const UUID = '2eca904b-b4cc-4243-81d3-67a121351892';
+
+function row(status: LedgerEntry['status'], over: Partial<LedgerEntry> = {}): LedgerEntry {
+  return {
+    schemaVersion: 1, id: 'wtask-abc-12345678', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'perf-A',
+    status, rev: 3, updatedAt: 1_000, updatedBy: { kind: 'brain', workspaceId: 'ws-owner' },
+    dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default' },
+    ...over,
+  };
+}
+
+let dir: string;
+let wt: string;
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w5-reclaim-'));
+  wt = path.join(dir, 'wt');
+  fs.mkdirSync(wt);
+});
+afterEach(() => {
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function session(over: Partial<WorkerSessionInfo> = {}): WorkerSessionInfo {
+  return { id: 'daemon-1', pid: 10, spawnCwd: wt, agentProcessAlive: true, resumeBinding: { agent: 'claude', sessionId: UUID, cwd: wt, permissionMode: 'bypassPermissions' }, ...over };
+}
+
+function reclaimPorts(store: ReclaimedWorkers, sessions: WorkerSessionInfo[], over: Partial<WorkerReclaimPorts> = {}) {
+  const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
+  const note = vi.fn();
+  let listener: ((t: { entry: LedgerEntry; from: string | null; to: string }) => void) | null = null;
+  const ports: WorkerReclaimPorts = {
+    onTransition: (fn) => { listener = fn; return () => { listener = null; }; },
+    store,
+    worktreeOf: async () => wt,
+    listSessions: async () => sessions,
+    stopAgent,
+    note,
+    now: () => 5_000,
+    log: () => undefined,
+    ...over,
+  };
+  return { ports, stopAgent, note, fire: (entry: LedgerEntry, to: string) => listener?.({ entry, from: 'review_requested', to }) };
+}
+
+describe('isReclaimableEnd', () => {
+  it('only a bot task that completed, failed or was cancelled, never one the owner stopped', () => {
+    expect(isReclaimableEnd(row('completed'), 'completed')).toBe(true);
+    expect(isReclaimableEnd(row('cancelled'), 'cancelled')).toBe(true);
+    expect(isReclaimableEnd(row('failed'), 'failed')).toBe(true);
+    for (const open of ['working', 'input_required', 'review_requested']) expect(isReclaimableEnd(row('working'), open)).toBe(false);
+    expect(isReclaimableEnd(row('completed', { dispatch: { origin: { kind: 'pane' } } }), 'completed')).toBe(false);
+    expect(isReclaimableEnd(row('cancelled', { summary: STOPPED_BY_OWNER, updatedBy: { kind: 'system', workspaceId: 'ws-daemon' } }), 'cancelled')).toBe(false);
+  });
+});
+
+describe('reclaimWorker', () => {
+  it('stops the agent of every pane started in the worktree and records its conversation', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const other = session({ id: 'daemon-2', spawnCwd: path.join(dir, 'elsewhere') });
+    const { ports, stopAgent, note } = reclaimPorts(store, [session(), other]);
+    const rec = await reclaimWorker(ports, row('completed'), 'completed');
+    expect(stopAgent).toHaveBeenCalledTimes(1);
+    expect(stopAgent).toHaveBeenCalledWith('daemon-1');
+    expect(rec?.sessions).toEqual([{ sessionId: 'daemon-1', cwd: wt, resumeSessionId: UUID, permissionMode: 'bypassPermissions' }]);
+    expect(rec?.state).toBe('stopped');
+    expect(reclaimedWorkerState(store.get(rec!.taskId))).toBe('resumable');
+    expect(note.mock.calls[0][2]).toBe('Worker done (resumable)');
+  });
+
+  it('records nothing (and the worker keeps running) without a worktree or when every stop is refused; no pane left is recorded as nothing to stop', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    expect(await reclaimWorker(reclaimPorts(store, [session()], { worktreeOf: async () => null }).ports, row('completed'), 'completed')).toBeNull();
+    const none = ReclaimedWorkers.at(path.join(dir, 'none'));
+    const empty = reclaimPorts(none, []);
+    expect(await reclaimWorker(empty.ports, row('failed'), 'failed')).toMatchObject({ ended: 'failed', sessions: [] });
+    expect(empty.stopAgent).not.toHaveBeenCalled();
+    expect(reclaimedWorkerState(none.get('wtask-abc-12345678'))).toBe('stopped');
+    const refused = reclaimPorts(store, [session()], { stopAgent: async () => ({ ok: false, code: 'unsupported' }) });
+    expect(await reclaimWorker(refused.ports, row('completed'), 'completed')).toBeNull();
+    expect(store.all()).toEqual([]);
+  });
+
+  it('persists the record across a reload', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('cancelled'), 'cancelled');
+    const again = ReclaimedWorkers.at(dir);
+    again.load();
+    expect(again.get('wtask-abc-12345678')?.ended).toBe('cancelled');
+  });
+});
+
+describe('installWorkerReclaim', () => {
+  it('reclaims on completion, never on a move to an open status, and catches up on a recent end at install', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const { ports, stopAgent, fire } = reclaimPorts(store, [session()], {
+      allRows: () => [row('completed', { id: 'wtask-old-00000001', updatedAt: 4_000 }), row('completed', { id: 'wtask-ancient-0001', updatedAt: -1e9 })],
+    });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(store.get('wtask-old-00000001')).not.toBeNull());
+    expect(store.get('wtask-ancient-0001')).toBeNull();
+    stopAgent.mockClear();
+    fire(row('review_requested'), 'review_requested');
+    fire(row('input_required'), 'input_required');
+    fire(row('working'), 'working');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stopAgent).not.toHaveBeenCalled();
+    fire(row('completed'), 'completed');
+    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(1));
+    off();
+  });
+});
+
+describe('resumeWorker', () => {
+  async function reclaimed(): Promise<ReclaimedWorkers> {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    return store;
+  }
+  function resumePorts(store: ReclaimedWorkers, live: WorkerSessionInfo[], over: Partial<WorkerResumePorts> = {}) {
+    const typeLine = vi.fn(() => true);
+    const ports: WorkerResumePorts = { store, listSessions: async () => live, typeLine, now: () => 9_000, ...over };
+    return { ports, typeLine };
+  }
+
+  it('types the exact resume line into the recorded pane and marks the worker resumed', async () => {
+    const store = await reclaimed();
+    const { ports, typeLine } = resumePorts(store, [session({ agentProcessAlive: false })]);
+    const r = await resumeWorker(ports, 'wtask-abc-12345678', { kind: 'owner' });
+    expect(r).toMatchObject({ ok: true, sessionId: 'daemon-1', resumeSessionId: UUID });
+    expect(typeLine).toHaveBeenCalledWith('daemon-1', `claude --resume ${UUID} --dangerously-skip-permissions`);
+    expect(store.get('wtask-abc-12345678')?.state).toBe('resumed');
+    // Its agent exiting makes it resumable again.
+    expect(noteWorkerAgentExit(store, 'daemon-1', 10_000)).toBe(true);
+    expect(reclaimedWorkerState(store.get('wtask-abc-12345678'))).toBe('resumable');
+  });
+
+  it('refuses another bot, a closed or moved pane, a running agent, and a line the guard did not type', async () => {
+    const store = await reclaimed();
+    const dead = session({ agentProcessAlive: false });
+    expect(await resumeWorker(resumePorts(store, [dead]).ports, 'wtask-abc-12345678', { kind: 'bot', botId: 'bot-0000000b' })).toMatchObject({ ok: false, code: 'not_yours' });
+    expect(await resumeWorker(resumePorts(store, []).ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'pane_gone' });
+    expect(await resumeWorker(resumePorts(store, [{ ...dead, spawnCwd: dir }]).ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'moved' });
+    expect(await resumeWorker(resumePorts(store, [session()]).ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'already_running' });
+    const thrown = resumePorts(store, [dead], { typeLine: () => { throw new Error('guard refused'); } });
+    expect(await resumeWorker(thrown.ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_typed' });
+    expect(await resumeWorker(resumePorts(store, [dead]).ports, 'wtask-none-0000000', { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_reclaimed' });
+    expect(store.get('wtask-abc-12345678')?.state).toBe('stopped');
+  });
+
+  it('delivers a bot\'s message once the relaunched agent is up', async () => {
+    const store = await reclaimed();
+    let alive = false;
+    const submit = vi.fn(async () => true);
+    const { ports } = resumePorts(store, [session({ agentProcessAlive: false })], {
+      agentAlive: async () => alive,
+      submit,
+      sleep: async () => { alive = true; },
+    });
+    const r = await resumeWorker(ports, 'wtask-abc-12345678', { kind: 'bot', botId: BOT }, '  run npm test again  ');
+    expect(r).toMatchObject({ ok: true, messageDelivered: true });
+    expect(submit).toHaveBeenCalledWith('daemon-1', 'run npm test again');
+  });
+
+  it('a pane without a recorded conversation has no resume line', () => {
+    expect(resumeLineFor({ sessionId: 'd', cwd: wt })).toBeNull();
+    expect(resumeLineFor({ sessionId: 'd', cwd: wt, resumeSessionId: 'not-a-uuid' })).toBeNull();
+    expect(resumeLineFor({ sessionId: 'd', cwd: wt, resumeSessionId: UUID })).toBe(`claude --resume ${UUID}`);
+  });
+});
+
+describe('installWorkerReclaim retries', () => {
+  it('an end the daemon could not serve yet is tried again, at most three times', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = ReclaimedWorkers.at(dir);
+      let connected = false;
+      const listSessions = vi.fn(async () => {
+        if (!connected) throw new Error('the daemon is not connected');
+        return [session()];
+      });
+      const { ports } = reclaimPorts(store, [], { listSessions, retryMs: 1_000, allRows: () => [row('completed', { updatedAt: 4_000 })] });
+      const off = installWorkerReclaim(ports);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get('wtask-abc-12345678')).toBeNull();
+      connected = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(store.get('wtask-abc-12345678')).not.toBeNull();
+      off();
+
+      const never = ReclaimedWorkers.at(path.join(dir, 'never'));
+      const failing = vi.fn(async () => { throw new Error('down'); });
+      const offNever = installWorkerReclaim(reclaimPorts(never, [], { listSessions: failing, retryMs: 1_000, allRows: () => [row('completed', { updatedAt: 4_000 })] }).ports);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(failing).toHaveBeenCalledTimes(3);
+      offNever();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('resume safety (review fixes)', () => {
+  async function reclaimedStore(): Promise<ReclaimedWorkers> {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    return store;
+  }
+  const dead = (over: Partial<WorkerSessionInfo> = {}) => session({ agentProcessAlive: false, ...over });
+  const ports = (store: ReclaimedWorkers, live: WorkerSessionInfo[], over: Partial<WorkerResumePorts> = {}): WorkerResumePorts =>
+    ({ store, listSessions: async () => live, typeLine: vi.fn(() => true), ...over });
+
+  it('refuses a pane whose shell moved out of the task folder, or whose state cannot be told', async () => {
+    const store = await reclaimedStore();
+    expect(await resumeWorker(ports(store, [dead({ cwd: dir })]), 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'moved' });
+    expect(await resumeWorker(ports(store, [dead({ commandRunning: true })]), 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'already_running' });
+    expect(await resumeWorker(ports(store, [session({ agentProcessAlive: undefined })]), 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'unknown_state' });
+    // A shell at its prompt (OSC 133) with no agent ever seen is known idle.
+    expect(await resumeWorker(ports(store, [session({ agentProcessAlive: undefined, commandRunning: false, cwd: wt })]), 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: true });
+  });
+
+  it('types once for two concurrent resumes and refuses a second resume of a resumed worker', async () => {
+    const store = await reclaimedStore();
+    const typeLine = vi.fn(() => true);
+    const p = ports(store, [dead()], { typeLine });
+    const [a, b] = await Promise.all([resumeWorker(p, 'wtask-abc-12345678', { kind: 'owner' }), resumeWorker(p, 'wtask-abc-12345678', { kind: 'owner' })]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    expect(typeLine).toHaveBeenCalledTimes(1);
+    expect(await resumeWorker(p, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'already_running' });
+  });
+
+  it('the owner\'s stop reaches a resumed worker; a launch slot hands over once the line is typed', async () => {
+    const store = await reclaimedStore();
+    const onLaunched = vi.fn();
+    const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
+    const p = ports(store, [dead()], { stopAgent });
+    await resumeWorker(p, 'wtask-abc-12345678', { kind: 'bot', botId: BOT }, undefined, onLaunched);
+    expect(onLaunched).toHaveBeenCalledTimes(1);
+    expect(await stopResumedWorkers(p, 'bot-0000000b')).toBe(0);
+    expect(await stopResumedWorkers(p, BOT)).toBe(1);
+    expect(stopAgent).toHaveBeenCalledWith('daemon-1');
+    expect(store.get('wtask-abc-12345678')?.state).toBe('stopped');
+  });
+
+  it('a record that cannot be written stops nothing', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    vi.spyOn(store, 'put').mockRejectedValueOnce(new Error('disk full'));
+    const { ports: p, stopAgent } = reclaimPorts(store, [session()]);
+    expect(await reclaimWorker(p, row('completed'), 'completed')).toBeNull();
+    expect(stopAgent).not.toHaveBeenCalled();
+  });
+
+  it('never evicts a resumed worker to stay under the record cap', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const rec = (i: number, state: 'stopped' | 'resumed') => ({ taskId: `wtask-n-${i}`, botId: BOT, ownerWorkspaceId: 'o', taskWorkspaceId: 't', title: 't', threadId: 'task:x' as never, ended: 'completed' as const, sessions: [], state, at: i });
+    await store.put(rec(0, 'resumed'));
+    for (let i = 1; i <= RECLAIMED_WORKERS_MAX; i++) await store.put(rec(i, 'stopped'));
+    expect(store.get('wtask-n-0')).not.toBeNull();
+    expect(store.get('wtask-n-1')).toBeNull();
+    expect(store.all()).toHaveLength(RECLAIMED_WORKERS_MAX);
+  });
+});
+
+describe('unreclaimedEndedWorkers', () => {
+  it('counts an ended bot task (failed included) until its worker is reclaimed', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const rows = [row('failed', { id: 'wtask-f-00000001', updatedAt: 4_000 }), row('working', { id: 'wtask-w-00000001' }), row('completed', { id: 'wtask-c-00000001', updatedAt: 4_000 })];
+    expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(2);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, rows[0], 'failed');
+    expect(store.get('wtask-f-00000001')?.ended).toBe('failed');
+    expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(1);
+  });
+});

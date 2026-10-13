@@ -40,10 +40,6 @@ import { ENV_KEYS, BRAIN_PTY_ID_PREFIX } from '../../shared/constants';
 import { mintCommanderToken, revokeCommanderToken } from './commanderTrust';
 import { registerBrainPty, type BrainPtyHookBlock, type BrainPtyHookContext } from './brainPtyHookBus';
 import { installBrainSkills, syncBrainContractFile } from './brainSkills';
-import { getHqWorkspaceId } from './deckHqStore';
-import { MOA_DELEGATE_MERGE_DENY, isMoaDelegateOn } from '../agents/delegateSpawnPolicy';
-import { buildReadGateScript } from './moaReadGate';
-import { buildProposalGateScript } from './commanderToolSandbox';
 import type { StopGateVerdict } from './stopGate';
 import { readLastAssistantMessage } from '../claude/lastAssistantMessage';
 import { resolveClaudeExecutable, resolveMcpBundlePath, DISALLOWED_TOOLS } from './ClaudeSdkAdapter';
@@ -330,9 +326,6 @@ export const BRAIN_PTY_ALLOWED_TOOLS: string[] = [...new Set([...COMMANDER_TOOL_
  */
 export const BRAIN_PTY_DENIED_TOOLS: string[] = [...DISALLOWED_TOOLS, 'Write', 'AskUserQuestion'];
 
-/** The tools the Moa proposal gate takes over from the deny list. */
-export const PROPOSAL_GATED_TOOLS: readonly string[] = ['Write', 'Edit'];
-
 /** Why each denied tool is denied, and what to reach for instead. This text is
  *  written to stderr by the deny script, which is the only channel that reaches
  *  the model — a bare exit 2 tells it a call failed and nothing else. */
@@ -422,23 +415,8 @@ export function buildBrainSettingsProfile(opts: {
    *  falls back to a bare `exit 2`, which blocks the call but explains
    *  nothing — only reachable when the script could not be written. */
   denyScriptPath?: string | null;
-  /** Absolute path to the generated Moa proposal gate (the HQ brain with Moa
-   *  and proposals on). When set, Write and Edit leave the deny list and go
-   *  through that script instead, which allows only `.md` files directly in
-   *  the proposals folder. Null/absent = the hard deny every other brain gets. */
-  proposalGateScriptPath?: string | null;
-  /** Moa's read gate script (moaReadGate.ts): Read, Grep and Glob inside a
-   *  delegated repo pass without a prompt. Absent = every such read prompts
-   *  as before. */
-  readGate?: { scriptPath: string } | null;
-  /** The Moa delegate is on: `gh` merges are denied too, so a merge goes
-   *  through the merge lane (delegateSpawnPolicy). Absent/false = today's list. */
-  mergeDeny?: boolean;
 }): Record<string, unknown> {
-  const proposalGate = opts.proposalGateScriptPath ?? null;
-  const denied = proposalGate
-    ? BRAIN_PTY_DENIED_TOOLS.filter((tool) => !PROPOSAL_GATED_TOOLS.includes(tool))
-    : BRAIN_PTY_DENIED_TOOLS;
+  const denied = BRAIN_PTY_DENIED_TOOLS;
   const denyScriptPath = opts.denyScriptPath ?? null;
   const preToolUse: unknown[] = denied.map((tool) => ({
     matcher: tool,
@@ -446,22 +424,6 @@ export function buildBrainSettingsProfile(opts: {
       brainHook(opts.nodePath, denyScriptPath ? [denyScriptPath, tool] : ['-e', 'process.exit(2)']),
     ],
   }));
-  if (proposalGate) {
-    // Fail-closed: the script prints an explicit allow only for a proposal
-    // file and exits 2 for everything else, including its own errors.
-    preToolUse.push({
-      matcher: PROPOSAL_GATED_TOOLS.join('|'),
-      hooks: [brainHook(opts.nodePath, [proposalGate])],
-    });
-  }
-  if (opts.readGate) {
-    // Allows or stays silent (the normal prompt); it never exits 2, so a read
-    // it cannot vouch for is asked about, never refused.
-    preToolUse.push({
-      matcher: 'Read|Grep|Glob',
-      hooks: [brainHook(opts.nodePath, [opts.readGate.scriptPath])],
-    });
-  }
   const hooks: Record<string, unknown> = {
     // Fail-closed backstop for the deny list above: exit code 2 is Claude
     // Code's "block this tool call" contract. The script also writes a reason
@@ -501,7 +463,7 @@ export function buildBrainSettingsProfile(opts: {
     // this profile is the
     // brain's whole configuration, exactly like the SDK adapter's raw mode.
     permissions: {
-      deny: opts.mergeDeny ? [...denied, ...MOA_DELEGATE_MERGE_DENY] : denied,
+      deny: denied,
       // The wmux MCP surface is pre-approved so the brain never sits on a
       // permission prompt no human is watching. Everything not listed — and
       // every denied built-in above — still prompts or is refused.
@@ -801,17 +763,6 @@ export interface ClaudePtyBrainAdapterDeps {
   /** Memory for the first turn of a fresh conversation (commanderMemory).
    *  Absent = none. A throw is swallowed: memory never blocks a turn. */
   loadMemory?: () => string;
-  /** The Moa proposal gate: Write/Edit allowed only for `.md` files directly
-   *  in this folder. Absent = Write and Edit stay hard-denied. */
-  proposalGate?: { proposalsDir: string };
-  /** Moa's read gate (moaReadGate.ts). Absent = no gate, every read outside
-   *  the brain home prompts. */
-  readGate?: true;
-  /** The Moa delegate gate (delegateSpawnPolicy.isMoaDelegateOn), read per
-   *  spawn. Absent = read from `wmuxDir`. */
-  moaDelegateOn?: () => boolean;
-  /** Whether this brain is the HQ's (Moa). Absent = deck-hq.json in `wmuxDir`. */
-  isHqBrain?: () => boolean;
   /** Fired with the daemon session id the moment the pty exists, so the deck
    *  can embed the live terminal, and with `null` on every teardown so the
    *  deck retires a terminal that no longer exists. */
@@ -904,9 +855,6 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
   private _resumeUnvalidated = false;
   private _startOptions: BrainStartOptions = {};
   private _contextInjected = false;
-  /** The commander contract (start options' systemPrompt), kept past the
-   *  first turn so every spawn can rewrite the HQ contract file. */
-  private _contract: string | null = null;
   /** This spawn's contract lives in the brain home's `.claude/CLAUDE.md`, so
    *  the first turn does not carry it. */
   private contractInFile = false;
@@ -916,7 +864,6 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
   private ptyId: string | null = null;
   private profilePaths: string[] = [];
   /** Moa's read gate written for this spawn, checked before every turn. */
-  private readGateScriptPath: string | null = null;
   private unregisterHooks: (() => void) | null = null;
   private unsubscribeData: (() => void) | null = null;
   private unsubscribeExit: (() => void) | null = null;
@@ -1062,7 +1009,6 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
 
   start(opts: BrainStartOptions): void {
     this._startOptions = opts;
-    this._contract = opts.systemPrompt ?? null;
     if (opts.resumeSessionId) {
       this._sessionId = opts.resumeSessionId;
       this._resumeUnvalidated = true;
@@ -1368,82 +1314,8 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
 
   // ── spawn ───────────────────────────────────────────────────────────────
 
-  /** Write the proposal gate script beside the profile, or return null (and
-   *  leave Write/Edit hard-denied) when there is no gate or it cannot be
-   *  written. The proposals folder must exist for the gate to allow anything. */
-  private writeProposalGate(dir: string, stamp: string): string | null {
-    const gate = this.deps.proposalGate;
-    if (!gate) return null;
-    try {
-      fs.mkdirSync(gate.proposalsDir, { recursive: true, mode: 0o700 });
-      const scriptPath = path.join(dir, `proposal-gate-${stamp}.cjs`);
-      fs.writeFileSync(scriptPath, buildProposalGateScript({ proposalsDir: gate.proposalsDir }), {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
-      this.profilePaths.push(scriptPath);
-      return scriptPath;
-    } catch (err) {
-      console.warn(`[deck] could not write Moa's proposal gate; Write stays denied: ${String(err)}`);
-      return null;
-    }
-  }
-
-  /** Write Moa's read gate beside the profile, or return null (every read
-   *  outside the brain home then prompts, as before). */
-  private writeReadGate(dir: string, stamp: string): { scriptPath: string } | null {
-    if (!this.deps.readGate) return null;
-    try {
-      const scriptPath = path.join(dir, `read-gate-${stamp}.cjs`);
-      fs.writeFileSync(scriptPath, buildReadGateScript(), { encoding: 'utf8', mode: 0o600 });
-      this.profilePaths.push(scriptPath);
-      this.readGateScriptPath = scriptPath;
-      return { scriptPath };
-    } catch (err) {
-      console.warn(`[deck] could not write Moa's read gate; reads keep prompting: ${String(err)}`);
-      return null;
-    }
-  }
-
-  /** The read gate is a file any same-user process could edit: before each
-   *  turn, put main's own script back if its content changed. */
-  ensureReadGateIntact(): void {
-    const scriptPath = this.readGateScriptPath;
-    if (!scriptPath) return;
-    const expected = buildReadGateScript();
-    try {
-      if (fs.readFileSync(scriptPath, 'utf8') === expected) return;
-    } catch {
-      /* missing: rewrite it */
-    }
-    try {
-      fs.writeFileSync(scriptPath, expected, { encoding: 'utf8', mode: 0o600 });
-      console.warn('[deck] Moa\'s read gate had changed on disk; rewrote it');
-    } catch (err) {
-      console.warn(`[deck] could not restore Moa's read gate: ${String(err)}`);
-    }
-  }
-
-  /** The Moa delegate gate. A resolver that throws reads as off. */
-  private resolveDelegateOn(): boolean {
-    try {
-      return this.deps.moaDelegateOn ? this.deps.moaDelegateOn() : isMoaDelegateOn(this.wmuxDir);
-    } catch {
-      return false;
-    }
-  }
-
-  private resolveIsHq(): boolean {
-    try {
-      if (this.deps.isHqBrain) return this.deps.isHqBrain();
-      return !!this._workspaceId && getHqWorkspaceId(this.wmuxDir) === this._workspaceId;
-    } catch {
-      return false;
-    }
-  }
-
   /** Write the generated profile + MCP config, returning their paths. */
-  private writeProfile(mergeDeny: boolean): { settingsPath: string; mcpConfigPath: string | null } {
+  private writeProfile(): { settingsPath: string; mcpConfigPath: string | null } {
     const dir = path.join(this.wmuxDir, 'brain-profiles');
     // 0700 / 0600 throughout: the generated MCP config carries this spawn's
     // WMUX_COMMANDER_TOKEN, which is a bearer credential for the whole
@@ -1466,8 +1338,6 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
       console.warn(`[deck] could not write the terminal brain's deny script: ${String(err)}`);
       denyScriptPath = null;
     }
-    const proposalGateScriptPath = this.writeProposalGate(dir, stamp);
-    const readGate = this.writeReadGate(dir, stamp);
     fs.writeFileSync(
       settingsPath,
       JSON.stringify(
@@ -1475,9 +1345,6 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
           bridgePath,
           nodePath,
           denyScriptPath,
-          proposalGateScriptPath,
-          readGate,
-          ...(mergeDeny ? { mergeDeny: true } : {}),
         }),
         null,
         2,
@@ -1588,12 +1455,10 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
     if (this._disposed) return { error: 'commander session disposed' };
     if (launch.kind === 'hold') return { error: launch.message };
     if (!resumeSessionId) this._conversationAccountId = launch.accountId;
-    // The Moa delegate, read once per spawn: a flip applies to the next TUI.
-    const delegateOn = this.resolveDelegateOn();
     let settingsPath: string;
     let mcpConfigPath: string | null;
     try {
-      ({ settingsPath, mcpConfigPath } = this.writeProfile(delegateOn));
+      ({ settingsPath, mcpConfigPath } = this.writeProfile());
     } catch (err) {
       return { error: `could not write the brain settings profile: ${String(err)}` };
     }
@@ -1677,11 +1542,9 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
         // profile; installBrainSkills never throws, so a skills write that
         // fails costs the skills, never the spawn.
         installBrainSkills(brainHome);
-        // With the Moa delegate on, the HQ brain's contract is a file its cwd
-        // loads rather than the body of its first typed turn. Off: no file,
-        // and a contract file an earlier run left behind is removed.
-        const contractOn = delegateOn && brainHome !== this.wmuxDir && this.resolveIsHq();
-        this.contractInFile = syncBrainContractFile(brainHome, contractOn ? this._contract : null);
+        // The contract rides the first typed turn; a contract file an earlier
+        // run left behind is removed.
+        this.contractInFile = syncBrainContractFile(brainHome, null);
       } catch {
         /* an unmakeable home surfaces as the spawn error below */
       }
@@ -1843,7 +1706,6 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
       yield { type: 'error', message: 'commander session disposed' };
       return;
     }
-    this.ensureReadGateIntact();
 
     if (!this.ptyId) {
       let spawned = await this.spawn(this._sessionId);

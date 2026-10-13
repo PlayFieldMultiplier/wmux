@@ -56,6 +56,12 @@ const packageJson = JSON.parse(readFileSync(PACKAGE_PATH, 'utf8'));
 //   the brain tools land as commander-ONLY registrations that relax that
 //   invariant to "commander ⊆ core ∪ COMMANDER_ONLY_TOOLS", at which point
 //   this number is the one that binds.
+//   bot profiles (`botProfiles`, agent factory, 2026-10): one per role tag,
+//   launched `--bot=<role>`. Every bot lists the same shared surface
+//   (2026-10-13), measured ~27,500 bytes with the routine / approval /
+//   secret tools still placeholders; 40,000 leaves room for their real
+//   schemas plus about a quarter before the number is re-argued, and stays
+//   well below commander's.
 const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
 // `--update` (npm run mcp:baseline:update): adopt the measured hashes and tool
 // names instead of failing on them, then rewrite the baseline file.
@@ -65,6 +71,10 @@ const guard = createBaselineGuard({ update: process.argv.includes('--update') })
 // against, never a copy typed into this script.
 const { COMMANDER_ONLY_TOOLS, COMMANDER_ONLY_RESERVED_TOOLS, COMMANDER_VARIANT_TOOLS } = createRequire(import.meta.url)(
   path.join(REPO_ROOT, 'dist', 'mcp', 'shared', 'commanderSurface.js'),
+);
+// The bot role surfaces (src/shared/botSurface.ts), from the same tsc output.
+const { ROLE_SURFACES } = createRequire(import.meta.url)(
+  path.join(REPO_ROOT, 'dist', 'mcp', 'shared', 'botSurface.js'),
 );
 
 function sha256(value) {
@@ -80,7 +90,17 @@ const PROFILE_ARGS = {
   commander: ['--commander'],
 };
 
+// Bot profiles are keyed `bot:<role>` and launch `--bot=<role>` with no
+// token file: tools/list is the role surface whatever the token is (main
+// refuses an untokened bot's calls, which the probe never makes).
+const BOT_PROFILE_PREFIX = 'bot:';
+
 function profileArgs(profile) {
+  if (profile.startsWith(BOT_PROFILE_PREFIX)) {
+    const role = profile.slice(BOT_PROFILE_PREFIX.length);
+    assert.ok(Object.hasOwn(ROLE_SURFACES, role), `unknown probe bot role: ${role}`);
+    return [BUNDLE_PATH, `--bot=${role}`];
+  }
   // hasOwn, not truthiness: a baseline key of `constructor` or `toString`
   // would otherwise pass the guard and blow up in the spread below.
   assert.ok(Object.hasOwn(PROFILE_ARGS, profile), `unknown probe profile: ${profile}`);
@@ -442,6 +462,26 @@ async function main() {
     rmSync(stableProbeDir, { recursive: true, force: true });
   }
 
+  // Bot profiles: each lists exactly its role surface (names compared as a
+  // set; order and bytes are pinned by the hashes), within its own budget.
+  assert.deepEqual(
+    Object.keys(baseline.botProfiles ?? {}).sort(),
+    Object.keys(ROLE_SURFACES).sort(),
+    'baseline must define one bot profile per role',
+  );
+  const botResults = [];
+  for (const [role, config] of Object.entries(baseline.botProfiles)) {
+    const profile = `${BOT_PROFILE_PREFIX}${role}`;
+    const sdk = await readSdkProfile(profile, config);
+    const wire = await readRawProfile(profile, config, RAW_PROTOCOL_VERSIONS[0]);
+    assert.deepEqual(
+      [...sdk.names].sort(),
+      [...ROLE_SURFACES[role].tools].sort(),
+      `${profile}: tools/list must be exactly the role surface`,
+    );
+    botResults.push({ ...sdk, ...wire });
+  }
+
   const byProfile = new Map(results.map((result) => [result.profile, result.names]));
   const fullOrder = byProfile.get('full');
   const fullNames = new Set(fullOrder);
@@ -533,7 +573,7 @@ async function main() {
     baseline: path.relative(REPO_ROOT, BASELINE_PATH).replaceAll('\\', '/'),
     rawProtocolVersions: RAW_PROTOCOL_VERSIONS,
     handshakeLayouts: ['bundle', 'unbundled-dist', 'relocated-bundle'],
-    profiles: Object.fromEntries(results.map((result) => [
+    profiles: Object.fromEntries([...results, ...botResults].map((result) => [
       result.profile,
       {
         toolCount: result.toolCount,

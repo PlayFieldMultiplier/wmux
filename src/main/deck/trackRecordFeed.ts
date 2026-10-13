@@ -33,13 +33,11 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { LedgerTransition } from '../../daemon/ledger/TaskLedger';
 import type { WorkspaceDecision } from './deckDecisionStore';
 import type { TrackRecordStore } from './trackRecordStore';
-import { sanitizeContextValue, VIEW_CONTEXT_DISCLAIMER } from './viewContext';
 import {
   addWeeks,
   agentSlug,
   buildRetro,
   bumpRow,
-  formatDuration,
   markSeen,
   moveItem,
   noteDecisionAsked,
@@ -49,7 +47,6 @@ import {
   pruneTrackRecord,
   resumeOpenItems,
   retroDueWeek,
-  rollupRows,
   sweepOpenItems,
   type OpenState,
   type TrackRecordData,
@@ -57,9 +54,6 @@ import {
 
 /** How often waits are swept and the retro schedule is checked. */
 export const TRACK_TICK_MS = 10 * 60 * 1000;
-/** Weeks Moa's context block covers. */
-export const TRACK_CONTEXT_WEEKS = 4;
-const MAX_CONTEXT_ROWS = 12;
 
 /** The slice of an approval record the feed reads. */
 export interface TrackApprovalRecord {
@@ -408,82 +402,6 @@ export function createTrackRecordFeed(ports: TrackRecordFeedPorts): TrackRecordF
     tick,
   };
 }
-
-// ── Moa's read-only view ────────────────────────────────────────────────────
-
-/**
- * The track record as one block for Moa's turn context, or null when there is
- * nothing to say. Counts only; workspace names are user text and go through
- * the same sanitizer as the view-context line.
- */
-export function renderTrackRecordContext(
-  data: TrackRecordData,
-  now: number,
-  nameOf: (workspaceId: string) => string | undefined,
-): string | null {
-  const rows = rollupRows(data, now, TRACK_CONTEXT_WEEKS).slice(0, MAX_CONTEXT_ROWS);
-  if (rows.length === 0) return null;
-  const lines = rows.map((r) => {
-    const name = sanitizeContextValue(nameOf(r.workspaceId), 60);
-    const avg = r.done > 0 ? ` (avg ${formatDuration(r.doneMs / r.done)})` : '';
-    return (
-      `- "${name}" (${sanitizeContextValue(r.workspaceId, 80)}) ${sanitizeContextValue(r.agent, 24)}: ` +
-      `${r.delegations} delegated, ${r.done} done${avg}, ${r.nudges} nudges, ${r.decisions} decisions, ` +
-      `${r.stalls} stalls, ${r.approvalsLane} approvals pressed by rule, ${r.approvalsHuman} by a person`
-    );
-  });
-  return [
-    `[wmux track record] Last ${TRACK_CONTEXT_WEEKS} weeks, per workspace and agent, counted by wmux from its own task data.`,
-    'Use it to pick where to delegate; you cannot change it.',
-    ...lines,
-    VIEW_CONTEXT_DISCLAIMER,
-  ].join('\n');
-}
-
-export interface TrackContextMemory {
-  /**
-   * The block for this brain turn, or null. Only while Moa is on, only for Moa
-   * (the HQ, or with no HQ designated each workspace's own brain), and only when
-   * it differs from what that brain's conversation already got, so an idle week
-   * costs no tokens. The block is pending until the turn is settled.
-   */
-  take: (
-    workspaceId: string,
-    opts: { moaEnabled: boolean; hq: string | null; data: TrackRecordData; now: number; nameOf: (id: string) => string | undefined },
-  ) => string | null;
-  /** The turn ended: a delivered block counts as shown; an errored one is sent again. */
-  settle: (workspaceId: string, delivered: boolean) => void;
-  /** The conversation was reset or retired: the next turn gets the block again. */
-  forget: (workspaceId: string) => void;
-}
-
-/** Changed-only memory for the block, settled like the deck's ambient blocks. */
-export function createTrackContextMemory(): TrackContextMemory {
-  const shown = new Map<string, string>();
-  const pending = new Map<string, string>();
-  return {
-    take: (workspaceId, opts) => {
-      if (!opts.moaEnabled || (opts.hq !== null && workspaceId !== opts.hq)) return null;
-      const block = renderTrackRecordContext(opts.data, opts.now, opts.nameOf);
-      if (!block || shown.get(workspaceId) === block) return null;
-      pending.set(workspaceId, block);
-      return block;
-    },
-    settle: (workspaceId, delivered) => {
-      const block = pending.get(workspaceId);
-      if (block === undefined) return;
-      pending.delete(workspaceId);
-      if (delivered) shown.set(workspaceId, block);
-    },
-    forget: (workspaceId) => {
-      shown.delete(workspaceId);
-      pending.delete(workspaceId);
-    },
-  };
-}
-
-/** The app's memory, used by the deck handler. */
-export const trackContextMemory = createTrackContextMemory();
 
 // ── The app's instance ──────────────────────────────────────────────────────
 

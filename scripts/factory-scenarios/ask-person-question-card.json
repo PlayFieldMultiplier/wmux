@@ -1,0 +1,23 @@
+{
+  "name": "ask-person-question-card",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A message in a PR thread wakes the lead, which asks the owner (ask_person, no thread named). The question lands as an open question card backed by a decision in that PR thread; the owner's answer resolves it, comes back as an answer handoff and wakes the asker in the same thread.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "script": { "turns": [
+        { "steps": [ { "tool": "ask_person", "args": { "title": "Merge order?", "body": "Ship this before or after the release?", "options": ["ship", "hold"] } } ] },
+        { "steps": [ { "tool": "room_post", "args": { "kind": "status", "title": "Answer received", "body": "Proceeding with the owner's choice." } } ] }
+      ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "msg", "post": { "threadId": "pr:github.com/acme/app#5", "title": "Order", "body": "Lead, what order for this one?", "to": "lead" } },
+    { "do": "waitFor", "label": "question open", "cond": { "cards": { "kind": "question", "state": "open" } }, "timeoutMs": 60000, "required": true },
+    { "do": "resolve", "label": "answer", "card": { "kind": "question", "state": "open" }, "resolution": "ship" },
+    { "do": "waitFor", "label": "asker woken", "cond": { "wakes": { "bot": "lead", "reason": "handoff", "state": "done" } }, "timeoutMs": 60000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 2000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes", "handoffs"], "bot": "lead", "thread": "pr:github.com/acme/app#5", "answer": "ship" }
+}

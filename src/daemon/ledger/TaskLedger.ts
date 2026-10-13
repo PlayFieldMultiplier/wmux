@@ -48,6 +48,7 @@ import {
   canTransition,
   isLedgerStatus,
   type LedgerActor,
+  type LedgerDispatch,
   type LedgerEntry,
   type LedgerGateResult,
   type LedgerStatus,
@@ -96,6 +97,7 @@ export interface LedgerRegisterInput {
   ownerWorkspaceId: string;
   title: string;
   actor?: LedgerActor;
+  dispatch?: LedgerDispatch;
 }
 
 export interface LedgerUpdateInput {
@@ -168,6 +170,10 @@ export interface TaskLedgerOptions {
   /** Called with every entry id the retention prune drops, so a host can
    *  release what it keyed on the id. */
   onPrune?: (id: string) => void;
+  /** Applied to every entry before it is written or kept: main's host
+   *  passes the redaction of stored bot secrets (factory/secretRedaction.ts).
+   *  Returns the entry itself when nothing changed. */
+  redact?: <T>(value: T) => T;
 }
 
 const SYSTEM_ACTOR = (workspaceId = 'daemon'): LedgerActor => ({ kind: 'system', workspaceId });
@@ -201,6 +207,8 @@ function boundGate(gate: LedgerGateResult): LedgerGateResult {
     recordedBy: 'system',
     // Carry the no-gate label through so the persisted entry says why exitCode is 0.
     ...(gate.skipped === 'no_gate_command' ? { skipped: 'no_gate_command' as const } : {}),
+    // The HEAD the gate ran on, kept only when it is a full commit SHA.
+    ...(typeof gate.headSha === 'string' && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(gate.headSha) ? { headSha: gate.headSha } : {}),
   };
 }
 
@@ -215,6 +223,15 @@ function isEntryShape(v: unknown): v is LedgerEntry {
     typeof e.rev === 'number' &&
     typeof e.updatedAt === 'number'
   );
+}
+
+function copyDispatch(d: LedgerDispatch): LedgerDispatch {
+  return {
+    origin: { kind: d.origin.kind, ...(d.origin.botId ? { botId: d.origin.botId } : {}), ...(typeof d.origin.tainted === 'boolean' ? { tainted: d.origin.tainted } : {}) },
+    ...(d.preset ? { preset: d.preset } : {}),
+    ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
+    ...(d.threadId ? { threadId: d.threadId } : {}),
+  };
 }
 
 function isOrphanShape(v: unknown): v is OrphanedEvent {
@@ -237,6 +254,7 @@ export class TaskLedger {
   private readonly orphanMaxBytes: number;
   private readonly log: (line: string) => void;
   private readonly onPrune: (id: string) => void;
+  private readonly redact: <T>(value: T) => T;
   private readonly entries = new Map<string, LedgerEntry>();
   private orphans: OrphanedEvent[] = [];
   private readonly listeners = new Set<(t: LedgerTransition) => void>();
@@ -257,6 +275,7 @@ export class TaskLedger {
     this.orphanMaxBytes = opts.orphanMaxBytes ?? LEDGER_ORPHAN_MAX_BYTES;
     this.log = opts.log ?? (() => undefined);
     this.onPrune = opts.onPrune ?? (() => undefined);
+    this.redact = opts.redact ?? (<T>(value: T) => value);
     const loaded = this.replay();
     this.skippedLines = loaded.skipped;
     this.recoveredFromRotated = loaded.recovered;
@@ -318,9 +337,19 @@ export class TaskLedger {
   register(input: LedgerRegisterInput): Promise<LedgerEntry> {
     return this.serialize(async () => {
       const existing = this.entries.get(input.id);
-      if (existing) return existing;
+      if (existing) {
+        // A row mirrored before its fan-out registered it (the reconciler)
+        // gets the dispatch once; a recorded dispatch is never replaced.
+        if (input.dispatch && !existing.dispatch) {
+          const entry: LedgerEntry = this.redact({ ...existing, dispatch: copyDispatch(input.dispatch) });
+          await this.append({ op: 'entry', entry });
+          this.entries.set(entry.id, entry);
+          return entry;
+        }
+        return existing;
+      }
       const by = input.actor ?? SYSTEM_ACTOR();
-      const entry: LedgerEntry = {
+      const entry: LedgerEntry = this.redact({
         schemaVersion: LEDGER_SCHEMA_VERSION,
         id: input.id,
         taskWorkspaceId: input.taskWorkspaceId,
@@ -330,7 +359,8 @@ export class TaskLedger {
         rev: 1,
         updatedAt: this.now(),
         updatedBy: by,
-      };
+        ...(input.dispatch ? { dispatch: copyDispatch(input.dispatch) } : {}),
+      });
       await this.append({ op: 'entry', entry });
       this.entries.set(entry.id, entry);
       this.emit({ entry, from: null, to: 'working', by });
@@ -428,14 +458,14 @@ export class TaskLedger {
       forcedReason !== undefined
         ? truncateHead(`${base ? `${base} ` : ''}[forced: ${forcedReason}]`, LEDGER_SUMMARY_MAX_BYTES)
         : base;
-    const updated: LedgerEntry = {
+    const updated: LedgerEntry = this.redact({
       ...entry,
       status: next,
       rev: entry.rev + 1,
       updatedAt: this.now(),
       updatedBy: input.actor,
       ...(summary !== undefined ? { summary } : {}),
-    };
+    });
     try {
       await this.append({ op: 'entry', entry: updated });
     } catch (err) {
@@ -448,7 +478,7 @@ export class TaskLedger {
       to: next,
       by: input.actor,
       ...(updated.summary !== undefined ? { summary: updated.summary } : {}),
-      ...(forcedReason !== undefined ? { forcedReason } : {}),
+      ...(forcedReason !== undefined ? { forcedReason: this.redact(forcedReason) } : {}),
     });
     return { ok: true, entry: updated };
   }
@@ -482,13 +512,13 @@ export class TaskLedger {
           entry,
         };
       }
-      const updated: LedgerEntry = {
+      const updated: LedgerEntry = this.redact({
         ...entry,
         gate: boundGate(gate),
         rev: entry.rev + 1,
         updatedAt: this.now(),
         updatedBy: actor,
-      };
+      });
       try {
         await this.append({ op: 'entry', entry: updated });
       } catch (err) {
@@ -507,14 +537,14 @@ export class TaskLedger {
       const entry = this.entries.get(id);
       if (!entry) return null;
       if (entry.status === 'completed' || entry.status === 'cancelled') return entry;
-      const updated: LedgerEntry = {
+      const updated: LedgerEntry = this.redact({
         ...entry,
         status: 'cancelled',
         rev: entry.rev + 1,
         updatedAt: this.now(),
         updatedBy: actor,
         summary: truncateHead(summary, LEDGER_SUMMARY_MAX_BYTES),
-      };
+      });
       try {
         await this.append({ op: 'entry', entry: updated });
       } catch (err) {
@@ -533,7 +563,8 @@ export class TaskLedger {
    *  events are dropped (and logged) before this one is appended. */
   recordOrphanedEvent(event: OrphanedEvent): Promise<void> {
     return this.serialize(async () => {
-      const next = [...this.orphans, event];
+      const clean = this.redact(event);
+      const next = [...this.orphans, clean];
       let bytes = next.reduce((n, o) => n + orphanBytes(o), 0);
       let dropped = 0;
       while (next.length > 1 && (next.length > this.orphanMaxCount || bytes > this.orphanMaxBytes)) {
@@ -544,7 +575,7 @@ export class TaskLedger {
       if (dropped > 0) {
         this.log(`[ledger] orphan backlog over cap — dropped ${dropped} oldest parked event(s)`);
       }
-      await this.append({ op: 'orphaned_event', event });
+      await this.append({ op: 'orphaned_event', event: clean });
       this.orphans = next;
     });
   }

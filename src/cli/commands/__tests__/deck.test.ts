@@ -19,25 +19,13 @@ import {
   setDeckWorkBootId,
 } from '../../../main/deck/deckWorkStore';
 import {
-  startLoop,
-  loadWorkspaceLoopState,
-} from '../../../main/deck/deckLoopStateStore';
-import {
   setWorkspaceMode,
   getDeckAutonomyPath,
 } from '../../../main/deck/deckAutonomyStore';
 import {
-  saveCommanderSession,
-  loadCommanderSession,
-} from '../../../main/deck/commanderSessionStore';
-import {
   raiseDecision,
   loadWorkspaceDecision,
 } from '../../../main/deck/deckDecisionStore';
-import {
-  saveDeckSchedules,
-  loadDeckSchedules,
-} from '../../../main/deck/deckScheduleStore';
 import type { RpcResponse } from '../../../shared/rpc';
 import { reconcileOrphanDeckState } from '../../../main/deck/deckOrphanReconcile';
 
@@ -95,47 +83,14 @@ async function seedFixture(targetDir: string, oldTimestamp = true) {
   beginOrContinueDeckWork('ws-live', 'work live', targetDir, ts);
   setDeckWorkBootId('boot-fixture');
 
-  // 2. deck-loop-state.json: ws-orphan1, ws-orphan3, ws-live
-  await startLoop('ws-orphan1', { objective: 'loop 1', steps: [] }, targetDir);
-  await startLoop('ws-orphan3', { objective: 'loop 3', steps: [] }, targetDir);
-  await startLoop('ws-live', { objective: 'loop live', steps: [] }, targetDir);
-
-  // 3. deck-autonomy.json: ws-orphan2, ws-orphan3, ws-live
+  // 2. deck-autonomy.json: ws-orphan2, ws-orphan3, ws-live
   await setWorkspaceMode('ws-orphan2', 'danger', targetDir);
   await setWorkspaceMode('ws-orphan3', 'assist', targetDir);
   await setWorkspaceMode('ws-live', 'danger', targetDir);
 
-  // 4. deck-commander.json: ws-orphan1, ws-orphan2::roleA, ws-live
-  await saveCommanderSession('ws-orphan1', 'sess-1', targetDir);
-  await saveCommanderSession('ws-orphan2::roleA', 'sess-2', targetDir);
-  await saveCommanderSession('ws-live', 'sess-live', targetDir);
-
-  // 5. deck-decisions.json: ws-orphan1, ws-live
+  // 3. deck-decisions.json: ws-orphan1, ws-live
   await raiseDecision('ws-orphan1', { question: 'q1', options: ['yes', 'no'], context: 'c1' }, targetDir);
   await raiseDecision('ws-live', { question: 'q live', options: ['a', 'b'], context: 'c live' }, targetDir);
-
-  // 6. deck-schedules.json: ws-orphan3, ws-live
-  await saveDeckSchedules(
-    [
-      {
-        id: 'sched-orphan3',
-        workspaceId: 'ws-orphan3',
-        prompt: 'prompt 3',
-        nextRunAt: Date.now() + 10000,
-        enabled: true,
-        createdAt: Date.now(),
-      },
-      {
-        id: 'sched-live',
-        workspaceId: 'ws-live',
-        prompt: 'prompt live',
-        nextRunAt: Date.now() + 20000,
-        enabled: true,
-        createdAt: Date.now(),
-      },
-    ],
-    targetDir,
-  );
 }
 
 beforeEach(() => {
@@ -271,9 +226,9 @@ describe('wmux deck CLI', () => {
 
       expect(code).toBe(0);
       const output = logs.join('\n');
-      expect(output).toContain('ws-orphan1: deck-commander.json, deck-decisions.json, deck-loop-state.json, deck-work.json');
-      expect(output).toContain('ws-orphan2: deck-autonomy.json, deck-commander.json, deck-work.json');
-      expect(output).toContain('ws-orphan3: deck-autonomy.json, deck-loop-state.json, deck-schedules.json');
+      expect(output).toContain('ws-orphan1: deck-decisions.json, deck-work.json');
+      expect(output).toContain('ws-orphan2: deck-autonomy.json, deck-work.json');
+      expect(output).toContain('ws-orphan3: deck-autonomy.json');
       expect(output).toContain('orphans: 3');
 
       // Crucial: no file changed
@@ -291,22 +246,9 @@ describe('wmux deck CLI', () => {
       const json = JSON.parse(logs.join('\n'));
       expect(json.orphans).toEqual(['ws-orphan1', 'ws-orphan2', 'ws-orphan3']);
       expect(json.count).toBe(3);
-      expect(json.files['ws-orphan1']).toEqual([
-        'deck-commander.json',
-        'deck-decisions.json',
-        'deck-loop-state.json',
-        'deck-work.json',
-      ]);
-      expect(json.files['ws-orphan2']).toEqual([
-        'deck-autonomy.json',
-        'deck-commander.json',
-        'deck-work.json',
-      ]);
-      expect(json.files['ws-orphan3']).toEqual([
-        'deck-autonomy.json',
-        'deck-loop-state.json',
-        'deck-schedules.json',
-      ]);
+      expect(json.files['ws-orphan1']).toEqual(['deck-decisions.json', 'deck-work.json']);
+      expect(json.files['ws-orphan2']).toEqual(['deck-autonomy.json', 'deck-work.json']);
+      expect(json.files['ws-orphan3']).toEqual(['deck-autonomy.json']);
 
       expect(snapshotDir(dir)).toEqual(beforeSnap);
     });
@@ -314,7 +256,7 @@ describe('wmux deck CLI', () => {
     it('prints orphans: 0 and exits 0 when no orphans exist', async () => {
       // Seed only live workspace
       beginOrContinueDeckWork('ws-live', 'live work', dir);
-      await startLoop('ws-live', { objective: 'live loop', steps: [] }, dir);
+      await setWorkspaceMode('ws-live', 'danger', dir);
       const beforeSnap = snapshotDir(dir);
 
       const { deps, logs } = createMockDeps();
@@ -353,7 +295,7 @@ describe('wmux deck CLI', () => {
       expect(output).toContain('torn down: ws-orphan1, ws-orphan2, ws-orphan3');
       expect(output).toContain('orphans: 0');
 
-      // Check all 6 files: only ws-live remains!
+      // Check all 3 files: only ws-live remains!
       // 1. Work store
       expect(loadActiveDeckWork('ws-orphan1', dir)).toBeNull();
       expect(loadActiveDeckWork('ws-orphan2', dir)).toBeNull();
@@ -364,30 +306,15 @@ describe('wmux deck CLI', () => {
       expect(archived).toHaveLength(2);
       expect(archived.map((w) => w.workspaceId).sort()).toEqual(['ws-orphan1', 'ws-orphan2']);
 
-      // 2. Loop state
-      expect(loadWorkspaceLoopState('ws-orphan1', dir)).toBeNull();
-      expect(loadWorkspaceLoopState('ws-orphan3', dir)).toBeNull();
-      expect(loadWorkspaceLoopState('ws-live', dir)).not.toBeNull();
-
-      // 3. Autonomy
+      // 2. Autonomy
       const rawAutonomy = JSON.parse(fs.readFileSync(getDeckAutonomyPath(dir), 'utf8'));
       expect('ws-orphan2' in rawAutonomy).toBe(false);
       expect('ws-orphan3' in rawAutonomy).toBe(false);
       expect('ws-live' in rawAutonomy).toBe(true);
 
-      // 4. Commander session
-      expect(loadCommanderSession('ws-orphan1', dir)).toBeNull();
-      expect(loadCommanderSession('ws-orphan2::roleA', dir)).toBeNull();
-      expect(loadCommanderSession('ws-live', dir)).not.toBeNull();
-
-      // 5. Decision
+      // 3. Decision
       expect(loadWorkspaceDecision('ws-orphan1', dir)).toBeNull();
       expect(loadWorkspaceDecision('ws-live', dir)).not.toBeNull();
-
-      // 6. Schedule
-      const schedules = loadDeckSchedules(dir);
-      expect(schedules.find((s) => s.workspaceId === 'ws-orphan3')).toBeUndefined();
-      expect(schedules.find((s) => s.workspaceId === 'ws-live')).toBeDefined();
     });
 
     it('reports parked work younger than TTL as skipped when re-listing orphans', async () => {

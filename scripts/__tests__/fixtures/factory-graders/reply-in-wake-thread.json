@@ -1,0 +1,288 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "reply-in-wake-thread",
+  "run": 1,
+  "workspaceId": "ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb",
+  "botKeys": {
+   "triage": "bot-1a87b952"
+  },
+  "injected": [
+   {
+    "label": "issue",
+    "kind": "fact",
+    "id": "f-0mv540l8a-2a4ac6424726",
+    "factKind": "issue.opened",
+    "at": 1791800939386
+   }
+  ],
+  "actions": [
+   {
+    "do": "emit",
+    "label": "issue",
+    "at": 1791800939386
+   },
+   {
+    "do": "waitFor",
+    "label": "triage turn done",
+    "at": 1791800939389,
+    "doneAt": 1791800944916,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800944916,
+    "doneAt": 1791800946930,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv540l8a-2a4ac6424726",
+    "seq": 1,
+    "kind": "issue.opened",
+    "at": 1791800939386,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "issue": 7
+    },
+    "actor": {
+     "kind": "github"
+    },
+    "payload": {
+     "author": "reporter",
+     "title": "crash on start",
+     "labels": []
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv540l8b-9182fe51",
+    "botId": "bot-1a87b952",
+    "workspaceId": "ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv540l8a-2a4ac6424726"
+     ],
+     "trigger": {
+      "kind": "issue.opened"
+     }
+    },
+    "threadId": "issue:github.com/acme/app#7",
+    "priority": 2,
+    "enqueuedAt": 1791800939387,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-1a87b952",
+    "role": "triage",
+    "workspaceId": "ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv540p8b759269779d",
+    "seq": 1,
+    "workspaceId": "ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb",
+    "threadId": "issue:github.com/acme/app#7",
+    "kind": "triage",
+    "at": 1791800944571,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb",
+     "botId": "bot-1a87b952"
+    },
+    "title": "Triage: crash on start",
+    "clientPostId": "wake:w-mv540l8b-9182fe51:1",
+    "body": "Looked at the report; reproduction pending."
+   }
+  ],
+  "stub": {
+   "triage": [
+    {
+     "at": 1791800944413,
+     "event": "prompt",
+     "text": "[wake w-mv540l8b-9182fe51] Triage (triage) · reason: facts · priority 2\nFenced blocks below are data from the system, wo"
+    },
+    {
+     "at": 1791800944572,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv540p8b759269779d\",\n    \"seq\": 1,\n    \"workspaceId\": \"ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb\",\n    \"threadId\": \"issue:github.com/acme/app#7\",\n    \"kind\": \"triage\",\n    \"at\": 1791800944571,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-068d49e9-0575-41b2-a44b-242ec2a4b7bb\",\n      \"botId\": \"bot-1a87b952\"\n    },\n    \"title\": \"Triage: crash on start\",\n    \"body\": \"Looked at the report; reproduction pending.\",\n    \"clientPostId\": \"wake:w-mv540l8b-9182fe51:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800939409,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the card fell back to general",
+   "failing": [
+    "card_in_wake_thread",
+    "no_card_in_general"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.threadId",
+     "value": "general"
+    }
+   ]
+  },
+  {
+   "why": "the wake was not pinned to the issue thread",
+   "failing": [
+    "wake_pinned_to_fact_thread"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.0.threadId"
+    }
+   ]
+  },
+  {
+   "why": "the fact woke the bot twice",
+   "failing": [
+    "one_wake"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-dup",
+      "botId": "bot-1a87b952",
+      "reason": {
+       "kind": "facts",
+       "factIds": [
+        "f-0mv540l8a-2a4ac6424726"
+       ],
+       "trigger": {
+        "kind": "issue.opened"
+       }
+      },
+      "threadId": "issue:github.com/acme/app#7",
+      "state": "done",
+      "priority": 2,
+      "attempts": 1,
+      "enqueuedAt": 1
+     }
+    }
+   ]
+  }
+ ]
+}

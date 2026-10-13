@@ -21,10 +21,8 @@
 //   - panes:        the roster's pane display name and surface title rules
 //   - layout:       `rootPane` as PaneContainer draws it (direction, sizes,
 //                   tab order, active tab) and `activePaneId`
-//   - HQ / moa:     `state.moa` (main's Moa state), as `isMoaHqWorkspace`
-//                   reads it
-//   - moaWakeBlocked: the HQ workspace's agent mode (DECK_MODE_GET), passed
-//                   in by the caller: `off` refuses every brain turn there
+//   - HQ, moa, moaWakeBlocked, factory: not here — main folds the agent
+//                   factory's fields in (main/phone/PhoneFactory.ts)
 //   - moaHandoff:   main's pending decisions (DECK_MOA_DECISIONS), passed in
 //                   by the caller: a pending hand-off card in that slot
 //   - moaDelegations: Fleet's own tickets (`buildFleetTickets` over main's
@@ -36,7 +34,6 @@
 
 import { getWorkspaceLeafPanes } from '../../shared/paneUtils';
 import { isBrainPtyId } from '../../shared/constants';
-import { moaHqId } from '../stores/slices/moaSlice';
 import {
   PHONE_LAYOUT_SURFACE_KINDS,
   PHONE_SIDEBAR_LIMITS,
@@ -79,7 +76,6 @@ import { selectWorkspaceAgentRoster, agentSurfaceTitle } from '../stores/selecto
 import { isTaskReadyForReview } from '../stores/selectors/reviewQueue';
 import { buildFleetTickets, type FleetTicket } from '../components/FleetView/fleetTickets';
 import type { WorkLink } from '../../shared/workLink';
-import type { AgentMode } from '../../main/deck/deckAutonomyStore';
 import { agentSlugToDisplay, isAgentSlug } from '../../shared/agentIdentity';
 
 function nonEmpty(value: string | undefined): string | undefined {
@@ -341,7 +337,6 @@ export function buildPhoneSidebarSnapshot(
   onDrop: SidebarDropReporter = () => undefined,
   moaDecisions?: readonly MoaPendingDecision[],
   workLinks?: { links: readonly WorkLink[]; now: number },
-  hqMode?: { workspaceId: string; mode: AgentMode },
 ): PhoneSidebarReply {
   const workspaces = state.workspaces;
   let handoffs = new Map<string, PhoneSidebarMoaHandoff>();
@@ -500,12 +495,6 @@ export function buildPhoneSidebarSnapshot(
     }
   }
 
-  // The Moa HQ, by the rule the desktop hides it with (`moaHqId`): the
-  // designated id, Moa on or off — the remembered id until main's first
-  // answer, so the phone does not show the HQ for a moment at boot. `moa`
-  // only while Moa is on and main reports its workspace present.
-  const hqId = moaHqId(state);
-  const hqWorkspaceId = isSidebarId(hqId) ? hqId : undefined;
   // Only with main's WorkLinks and decisions both in hand: an empty list must
   // mean "no jobs", and a job must not read as working because the decision
   // blocking it could not be read.
@@ -535,18 +524,10 @@ export function buildPhoneSidebarSnapshot(
     onDrop('nextScheduleAt');
   }
 
-  const moaOn = state.moa?.config.enabled === true && state.moa.hq.state === 'ok' && hqWorkspaceId !== undefined && liveIds.has(hqWorkspaceId);
-  // A wake would end 409 `moa-mode-off`: say so only for the HQ this snapshot
-  // names, and only on a mode main actually answered (no read → no claim).
-  const wakeBlocked = moaOn && hqMode?.workspaceId === hqWorkspaceId && hqMode.mode === 'off';
-
   return {
     activeWorkspaceId: state.activeWorkspaceId && liveIds.has(state.activeWorkspaceId) ? state.activeWorkspaceId : null,
     workspaces: workspaceRows,
     panes: paneRows,
-    ...(hqWorkspaceId !== undefined ? { hqWorkspaceId } : {}),
-    ...(moaOn ? { moa: true as const } : {}),
-    ...(wakeBlocked ? { moaWakeBlocked: 'moa-mode-off' as const } : {}),
     ...(moaDelegations ? { moaDelegations } : {}),
     ...(fleet ? { fleetTickets: fleet.tickets, [PHONE_FLEET_TICKET_DETAILS_KEY]: fleet.details } : {}),
     ...(nextScheduleAt !== undefined ? { nextScheduleAt } : {}),

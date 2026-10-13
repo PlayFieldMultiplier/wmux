@@ -33,10 +33,10 @@ const rail = () => container.querySelector<HTMLDivElement>('[data-sidebar-rail]'
 const navIds = () => [...container.querySelectorAll('[data-sidebar-nav]')].map((el) => el.getAttribute('data-sidebar-nav'));
 
 describe('sidebar icon rail', () => {
-  it('lists only pages — Workspaces, Fleet, Schedules, Remote and Git — each named', async () => {
+  it('lists only pages — Workspaces, Bots, Fleet, Schedules, Remote and Git — each named', async () => {
     await act(async () => root.render(<MiniSidebar rail collapsed={false} />));
     // Search & commands is a palette (the titlebar pill), not a page.
-    expect(navIds()).toEqual(['home', 'fleet', 'schedules', 'remote', 'git']);
+    expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git']);
     // Home is the current page until another is chosen.
     expect(container.querySelector('[data-sidebar-nav="home"]')?.getAttribute('aria-current')).toBe('page');
     for (const b of rail().querySelectorAll('button')) {
@@ -84,7 +84,7 @@ describe('sidebar icon rail', () => {
     expect(more().getAttribute('aria-expanded')).toBe('true');
     const menu = document.querySelector('[data-pane-actions-menu]')!;
     expect(menu.getAttribute('role')).toBe('menu');
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toEqual(['Command palette⌘K', 'Settings⌘,', 'Turn on Moa…', 'Keyboard shortcuts', 'Check for updates']);
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toEqual(['Command palette⌘K', 'Settings⌘,', 'Keyboard shortcuts', 'Check for updates']);
     expect(menu.querySelector('[data-pane-menu-footer]')?.textContent).toBe('wmux v9.9.9');
 
     act(() => item('command-palette')!.click());
@@ -117,21 +117,6 @@ describe('sidebar icon rail', () => {
     expect(document.activeElement).toBe(settingsButton);
     settingsButton.remove();
     delete (globalThis as { __APP_VERSION__?: string }).__APP_VERSION__;
-  });
-
-  it('offers Turn on Moa… only while Moa is off, opening Settings › Moa', async () => {
-    await act(async () => root.render(<MiniSidebar rail collapsed={false} />));
-    const more = () => container.querySelector<HTMLButtonElement>('[data-rail-more]')!;
-    const item = () => document.querySelector<HTMLButtonElement>('[data-pane-menu-action="turn-on-moa"]');
-    act(() => more().click());
-    expect(item()?.textContent).toBe('Turn on Moa…');
-    act(() => item()!.click());
-    expect(useStore.getState().appRoute).toBe('settings');
-    expect(useStore.getState().settingsInitialTab).toBe('moa');
-    act(() => useStore.setState({ appRoute: 'workspaces', settingsInitialTab: null, moa: { config: { enabled: true }, hq: { workspaceId: null, state: 'unset' } } as never }));
-    act(() => more().click());
-    expect(item()).toBeNull();
-    act(() => useStore.setState({ moa: null }));
   });
 
   it('closes the More menu on Escape and hands focus back to its button', async () => {
@@ -217,16 +202,15 @@ describe('Moa and the rail', () => {
   it('has no Moa entry: the panel is its home', async () => {
     useStore.setState({ workspaces: [ws('a'), ws('hq')], activeWorkspaceId: 'a', activeRemoteKey: null, moa: moa(true) } as never);
     await act(async () => root.render(<MiniSidebar rail collapsed={false} />));
-    expect(navIds()).toEqual(['home', 'fleet', 'schedules', 'remote', 'git']);
+    expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git']);
     expect(container.querySelector('[data-sidebar-nav="moa"]')).toBeNull();
   });
 
-  it('Workspaces leads back from the HQ to the first listed workspace', async () => {
-    useStore.setState({ workspaces: [ws('hq'), ws('a')], activeWorkspaceId: 'hq', activeRemoteKey: null, appRoute: 'workspaces', moa: moa(true) } as never);
+  it('Workspaces keeps an earlier version\'s HQ workspace active: it is an ordinary one', async () => {
+    useStore.setState({ workspaces: [ws('hq'), ws('a')], activeWorkspaceId: 'hq', activeRemoteKey: null, appRoute: 'workspaces', moa: null } as never);
     await act(async () => root.render(<MiniSidebar rail collapsed={false} />));
-    expect(current()).toEqual(['home']);
     act(() => container.querySelector<HTMLButtonElement>('[data-sidebar-nav="home"]')!.click());
-    expect(useStore.getState().activeWorkspaceId).toBe('a');
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
     expect(current()).toEqual(['home']);
   });
 });

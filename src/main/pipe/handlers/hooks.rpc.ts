@@ -55,7 +55,6 @@ import type { DaemonClient } from '../../DaemonClient';
 import type { ResumeBinding, PermissionMode } from '../../../shared/agentResume';
 import { readLastAssistantMessage } from '../../claude/lastAssistantMessage';
 import { deliverBrainPtyHookSignal } from '../../deck/brainPtyHookBus';
-import { noteBrainHookSignal } from '../../deck/moaPaneFeed';
 import { getWorkspaceMirror, type WorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { isStaleInterruptedStop, normalizeHookCue, type CompletionAlarm } from '../../../shared/hooks/CompletionAlarm';
 import type { AgentLastMessage } from '../../../shared/events';
@@ -550,9 +549,6 @@ export function registerHooksRpc(
     //     (the HQ brain's view pointer), carried the same way.
     const brainVerdict = deliverBrainPtyHookSignal(signal);
     if (brainVerdict.consumed) {
-      // The daemon never sees a brain's hooks, so the Moa pane's transcript
-      // reaches it only through the Moa pane feed (phone turn view).
-      noteBrainHookSignal(signal);
       if (brainVerdict.block) return { ok: true, block: { reason: brainVerdict.block } };
       if (brainVerdict.additionalContext) return { ok: true, additionalContext: brainVerdict.additionalContext };
       return { ok: true };

@@ -30,8 +30,6 @@ function render(bindings: OrchestratorRoleBindings): string {
       bindings,
       onApply: () => undefined,
       onOpenTab: () => undefined,
-      deckBrainModel: 'claude-sonnet-5-5',
-      deckBrainEffort: 'medium',
       t,
     }),
   );
@@ -82,12 +80,6 @@ describe('TokenUsageView', () => {
     expect(htmlOnlyBuilder).not.toContain('data-testid="token-shared-pane"');
   });
 
-  it('shows the Deck brain model and effort with a link to Moa settings', () => {
-    const html = render(BOUND);
-    expect(html).toContain('claude-sonnet-5-5 · medium');
-    expect(html).toContain('Open Moa settings');
-  });
-
   it('toggles Custom panel when clicking the badge or using keyboard', () => {
     const container = document.createElement('div');
     const root = createRoot(container);
@@ -97,8 +89,6 @@ describe('TokenUsageView', () => {
           bindings: BOUND,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -157,8 +147,6 @@ describe('TokenUsageView', () => {
           bindings: BOUND,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -195,8 +183,6 @@ describe('TokenUsageView', () => {
           bindings: BOUND,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -257,8 +243,6 @@ describe('TokenUsageView', () => {
           bindings: singleBound,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -311,8 +295,6 @@ describe('TokenUsageView', () => {
           bindings: BOUND,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -358,8 +340,6 @@ describe('TokenUsageView', () => {
           bindings: singleBound,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -417,8 +397,6 @@ describe('TokenUsageView', () => {
           bindings: singleBound1,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -431,8 +409,6 @@ describe('TokenUsageView', () => {
           bindings: singleBound2,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -506,8 +482,6 @@ describe('TokenUsageView', () => {
           bindings: dualBound,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );
@@ -549,8 +523,6 @@ describe('TokenUsageView', () => {
           bindings: unsupportedBound,
           onApply: () => undefined,
           onOpenTab: () => undefined,
-          deckBrainModel: 'claude-sonnet-5-5',
-          deckBrainEffort: 'medium',
           t,
         }),
       );

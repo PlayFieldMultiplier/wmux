@@ -179,8 +179,11 @@ import {
   type WireResponse,
 } from './chatWire';
 import { MOA_WAKE_RETRY_AFTER, type MoaWakeService, type MoaWakeWire } from '../phone/MoaWakeService';
-import { MOA_WAKE_COMMAND } from '../../shared/moaWake';
+import { FACTORY_PHONE_MESSAGE_CAPABILITY, MOA_WAKE_COMMAND } from '../../shared/moaWake';
 import { FLEET_TICKET_ROUTE_PREFIX, fleetTicketDetailResponse, fleetTicketsFields } from './fleetTickets';
+import { factoryOn, moaConfigFields } from './factoryConfig';
+import { ROOMS_ROUTE, roomsResponse, roomsSupported } from './rooms';
+import { BOT_APPROVALS_ROUTE, botApprovalsResponse, botApprovalsSupported } from './botApprovals';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
 // Type only — the channel service implementation stays out of this module.
@@ -2750,29 +2753,39 @@ export class WebTerminalServer {
         // Moa (the desktop's HQ main bot) is on and its HQ workspace exists.
         // OMITTED, not false, otherwise — Moa off, no HQ, no desktop attached,
         // or an older desktop or daemon: the phone reads all of them as "no Moa".
-        ...(sidebar?.moa === true ? { moa: true } : {}),
-        // The Moa pane's session id, for its turns, chat and input routes.
-        // Only beside `moa` and only while main vouches for a live HQ brain
-        // TUI (see moaSession): omitted with Moa off, the HQ missing or
-        // changed, or before the brain's first turn has started its TUI.
-        ...(sidebar?.moa === true ? this.moaSessionIdField() : {}),
-        // `POST /api/moa/messages` can start Moa's brain: Moa on, no Moa pane
-        // yet, an attached desktop that announced `moa.wake`, and a caller
-        // the chat write gates admit. Omitted otherwise.
         //
-        // Where every one of those holds but the desktop says the HQ's agent
-        // mode is off, the wake would only end 409 `moa-mode-off`: serve
-        // `moaWakeBlocked` with that reason INSTEAD of `moaWake`, so the phone
-        // can say why rather than offer a send that fails. Never both.
-        ...(sidebar?.moa === true && this.moaSessionIdField().moaSessionId === undefined &&
-          this.deps.moaWake && this.availableDesktop()?.supports(MOA_WAKE_COMMAND) &&
-          this.chatWriteRefusal(principal) === null
-          ? (sidebar.moaWakeBlocked === 'moa-mode-off' ? { moaWakeBlocked: 'moa-mode-off' } : { moaWake: true })
-          : {}),
+        // `moaSessionId`: the Moa pane's session id, for its turns, chat and
+        // input routes. Only beside `moa` and only while main vouches for a
+        // live HQ brain TUI (see moaSession): omitted with Moa off, the HQ
+        // missing or changed, or before the brain's first turn has started
+        // its TUI.
+        //
+        // `moaWake`: `POST /api/moa/messages` can start Moa's brain: Moa on,
+        // no Moa pane yet, an attached desktop that announced `moa.wake`, and
+        // a caller the chat write gates admit. Omitted otherwise. Where every
+        // one of those holds but the desktop says the HQ's agent mode is off,
+        // the wake would only end 409 `moa-mode-off`: serve `moaWakeBlocked`
+        // with that reason INSTEAD of `moaWake`. Never both.
+        //
+        // With the desktop's agent factory on, Moa is its HQ bot and these
+        // keys follow the factory instead (`factory`, `rooms`; see
+        // factoryConfig.ts).
+        ...moaConfigFields({
+          sidebar,
+          legacySessionId: () => this.moaSessionIdField().moaSessionId,
+          writable: !!this.deps.moaWake && this.chatWriteRefusal(principal) === null,
+          supportsWake: this.availableDesktop()?.supports(MOA_WAKE_COMMAND) === true,
+          supportsFactory: this.availableDesktop()?.supports(FACTORY_PHONE_MESSAGE_CAPABILITY) === true,
+          roomsReadable: this.opts?.allowTranscript === true && roomsSupported(this.availableDesktop()),
+          roomsClient: clientCaps(req).roomsV1 === true,
+        }),
         // Phone channel Inbox (§9): the four `/api/channels*` routes answer
         // here. OMITTED, not false, exactly when they would answer 503
         // `channels-unavailable` — the shape a pre-channels daemon serves.
         ...(this.deps.channels ? { channels: true } : {}),
+        // `/api/bot-approvals/*` answer here: the operator token and a
+        // desktop that announced both commands. OMITTED otherwise.
+        ...(principal.kind === 'operator' && botApprovalsSupported(this.availableDesktop()) ? { botApprovals: true } : {}),
         // Whether `/api/devices` answers here, and how much of the roster this
         // caller may see and act on (see handleDeviceList). OMITTED, not
         // false, when the device store cannot list, revoke and set grants —
@@ -2965,6 +2978,23 @@ export class WebTerminalServer {
     if (req.method === 'GET' && p.startsWith(FLEET_TICKET_ROUTE_PREFIX)) {
       void fleetTicketDetailResponse(p.slice(FLEET_TICKET_ROUTE_PREFIX.length), { allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop() })
         .then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'}));
+      return;
+    }
+    const roomsRoute = req.method === 'GET' ? ROOMS_ROUTE.exec(p) : null;
+    if (roomsRoute) {
+      void roomsResponse(roomsRoute[1], roomsRoute[2] as 'threads' | 'cards', url.searchParams, { allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop() })
+        .then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'}));
+      return;
+    }
+    // A bot's approval request, read or decided by the operator (botApprovals.ts).
+    const botApprovalRoute = BOT_APPROVALS_ROUTE.exec(p);
+    if (botApprovalRoute && ((req.method === 'GET' && !botApprovalRoute[2]) || (req.method === 'POST' && botApprovalRoute[2]))) {
+      const answer = (body: unknown) => void botApprovalsResponse(botApprovalRoute[1], botApprovalRoute[2] ? 'decision' : 'get', body, { operator: principal.kind === 'operator', desktop: this.availableDesktop(), readOnly: this.opts?.allowInput !== true })
+        .then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'}));
+      if (req.method === 'GET') answer(undefined);
+      else if (principal.kind !== 'operator') this.json(res,403,{error:'operator-only'},{'Cache-Control':'no-store'});
+      else if (this.opts?.allowInput !== true) this.json(res,403,{error:'read-only'},{'Cache-Control':'no-store'});
+      else this.readJsonBody(req,res,answer);
       return;
     }
     if ((req.method === 'GET' && p === '/api/desktop-workspaces') || (req.method === 'POST' && p === '/api/workspaces')) return this.handlePhoneWorkspaces(req,res,url,principal);
@@ -3654,8 +3684,12 @@ export class WebTerminalServer {
           if (!value && raw !== undefined) drops.report('sidebar.notSnapshot');
           this.warnDesktopSidebar(drops.summary());
           if (value) {
+            const wasFactory = factoryOn(this.desktopSidebarCache?.value ?? null);
             this.desktopSidebarCache = { at: this.now(), value };
             this.desktopSidebarFailedAt = 0;
+            // The `moa` event names no pane while the factory is on: a switch
+            // either way re-sends it.
+            if (factoryOn(value) !== wasFactory) this.emitMoaChanged();
           } else {
             // The desktop answered and has no sidebar to give (an older build,
             // or a renderer still starting): nothing to keep serving.
@@ -5433,6 +5467,22 @@ export class WebTerminalServer {
         // since gone away — replays; it never becomes a wake or a second send.
         const prior = this.moaPriorSend(owner, cmid, text);
         if (prior) return this.json(res, prior.status, prior.body);
+        // A desktop whose agent factory is on takes the message as a queued
+        // wake for its HQ bot (a room card answers it). Off: main says so,
+        // the receipt is released, and the Moa path below runs unchanged.
+        if (wake && this.availableDesktop()?.supports(FACTORY_PHONE_MESSAGE_CAPABILITY)) {
+          const queued = await wake.factoryMessage({
+            owner, clientMessageId: cmid, text, ...(caller.kind === 'device' ? { deviceId: caller.deviceId } : {}),
+          });
+          if (queued) {
+            if (caller.kind === 'device') {
+              try { this.deps.auditMoaSend?.({ deviceId: caller.deviceId, sessionId: 'moa-wake', route: 'wake' }); } catch { /* best-effort */ }
+            } else {
+              this.deps.log('info', '[web] Moa message queued for the factory by the operator');
+            }
+            return this.moaWire(res, queued);
+          }
+        }
         const sessionId = this.moaSessionIdField().moaSessionId;
         if (sessionId !== undefined) return this.moaDelegateSend(req, res, url, principal, caller, sessionId, cmid, text);
         if (!wake) return this.json(res, 503, { error: 'desktop-unavailable', clientMessageId: cmid });
@@ -5518,7 +5568,8 @@ export class WebTerminalServer {
     if (this.opts?.allowTranscript !== true) return this.refuseTranscript(res);
     const clientMessageId = decodePathSegment(rawMessageId) ?? '';
     const owner = chatOwner(principal);
-    const sessionId = this.moaSessionIdField().moaSessionId;
+    // With the factory on, Moa is a bot with no pane: no pane id rides along.
+    const sessionId = factoryOn(this.desktopSidebarCache?.value ?? null) ? undefined : this.moaSessionIdField().moaSessionId;
     const withPane = sessionId !== undefined ? { moaSessionId: sessionId } : {};
     const view = this.deps.moaWake?.().view(owner, clientMessageId) ?? null;
     if (view) {
@@ -5547,10 +5598,12 @@ export class WebTerminalServer {
    * every Moa pane push; it fires only when the resolved id changed.
    */
   emitMoaChanged(): void {
-    const sessionId = this.moaSessionIdField().moaSessionId ?? null;
+    const paneId = this.moaSessionIdField().moaSessionId ?? null;
+    if (paneId !== null) this.deps.moaWake?.().paneAppeared();
+    // With the factory on, Moa is a bot with no pane: the event names none.
+    const sessionId = factoryOn(this.desktopSidebarCache?.value ?? null) ? null : paneId;
     if (sessionId === this.lastMoaEventId) return;
     this.lastMoaEventId = sessionId;
-    if (sessionId !== null) this.deps.moaWake?.().paneAppeared();
     const body = JSON.stringify({ moaSessionId: sessionId });
     for (const client of this.eventClients) {
       try {
@@ -10076,6 +10129,8 @@ function sidebarWorkspaceFields(
     ...(row.gitIsWorktree !== undefined ? { gitIsWorktree: row.gitIsWorktree } : {}),
     ...(row.gitSync !== undefined ? { gitSync: row.gitSync } : {}),
     ...(row.moaHandoff !== undefined ? { moaHandoff: row.moaHandoff } : {}),
+    ...(row.bots !== undefined ? { bots: row.bots } : {}),
+    ...(row.openQuestions !== undefined ? { openQuestions: row.openQuestions } : {}),
     ...(taskSummary !== undefined ? { taskSummary } : {}),
     ...(task
       ? {
@@ -10219,6 +10274,8 @@ export interface ClientCaps {
   chatCancel?: boolean;
   /** Uses the daemon-held chat queue: a send carrying it is queued during a turn; `/turns` adds `chat.turn` and `chat.queue`. */
   chatQueue?: boolean;
+  /** Reads Moa's replies as room cards (`/api/rooms`): with the agent factory on, `/api/config` offers `moaWake` only to such a client. */
+  roomsV1?: boolean;
 }
 
 export const CLIENT_CAPS_HEADER = 'x-wmux-client-caps';
@@ -10227,6 +10284,7 @@ export const CLIENT_CAP_TERMINAL_PROMPT_DECLINE = 'terminal-prompt-decline';
 export const CLIENT_CAP_DECISION_V2 = 'decision-v2';
 export const CLIENT_CAP_CHAT_CANCEL = 'chat-cancel';
 export const CLIENT_CAP_CHAT_QUEUE = 'chat-queue';
+export const CLIENT_CAP_ROOMS_V1 = 'rooms-v1';
 
 export function clientCaps(req: http.IncomingMessage): ClientCaps {
   const raw = req.headers[CLIENT_CAPS_HEADER];
@@ -10238,6 +10296,7 @@ export function clientCaps(req: http.IncomingMessage): ClientCaps {
     decisionV2: tokens.has(CLIENT_CAP_DECISION_V2),
     chatCancel: tokens.has(CLIENT_CAP_CHAT_CANCEL),
     chatQueue: tokens.has(CLIENT_CAP_CHAT_QUEUE),
+    roomsV1: tokens.has(CLIENT_CAP_ROOMS_V1),
   };
 }
 

@@ -45,6 +45,7 @@ export function DeckDecisionCard({
   onStream,
   workspaceId,
   onPendingChange,
+  bare = false,
   t: tProp,
 }: {
   api?: DeckDecisionApi;
@@ -55,6 +56,9 @@ export function DeckDecisionCard({
    *  collapsed by default, so its header has to say a decision is waiting even
    *  though the card itself is hidden inside the rail body. */
   onPendingChange?: (pending: boolean) => void;
+  /** Inside a row that already draws the needs-you boundary (a room's
+   *  question card): no box and no eyebrow of its own. */
+  bare?: boolean;
   t?: (key: string) => string;
 }): React.ReactElement | null {
   const t = tProp ?? (() => '');
@@ -160,11 +164,11 @@ export function DeckDecisionCard({
   return (
     <div
       data-deck-decision
-      className="rounded-md px-4 py-3 space-y-2.5 border border-dashed border-[color-mix(in_srgb,var(--text-main)_30%,transparent)] bg-[color-mix(in_srgb,var(--text-main)_20%,transparent)]"
+      className={bare ? 'space-y-2.5' : 'rounded-md px-4 py-3 space-y-2.5 border border-dashed border-[color-mix(in_srgb,var(--text-main)_30%,transparent)] bg-[color-mix(in_srgb,var(--text-main)_20%,transparent)]'}
     >
-      <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--accent-yellow)]" {...tokenAttrs('warning', 'text')}>
+      {!bare && <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--accent-yellow)]" {...tokenAttrs('warning', 'text')}>
         {t('deck.decisionEyebrow') || 'Decision needed'}
-      </div>
+      </div>}
       <div
         className="text-[13px] font-semibold text-[var(--text-main)] leading-relaxed"
         {...tokenAttrs('textMain', 'text')}

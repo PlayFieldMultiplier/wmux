@@ -5,7 +5,7 @@ Settings is a full rail page (not a modal) with a searchable nav of 15 tabs grou
 ## Sub-features
 
 - `settings-open` / `settings-close`: open from the More menu or ⌘,; close with "Close" or Escape (⌘, toggles).
-- `settings-nav`: tabs General, Appearance, Terminal, Keyboard, Notifications, Claude Code, Accounts, Moa, Roles & fan-out, Token usage, Browser, Computer use, Remote & phone, LAN, About.
+- `settings-nav`: tabs General, Appearance, Terminal, Keyboard, Notifications, Claude Code, Accounts, Factory, Roles & fan-out, Token usage, Browser, Computer use, Remote & phone, LAN, About.
 - `settings-search`: "Search settings" with grouped results and an empty state.
 - `settings-theme`: Appearance › Theme radio cards (Tint, Paper, Mono, …).
 - `settings-language`: General › Language select (`en`, `ko`, `ja`, …).
@@ -15,7 +15,7 @@ Settings is a full rail page (not a modal) with a searchable nav of 15 tabs grou
 
 - Rail "More" button › "Settings ⌘," ("Settings Ctrl+," on Windows/Linux).
 - Shortcut ⌘, (Ctrl+,), which toggles.
-- Other features link into tabs (More › "Turn on Moa…" opens the Moa tab).
+- Other features link into tabs (the room dock's factory-off view opens the Factory tab).
 
 ## Driving it with control-wmux
 

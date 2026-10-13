@@ -45,11 +45,12 @@ import OnboardingOverlay from '../Onboarding/OnboardingOverlay';
 import FirstRunWizard from '../FirstRunWizard';
 import KeyboardCheatSheet from '../KeyboardCheatSheet';
 import ToastContainer from '../Toast/ToastContainer';
-import MoaHqMissingNotice from '../Moa/MoaHqMissingNotice';
 import { HooksInstallPromptContainer } from '../Deck/HooksInstallPrompt';
 import FloatingPane from '../Terminal/FloatingPane';
 import SearchResultsPanel from '../Search/SearchResultsPanel';
-import ChannelDock from '../Channels/ChannelDock';
+import RoomDock from '../Room/RoomDock';
+import { useRoomDockHint } from '../Room/roomDockGate';
+import { useRoomSync } from '../../hooks/useRoomSync';
 import { useDockMode } from './dockLayout';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { useKeyboard } from '../../hooks/useKeyboard';
@@ -65,7 +66,6 @@ import AgentMentionPicker from '../Palette/AgentMentionPicker';
 import HandoffPopover from '../Git/HandoffPopover';
 import { useWorkspaceMirrorPush } from '../../hooks/useWorkspaceMirrorPush';
 import { usePrivateBrowserCleanup } from '../../hooks/usePrivateBrowserCleanup';
-import { useMoaSync } from '../../hooks/useMoaSync';
 import { useResizeGuard } from '../../hooks/useResizeGuard';
 import { useApprovalInboxBridge } from '../../hooks/useApprovalInboxBridge';
 import { useBrowserHelpBridge } from '../../hooks/useBrowserHelpBridge';
@@ -112,7 +112,6 @@ import {
 import { isChatV2Covering } from '../ChatV2/coverage';
 import { overlayColors } from '../../utils/titlebarOverlay';
 import { dockShownOn } from './pagesBesideDock';
-import { selectDockOpen, selectMoaOn, useMoaDockGate } from './moaDockGate';
 
 interface ReconcilePtySession extends DeadPaneSessionSnapshot {
   id: string;
@@ -788,10 +787,10 @@ export default function AppLayout() {
   // theme (overlay colors) does — see useUiScaleSync below.
   useUiScaleSync(uiScale);
   const sidebarVisible = useStore((s) => s.sidebarVisible);
-  // The right panel renders only while Moa is on (moaDockGate); with Moa off
-  // the persisted open flag is kept but nothing is drawn.
-  const dockOpen = useStore(selectDockOpen);
-  useMoaDockGate();
+  // The right slot holds the room dock, open on the panel's own flag.
+  const dockOpen = useStore((s) => s.channelDockVisible);
+  useRoomSync();
+  useRoomDockHint();
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   // The dock never pushes the sheet past the window: when inline would leave
   // the panes under their floor, it collapses and reopens as an overlay
@@ -807,9 +806,6 @@ export default function AppLayout() {
   const dockAutoCollapsed = useRef(false);
   useEffect(() => {
     const st = useStore.getState();
-    // With Moa off there is no panel to collapse or restore: leave its flag,
-    // and forget a collapse from before, so it cannot reopen the panel later.
-    if (!selectMoaOn(st)) { dockAutoCollapsed.current = false; return; }
     if (dockMode === 'overlay' && st.channelDockVisible) {
       dockAutoCollapsed.current = true;
       st.setChannelDockVisible(false);
@@ -941,7 +937,6 @@ export default function AppLayout() {
   useWorkspaceMirrorPush();
   // Wipe the private-tab session when the last private browser tab closes.
   usePrivateBrowserCleanup();
-  useMoaSync();
   // S-C2 Approval Inbox bridge: the SINGLE owner of permissionPrompt.onOpen /
   // onClosed (guard #2). Always-on (not gated on fleetViewVisible) so MCP
   // prompts accumulate in the store before the cockpit's Approvals tab opens.
@@ -1653,31 +1648,6 @@ export default function AppLayout() {
     return () => window.removeEventListener(FIRST_RUN_REOPEN_EVENT, handler);
   }, []);
 
-  // Sync the orchestrator full-power toggle to MAIN, which is the authority
-  // every brain-turn path consults (typed, scheduled, event-woken). Fires on
-  // change AND once after session hydration flips the persisted value in, so
-  // a restart restores the mode for autonomous turns without a typed command.
-  // Fire-and-forget: a failed sync leaves main on the safe default (raw).
-  const deckBrainFullPowerLive = useStore((s) => s.deckBrainFullPower);
-  useEffect(() => {
-    void window.electronAPI?.deck?.fullPowerSet?.(deckBrainFullPowerLive);
-  }, [deckBrainFullPowerLive]);
-
-  // Same main-authority sync for the brain vendor (BYOB M0).
-  const deckBrainVendorLive = useStore((s) => s.deckBrainVendor);
-  useEffect(() => {
-    void window.electronAPI?.deck?.brainVendorSet?.(deckBrainVendorLive);
-  }, [deckBrainVendorLive]);
-
-  // …and for the orchestrator model. The composer still rides it on each send,
-  // but that path does not exist for the terminal brain (no composer — the TUI
-  // is the input) and never covered scheduled / event-woken turns.
-  const deckBrainModelLive = useStore((s) => s.deckBrainModel);
-  const deckBrainEffortLive = useStore((s) => s.deckBrainEffort);
-  useEffect(() => {
-    void window.electronAPI?.deck?.modelSet?.(deckBrainModelLive, deckBrainEffortLive);
-  }, [deckBrainModelLive, deckBrainEffortLive]);
-
   // An upgrader may answer the update question in Settings › General before
   // the queue reaches the prompt: any change after hydration answers it.
   const autoUpdateEnabled = useStore((s) => s.autoUpdateEnabled);
@@ -1695,7 +1665,7 @@ export default function AppLayout() {
   // The wizard owns the first impression; after it, the legacy update
   // question (upgraders only), the one-time "New: …" toast (upgraders only),
   // the spotlight tour (first visit to the Fleet page) and the keyboard cheat
-  // sheet (once, after the tour) each wait until nothing else is open — no
+  // sheet (once, after the tour, on Fleet) each wait until nothing else is open — no
   // dialog, no Settings panel, no other queued surface. Each start is latched
   // here: the surface's own modal layer must not count against itself.
   const firstBootNext = nextFirstBootSurface({
@@ -2203,15 +2173,15 @@ export default function AppLayout() {
       )}
       </div>
       {/* The dock stays interactive beside every rail page but Settings (they
-          cover only the sidebar and the panes, so Moa is in reach); Settings
+          cover only the sidebar and the panes, so the room is in reach); Settings
           covers it, inert, like the rest of the Workspaces page. Both dock
           modes live in this region: `contents` keeps the inline dock the same
           flex item it always was, and the overlay still positions against
           the sheet. */}
       <div className="contents" inert={!dockShownOn(appRoute) && !inspectModeActive} data-dock-region>
       {dockOpen && dockMode === 'inline' && (
-        <ErrorBoundary name="ChannelDock">
-          <ChannelDock />
+        <ErrorBoundary name="RoomDock">
+          <RoomDock />
         </ErrorBoundary>
       )}
       {/* Too narrow for the dock beside the panes: it floats over them on the
@@ -2221,8 +2191,8 @@ export default function AppLayout() {
           data-dock-overlay
           className={`absolute inset-y-0 z-30 flex max-w-full ${sidebarPosition === 'right' ? 'left-0' : 'right-0'}`}
         >
-          <ErrorBoundary name="ChannelDock">
-            <ChannelDock />
+          <ErrorBoundary name="RoomDock">
+            <RoomDock />
           </ErrorBoundary>
         </div>
       )}
@@ -2334,7 +2304,6 @@ export default function AppLayout() {
       )}
       <FloatingPane />
       <ToastContainer />
-      <MoaHqMissingNotice />
       <HooksInstallPromptContainer
         t={t}
         launchCheck={hooksLaunchCheck({ firstRunSettled: firstRunProbeSettled, firstRunWizardRanThisBoot })}

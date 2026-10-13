@@ -1,0 +1,988 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
+import { factDedupeKey, type Fact, type FactDraft } from '../../../shared/facts';
+import { HANDOFF_LIMITS } from '../../../shared/handoff';
+import type { ThreadId } from '../../../shared/room';
+import { WAKE_LIMITS, type WakeItem } from '../../../shared/wake';
+import { WakeQueue, wakeQueuePath } from '../wakeQueue';
+import { clearThreadDecision, loadThreadDecision, loadWorkspaceDecisions, raiseThreadDecisionIfFree, resolveThreadDecision } from '../../deck/deckDecisionStore';
+import {
+  DISMISSED_ANSWER,
+  HANDOFFS_FILENAME,
+  HANDOFF_STORE_LIMITS,
+  HandoffRouter,
+  deckDecisionPort,
+  handoffFromLegacy,
+  importLegacyMoaHandoffs,
+} from '../handoffRouter';
+import { runFactoryMigrations } from '../migrate';
+import { RoomWriter, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
+import { TriggerEngine, botSeesFact } from '../triggerEngine';
+import { handleRoomPost } from '../../pipe/handlers/room.rpc';
+import type { RpcContext } from '../../../shared/rpc';
+import { defaultTriggers } from '../roleDefaults';
+
+let dir = '';
+let now = 1_000_000_000_000;
+const routers: HandoffRouter[] = [];
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-wp5-handoffs-'));
+  now = 1_000_000_000_000;
+});
+
+afterEach(() => {
+  for (const r of routers.splice(0)) r.dispose();
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+});
+
+let botN = 0;
+function bot(ws: string, role: BotRole, extra: Partial<BotProfile> = {}): BotProfile {
+  botN += 1;
+  return {
+    version: 1, id: `bot-${botN.toString(16).padStart(8, '0')}`, workspaceId: ws, role, name: role, engine: { kind: 'claude-sdk' }, triggers: [],
+    budget: { maxTurnsPerHour: 1, maxTurnsPerDay: 1, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 1, turnTimeoutMs: 1 },
+    enabled: true, createdAt: botN, updatedAt: botN, ...extra,
+  };
+}
+
+function binding(b: BotProfile): BotBinding {
+  return { workspaceId: b.workspaceId, botId: b.id, role: b.role };
+}
+
+interface Harness {
+  router: HandoffRouter;
+  rooms: RoomWriter;
+  facts: Fact[];
+  wakes: Array<Parameters<FactoryRoomPorts['wakes']['enqueue']>[0]>;
+  dropWakesFor: Set<string>;
+  ports: Partial<FactoryRoomPorts>;
+  wake: { thread: ThreadId | null; id: { wakeId: string; attempt: number; handoffId?: string } | null };
+}
+
+async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: FactoryRoomPorts['wakes'] } = {}): Promise<Harness> {
+  const facts: Fact[] = [];
+  const subs = new Set<(f: Fact) => void>();
+  const rooms = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), now: () => now, log: () => undefined });
+  const factLog = {
+    append(d: FactDraft): Fact | null {
+      const key = factDedupeKey(d);
+      if (!key || facts.some((f) => f.dedupeKey === key)) return null;
+      const f: Fact = { ...d, id: `f-${facts.length + 1}`, seq: facts.length + 1, dedupeKey: key };
+      facts.push(f);
+      for (const s of subs) s(f);
+      return f;
+    },
+    subscribe(fn: (f: Fact) => void) {
+      subs.add(fn);
+      return () => subs.delete(fn);
+    },
+    readSince: () => ({ facts: [], cursor: null }),
+  };
+  const directory = { listEnabled: () => bots.filter((b) => b.enabled), get: (id: string) => bots.find((b) => b.id === id) ?? null };
+  const wakes: Harness['wakes'] = [];
+  const dropWakesFor = new Set<string>();
+  const wake: Harness['wake'] = { thread: null, id: null };
+  const ports: Partial<FactoryRoomPorts> = {
+    ...(opts.noFactLog ? {} : { factLog }),
+    bots: directory,
+    wakes: opts.wakes ?? {
+      enqueue(input) {
+        if (dropWakesFor.has(input.botId)) return null;
+        wakes.push(input);
+        return { id: `w-${wakes.length}`, ...input, enqueuedAt: now, attempts: 0, state: 'queued' } as WakeItem;
+      },
+    },
+    currentWakeThread: () => wake.thread,
+    currentWake: () => wake.id,
+  };
+  // What the room module does with every fact.
+  factLog.subscribe((f) => void writeFactCards(rooms, f, directory));
+  const router = new HandoffRouter({
+    file: path.join(dir, 'factory', HANDOFFS_FILENAME),
+    decisions: deckDecisionPort(dir),
+    ports: () => ports,
+    rooms: () => rooms,
+    now: () => now,
+    log: () => undefined,
+  });
+  routers.push(router);
+  await router.start();
+  return { router, rooms, facts, wakes, dropWakesFor, ports, wake };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 20));
+
+describe('handoff.send — addressee, attribution, delivery', () => {
+  it('a Moa dispatch goes to the target workspace lead: delivered, directed fact, priority-1 wake, cards in both rooms', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const h = await harness([moa, lead, verifier]);
+    const r = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'Fix the login bug', body: 'details' });
+    expect(r).toMatchObject({ ok: true, status: 'delivered', to: { botId: lead.id, role: 'lead', workspaceId: 'ws1' } });
+    if (!r.ok) return;
+    const stored = h.router.get(r.handoffId)!;
+    expect(stored).toMatchObject({ depth: 0, hopsInRun: 1, from: { kind: 'bot', botId: moa.id }, to: { kind: 'bot', botId: lead.id }, attribution: { originator: { kind: 'bot', botId: moa.id }, chain: [] } });
+    expect(stored.threadId).toBe(`handoff:${r.handoffId}`);
+    expect(h.wakes).toEqual([{ botId: lead.id, workspaceId: 'ws1', reason: { kind: 'handoff', handoffId: r.handoffId }, priority: 1, threadId: `handoff:${r.handoffId}` }]);
+    const received = h.facts.find((f) => f.kind === 'handoff.received')!;
+    expect(received).toMatchObject({ workspaceId: 'ws1', ref: { handoffId: r.handoffId, botId: lead.id }, actor: { kind: 'bot', id: moa.id } });
+    // Directed: only the addressee sees it (the router's own scope rule).
+    expect(botSeesFact(lead, received)).toBe(true);
+    expect(botSeesFact(verifier, received)).toBe(false);
+    expect(h.rooms.read('ws1').cards.map((c) => c.kind)).toEqual(['fact']);
+    expect(h.rooms.read('hq').cards).toHaveLength(1);
+    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'moa (moa)', title: 'Fix the login bug', body: 'details' });
+  });
+
+  it('any bot may dispatch into another workspace (messaging is every bot\'s); its chain starts at depth 1', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws2', 'lead');
+    const triage = bot('ws1', 'triage');
+    const h = await harness([lead, other, triage]);
+    const r = h.router.send(binding(triage), { kind: 'dispatch', toWorkspaceId: 'ws2', title: 'x', body: '' });
+    expect(r).toMatchObject({ ok: true, status: 'delivered', to: { botId: other.id, workspaceId: 'ws2' } });
+    if (!r.ok) return;
+    expect(h.router.get(r.handoffId)).toMatchObject({ depth: 1 });
+    expect(h.wakes).toMatchObject([{ botId: other.id, workspaceId: 'ws2' }]);
+    // Inside its own workspace a dispatch reaches the lead.
+    expect(h.router.send(binding(triage), { kind: 'dispatch', title: 'y', body: '' })).toMatchObject({ ok: true, to: { botId: lead.id } });
+    const refused = h.router.send(binding(triage), { kind: 'dispatch', toWorkspaceId: 'ws9', title: 'z', body: '' });
+    expect(refused).toMatchObject({ ok: false, code: 'no_addressee' });
+    if (refused.ok) return;
+    expect(h.router.get(refused.handoffId!)!.status).toBe('refused');
+    expect(h.facts.find((f) => f.kind === 'handoff.refused')).toMatchObject({ workspaceId: 'ws1', ref: { handoffId: refused.handoffId, botId: triage.id } });
+    expect(h.rooms.read('ws1').cards.at(-1)).toMatchObject({ kind: 'refusal' });
+  });
+
+  it('no enabled lead, or the lead dispatching to itself → no_addressee', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead, bot('ws2', 'lead', { enabled: false })]);
+    expect(h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws2', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(lead), { kind: 'dispatch', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+  });
+
+  it('a result replies to the sender of its parent, in the parent\'s thread, one hop deeper; a second result is refused', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    const d = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'plan item', body: '', threadId: 'plan:p1' });
+    if (!d.ok) throw new Error('dispatch failed');
+    const res = h.router.send(binding(lead), { kind: 'result', replyTo: d.handoffId, title: 'merged', body: 'all green' });
+    expect(res).toMatchObject({ ok: true, to: { botId: moa.id }, threadId: 'plan:p1' });
+    if (!res.ok) return;
+    expect(h.router.get(res.handoffId)).toMatchObject({ depth: 1, hopsInRun: 2, runId: h.router.get(d.handoffId)!.runId, attribution: { chain: [d.handoffId] } });
+    expect(h.router.send(binding(lead), { kind: 'result', replyTo: d.handoffId, title: 'again', body: '' })).toMatchObject({ ok: false, code: 'duplicate_result' });
+    expect(h.router.send(binding(lead), { kind: 'refusal', replyTo: d.handoffId, title: 'nope', body: '' })).toMatchObject({ ok: false, code: 'duplicate_result' });
+  });
+
+  it('only the addressee of a handoff may reply to it; an unknown replyTo has no addressee', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const triage = bot('ws1', 'triage');
+    const h = await harness([moa, lead, triage]);
+    const d = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' });
+    if (!d.ok) throw new Error('dispatch failed');
+    expect(h.router.send(binding(triage), { kind: 'result', replyTo: d.handoffId, title: 'r', body: '' })).toMatchObject({ ok: false, code: 'surface' });
+    expect(h.router.send(binding(lead), { kind: 'result', replyTo: 'h-unknown', title: 'r', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+  });
+
+  it('a result without replyTo goes to the workspace lead', async () => {
+    const lead = bot('ws1', 'lead');
+    const triage = bot('ws1', 'triage');
+    const h = await harness([lead, triage]);
+    expect(h.router.send(binding(triage), { kind: 'result', title: 'repro PR', body: 'link' })).toMatchObject({ ok: true, to: { botId: lead.id } });
+    expect(h.router.send(binding(lead), { kind: 'result', title: 'to whom', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+  });
+
+  it('refuses the hop past MAX_DEPTH with a card and a fact', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    let parent = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'd0', body: '' });
+    const depths: number[] = [];
+    // A Coordinator's chain starts at depth 0: MAX_DEPTH + 1 hops fit.
+    for (let i = 1; i <= HANDOFF_LIMITS.MAX_DEPTH; i += 1) {
+      if (!parent.ok) throw new Error(`hop ${i} refused`);
+      depths.push(h.router.get(parent.handoffId)!.depth);
+      const sender = i % 2 === 1 ? lead : moa;
+      parent = h.router.send(binding(sender), { kind: i % 2 === 1 ? 'result' : 'dispatch', replyTo: parent.handoffId, toWorkspaceId: 'ws1', title: `d${i}`, body: '' });
+    }
+    if (!parent.ok) throw new Error('last allowed hop refused');
+    depths.push(h.router.get(parent.handoffId)!.depth);
+    expect(depths).toEqual(Array.from({ length: HANDOFF_LIMITS.MAX_DEPTH + 1 }, (_, i) => i));
+    // One more would exceed the cap.
+    const next = HANDOFF_LIMITS.MAX_DEPTH + 1;
+    const over = h.router.send(binding(next % 2 === 1 ? lead : moa), { kind: next % 2 === 1 ? 'result' : 'dispatch', replyTo: parent.handoffId, toWorkspaceId: 'ws1', title: 'too deep', body: '' });
+    expect(over).toMatchObject({ ok: false, code: 'max_depth' });
+    expect(h.facts.filter((f) => f.kind === 'handoff.refused')).toHaveLength(1);
+    expect(h.rooms.read(next % 2 === 1 ? 'ws1' : 'hq').cards.filter((c) => c.kind === 'refusal')).toHaveLength(1);
+    expect(h.wakes).toHaveLength(HANDOFF_LIMITS.MAX_DEPTH + 1);
+  });
+
+  it('refuses the hop past MAX_PER_RUN, counted across the whole run', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    const d = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'd', body: '' });
+    if (!d.ok) throw new Error('dispatch failed');
+    const res = h.router.send(binding(lead), { kind: 'result', replyTo: d.handoffId, title: 'r', body: '' });
+    if (!res.ok) throw new Error('result failed');
+    // Moa fans the same run out again and again (each a sibling hop).
+    let last = res as ReturnType<HandoffRouter['send']>;
+    for (let hop = 3; hop <= HANDOFF_LIMITS.MAX_PER_RUN; hop += 1) {
+      last = h.router.send(binding(moa), { kind: 'dispatch', replyTo: res.handoffId, toWorkspaceId: 'ws1', title: `d${hop}`, body: '' });
+      expect(last.ok, `hop ${hop}`).toBe(true);
+    }
+    const over = h.router.send(binding(moa), { kind: 'dispatch', replyTo: res.handoffId, toWorkspaceId: 'ws1', title: 'one too many', body: '' });
+    expect(over).toMatchObject({ ok: false, code: 'max_per_run' });
+  });
+
+  it('a wake the queue does not take is a failed hop: refused, not left delivered', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    h.dropWakesFor.add(lead.id);
+    const r = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' });
+    expect(r).toMatchObject({ ok: false, code: 'budget' });
+    if (r.ok) return;
+    expect(h.router.get(r.handoffId!)!.status).toBe('refused');
+    // The wake is the delivery: no received fact for a hop that failed.
+    expect(h.facts.map((f) => f.kind)).toEqual(['handoff.refused']);
+  });
+
+  it('without a fact log the cards are still written', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead], { noFactLog: true });
+    h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' });
+    h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws9', title: 'y', body: '' });
+    expect(h.rooms.read('ws1').cards.map((c) => c.kind)).toEqual(['fact']);
+    expect(h.rooms.read('hq').cards.map((c) => c.kind)).toEqual(['fact', 'refusal']);
+  });
+
+  it('refuses a role without the tool and invalid params', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const r = h.router.send({ workspaceId: 'ws1', botId: 'bot-ffffffff', role: 'nope' as BotRole }, { kind: 'result', title: 'x', body: '' });
+    expect(r).toMatchObject({ ok: false, code: 'surface' });
+    expect(h.router.send(binding(lead), { kind: 'answer' as never, title: 'x', body: '' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(h.router.send(binding(lead), { kind: 'dispatch', title: '', body: '' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(h.router.send(binding(lead), { kind: 'dispatch', title: 'x', body: '', threadId: 'bad' as ThreadId })).toMatchObject({ ok: false, code: 'invalid' });
+  });
+});
+
+describe('one wake per handoff with the trigger engine connected', () => {
+  it('the default role triggers do not wake on the handoff fact the router already delivered', async () => {
+    const moa = bot('hq', 'moa', { triggers: defaultTriggers('moa') });
+    const lead = bot('ws1', 'lead', { triggers: defaultTriggers('lead') });
+    const h = await harness([moa, lead]);
+    const engine = new TriggerEngine({ factLog: h.ports.factLog!, wakes: h.ports.wakes!, bots: h.ports.bots! }, () => undefined);
+    engine.start();
+    const d = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' });
+    if (!d.ok) throw new Error('dispatch failed');
+    h.router.send(binding(lead), { kind: 'result', replyTo: d.handoffId, title: 'r', body: '' });
+    engine.dispose();
+    expect(h.wakes.map((w) => [w.botId, w.reason.kind])).toEqual([[lead.id, 'handoff'], [moa.id, 'handoff']]);
+  });
+});
+
+describe('main pins the thread and keys, not the model', () => {
+  it('a handoff without a thread lands in the running wake\'s thread', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    h.wake.thread = 'pr:github.com/acme/app#3';
+    expect(h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' })).toMatchObject({ ok: true, threadId: 'pr:github.com/acme/app#3' });
+  });
+
+  it('the same clientHandoffId returns the first handoff; a retried wake attempt reuses its default keys', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    const a = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '', clientHandoffId: 'k1' });
+    const b = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '', clientHandoffId: 'k1' });
+    expect(b).toMatchObject({ ok: true, duplicate: true, handoffId: a.ok ? a.handoffId : '' });
+    expect(h.wakes).toHaveLength(1);
+
+    h.wake.id = { wakeId: 'wake-retry-1', attempt: 1 };
+    const first = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'one', body: '' });
+    const second = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'two', body: '' });
+    expect(first.ok && second.ok && first.handoffId !== second.handoffId).toBe(true);
+    h.wake.id = { wakeId: 'wake-retry-1', attempt: 2 };
+    const retried = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'one', body: '' });
+    expect(retried).toMatchObject({ ok: true, duplicate: true, handoffId: first.ok ? first.handoffId : '' });
+    expect(h.wakes).toHaveLength(3);
+  });
+});
+
+describe('chain limits follow the wake', () => {
+  it('a handoff sent from a handoff wake continues that chain without replyTo', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const triage = bot('ws1', 'triage');
+    const h = await harness([moa, lead, triage]);
+    const d = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'item', body: '' });
+    if (!d.ok) throw new Error('dispatch failed');
+    h.wake.id = { wakeId: 'w-chain-1', attempt: 1, handoffId: d.handoffId };
+    const onward = h.router.send(binding(lead), { kind: 'result', title: 'onward', body: '' });
+    expect(onward.ok).toBe(true);
+    if (!onward.ok) return;
+    expect(onward.to?.botId).toBe(moa.id);
+    expect(h.router.get(onward.handoffId)).toMatchObject({ replyTo: d.handoffId, depth: 1, hopsInRun: 2, runId: h.router.get(d.handoffId)!.runId, attribution: { chain: [d.handoffId] } });
+    // It answered the handoff: a second result is refused.
+    expect(h.router.send(binding(lead), { kind: 'result', title: 'again', body: '' })).toMatchObject({ ok: false, code: 'duplicate_result' });
+    // A wake handoff addressed to someone else is not this bot's chain.
+    h.wake.id = { wakeId: 'w-chain-2', attempt: 1, handoffId: d.handoffId };
+    const other = h.router.send(binding(triage), { kind: 'result', title: 'x', body: '' });
+    expect(other.ok && h.router.get(other.handoffId)!.depth).toBe(1);
+    expect(other.ok && h.router.get(other.handoffId)!.runId).not.toBe(h.router.get(d.handoffId)!.runId);
+  });
+
+  it('one turn sends at most MAX_PER_RUN handoffs, each parentless one its own run', async () => {
+    const moa = bot('hq', 'moa');
+    const h = await harness([moa, ...Array.from({ length: 3 }, (_, i) => bot(`ws${i}`, 'lead'))]);
+    h.wake.id = { wakeId: 'w-fanout', attempt: 1 };
+    const results = Array.from({ length: HANDOFF_LIMITS.MAX_PER_RUN + 1 }, (_, i) =>
+      h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: `ws${i % 3}`, title: `d${i}`, body: '' }));
+    expect(results.slice(0, HANDOFF_LIMITS.MAX_PER_RUN).every((r) => r.ok)).toBe(true);
+    expect(results.at(-1)).toMatchObject({ ok: false, code: 'max_per_run' });
+    const runs = new Set(results.filter((r) => r.ok).map((r) => (r.ok ? h.router.get(r.handoffId)!.runId : '')));
+    expect(runs.size).toBe(HANDOFF_LIMITS.MAX_PER_RUN);
+    // The next turn may send again.
+    h.wake.id = { wakeId: 'w-fanout-2', attempt: 1 };
+    expect(h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws0', title: 'next', body: '' })).toMatchObject({ ok: true });
+  });
+
+  it('the hop count survives pruning of earlier hops of the run', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const last = {
+      version: 1, id: 'h-last', runId: 'run-old', threadId: 'handoff:h-last', depth: 1, hopsInRun: HANDOFF_LIMITS.MAX_PER_RUN,
+      from: { kind: 'bot', workspaceId: 'hq', botId: moa.id }, to: { kind: 'bot', workspaceId: 'ws1', botId: lead.id }, kind: 'dispatch',
+      attribution: { originator: { kind: 'bot', workspaceId: 'hq', botId: moa.id }, chain: [] }, landing: 'wake',
+      payload: { title: 'x', body: '' }, status: 'delivered', createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(file, `${JSON.stringify(last)}\n`);
+    const h = await harness([moa, lead]);
+    expect(h.router.send(binding(lead), { kind: 'result', replyTo: 'h-last', title: 'r', body: '' })).toMatchObject({ ok: false, code: 'max_per_run' });
+  });
+});
+
+describe('crash and write-failure boundaries', () => {
+  it('a handoff stored but not delivered before a stop is delivered on start', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify({
+      version: 1, id: 'h-q', runId: 'run-q', threadId: 'handoff:h-q', depth: 0, hopsInRun: 1,
+      from: { kind: 'bot', workspaceId: 'hq', botId: moa.id }, to: { kind: 'bot', workspaceId: 'ws1', botId: lead.id }, kind: 'dispatch',
+      attribution: { originator: { kind: 'bot', workspaceId: 'hq', botId: moa.id }, chain: [] }, landing: 'wake',
+      payload: { title: 'x', body: '' }, status: 'queued', createdAt: now, updatedAt: now,
+    })}\n`);
+    const h = await harness([moa, lead]);
+    expect(h.router.get('h-q')!.status).toBe('delivered');
+    expect(h.wakes).toEqual([{ botId: lead.id, workspaceId: 'ws1', reason: { kind: 'handoff', handoffId: 'h-q' }, priority: 1, threadId: 'handoff:h-q' }]);
+    const again = await harness([moa, lead]);
+    expect(again.wakes).toEqual([]);
+  });
+
+  it('the handoff is marked delivered only once its wake is on disk', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    let land!: () => void;
+    const inner = h.ports.wakes!;
+    h.ports.wakes = { enqueue: (i) => inner.enqueue(i), flush: () => new Promise<void>((r) => { land = r; }) };
+    const r = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'Fix it', body: '' });
+    expect(r).toMatchObject({ ok: true, status: 'delivered', wakeId: 'w-1' });
+    if (!r.ok) return;
+    // Not yet on disk: stored queued, no received fact.
+    expect(h.router.get(r.handoffId)!.status).toBe('queued');
+    expect(h.facts.some((f) => f.kind === 'handoff.received')).toBe(false);
+    land();
+    await h.router.idle();
+    expect(h.router.get(r.handoffId)!.status).toBe('delivered');
+    expect(h.facts.filter((f) => f.kind === 'handoff.received')).toHaveLength(1);
+  });
+
+  it('a wake that did not reach the disk leaves the handoff queued; the next start redelivers into the one wake', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const queueFile = wakeQueuePath(dir);
+    const q1 = new WakeQueue(queueFile);
+    const h = await harness([moa, lead]);
+    // The wake is written, but the router hears a failure (its status line never lands).
+    h.ports.wakes = { enqueue: (i) => q1.enqueue(i), flush: () => q1.flush().then(() => { throw new Error('disk'); }) };
+    const r = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'Fix it', body: '' });
+    if (!r.ok) throw new Error('not sent');
+    await h.router.idle();
+    expect(h.router.get(r.handoffId)!.status).toBe('queued');
+    h.router.dispose();
+
+    // Restart: the queue reloads its file and the router redelivers what is queued.
+    const q2 = new WakeQueue(queueFile);
+    expect(q2.load()).toEqual([]);
+    const again = await harness([moa, lead], { wakes: q2 });
+    await again.router.idle();
+    expect(again.router.get(r.handoffId)!.status).toBe('delivered');
+    expect(q2.list({ botId: lead.id }).filter((i) => i.reason.kind === 'handoff').map((i) => i.id)).toEqual([r.wakeId]);
+    expect(again.facts.filter((f) => f.kind === 'handoff.received')).toHaveLength(1);
+  });
+
+  it('a question whose decision was raised before a stop adopts that decision', async () => {
+    const lead = bot('ws1', 'lead');
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify({
+      version: 1, id: 'h-ask', runId: 'run-a', threadId: 'task:t1', depth: 0, hopsInRun: 1,
+      from: { kind: 'bot', workspaceId: 'ws1', botId: lead.id }, to: { kind: 'human' }, kind: 'ask_person',
+      attribution: { originator: { kind: 'bot', workspaceId: 'ws1', botId: lead.id }, chain: [] }, landing: 'room+phone',
+      payload: { title: 'Q?', body: '' }, status: 'queued', createdAt: now, updatedAt: now,
+    })}\n`);
+    const d = await raiseThreadDecisionIfFree('ws1', 'task:t1', { question: 'Q?', origin: 'ask_person', handoffId: 'h-ask' }, dir);
+    const h = await harness([lead]);
+    expect(h.router.get('h-ask')!.status).toBe('delivered');
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question')).toHaveLength(1);
+    await resolveThreadDecision('ws1', d!.id, 'A', {}, dir);
+    await h.router.reconcile();
+    expect(h.router.get('h-ask')!.status).toBe('answered');
+    expect(h.wakes).toHaveLength(1);
+  });
+
+  it('a decision left behind by a closed question is cleared so the thread frees', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const ask = await h.router.askPerson(binding(lead), { title: 'q', body: '', threadId: 'task:t2' });
+    if (!ask.ok) throw new Error('ask failed');
+    await h.router.answer(ask.handoffId, 'done');
+    // As if the clear after the answer had failed.
+    await raiseThreadDecisionIfFree('ws1', 'task:t2', { question: 'q', origin: 'ask_person', handoffId: ask.handoffId }, dir);
+    await h.router.reconcile();
+    expect(loadThreadDecision('ws1', 'task:t2', dir)).toBeNull();
+  });
+
+  it('a send that cannot be stored fails without waking anyone', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    // The handoffs file becomes unwritable.
+    fs.mkdirSync(path.join(dir, 'factory', HANDOFFS_FILENAME, 'blocker'), { recursive: true });
+    expect(h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(await h.router.askPerson(binding(lead), { title: 'q', body: '' })).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(h.wakes).toEqual([]);
+    expect(h.router.list()).toEqual([]);
+  });
+
+  it('a key taken by a send is not answered as a question, whatever the call order', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    h.wake.id = { wakeId: 'w-mixed', attempt: 1 };
+    const ask = h.router.askPerson(binding(moa), { title: 'q', body: '' });
+    const sent = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'd', body: '' });
+    const asked = await ask;
+    if (!asked.ok || !sent.ok) throw new Error('first attempt failed');
+    expect(h.router.get(asked.handoffId)!.clientHandoffId).toBe('wake:w-mixed:h1');
+    h.wake.id = { wakeId: 'w-mixed', attempt: 2 };
+    expect(await h.router.askPerson(binding(moa), { title: 'q', body: '' })).toMatchObject({ ok: true, duplicate: true, handoffId: asked.handoffId });
+    expect(h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'd', body: '' })).toMatchObject({ ok: true, duplicate: true, handoffId: sent.handoffId });
+    expect(await h.router.askPerson(binding(moa), { title: 'q', body: '', clientHandoffId: 'wake:w-mixed:h2' })).toMatchObject({ ok: false, code: 'invalid' });
+  });
+});
+
+describe('ask_person', () => {
+  it('raises a decision in the thread, then the owner\'s answer wakes the bot that asked', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const ask = await h.router.askPerson(binding(lead), { title: 'Ship it?', body: 'CI green', options: ['Yes', 'No'], threadId: 'pr:github.com/acme/app#7' });
+    expect(ask).toMatchObject({ ok: true, status: 'delivered', threadId: 'pr:github.com/acme/app#7' });
+    if (!ask.ok) return;
+    const d = loadThreadDecision('ws1', 'pr:github.com/acme/app#7', dir)!;
+    expect(d).toMatchObject({ origin: 'ask_person', handoffId: ask.handoffId, question: 'Ship it?', options: ['Yes', 'No'], status: 'pending' });
+    expect(ask.decisionId).toBe(d.id);
+    const q = h.rooms.read('ws1').cards.find((c) => c.kind === 'question')!;
+    expect(q).toMatchObject({ state: 'open', refs: { handoffId: ask.handoffId, decisionId: d.id }, actor: { kind: 'bot', botId: lead.id } });
+    expect(h.wakes).toEqual([]);
+
+    // Any resolve path (deck card, phone, room.resolve) goes through the store.
+    await resolveThreadDecision('ws1', d.id, 'Yes', {}, dir);
+    await h.router.reconcile();
+    expect(h.router.get(ask.handoffId)!.status).toBe('answered');
+    const answer = h.router.list({ workspaceId: 'ws1' }).find((x) => x.kind === 'answer')!;
+    expect(answer).toMatchObject({ from: { kind: 'human' }, to: { kind: 'bot', botId: lead.id }, replyTo: ask.handoffId, threadId: 'pr:github.com/acme/app#7', status: 'delivered', payload: { body: 'Yes' } });
+    expect(h.wakes).toEqual([{ botId: lead.id, workspaceId: 'ws1', reason: { kind: 'handoff', handoffId: answer.id }, priority: 1, threadId: 'pr:github.com/acme/app#7', overCap: true }]);
+    expect(h.facts.find((f) => f.kind === 'handoff.received')).toMatchObject({ ref: { botId: lead.id, handoffId: answer.id } });
+    expect(loadThreadDecision('ws1', 'pr:github.com/acme/app#7', dir)).toBeNull();
+    expect(h.rooms.get('ws1', q.id)!.state).toBe('resolved');
+    expect(h.rooms.read('ws1').cards.some((c) => c.title.startsWith('Answered'))).toBe(true);
+  });
+
+  it('the answer reaches the asker even when its queue is at the cap; the question closes once', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const queue = new WakeQueue(wakeQueuePath(dir));
+    for (let i = 0; i < WAKE_LIMITS.PER_BOT_QUEUE_CAP; i++) queue.enqueue({ botId: lead.id, workspaceId: 'ws1', reason: { kind: 'manual', by: 'human' }, priority: 1 });
+    h.ports.wakes = queue;
+    // A dispatch to the full queue is still refused: only answers go past the cap.
+    expect(queue.enqueue({ botId: lead.id, workspaceId: 'ws1', reason: { kind: 'handoff', handoffId: 'h-other' }, priority: 1 })).toBeNull();
+    const ask = await h.router.askPerson(binding(lead), { title: 'Ship it?', body: '', threadId: 'pr:github.com/acme/app#7' });
+    if (!ask.ok) throw new Error('not asked');
+    const answered = await h.router.answer(ask.handoffId, 'Yes');
+    expect(answered).toMatchObject({ ok: true, status: 'answered', answerHandoffId: expect.any(String) });
+    if (!answered.ok) return;
+    await h.router.idle();
+    expect(h.router.get(answered.answerHandoffId!)).toMatchObject({ kind: 'answer', status: 'delivered' });
+    const answerWakes = queue.list({ botId: lead.id, states: ['queued'] }).filter((i) => i.reason.kind === 'handoff');
+    expect(answerWakes).toEqual([expect.objectContaining({ reason: { kind: 'handoff', handoffId: answered.answerHandoffId } })]);
+    expect(h.facts.some((f) => f.kind === 'handoff.refused')).toBe(false);
+    await queue.flush();
+  });
+
+  it('the answer wakes the asker in the question\'s thread, so its next post without a thread lands there', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    h.wake.thread = 'pr:github.com/acme/app#5';
+    const ask = await h.router.askPerson(binding(lead), { title: 'Merge order?', body: '', options: ['ship', 'hold'] });
+    if (!ask.ok) throw new Error('ask failed');
+    expect(ask.threadId).toBe('pr:github.com/acme/app#5');
+    h.wake.thread = null;
+    await resolveThreadDecision('ws1', ask.decisionId!, 'ship', {}, dir);
+    await h.router.reconcile();
+    expect(h.wakes).toHaveLength(1);
+    expect(h.wakes[0]).toMatchObject({ botId: lead.id, reason: { kind: 'handoff' }, threadId: 'pr:github.com/acme/app#5' });
+    // The runtime runs that wake: its thread is the running wake's thread.
+    h.wake.thread = h.wakes[0].threadId ?? null;
+    const posted = await handleRoomPost({ kind: 'status', title: 'Answer received' }, { bot: binding(lead) } as RpcContext, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: boolean; card?: { threadId: string } };
+    expect(posted).toMatchObject({ ok: true, card: { threadId: 'pr:github.com/acme/app#5' } });
+  });
+
+  it('without a thread it lands in the running wake\'s thread, else a thread of its own', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const own = await h.router.askPerson(binding(lead), { title: 'q1', body: '' });
+    expect(own.ok && own.threadId === `handoff:${own.handoffId}`).toBe(true);
+    h.wake.thread = 'task:wt-5';
+    expect(await h.router.askPerson(binding(lead), { title: 'q2', body: '' })).toMatchObject({ ok: true, threadId: 'task:wt-5' });
+  });
+
+  it('a thread busy with another bot\'s question queues the question and raises it once the open one is answered', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const first = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:t1' });
+    const second = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:t1' });
+    if (!first.ok || !second.ok) throw new Error('asks failed');
+    expect(second).toMatchObject({ status: 'queued', queuedBehind: first.decisionId });
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question')).toHaveLength(1);
+    await resolveThreadDecision('ws1', first.decisionId!, 'ok', {}, dir);
+    await h.router.reconcile();
+    expect(h.router.get(second.handoffId)!.status).toBe('delivered');
+    expect(loadThreadDecision('ws1', 'task:t1', dir)).toMatchObject({ question: 'second', handoffId: second.handoffId });
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first', 'second']);
+  });
+
+  it('a dismissed question answers the bot that it was closed without a choice', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const ask = await h.router.askPerson(binding(lead), { title: 'q', body: '', options: ['a', 'b'] });
+    if (!ask.ok) throw new Error('ask failed');
+    await resolveThreadDecision('ws1', ask.decisionId!, '', { dismissed: true }, dir);
+    await h.router.reconcile();
+    const answer = h.router.list().find((x) => x.kind === 'answer')!;
+    expect(answer.payload.body).toBe(DISMISSED_ANSWER);
+    // Its wake still holds over budget, but it carries no instruction.
+    expect(h.router.summarize(answer.id)).toMatchObject({ ownerWords: true, dismissed: true });
+    // Closing a question is not overriding the bot's recommendation.
+    expect(h.facts.filter((f) => f.kind === 'human.correction')).toEqual([]);
+  });
+
+  it('an answer outside the offered options is one human.correction keyed by the question card; an offered option is none', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const picked = await h.router.askPerson(binding(lead), { title: 'p', body: '', threadId: 'task:p', options: ['a', 'b'] });
+    if (!picked.ok) throw new Error('ask failed');
+    await resolveThreadDecision('ws1', picked.decisionId!, 'b', {}, dir);
+    await h.router.reconcile();
+    expect(h.facts.filter((f) => f.kind === 'human.correction')).toEqual([]);
+    const ask = await h.router.askPerson(binding(lead), { title: 'q', body: '', options: ['a', 'b'] });
+    if (!ask.ok) throw new Error('ask failed');
+    await resolveThreadDecision('ws1', ask.decisionId!, 'neither, c', {}, dir);
+    await h.router.reconcile();
+    await h.router.reconcile();
+    const card = h.rooms.read('ws1').cards.find((c) => c.kind === 'question' && c.title === 'q')!;
+    const corrections = h.facts.filter((f) => f.kind === 'human.correction');
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0]).toMatchObject({
+      dedupeKey: `human.correction:${card.id}`,
+      ref: { botId: lead.id, messageId: card.id },
+      payload: { category: 'question-override', cardKind: 'question', note: 'neither, c' },
+    });
+  });
+
+  it('expires a question whose decision disappeared, and one past its time limit', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const gone = await h.router.askPerson(binding(lead), { title: 'gone', body: '', threadId: 'task:a' });
+    const old = await h.router.askPerson(binding(lead), { title: 'old', body: '', threadId: 'task:b' });
+    if (!gone.ok || !old.ok) throw new Error('asks failed');
+    await clearThreadDecision('ws1', 'task:a', undefined, dir);
+    await h.router.reconcile();
+    expect(h.router.get(gone.handoffId)!.status).toBe('expired');
+    now += HANDOFF_LIMITS.ASK_PERSON_TTL_MS + 1;
+    await h.router.reconcile();
+    expect(h.router.get(old.handoffId)!.status).toBe('expired');
+    expect(loadThreadDecision('ws1', 'task:b', dir)).toBeNull();
+    expect(h.wakes).toEqual([]);
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').every((c) => c.state === 'resolved')).toBe(true);
+  });
+
+  it('handoff.answer answers a raised question and a queued one', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const a = await h.router.askPerson(binding(lead), { title: 'a', body: '', threadId: 'task:t' });
+    const b = await h.router.askPerson(binding(other), { title: 'b', body: '', threadId: 'task:t' });
+    if (!a.ok || !b.ok) throw new Error('asks failed');
+    const queuedAnswer = await h.router.answer(b.handoffId, 'later');
+    expect(queuedAnswer).toMatchObject({ ok: true, status: 'answered' });
+    const raisedAnswer = await h.router.answer(a.handoffId, 'now');
+    expect(raisedAnswer).toMatchObject({ ok: true, status: 'answered' });
+    expect(raisedAnswer.ok && raisedAnswer.answerHandoffId).toBeTruthy();
+    expect(await h.router.answer(a.handoffId, 'again')).toMatchObject({ ok: false, code: 'not_pending' });
+    expect(await h.router.answer('h-nope', 'x')).toMatchObject({ ok: false, code: 'not_found' });
+    expect(h.wakes).toHaveLength(2);
+  });
+
+  it('caps open questions per workspace', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    for (let i = 0; i < HANDOFF_STORE_LIMITS.OPEN_ASKS_PER_WORKSPACE; i += 1) {
+      expect((await h.router.askPerson(binding(lead), { title: `q${i}`, body: '', threadId: `task:t${i}` })).ok).toBe(true);
+    }
+    expect(await h.router.askPerson(binding(lead), { title: 'one more', body: '' })).toMatchObject({ ok: false, code: 'budget' });
+  });
+
+  it('an answer given while the app was off is delivered on the next start, and the queued question raised', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const first = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:t1' });
+    const second = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:t1' });
+    if (!first.ok || !second.ok) throw new Error('asks failed');
+    h.router.dispose();
+    await resolveThreadDecision('ws1', first.decisionId!, 'yes', {}, dir);
+    await settle();
+    expect(h.wakes).toEqual([]);
+    const restarted = await harness([lead, other]);
+    expect(restarted.router.get(first.handoffId)!.status).toBe('answered');
+    expect(restarted.router.get(second.handoffId)!.status).toBe('delivered');
+    expect(restarted.wakes).toHaveLength(1);
+    expect(loadWorkspaceDecisions('ws1', dir).map((d) => d.question)).toEqual(['second']);
+  });
+});
+
+describe('persistence and migration', () => {
+  it('reloads handoffs (last line of an id wins) and keeps counting hops of a run', async () => {
+    const moa = bot('hq', 'moa');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([moa, lead]);
+    const d = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'x', body: '' });
+    if (!d.ok) throw new Error('dispatch failed');
+    const again = await harness([moa, lead]);
+    expect(again.router.get(d.handoffId)!.status).toBe('delivered');
+    const res = again.router.send(binding(lead), { kind: 'result', replyTo: d.handoffId, title: 'r', body: '' });
+    expect(res.ok && again.router.get(res.handoffId)!.hopsInRun).toBe(2);
+  });
+
+  it('imports moa-handoffs.json once as depth-0 dispatches and keeps the legacy file', () => {
+    const legacy = {
+      version: 1,
+      items: {
+        a: { id: 'a', hqWorkspaceId: 'hq', target: { workspaceId: 'ws1' }, title: 'Fix it', body: 'please', state: 'delivered', taskId: 'wtask-1', createdAt: 5, at: 6 },
+        b: { id: 'b', title: 'Old', body: '', state: 'canceled', createdAt: 7, at: 8 },
+        c: { nope: true },
+      },
+    };
+    fs.writeFileSync(path.join(dir, 'moa-handoffs.json'), JSON.stringify(legacy));
+    const factoryDir = path.join(dir, 'factory');
+    expect(importLegacyMoaHandoffs({ wmuxDir: dir, factoryDir, now })).toBe(2);
+    expect(importLegacyMoaHandoffs({ wmuxDir: dir, factoryDir, now })).toBe(0);
+    const lines = fs.readFileSync(path.join(factoryDir, HANDOFFS_FILENAME), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ id: 'h-legacy-a', depth: 0, kind: 'dispatch', status: 'delivered', payload: { title: 'Fix it', refs: { taskId: 'wtask-1' } } });
+    expect(lines[0].payload.body).toContain('Target workspace: ws1');
+    expect(lines[1]).toMatchObject({ id: 'h-legacy-b', status: 'expired' });
+    expect(fs.existsSync(path.join(dir, 'moa-handoffs.json'))).toBe(true);
+    expect(handoffFromLegacy({ id: 'x', state: 'delivered', endedAt: 9, createdAt: 1 }, now)!.status).toBe('answered');
+  });
+
+  it('the shipped migration step imports through runFactoryMigrations and a router loads the result', async () => {
+    fs.writeFileSync(path.join(dir, 'moa-handoffs.json'), JSON.stringify({ version: 1, items: { a: { id: 'a', title: 'T', body: '', state: 'delivered', createdAt: now, at: now } } }));
+    const r = runFactoryMigrations(dir, { now });
+    expect(r.notes).toEqual(['imported 1 Moa hand-offs into handoffs.jsonl']);
+    expect(runFactoryMigrations(dir, { now }).notes).toEqual([]);
+    const h = await harness([]);
+    expect(h.router.get('h-legacy-a')).toMatchObject({ kind: 'dispatch', depth: 0 });
+  });
+});
+
+describe('messages and room mentions (group rooms)', () => {
+  const card = (id: string, extra: Record<string, unknown> = {}) => ({ id, threadId: 'general' as ThreadId, title: `card ${id}`, body: `body of ${id}`, ...extra });
+
+  it('a message goes to the named bot in any workspace; it needs toBotId, never the sender, never a disabled bot', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws2', 'triage');
+    const off = bot('ws1', 'verifier', { enabled: false });
+    const h = await harness([a, b, off]);
+    const r = h.router.send(binding(a), { kind: 'message', toBotId: b.id, title: 'hello', body: 'over there' });
+    expect(r).toMatchObject({ ok: true, to: { botId: b.id, workspaceId: 'ws2' } });
+    if (!r.ok) return;
+    expect(h.router.get(r.handoffId)).toMatchObject({ kind: 'message', depth: 1, to: { kind: 'bot', botId: b.id } });
+    expect(h.wakes.at(-1)).toMatchObject({ botId: b.id, reason: { kind: 'handoff', handoffId: r.handoffId } });
+    // A plain message is a line in the addressee's room (no card said it).
+    expect(h.rooms.read('ws2').cards.map((c) => c.kind)).toEqual(['fact']);
+    expect(h.router.send(binding(a), { kind: 'message', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: a.id, title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: off.id, title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(a), { kind: 'result', toBotId: b.id, title: 'x', body: '' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: 'nope', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'invalid' });
+    // The mention keys are the router's own.
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: b.id, title: 'x', body: '', clientHandoffId: `mention:c-1:${b.id}` })).toMatchObject({ ok: false, code: 'invalid' });
+    // A dispatch may name its bot too.
+    expect(h.router.send(binding(a), { kind: 'dispatch', toBotId: b.id, title: 'do it', body: '' })).toMatchObject({ ok: true, to: { botId: b.id } });
+  });
+
+  it('a mention wakes each named bot once as a `mention` wake; a repeat or a restart wakes nobody again', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'triage');
+    const c = bot('ws1', 'verifier');
+    const h = await harness([a, b, c]);
+    const out = h.router.mention(binding(a), card('c-one', { refs: { pr: 7 } }), [b.id, c.id]);
+    expect(out.map((o) => o.result.ok)).toEqual([true, true]);
+    expect(h.wakes.map((w) => [w.botId, w.reason])).toEqual([
+      [b.id, { kind: 'mention', cardId: 'c-one', handoffId: out[0].result.ok ? out[0].result.handoffId : '', fromBotId: a.id }],
+      [c.id, { kind: 'mention', cardId: 'c-one', handoffId: out[1].result.ok ? out[1].result.handoffId : '', fromBotId: a.id }],
+    ]);
+    // The mentioning card said it: its deliveries add no room line.
+    expect(h.rooms.read('ws1').cards).toHaveLength(0);
+    const stored = out[0].result.ok ? h.router.get(out[0].result.handoffId)! : null;
+    expect(stored).toMatchObject({ kind: 'message', threadId: 'general', payload: { title: 'card c-one', body: 'body of c-one', refs: { pr: 7, messageId: 'c-one' } } });
+    // The same card again: the first outcome, marked duplicate, no new wake.
+    const again = h.router.mention(binding(a), card('c-one'), [b.id]);
+    expect(again[0].result).toMatchObject({ ok: true, duplicate: true });
+    expect(h.wakes).toHaveLength(2);
+    // After a restart the records answer the same.
+    const later = await harness([a, b, c]);
+    expect(later.router.mention(binding(a), card('c-one'), [b.id, c.id]).every((o) => o.result.ok && o.result.duplicate)).toBe(true);
+    expect(later.wakes).toEqual([]);
+  });
+
+  it('a queued mention redelivered on start wakes as the same mention', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'triage');
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify({
+      version: 1, id: 'h-m', runId: 'run-m', threadId: 'general', depth: 1, hopsInRun: 1,
+      from: { kind: 'bot', workspaceId: 'ws1', botId: a.id }, to: { kind: 'bot', workspaceId: 'ws1', botId: b.id }, kind: 'message',
+      attribution: { originator: { kind: 'bot', workspaceId: 'ws1', botId: a.id }, chain: [] }, landing: 'wake',
+      payload: { title: 'x', body: '', refs: { messageId: 'c-m' } }, status: 'queued', clientHandoffId: `mention:c-m:${b.id}`, createdAt: now, updatedAt: now,
+    })}\n`);
+    const h = await harness([a, b]);
+    expect(h.wakes).toEqual([{ botId: b.id, workspaceId: 'ws1', reason: { kind: 'mention', cardId: 'c-m', handoffId: 'h-m', fromBotId: a.id }, priority: 1, threadId: 'general' }]);
+  });
+
+  it('every bot an owner message woke speaks in one run, owned by the owner; its first hops are never capped', async () => {
+    const bots = Array.from({ length: 7 }, (_, i) => bot('ws1', i === 0 ? 'lead' : 'triage'));
+    const h = await harness(bots);
+    const runId = 'run-c-owner1';
+    // Each of the seven answers the owner by mentioning the six others: 42
+    // first hops, more than MAX_PER_RUN, none refused.
+    let n = 0;
+    for (const sender of bots) {
+      h.wake.id = { wakeId: `w-owner-${sender.id}`, attempt: 1, runId } as never;
+      const out = h.router.mention(binding(sender), card(`c-r${n += 1}`), bots.filter((b) => b.id !== sender.id).map((b) => b.id));
+      expect(out.every((o) => o.result.ok)).toBe(true);
+    }
+    expect(7 * 6).toBeGreaterThan(HANDOFF_LIMITS.MAX_PER_RUN);
+    const hops = h.router.list({ limit: 200 }).filter((x) => x.kind === 'message');
+    expect(hops).toHaveLength(42);
+    expect(new Set(hops.map((x) => x.runId))).toEqual(new Set([runId]));
+    expect(hops.every((x) => x.depth === 1 && x.attribution.originator.kind === 'human')).toBe(true);
+    // A deeper hop of that run meets the cap.
+    const first = hops.find((x) => x.to.kind === 'bot' && x.to.botId === bots[1].id)!;
+    h.wake.id = { wakeId: 'w-deeper', attempt: 1, handoffId: first.id };
+    const deeper = h.router.mention(binding(bots[1]), card('c-deeper'), [bots[2].id]);
+    expect(deeper[0].result).toMatchObject({ ok: false, code: 'max_per_run' });
+    const refused = h.facts.filter((f) => f.kind === 'handoff.refused');
+    expect(refused).toHaveLength(1);
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'refusal')).toHaveLength(1);
+  });
+
+  it('a mention ping-pong stops at MAX_DEPTH with a refusal card', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'triage');
+    const h = await harness([a, b]);
+    let woken: string | undefined;
+    let last: ReturnType<HandoffRouter['send']> | null = null;
+    for (let i = 0; i <= HANDOFF_LIMITS.MAX_DEPTH; i += 1) {
+      const [from, to] = i % 2 === 0 ? [a, b] : [b, a];
+      h.wake.id = { wakeId: `w-pp-${i}`, attempt: 1, ...(woken ? { handoffId: woken } : {}) };
+      last = h.router.mention(binding(from), card(`c-pp${i}`), [to.id])[0].result;
+      if (last.ok) woken = last.handoffId;
+      else break;
+    }
+    expect(last).toMatchObject({ ok: false, code: 'max_depth' });
+    expect(h.wakes).toHaveLength(HANDOFF_LIMITS.MAX_DEPTH);
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'refusal')).toHaveLength(1);
+  });
+});
+
+describe('closing questions nobody needs to answer (A5)', () => {
+  const ownerWake = (threadId: ThreadId | undefined, enqueuedAt: number) => ({
+    reason: { kind: 'human' as const, text: 'do X', source: 'desktop' as const },
+    workspaceId: 'ws1',
+    enqueuedAt,
+    ...(threadId ? { threadId } : {}),
+  });
+  const open = (h: Harness) => h.rooms.read('ws1').cards.filter((c) => c.kind === 'question' && c.state === 'open').map((c) => c.title);
+
+  it('a newer question of the same bot in the same thread replaces its open one; nobody is woken', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const first = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:t1' });
+    const second = await h.router.askPerson(binding(lead), { title: 'second', body: '', threadId: 'task:t1' });
+    if (!first.ok || !second.ok) throw new Error('asks failed');
+    expect(second.status).toBe('delivered');
+    expect(h.router.get(first.handoffId)!.status).toBe('expired');
+    expect(loadThreadDecision('ws1', 'task:t1', dir)).toMatchObject({ question: 'second' });
+    expect(open(h)).toEqual(['second']);
+    await h.router.reconcile();
+    expect(h.wakes).toEqual([]);
+    expect(h.router.list().some((x) => x.kind === 'answer')).toBe(false);
+  });
+
+  it('the owner answering in chat closes the bot\'s earlier questions there or in their own thread, not the ones it asked in that turn or elsewhere', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const own = await h.router.askPerson(binding(lead), { title: 'greeting', body: '' });
+    const inGeneral = await h.router.askPerson(binding(lead), { title: 'general q', body: '', threadId: 'general' });
+    const elsewhere = await h.router.askPerson(binding(lead), { title: 'pr q', body: '', threadId: 'pr:github.com/acme/app#2' });
+    const others = await h.router.askPerson(binding(other), { title: 'other bot', body: '', threadId: 'task:x' });
+    const said = now + 1;
+    now += 5;
+    const during = await h.router.askPerson(binding(lead), { title: 'asked in the turn', body: '', threadId: 'task:during' });
+    if (!own.ok || !inGeneral.ok || !elsewhere.ok || !others.ok || !during.ok) throw new Error('asks failed');
+    const closed = await h.router.closeAnsweredInChat(lead.id, ownerWake('general', said));
+    expect(closed.sort()).toEqual([own.handoffId, inGeneral.handoffId].sort());
+    expect(open(h).sort()).toEqual(['asked in the turn', 'other bot', 'pr q']);
+    // Words to the whole room close no question of a thread of its own.
+    const greeting = await h.router.askPerson(binding(other), { title: 'what should I do?', body: '' });
+    if (!greeting.ok) throw new Error('ask failed');
+    now += 5;
+    expect(await h.router.closeAnsweredInChat(other.id, { ...ownerWake('general', now), reason: { kind: 'human', text: 'Hi', source: 'desktop', room: true } })).toEqual([]);
+    expect(await h.router.closeAnsweredInChat(other.id, ownerWake('general', now))).toEqual([greeting.handoffId]);
+    // A wake that is not the owner's words closes nothing.
+    expect(await h.router.closeAnsweredInChat(lead.id, { ...ownerWake('pr:github.com/acme/app#2', now + 10), reason: { kind: 'manual', by: 'human' } })).toEqual([]);
+    expect(h.wakes).toEqual([]);
+  });
+
+  it('a greeting question is marked, and closes once the bot has a job', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    h.wake.id = { wakeId: 'w-intro', attempt: 1, reasonKind: 'intro' } as never;
+    const greet = await h.router.askPerson(binding(lead), { title: 'What should I do?', body: '' });
+    h.wake.id = { wakeId: 'w-2', attempt: 1, reasonKind: 'human' } as never;
+    const later = await h.router.askPerson(binding(lead), { title: 'Which repo?', body: '', threadId: 'task:r' });
+    if (!greet.ok || !later.ok) throw new Error('asks failed');
+    const card = h.rooms.read('ws1').cards.find((c) => c.title === 'What should I do?')!;
+    expect(card.greeting).toBe(true);
+    expect(h.rooms.read('ws1').cards.find((c) => c.title === 'Which repo?')!.greeting).toBeUndefined();
+    expect(await h.router.closeIntroQuestions(lead.id)).toEqual([greet.handoffId]);
+    expect(open(h)).toEqual(['Which repo?']);
+  });
+
+  it('a thread whose subject ended closes its open questions', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const q = await h.router.askPerson(binding(lead), { title: 'merge?', body: '', threadId: 'pr:github.com/acme/app#3' });
+    if (!q.ok) throw new Error('ask failed');
+    expect(await h.router.closeThreadQuestions('ws2', 'pr:github.com/acme/app#3')).toEqual([]);
+    expect(await h.router.closeThreadQuestions('ws1', 'pr:github.com/acme/app#3')).toEqual([q.handoffId]);
+    expect(loadThreadDecision('ws1', 'pr:github.com/acme/app#3', dir)).toBeNull();
+  });
+
+  it('a question asked in a wake about one task carries it, and closes once the task stops waiting', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    h.wake.id = { wakeId: 'w-t', attempt: 1, reasonKind: 'facts', taskId: 'wtask-9' } as never;
+    const q = await h.router.askPerson(binding(lead), { title: 'push refused, what now?', body: '' });
+    h.wake.id = null;
+    const named = await h.router.askPerson(binding(lead), { title: 'named', body: '', refs: { taskId: 'wtask-1' } });
+    if (!q.ok || !named.ok) throw new Error('asks failed');
+    expect(h.rooms.read('ws1').cards.find((c) => c.title === 'push refused, what now?')!.refs).toMatchObject({ taskId: 'wtask-9' });
+    expect(await h.router.closeTaskQuestions('wtask-9')).toEqual([q.handoffId]);
+    expect(open(h)).toEqual(['named']);
+  });
+
+  it('question_close: a bot closes only its own open question card', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const q = await h.router.askPerson(binding(lead), { title: 'q', body: '', threadId: 'task:q' });
+    if (!q.ok) throw new Error('ask failed');
+    const card = h.rooms.read('ws1').cards.find((c) => c.kind === 'question')!;
+    expect(await h.router.closeOwnQuestion(binding(other), card.id)).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await h.router.closeOwnQuestion(binding(lead), 'nope')).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await h.router.closeOwnQuestion(binding(lead), 7)).toMatchObject({ ok: false, code: 'invalid' });
+    expect(await h.router.closeOwnQuestion(binding(lead), card.id)).toEqual({ ok: true, handoffId: q.handoffId });
+    expect(await h.router.closeOwnQuestion(binding(lead), card.id)).toMatchObject({ ok: false, code: 'not_found' });
+    expect(h.wakes).toEqual([]);
+  });
+});
+
+describe('closing questions: the owner\'s answer and blocked threads (review)', () => {
+  it('a question the owner already answered is not closed quietly: the answer still reaches the bot', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const q = await h.router.askPerson(binding(lead), { title: 'which?', body: '', threadId: 'task:z', refs: { taskId: 'wtask-z' } });
+    if (!q.ok) throw new Error('ask failed');
+    await resolveThreadDecision('ws1', q.decisionId!, 'the second', {}, dir);
+    expect(await h.router.closeTaskQuestions('wtask-z')).toEqual([]);
+    await h.router.reconcile();
+    expect(h.router.get(q.handoffId)!.status).toBe('answered');
+    expect(h.wakes).toHaveLength(1);
+  });
+
+  it('a thread held by the decision of a closed question frees when the next question comes', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const q = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:b' });
+    if (!q.ok) throw new Error('ask failed');
+    // Its clear failed: the question is closed, its decision still there.
+    const d = loadThreadDecision('ws1', 'task:b', dir)!;
+    const realClear = deckDecisionPort(dir).clear;
+    (h.router as unknown as { opts: { decisions: { clear: typeof realClear } } }).opts.decisions.clear = async () => false;
+    await h.router.closeOwnQuestion(binding(lead), h.rooms.read('ws1').cards.find((c) => c.kind === 'question')!.id);
+    expect(loadThreadDecision('ws1', 'task:b', dir)?.id).toBe(d.id);
+    (h.router as unknown as { opts: { decisions: { clear: typeof realClear } } }).opts.decisions.clear = realClear;
+    const next = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:b' });
+    expect(next).toMatchObject({ ok: true, status: 'delivered' });
+    expect(loadThreadDecision('ws1', 'task:b', dir)).toMatchObject({ question: 'second' });
+  });
+});

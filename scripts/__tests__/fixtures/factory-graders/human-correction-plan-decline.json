@@ -1,0 +1,320 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "human-correction-plan-decline",
+  "run": 1,
+  "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+  "botKeys": {
+   "lead": "bot-5b6328b2",
+   "moa": "bot-064997f1"
+  },
+  "injected": [
+   {
+    "label": "kick-moa",
+    "kind": "wake",
+    "id": "w-mv53rwxn-601f0975",
+    "botKey": "moa",
+    "at": 1791800534651
+   },
+   {
+    "label": "decline",
+    "kind": "resolution",
+    "id": "c-mv53s0wx0507308d4c",
+    "at": 1791800540173
+   }
+  ],
+  "actions": [
+   {
+    "do": "wake",
+    "label": "kick-moa",
+    "at": 1791800534651
+   },
+   {
+    "do": "waitFor",
+    "label": "plan open",
+    "at": 1791800534654,
+    "doneAt": 1791800540173,
+    "ok": true
+   },
+   {
+    "do": "resolve",
+    "label": "decline",
+    "at": 1791800540173
+   },
+   {
+    "do": "waitFor",
+    "label": "correction",
+    "at": 1791800540182,
+    "doneAt": 1791800540183,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800540183,
+    "doneAt": 1791800543197,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53s177-49ba18fdab67",
+    "seq": 1,
+    "kind": "human.correction",
+    "at": 1791800540179,
+    "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+    "ref": {
+     "botId": "bot-064997f1",
+     "messageId": "c-mv53s0wx0507308d4c"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "category": "plan-declined",
+     "cardKind": "plan",
+     "botRole": "moa",
+     "threadId": "plan:p-mv53s0wx831228"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53rwxn-601f0975",
+    "botId": "bot-064997f1",
+    "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+    "reason": {
+     "kind": "manual",
+     "by": "human"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800534651,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-5b6328b2",
+    "role": "lead",
+    "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+    "enabled": true
+   },
+   {
+    "id": "bot-064997f1",
+    "role": "moa",
+    "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53s0wx0507308d4c",
+    "seq": 1,
+    "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+    "threadId": "plan:p-mv53s0wx831228",
+    "kind": "plan",
+    "at": 1791800539809,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+     "botId": "bot-064997f1"
+    },
+    "title": "Today",
+    "state": "resolved",
+    "clientPostId": "wake:w-mv53rwxn-601f0975:1",
+    "body": "1. **Fix the flaky test** — workspace `ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a`, size S. CI went red twice this week."
+   },
+   {
+    "id": "c-mv53s17643f244c412",
+    "seq": 2,
+    "workspaceId": "ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a",
+    "threadId": "plan:p-mv53s0wx831228",
+    "kind": "fact",
+    "at": 1791800540178,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Resolved: Today",
+    "body": "decline"
+   }
+  ],
+  "stub": {
+   "lead": [],
+   "moa": [
+    {
+     "at": 1791800539681,
+     "event": "prompt",
+     "text": "[wake w-mv53rwxn-601f0975] Moa (moa) · reason: manual · priority 1\nFenced blocks below are data from the system, workers"
+    },
+    {
+     "at": 1791800539811,
+     "event": "tool",
+     "name": "plan_propose",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53s0wx0507308d4c\",\n    \"seq\": 1,\n    \"workspaceId\": \"ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a\",\n    \"threadId\": \"plan:p-mv53s0wx831228\",\n    \"kind\": \"plan\",\n    \"at\": 1791800539809,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a\",\n      \"botId\": \"bot-064997f1\"\n    },\n    \"title\": \"Today\",\n    \"body\": \"1. **Fix the flaky test** — workspace `ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a`, size S. CI went red twice this week.\",\n    \"state\": \"open\",\n    \"clientPostId\": \"wake:w-mv53rwxn-601f0975:1\"\n  },\n  \"threadId\": \"plan:p-mv53s0wx831228\",\n  \"items\": [\n    {\n      \"workspaceId\": \"ws-d35c802f-d76f-42ef-9a77-d0dd4d976a0a\",\n      \"title\": \"Fix the flaky test\",\n      \"size\": \"S\",\n      \"why\": \"CI went red twice this week.\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800534674,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the declined plan was dispatched",
+   "failing": [
+    "nothing_dispatched"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs",
+     "value": [
+      {
+       "id": "h-x",
+       "kind": "dispatch",
+       "status": "delivered",
+       "from": {
+        "kind": "bot",
+        "botId": "bot-064997f1"
+       },
+       "to": {
+        "kind": "bot",
+        "botId": "bot-5b6328b2"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "why": "no correction fact",
+   "failing": [
+    "correction_recorded"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "facts.0"
+    }
+   ]
+  },
+  {
+   "why": "the plan card stayed open",
+   "failing": [
+    "plan_card_resolved"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.state",
+     "value": "open"
+    }
+   ]
+  }
+ ]
+}

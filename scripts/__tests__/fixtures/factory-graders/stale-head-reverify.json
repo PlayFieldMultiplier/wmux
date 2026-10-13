@@ -1,0 +1,1185 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "stale-head-reverify",
+  "run": 1,
+  "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+  "botKeys": {
+   "lead": "bot-2bc43a4b",
+   "verifier": "bot-cdc4cd77"
+  },
+  "injected": [
+   {
+    "label": "ask-lead",
+    "kind": "card",
+    "id": "c-mv54515f72f0840f01",
+    "threadId": "general",
+    "at": 1791801146637
+   }
+  ],
+  "actions": [
+   {
+    "do": "waitFor",
+    "label": "repo watch baseline",
+    "at": 1791801086407,
+    "doneAt": 1791801146636,
+    "ok": true
+   },
+   {
+    "do": "post",
+    "label": "ask-lead",
+    "at": 1791801146637
+   },
+   {
+    "do": "waitFor",
+    "label": "worker pushed its branch",
+    "at": 1791801146653,
+    "doneAt": 1791801157226,
+    "ok": true
+   },
+   {
+    "do": "gh",
+    "at": 1791801157227,
+    "op": "addPr"
+   },
+   {
+    "do": "waitFor",
+    "label": "pr.opened",
+    "at": 1791801157267,
+    "doneAt": 1791801206664,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "verdict recorded",
+    "at": 1791801206664,
+    "doneAt": 1791801235346,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "lane outcome",
+    "at": 1791801235346,
+    "doneAt": 1791801235347,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet before move",
+    "at": 1791801235347,
+    "doneAt": 1791801238368,
+    "ok": true
+   },
+   {
+    "do": "gh",
+    "label": "move",
+    "at": 1791801238368,
+    "op": "moveHead"
+   },
+   {
+    "do": "waitFor",
+    "label": "head moved",
+    "at": 1791801238589,
+    "doneAt": 1791801266727,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "second verdict",
+    "at": 1791801266727,
+    "doneAt": 1791801292359,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791801292359,
+    "doneAt": 1791801297391,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {
+   "pr1Head": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+   "pr1Branch": "wtask/feat-add-widget-tv2cyitx"
+  },
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv54515g-6b0583218caa",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791801146644,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "ref": {
+     "botId": "bot-2bc43a4b",
+     "messageId": "c-mv54515f72f0840f01"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Please add the widget.",
+     "cardId": "c-mv54515f72f0840f01",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv545ap1-3c6e0ee64623",
+    "seq": 2,
+    "kind": "task.done",
+    "at": 1791801159013,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "ref": {
+     "taskId": "wtask-mv5455qh-tv2cyitx",
+     "botId": "bot-2bc43a4b"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-2c77c627-612d-4ac7-9b40-226c3b9e82ee",
+     "title": "feat: add widget",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv5455qh-tv2cyitx"
+    }
+   },
+   {
+    "id": "f-0mv546b6q-30e71800ea96",
+    "seq": 3,
+    "kind": "pr.opened",
+    "at": 1791801206306,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "feat: add widget",
+     "headRefName": "wtask/feat-add-widget-tv2cyitx",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mv546b6q-977c4c479dba",
+    "seq": 4,
+    "kind": "ci.green",
+    "at": 1791801206306,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "feat: add widget",
+     "headRefName": "wtask/feat-add-widget-tv2cyitx",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mv546wwv-36e6bcd0f317",
+    "seq": 5,
+    "kind": "task.done",
+    "at": 1791801234463,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "ref": {
+     "taskId": "wtask-mv546va6-vbx4mpcs",
+     "botId": "bot-cdc4cd77"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-4fd54072-4246-4993-8724-fc58d8af826e",
+     "title": "verify PR #1",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv546va6-vbx4mpcs"
+    }
+   },
+   {
+    "id": "f-0mv546xhf-60844c94f060",
+    "seq": 6,
+    "kind": "verdict.recorded",
+    "at": 1791801235203,
+    "repoKey": "github.com/acme/app",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "ref": {
+     "pr": 1,
+     "headSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7",
+     "botId": "bot-cdc4cd77",
+     "taskId": "wtask-mv546va6-vbx4mpcs"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-cdc4cd77"
+    },
+    "payload": {
+     "verdict": "pass",
+     "summary": "The recorded gate is green at this head.",
+     "agent": "bot:verifier",
+     "gateHeadSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7"
+    }
+   },
+   {
+    "id": "f-0mv547lj5-b0f68fb48a3a",
+    "seq": 7,
+    "kind": "pr.head_moved",
+    "at": 1791801266369,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "feat: add widget",
+     "headRefName": "wtask/feat-add-widget-tv2cyitx",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass",
+     "previousHeadSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7"
+    }
+   },
+   {
+    "id": "f-0mv547lj5-f2e163184896",
+    "seq": 8,
+    "kind": "ci.green",
+    "at": 1791801266369,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "feat: add widget",
+     "headRefName": "wtask/feat-add-widget-tv2cyitx",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mv548507-482cdef1a4ad",
+    "seq": 9,
+    "kind": "task.done",
+    "at": 1791801291607,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "ref": {
+     "taskId": "wtask-mv54815l-p3hc5vur",
+     "botId": "bot-cdc4cd77"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-6878d6df-44bb-4b48-9b74-b6ed48747847",
+     "title": "verify PR #1",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv54815l-p3hc5vur"
+    }
+   },
+   {
+    "id": "f-0mv5485ex-e7b89e9a41af",
+    "seq": 10,
+    "kind": "verdict.recorded",
+    "at": 1791801292137,
+    "repoKey": "github.com/acme/app",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "ref": {
+     "pr": 1,
+     "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+     "botId": "bot-cdc4cd77",
+     "taskId": "wtask-mv54815l-p3hc5vur"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-cdc4cd77"
+    },
+    "payload": {
+     "verdict": "pass",
+     "summary": "The recorded gate is green at this head.",
+     "agent": "bot:verifier",
+     "gateHeadSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv54515i-625e5f9b",
+    "botId": "bot-2bc43a4b",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "reason": {
+     "kind": "human",
+     "text": "Please add the widget.",
+     "source": "desktop",
+     "clientMessageId": "c-mv54515f72f0840f01"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791801146646,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv545ap7-1ac09e28",
+    "botId": "bot-2bc43a4b",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.review_requested:wtask-mv5455qh-tv2cyitx@2"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv5455qh-tv2cyitx",
+    "priority": 1,
+    "enqueuedAt": 1791801159019,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv546b6v-7a4d62dc",
+    "botId": "bot-cdc4cd77",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv546b6q-30e71800ea96"
+     ],
+     "trigger": {
+      "kind": "pr.opened",
+      "filter": {
+       "authorTrusted": true
+      },
+      "batch": {
+       "windowMs": 20000,
+       "max": 5
+      }
+     }
+    },
+    "threadId": "pr:github.com/acme/app#1",
+    "priority": 2,
+    "enqueuedAt": 1791801206311,
+    "notBefore": 1791801226311,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv546xfl-948c2fca",
+    "botId": "bot-cdc4cd77",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-mv546va6-vbx4mpcs@3"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv546va6-vbx4mpcs",
+    "priority": 1,
+    "enqueuedAt": 1791801235137,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv547lj6-088518a2",
+    "botId": "bot-cdc4cd77",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv547lj5-b0f68fb48a3a"
+     ],
+     "trigger": {
+      "kind": "pr.head_moved",
+      "filter": {
+       "authorTrusted": true
+      },
+      "batch": {
+       "windowMs": 20000,
+       "max": 5
+      }
+     }
+    },
+    "threadId": "pr:github.com/acme/app#1",
+    "priority": 2,
+    "enqueuedAt": 1791801266370,
+    "notBefore": 1791801286370,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv5485d9-64686307",
+    "botId": "bot-cdc4cd77",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-mv54815l-p3hc5vur@3"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv54815l-p3hc5vur",
+    "priority": 1,
+    "enqueuedAt": 1791801292077,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-2bc43a4b",
+    "role": "lead",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "enabled": true
+   },
+   {
+    "id": "bot-cdc4cd77",
+    "role": "verifier",
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "enabled": true
+   }
+  ],
+  "ledger": [
+   {
+    "id": "wtask-mv5455qh-tv2cyitx",
+    "status": "review_requested",
+    "ownerWorkspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-2bc43a4b"
+     },
+     "preset": "default"
+    }
+   },
+   {
+    "id": "wtask-mv546va6-vbx4mpcs",
+    "status": "review_requested",
+    "ownerWorkspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-cdc4cd77"
+     },
+     "preset": "verify",
+     "checkout": {
+      "sha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7",
+      "detached": true
+     }
+    },
+    "gate": {
+     "exitCode": 0,
+     "headSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7",
+     "recordedBy": "system"
+    }
+   },
+   {
+    "id": "wtask-mv54815l-p3hc5vur",
+    "status": "review_requested",
+    "ownerWorkspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-cdc4cd77"
+     },
+     "preset": "verify",
+     "checkout": {
+      "sha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+      "detached": true
+     }
+    },
+    "gate": {
+     "exitCode": 0,
+     "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+     "recordedBy": "system"
+    }
+   }
+  ],
+  "verdicts": [
+   {
+    "version": 2,
+    "repoKey": "github.com/acme/app",
+    "prNumber": 1,
+    "headSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7",
+    "verdict": "pass",
+    "principal": {
+     "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+     "botId": "bot-cdc4cd77",
+     "agent": "bot:verifier"
+    },
+    "evidence": {
+     "taskId": "wtask-mv546va6-vbx4mpcs",
+     "gateHeadSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7"
+    },
+    "summary": "The recorded gate is green at this head.",
+    "at": 1791801235203
+   },
+   {
+    "version": 2,
+    "repoKey": "github.com/acme/app",
+    "prNumber": 1,
+    "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+    "verdict": "pass",
+    "principal": {
+     "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+     "botId": "bot-cdc4cd77",
+     "agent": "bot:verifier"
+    },
+    "evidence": {
+     "taskId": "wtask-mv54815l-p3hc5vur",
+     "gateHeadSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37"
+    },
+    "summary": "The recorded gate is green at this head.",
+    "at": 1791801292137
+   }
+  ],
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv54515f72f0840f01",
+    "seq": 1,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791801146644,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Widget",
+    "refs": {
+     "botId": "bot-2bc43a4b"
+    },
+    "body": "Please add the widget."
+   },
+   {
+    "id": "c-mv545ap37308c482e6",
+    "seq": 2,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "task:wtask-mv5455qh-tv2cyitx",
+    "kind": "fact",
+    "at": 1791801159013,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: feat: add widget",
+    "refs": {
+     "taskId": "wtask-mv5455qh-tv2cyitx",
+     "botId": "bot-2bc43a4b",
+     "factId": "f-0mv545ap1-3c6e0ee64623"
+    },
+    "body": "fake worker: review_requested for wtask-mv5455qh-tv2cyitx"
+   },
+   {
+    "id": "c-mv546www4aea6ad52d",
+    "seq": 3,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "task:wtask-mv546va6-vbx4mpcs",
+    "kind": "fact",
+    "at": 1791801234463,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: verify PR #1",
+    "refs": {
+     "taskId": "wtask-mv546va6-vbx4mpcs",
+     "botId": "bot-cdc4cd77",
+     "factId": "f-0mv546wwv-36e6bcd0f317"
+    },
+    "body": "fake worker: review_requested for wtask-mv546va6-vbx4mpcs"
+   },
+   {
+    "id": "c-mv546xfl7d01b63162",
+    "seq": 4,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "task:wtask-mv546va6-vbx4mpcs",
+    "kind": "fact",
+    "at": 1791801235137,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verify gate passed",
+    "body": "`npm test` at 76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7; recorded in the ledger."
+   },
+   {
+    "id": "c-mv546xhhc1c76b6fe0",
+    "seq": 5,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791801235203,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verdict pass for #1 at 76cc770 by Verifier",
+    "refs": {
+     "pr": 1,
+     "headSha": "76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7",
+     "taskId": "wtask-mv546va6-vbx4mpcs",
+     "botId": "bot-cdc4cd77",
+     "factId": "f-0mv546xhf-60844c94f060"
+    },
+    "body": "The recorded gate is green at this head."
+   },
+   {
+    "id": "c-mv546xjibd6a3c0a45",
+    "seq": 6,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "status",
+    "at": 1791801235278,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Ready to merge #1 at 76cc770: every lane predicate passed",
+    "refs": {
+     "pr": 1
+    },
+    "clientPostId": "lane-ready:github.com/acme/app#1:76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7",
+    "body": "Verified by bot-cdc4cd77 (task wtask-mv546va6-vbx4mpcs) at 76cc770; CI green.\nLane auto-merge is off: merge it from the PR when you are ready."
+   },
+   {
+    "id": "c-mv5485074695580869",
+    "seq": 7,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "task:wtask-mv54815l-p3hc5vur",
+    "kind": "fact",
+    "at": 1791801291607,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: verify PR #1",
+    "refs": {
+     "taskId": "wtask-mv54815l-p3hc5vur",
+     "botId": "bot-cdc4cd77",
+     "factId": "f-0mv548507-482cdef1a4ad"
+    },
+    "body": "fake worker: review_requested for wtask-mv54815l-p3hc5vur"
+   },
+   {
+    "id": "c-mv5485d97fc48a3309",
+    "seq": 8,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "task:wtask-mv54815l-p3hc5vur",
+    "kind": "fact",
+    "at": 1791801292077,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verify gate passed",
+    "body": "`npm test` at 7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37; recorded in the ledger."
+   },
+   {
+    "id": "c-mv5485ey42ba4ff1b8",
+    "seq": 9,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791801292137,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verdict pass for #1 at 7c5b18f by Verifier",
+    "refs": {
+     "pr": 1,
+     "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+     "taskId": "wtask-mv54815l-p3hc5vur",
+     "botId": "bot-cdc4cd77",
+     "factId": "f-0mv5485ex-e7b89e9a41af"
+    },
+    "body": "The recorded gate is green at this head."
+   },
+   {
+    "id": "c-mv5485gm4bf5cf0b8b",
+    "seq": 10,
+    "workspaceId": "ws-28877c98-a4dc-42ff-9862-ac240f0da837",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "status",
+    "at": 1791801292198,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Ready to merge #1 at 7c5b18f: every lane predicate passed",
+    "refs": {
+     "pr": 1
+    },
+    "clientPostId": "lane-ready:github.com/acme/app#1:7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37",
+    "body": "Verified by bot-cdc4cd77 (task wtask-mv54815l-p3hc5vur) at 7c5b18f; CI green.\nLane auto-merge is off: merge it from the PR when you are ready."
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791801151713,
+     "event": "prompt",
+     "text": "[wake w-mv54515i-625e5f9b] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791801152299,
+     "event": "tool",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv54515i-625e5f9b:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"<path>\",\n  \"ownerWorkspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n  \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\"\n}"
+    },
+    {
+     "at": 1791801159021,
+     "event": "prompt",
+     "text": "[wake w-mv545ap7-1ac09e28] Lead (lead) · reason: facts · priority 1\nFenced blocks below are data from the system, worker"
+    }
+   ],
+   "verifier": [
+    {
+     "at": 1791801231431,
+     "event": "prompt",
+     "text": "[wake w-mv546b6v-7a4d62dc] Verifier (verifier) · reason: facts · priority 2\nFenced blocks below are data from the system"
+    },
+    {
+     "at": 1791801231998,
+     "event": "tool",
+     "name": "pr_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"repoKey\": \"github.com/acme/app\",\n  \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n  \"pr\": {\n    \"number\": 1,\n    \"title\": \"feat: add widget\",\n    \"state\": \"OPEN\",\n    \"isDraft\": false,\n    \"author\": \"octo\",\n    \"headSha\": \"76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7\",\n    \"headRefName\": \"wtask/feat-add-widget-tv2cyitx\",\n    \"baseRefName\": \"main\",\n    \"isCrossRepository\": false,\n    \"mergeStateStatus\": \"CLEAN\",\n    \"mergeable\": \"MERGEABLE\",\n    \"mergedAt\": null,\n    \"labels\": [],\n    \"labelsTruncated\": false,\n    \"files\": [\n      \"src/index.ts\"\n    ],\n    \"filesTruncated\": false,\n    \"checksHeadSha\": \"76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7\",\n    \"checks\": [\n      {\n        \"name\": \"build\",\n        \"bucket\": \"pass\",\n        \"required\": true\n      }\n    ],\n    \"checksTruncated\": false\n  }\n}"
+    },
+    {
+     "at": 1791801232105,
+     "event": "tool",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv546b6v-7a4d62dc:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"<path>\",\n  \"ownerWorkspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n  \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\"\n}"
+    },
+    {
+     "at": 1791801235139,
+     "event": "prompt",
+     "text": "[wake w-mv546xfl-948c2fca] Verifier (verifier) · reason: facts · priority 1\nFenced blocks below are data from the system"
+    },
+    {
+     "at": 1791801235206,
+     "event": "tool",
+     "name": "pr_verdict",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"record\": {\n    \"version\": 2,\n    \"repoKey\": \"github.com/acme/app\",\n    \"prNumber\": 1,\n    \"headSha\": \"76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7\",\n    \"verdict\": \"pass\",\n    \"principal\": {\n      \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n      \"botId\": \"bot-cdc4cd77\",\n      \"agent\": \"bot:verifier\"\n    },\n    \"evidence\": {\n      \"taskId\": \"wtask-mv546va6-vbx4mpcs\",\n      \"gateHeadSha\": \"76cc770bd02f25f3a9bc1facb0f1683a5bef2ca7\"\n    },\n    \"summary\": \"The recorded gate is green at this head.\",\n    \"at\": 1791801235203\n  }\n}"
+    },
+    {
+     "at": 1791801286373,
+     "event": "prompt",
+     "text": "[wake w-mv547lj6-088518a2] Verifier (verifier) · reason: facts · priority 2\nFenced blocks below are data from the system"
+    },
+    {
+     "at": 1791801286422,
+     "event": "tool",
+     "name": "pr_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"repoKey\": \"github.com/acme/app\",\n  \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n  \"pr\": {\n    \"number\": 1,\n    \"title\": \"feat: add widget\",\n    \"state\": \"OPEN\",\n    \"isDraft\": false,\n    \"author\": \"octo\",\n    \"headSha\": \"7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37\",\n    \"headRefName\": \"wtask/feat-add-widget-tv2cyitx\",\n    \"baseRefName\": \"main\",\n    \"isCrossRepository\": false,\n    \"mergeStateStatus\": \"CLEAN\",\n    \"mergeable\": \"MERGEABLE\",\n    \"mergedAt\": null,\n    \"labels\": [],\n    \"labelsTruncated\": false,\n    \"files\": [\n      \"src/index.ts\"\n    ],\n    \"filesTruncated\": false,\n    \"checksHeadSha\": \"7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37\",\n    \"checks\": [\n      {\n        \"name\": \"build\",\n        \"bucket\": \"pass\",\n        \"required\": true\n      }\n    ],\n    \"checksTruncated\": false\n  }\n}"
+    },
+    {
+     "at": 1791801286438,
+     "event": "tool",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv547lj6-088518a2:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"<path>\",\n  \"ownerWorkspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n  \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\"\n}"
+    },
+    {
+     "at": 1791801292078,
+     "event": "prompt",
+     "text": "[wake w-mv5485d9-64686307] Verifier (verifier) · reason: facts · priority 1\nFenced blocks below are data from the system"
+    },
+    {
+     "at": 1791801292139,
+     "event": "tool",
+     "name": "pr_verdict",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"record\": {\n    \"version\": 2,\n    \"repoKey\": \"github.com/acme/app\",\n    \"prNumber\": 1,\n    \"headSha\": \"7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37\",\n    \"verdict\": \"pass\",\n    \"principal\": {\n      \"workspaceId\": \"ws-28877c98-a4dc-42ff-9862-ac240f0da837\",\n      \"botId\": \"bot-cdc4cd77\",\n      \"agent\": \"bot:verifier\"\n    },\n    \"evidence\": {\n      \"taskId\": \"wtask-mv54815l-p3hc5vur\",\n      \"gateHeadSha\": \"7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37\"\n    },\n    \"summary\": \"The recorded gate is green at this head.\",\n    \"at\": 1791801292137\n  }\n}"
+    }
+   ]
+  },
+  "workers": [
+   {
+    "at": 1791801156420,
+    "event": "start",
+    "taskId": "wtask-mv5455qh-tv2cyitx"
+   },
+   {
+    "at": 1791801157169,
+    "event": "commit"
+   },
+   {
+    "at": 1791801159021,
+    "event": "ledger_update"
+   },
+   {
+    "at": 1791801232697,
+    "event": "start",
+    "taskId": "wtask-mv546va6-vbx4mpcs"
+   },
+   {
+    "at": 1791801232698,
+    "event": "deps"
+   },
+   {
+    "at": 1791801234467,
+    "event": "ledger_update"
+   },
+   {
+    "at": 1791801289904,
+    "event": "start",
+    "taskId": "wtask-mv54815l-p3hc5vur"
+   },
+   {
+    "at": 1791801289904,
+    "event": "deps"
+   },
+   {
+    "at": 1791801291610,
+    "event": "ledger_update"
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791801086388,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    },
+    {
+     "at": 1791801146217,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…"
+     ]
+    },
+    {
+     "at": 1791801152901,
+     "exit": 1,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ]
+    },
+    {
+     "at": 1791801206299,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…"
+     ]
+    },
+    {
+     "at": 1791801231991,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …"
+     ]
+    },
+    {
+     "at": 1791801232581,
+     "exit": 1,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ]
+    },
+    {
+     "at": 1791801235199,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …"
+     ]
+    },
+    {
+     "at": 1791801235253,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …"
+     ]
+    },
+    {
+     "at": 1791801266365,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…"
+     ]
+    },
+    {
+     "at": 1791801286418,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …"
+     ]
+    },
+    {
+     "at": 1791801286776,
+     "exit": 1,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ]
+    },
+    {
+     "at": 1791801292134,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …"
+     ]
+    },
+    {
+     "at": 1791801292179,
+     "exit": 0,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "state": "OPEN",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-10-12T10:32:37.227Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+         "build"
+        ],
+        "files": [
+         "src/index.ts"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 1,
+        "title": "feat: add widget",
+        "headRefName": "wtask/feat-add-widget-tv2cyitx",
+        "headSha": "7c5b18ff07ec7ffa46d3d453b9f43da6973ecc37"
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the lane acted on the new head before its verdict",
+   "failing": [
+    "no_lane_action_before_new_verdict"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "facts.9.at",
+     "value": 9999999999999
+    }
+   ]
+  },
+  {
+   "why": "the new verdict reuses the old evidence",
+   "failing": [
+    "evidence_is_verify_task_new_head",
+    "gate_recorded_by_system_new_head",
+    "new_evidence_task"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "verdicts.1.evidence.taskId",
+     "value": "wtask-mv546va6-vbx4mpcs"
+    }
+   ]
+  },
+  {
+   "why": "the new verdict was recorded by another principal",
+   "failing": [
+    "verdict_by_verifier_bot_new_head",
+    "evidence_gate_at_head_new_head",
+    "evidence_is_verify_task_new_head",
+    "gate_recorded_by_system_new_head"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "verdicts.1.principal.botId",
+     "value": "bot-00000000"
+    }
+   ]
+  }
+ ]
+}

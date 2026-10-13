@@ -1,0 +1,15 @@
+{
+  "name": "room-read-paging",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "250 cards in one thread read with the room's seq cursor, 100 per page: three pages, every card exactly once in seq order, hasMore false only on the last page.",
+  "setup": {
+    "bots": [ { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [ { "say": "idle" } ] } ] } } ]
+  },
+  "actions": [
+    { "do": "loop", "times": 250, "actions": [ { "do": "post", "post": { "threadId": "task:paging", "title": "card {{i1}}", "to": "maintainer" } } ] },
+    { "do": "readPages", "label": "pages", "params": { "threadId": "task:paging", "sinceSeq": 0, "limit": 100 } }
+  ],
+  "expect": { "requires": ["cards", "bots"], "total": 250, "page": 100, "thread": "task:paging", "record": "pages" }
+}

@@ -1,0 +1,299 @@
+{
+ "note": "pass = a trimmed live run; every card in the one normalized PR thread, as a live run of the fixed build writes them (thread ids are canonical at every entry)",
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "thread-id-roundtrip",
+  "run": 1,
+  "workspaceId": "ws-531fea64-342c-44d2-9542-5c951c168f87",
+  "botKeys": {
+   "triage": "bot-eb354eba"
+  },
+  "injected": [
+   {
+    "label": "refused-mixed-case",
+    "kind": "fact",
+    "id": "f-0mv548qt6-88aec5efc904",
+    "factKind": "merge.refused",
+    "at": 1791801319866
+   },
+   {
+    "label": "merged-normalized",
+    "kind": "fact",
+    "id": "f-0mv548qtb-9edb26cb399a",
+    "factKind": "pr.merged",
+    "at": 1791801319871
+   },
+   {
+    "label": "human-mixed-case",
+    "kind": "card",
+    "id": "c-mv548qtgcea16b2748",
+    "threadId": "pr:Acme/App#12",
+    "at": 1791801319874
+   }
+  ],
+  "actions": [
+   {
+    "do": "emit",
+    "label": "refused-mixed-case",
+    "at": 1791801319866
+   },
+   {
+    "do": "emit",
+    "label": "merged-normalized",
+    "at": 1791801319871
+   },
+   {
+    "do": "post",
+    "label": "human-mixed-case",
+    "at": 1791801319874
+   },
+   {
+    "do": "waitFor",
+    "label": "fact cards",
+    "at": 1791801319877,
+    "doneAt": 1791801339967,
+    "ok": false
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [
+   {
+    "label": "fact cards"
+   }
+  ],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv548qt6-88aec5efc904",
+    "seq": 1,
+    "kind": "merge.refused",
+    "at": 1791801319866,
+    "repoKey": "Acme/App",
+    "ref": {
+     "pr": 12,
+     "headSha": "1111111111111111111111111111111111111111"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "approvedBy": "lane",
+     "reason": "required-checks-green:no-required-checks"
+    }
+   },
+   {
+    "id": "f-0mv548qtb-9edb26cb399a",
+    "seq": 2,
+    "kind": "pr.merged",
+    "at": 1791801319871,
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 12,
+     "headSha": "1111111111111111111111111111111111111111"
+    },
+    "actor": {
+     "kind": "github"
+    },
+    "payload": {
+     "author": "octo",
+     "labels": []
+    }
+   }
+  ],
+  "wakes": null,
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-eb354eba",
+    "role": "triage",
+    "workspaceId": "ws-531fea64-342c-44d2-9542-5c951c168f87",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv548qt955f84a6930",
+    "seq": 1,
+    "workspaceId": "ws-531fea64-342c-44d2-9542-5c951c168f87",
+    "threadId": "pr:github.com/acme/app#12",
+    "kind": "refusal",
+    "at": 1791801319866,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merge refused for #12 at 1111111",
+    "refs": {
+     "pr": 12,
+     "headSha": "1111111111111111111111111111111111111111",
+     "factId": "f-0mv548qt6-88aec5efc904"
+    },
+    "body": "required-checks-green:no-required-checks"
+   },
+   {
+    "id": "c-mv548qtd22b52b2b40",
+    "seq": 2,
+    "workspaceId": "ws-531fea64-342c-44d2-9542-5c951c168f87",
+    "threadId": "pr:github.com/acme/app#12",
+    "kind": "fact",
+    "at": 1791801319871,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "PR #12 merged",
+    "refs": {
+     "pr": 12,
+     "headSha": "1111111111111111111111111111111111111111",
+     "factId": "f-0mv548qtb-9edb26cb399a"
+    }
+   },
+   {
+    "id": "c-mv548qtgcea16b2748",
+    "seq": 3,
+    "workspaceId": "ws-531fea64-342c-44d2-9542-5c951c168f87",
+    "threadId": "pr:github.com/acme/app#12",
+    "kind": "human",
+    "at": 1791801319876,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "note",
+    "body": "About this PR."
+   }
+  ],
+  "stub": {
+   "triage": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791801320012,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "a human post with another spelling splits the PR thread (the behaviour before the fix)",
+   "failing": [
+    "human_post_joins_thread",
+    "one_thread_per_pr"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.2.threadId",
+     "value": "pr:Acme/App#12"
+    }
+   ]
+  },
+  {
+   "why": "fact cards split by repo key spelling",
+   "failing": [
+    "fact_cards_one_thread",
+    "one_thread_per_pr"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.threadId",
+     "value": "pr:Acme/App#12"
+    }
+   ]
+  }
+ ]
+}

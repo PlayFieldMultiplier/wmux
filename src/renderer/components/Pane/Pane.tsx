@@ -856,8 +856,12 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         return;
       }
       if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
-      window.electronAPI.pty.write(ptyId, `${line}\r`);
-      useStore.getState().clearResumeHint(ptyId);
+      // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
+      // A refused line keeps the pill, so the pane can still be resumed by hand.
+      window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
+        () => useStore.getState().clearResumeHint(ptyId),
+        (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
+      );
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1176,11 +1180,20 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
 
         // Paste WITHOUT a trailing \r. The user presses Enter to run — so bypass
         // is re-granted only by an explicit keystroke, never automatically (D6).
-        const type = (text: string) => window.electronAPI.pty.write(ptyId, text);
-        const typeAndClear = (text: string) => {
-          type(text);
-          useStore.getState().clearResumeHint(ptyId);
-        };
+        // Resolves false when main refused the line: the pill then stays as it was.
+        const type = (text: string): Promise<boolean> =>
+          window.electronAPI.pty.writeLaunch(ptyId, text, false).then(
+            () => true,
+            (err: unknown) => {
+              console.warn('[wmux:resume] the resume line was not typed', String(err));
+              return false;
+            },
+          );
+        const typeAndClear = (text: string): Promise<boolean> =>
+          type(text).then((ok) => {
+            if (ok) useStore.getState().clearResumeHint(ptyId);
+            return ok;
+          });
 
         // Assemble the exact string the next click types — with the role's
         // bound model re-asserted on the launcher-prefixed variants (mirrors the
@@ -1214,9 +1227,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
               after: plan.text,
             });
           }
-          if (plan.clearHint) typeAndClear(plan.text);
-          else type(plan.text);
-          if (plan.advanceStage) setResumeStage(1);
+          const typed = plan.clearHint ? typeAndClear(plan.text) : type(plan.text);
+          if (plan.advanceStage) void typed.then((ok) => { if (ok) setResumeStage(1); });
         };
 
         // The two-stage progressive assembly only applies to the toggle-OFF

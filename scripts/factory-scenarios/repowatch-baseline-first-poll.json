@@ -1,0 +1,125 @@
+{
+  "name": "repowatch-baseline-first-poll",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The repo watch's first poll of a repo is a baseline: the issue and PR already open emit nothing. An issue opened after it emits exactly one issue.opened, which wakes the triage bot in that issue's thread. One GraphQL read per poll.",
+  "setup": {
+    "repo": true,
+    "gh": {
+      "issues": [
+        {
+          "number": 3,
+          "title": "old issue",
+          "author": "reporter",
+          "createdAt": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "prs": [
+        {
+          "number": 4,
+          "title": "old pr",
+          "headSha": "4444444444444444444444444444444444444444",
+          "headRefName": "old",
+          "author": "octo",
+          "createdAt": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "bots": [
+      {
+        "key": "triage",
+        "role": "triage",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "triage",
+                    "title": "Triage",
+                    "body": "Read the new issue."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "waitFor",
+      "label": "baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addIssue",
+      "issue": {
+        "number": 9,
+        "title": "new bug",
+        "author": "octo",
+        "labels": [
+          "bug"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "issue.opened",
+      "cond": {
+        "facts": {
+          "kind": "issue.opened"
+        }
+      },
+      "timeoutMs": 100000
+    },
+    {
+      "do": "waitFor",
+      "label": "triage done",
+      "cond": {
+        "wakes": {
+          "bot": "triage",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 2000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "repoWatch",
+      "ghCalls"
+    ],
+    "old": {
+      "issue": 3,
+      "pr": 4
+    },
+    "new": 9,
+    "bot": "triage",
+    "thread": "issue:github.com/acme/app#9"
+  }
+}

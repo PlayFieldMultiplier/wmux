@@ -487,6 +487,65 @@ for (const b of BORROWED_SOURCES) {
   lines.push('');
 }
 
+// Projects whose ideas shaped a wmux design. Nothing was copied from them, so no
+// license terms apply; they are listed as an acknowledgement only.
+const INSPIRED_BY = [
+  {
+    name: 'OpenBot',
+    license: 'MIT License',
+    repo: 'https://github.com/CopilotKit/OpenBot',
+    what: 'Bot-to-bot handoffs routed by the system rather than the model, with a\n' +
+      'depth cap and a per-run cap that refuse instead of truncating, an always\n' +
+      'available ask_person exit, and refusals that are recorded.',
+  },
+  {
+    name: 'OpenClaw',
+    license: 'MIT License',
+    repo: 'https://github.com/openclaw/openclaw',
+    what: 'An "always allow" for a scheduled job that holds only for the job\'s\n' +
+      'current configuration, so editing the job resets it.',
+  },
+  {
+    name: 'Paperclip',
+    license: 'MIT License',
+    repo: 'https://github.com/paperclipai/paperclip',
+    what: 'Agents that wake on events through a queue that merges duplicate wakes,\n' +
+      'per-agent budgets, and owner approval of work-level decisions.',
+  },
+  {
+    name: 'Buzz',
+    license: 'Apache License 2.0',
+    repo: 'https://github.com/block/buzz',
+    what: 'Humans and agents sharing threaded rooms, and grading agent scenarios from\n' +
+      'an evidence snapshot taken after the run.',
+  },
+  {
+    name: 'Gas Town',
+    license: 'MIT License',
+    repo: 'https://github.com/steveyegge/gastown',
+    what: 'A dedicated merge step that lands agent work in order.',
+  },
+  {
+    name: 'Anneal',
+    license: 'MIT License',
+    repo: 'https://github.com/mosonlab/anneal',
+    what: 'A mechanical, model-free merge step and a review that does not see the\n' +
+      'earlier review.',
+  },
+];
+lines.push('PROJECTS THAT INSPIRED THE DESIGN');
+lines.push('');
+lines.push('wmux\'s agent features were inspired by ideas from the projects below. No code');
+lines.push('or text was taken from them; they are listed as an acknowledgement.');
+lines.push('');
+for (const p of INSPIRED_BY) {
+  lines.push(`${p.name} (${p.license}) - ${p.repo}`);
+  lines.push(p.what);
+  lines.push('');
+}
+lines.push(SEP);
+lines.push('');
+
 const rendered = lines.join('\n');
 
 if (DIGEST_ONLY) {

@@ -16,32 +16,56 @@
 //                    dependency change are indistinguishable by path, and both
 //                    go to the owner), CHANGELOG.md (changelog.d/ fragments are
 //                    fine), .github/, release and notice scripts, packaging.
+//   gate-definition-changed  the files that define the gate a verifier runs
+//                    (scripts/verify.sh, package.json, .npmrc, wmux.json,
+//                    vitest, eslint and tsconfig files): a PR that changes them is
+//                    not graded by its own gate without the owner. A
+//                    package.json change also fails not-release-pr; each
+//                    predicate reports its own reason.
 //   not-windows-path path tokens naming Windows (win32, windows, wsl, conpty,
 //                    squirrel, pwsh, …), Windows-only trees and extensions.
 // Path tokens split on separators AND camelCase, so `winSnapshotNative.ts`
 // counts; an Electron `auxiliaryWindows.ts` also counts — over-firing only
 // sends a merge to the owner.
+//
+// Decided from the verdict store (shared/prVerdict.ts), read fresh by main:
+//   verifier-pass-at-head  a workspace other than the PR's authors (for a
+//                    bot's PASS with `authorBots` known: a bot other than the
+//                    ones that dispatched the PR's worker) recorded
+//                    PASS at exactly the head being merged, and nobody
+//                    recorded FAIL there. With `botVerdictsOnly` (the factory
+//                    is on) a PASS counts only when its evidence resolves to a
+//                    bot verify task whose system gate ran, unskipped and
+//                    green, on a detached checkout of that head
+//                    (verdictEvidenceCheck).
 
+import type { LedgerGateResult } from '../../shared/ledger';
 import type { PrLaneFacts } from '../../shared/prReview';
+import type { PrVerdictRecord } from '../../shared/prVerdict';
 
 export type LanePredicate =
   | 'head-unchanged'
   | 'required-checks-green'
   | 'not-release-pr'
+  | 'gate-definition-changed'
   | 'not-windows-path'
   | 'no-needs-windows-verify-label'
   | 'author-trusted'
-  | 'pr-branch-bound-to-asker';
+  | 'pr-branch-bound-to-asker'
+  | 'verifier-pass-at-head';
 
-/** Evaluation order, and every predicate a 'moa-auto' merge must pass. */
+/** Evaluation order, and every predicate a 'moa-auto' or 'lane' merge must
+ *  pass. */
 export const LANE_PREDICATES: readonly LanePredicate[] = [
   'head-unchanged',
   'required-checks-green',
   'not-release-pr',
+  'gate-definition-changed',
   'not-windows-path',
   'no-needs-windows-verify-label',
   'author-trusted',
   'pr-branch-bound-to-asker',
+  'verifier-pass-at-head',
 ];
 
 /** What an owner-approved merge re-checks (mergeBlock runs inside merge()). */
@@ -66,12 +90,60 @@ export interface MergeLaneContext {
   /** Branches bound to the asker, read by main: the branch checked out in the
    *  asker's cwd and the branches of its task ledger rows. */
   askerBranches: readonly string[];
+  /** This PR's verdict records, read fresh by main; null when unreadable. */
+  verdicts: readonly PrVerdictRecord[] | null;
+  /** The workspaces that authored the PR, read by main: the asker, the
+   *  workspaces of tasks on the head branch, and those with a pane in a
+   *  worktree of it. Null when any part could not be read. */
+  authorWorkspaces: readonly string[] | null;
+  /** The bots whose fan-out produced the PR's head branch (their ledger rows'
+   *  dispatch origin), read by main. When set, a bot's PASS is self-verified
+   *  only when its bot is one of these — a verifier may share a workspace
+   *  with the lead that dispatched the PR's worker. A PASS without a bot
+   *  (a pane verifier) is judged by `authorWorkspaces` as before. Absent:
+   *  every PASS is judged by workspace. */
+  authorBots?: readonly string[] | null;
+  /** True when the factory is on: a PASS counts only with evidence that
+   *  resolves in `evidenceRows` (verdictEvidenceCheck). Absent/false keeps
+   *  the stage-2 rule (any non-author PASS at the head). */
+  botVerdictsOnly?: boolean;
+  /** The ledger rows behind the verdicts' `evidence.taskId`, resolved by the
+   *  caller from main's own stores, keyed by task id. A task the caller could
+   *  not find is left out; null/absent when the rows could not be read, which
+   *  under `botVerdictsOnly` refuses. */
+  evidenceRows?: ReadonlyMap<string, LaneEvidenceRow> | null;
+}
+
+/** A verify task's ledger row as the lane needs it: who dispatched it, with
+ *  which preset, on what checkout, and the gate the runner recorded. */
+export interface LaneEvidenceRow {
+  taskId: string;
+  /** Who started the task; only `{kind: 'bot', botId}` can back a verdict. */
+  origin: { kind: string; botId?: string };
+  /** The fan-out preset, e.g. 'verify'; null when none. */
+  preset: string | null;
+  /** The task worktree's checkout; null when it was a branch checkout. */
+  checkout: { sha: string; detached: boolean } | null;
+  /** The system-recorded gate result, null when none was recorded. */
+  gate: LedgerGateResult | null;
+}
+
+/** The verifier a passing `verifier-pass-at-head` rests on. */
+export interface LaneVerifier {
+  workspaceId: string;
+  agent: string;
+  headSha: string;
+  /** Set when the PASS came from a bot with evidence (botVerdictsOnly). */
+  botId?: string;
+  taskId?: string;
 }
 
 export interface LaneVerdict {
   ok: boolean;
   /** Every failed predicate, in LANE_PREDICATES order. */
   failures: LaneFailure[];
+  /** Set when verifier-pass-at-head ran and passed. */
+  verifiedBy?: LaneVerifier;
 }
 
 /** The gh I/O half (built later). Must read fresh: never a cached answer. */
@@ -129,6 +201,33 @@ export function notReleasePr(facts: PrLaneFacts): LaneCheck {
   return pass;
 }
 
+/** Files that define the gate a verifier runs: [reason, test]. */
+const GATE_DEFINITION_PATHS: ReadonlyArray<[string, (p: string) => boolean]> = [
+  ['verify-script', (p) => p === 'scripts/verify.sh'],
+  ['package-manifest', (p) => /(?:^|\/)package\.json$/.test(p)],
+  ['npm-config', (p) => /(?:^|\/)\.npmrc$/.test(p)],
+  ['project-config', (p) => /(?:^|\/)wmux\.json$/.test(p)],
+  ['test-config', (p) => /(?:^|\/)vitest(?:\.[\w-]+)*\.config\.[cm]?[jt]s$/.test(p) || /(?:^|\/)vitest\.workspace\.[\w.]+$/.test(p)],
+  ['lint-config', (p) => /(?:^|\/)(?:eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.[\w]+)?|\.eslintignore)$/.test(p)],
+  ['ts-config', (p) => /(?:^|\/)tsconfig[^/]*\.json$/.test(p)],
+];
+
+/** The gate-definition reason a changed path falls under, or null. */
+export function gateDefinitionPathReason(path: string): string | null {
+  for (const [reason, test] of GATE_DEFINITION_PATHS) if (test(path)) return reason;
+  return null;
+}
+
+export function gateDefinitionUnchanged(facts: PrLaneFacts): LaneCheck {
+  if (facts.filesTruncated) return fail('files-truncated');
+  if (facts.files.length === 0) return fail('no-files');
+  for (const p of facts.files) {
+    const reason = gateDefinitionPathReason(p);
+    if (reason) return fail(reason);
+  }
+  return pass;
+}
+
 const WINDOWS_TOKENS: ReadonlySet<string> = new Set([
   'win', 'win32', 'win64', 'windows', 'wsl', 'conpty', 'winpty', 'squirrel', 'pwsh', 'powershell',
   'winget', 'chocolatey', 'choco', 'nsis', 'msi', 'msix', 'appx',
@@ -175,15 +274,93 @@ export function prBranchBoundToAsker(facts: PrLaneFacts, askerBranches: readonly
   return askerBranches.includes(facts.headRefName) ? pass : fail('branch-not-bound');
 }
 
+/**
+ * Whether one PASS is backed by main-written evidence (botVerdictsOnly). The
+ * verdict names its task; the row the caller resolved for that task must be a
+ * bot's `verify` task, dispatched by the verdict's own bot, on a detached
+ * checkout of the verdict's head, whose system-recorded gate ran on that head
+ * and exited 0 without being a skip. Null = counts.
+ */
+export function verdictEvidenceCheck(
+  r: PrVerdictRecord,
+  rows: ReadonlyMap<string, LaneEvidenceRow>,
+): 'verdict-no-evidence' | 'evidence-mismatch' | 'gate-skipped' | 'gate-failed' | null {
+  const ev = r.evidence;
+  if (!ev) return 'verdict-no-evidence';
+  const row = rows.get(ev.taskId);
+  const botId = r.principal.botId;
+  if (!row || row.taskId !== ev.taskId || !botId) return 'evidence-mismatch';
+  if (row.origin.kind !== 'bot' || row.origin.botId !== botId) return 'evidence-mismatch';
+  if (row.preset !== 'verify') return 'evidence-mismatch';
+  if (!row.checkout || row.checkout.detached !== true || row.checkout.sha !== r.headSha) return 'evidence-mismatch';
+  if (ev.gateHeadSha !== r.headSha) return 'evidence-mismatch';
+  const gate = row.gate;
+  if (!gate || gate.recordedBy !== 'system') return 'evidence-mismatch';
+  // A recorded skip ran nothing: it is not a pass, whatever its exit code.
+  if (gate.skipped !== undefined || gate.command === 'none') return 'gate-skipped';
+  if (gate.headSha !== r.headSha) return 'evidence-mismatch';
+  if (gate.exitCode !== 0) return 'gate-failed';
+  return null;
+}
+
+/** Most specific first, for the reason a set of PASSes all failed. */
+const EVIDENCE_REASON_RANK: readonly string[] = ['gate-failed', 'gate-skipped', 'evidence-mismatch', 'verdict-no-evidence'];
+
+/**
+ * A PASS at exactly `expectHead` from a workspace that is not one of the PR's
+ * authors, and no FAIL there from anyone. This guards against an author
+ * verifying its own work. With `botVerdictsOnly`, the PASS must also pass
+ * verdictEvidenceCheck; a FAIL from anyone still blocks.
+ */
+export function verifierPassAtHead(facts: PrLaneFacts, ctx: MergeLaneContext): { check: LaneCheck; by?: LaneVerifier } {
+  if (ctx.verdicts === null) return { check: fail('verdicts-unreadable') };
+  if (ctx.authorWorkspaces === null) return { check: fail('author-unknown') };
+  const forPr = ctx.verdicts.filter((r) => r.prNumber === facts.number);
+  const atHead = facts.headRefOid === ctx.expectHead ? forPr.filter((r) => r.headSha === ctx.expectHead) : [];
+  if (atHead.some((r) => r.verdict === 'fail')) return { check: fail('verdict-fail') };
+  if (atHead.length === 0) return { check: fail(forPr.length > 0 ? 'verdict-stale-head' : 'no-verdict') };
+  const authors = ctx.authorWorkspaces;
+  const authorBots = ctx.authorBots;
+  const isAuthor = (r: PrVerdictRecord): boolean => (r.principal.botId && authorBots
+    ? authorBots.includes(r.principal.botId)
+    : authors.includes(r.principal.workspaceId));
+  const passes = atHead.filter((r) => r.verdict === 'pass' && !isAuthor(r));
+  if (passes.length === 0) return { check: fail('self-verified') };
+  if (!ctx.botVerdictsOnly) {
+    const p = passes[0];
+    return { check: { ok: true }, by: { workspaceId: p.principal.workspaceId, agent: p.principal.agent, headSha: p.headSha } };
+  }
+  const rows = ctx.evidenceRows;
+  if (!rows) return { check: fail('evidence-unreadable') };
+  let worst: number = EVIDENCE_REASON_RANK.length;
+  for (const p of passes) {
+    const why = verdictEvidenceCheck(p, rows);
+    if (why === null) {
+      return {
+        check: { ok: true },
+        by: {
+          workspaceId: p.principal.workspaceId, agent: p.principal.agent, headSha: p.headSha,
+          ...(p.principal.botId ? { botId: p.principal.botId } : {}),
+          ...(p.evidence ? { taskId: p.evidence.taskId } : {}),
+        },
+      };
+    }
+    worst = Math.min(worst, EVIDENCE_REASON_RANK.indexOf(why));
+  }
+  return { check: fail(EVIDENCE_REASON_RANK[worst] ?? 'verdict-no-evidence') };
+}
+
 function runPredicate(p: LanePredicate, facts: PrLaneFacts, ctx: MergeLaneContext): LaneCheck {
   switch (p) {
     case 'head-unchanged': return headUnchanged(facts, ctx.expectHead);
     case 'required-checks-green': return requiredChecksGreen(facts, ctx.expectHead);
     case 'not-release-pr': return notReleasePr(facts);
+    case 'gate-definition-changed': return gateDefinitionUnchanged(facts);
     case 'not-windows-path': return notWindowsPath(facts);
     case 'no-needs-windows-verify-label': return noNeedsWindowsVerifyLabel(facts);
     case 'author-trusted': return authorTrusted(facts, ctx.trustedAuthors);
     case 'pr-branch-bound-to-asker': return prBranchBoundToAsker(facts, ctx.askerBranches);
+    case 'verifier-pass-at-head': return verifierPassAtHead(facts, ctx).check;
   }
 }
 
@@ -199,5 +376,6 @@ export function evaluateMergeLane(
     const r = runPredicate(p, facts, ctx);
     if (!r.ok) failures.push({ predicate: p, reason: r.reason });
   }
-  return { ok: failures.length === 0, failures };
+  const verifiedBy = predicates.includes('verifier-pass-at-head') ? verifierPassAtHead(facts, ctx).by : undefined;
+  return { ok: failures.length === 0, failures, ...(verifiedBy ? { verifiedBy } : {}) };
 }

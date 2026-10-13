@@ -1,0 +1,24 @@
+{
+  "name": "human-correction-plan-decline",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Moa proposes a plan; the owner declines it. The plan card resolves, a human.correction fact (plan-declined) is recorded against Moa, nothing is dispatched, and the decline costs Moa no turn.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [ { "say": "should not run" } ] } ] } },
+      { "key": "moa", "role": "moa", "script": { "turns": [
+        { "steps": [ { "tool": "plan_propose", "args": { "title": "Today", "items": [ { "workspace_id": "{{ws}}", "title": "Fix the flaky test", "size": "S", "why": "CI went red twice this week." } ] } } ] },
+        { "steps": [ { "say": "plan declined; standing by" } ] }
+      ] } }
+    ]
+  },
+  "actions": [
+    { "do": "wake", "label": "kick-moa", "bot": "moa" },
+    { "do": "waitFor", "label": "plan open", "cond": { "cards": { "kind": "plan", "state": "open" } }, "timeoutMs": 60000, "required": true },
+    { "do": "resolve", "label": "decline", "card": { "kind": "plan", "state": "open" }, "resolution": "decline" },
+    { "do": "waitFor", "label": "correction", "cond": { "facts": { "kind": "human.correction" } }, "timeoutMs": 30000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 3000 }, "timeoutMs": 60000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "moa": "moa", "lead": "lead", "category": "plan-declined" }
+}

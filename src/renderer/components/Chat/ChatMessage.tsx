@@ -5,8 +5,8 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import { MessagePrimitive, useAuiState } from '@assistant-ui/react';
 import type { ChatBridgeApi, CodeBlockRef, ToolBody, TurnEvent } from '../../../shared/transcript/turnEvents';
-import { renderBrainMarkdown } from '../Deck/BrainMarkdown';
-import { formatChatTime } from '../Deck/deckBrain';
+import { renderBrainMarkdown } from '../shared/BrainMarkdown';
+import { formatChatTime } from '../../utils/formatChatTime';
 import { IconCheck, IconChevron, IconCopy } from '../icons';
 import { useT } from '../../hooks/useT';
 import { activityLabel, type ChatRow, type TurnReceipt } from './chatMessages';

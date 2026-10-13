@@ -99,7 +99,7 @@ in the terminal whatever the chrome accent.
 
 ```
 ┌ frame ─ titlebar 40px ───────────────────────────────────────────────┐
-│ [lights][wmux      ◧]            (drag region)            [vitals][Moa]│
+│ [lights][wmux      ◧]            (drag region)           [vitals][Room]│
 ├──┬───────────────────────────────────────────────────────────────────┤
 │  │╭ sheet ────────────────────────────────────────────────────────╮ │
 │r │ sidebar   │ pane tab strip                       │ tools dock    │ │
@@ -152,7 +152,7 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   The toggle sits right after the wordmark, 8px from it, whether the
   sidebar is open or collapsed (collapsed, the segment takes their width
   instead of the rail's 48px; the look paints it transparent). It is a 28px square with a 16px panel icon (the
-  bar drawn on the sidebar's side), the left-hand pair of Moa's panel toggle
+  bar drawn on the sidebar's side), the left-hand pair of the room dock's toggle
   at the bar's other end. **Both titlebar panel toggles are bare icons:** no
   fill at rest and none when on — the icon and `aria-pressed` /
   `aria-expanded` carry the state —
@@ -166,9 +166,9 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   highlighted row already names the workspace, so the titlebar shows
   neither the workspace's name, its task link nor its branch. With the
   sidebar collapsed they return right of the segment: the name, the task
-  link and the branch (the shortcut to Git). On a rail page (Git, Fleet,
-  Schedules, Remote) the title is the page's name, with no branch, whatever
-  the sidebar does. Settings follows the Workspaces rule.
+  link and the branch (the shortcut to Git). On a rail page (Bots, Git,
+  Fleet, Schedules, Remote) the title is the page's name, with no branch,
+  whatever the sidebar does. Settings follows the Workspaces rule.
 - **Centre: the drag region.** Nothing sits between the left segment and the
   right cluster; the whole gap drags the window. The command palette has no
   titlebar entry: ⌘K (Ctrl+K on Windows and Linux) opens it, and the rail's
@@ -176,8 +176,8 @@ bar is a drag region; each interactive child opts out with `no-drag`.
 - **Right:** Fleet vitals as appearing chips (`N running`, `N need you`; only
   when nonzero, and dropped while Fleet is the page), the account usage when
   it matters, then the **file tree toggle** (a bare icon like the sidebar's,
-  ⌘⇧E / Ctrl+Shift+E), then Moa's icon, the dock's only toggle, while Moa is
-  on. With Moa off there is no dock and no Moa toggle (see Tools panel).
+  ⌘⇧E / Ctrl+Shift+E), then the room dock's toggle ("Room"), the dock's only
+  toggle (see Tools panel).
   Settings is not here: it lives in the rail's More menu (and ⌘,).
 - **Windows:** the native window controls sit at the right edge in the
   `titleBarOverlay` strip, drawn in the colour the frame actually paints
@@ -200,32 +200,31 @@ commands, sidebar links, toast and notification jumps, schedule deep links —
 navigates through it.
 
 - **Pages, in order:** Workspaces (home: the sidebar, panes and tools dock)
-  · Fleet · Schedules · Remote · Git. Settings is a page too, opened from the
-  rail's More menu or ⌘,.
+  · Bots · Fleet · Schedules · Remote · Git. Settings is a page too,
+  opened from the rail's More menu or ⌘,.
 - **The rail's foot** holds one `⋯` **More** button (named "More",
   `aria-haspopup="menu"`). Its menu, beside the rail and level with the
-  button: Command palette (with ⌘K), Settings (with ⌘,), Turn on Moa…
-  (only while Moa is off; opens Settings › Moa), Keyboard shortcuts
+  button: Command palette (with ⌘K), Settings (with ⌘,), Keyboard shortcuts
   (Settings › Shortcuts),
   Check for updates (opens Settings › General, where the check reports, and
   starts it), then the version line as muted text. It is the pane actions
   menu's body (arrows, Enter, Escape, focus back on the button). The sidebar
   toggle is in the titlebar, so the foot carries no chevron.
-- **Moa has no rail entry.** Its panel is its home, and the panel's ⋯ menu
-  (View as terminal) shows its terminal in place. Moa's workspace stays out
-  of the workspace list; when it is the active workspace (Settings › Moa),
-  Workspaces leads back to the first listed one.
 - **Rail item:** a 19px icon on a 40px square. The current page is a soft
   `--selection` square (plus the look's `--select-ring`) marked
   `aria-current="page"`; hover is
-  `--hover-fill`; Fleet's and Remote's needs-you counts are small number
-  badges on the icon's corner. Every button is named, and the arrow keys move between
+  `--hover-fill`; Bots', Fleet's and Remote's needs-you counts are small
+  number badges on the icon's corner. Every button is named, and the arrow keys move between
   them.
 - **A page fills the sheet beside the tools dock** (every rail page — Git,
-  Fleet, Schedules, Remote — leaves the dock in view and usable, so Moa is in
-  reach; the page is inset off the dock by measuring it, never by reflowing
+  Fleet, Schedules, Remote — leaves the dock in view and usable, so the room
+  is in reach; the page is inset off the dock by measuring it, never by reflowing
   the sheet, whether the dock sits inline or floats as the narrow-window
-  overlay; Moa's titlebar icon opens and closes it in place there). Settings alone covers the whole sheet, dock included. The
+  overlay; the titlebar's Room toggle opens and closes it in place there).
+  Bots and Settings cover the whole sheet, dock included (inert under
+  them): on Bots the conversation is the page, so a second view of the
+  same room beside it would only repeat it, and the Room toggle pressed there
+  brings Workspaces forward. The
   Workspaces page stays mounted at full size and **inert** under every page, so no terminal is resized or unmounted
   and PTYs, scrollback, the WebGL atlas and IME state survive the round trip.
   Showing a page drops focus left in the panes, and the focus self-heal runs
@@ -295,6 +294,129 @@ no difference). A2A-only peers stay on the Remote page.
   computer)". A host's terminal keeps the user's font size: a grid the pane
   cannot hold scrolls inside it (letterbox), never shrinks to fit.
 
+### Bots
+
+The agent factory's bots, read and talked to like a messenger (owner
+decision 2026-10-13). A bot has no pane of its own; its workers are agent
+panes in hidden task workspaces, and they are shown here, under their bot,
+instead of in the Workspaces sidebar. Fleet still lists every agent (a
+bot's worker "by <the bot's name>", never "by Orchestrator"), and a sidebar
+group of bot tasks is "Started by bots", never "From closed pane".
+
+- **Layout:** a 320px conversation list on `--bg-mantle` beside the chat on
+  `--bg-base`, split by one `--stroke` seam. Under an 800px-wide page (an
+  ~860px window) it is one column: the list first; choosing a conversation opens the chat over
+  it, with a round back button left of the name pill.
+- **List:** the 16px title with Search, `⋯` (the page menu: Stop all
+  bots, when main offers it) and `+` (Add bot: the Settings add form in a
+  dialog; the bot it adds is selected) as 28px icon buttons, in every state
+  of the page; Search opens a filter field under the header (Escape closes
+  and clears it). One row per conversation: a 36px avatar, the 13px/500 name
+  with the newest message's time, and one 12px muted preview line (the
+  owner's own as "You: …", a room's prefixed with who spoke). Every
+  workspace room is a group conversation and every bot a 1:1. The HQ room is
+  pinned first (a muted "HQ" beside its name); the other rooms and the bots
+  follow by latest activity. The selected row is the `--selection` pill
+  (10px radius), hover `--hover-fill`.
+- **Avatars:** like a team chat's: a bot's avatar is the picture the
+  owner set for it, else a calm rounded-square tile with the name's
+  initials (one or two letters; a Korean name's first syllable) on a colour
+  picked from the theme tokens by the bot's id (the shared `BotAvatar`).
+  No mascots or drawn faces on this page. A room stacks two of its bots'
+  avatars and "+N" for the rest. A bot's presence dot (the room's presence
+  grammar; not reported is a hollow ring) sits on its avatar's corner.
+- **Needs you:** the one coloured mark is the attention badge on a bot's
+  row: its open questions, its open plan (its newest; an older plan left
+  open is superseded) and open proposals, plus its workers waiting on the
+  owner — a waiting worker its bot's open question already asks about (the
+  question's task) counts once. Rooms carry none (every question has a bot that asked it), and the
+  rail badge is the sum of the bot rows — one count, read from one model.
+  While the bots are paused nothing on the page can be answered, so
+  nothing is counted (rows and rail alike).
+- **Chat:** a floating name pill (avatar, name, presence; a room's bot
+  count) over the top of the messages, which fade in just below its row
+  (nothing shows beside or under the pill). The pill opens
+  the bot's profile (template, job — the owner's words, with Edit —
+  workspace, repository, on/off and presence, turns used and left today,
+  its routines; then, read-only, what it can do in the owner's words — one phrase per power of
+  the shared surface, plus a Coordinator's reads in every workspace, never
+  per-bot settings — whom it reports to (You), and its workers now; last,
+  Stop — the bot's turn and its workers — a
+  destructive secondary that asks in place, the solid red only on its
+  final confirm, never a window dialog) as a popover that fits the chat: on a
+  short window it scrolls inside (16px off the chat's foot), so Stop at its
+  end stays reachable. A stop's result is a
+  toast naming what stopped (counts at zero left out). Bots speak on the left in soft
+  `--selection-subtle` bubbles (16px radius; a kind word such as Verdict
+  in 11px muted, the 14px title, the markdown body clamped behind Show
+  more); in a room each run of one bot's messages starts with its avatar and
+  name. The owner's messages are right-aligned in the user bubble's
+  content-10% fill, with the delivery line ("Sent to Lead", "Queued for
+  Lead") under one sent from here. A question is the room's own question
+  card, answered in place (its needs-you hairline is the bubble's
+  boundary). A plan and a proposal take the room dock's own answers (one
+  shared component: a plan's Approve — the primary — Edit and Decline, a
+  proposal's Approve / Decline), right under the title, and while they
+  wait the needs-you hairline is the bubble's boundary; a plan names each
+  workspace by its name, never its id ("a workspace" when it is not one
+  here). A system card — a refusal and its reasons, a gate's result, a
+  task's end, an error — is a centred 11px muted line (a refusal's kind
+  word red, a budget's yellow) with its body folded to two 12px lines
+  under Show more. A 1:1 holds the system cards about the bot's own work:
+  those naming the bot or its task, or written in a thread it wrote in. A bubble from a thread other than General
+  carries a chip naming the thread: a PR's or an issue's reference in mono
+  (`acme/api#12`), a task's title, else its kind (Request, Plan, Report);
+  the chip narrows the conversation to that thread, and the header's "All
+  messages" brings the rest back. A card posted where the bot talks with the
+  owner about another thread's subject (an approval in General about a PR)
+  carries that thread's chip too, and shows when the conversation is
+  narrowed to it. **No internal id in the owner's view:**
+  a task's, a request's or a routine's id is only in a chip's tooltip; a
+  routine card shows its schedule (never the instructions the bot gave
+  itself); a refusal shows its plain sentences (never the reason codes); a
+  line main wrote names a bot without a role tag ("Wmux Dev", not "Wmux Dev
+  (lead)"). A bot's live workers — at work, or waiting on input, read from
+  the task's own stage (a worker whose agent stopped to ask reads idle on
+  Fleet, and still shows) — close its 1:1, and its room under the bot's
+  face, as compact status bubbles while the worker's pane is open — a muted
+  dot or the attention ring, the task's name, the state in words ("Worker
+  needs input", with what it waits for under it) — with Open, which jumps to the worker's pane on
+  Workspaces; a done worker that can resume offers Resume; finished
+  workers leave.
+- **Composer:** the shared composer box at the foot, "Message <name>". A 1:1
+  message is addressed to that bot alone. A room's message goes to every bot
+  of the room (they may answer each other), as the room dock's does, unless
+  bots are picked: a row of `@name` chips under the box (the room's bots,
+  26px, the selection fills; pressed = `--selection-emphasis`), with a muted
+  "To everyone here" while none is picked; starting the message with `@` and
+  a bot's name (or a run of them, `@A @B …`) picks those chips, and an
+  `@name` inside a sentence is plain text that addresses nobody. A bot that
+  is off says so under the box and sends nothing. While a bot's approval
+  request waits and its card is in the conversation — a room's whole view,
+  the asking bot's 1:1, or a thread it sits in or links when narrowed to it — an
+  "Approve N pending" chip sits above the box, whatever thread the card is in.
+- **Paused:** with the bots off the page stays — the list and every
+  conversation, live workers included, read-only (no answers; the composer
+  says why and sends nothing) — under a notice row across the page on the
+  header band's `--selection-subtle` fill: "Bots are paused", one muted
+  line, and Run bots (the primary; it writes the same setting Settings
+  does). Stop stays: it ends work still running.
+- **Add bot (2026-10-13):** a name is all a bot needs. The form: workspace,
+  name (required), picture, "Start from" template chips (the composer's
+  chip style; one pressed at most) that prefill the job — a chip replaces
+  only its own prefill, never words the owner typed — the job (an optional
+  plain textarea) and the repository (optional: inherited, suggested, or a
+  picked folder). No role picker. The new bot greets the owner and asks
+  what to do, with choices, in its 1:1; its room shows, at the time it was
+  added, one centred muted line, "<name> joined", with Open chat (to that
+  1:1), instead of the greeting (the question main marks as the bot's
+  greeting). A bot's `job_changed` card carries
+  Undo (secondary).
+- **First run:** with the bots on and none added, the list holds one card
+  at its top (10px, `--line` hairline): "Add a bot to <the current
+  workspace>", one muted line and Add bot (the primary), which opens the
+  add form preset to that workspace; the new bot's chat then opens.
+
 ### Fleet
 
 One attention list with a detail area under it — see "Fleet page" after the
@@ -320,6 +442,11 @@ tests, changelog draft, issue triage) that open the composer filled in.
 - **Detail:** the name, the on/off switch, the next run, Run now and Edit,
   then the run history (status dot, start, duration, result, Open for a live
   run). Dividers are `--stroke` hairlines.
+- **Bot routines:** under the schedules, a muted "Bot routines" heading and
+  one read-only row per routine a bot keeps for itself (its title over a
+  muted `bot · schedule · next run` line; a paused one dimmed, with why). A
+  bot sets and pauses them in chat; nothing here edits them. Not drawn when
+  there are none. A bot's profile lists its own the same way.
 
 ### Remote
 
@@ -668,41 +795,38 @@ leaves the page.
   buttons join the Tab order only while the keyboard is on that row. When the
   stop's row leaves (closed, filtered, snoozed, folded away), the stop moves to
   the selected row, else the first visible one, so Tab always enters the list.
-  Remote rows answer the same keys (Shift+F10 opens their menu). Moa's HQ row
-  sits above the tree and is not part of it: no row stop, its own buttons take
-  Tab. Focus is the app's ring: 2px `--accent`, inside the row, never the
+  Remote rows answer the same keys (Shift+F10 opens their menu). Focus is the
+  app's ring: 2px `--accent`, inside the row, never the
   browser default.
 - **Order control:** a sort button in the header, left of the filter, names
   the current order (`Order: Manual`) and opens a three-item menu —
   Attention, Manual, Recent activity — the same setting as Settings ›
   Appearance › Sidebar.
-- **Moa's workspace** is app-owned and never in the list, its count, the
-  filter, the collapsed rail or Ctrl+N (the numbers skip it). While it is
-  the active workspace it shows as its own row above the Workspaces header;
-  its Close and Archive stay visible but disabled (`aria-disabled`, still
-  focusable) with the reason as tooltip and description — turn Moa off in
-  Settings › Moa instead. Every other close path (keyboard, task groups,
-  Fleet) refuses it with that reason before any session is touched. When Moa
-  is on and its workspace is gone, one persistent toast offers "Recreate Moa
-  workspace" and leaves once the state recovers.
+- **Bot workers are not listed:** a fan-out task a factory bot dispatched
+  (lineage origin `{kind:'bot'}`) is the bot's worker, shown on the Bots
+  page; the sidebar's task groups, the collapsed rail and the Ctrl+N digits
+  leave it out and the header count never counts it. The one the owner is
+  in stays listed while it is active, so the row you are working in never
+  vanishes, but it is not counted and takes no Ctrl+N digit. The Tasks line
+  does not count bot workers either. Human, GUI and orchestrator tasks are
+  unchanged.
 - The glance-board rules (attention order, pin to top, fan-out nesting, the
   changed-since-you-looked dot) are in "Sidebar rows" after the Decisions
   Log.
 
 ## Tools panel (Workspaces page)
 
-The dock opposite the sidebar is **Moa's**, and exists only while Moa is on.
-With Moa off the dock is not drawn, the terminals take its width (one
-refit), and the titlebar has no Moa toggle; the panel's saved open
-state is kept, so turning Moa back on restores it as it was left. With Moa on,
-Moa's titlebar icon is the only toggle, and the first time Moa is ever turned
-on the panel opens once on Moa's conversation. Turning Moa on lives in
-Settings › Moa and the rail's More menu. With Moa off, task status and fan-out
-work are read in Fleet (the sidebar's Tasks line opens Fleet). Git is not here:
-it is a page on the rail.
+The dock opposite the sidebar is the **room dock** (the agent factory's room
+for the active workspace), present on every launch. The titlebar's Room
+toggle is its only toggle, and its open state persists. With the factory off
+the dock says so in a few lines and offers to turn it on (or open Settings ›
+Factory) instead of threads. Task status and fan-out work are read in Fleet
+(the sidebar's Tasks line opens Fleet); a bot's workers are read on the
+Bots page. Git is not here: it is a page on the
+rail.
 
 **File tree column.** A separate, opt-in column on the same edge, between
-the panes and Moa's dock, present whether Moa is on or off. Its titlebar
+the panes and the room dock. Its titlebar
 toggle (or ⌘⇧E / Ctrl+Shift+E, or the palette) shows it; open state and
 width (200–480px, drag the inner seam) persist. It is Workspaces-page
 chrome: a rail page covers it with the panes, and the toggle pressed from a
@@ -960,15 +1084,12 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 - **Information architecture** (owner-reviewed, 2026-09-24). Tabs, in nav
   order: General · Appearance (theme, interface, sidebar, panes, terminal
   text, agent toolbar) · Terminal · Keyboard · Notifications. Group
-  **Agents**: Claude Code · Accounts · Moa · Roles & fan-out ·
+  **Agents**: Claude Code · Accounts · Factory · Roles & fan-out ·
   Token usage · Browser · Computer use. Group **Connections**: Remote & phone · LAN. Then
   About. Each tab answers one question; a setting lives on exactly one tab
   and the search catalog (`settings/catalog.ts`) names that tab. Retired tab
-  ids resolve through `resolveSettingsTab` (Orchestrator became Moa, the HQ
-  main bot: its master switch first, then engine, model and effort, the Moa
-  workspace's status with its one-click recovery, a per-workspace mode table
-  that leaves out the HQ, the hourly turn cap, bubbles and reduce motion, and
-  the orchestrator rows it kept).
+  ids resolve through `resolveSettingsTab` (Orchestrator, Agents and Moa all
+  open Factory, the agent factory's tab).
 - **Theme picker:** visual cards whose thumbnails show the look's face,
   chip shape and selection style; selected by a neutral outline + check.
 - **Nav:** 13px icon + label rows; group headings muted sentence case; the
@@ -998,8 +1119,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
   finished turn), so nothing moves; it is a CSS animation class picked from
   state, never a per-row timer. A row whose workspace is active or on screen
   never pulses, the row's own status mark does not breathe while the row can
-  pulse (Off means still), and `prefers-reduced-motion` forces Off. Moa's
-  Reduce motion setting is Moa's own and does not apply here.
+  pulse (Off means still), and `prefers-reduced-motion` forces Off.
 - Tokens: feedback 120ms (`--motion-feedback`), ease-out
   `cubic-bezier(0.22, 1, 0.36, 1)`; transitions only for state changes
   (hover, expand, open). Theme swaps are not animated. Reduced motion
@@ -1089,6 +1209,8 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-10 | Owner decision (PC rail, same day): no computer column. The frame is one rail again; the sidebar title is the PC switcher ("Workspaces · <PC> ▾", a dropdown with each computer's state, needs-you count and settings), one badge beside it sums the unselected computers' needs-you, and the collapsed sidebar gets one switcher item. Supersedes the row above | A 48px column took width from every window for a scope most sessions never change; the title already names what the list shows |
 | 2026-10-10 | Owner direction (#1987 PR3): the Worktrees tab takes the who-acts-next grammar — In use · Uncommitted changes · No open PR · Cleanup candidates (a merged PR counts) · No workspace — with a summary line, plus snooze (1 hour / 1 day / 1 week / until it changes; any change of state ends it early) kept per viewer. Headers stay neutral; the PR knowledge is only what the page already read, so a repo whose list is not held shows no No open PR | Three groups said where a workspace sat but not what each worktree wanted. Uncommitted work nobody is on, unshipped branches and merged leftovers are the three things a worktree asks of the owner; snooze lets a known one stop asking without deleting it. Reading every repo's PR list for this tab would cost gh calls the page otherwise never makes |
 | 2026-10-11 | Owner decision: bring back the file tree as an opt-in column opposite the sidebar, independent of Moa, between the panes and the dock, with its own bare titlebar toggle before Moa's. Amends "the dock opposite the sidebar is Moa's" and "Moa's icon, the right panel's only toggle" | #1440 dropped the toggle with the old right panel, which left the tree mounted but unreachable. A file tree answers "what is in this project" without leaving the terminals, a different job from Moa's conversation, so it gets its own column rather than a dock tab; placing it inside the dock edge keeps rail pages covering it with the panes |
+| 2026-10-12 | Owner decision (5.0, agent factory): Moa's panel, its titlebar button, Settings › Moa and the Turn on Moa menu item are gone; the dock opposite the sidebar is always the room dock, with its Room toggle in the titlebar, and says so when the factory is off. The workspace an earlier version made Moa's HQ is an ordinary workspace again: listed, numbered and closable. Amends the rail's More menu, Tools panel, sidebar rows and Settings rows above | The factory's bots replace Moa's brain, so a dock that only existed while Moa ran would leave the dock slot empty for everyone. A hidden workspace nobody can close is a trap once nothing manages it |
+| 2026-10-13 | Owner decision (approved layout change): the bots get their own rail page, **Bots** (봇; first named Company the same day), right below Workspaces — Workspaces · Bots · Fleet · Schedules · Remote · Git — laid out like a messenger: a conversation list (each workspace room a group, each bot a 1:1; HQ pinned first, the rest by latest activity) beside the selected conversation as a chat, with a needs-you number badge on the rail item that is the sum of the page's bot rows. Bot fan-out workers leave the Workspaces sidebar (task groups, header count, collapsed rail, Ctrl+N) for their bot's conversation; Fleet still lists them. Bots covers the whole sheet, room dock included (amends "every rail page leaves the dock in view"). Bot avatars are the owner's picture for the bot, else an initials tile on a token colour picked by the bot's id (owner, same day: mascot-style faces read as a copy of the reference app). One grammar exception, owner-approved: the owner's messages are right-aligned bubbles in the user bubble's neutral content-10% fill rather than the reference's accent fill (the accent is never an area fill) | A live dogfood showed bot workers landing in the owner's sidebar under the HQ workspace as "From closed pane" rows: they read as the owner's own work, duplicated what the room shows, and the hidden task workspaces inflated the Workspaces count. The owner reads and answers bots in a messenger every day, so the page takes that structure and interaction; DESIGN.md's tokens, type and one-boundary rule still apply. With the conversation as the page, the dock beside it would show the same room twice |
 | 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
 
 ### Desktop conversation view
@@ -1222,8 +1344,8 @@ no empty reply row or reserved gap under the latest prompt.
   applies after the list has been quiet for 3 s (at most 10 s after the first
   pending change), or at once when the pointer or focus leaves; adds and
   removals land immediately. The non-manual orders are display-only:
-  drag-to-reorder pauses. Every row (not a nested task, Moa's HQ or a
-  Snoozed/Settled row) shows the number its Ctrl+N jumps to, left of its name,
+  drag-to-reorder pauses. Every row (not a nested task or a Snoozed/Settled
+  row) shows the number its Ctrl+N jumps to, left of its name,
   in `--text-muted` and in every order; Ctrl+N follows the stored order, so in
   a sorted order the numbers can read out of sequence. Ctrl+9 is the last
   workspace (browser tabs), so the first eight stored rows show 1–8, the last
@@ -1244,7 +1366,7 @@ no empty reply row or reserved gap under the latest prompt.
   beside an unpinned row unpins. Pinning lands the row at the end of the
   group; unpinning at the top of the rest.
 - **Bookmarked:** row menu › Bookmark / Remove bookmark (or the palette's
-  "Toggle bookmark for this workspace"), on any row but Moa's HQ. A bookmark
+  "Toggle bookmark for this workspace"), on any row. A bookmark
   never moves a row — order is the pin's job — and only feeds the filter's
   Bookmarked only check, where a bookmarked owner keeps its nested fan-out
   tasks. A bookmarked row carries a muted ribbon glyph after the pin's place
@@ -1272,29 +1394,9 @@ command palette. Remote opens the existing browser/phone pairing controls;
 Agent, Git and Channels remain in the tools panel. The compact sidebar
 uses the same destinations with accessible names.
 
-The Agent conversation uses a rounded, readable composer. Outside Moa's panel,
-Mode and New session remain visible; Loop and Schedules are grouped under an
-Automation disclosure. Keep approval countdowns visible. Show recovery once while
-its notice is present, and restore the recovery shortcut after dismissal.
-Briefing headlines may wrap instead of being clipped between a label and a pane
-link.
-
-**Moa's panel (2026-10-05)** has no control rows and no Fleet roster. One `⋯`
-button at the end of its header ("Moa options") holds Model ›, Mode ›, New
-session (confirmed), Wake, View as terminal / chat, Loop…, Schedules…
-(the old Automation disclosure) and Moa settings…, each with the disabled state and reason of the
-control it replaced. The current mode is a quiet text label next to Main bot
-(red text for Danger), never a button. The panel scrolls as **one column**:
-Waiting on you, Delegated work (folds to its heading and count), the briefing
-(only what Waiting on you does not already say; never two lines that say the
-same thing), then the chat. No card has its own height or scroller; long cards
-grow, and a decision's quick replies stack full width. Agent recovery lives on
-each pane's resume pill, not in Moa's panel. In terminal view the top sections (Waiting on
-you, delegated work, briefing) are capped at 30% of the panel with their own
-scroll, so the TUI always keeps most of the column. While Moa owns the tab, the
-tab is a plain label (Moa · Main bot); the model is chosen only in ⋯ › Model.
-Submenus are marked as such (`aria-haspopup`), and Escape steps back one level.
-A delegated-work title is one line at rest and wraps once its card is open.
+The 2026-10-05 rules for Moa's panel and the Agent conversation's composer
+rows went with them in 5.0 (Decisions Log, 2026-10-12): the dock is the room
+dock.
 
 ### Fleet page (2026-10-05 list; a rail page since 2026-10-03)
 
@@ -1363,8 +1465,8 @@ differently in the two places, and in the order `fleet_triage` returns.
   selected agent's last 20 lines of output (40 for an error row, its error
   line marked and scrolled into view) and, for a fan-out task, its
   Conversation beside them (stacked below 900px): read-only, oldest first,
-  live, in the mantle fill. Moa's task cards, Waiting on you rows and the
-  deck ledger's `#` open Fleet on that task with the detail open. For a
+  live, in the mantle fill. The sidebar's Tasks line opens Fleet on that
+  task with the detail open. For a
   Needs you row the detail leads with what it asks, above the output: the
   question in full (never truncated), the numbered choices of the prompt
   drawn at the bottom of its terminal (read-only), then Open approval (when
@@ -1410,11 +1512,6 @@ differently in the two places, and in the order `fleet_triage` returns.
   None, then the roles (built-in, plus the pane's custom role), the current
   one selected; a pick writes the pane's role through the same path as the
   dock roster and None clears it. A set role is plain text on the row.
-- **Moa is not on the list.** Moa's HQ workspace is the main bot, not a
-  worker: it is left off the rows, their counts and filters, the rail's
-  badge, the titlebar vitals and `fleet_triage`. Its decisions and
-  permission prompts reach you through Moa's panel (Waiting on you) and its
-  titlebar icon's dot.
 - **Empty fleet:** no agents is one call to action, the Tickets way in when
   there are any, and the three newest finished tasks.
 - **Keys:** ↑↓ (and ←→) move through the list and open the detail, Home/End

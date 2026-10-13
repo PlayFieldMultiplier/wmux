@@ -1,0 +1,991 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "interleaved-worker-reports",
+  "run": 1,
+  "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+  "botKeys": {
+   "moa": "bot-500dbf9c",
+   "lead": "bot-98e607c8"
+  },
+  "injected": [
+   {
+    "label": "kick-moa",
+    "kind": "wake",
+    "id": "w-mv53t7vy-9f1ec46d",
+    "botKey": "moa",
+    "at": 1791800595501
+   }
+  ],
+  "actions": [
+   {
+    "do": "wake",
+    "label": "kick-moa",
+    "at": 1791800595501
+   },
+   {
+    "do": "waitFor",
+    "label": "three reports",
+    "at": 1791800595503,
+    "doneAt": 1791800623160,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "moa woken by result",
+    "at": 1791800623160,
+    "doneAt": 1791800623161,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800623161,
+    "doneAt": 1791800631207,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53tbw8-ec6abdf0d9d7",
+    "seq": 1,
+    "kind": "handoff.received",
+    "at": 1791800600696,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "handoffId": "h-mv53tbw8a30116e5c161",
+     "botId": "bot-98e607c8"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-500dbf9c"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Three small changes",
+     "threadId": "handoff:h-mv53tbw8a30116e5c161",
+     "runId": "run-mv53tbw8ad2f92bd54a1",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "toWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6"
+    }
+   },
+   {
+    "id": "f-0mv53tjsm-5fdd57470ca8",
+    "seq": 2,
+    "kind": "task.done",
+    "at": 1791800610934,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "taskId": "wtask-mv53tg1y-32yh0cw2",
+     "botId": "bot-98e607c8"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-9adf8da6-532c-4333-9d3a-3ea0ffc2862a",
+     "title": "change A",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv53tg1y-32yh0cw2"
+    }
+   },
+   {
+    "id": "f-0mv53tjsw-699513bb50e4",
+    "seq": 3,
+    "kind": "handoff.received",
+    "at": 1791800610944,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "handoffId": "h-mv53tjsvb7af074947cc",
+     "botId": "bot-500dbf9c"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-98e607c8"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Three changes ready",
+     "threadId": "handoff:h-mv53tbw8a30116e5c161",
+     "runId": "run-mv53tbw8ad2f92bd54a1",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "toWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6"
+    }
+   },
+   {
+    "id": "f-0mv53to94-6ebfaf17cfde",
+    "seq": 4,
+    "kind": "task.done",
+    "at": 1791800616712,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "taskId": "wtask-mv53tkt2-d5lcy7ji",
+     "botId": "bot-98e607c8"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-88a05265-3c51-44f9-a815-99cc7c47a130",
+     "title": "change B",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv53tkt2-d5lcy7ji"
+    }
+   },
+   {
+    "id": "f-0mv53to9c-129f5774009a",
+    "seq": 5,
+    "kind": "handoff.refused",
+    "at": 1791800616720,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "handoffId": "h-mv53to9c484089663819",
+     "botId": "bot-98e607c8"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-98e607c8"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Three changes ready",
+     "threadId": "handoff:h-mv53tbw8a30116e5c161",
+     "runId": "run-mv53tbw8ad2f92bd54a1",
+     "depth": 1,
+     "hopsInRun": 3,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "wmux",
+     "fromWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "code": "duplicate_result",
+     "detail": "handoff h-mv53tbw8a30116e5c161 already has its result"
+    }
+   },
+   {
+    "id": "f-0mv53tt19-f445c389686e",
+    "seq": 6,
+    "kind": "task.done",
+    "at": 1791800622909,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "taskId": "wtask-mv53tpl7-d2protub",
+     "botId": "bot-98e607c8"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-05e898a2-6fb1-4544-b3c4-36a8a3681c86",
+     "title": "change C",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv53tpl7-d2protub"
+    }
+   },
+   {
+    "id": "f-0mv53tt1l-bd3816694523",
+    "seq": 7,
+    "kind": "handoff.refused",
+    "at": 1791800622921,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "ref": {
+     "handoffId": "h-mv53tt1l9dae9f81db20",
+     "botId": "bot-98e607c8"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-98e607c8"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Three changes ready",
+     "threadId": "handoff:h-mv53tbw8a30116e5c161",
+     "runId": "run-mv53tbw8ad2f92bd54a1",
+     "depth": 1,
+     "hopsInRun": 3,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "wmux",
+     "fromWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "code": "duplicate_result",
+     "detail": "handoff h-mv53tbw8a30116e5c161 already has its result"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53t7vy-9f1ec46d",
+    "botId": "bot-500dbf9c",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "reason": {
+     "kind": "manual",
+     "by": "human"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800595502,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53tbw8-8368dfb3",
+    "botId": "bot-98e607c8",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv53tbw8a30116e5c161"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800600696,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53tjsm-7d77c6fc",
+    "botId": "bot-98e607c8",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.review_requested:wtask-mv53tg1y-32yh0cw2@2"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv53tg1y-32yh0cw2",
+    "priority": 1,
+    "enqueuedAt": 1791800610934,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53tjsw-ec4f9291",
+    "botId": "bot-500dbf9c",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv53tjsvb7af074947cc"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800610944,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53to96-8f309809",
+    "botId": "bot-98e607c8",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.review_requested:wtask-mv53tkt2-d5lcy7ji@2"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv53tkt2-d5lcy7ji",
+    "priority": 1,
+    "enqueuedAt": 1791800616714,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53tt19-0b334041",
+    "botId": "bot-98e607c8",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.review_requested:wtask-mv53tpl7-d2protub@2"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv53tpl7-d2protub",
+    "priority": 1,
+    "enqueuedAt": 1791800622909,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "id": "h-mv53tbw8a30116e5c161",
+    "runId": "run-mv53tbw8ad2f92bd54a1",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-500dbf9c"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "kind": "dispatch",
+    "status": "delivered",
+    "createdAt": 1791800600696,
+    "payload": {
+     "title": "Three small changes",
+     "body": "Ship three small, independent changes."
+    }
+   },
+   {
+    "id": "h-mv53tjsvb7af074947cc",
+    "runId": "run-mv53tbw8ad2f92bd54a1",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-500dbf9c"
+    },
+    "kind": "result",
+    "replyTo": "h-mv53tbw8a30116e5c161",
+    "status": "delivered",
+    "createdAt": 1791800610943,
+    "payload": {
+     "title": "Three changes ready",
+     "body": "All three tasks reported review_requested."
+    }
+   },
+   {
+    "id": "h-mv53to9c484089663819",
+    "runId": "run-mv53tbw8ad2f92bd54a1",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "depth": 1,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "to": {
+     "kind": "system"
+    },
+    "kind": "result",
+    "replyTo": "h-mv53tbw8a30116e5c161",
+    "status": "refused",
+    "refusal": {
+     "code": "duplicate_result",
+     "detail": "handoff h-mv53tbw8a30116e5c161 already has its result"
+    },
+    "createdAt": 1791800616720,
+    "payload": {
+     "title": "Three changes ready",
+     "body": "All three tasks reported review_requested."
+    }
+   },
+   {
+    "id": "h-mv53tt1l9dae9f81db20",
+    "runId": "run-mv53tbw8ad2f92bd54a1",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "depth": 1,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "to": {
+     "kind": "system"
+    },
+    "kind": "result",
+    "replyTo": "h-mv53tbw8a30116e5c161",
+    "status": "refused",
+    "refusal": {
+     "code": "duplicate_result",
+     "detail": "handoff h-mv53tbw8a30116e5c161 already has its result"
+    },
+    "createdAt": 1791800622921,
+    "payload": {
+     "title": "Three changes ready",
+     "body": "All three tasks reported review_requested."
+    }
+   }
+  ],
+  "bots": [
+   {
+    "id": "bot-500dbf9c",
+    "role": "moa",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "enabled": true
+   },
+   {
+    "id": "bot-98e607c8",
+    "role": "lead",
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "enabled": true
+   }
+  ],
+  "ledger": [
+   {
+    "id": "wtask-mv53tg1y-32yh0cw2",
+    "status": "review_requested",
+    "ownerWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-98e607c8"
+     },
+     "preset": "default"
+    }
+   },
+   {
+    "id": "wtask-mv53tkt2-d5lcy7ji",
+    "status": "review_requested",
+    "ownerWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-98e607c8"
+     },
+     "preset": "default"
+    }
+   },
+   {
+    "id": "wtask-mv53tpl7-d2protub",
+    "status": "review_requested",
+    "ownerWorkspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-98e607c8"
+     },
+     "preset": "default"
+    }
+   }
+  ],
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53tbw9396cea3d12",
+    "seq": 1,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "kind": "fact",
+    "at": 1791800600696,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Lead (lead): Three small changes",
+    "refs": {
+     "botId": "bot-98e607c8",
+     "handoffId": "h-mv53tbw8a30116e5c161",
+     "factId": "f-0mv53tbw8-ec6abdf0d9d7"
+    }
+   },
+   {
+    "id": "c-mv53tjsm3ce65f1a79",
+    "seq": 2,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "task:wtask-mv53tg1y-32yh0cw2",
+    "kind": "fact",
+    "at": 1791800610934,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: change A",
+    "refs": {
+     "taskId": "wtask-mv53tg1y-32yh0cw2",
+     "botId": "bot-98e607c8",
+     "factId": "f-0mv53tjsm-5fdd57470ca8"
+    },
+    "body": "fake worker: review_requested for wtask-mv53tg1y-32yh0cw2"
+   },
+   {
+    "id": "c-mv53tjsua1a8845fc8",
+    "seq": 3,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "task:wtask-mv53tg1y-32yh0cw2",
+    "kind": "status",
+    "at": 1791800610942,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "title": "Workers reported",
+    "clientPostId": "wake:w-mv53tjsm-7d77c6fc:1",
+    "body": "Reports read for this wake."
+   },
+   {
+    "id": "c-mv53tjswa3d58e03d7",
+    "seq": 4,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "kind": "fact",
+    "at": 1791800610944,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Moa (moa): Three changes ready",
+    "refs": {
+     "botId": "bot-500dbf9c",
+     "handoffId": "h-mv53tjsvb7af074947cc",
+     "factId": "f-0mv53tjsw-699513bb50e4"
+    }
+   },
+   {
+    "id": "c-mv53to954ccf3db026",
+    "seq": 5,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "task:wtask-mv53tkt2-d5lcy7ji",
+    "kind": "fact",
+    "at": 1791800616712,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: change B",
+    "refs": {
+     "taskId": "wtask-mv53tkt2-d5lcy7ji",
+     "botId": "bot-98e607c8",
+     "factId": "f-0mv53to94-6ebfaf17cfde"
+    },
+    "body": "fake worker: review_requested for wtask-mv53tkt2-d5lcy7ji"
+   },
+   {
+    "id": "c-mv53to9b349339e363",
+    "seq": 6,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "task:wtask-mv53tkt2-d5lcy7ji",
+    "kind": "status",
+    "at": 1791800616719,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "title": "Workers reported",
+    "clientPostId": "wake:w-mv53to96-8f309809:1",
+    "body": "Reports read for this wake."
+   },
+   {
+    "id": "c-mv53to9c3e01df0459",
+    "seq": 7,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "kind": "refusal",
+    "at": 1791800616720,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (duplicate_result): Three changes ready",
+    "refs": {
+     "botId": "bot-98e607c8",
+     "handoffId": "h-mv53to9c484089663819",
+     "factId": "f-0mv53to9c-129f5774009a"
+    },
+    "body": "handoff h-mv53tbw8a30116e5c161 already has its result"
+   },
+   {
+    "id": "c-mv53tt19ae0b078952",
+    "seq": 8,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "task:wtask-mv53tpl7-d2protub",
+    "kind": "fact",
+    "at": 1791800622909,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: change C",
+    "refs": {
+     "taskId": "wtask-mv53tpl7-d2protub",
+     "botId": "bot-98e607c8",
+     "factId": "f-0mv53tt19-f445c389686e"
+    },
+    "body": "fake worker: review_requested for wtask-mv53tpl7-d2protub"
+   },
+   {
+    "id": "c-mv53tt1k7eba644436",
+    "seq": 9,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "task:wtask-mv53tpl7-d2protub",
+    "kind": "status",
+    "at": 1791800622920,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+     "botId": "bot-98e607c8"
+    },
+    "title": "Workers reported",
+    "clientPostId": "wake:w-mv53tt19-0b334041:1",
+    "body": "Reports read for this wake."
+   },
+   {
+    "id": "c-mv53tt1l3436e31524",
+    "seq": 10,
+    "workspaceId": "ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6",
+    "threadId": "handoff:h-mv53tbw8a30116e5c161",
+    "kind": "refusal",
+    "at": 1791800622921,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (duplicate_result): Three changes ready",
+    "refs": {
+     "botId": "bot-98e607c8",
+     "handoffId": "h-mv53tt1l9dae9f81db20",
+     "factId": "f-0mv53tt1l-bd3816694523"
+    },
+    "body": "handoff h-mv53tbw8a30116e5c161 already has its result"
+   }
+  ],
+  "stub": {
+   "moa": [
+    {
+     "at": 1791800600531,
+     "event": "prompt",
+     "text": "[wake w-mv53t7vy-9f1ec46d] Moa (moa) · reason: manual · priority 1\nFenced blocks below are data from the system, workers"
+    },
+    {
+     "at": 1791800600698,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv53tbw8a30116e5c161\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n  \"to\": {\n    \"botId\": \"bot-98e607c8\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\"\n  },\n  \"wakeId\": \"w-mv53tbw8-8368dfb3\"\n}"
+    },
+    {
+     "at": 1791800610944,
+     "event": "prompt",
+     "text": "[wake w-mv53tjsw-ec4f9291] Moa (moa) · reason: handoff · priority 1\nFenced blocks below are data from the system, worker"
+    }
+   ],
+   "lead": [
+    {
+     "at": 1791800605730,
+     "event": "prompt",
+     "text": "[wake w-mv53tbw8-8368dfb3] Lead (lead) · reason: handoff · priority 1\nFenced blocks below are data from the system, work"
+    },
+    {
+     "at": 1791800605946,
+     "event": "tool",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv53tbw8-8368dfb3:1\",\n  \"taskCount\": 3,\n  \"repoPath\": \"<path>\",\n  \"ownerWorkspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n  \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\"\n}"
+    },
+    {
+     "at": 1791800610935,
+     "event": "prompt",
+     "text": "[wake w-mv53tjsm-7d77c6fc] Lead (lead) · reason: facts · priority 1\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800610941,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n  \"threadId\": null,\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tbw9396cea3d12\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n      \"kind\": \"fact\",\n      \"at\": 1791800600696,\n      \"actor\": {\n        \"kind\": \"system\"\n      },\n      \"title\": \"dispatch → Lead (lead): Three small changes\",\n      \"refs\": {\n        \"botId\": \"bot-98e607c8\",\n        \"handoffId\": \"h-mv53tbw8a30116e5c161\",\n        \"factId\": \"f-0mv53tbw8-ec6abdf0d9d7\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjsm3ce65f1a79\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"task:wtask-mv53tg1y-32yh0cw2\",\n      \"kind\": \"fact\",\n      \"at\": 1791800610934,\n      \"actor\": {\n        \"kind\": \"system\"\n      },\n      \"title\": \"Task done: change A\",\n      \"body\": \"fake worker: review_requested for wtask-mv53tg1y-32yh0cw2\",\n      \"refs\": {\n        \"taskId\": \"wtask-mv53tg1y-32yh0cw2\",\n        \"botId\": \"bot-98e607c8\",\n        \"factId\": \"f-0mv53tjsm-5fdd57470ca8\"\n      },\n      \"closes\": true\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800610943,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53tjsua1a8845fc8\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n    \"threadId\": \"task:wtask-mv53tg1y-32yh0cw2\",\n    \"kind\": \"status\",\n    \"at\": 1791800610942,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"botId\": \"bot-98e607c8\"\n    },\n    \"title\": \"Workers reported\",\n    \"body\": \"Reports read for this wake.\",\n    \"clientPostId\": \"wake:w-mv53tjsm-7d77c6fc:1\"\n  }\n}"
+    },
+    {
+     "at": 1791800610944,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv53tjsvb7af074947cc\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n  \"to\": {\n    \"botId\": \"bot-500dbf9c\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\"\n  },\n  \"wakeId\": \"w-mv53tjsw-ec4f9291\"\n}"
+    },
+    {
+     "at": 1791800616714,
+     "event": "prompt",
+     "text": "[wake w-mv53to96-8f309809] Lead (lead) · reason: facts · priority 1\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800616719,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n  \"threadId\": null,\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tbw9396cea3d12\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n      \"kind\": \"fact\",\n      \"at\": 1791800600696,\n      \"actor\": {\n        \"kind\": \"system\"\n      },\n      \"title\": \"dispatch → Lead (lead): Three small changes\",\n      \"refs\": {\n        \"botId\": \"bot-98e607c8\",\n        \"handoffId\": \"h-mv53tbw8a30116e5c161\",\n        \"factId\": \"f-0mv53tbw8-ec6abdf0d9d7\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjsm3ce65f1a79\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"task:wtask-mv53tg1y-32yh0cw2\",\n      \"kind\": \"fact\",\n      \"at\": 1791800610934,\n      \"actor\": {\n        \"kind\": \"system\"\n      },\n      \"title\": \"Task done: change A\",\n      \"body\": \"fake worker: review_requested for wtask-mv53tg1y-32yh0cw2\",\n      \"refs\": {\n        \"taskId\": \"wtask-mv53tg1y-32yh0cw2\",\n        \"botId\": \"bot-98e607c8\",\n        \"factId\": \"f-0mv53tjsm-5fdd57470ca8\"\n      },\n      \"closes\": true\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjsua1a8845fc8\",\n      \"seq\": 3,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"task:wtask-mv53tg1y-32yh0cw2\",\n      \"kind\": \"status\",\n      \"at\": 1791800610942,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n        \"botId\": \"bot-98e607c8\"\n      },\n      \"title\": \"Workers reported\",\n      \"body\": \"Reports read for this wake.\",\n      \"clientPostId\": \"wake:w-mv53tjsm-7d77c6fc:1\"\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjswa3d58e03d7\",\n      \"seq\": 4,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n      \"kind\": \"fact\",\n      \"at\": 1791800610944,\n      \"actor\": {\n        \"k"
+    },
+    {
+     "at": 1791800616720,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53to9b349339e363\",\n    \"seq\": 6,\n    \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n    \"threadId\": \"task:wtask-mv53tkt2-d5lcy7ji\",\n    \"kind\": \"status\",\n    \"at\": 1791800616719,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"botId\": \"bot-98e607c8\"\n    },\n    \"title\": \"Workers reported\",\n    \"body\": \"Reports read for this wake.\",\n    \"clientPostId\": \"wake:w-mv53to96-8f309809:1\"\n  }\n}"
+    },
+    {
+     "at": 1791800616721,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"duplicate_result\",\n  \"message\": \"handoff h-mv53tbw8a30116e5c161 already has its result\",\n  \"handoffId\": \"h-mv53to9c484089663819\"\n}"
+    },
+    {
+     "at": 1791800622911,
+     "event": "prompt",
+     "text": "[wake w-mv53tt19-0b334041] Lead (lead) · reason: facts · priority 1\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800622918,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n  \"threadId\": null,\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tbw9396cea3d12\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n      \"kind\": \"fact\",\n      \"at\": 1791800600696,\n      \"actor\": {\n        \"kind\": \"system\"\n      },\n      \"title\": \"dispatch → Lead (lead): Three small changes\",\n      \"refs\": {\n        \"botId\": \"bot-98e607c8\",\n        \"handoffId\": \"h-mv53tbw8a30116e5c161\",\n        \"factId\": \"f-0mv53tbw8-ec6abdf0d9d7\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjsm3ce65f1a79\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"task:wtask-mv53tg1y-32yh0cw2\",\n      \"kind\": \"fact\",\n      \"at\": 1791800610934,\n      \"actor\": {\n        \"kind\": \"system\"\n      },\n      \"title\": \"Task done: change A\",\n      \"body\": \"fake worker: review_requested for wtask-mv53tg1y-32yh0cw2\",\n      \"refs\": {\n        \"taskId\": \"wtask-mv53tg1y-32yh0cw2\",\n        \"botId\": \"bot-98e607c8\",\n        \"factId\": \"f-0mv53tjsm-5fdd57470ca8\"\n      },\n      \"closes\": true\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjsua1a8845fc8\",\n      \"seq\": 3,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"task:wtask-mv53tg1y-32yh0cw2\",\n      \"kind\": \"status\",\n      \"at\": 1791800610942,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n        \"botId\": \"bot-98e607c8\"\n      },\n      \"title\": \"Workers reported\",\n      \"body\": \"Reports read for this wake.\",\n      \"clientPostId\": \"wake:w-mv53tjsm-7d77c6fc:1\"\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53tjswa3d58e03d7\",\n      \"seq\": 4,\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"threadId\": \"handoff:h-mv53tbw8a30116e5c161\",\n      \"kind\": \"fact\",\n      \"at\": 1791800610944,\n      \"actor\": {\n        \"k"
+    },
+    {
+     "at": 1791800622920,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53tt1k7eba644436\",\n    \"seq\": 9,\n    \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n    \"threadId\": \"task:wtask-mv53tpl7-d2protub\",\n    \"kind\": \"status\",\n    \"at\": 1791800622920,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-adf8e396-a6f8-47ce-baaf-d866f078b6e6\",\n      \"botId\": \"bot-98e607c8\"\n    },\n    \"title\": \"Workers reported\",\n    \"body\": \"Reports read for this wake.\",\n    \"clientPostId\": \"wake:w-mv53tt19-0b334041:1\"\n  }\n}"
+    },
+    {
+     "at": 1791800622921,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"duplicate_result\",\n  \"message\": \"handoff h-mv53tbw8a30116e5c161 already has its result\",\n  \"handoffId\": \"h-mv53tt1l9dae9f81db20\"\n}"
+    }
+   ]
+  },
+  "workers": [
+   {
+    "at": 1791800609754,
+    "event": "start",
+    "taskId": "wtask-mv53tg1y-32yh0cw2"
+   },
+   {
+    "at": 1791800610935,
+    "event": "ledger_update"
+   },
+   {
+    "at": 1791800615528,
+    "event": "start",
+    "taskId": "wtask-mv53tkt2-d5lcy7ji"
+   },
+   {
+    "at": 1791800616715,
+    "event": "ledger_update"
+   },
+   {
+    "at": 1791800621721,
+    "event": "start",
+    "taskId": "wtask-mv53tpl7-d2protub"
+   },
+   {
+    "at": 1791800622911,
+    "event": "ledger_update"
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800595571,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    },
+    {
+     "at": 1791800606225,
+     "exit": 1,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ]
+    },
+    {
+     "at": 1791800612423,
+     "exit": 1,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ]
+    },
+    {
+     "at": 1791800618619,
+     "exit": 1,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "a report never reached the lead",
+   "failing": [
+    "every_report_reached_lead"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.5"
+    }
+   ]
+  },
+  {
+   "why": "a second result was delivered",
+   "failing": [
+    "one_result_to_moa"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.2.status",
+     "value": "delivered"
+    },
+    {
+     "op": "remove",
+     "path": "handoffs.2.refusal"
+    }
+   ]
+  },
+  {
+   "why": "another bot woke on the reports",
+   "failing": [
+    "no_other_bot_woken"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-99999999",
+      "reason": {
+       "kind": "facts",
+       "factIds": [
+        "f-x"
+       ],
+       "trigger": {
+        "kind": "task.done"
+       }
+      },
+      "state": "done",
+      "priority": 2,
+      "attempts": 1,
+      "enqueuedAt": 1
+     }
+    }
+   ]
+  }
+ ]
+}

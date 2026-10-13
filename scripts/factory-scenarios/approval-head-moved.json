@@ -1,0 +1,141 @@
+{
+  "name": "approval-head-moved",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner approves a merge request on its card; inside the Undo window the PR gets a new head. Main's executor re-reads the PR, refuses head-moved, merges nothing, and says a new request is needed.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "dev",
+        "role": "lead",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "approval_request",
+                  "args": {
+                    "action": "merge",
+                    "pr_number": 1,
+                    "reason": "CI is green."
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "say": "#1 is ready."
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "ok"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "gh",
+      "op": "addPr",
+      "pr": {
+        "number": 1,
+        "title": "feat: one",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "post",
+      "label": "ask",
+      "post": {
+        "title": "Check PR 1",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "request",
+      "cond": {
+        "approvals": {
+          "state": "pending",
+          "min": 1
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "api",
+      "label": "list",
+      "fn": "approvals.list",
+      "args": [],
+      "save": {
+        "req": "requests.0.requestId"
+      }
+    },
+    {
+      "do": "api",
+      "label": "approve",
+      "fn": "approvals.decide",
+      "args": [
+        {
+          "requestId": "{{saved.req}}",
+          "decision": "approve"
+        }
+      ],
+      "record": true
+    },
+    {
+      "do": "gh",
+      "op": "setPr",
+      "number": 1,
+      "patch": {
+        "headSha": "1111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "refused",
+      "cond": {
+        "approvals": {
+          "state": "refused",
+          "min": 1
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "approvals",
+      "ghCalls"
+    ],
+    "bot": "dev",
+    "pr": 1
+  }
+}

@@ -211,14 +211,6 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   // WP3). Same per-spawn-token auth; the handler server-enforces auto-mode +
   // staleness + substance, so a non-commander or premature caller fails closed.
   'deck.resolveDecision',
-  // Moa (HQ brain) hand-off proposal (moa_propose_handoff tool). Same
-  // per-spawn-token auth; the handler refuses any caller that is not the HQ
-  // brain, and delivery waits for the operator's card answer.
-  'deck.proposeHandoff',
-  // Moa's goal contract (moa_propose_goal / moa_goal). Same per-spawn-token
-  // auth, HQ only; the proposal only raises an operator card.
-  'deck.proposeGoal',
-  'deck.goal',
   // events
   'events.poll',
   // browser (Playwright + packaged CDP/RPC fallbacks)
@@ -341,10 +333,41 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   // authz) and ledger_list (commander-only tool, also in the commander lane).
   'ledger.list',
   'ledger.update',
-  // Moa's delegate — moa_ask / moa_ask_status (full profile, registered only
-  // when the owner turned the ask mode on).
-  'moa.ask',
-  'moa.askStatus',
+  // pr_verdict (the verifier bot's tool).
+  'verify.recordVerdict',
+  // Agent factory bot tools (shared/botSurface.ts BOT_TOOL_RPC), registered
+  // only in `--bot=<role>` mode. Operator-only factory methods (bot.create,
+  // room.resolve, handoff.answer, fact.emit, ...) are deliberately absent.
+  'fact.poll',
+  'room.post',
+  'room.read',
+  'handoff.send',
+  'ask.person',
+  'pr.read',
+  'issue.read',
+  'ci.read',
+  'verdict.read',
+  'trustMetrics.read',
+  'plan.propose',
+  'bot.list',
+  'bot.park',
+  // The shared bot surface's own-profile, routine, worker-resume,
+  // approval-request and secret-request tools: each handler acts only for
+  // the calling bot's binding (an approval request grants nothing; a secret request carries
+  // no value).
+  'bot.setJob',
+  'bot.stopMyWork',
+  'bot.resumeWorker',
+  'bot.workerMessage',
+  'bot.questionClose',
+  'routine.set',
+  'routine.list',
+  'routine.pause',
+  'botApproval.request',
+  'botApproval.list',
+  'botSecret.request',
+  'botSecret.list',
+  'botLogin.request',
   // Task lifecycle — the eight commander-only tools (task_gate_run,
   // task_gate_cancel, task_adopt, task_close, task_pr, git_status, git_log,
   // gh_pr_view).

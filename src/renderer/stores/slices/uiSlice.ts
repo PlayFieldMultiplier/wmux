@@ -135,7 +135,6 @@ import {
   type TokenRole,
 } from '../../themes';
 import { sanitizeFontFamily } from '../../utils/terminalFont';
-import { isMoaHqWorkspace } from './moaSlice';
 import {
   DEFAULT_TERMINAL_CURSOR_STYLE,
   sanitizeTerminalCursorStyle,
@@ -162,7 +161,7 @@ export type FleetTab = 'fleet' | 'approvals' | 'remote';
  * panes and tools dock) is home; every other page covers it while the
  * terminals stay mounted underneath. Session-only, never persisted.
  */
-export type AppRoute = 'workspaces' | 'fleet' | 'schedules' | 'remote' | 'git' | 'settings';
+export type AppRoute = 'workspaces' | 'bots' | 'fleet' | 'schedules' | 'remote' | 'git' | 'settings';
 
 export interface UISlice {
   // ─── Startup gate (Fix 0) ─────────────────────────────────────────────
@@ -933,6 +932,7 @@ export interface UISlice {
 
   companyViewVisible: boolean;
   toggleCompanyView: () => void;
+  toggleBotsView: () => void;
   setCompanyViewVisible: (visible: boolean) => void;
 
   messageFeedVisible: boolean;
@@ -1496,11 +1496,6 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setChannelsTabVisible: (visible) => set((state) => {
     state.channelsTabVisible = visible;
-    // Hiding the tab while it is the active one must not leave the deck on an
-    // unreachable surface — snap back to the orchestrator.
-    if (!visible && state.activeDeckTab === 'channels') {
-      state.activeDeckTab = 'commander';
-    }
   }),
 
 
@@ -1814,8 +1809,8 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
       state.sidebarBookmarkedIds = state.sidebarBookmarkedIds.filter((id) => id !== workspaceId);
       return;
     }
-    // Only a live workspace can be bookmarked; Moa's HQ is never in the list.
-    if (!state.workspaces.some((w) => w.id === workspaceId) || isMoaHqWorkspace(state, workspaceId)) return;
+    // Only a live workspace can be bookmarked.
+    if (!state.workspaces.some((w) => w.id === workspaceId)) return;
     state.sidebarBookmarkedIds = [...state.sidebarBookmarkedIds, workspaceId];
   }),
   sidebarNewAt: {},
@@ -2196,6 +2191,11 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   companyViewVisible: false,
   toggleCompanyView: () => set((state) => { state.companyViewVisible = !state.companyViewVisible; }),
+  // Opens the Bots rail page and, pressed there, returns to Workspaces.
+  toggleBotsView: () => {
+    if (get().appRoute === 'bots') set((state) => { leaveAppRoute(state, 'bots'); });
+    else get().setAppRoute('bots');
+  },
   setCompanyViewVisible: (visible) => set((state) => { state.companyViewVisible = visible; }),
 
   messageFeedVisible: false,

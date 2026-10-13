@@ -15,7 +15,6 @@ const owners: Record<string, string> = { 'daemon-own': 'ws-own' };
 function setup(): RpcRouter {
   const router = new RpcRouter();
   registerWorkspaceRpc(router, () => fakeWindow, {
-    getHqWorkspaceId: () => 'ws-hq',
     resolveCallerWorkspace: async (pty) => owners[pty] ?? null,
   });
   return router;
@@ -48,9 +47,9 @@ describe('workspace.close — the caller’s own workspace', () => {
     expect(sendToRendererMock).toHaveBeenLastCalledWith(expect.anything(), 'workspace.close', { id: 'ws-own' });
   });
 
-  it('force never lifts the HQ refusal', async () => {
-    const res = await setup().dispatch({ id: 'c6', method: 'workspace.close', params: { id: 'ws-hq', force: true } });
-    expect(res.ok).toBe(false);
-    expect(sendToRendererMock).not.toHaveBeenCalled();
+  it('an earlier version\'s HQ workspace closes like any other', async () => {
+    const res = await setup().dispatch({ id: 'c6', method: 'workspace.close', params: { id: 'ws-hq' } });
+    expect(res.ok).toBe(true);
+    expect(sendToRendererMock).toHaveBeenLastCalledWith(expect.anything(), 'workspace.close', { id: 'ws-hq' });
   });
 });

@@ -14,6 +14,7 @@ import * as path from 'path';
 import { FIRST_PARTY_CLIENT_NAMES, FIRST_PARTY_METHODS, isFirstPartyClient } from '../firstParty';
 import { METHOD_CAPABILITY, resolveRequiredCapability } from '../methodCapabilityMap';
 import type { RpcMethod } from '../../../shared/rpc';
+import { BOT_TOOL_RPC } from '../../../shared/botSurface';
 
 // src/main/mcp/__tests__ -> src/mcp
 const MCP_DIR = path.resolve(__dirname, '..', '..', '..', 'mcp');
@@ -53,6 +54,11 @@ function extractCalledMethods(): Set<string> {
       called.add(m[1]);
     }
   }
+  // The bot placeholder lane (src/mcp/toolModules.ts) forwards every bot
+  // surface tool that no module registers to that tool's primary method — a
+  // call through a variable the regex above cannot see.
+  expect(fs.readFileSync(path.join(MCP_DIR, 'toolModules.ts'), 'utf8')).toContain('BOT_TOOL_RPC');
+  for (const methods of Object.values(BOT_TOOL_RPC)) called.add(methods[0]);
   return called;
 }
 
@@ -151,12 +157,44 @@ describe('FIRST_PARTY_METHODS source invariant', () => {
       // issue #285 — supervisor pane/surface lifecycle (reserved wmux.internal)
       'surface.new',
       'surface.close',
-      // Moa's delegate (moa_ask / moa_ask_status): reserved so no plugin can
-      // declare it. It only records a ticket for the verified calling pane;
-      // nothing acts without the owner's switches, and the handler answers
-      // `off` while the delegate is off.
-      'moa.ask',
-      'moa.askStatus',
+      // pr_verdict (the verifier bot's tool): reserved so no plugin can
+      // declare it. It records one verdict for the verified caller, after main
+      // re-reads the PR head and the caller's own checkout; it merges nothing
+      // by itself.
+      'verify.recordVerdict',
+      // Agent factory bot tools (registered only in `--bot=<role>` mode).
+      // Reserved so no plugin can declare them; each handler scopes the call
+      // on the caller's validated bot binding. The operator-only factory
+      // methods (bot.create/update/remove/wake/..., room.resolve,
+      // handoff.answer/list, fact.emit) stay out of this set.
+      'fact.poll',
+      'room.post',
+      'room.read',
+          'handoff.send',
+      'ask.person',
+      'pr.read',
+      'issue.read',
+      'ci.read',
+      'verdict.read',
+      'trustMetrics.read',
+      'plan.propose',
+      'bot.list',
+      'bot.park',
+      // The shared bot surface: each handler acts only for
+      // the calling bot's binding; none grants an approval or reads a value.
+      'bot.setJob',
+      'bot.stopMyWork',
+      'bot.resumeWorker',
+      'bot.workerMessage',
+      'bot.questionClose',
+      'routine.set',
+      'routine.list',
+      'routine.pause',
+      'botApproval.request',
+      'botApproval.list',
+      'botSecret.request',
+      'botSecret.list',
+      'botLogin.request',
       // `company.a2a.*` was here for the six company_a2a_* tools; both the
       // tools and the grants are gone (the least-privilege assertion below is
       // what would have caught them lingering).

@@ -47,6 +47,23 @@ describe('ledger.list', () => {
 });
 
 describe('ledger.update', () => {
+  it('a worker that leaves the task out reports on the open task of its own workspace', async () => {
+    const ok = (await call('ledger.update', { senderPtyId: 'pty-task', status: 'review_requested', expectedRev: 1, summary: 'done' })) as { ok: boolean; entry: { id: string; status: string } };
+    expect(ok.ok).toBe(true);
+    expect(ok.entry).toMatchObject({ id: 'wtask-1', status: 'review_requested' });
+  });
+
+  it('a worker with no open task of its own, or the brain without a task id, is refused; a wrong id names the worker\'s own task', async () => {
+    const wrong = (await call('ledger.update', { senderPtyId: 'pty-task', taskId: 'wtask-guess', status: 'review_requested', expectedRev: 1 })) as { error: { code: string; message: string } };
+    expect(wrong.error.code).toBe('NOT_FOUND');
+    expect(wrong.error.message).toContain('your task is wtask-1 at rev 1');
+    await call('ledger.update', { senderPtyId: 'pty-task', taskId: 'wtask-1', status: 'failed', expectedRev: 1 });
+    const none = (await call('ledger.update', { senderPtyId: 'pty-task', status: 'review_requested', expectedRev: 2 })) as { ok: boolean; error: { code: string } };
+    expect(none.error.code).toBe('NOT_FOUND');
+    const brain = (await call('ledger.update', { status: 'failed', expectedRev: 1 }, brainCtx)) as { error: { code: string } };
+    expect(brain.error.code).toBe('INVALID_ARGUMENT');
+  });
+
   it('a worker hands its task to review with the rev it read; a stale rev is refused', async () => {
     const ok = (await call('ledger.update', { senderPtyId: 'pty-task', taskId: 'wtask-1', status: 'review_requested', expectedRev: 1, summary: 'gate green' })) as { ok: boolean; entry: { status: string; rev: number } };
     expect(ok.ok).toBe(true);

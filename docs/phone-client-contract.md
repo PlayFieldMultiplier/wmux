@@ -379,7 +379,7 @@ GET /api/events?since=<cursor>     (Bearer)
 ```
 GET /api/config    → {allowInput, allowUpload, allowTranscript, inlineImages?, liveActivityPush?,
                       gatedTools, gateEnabled?, fleetSidebar?, moaDelegations?, fleetTickets?, moa?, moaSessionId?, moaWake?,
-                      moaWakeBlocked?, channels?, terminalPromptDetail?,
+                      moaWakeBlocked?, factory?, rooms?, channels?, terminalPromptDetail?,
                       terminalPromptDecline?, protocolVersion, minProtocolVersion,
                       serverVersion, hostPlatform}
 GET /api/sessions  → {sessions: [{id, cwd, spawnCwd?, cols, rows, state, agent, lastActivity,
@@ -3586,7 +3586,9 @@ wired); like `fleetSidebar` it describes support, not presence. Read-only:
 ```
 
 - **Which jobs.** A job Moa handed off (operator-approved or automatic) that
-  has an A2A task. Every open job (`working`, `blocked`) however old, plus jobs
+  has an A2A task. With a 5.0 desktop's factory on, the jobs are the factory's
+  dispatch handoffs instead and `taskId` is a handoff id (see *The agent
+  factory* below). Every open job (`working`, `blocked`) however old, plus jobs
   that ended (`done`, `failed`) within the last 24 hours. At most 20, newest
   `since` first; past 20 the oldest are left out. A hand-off Moa only proposed
   is not a job yet: it is the `moaHandoff` notice on its workspace row.
@@ -3894,7 +3896,9 @@ GET /api/config → { ..., moa: true, moaWake: true }
   `"moa-mode-off"`: the HQ workspace's agent mode is off, so the wake would
   end `409 moa-mode-off`. Show that reason (for example "Turn on Moa's agent
   mode on the desktop") instead of offering a send that fails. Treat an
-  unknown value as blocked with a generic reason. Omitted when nothing blocks
+  unknown value as blocked with a generic reason. A 5.0 desktop adds
+  `"no-hq-bot"` and `"factory-off"`, served without `moa` (see *The agent
+  factory* below). Omitted when nothing blocks
   the wake, when any other `moaWake` gate fails, when the desktop could not
   read the mode, and by older daemons or desktops — read its absence as
   today's `moaWake` rule. Like `moa`, it reflects the desktop's sidebar
@@ -4026,6 +4030,249 @@ line.
 Never exposed, on any route: the brain's environment, its commander token, or
 its hook and MCP configuration. A device holding input can of course ask Moa
 anything in its own words, as it can any agent pane.
+
+#### The agent factory (`factory`, `rooms`, `/api/rooms`)
+
+> **Serving: not yet.** This section describes the 5.0 branch (local, not
+> released). No shipped daemon serves any key or route below; a daemon or
+> desktop that predates it omits every one of them, and the Moa sections above
+> describe what it serves.
+
+In 5.0 the desktop's Moa becomes the HQ bot of an **agent factory**: long-lived
+bots bound to workspaces by role (`lead`, `triage`, `verifier`, `maintainer`,
+and the HQ's `moa`). Bots have no pane and no terminal. What they say lands in
+the workspace's **room**, a timeline of typed cards split into threads (one per
+PR, issue, task, handoff, plan or report, plus `general`). A desktop whose
+factory is switched off keeps the Moa behaviour above unchanged.
+
+**`/api/config`.**
+
+```
+GET /api/config   (X-Wmux-Client-Caps: rooms-v1)
+                → { ..., factory: { enabled: true, hqBotId: "bot-1a2b3c4d",
+                    hqWorkspaceId: "ws-…", hqSessionId: "…" },
+                    moa: true, moaWake: true, rooms: true }
+```
+
+- `factory` — present only while a factory desktop is attached and its factory
+  has started; omitted otherwise (read a missing key as "no factory", and the
+  Moa keys keep their meaning above). `enabled` — the desktop's factory switch.
+  While `enabled`:
+  - `hqBotId` — the bot the phone talks to (called the HQ bot below): the
+    one the owner pinned in Settings › Bots while it is enabled, else the
+    oldest enabled Coordinator-template bot, else the oldest enabled bot of
+    the HQ workspace. Omitted when there is none. It may be any bot, so its
+    `role` in a workspace row's `bots` is whatever label that bot carries
+    (the same five values as before).
+  - `hqWorkspaceId` — that bot's workspace: its room is where Moa's replies
+    land (`/api/rooms/<hqWorkspaceId>/cards`). It may differ from the
+    `role: "hq"` workspace; take the room from this key.
+  - `hqSessionId` — the HQ bot's engine session id, once it has one. Opaque:
+    it is **not** a pane and no session route accepts it. It may change.
+- `moa` — with the factory on: `true` exactly when an HQ bot is enabled.
+  With it off: as above.
+- `moaSessionId` — **never served while the factory is on**, on `/api/config`,
+  on `GET /api/moa/messages/:id` or in the `moa` event (which sends
+  `{moaSessionId: null}`). The HQ bot has no pane, so no `/turns` or chat
+  route could answer it. With the factory off: as above.
+- `moaWake` — with the factory on: `true` when an HQ bot is enabled, the
+  desktop announced `moa.wake` and `factory.message`, this caller passes the chat write
+  gates (transcript and input), **and the `/api/config` request carried the
+  `rooms-v1` client capability** (`X-Wmux-Client-Caps: rooms-v1`, alongside
+  any others), whether or not the bot has ever run. `rooms-v1` says the
+  client reads Moa's replies as room cards (below) instead of waiting for a
+  Moa pane, which never appears with the factory on. A client that does not
+  send it gets `moaWakeBlocked: "needs-app-update"` beside `moa: true` in
+  place of `moaWake`.
+- `moaWakeBlocked` gains three values, under the same gates as `moaWake` and
+  never beside it. `"needs-app-update"` comes **with** `moa: true`: the factory
+  is on and has an HQ bot, but this client did not send `rooms-v1`, so it
+  cannot show Moa's replies. The other two come **without** `moa`:
+  - `"no-hq-bot"` — the factory is on but no HQ bot is enabled; a send would
+    end `409 no-hq`.
+  - `"factory-off"` — the factory is off and the desktop has no Moa on either.
+  `"moa-mode-off"` stays the factory-off, legacy-Moa value. Treat an unknown
+  value as blocked with a generic reason, as before.
+- `rooms` — `true` when the two room routes below answer here: the server runs
+  with `--allow-transcript` and the attached desktop announced both room
+  commands. Omitted, never `false`, otherwise.
+
+**Messages to Moa while the factory is on.** `POST /api/moa/messages` is
+unchanged on the wire, but the factory route wins over everything else — even
+over a Moa pane that is still up. The message becomes a `human` card in the HQ
+bot's room (`hqWorkspaceId`) addressed to that one bot (`hqBotId`), and a wake
+queued for it; the daemon answers on queue, never on reply:
+
+| Answer | Meaning | Retry |
+|---|---|---|
+| `202 {state:"queued", clientMessageId}` | The HQ bot has the message in its queue. Its reply will be a card in the HQ room. A busy bot queues, it never refuses. | — |
+| `409 {error:"no-hq", reason, state:"failed"}` | `reason:"hq-missing"`: the factory is on and no HQ bot is enabled. `reason:"hq-unknown"`: the HQ room refused the message. Final for this id. | new id, once a bot exists |
+| `409 {error:"moa-busy", state:"failed"}`, `Retry-After: 5` | The factory has not finished starting, or the bot's queue is full. Nothing was queued; the id is released. | same id, after the delay |
+
+The replay, id-reuse, `desktop-unavailable`, `desktop-busy`, `uncertain` and
+`message-history-full` answers are those of the table above. With the factory
+off the desktop says so and the Moa path above runs with the same id.
+
+`GET /api/moa/messages/:clientMessageId` reads `state: "queued"` for such a
+message: final, it never moves to `accepted`. There is no `cardId` yet: find
+the reply by reading the HQ room after the message's own `human` card.
+
+**`/api/workspaces`.** With the factory on, each row of a workspace that has
+bots carries them, and their room's open questions:
+
+```json
+{ "id": "ws-…", "name": "wmux", "panes": [ … ],
+  "bots": [ { "id": "bot-1a2b3c4d", "role": "lead", "presence": "idle", "queueDepth": 0 },
+            { "id": "bot-5e6f7a8b", "role": "verifier", "presence": "running", "queueDepth": 2 } ],
+  "openQuestions": 1 }
+```
+
+- `bots` — oldest first, at most 16. `role`: `lead`, `triage`, `verifier`,
+  `maintainer`, `moa`. `presence`: `running` (in a turn), `idle`, `parked`
+  (paused by its budget, an error or a human), `stopped` (disabled), or
+  `unknown` (not started since the desktop launched — not offline). Treat an
+  unknown value as `unknown`. `queueDepth` — wakes waiting for it. Omitted on a
+  row with no bot.
+- `openQuestions` — questions bots asked the owner (`ask_person`) that are not
+  answered yet, over the workspace's whole room. Present (possibly `0`) on a
+  row with a bot; omitted otherwise, and when the room could not be read. The
+  questions themselves are answered through the approvals inbox as before.
+- Like every sidebar field, both are dropped first when the desktop's reply is
+  over its size budget.
+
+`moaDelegations` keeps its shape, but with the factory on its rows are the
+jobs the factory dispatched (a `dispatch` handoff to a bot): every open one,
+plus those that ended within 24 hours. `taskId` is then the **handoff id**
+(`h-…`), opaque and stable — no `fleetTickets` row carries a factory
+dispatch, so no ticket's `id` or `taskId` ever equals it and the delegation is
+the only row for that job; `agentName` is the bot's name; `blocked` means the
+handoff's thread holds an open question; `done` an answered handoff; `failed`
+a refused or expired one.
+
+**`GET /api/rooms/:workspaceId/threads`** — the room's threads, open
+questions first, then open, quiet and closed threads, each newest first. At
+most 100, fewer when the titles would push the reply past 112 KiB;
+`truncated: true` when threads were left out (from the end of that order).
+
+```json
+{ "workspaceId": "ws-…",
+  "threads": [ { "threadId": "pr:github.com/o/r#42", "title": "Fix the login redirect",
+                 "lastAt": 1759600000000, "lastSeq": 18, "cardCount": 6,
+                 "openQuestions": 1, "lastKind": "question", "status": "open",
+                 "unread": null } ] }
+```
+
+`status` is `open`, `quiet` (no card for three days) or `closed` (the subject
+ended and nothing is open). `unread` counts cards after the owner's read
+position on the desktop, or `null` when none is known (not zero). `general`
+is always listed.
+
+**`GET /api/rooms/:workspaceId/cards?thread=&sinceSeq=&limit=`** — cards in
+arrival order (`seq`, increasing; never sort by `at`).
+
+- `thread` — a thread id from the list (URL-encoded); omitted: every card of
+  the room. `general` reads the general thread only.
+- `sinceSeq` — cards with a larger `seq`. Omitted: the newest page. Read
+  forward from `0` for the whole history.
+- `limit` — 1–100, default 50.
+
+```json
+{ "workspaceId": "ws-…", "threadId": "pr:github.com/o/r#42",
+  "cards": [ { "id": "c-…", "seq": 17, "threadId": "pr:github.com/o/r#42",
+               "kind": "verdict", "at": 1759600000000,
+               "actor": { "kind": "bot", "botId": "bot-5e6f7a8b", "role": "verifier", "name": "Verifier" },
+               "title": "PASS at 3f2a9c1", "body": "Gate exit 0 …",
+               "refs": { "pr": 42, "headSha": "3f2a9c1…" } } ],
+  "nextSinceSeq": 17, "hasMore": false }
+```
+
+- An owner card a phone sent (`kind: "human"`, `actor.kind: "human"`)
+  carries `clientMessageId`: the id it was sent under to
+  `POST /api/moa/messages`. No other card has one. Use it to find your own
+  message, for example one that was posted but answered `moa-busy`.
+- Pass `nextSinceSeq` back as `sinceSeq` for the next page; `hasMore` says
+  more cards follow it. A page can hold fewer than `limit` cards: replies are
+  kept under 112 KiB, so large bodies shorten a page (a forward page then says
+  `hasMore: true`; the newest page keeps its newest cards).
+- `kind`: `fact`, `dispatch`, `status`, `triage`, `verdict`, `report`,
+  `plan`, `proposal`, `opinion`, `question`, `human`, `refusal`, `budget`,
+  `approval` (a bot asking the owner for an act; see
+  [Bot approvals](#bot-approvals-apibot-approvals)).
+  A card of a kind this list does not name is left out of the page.
+- `actor`: `{kind:"bot", botId, role?, name?}`, `{kind:"human"}` (the owner,
+  from the desktop or a phone) or `{kind:"system"}`.
+- `title` — one line, at most 200 characters. `body` — markdown, at most 8,192
+  characters, with control and bidi-override characters removed. Optional.
+- `refs` — optional: `pr`, `issue`, `headSha`, `taskId`, `botId`,
+  `handoffId`, `check`, `factId`, `decisionId`, `approvalId` (an `approval`
+  card's request, `apr-…`), and `url` (http or https only).
+- `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
+  `replyTo` — a card of the same thread this one answers. `closes: true` — the
+  card records the end of its thread's subject.
+
+Both routes are read-only and need `--allow-transcript` (card text is
+bot-authored), checked before anything else; no input grant. Every answer is
+`Cache-Control: no-store`.
+
+| Answer | Meaning |
+|---|---|
+| `200` | The page above. |
+| `400 {error:"invalid-room-request", detail?}` | A malformed `thread`, `sinceSeq` or `limit`. |
+| `403 {error:"transcript-disabled"}` | The server runs without `--allow-transcript`. |
+| `404 {error:"room-not-found"}` | Not a workspace id, or a workspace with no bot, no room and not the HQ. |
+| `503 {error:"desktop-unavailable"}` | No desktop attached (rooms live on the desktop; the daemon keeps no copy). |
+| `503 {error:"rooms-unavailable"}` | The desktop cannot read rooms: too old, its factory has not started, or the room's file cannot be read. |
+| `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
+
+#### Bot approvals (`/api/bot-approvals`)
+
+A bot asks the owner before a merge, a push to a default branch, opening or
+closing an issue, a comment or a release; the request shows as an `approval`
+card whose `refs.approvalId` names it. The operator answers it here. Both
+routes take the **operator token only**: a paired device gets
+`403 {error:"operator-only"}`, checked first. `/api/config` carries
+`botApprovals: true` for the operator when the attached desktop answers
+them (omitted otherwise).
+
+**`GET /api/bot-approvals/:requestId`** — the request now.
+
+**`POST /api/bot-approvals/:requestId/decision`** — body
+`{"decision": "approve" | "deny" | "undo" | "always", "ruleScope"?: "bot" | "workspace"}`
+(`ruleScope` only with `always`; any other field is 400). The decision is the
+desktop card's: an approved merge waits 10 seconds (`executeAfter`) with
+`undo` available, then the desktop re-checks the head and CI and merges;
+`always` approves and remembers a rule for that bot (or its whole workspace)
+and repository, merges only (`canAlwaysAllow`).
+
+```json
+{ "request": { "requestId": "apr-…", "action": "merge", "workspaceId": "ws-…",
+               "threadId": "pr:github.com/o/r#42", "botId": "bot-5e6f7a8b",
+               "repoKey": "github.com/o/r", "prNumber": 42, "headSha": "3f2a9c1…",
+               "tainted": false, "state": "approved", "decidedBy": "owner",
+               "decidedAt": 1759600000000, "executeAfter": 1759600010000,
+               "createdAt": 1759599990000, "updatedAt": 1759600000000,
+               "canAlwaysAllow": false } }
+```
+
+- `action`: `merge`, `push_default`, `issue_create`, `issue_close`,
+  `comment`, `release`. Only a merge is carried out; the others are recorded.
+- `state`: `pending`, `approved`, `denied`, `executed`, `refused`, `expired`
+  (`undo` returns an approved merge to `pending`). `refusal` names why a
+  `refused` one did not merge (`head-moved`: the bot must ask again).
+- `tainted: true` — the work started from outside text (an issue or PR);
+  show it on the card. `decidedBy`: `owner` or `rule`.
+- No bot-written text: the reason is the card's `body`.
+
+| Answer | Meaning |
+|---|---|
+| `200 {request}` | The request after the read or the decision. |
+| `400 {error:"invalid-decision"}` | A malformed body. |
+| `403 {error:"operator-only"}` | Not the operator token. |
+| `403 {error:"read-only"}` | A decision on a server started without `--allow-input` (reads still answer). |
+| `404 {error:"approval-not-found"}` | No such request. |
+| `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the merge started), `not_ruleable`, `too_many`, `write_failed`. |
+| `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |
+| `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
 
 #### Workspace layout tree
 

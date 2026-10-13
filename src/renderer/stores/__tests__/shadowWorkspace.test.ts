@@ -29,7 +29,6 @@ import { getWorkspaceRemoteSessions } from '../../../shared/paneUtils';
 import { listedWorkspaces } from '../slices/moaSlice';
 import { buildWorkspaceMirrorPayload } from '../../hooks/workspaceMirrorSnapshot';
 import { createTerminalSurface } from '../../utils/createTerminalSurface';
-import { buildWorkspaceContextSummary } from '../../components/Deck/deckBrain';
 import { workspaceCloseRefusal } from '../../components/Moa/moaHqGuard';
 import { showGitDiff } from '../../utils/commandActions';
 
@@ -338,10 +337,9 @@ describe('exclusions outside the store', () => {
     expect(read('components/Layout/EmptyLeafFunnel.tsx')).toMatch(/if \(isShadowWorkspaceId\(activeWorkspace\.id\)\) return;/);
   });
 
-  it('the listed workspaces (sidebars, Ctrl+N, Alt+Up/Down, last-workspace guard) drop shadows and the HQ', () => {
+  it('the listed workspaces (sidebars, Ctrl+N, Alt+Up/Down, last-workspace guard) drop shadows', () => {
     const list = [local('ws-1'), { ...local('x'), id: 'shadow:h1:rw1' }, local('hq')];
-    expect(listedWorkspaces(list, 'hq').map((w) => w.id)).toEqual(['ws-1']);
-    expect(listedWorkspaces(list, null).map((w) => w.id)).toEqual(['ws-1', 'hq']);
+    expect(listedWorkspaces(list).map((w) => w.id)).toEqual(['ws-1', 'hq']);
   });
 
   it('the workspace mirror (workspace_list, fan-out targets, pane ids) carries no shadow', () => {
@@ -385,16 +383,11 @@ describe('review fixes', () => {
     expect(resolveRepo).not.toHaveBeenCalled();
   });
 
-  it('opens no fan-out for a shadow, and the orchestrator neither talks to one nor reads its name', () => {
+  it('opens no fan-out for a shadow', () => {
     const id = useStore.getState().openShadowWorkspace('h1', 'rw2')!;
     useStore.getState().openFanOut(id, null);
     expect(useStore.getState().fanOutWorkspaceId).toBeNull();
     expect(selectLocalWorkspaceId(useStore.getState())).toBe('ws-1');
-    const summary = buildWorkspaceContextSummary({
-      workspaces: useStore.getState().workspaces, activeWorkspaceId: 'ws-1', surfaceAgent: {}, paneLabel: {}, channels: {},
-    });
-    expect(summary).toContain('ws-2');
-    expect(summary).not.toContain('web');
   });
 
   it('a hidden local workspace takes no keys, and choosing a local workspace selects this computer', () => {

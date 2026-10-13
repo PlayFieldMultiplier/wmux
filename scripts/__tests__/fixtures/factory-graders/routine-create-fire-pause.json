@@ -1,0 +1,854 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "routine-create-fire-pause",
+  "run": 1,
+  "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881789471,
+    "updatedAt": 1791881789471
+   },
+   {
+    "version": 1,
+    "id": "bot-c1aedef9",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881794556,
+    "updatedAt": 1791881794556
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-88b27264",
+   "moa": "bot-c1aedef9"
+  },
+  "injected": [
+   {
+    "label": "set",
+    "kind": "card",
+    "id": "c-mv6g5lhbeb6d5cfac6",
+    "threadId": "general",
+    "at": 1791881794557
+   },
+   {
+    "label": "stop",
+    "kind": "card",
+    "id": "c-mv6g6zv91d9b4f9d2d",
+    "threadId": "general",
+    "at": 1791881859860
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881794557,
+    "do": "post",
+    "label": "set",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6g5lhbeb6d5cfac6",
+      "seq": 1,
+      "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881794559,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Check the PRs every minute",
+      "body": "Check the open PRs every minute.",
+      "refs": {
+       "botId": "bot-88b27264",
+       "botIds": [
+        "bot-88b27264"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-88b27264",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6g5lhc-3e097dc4",
+     "addressees": [
+      {
+       "botId": "bot-88b27264",
+       "role": "lead",
+       "wakeId": "w-mv6g5lhc-3e097dc4"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881794563,
+    "do": "waitFor",
+    "label": "routine card",
+    "ok": true,
+    "doneAt": 1791881800089
+   },
+   {
+    "at": 1791881800089,
+    "do": "waitFor",
+    "label": "fired",
+    "ok": true,
+    "doneAt": 1791881859856
+   },
+   {
+    "at": 1791881859856,
+    "do": "rpc",
+    "label": "routines",
+    "result": {
+     "ok": true,
+     "routines": [
+      {
+       "id": "r-917501940a428deb",
+       "botId": "bot-88b27264",
+       "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+       "title": "Check PRs",
+       "prompt": "List the open PRs and say what needs the owner.",
+       "schedule": {
+        "kind": "interval",
+        "everyMs": 60000
+       },
+       "state": "active",
+       "createdAt": 1791881799730,
+       "updatedAt": 1791881799730,
+       "nextDueAt": 1791881919730,
+       "lastFiredAt": 1791881859733
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881859860,
+    "do": "post",
+    "label": "stop",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6g6zv91d9b4f9d2d",
+      "seq": 5,
+      "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881859861,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Stop everything",
+      "body": "Stop your work now.",
+      "refs": {
+       "botId": "bot-88b27264",
+       "botIds": [
+        "bot-88b27264"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-88b27264",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6g6zv9-0ac5a08d",
+     "addressees": [
+      {
+       "botId": "bot-88b27264",
+       "role": "lead",
+       "wakeId": "w-mv6g6zv9-0ac5a08d"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881859865,
+    "do": "waitFor",
+    "label": "paused",
+    "ok": true,
+    "doneAt": 1791881860369
+   },
+   {
+    "at": 1791881860369,
+    "do": "sleep"
+   },
+   {
+    "at": 1791881935372,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881938393
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6g5lhb-0f85135daec5",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881794559,
+    "dedupeKey": "human.message:c-mv6g5lhbeb6d5cfac6:bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "ref": {
+     "botId": "bot-88b27264",
+     "messageId": "c-mv6g5lhbeb6d5cfac6:bot-88b27264"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Check the open PRs every minute.",
+     "cardId": "c-mv6g5lhbeb6d5cfac6",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6g6rrw-78b7c2bcd696",
+    "seq": 2,
+    "kind": "schedule.fired",
+    "at": 1791881849372,
+    "dedupeKey": "schedule.fired:morning:20739",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "ref": {
+     "scheduleId": "morning",
+     "botId": "bot-c1aedef9"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "morning": {
+      "at": 1791881849372,
+      "windowHours": 24,
+      "trust": [],
+      "merged": [],
+      "mergedCount": 0,
+      "blocked": [],
+      "blockedCount": 0,
+      "budgetExhausted": [],
+      "rooms": [
+       {
+        "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+        "openThreads": 0,
+        "openQuestions": 0,
+        "newest": []
+       }
+      ],
+      "gardener": []
+     }
+    }
+   },
+   {
+    "id": "f-0mv6g6zrp-ce7a37faa7e8",
+    "seq": 3,
+    "kind": "schedule.fired",
+    "at": 1791881859733,
+    "dedupeKey": "schedule.fired:routine:r-917501940a428deb@1791881859730:20739",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "ref": {
+     "botId": "bot-88b27264",
+     "scheduleId": "routine:r-917501940a428deb@1791881859730"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "routineId": "r-917501940a428deb",
+     "title": "Check PRs",
+     "dueAt": 1791881859730
+    }
+   },
+   {
+    "id": "f-0mv6g6zv9-06d5f1c44b90",
+    "seq": 4,
+    "kind": "human.message",
+    "at": 1791881859861,
+    "dedupeKey": "human.message:c-mv6g6zv91d9b4f9d2d:bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "ref": {
+     "botId": "bot-88b27264",
+     "messageId": "c-mv6g6zv91d9b4f9d2d:bot-88b27264"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Stop your work now.",
+     "cardId": "c-mv6g6zv91d9b4f9d2d",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6g5lhc-3e097dc4",
+    "botId": "bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "reason": {
+     "kind": "human",
+     "text": "Check the open PRs every minute.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g5lhbeb6d5cfac6",
+     "runId": "run-c-mv6g5lhbeb6d5cfac6"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881794560,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g6zrp-04a534ac",
+    "botId": "bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "reason": {
+     "kind": "routine",
+     "routineId": "r-917501940a428deb",
+     "dueAt": 1791881859730
+    },
+    "threadId": "general",
+    "priority": 2,
+    "enqueuedAt": 1791881859733,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g6zv9-0ac5a08d",
+    "botId": "bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "reason": {
+     "kind": "human",
+     "text": "Stop your work now.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6g6zv91d9b4f9d2d",
+     "runId": "run-c-mv6g6zv91d9b4f9d2d"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881859861,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": [
+   {
+    "id": "r-917501940a428deb",
+    "botId": "bot-88b27264",
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "title": "Check PRs",
+    "prompt": "List the open PRs and say what needs the owner.",
+    "schedule": {
+     "kind": "interval",
+     "everyMs": 60000
+    },
+    "state": "paused",
+    "createdAt": 1791881799730,
+    "updatedAt": 1791881859865,
+    "clientRoutineId": "wake:w-mv6g5lhc-3e097dc4:r1",
+    "lastFiredAt": 1791881859733,
+    "paused": {
+     "reason": "stop",
+     "at": 1791881859865
+    }
+   }
+  ],
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6g5lhbeb6d5cfac6",
+    "seq": 1,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881794559,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Check the PRs every minute",
+    "body": "Check the open PRs every minute.",
+    "refs": {
+     "botId": "bot-88b27264",
+     "botIds": [
+      "bot-88b27264"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5pgy7566139baf",
+    "seq": 2,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881799730,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+     "botId": "bot-88b27264"
+    },
+    "title": "Routine created: Check PRs",
+    "body": "every 1 min\n\nList the open PRs and say what needs the owner.",
+    "refs": {
+     "botId": "bot-88b27264",
+     "routineId": "r-917501940a428deb"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g5ph0252444c5a8",
+    "seq": 3,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881799732,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+     "botId": "bot-88b27264"
+    },
+    "title": "Routine set",
+    "body": "Every minute.",
+    "clientPostId": "wake:w-mv6g5lhc-3e097dc4:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g6zrt8fa43ef48f",
+    "seq": 4,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881859737,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+     "botId": "bot-88b27264"
+    },
+    "title": "Checked the PRs",
+    "body": "Nothing waits.",
+    "clientPostId": "wake:w-mv6g6zrp-04a534ac:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g6zv91d9b4f9d2d",
+    "seq": 5,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881859861,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Stop everything",
+    "body": "Stop your work now.",
+    "refs": {
+     "botId": "bot-88b27264",
+     "botIds": [
+      "bot-88b27264"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g6zvda7ccb55bd0",
+    "seq": 6,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "routine",
+    "at": 1791881859865,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Routine paused (stopped): Check PRs",
+    "body": "every 1 min\n\nList the open PRs and say what needs the owner.",
+    "refs": {
+     "botId": "bot-88b27264",
+     "routineId": "r-917501940a428deb"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g6zvh68ba3cfdea",
+    "seq": 7,
+    "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881859869,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+     "botId": "bot-88b27264"
+    },
+    "title": "Stopped",
+    "body": "My routine is paused.",
+    "clientPostId": "wake:w-mv6g6zv9-0ac5a08d:1"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881794591,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881794592,
+     "event": "session/new",
+     "sessionId": "stub-791375df5a71",
+     "cwd": "/home/owner/.wmux-verify-f9839c73/factory/bots/bot-88b27264"
+    },
+    {
+     "at": 1791881799595,
+     "event": "prompt",
+     "sessionId": "stub-791375df5a71",
+     "text": "[wake w-mv6g5lhc-3e097dc4] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881799731,
+     "event": "tool",
+     "sessionId": "stub-791375df5a71",
+     "name": "routine_set",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"routine\": {\n    \"id\": \"r-917501940a428deb\",\n    \"botId\": \"bot-88b27264\",\n    \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n    \"title\": \"Check PRs\",\n    \"prompt\": \"List the open PRs and say what needs the owner.\",\n    \"schedule\": {\n      \"kind\": \"interval\",\n      \"everyMs\": 60000\n    },\n    \"state\": \"active\",\n    \"createdAt\": 1791881799730,\n    \"updatedAt\": 1791881799730,\n    \"nextDueAt\": 1791881859730\n  }\n}"
+    },
+    {
+     "at": 1791881799732,
+     "event": "tool",
+     "sessionId": "stub-791375df5a71",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g5ph0252444c5a8\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881799732,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n      \"botId\": \"bot-88b27264\"\n    },\n    \"title\": \"Routine set\",\n    \"body\": \"Every minute.\",\n    \"clientPostId\": \"wake:w-mv6g5lhc-3e097dc4:1\"\n  }\n}"
+    },
+    {
+     "at": 1791881859734,
+     "event": "prompt",
+     "sessionId": "stub-791375df5a71",
+     "text": "[wake w-mv6g6zrp-04a534ac] Lead (developer) · reason: routine · priority 2"
+    },
+    {
+     "at": 1791881859738,
+     "event": "tool",
+     "sessionId": "stub-791375df5a71",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g6zrt8fa43ef48f\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881859737,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n      \"botId\": \"bot-88b27264\"\n    },\n    \"title\": \"Checked the PRs\",\n    \"body\": \"Nothing waits.\",\n    \"clientPostId\": \"wake:w-mv6g6zrp-04a534ac:1\"\n  }\n}"
+    },
+    {
+     "at": 1791881859862,
+     "event": "prompt",
+     "sessionId": "stub-791375df5a71",
+     "text": "[wake w-mv6g6zv9-0ac5a08d] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881859867,
+     "event": "tool",
+     "sessionId": "stub-791375df5a71",
+     "name": "stop_my_work",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workersStopped\": 0,\n  \"gatesCancelled\": 0,\n  \"routinesPaused\": 1\n}"
+    },
+    {
+     "at": 1791881859869,
+     "event": "tool",
+     "sessionId": "stub-791375df5a71",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g6zvh68ba3cfdea\",\n    \"seq\": 7,\n    \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881859869,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9\",\n      \"botId\": \"bot-88b27264\"\n    },\n    \"title\": \"Stopped\",\n    \"body\": \"My routine is paused.\",\n    \"clientPostId\": \"wake:w-mv6g6zv9-0ac5a08d:1\"\n  }\n}"
+    }
+   ],
+   "moa": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881789662,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-56-27-verify-f9839c73",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-56-27-verify-f9839c73"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "no routine card",
+   "failing": [
+    "routine_created"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.1"
+    }
+   ]
+  },
+  {
+   "why": "the routine woke another bot",
+   "failing": [
+    "fired_for_its_bot_only"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.1.botId",
+     "value": "bot-00000000"
+    }
+   ]
+  },
+  {
+   "why": "the operator did not see it",
+   "failing": [
+    "operator_lists_it"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "actions.3.result.routines",
+     "value": []
+    }
+   ]
+  },
+  {
+   "why": "the stop paused nothing",
+   "failing": [
+    "stop_tool_ok"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "stub.lead.8.text",
+     "value": "{\n  \"ok\": true,\n  \"workersStopped\": 0,\n  \"gatesCancelled\": 0,\n  \"routinesPaused\": 0\n}"
+    }
+   ]
+  },
+  {
+   "why": "the routine stayed active",
+   "failing": [
+    "paused_by_stop"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "routines.0.state",
+     "value": "active"
+    },
+    {
+     "op": "remove",
+     "path": "cards.5"
+    }
+   ]
+  },
+  {
+   "why": "it fired after the stop",
+   "failing": [
+    "nothing_fires_after_stop"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-late",
+      "botId": "bot-88b27264",
+      "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+      "reason": {
+       "kind": "routine",
+       "routineId": "r-917501940a428deb",
+       "dueAt": 1791881859730
+      },
+      "threadId": "general",
+      "priority": 2,
+      "enqueuedAt": 1791881919867,
+      "attempts": 1,
+      "state": "done"
+     }
+    },
+    {
+     "op": "push",
+     "path": "facts",
+     "value": {
+      "id": "f-late",
+      "seq": 3,
+      "kind": "schedule.fired",
+      "at": 1791881859733,
+      "dedupeKey": "schedule.fired:routine:r-917501940a428deb@1791881859730:20739",
+      "workspaceId": "ws-f7d55545-9f24-4cc4-a4e9-afb4bc69aab9",
+      "ref": {
+       "botId": "bot-88b27264",
+       "scheduleId": "routine:r-917501940a428deb@1791881859730"
+      },
+      "actor": {
+       "kind": "system"
+      },
+      "payload": {
+       "routineId": "r-917501940a428deb",
+       "title": "Check PRs",
+       "dueAt": 1791881859730
+      }
+     }
+    }
+   ]
+  },
+  {
+   "why": "no line after the stop",
+   "failing": [
+    "one_line_after_stop"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.6"
+    }
+   ]
+  }
+ ]
+}

@@ -381,8 +381,12 @@ describe('automatic resume vs the Resume pill', () => {
 
   it('the pill marks the pty before typing, and the timer claims it before writing', () => {
     const source = readFileSync(resolve(__dirname, '../Pane.tsx'), 'utf8');
-    expect(source).toMatch(/markResumePillUsed\(ptyId\);[\s\S]{0,600}?if \(plan\.clearHint\) typeAndClear\(plan\.text\);/);
-    expect(source).toMatch(/if \(!claimAutoResume\(ptyId\)\) return;[^\n]*\n\s*window\.electronAPI\.pty\.write\(ptyId, `\$\{line\}\\r`\);/);
+    expect(source).toMatch(/markResumePillUsed\(ptyId\);[\s\S]{0,600}?const typed = plan\.clearHint \? typeAndClear\(plan\.text\) : type\(plan\.text\);/);
+    // A line main refused keeps the hint and the stage: both move only once it was typed.
+    expect(source).toMatch(/if \(ok\) useStore\.getState\(\)\.clearResumeHint\(ptyId\);/);
+    expect(source).toMatch(/void typed\.then\(\(ok\) => \{ if \(ok\) setResumeStage\(1\); \}\);/);
+    expect(source).toMatch(/writeLaunch\(ptyId, line, true\)\.then\(\s*\(\) => useStore\.getState\(\)\.clearResumeHint\(ptyId\),/);
+    expect(source).toMatch(/if \(!claimAutoResume\(ptyId\)\) return;[^\n]*\n(\s*\/\/[^\n]*\n)*\s*window\.electronAPI\.pty\.writeLaunch\(ptyId, line, true\)/);
   });
 });
 

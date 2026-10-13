@@ -1,0 +1,167 @@
+{
+ "note": "Synthetic (hand-written): the real-model scenarios are run by hand; this pins the grading rule.",
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "moa-morning-report-real",
+  "run": 1,
+  "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+  "botKeys": {
+   "lead": "bot-aaaa0002",
+   "moa": "bot-aaaa0001"
+  },
+  "injected": [],
+  "actions": [],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "facts": [],
+  "wakes": [
+   {
+    "id": "w-0001fa",
+    "botId": "bot-aaaa0001",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-1"
+     ],
+     "trigger": {
+      "kind": "schedule.fired"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-aaaa0002",
+    "role": "lead",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "enabled": true
+   },
+   {
+    "id": "bot-aaaa0001",
+    "role": "moa",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-1",
+    "seq": 1,
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "threadId": "general",
+    "kind": "report",
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+     "botId": "bot-aaaa0001"
+    },
+    "title": "Morning report",
+    "body": "Revert rate 0% over 30 days; 7-day survival 100%. Open: #11 Login button does nothing on Safari."
+   },
+   {
+    "id": "c-2",
+    "seq": 2,
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "threadId": "plan:p-1",
+    "kind": "plan",
+    "state": "open",
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+     "botId": "bot-aaaa0001"
+    },
+    "title": "Today",
+    "body": "1. Fix Safari login"
+   }
+  ],
+  "stub": {},
+  "workers": [],
+  "gh": {
+   "calls": [],
+   "state": null
+  },
+  "records": []
+ },
+ "fail": [
+  {
+   "why": "the report leaves out the trust metrics",
+   "failing": [
+    "report_has_trust_metrics"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.body",
+     "value": "Open: #11 Login button does nothing on Safari."
+    }
+   ]
+  },
+  {
+   "why": "the report misses the open issue",
+   "failing": [
+    "report_mentions_open_issue"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.body",
+     "value": "Revert rate 0%; 7-day survival 100%."
+    }
+   ]
+  },
+  {
+   "why": "Moa dispatched without approval",
+   "failing": [
+    "no_dispatch_without_approval"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs",
+     "value": [
+      {
+       "id": "h-1",
+       "kind": "dispatch",
+       "status": "delivered"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

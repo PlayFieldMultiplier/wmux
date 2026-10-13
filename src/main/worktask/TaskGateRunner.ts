@@ -44,7 +44,11 @@
 // a false `npm test` failure) is reported as `skipped: 'deps_missing'`, never as
 // a failing gate: "the gate did not run" and "the code is broken" are different
 // facts and a brain that cannot tell them apart will close a healthy task as
-// failed.
+// failed. One exception: a project whose package.json declares no dependencies
+// of any kind has nothing to install — `npm ci` refuses without a lockfile and
+// `npm install` creates no node_modules — so a missing node_modules there is
+// the installed state and the gate runs (see nothingToInstall). A symlink is
+// always a skip.
 //
 // NO GATE IS NOT A FAILED GATE. A project that declares neither a verify script
 // nor npm lint/test scripts has nothing to fail, but the ledger refuses
@@ -74,6 +78,24 @@
 // again: neither "no gate" nor "a gate that failed", but a gate whose existence
 // is unknown. That answers `gate_unavailable` (unrecorded) rather than guessing.
 //
+// ── GATE FROM A BASE REF (opt-in) ───────────────────────────────────────────
+//
+// A caller may name a base ref (`gateBaseRef`, e.g. the PR's base branch). The
+// gate is then chosen from that ref, not from the worktree: package.json's
+// lint/test scripts are read with `git show <ref>:package.json`, and the
+// worktree must declare exactly the same ones and carry the ref's `.npmrc`
+// (npm reads it when it runs them); a declared verify script must be the same
+// blob at the ref as in the worktree. Any difference is a refusal, so the
+// steps that run are the base's own. Which gate a trusted wmux.json
+// picks is still read at the parent root, as above. Off by default.
+//
+// ── THE HEAD A GATE RAN ON ──────────────────────────────────────────────────
+//
+// The worktree's HEAD is read before the gate and again before the result is
+// recorded, each time only if the tree is clean (no tracked change, no
+// untracked file outside .gitignore); the result carries `headSha` only when
+// both reads agree, so a recorded gate names the commit it graded or none.
+//
 // Ledger writes go through LedgerPort (see ledgerPort.ts) as a `system` actor —
 // the daemon ran the gate, not the worker whose code it graded — and a ledger
 // that is unreachable does not fail the gate: the run happened, only its receipt
@@ -84,6 +106,7 @@ import * as path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { getExecEnv } from '../../shared/execEnv';
 import { LEDGER_GATE_TAIL_MAX_BYTES, type LedgerGateResult } from '../../shared/ledger';
+import { git } from '../git/git';
 import type { LedgerPort } from './ledgerPort';
 
 /** 15 minutes. A gate is a lint+test run, not a build farm; past this the
@@ -191,8 +214,21 @@ export interface TaskGateRunnerOptions {
   readPackageScripts?: (root: string) => Record<string, string> | null;
   /** Injected for tests; defaults to an lstat of `<worktree>/node_modules`. */
   depsState?: (worktreePath: string) => 'ok' | 'missing' | 'symlink';
+  /** Injected for tests; defaults to reading `<root>/package.json`. Null when
+   *  there is none; throws when it is there and cannot be read. */
+  readPackageJson?: (root: string) => string | null;
   /** Injected for tests; defaults to fs.existsSync. */
   fileExists?: (p: string) => boolean;
+  /** Injected for tests; defaults to `git rev-parse HEAD` in the worktree
+   *  when `git status --porcelain` is empty. Null when it cannot be read or
+   *  the tree has changes of its own. */
+  readHead?: (worktreePath: string) => Promise<string | null>;
+  /** Injected for tests; defaults to `git show <ref>:<file>` in the worktree.
+   *  Null when the ref has no such file; throws when the ref cannot be read. */
+  readBaseFile?: (worktreePath: string, ref: string, file: string) => Promise<string | null>;
+  /** Injected for tests; defaults to comparing `git hash-object <file>` with
+   *  the ref's blob. False when either side is missing or unreadable. */
+  sameAsBase?: (worktreePath: string, ref: string, file: string) => Promise<boolean>;
 }
 
 // ── Results ──────────────────────────────────────────────────────────────────
@@ -238,7 +274,13 @@ export interface GateRunInput {
    * behaviour: no verdict, npm only.
    */
   projectRoot?: string;
+  /** Choose the gate from this ref (e.g. `origin/main`) instead of the
+   *  worktree; see GATE FROM A BASE REF above. Omitted = the worktree. */
+  gateBaseRef?: string;
 }
+
+/** A ref this runner passes to git: a plain ref name, never an option. */
+const BASE_REF_RE = /^(?!-)[A-Za-z0-9._/-]{1,200}$/;
 
 // ── Tail bounding ────────────────────────────────────────────────────────────
 
@@ -309,6 +351,88 @@ const defaultSpawn: GateSpawn = (cmd, args, opts) => {
   };
 };
 
+async function defaultReadHead(worktreePath: string): Promise<string | null> {
+  const [r, status] = await Promise.all([
+    git(['rev-parse', 'HEAD'], worktreePath),
+    git(['status', '--porcelain', '--untracked-files=all'], worktreePath),
+  ]);
+  const sha = r.stdout.trim();
+  // A tree with changes of its own is not the commit: name none.
+  if (status.code !== 0 || status.stdout.trim() !== '') return null;
+  return r.code === 0 && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null;
+}
+
+async function defaultReadBaseFile(worktreePath: string, ref: string, file: string): Promise<string | null> {
+  const commit = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], worktreePath);
+  if (commit.code !== 0) throw new Error(`the base ref ${ref} cannot be read`);
+  const exists = await git(['cat-file', '-e', `${ref}:${file}`], worktreePath);
+  if (exists.code !== 0) return null;
+  const r = await git(['show', `${ref}:${file}`], worktreePath);
+  if (r.code !== 0) throw new Error(`${ref}:${file} cannot be read`);
+  return r.stdout;
+}
+
+async function defaultSameAsBase(worktreePath: string, ref: string, file: string): Promise<boolean> {
+  // Blob ids, not bytes: hash-object applies the same clean filters (line
+  // endings) the ref's blob went through.
+  const [base, here] = await Promise.all([
+    git(['rev-parse', '--verify', '--quiet', `${ref}:${file}`], worktreePath),
+    git(['hash-object', '--', file], worktreePath),
+  ]);
+  return base.code === 0 && here.code === 0 && base.stdout.trim() !== '' && base.stdout.trim() === here.stdout.trim();
+}
+
+/** package.json text → its string scripts; null when it is not JSON. */
+function scriptsOf(raw: string): Record<string, string> | null {
+  let parsed: { scripts?: Record<string, unknown> } | null;
+  try {
+    parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> } | null;
+  } catch {
+    return null;
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed?.scripts ?? {})) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
+}
+
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+
+/**
+ * Whether package.json text declares nothing to install: every dependency
+ * field absent or an empty object, and no `workspaces` (whose packages may
+ * declare their own). Only a package.json that says so counts: none at all
+ * (null), text that is not JSON, or a field of any other shape answers
+ * false — the gate then waits for node_modules as before.
+ */
+export function declaresNoDependencies(raw: string | null): boolean {
+  if (raw === null) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const pkg = parsed as Record<string, unknown>;
+  if (pkg['workspaces'] !== undefined) return false;
+  return DEPENDENCY_FIELDS.every((f) => {
+    const v = pkg[f];
+    if (v === undefined) return true;
+    return !!v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0;
+  });
+}
+
+function defaultReadPackageJson(root: string): string | null {
+  try {
+    return fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
 function defaultDepsState(worktreePath: string): 'ok' | 'missing' | 'symlink' {
   try {
     const st = fs.lstatSync(path.join(worktreePath, 'node_modules'));
@@ -336,17 +460,7 @@ function defaultReadPackageScripts(root: string): Record<string, string> | null 
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? {} : null;
   }
-  let parsed: { scripts?: Record<string, unknown> } | null;
-  try {
-    parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> } | null;
-  } catch {
-    return null;
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(parsed?.scripts ?? {})) {
-    if (typeof v === 'string') out[k] = v;
-  }
-  return out;
+  return scriptsOf(raw);
 }
 
 // ── The runner ───────────────────────────────────────────────────────────────
@@ -363,7 +477,11 @@ export class TaskGateRunner {
   private readonly now: () => number;
   private readonly readPackageScripts: (root: string) => Record<string, string> | null;
   private readonly depsState: (worktreePath: string) => 'ok' | 'missing' | 'symlink';
+  private readonly readPackageJson: (root: string) => string | null;
   private readonly fileExists: (p: string) => boolean;
+  private readonly readHead: (worktreePath: string) => Promise<string | null>;
+  private readonly readBaseFile: (worktreePath: string, ref: string, file: string) => Promise<string | null>;
+  private readonly sameAsBase: (worktreePath: string, ref: string, file: string) => Promise<boolean>;
   /** One gate per task — the second concurrent call is `busy`, not a second
    *  npm install fighting the first over the same node_modules. */
   private readonly active = new Map<string, ActiveGate>();
@@ -382,7 +500,11 @@ export class TaskGateRunner {
     this.now = opts.now ?? Date.now;
     this.readPackageScripts = opts.readPackageScripts ?? defaultReadPackageScripts;
     this.depsState = opts.depsState ?? defaultDepsState;
+    this.readPackageJson = opts.readPackageJson ?? defaultReadPackageJson;
     this.fileExists = opts.fileExists ?? ((p) => fs.existsSync(p));
+    this.readHead = opts.readHead ?? defaultReadHead;
+    this.readBaseFile = opts.readBaseFile ?? defaultReadBaseFile;
+    this.sameAsBase = opts.sameAsBase ?? defaultSameAsBase;
   }
 
   isRunning(taskId: string): boolean {
@@ -402,12 +524,17 @@ export class TaskGateRunner {
    * Resolve the steps for a worktree. Exported behaviour, tested directly:
    * a trusted project declaring the well-known id wins; anything else it
    * declares under that id is a refusal; otherwise npm, filtered by the scripts
-   * package.json actually has.
+   * package.json actually has. With `baseRef`, the steps come from that ref
+   * and the worktree must agree with it (see GATE FROM A BASE REF).
    */
   async resolveSteps(
     worktreePath: string,
     configRoot: string = worktreePath,
+    baseRef?: string,
   ): Promise<{ steps: GateStep[] } | { refused: string } | { unavailable: string }> {
+    if (baseRef !== undefined && !BASE_REF_RE.test(baseRef)) {
+      return { refused: `'${baseRef.slice(0, 80)}' is not a ref name the gate runner reads` };
+    }
     // The verdict is read at the PARENT root (that is where the user approved a
     // wmux.json); the script runs in the worktree.
     const declared = await this.declaredVerifyCommand(configRoot);
@@ -420,7 +547,12 @@ export class TaskGateRunner {
         };
       }
       const scriptPath = path.join(worktreePath, GATE_VERIFY_SCRIPT);
-      if (this.fileExists(scriptPath)) return { steps: [step(['bash', scriptPath])] };
+      if (this.fileExists(scriptPath)) {
+        if (baseRef !== undefined && !(await this.sameAsBase(worktreePath, baseRef, GATE_VERIFY_SCRIPT).catch(() => false))) {
+          return { refused: `${GATE_VERIFY_SCRIPT} in the task worktree is not the one on ${baseRef}; the gate runs the base's own script` };
+        }
+        return { steps: [step(['bash', scriptPath])] };
+      }
       // Declared and trusted, but this worktree does not have the file. Falling
       // through to npm would grade the task by a gate the project did not
       // choose, so say so instead.
@@ -429,11 +561,37 @@ export class TaskGateRunner {
       };
     }
 
-    const scripts = this.readPackageScripts(worktreePath);
+    let scripts = this.readPackageScripts(worktreePath);
     if (scripts === null) {
       return {
         unavailable: `the package.json in ${worktreePath} could not be read or parsed, so whether this project has a gate is unknown`,
       };
+    }
+    if (baseRef !== undefined) {
+      let raw: string | null;
+      try {
+        raw = await this.readBaseFile(worktreePath, baseRef, 'package.json');
+      } catch (err) {
+        return { unavailable: `package.json on ${baseRef} could not be read (${err instanceof Error ? err.message : String(err)})` };
+      }
+      const base = raw === null ? {} : scriptsOf(raw);
+      if (base === null) return { unavailable: `package.json on ${baseRef} could not be parsed, so whether this project has a gate is unknown` };
+      const differs = GATE_NPM_SCRIPTS.filter((s) => base[s] !== scripts?.[s]);
+      if (differs.length > 0) {
+        return { refused: `the task worktree's npm ${differs.join(' and ')} ${differs.length > 1 ? 'scripts differ' : 'script differs'} from ${baseRef}'s; the gate runs the base's own` };
+      }
+      if (GATE_NPM_SCRIPTS.some((s) => typeof base[s] === 'string')) {
+        let npmrc: string | null;
+        try {
+          npmrc = await this.readBaseFile(worktreePath, baseRef, '.npmrc');
+        } catch (err) {
+          return { unavailable: `.npmrc on ${baseRef} could not be read (${err instanceof Error ? err.message : String(err)})` };
+        }
+        const here = this.fileExists(path.join(worktreePath, '.npmrc'));
+        const same = npmrc === null ? !here : here && (await this.sameAsBase(worktreePath, baseRef, '.npmrc').catch(() => false));
+        if (!same) return { refused: `.npmrc in the task worktree is not the one on ${baseRef}; npm reads it when it runs the gate` };
+      }
+      scripts = base;
     }
     const steps: GateStep[] = [];
     if (typeof scripts['lint'] === 'string') steps.push(step([npmBin(), 'run', 'lint']));
@@ -491,15 +649,16 @@ export class TaskGateRunner {
       // every gate answered `deps_missing` — unrecorded — and the task could
       // never reach `completed`. That is the exact blockage the no-gate record
       // exists to remove, reintroduced one step earlier.
-      const resolved = await this.resolveSteps(worktreePath, input.projectRoot ?? worktreePath);
+      const before = await this.readHead(worktreePath).catch(() => null);
+      const resolved = await this.resolveSteps(worktreePath, input.projectRoot ?? worktreePath, input.gateBaseRef);
       if ('refused' in resolved) return { ok: false, status: 'refused', taskId, error: resolved.refused };
       if ('unavailable' in resolved) {
         return { ok: true, status: 'skipped', taskId, skipped: 'gate_unavailable', detail: resolved.unavailable };
       }
-      if (resolved.steps.length === 0) return this.noGateVerdict(input);
+      if (resolved.steps.length === 0) return this.noGateVerdict(input, before);
 
       const deps = this.depsState(worktreePath);
-      if (deps !== 'ok') {
+      if (deps !== 'ok' && !(deps === 'missing' && (await this.nothingToInstall(worktreePath, input.gateBaseRef)))) {
         return {
           ok: true,
           status: 'skipped',
@@ -580,16 +739,36 @@ export class TaskGateRunner {
         if (exitCode !== 0) break;
       }
 
+      const headSha = await this.pinnedHead(worktreePath, before);
       const result: LedgerGateResult = {
         exitCode,
         tail: boundTail(output),
         at: this.now(),
         command: label,
+        ...(headSha ? { headSha } : {}),
       };
       const recorded = await this.record(taskId, input.systemWorkspaceId, result);
       return { ok: true, status: 'completed', taskId, result, recorded };
     } finally {
       release();
+    }
+  }
+
+  /**
+   * Whether a missing node_modules is simply the installed state: no
+   * package.json the gate runs under declares a dependency. Both are asked,
+   * the way the steps are chosen — npm resolves modules from the worktree's
+   * package.json where the steps run, and with a base ref the steps were the
+   * base's own, so the base's package.json must agree too. Anything that
+   * cannot be read answers false and the gate stays a `deps_missing` skip.
+   */
+  private async nothingToInstall(worktreePath: string, baseRef: string | undefined): Promise<boolean> {
+    try {
+      if (!declaresNoDependencies(this.readPackageJson(worktreePath))) return false;
+      if (baseRef === undefined) return true;
+      return declaresNoDependencies(await this.readBaseFile(worktreePath, baseRef, 'package.json'));
+    } catch {
+      return false;
     }
   }
 
@@ -606,9 +785,11 @@ export class TaskGateRunner {
    * answers alone — that is the task-runs-in-the-main-checkout case, where the
    * two trees are the same tree.
    */
-  private async noGateVerdict(input: GateRunInput): Promise<GateRunResult> {
+  private async noGateVerdict(input: GateRunInput, before: string | null): Promise<GateRunResult> {
     const { taskId, worktreePath } = input;
     const parentRoot = input.projectRoot ?? worktreePath;
+    const headSha = await this.pinnedHead(worktreePath, before);
+    const pinned = headSha ? { headSha } : {};
     if (path.resolve(parentRoot) !== path.resolve(worktreePath)) {
       const parentScripts = this.readPackageScripts(parentRoot);
       if (parentScripts === null) {
@@ -626,7 +807,7 @@ export class TaskGateRunner {
           `the parent repository declares npm ${declared.join(' and ')} ` +
           `${declared.length > 1 ? 'scripts' : 'script'}, and the task worktree's package.json declares neither — ` +
           'the gate is missing from the tree it was supposed to grade, which is a failed gate and not a waiver';
-        const result: LedgerGateResult = { exitCode: 1, tail: detail, at: this.now(), command: 'none' };
+        const result: LedgerGateResult = { exitCode: 1, tail: detail, at: this.now(), command: 'none', ...pinned };
         const recorded = await this.record(taskId, input.systemWorkspaceId, result);
         return { ok: true, status: 'completed', taskId, result, recorded };
       }
@@ -644,8 +825,17 @@ export class TaskGateRunner {
       at: this.now(),
       command: 'none',
       skipped: 'no_gate_command',
+      ...pinned,
     });
     return { ok: true, status: 'skipped', taskId, skipped: 'no_gate_command', detail, recorded };
+  }
+
+  /** `before` when HEAD reads the same again now; else undefined (the gate
+   *  graded no single commit, or HEAD could not be read). */
+  private async pinnedHead(worktreePath: string, before: string | null): Promise<string | undefined> {
+    if (!before) return undefined;
+    const after = await this.readHead(worktreePath).catch(() => null);
+    return after === before ? before : undefined;
   }
 
   /** Compare-and-swap write of the verdict. A ledger that is missing or
@@ -678,8 +868,8 @@ export class TaskGateRunner {
 }
 
 // The one runner main creates for the task pipe (index.ts), shared with the
-// Moa goal verifier so a goal's gates and a task's gates take the same
-// per-task slot (a second concurrent run is `busy`, never a second npm).
+// factory's verifier bot (factory/roles) so its gates and a task's gates take
+// the same per-task slot (a second concurrent run is `busy`, never a second npm).
 let shared: TaskGateRunner | null = null;
 
 export function setSharedTaskGateRunner(r: TaskGateRunner | null): void {

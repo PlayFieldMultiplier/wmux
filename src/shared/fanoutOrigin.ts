@@ -19,7 +19,9 @@
 // to a pane whose verified agent passes the delivery eligibility checks, and
 // writes one fixed line.
 
-export type FanoutOriginKind = 'pane' | 'orchestrator' | 'gui';
+import { BOT_ID_RE } from './bot';
+
+export type FanoutOriginKind = 'pane' | 'orchestrator' | 'gui' | 'bot';
 
 export interface FanoutOrigin {
   kind: FanoutOriginKind;
@@ -29,6 +31,11 @@ export interface FanoutOrigin {
   surfaceId?: string;
   /** kind 'pane': the pane's display name when the task launched. */
   label?: string;
+  /** kind 'bot': the factory bot that started the fan-out (shared/bot.ts). */
+  botId?: string;
+  /** kind 'bot': whether the wake that started it carried outside text (set
+   *  by main from its own wake state, never from the bot's arguments). */
+  tainted?: boolean;
 }
 
 const ID_MAX = 128;
@@ -51,7 +58,13 @@ export function sanitizeFanoutOrigin(raw: unknown): FanoutOrigin | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const r = raw as Record<string, unknown>;
   const kind = r['kind'];
-  if (kind !== 'pane' && kind !== 'orchestrator' && kind !== 'gui') return undefined;
+  if (kind !== 'pane' && kind !== 'orchestrator' && kind !== 'gui' && kind !== 'bot') return undefined;
+  // A bot origin is nothing without the bot it names.
+  if (kind === 'bot') {
+    const botId = r['botId'];
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return undefined;
+    return { kind, botId, ...(typeof r['tainted'] === 'boolean' ? { tainted: r['tainted'] } : {}) };
+  }
   if (kind !== 'pane') return { kind };
   const paneId = boundedString(r['paneId'], ID_MAX);
   const surfaceId = boundedString(r['surfaceId'], ID_MAX);
@@ -67,5 +80,6 @@ export function sanitizeFanoutOrigin(raw: unknown): FanoutOrigin | undefined {
 
 export function sameFanoutOrigin(a: FanoutOrigin | undefined, b: FanoutOrigin | undefined): boolean {
   if (!a || !b) return a === b;
-  return a.kind === b.kind && a.paneId === b.paneId && a.surfaceId === b.surfaceId && a.label === b.label;
+  return a.kind === b.kind && a.paneId === b.paneId && a.surfaceId === b.surfaceId && a.label === b.label
+    && a.botId === b.botId;
 }

@@ -28,6 +28,8 @@ const SOURCES = [
   'ComputerUseSection.tsx',
   'QuickLaunchSection.tsx',
   'MoaTab.tsx',
+  'FactoryTab.tsx',
+  'BotSecretsSection.tsx',
 ];
 
 function anchoredIds(): Set<string> {

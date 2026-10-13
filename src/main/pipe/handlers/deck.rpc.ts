@@ -25,7 +25,6 @@
 // owner lane grants it from the validated token — so the grant and the
 // "untrusted worker text" label stay in one place (ptyOwnership.ts).
 
-import { parseCriterionClaims } from '../../deck/moaGoalVerifier';
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
@@ -39,13 +38,7 @@ import {
   isMainOwnedDecision,
   type WorkspaceDecision,
 } from '../../deck/deckDecisionStore';
-import { getMoaHandoffService } from '../../deck/moaHandoff';
-import { getMoaGoalService } from '../../deck/moaGoalContract';
-import { currentMoaReadRoots, refreshMoaReadRoots } from '../../deck/moaReadGate';
-import { plainLanguageRefusal } from '../../deck/plainLanguage';
-import { getHqWorkspaceId } from '../../deck/deckHqStore';
 import { loadWorkspaceMode } from '../../deck/deckAutonomyStore';
-import { loadDeckHeartbeat } from '../../deck/deckHeartbeatStore';
 import { hasReExamineLease } from '../../deck/reExamineLease';
 import {
   completeActiveDeckWork,
@@ -66,6 +59,9 @@ import { attachDecisionToTask, carryDecision } from '../../workLink/decisionLink
 const MIN_SELF_RESOLVE_CHARS = 20;
 const MIN_WORK_SUMMARY_CHARS = 8;
 const MIN_WORK_VERIFICATION_CHARS = 12;
+/** How long a pending decision stays fresh before it may be replaced or
+ *  self-resolved (the retired heartbeat store's default). */
+const DECISION_TTL_MS = 30 * 60_000;
 
 /** Pull a task's canonical state from either renderer or daemon query shape. */
 function readTaskState(task: unknown): string | null {
@@ -191,11 +187,6 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
     if (verification.length < MIN_WORK_VERIFICATION_CHARS) {
       return { ok: false, error: 'verification_required' };
     }
-    // Moa's report is the operator's to read: refuse internals.
-    if (ws === getHqWorkspaceId()) {
-      const refusal = plainLanguageRefusal([summary, verification]);
-      if (refusal) return refusal;
-    }
 
     // Brain PTYs are excluded from the mirror upstream, so only worker panes can
     // block. A stale/missing renderer snapshot cannot prove work outstanding and
@@ -220,20 +211,7 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
       }
     }
 
-    // A Moa hand-off is the OPERATOR's task (moaHandoff.ts): it is not in this
-    // brain's own task list, and an end the operator or the worker chose
-    // (canceled, failed) settles it as much as a completion does. Its state
-    // comes from main's hand-off store.
-    const handoffs = getMoaHandoffService();
-    const handoffOpen: string[] = [];
-    const trackedIds = Object.keys(work.a2aTasks).filter((taskId) => {
-      const st = handoffs?.handoffTaskStatus(taskId) ?? null;
-      if (st === 'open') handoffOpen.push(taskId);
-      return st === null;
-    });
-    if (handoffOpen.length > 0) {
-      return { ok: false, error: 'a2a_tasks_outstanding', tasks: handoffOpen.map((taskId) => ({ taskId, state: 'handoff_open' })) };
-    }
+    const trackedIds = Object.keys(work.a2aTasks);
     if (trackedIds.length > 0) {
       const query = await router.dispatch({
         id: `deck-complete-${work.id}`,
@@ -268,11 +246,6 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
     // request with an older completion verdict.
     const completed = completeActiveDeckWork(ws, work);
     if (!completed) return { ok: false, error: 'active_work_changed' };
-    // The job is done: hand-off cards Moa raised for it and the operator never
-    // answered are moot, and would keep "Waiting on you" above zero.
-    if (handoffs && ws === getHqWorkspaceId()) await handoffs.closeMootCards(ws).catch(() => 0);
-    // The job is settled: the repos it read stop being readable without asking.
-    if (ws === getHqWorkspaceId()) await refreshMoaReadRoots();
     return { ok: true, workId: work.id, summary, verification };
   });
 
@@ -297,11 +270,6 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
       ? (params['options'] as unknown[]).filter((s): s is string => typeof s === 'string')
       : [];
     const context = typeof params['context'] === 'string' ? (params['context'] as string) : '';
-    // Moa's card is the operator's to read: refuse internals.
-    if (ws === getHqWorkspaceId()) {
-      const refusal = plainLanguageRefusal([question, context, ...options]);
-      if (refusal) return refusal;
-    }
     // Optional A2A task the decision is about: shown on that task's work link.
     // Best-effort — a missing or foreign task never fails the raise.
     const taskId = typeof params['taskId'] === 'string' && params['taskId'] ? params['taskId'] : undefined;
@@ -321,7 +289,7 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
       // COMPARE-AND-SWAP inside one serialized store mutation (3-way review
       // round 2): if the human's resolve wins the race, the CAS fails and their
       // answer stays intact — we refuse instead of overwriting it.
-      const ttlMs = loadDeckHeartbeat().decisionTtlMs;
+      const ttlMs = DECISION_TTL_MS;
       if (!isDecisionStale(existing, ttlMs)) {
         return { ok: false, error: 'decision_pending', id: existing.id };
       }
@@ -351,81 +319,6 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
     }
     if (!taskId) return { ok: true, id: decision.id };
     return { ok: true, id: decision.id, ...(await attachDecisionToTask(ws, taskId, decision.id)) };
-  });
-
-  // `deck.proposeHandoff` (moa_propose_handoff): the HQ brain proposes work
-  // for an agent in ANOTHER workspace. Main stores the body and raises a card
-  // for the operator, or, in danger mode on both sides, delivers it itself
-  // (moaHandoff.ts). HQ only: the token's workspace must be the HQ. Nothing
-  // here takes a mode, an origin or a decision id from the brain.
-  // `deck.moaReadRoots`: Moa's read gate (a PreToolUse hook script in the HQ
-  // brain) asks which repositories it may read without a prompt. Read-only:
-  // the roots main holds in memory, unexpired and re-vetted (moaReadGate.ts).
-  // Reached through its own client lane (readGateLane.ts).
-  router.register('deck.moaReadRoots', async () => ({ roots: currentMoaReadRoots() }));
-
-  router.register('deck.proposeHandoff', async (params) => {
-    const ws = commanderTokenWorkspace(params['token']);
-    if (!ws) {
-      throw new Error('deck.proposeHandoff: not a live commander session');
-    }
-    const svc = getMoaHandoffService();
-    if (!svc) return { ok: false, error: 'moa_off' };
-    return svc.propose(ws, {
-      ptyId: params['ptyId'],
-      paneId: params['paneId'],
-      body: params['body'],
-      title: params['title'],
-      externalSource: params['externalSource'],
-    });
-  });
-
-  // `deck.proposeGoal` (moa_propose_goal): the HQ brain proposes a goal
-  // contract. Main validates it, vets the repository and raises ONE main-owned
-  // card in the HQ's slot (moaGoalContract.ts). Nothing is granted until the
-  // operator approves that card. HQ only, by the token's workspace.
-  router.register('deck.proposeGoal', async (params) => {
-    const ws = commanderTokenWorkspace(params['token']);
-    if (!ws) {
-      throw new Error('deck.proposeGoal: not a live commander session');
-    }
-    const svc = getMoaGoalService();
-    if (!svc) return { ok: false, error: 'moa_off' };
-    return svc.propose(ws, {
-      goal: params['goal'],
-      repo: params['repo'],
-      workspaceIds: params['workspaceIds'],
-      level: params['level'],
-      budget: params['budget'],
-      humanOnly: params['humanOnly'],
-      doneCriteria: params['doneCriteria'],
-      evidence: params['evidence'],
-      constraints: params['constraints'],
-    });
-  });
-
-  // `deck.goal` (moa_goal): the HQ brain reads its open contract, or ends it.
-  // Ending only takes powers away, so Moa may end its own goal.
-  router.register('deck.goal', async (params) => {
-    const ws = commanderTokenWorkspace(params['token']);
-    if (!ws) {
-      throw new Error('deck.goal: not a live commander session');
-    }
-    const svc = getMoaGoalService();
-    if (!svc) return { ok: false, error: 'moa_off' };
-    if (ws !== getHqWorkspaceId()) return { ok: false, error: 'not_hq' };
-    const action = params['action'];
-    if (action === 'complete' || action === 'cancel') {
-      const summary = typeof params['summary'] === 'string' ? params['summary'] : '';
-      if (action === 'complete' && summary.trim().length < 10) {
-        return { ok: false, error: 'summary_required', message: 'say what was done and how you verified it (≥10 characters)' };
-      }
-      if (action === 'cancel') return svc.end('moa', 'canceled', summary);
-      const claims = parseCriterionClaims(params['criteria']);
-      if ('error' in claims) return { ok: false, error: 'criteria_invalid', message: claims.error };
-      return svc.end('moa', 'completed', summary, claims);
-    }
-    return { ok: true, goal: svc.view() };
   });
 
   // `deck.resolveDecision` is how the commander brain resolves its OWN stale
@@ -488,7 +381,7 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
     if (!(current.raisedAt > 0)) {
       return { ok: false, error: 'not_stale' };
     }
-    const ttlMs = loadDeckHeartbeat().decisionTtlMs;
+    const ttlMs = DECISION_TTL_MS;
     if (!isDecisionStale(current, ttlMs)) {
       return { ok: false, error: 'not_stale' };
     }

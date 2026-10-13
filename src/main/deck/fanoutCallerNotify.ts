@@ -27,7 +27,10 @@
 import type { FanoutOrigin } from '../../shared/fanoutOrigin';
 import { isFanoutCallerKind, type FanoutCallerKind } from '../../shared/fanoutCallerNudge';
 import type { TaskLedger } from '../../daemon/ledger/TaskLedger';
+import type { LedgerEntry } from '../../shared/ledger';
+import { taskThreadOf, type ThreadId } from '../../shared/room';
 import { getFanOutGuards } from '../worktask/fanoutGuards';
+import { isTaskGateReport } from '../factory/taskGate';
 import { getTaskLedger } from './taskLedgerHost';
 
 export interface FanoutCallerEvent {
@@ -120,6 +123,92 @@ export function installFanoutCallerLedgerNotify(
       notify(t.entry.ownerWorkspaceId, t.entry.taskWorkspaceId, t.entry.id, `ledger.${t.to}`, t.entry.rev);
     } catch {
       // best effort
+    }
+  });
+}
+
+/** What a bot-origin task transition wakes, by the status it moved to. */
+const BOT_TASK_WAKE: Readonly<Partial<Record<string, 'task.done' | 'task.failed' | 'task.input_required'>>> = {
+  review_requested: 'task.done',
+  failed: 'task.failed',
+  cancelled: 'task.failed',
+  input_required: 'task.input_required',
+};
+
+const WORKER_ENDED: ReadonlySet<string> = new Set(['review_requested', 'completed', 'failed', 'cancelled']);
+
+/** Tasks the owner stopped (factory/factoryStop.ts), newest last, bounded. */
+const STOPPED_BY_OWNER_MAX = 1000;
+const stoppedByOwner = new Set<string>();
+
+/** Mark a task the owner is stopping, before its row moves to `cancelled`:
+ *  that move wakes nobody (the owner asked for the stop; a bot woken by it
+ *  would only start the work again). */
+export function markStoppedByOwner(taskId: string): void {
+  stoppedByOwner.delete(taskId);
+  stoppedByOwner.add(taskId);
+  while (stoppedByOwner.size > STOPPED_BY_OWNER_MAX) {
+    const oldest = stoppedByOwner.values().next().value as string | undefined;
+    if (oldest === undefined) break;
+    stoppedByOwner.delete(oldest);
+  }
+}
+
+/** Undo markStoppedByOwner for a task whose stop did not move its row. */
+export function unmarkStoppedByOwner(taskId: string): void {
+  stoppedByOwner.delete(taskId);
+}
+
+export interface BotFanoutWakePorts {
+  /** The bot runtime's wake queue (wakeQueue.ts WakeSinkApi.enqueue). */
+  enqueue: (input: {
+    botId: string;
+    workspaceId: string;
+    reason: { kind: 'facts'; factIds: string[]; trigger: { kind: 'task.done' | 'task.failed' | 'task.input_required' } };
+    priority: 1;
+    /** The task's room thread (shared/room.ts taskThreadOf): the thread of
+     *  the wake that started it, else `task:<taskId>`. */
+    threadId: ThreadId;
+  }) => unknown;
+  /** The task's worker stopped working (for the bot's worker-hours). */
+  onWorkerEnded?: (botId: string, taskId: string) => void;
+  /** A transition whose wake another path sends (a bot verify task's report:
+   *  the verify gate wakes the bot once the gate it runs is recorded). */
+  wokenElsewhere?: (t: { entry: LedgerEntry; to: string }) => boolean;
+}
+
+/**
+ * A task a factory bot started reports to that bot through its wake queue,
+ * never into a pane: the ledger row's `dispatch.origin` (written by main when
+ * the task was registered) names the bot, and every move of the row to
+ * review_requested, failed, cancelled or input_required queues one wake for
+ * it. The wake names the task by a `task.<status>:<taskId>@<rev>` id; the bot reads
+ * the row itself. It runs in the thread the task was started from (an issue
+ * or PR thread stays one conversation), else the task's own thread.
+ * Independent of whether the owner workspace has a brain.
+ * Returns the unsubscribe.
+ */
+export function installBotFanoutWake(ports: BotFanoutWakePorts, instance?: TaskLedger): () => void {
+  return (instance ?? getTaskLedger()).onTransition((t) => {
+    const origin = t.entry.dispatch?.origin;
+    if (!origin || origin.kind !== 'bot' || !origin.botId) return;
+    try {
+      if (WORKER_ENDED.has(t.to)) ports.onWorkerEnded?.(origin.botId, t.entry.id);
+      const trigger = BOT_TASK_WAKE[t.to];
+      if (!trigger || ports.wokenElsewhere?.(t) === true) return;
+      if (isTaskGateReport(t.entry, t.to)) return;
+      if (t.to === 'cancelled' && stoppedByOwner.has(t.entry.id)) return;
+      ports.enqueue({
+        botId: origin.botId,
+        workspaceId: t.entry.ownerWorkspaceId,
+        // The rev makes each transition its own wake: a task that asks for
+        // input twice wakes its bot twice.
+        reason: { kind: 'facts', factIds: [`task.${t.to}:${t.entry.id}@${t.entry.rev}`], trigger: { kind: trigger } },
+        priority: 1,
+        threadId: taskThreadOf(t.entry),
+      });
+    } catch (err) {
+      console.warn(`[factory] could not wake bot ${origin.botId} for task ${t.entry.id}: ${String(err)}`);
     }
   });
 }

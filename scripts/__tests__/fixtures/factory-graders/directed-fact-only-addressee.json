@@ -1,0 +1,472 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "directed-fact-only-addressee",
+  "run": 1,
+  "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-2c1db152",
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881313271,
+    "updatedAt": 1791881313271
+   },
+   {
+    "version": 1,
+    "id": "bot-7e2e67f5",
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "role": "triage",
+    "template": "issue",
+    "name": "Triage",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [
+     {
+      "kind": "human.message"
+     },
+     {
+      "kind": "handoff.received"
+     }
+    ],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881313272,
+    "updatedAt": 1791881313272
+   },
+   {
+    "version": 1,
+    "id": "bot-cd45188d",
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881318384,
+    "updatedAt": 1791881318384
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-2c1db152",
+   "triage": "bot-7e2e67f5",
+   "moa": "bot-cd45188d"
+  },
+  "injected": [
+   {
+    "label": "to-lead",
+    "kind": "card",
+    "id": "c-mv6fve2cbfae51eb94",
+    "threadId": "general",
+    "at": 1791881318386
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881318386,
+    "do": "post",
+    "label": "to-lead",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fve2cbfae51eb94",
+      "seq": 1,
+      "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881318388,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Plan",
+      "body": "Lead, please plan the week.",
+      "refs": {
+       "botId": "bot-2c1db152",
+       "botIds": [
+        "bot-2c1db152"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-2c1db152",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fve2e-6b2653da",
+     "addressees": [
+      {
+       "botId": "bot-2c1db152",
+       "role": "lead",
+       "wakeId": "w-mv6fve2e-6b2653da"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881318394,
+    "do": "waitFor",
+    "label": "lead done",
+    "ok": true,
+    "doneAt": 1791881323926
+   },
+   {
+    "at": 1791881323926,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881328960
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6fve2c-bc818775cf6e",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881318388,
+    "dedupeKey": "human.message:c-mv6fve2cbfae51eb94:bot-2c1db152",
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "ref": {
+     "botId": "bot-2c1db152",
+     "messageId": "c-mv6fve2cbfae51eb94:bot-2c1db152"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Lead, please plan the week.",
+     "cardId": "c-mv6fve2cbfae51eb94",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6fve2e-6b2653da",
+    "botId": "bot-2c1db152",
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "reason": {
+     "kind": "human",
+     "text": "Lead, please plan the week.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fve2cbfae51eb94",
+     "runId": "run-c-mv6fve2cbfae51eb94"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881318390,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6fve2cbfae51eb94",
+    "seq": 1,
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881318388,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Plan",
+    "body": "Lead, please plan the week.",
+    "refs": {
+     "botId": "bot-2c1db152",
+     "botIds": [
+      "bot-2c1db152"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fvi2y2bbe6bc8be",
+    "seq": 2,
+    "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881323594,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+     "botId": "bot-2c1db152"
+    },
+    "title": "Got it",
+    "body": "Reading the message.",
+    "clientPostId": "wake:w-mv6fve2e-6b2653da:1"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881318437,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881318438,
+     "event": "session/new",
+     "sessionId": "stub-2bb1e535f1a0",
+     "cwd": "/home/owner/.wmux-verify-f917c085/factory/bots/bot-2c1db152"
+    },
+    {
+     "at": 1791881323442,
+     "event": "prompt",
+     "sessionId": "stub-2bb1e535f1a0",
+     "text": "[wake w-mv6fve2e-6b2653da] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881323595,
+     "event": "tool",
+     "sessionId": "stub-2bb1e535f1a0",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fvi2y2bbe6bc8be\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881323594,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7\",\n      \"botId\": \"bot-2c1db152\"\n    },\n    \"title\": \"Got it\",\n    \"body\": \"Reading the message.\",\n    \"clientPostId\": \"wake:w-mv6fve2e-6b2653da:1\"\n  }\n}"
+    }
+   ],
+   "triage": [],
+   "moa": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881313359,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-48-32-verify-f917c085",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-48-32-verify-f917c085"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the fact went undirected",
+   "failing": [
+    "fact_directed_to_addressee"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "facts.0.ref.botId"
+    }
+   ]
+  },
+  {
+   "why": "the card names another bot",
+   "failing": [
+    "card_names_its_addressee"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.refs.botIds",
+     "value": [
+      "bot-7e2e67f5"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "the addressee was not woken",
+   "failing": [
+    "addressee_woken_once"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.0"
+    }
+   ]
+  },
+  {
+   "why": "triage woke too",
+   "failing": [
+    "triage_not_woken"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-7e2e67f5",
+      "workspaceId": "ws-9865ac8f-83cc-44d0-b8f8-7ca2964fcdc7",
+      "reason": {
+       "kind": "human",
+       "text": "Lead, please plan the week.",
+       "source": "desktop",
+       "clientMessageId": "c-mv6fve2cbfae51eb94",
+       "runId": "run-c-mv6fve2cbfae51eb94"
+      },
+      "threadId": "general",
+      "priority": 0,
+      "enqueuedAt": 1791881318390,
+      "attempts": 1,
+      "state": "done"
+     }
+    }
+   ]
+  }
+ ]
+}

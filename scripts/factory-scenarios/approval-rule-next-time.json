@@ -1,0 +1,377 @@
+{
+  "name": "approval-rule-next-time",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner answers a bot's merge request for an outside PR with Always allow (the owner merges it). The bot's next request, for its own verified PR, is approved by that rule — untainted, every lane predicate on a fresh read, the rule's gate (factory on, daily cap; lane auto-merge stays off) — and merged after the Undo window. The bot that asked is told once #2 merged (one turn).",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "commit": true,
+      "delayMs": 1500
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "approval_request",
+                  "args": {
+                    "action": "merge",
+                    "pr_number": 2,
+                    "reason": "An outside fix, CI green."
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "say": "#2 waits for you."
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "#2 is merged."
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "feat: add widget"
+                    ],
+                    "prompt": "Add a widget file to the repository.",
+                    "preset": "default"
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "noted"
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "approval_request",
+                  "args": {
+                    "action": "merge",
+                    "pr_number": 1,
+                    "reason": "Verified by the verifier with gate evidence."
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "say": "#1 asked."
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "ok"
+                }
+              ]
+            }
+          ]
+        },
+        "triggers": []
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "pr_read",
+                  "args": {
+                    "pr_number": 1
+                  },
+                  "save": {
+                    "head": "\"head(?:Sha|RefOid)\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "verify PR #1"
+                    ],
+                    "prompt": "Grade pull request #1 at its head.",
+                    "preset": "verify",
+                    "checkout": {
+                      "sha": "{{head}}",
+                      "fetch_ref": "pull/1/head"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "task": "\"taskId\": \"(wtask-[^\"]+)\"",
+                    "gateHead": "\"headSha\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "pr_verdict",
+                  "args": {
+                    "pr_number": 1,
+                    "head_sha": "{{gateHead}}",
+                    "verdict": "pass",
+                    "summary": "The recorded gate is green at this head.",
+                    "evidence": {
+                      "task_id": "{{task}}"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "nothing to do"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "settings": {
+      "laneAutoMerge": false
+    }
+  },
+  "actions": [
+    {
+      "do": "gh",
+      "op": "addPr",
+      "pr": {
+        "number": 2,
+        "title": "fix: outside",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "repo watch baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "ask-2",
+      "post": {
+        "title": "Merge #2",
+        "body": "Ask me to merge #2.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "request 2",
+      "cond": {
+        "approvals": {
+          "state": "pending",
+          "pr": 2
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "api",
+      "label": "list",
+      "fn": "approvals.list",
+      "args": [],
+      "save": {
+        "req": "requests.0.requestId"
+      }
+    },
+    {
+      "do": "api",
+      "label": "always",
+      "fn": "approvals.decide",
+      "args": [
+        {
+          "requestId": "{{saved.req}}",
+          "decision": "always"
+        }
+      ],
+      "record": true
+    },
+    {
+      "do": "waitFor",
+      "label": "2 merged by the owner",
+      "cond": {
+        "approvals": {
+          "state": "executed",
+          "pr": 2
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "ask-lead",
+      "post": {
+        "title": "Widget",
+        "body": "Please add the widget.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "worker pushed its branch",
+      "cond": {
+        "workers": {
+          "event": "commit"
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addPr",
+      "fromBranch": "wtask/",
+      "pr": {
+        "number": 1,
+        "title": "feat: add widget",
+        "author": "octo",
+        "checks": "PENDING",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "pr.opened",
+      "cond": {
+        "facts": {
+          "kind": "pr.opened"
+        }
+      },
+      "timeoutMs": 100000
+    },
+    {
+      "do": "waitFor",
+      "label": "verdict recorded",
+      "cond": {
+        "facts": {
+          "kind": "verdict.recorded"
+        }
+      },
+      "timeoutMs": 300000
+    },
+    {
+      "do": "gh",
+      "op": "setPr",
+      "number": 1,
+      "patch": {
+        "checks": "SUCCESS"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "lead idle",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "state": "done",
+          "min": 4
+        }
+      },
+      "timeoutMs": 120000
+    },
+    {
+      "do": "post",
+      "label": "ask-1",
+      "post": {
+        "title": "PR 1",
+        "body": "PR #1 is verified; ask me to merge it.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "1 by the rule",
+      "cond": {
+        "approvals": {
+          "pr": 1,
+          "decidedBy": "rule",
+          "state": [
+            "executed",
+            "refused"
+          ]
+        }
+      },
+      "timeoutMs": 90000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "ledger",
+      "verdicts",
+      "ghCalls",
+      "workers",
+      "approvals"
+    ],
+    "pr": 1,
+    "outsidePr": 2,
+    "verifier": "verifier",
+    "lead": "lead"
+  }
+}

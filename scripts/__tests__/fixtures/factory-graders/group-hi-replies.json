@@ -1,0 +1,772 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "group-hi-replies",
+  "run": 1,
+  "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-7d307144",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881331336,
+    "updatedAt": 1791881331336
+   },
+   {
+    "version": 1,
+    "id": "bot-3acef2e1",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "role": "triage",
+    "template": "issue",
+    "name": "Triage",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881331337,
+    "updatedAt": 1791881331337
+   },
+   {
+    "version": 1,
+    "id": "bot-56eb243b",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Verifier",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881331338,
+    "updatedAt": 1791881331338
+   },
+   {
+    "version": 1,
+    "id": "bot-405d667b",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881336448,
+    "updatedAt": 1791881336448
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-7d307144",
+   "triage": "bot-3acef2e1",
+   "verifier": "bot-56eb243b",
+   "moa": "bot-405d667b"
+  },
+  "injected": [
+   {
+    "label": "hi",
+    "kind": "card",
+    "id": "c-mv6fvs0522d0731b0b",
+    "threadId": "general",
+    "at": 1791881336450
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881336450,
+    "do": "post",
+    "label": "hi",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fvs0522d0731b0b",
+      "seq": 1,
+      "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881336453,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Hi",
+      "refs": {
+       "botIds": [
+        "bot-7d307144",
+        "bot-3acef2e1",
+        "bot-56eb243b",
+        "bot-405d667b"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-7d307144",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fvs07-ffeeb507",
+     "addressees": [
+      {
+       "botId": "bot-7d307144",
+       "role": "lead",
+       "wakeId": "w-mv6fvs07-ffeeb507"
+      },
+      {
+       "botId": "bot-3acef2e1",
+       "role": "triage",
+       "wakeId": "w-mv6fvs07-1dc709fe"
+      },
+      {
+       "botId": "bot-56eb243b",
+       "role": "verifier",
+       "wakeId": "w-mv6fvs07-d37f3bb3"
+      },
+      {
+       "botId": "bot-405d667b",
+       "role": "moa",
+       "wakeId": "w-mv6fvs07-e31de668"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881336462,
+    "do": "waitFor",
+    "label": "all answered",
+    "ok": true,
+    "doneAt": 1791881347030
+   },
+   {
+    "at": 1791881347030,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881352063
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6fvs05-5c926d264c5b",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881336453,
+    "dedupeKey": "human.message:c-mv6fvs0522d0731b0b:bot-7d307144",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "ref": {
+     "botId": "bot-7d307144",
+     "messageId": "c-mv6fvs0522d0731b0b:bot-7d307144"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Hi",
+     "cardId": "c-mv6fvs0522d0731b0b",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fvs05-4c071c07cd3a",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791881336453,
+    "dedupeKey": "human.message:c-mv6fvs0522d0731b0b:bot-3acef2e1",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "ref": {
+     "botId": "bot-3acef2e1",
+     "messageId": "c-mv6fvs0522d0731b0b:bot-3acef2e1"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Hi",
+     "cardId": "c-mv6fvs0522d0731b0b",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fvs05-02b39691b421",
+    "seq": 3,
+    "kind": "human.message",
+    "at": 1791881336453,
+    "dedupeKey": "human.message:c-mv6fvs0522d0731b0b:bot-56eb243b",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "ref": {
+     "botId": "bot-56eb243b",
+     "messageId": "c-mv6fvs0522d0731b0b:bot-56eb243b"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Hi",
+     "cardId": "c-mv6fvs0522d0731b0b",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fvs05-5715d92e0281",
+    "seq": 4,
+    "kind": "human.message",
+    "at": 1791881336453,
+    "dedupeKey": "human.message:c-mv6fvs0522d0731b0b:bot-405d667b",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "ref": {
+     "botId": "bot-405d667b",
+     "messageId": "c-mv6fvs0522d0731b0b:bot-405d667b"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Hi",
+     "cardId": "c-mv6fvs0522d0731b0b",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6fvs07-ffeeb507",
+    "botId": "bot-7d307144",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "reason": {
+     "kind": "human",
+     "text": "Hi",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fvs0522d0731b0b",
+     "runId": "run-c-mv6fvs0522d0731b0b",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881336455,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fvs07-1dc709fe",
+    "botId": "bot-3acef2e1",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "reason": {
+     "kind": "human",
+     "text": "Hi",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fvs0522d0731b0b",
+     "runId": "run-c-mv6fvs0522d0731b0b",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881336455,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fvs07-d37f3bb3",
+    "botId": "bot-56eb243b",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "reason": {
+     "kind": "human",
+     "text": "Hi",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fvs0522d0731b0b",
+     "runId": "run-c-mv6fvs0522d0731b0b",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881336455,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fvs07-e31de668",
+    "botId": "bot-405d667b",
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "reason": {
+     "kind": "human",
+     "text": "Hi",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fvs0522d0731b0b",
+     "runId": "run-c-mv6fvs0522d0731b0b",
+     "room": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881336455,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6fvs0522d0731b0b",
+    "seq": 1,
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881336453,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Hi",
+    "refs": {
+     "botIds": [
+      "bot-7d307144",
+      "bot-3acef2e1",
+      "bot-56eb243b",
+      "bot-405d667b"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fvw0he41690d5ab",
+    "seq": 2,
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881341649,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+     "botId": "bot-56eb243b"
+    },
+    "title": "Hi from verifier",
+    "body": "verifier here.",
+    "clientPostId": "wake:w-mv6fvs07-d37f3bb3:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fvw0hf109238d91",
+    "seq": 3,
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881341649,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+     "botId": "bot-3acef2e1"
+    },
+    "title": "Hi from triage",
+    "body": "triage here.",
+    "clientPostId": "wake:w-mv6fvs07-1dc709fe:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fvw0hfb42cb360b",
+    "seq": 4,
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881341649,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+     "botId": "bot-7d307144"
+    },
+    "title": "Hi from lead",
+    "body": "lead here.",
+    "clientPostId": "wake:w-mv6fvs07-ffeeb507:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fvzzp7bdddd6775",
+    "seq": 5,
+    "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881346805,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+     "botId": "bot-405d667b"
+    },
+    "title": "Hi from moa",
+    "body": "moa here.",
+    "clientPostId": "wake:w-mv6fvs07-e31de668:1"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881336499,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881336500,
+     "event": "session/new",
+     "sessionId": "stub-42b03bc308cc",
+     "cwd": "/home/owner/.wmux-verify-f92cfe5e/factory/bots/bot-7d307144"
+    },
+    {
+     "at": 1791881341503,
+     "event": "prompt",
+     "sessionId": "stub-42b03bc308cc",
+     "text": "[wake w-mv6fvs07-ffeeb507] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881341650,
+     "event": "tool",
+     "sessionId": "stub-42b03bc308cc",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fvw0hfb42cb360b\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881341649,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n      \"botId\": \"bot-7d307144\"\n    },\n    \"title\": \"Hi from lead\",\n    \"body\": \"lead here.\",\n    \"clientPostId\": \"wake:w-mv6fvs07-ffeeb507:1\"\n  }\n}"
+    }
+   ],
+   "triage": [
+    {
+     "at": 1791881336499,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881336500,
+     "event": "session/new",
+     "sessionId": "stub-83a72791ecc7",
+     "cwd": "/home/owner/.wmux-verify-f92cfe5e/factory/bots/bot-3acef2e1"
+    },
+    {
+     "at": 1791881341503,
+     "event": "prompt",
+     "sessionId": "stub-83a72791ecc7",
+     "text": "[wake w-mv6fvs07-1dc709fe] Triage (issue) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881341650,
+     "event": "tool",
+     "sessionId": "stub-83a72791ecc7",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fvw0hf109238d91\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881341649,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n      \"botId\": \"bot-3acef2e1\"\n    },\n    \"title\": \"Hi from triage\",\n    \"body\": \"triage here.\",\n    \"clientPostId\": \"wake:w-mv6fvs07-1dc709fe:1\"\n  }\n}"
+    }
+   ],
+   "verifier": [
+    {
+     "at": 1791881336498,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881336499,
+     "event": "session/new",
+     "sessionId": "stub-3396ffb3e8e0",
+     "cwd": "/home/owner/.wmux-verify-f92cfe5e/factory/bots/bot-56eb243b"
+    },
+    {
+     "at": 1791881341503,
+     "event": "prompt",
+     "sessionId": "stub-3396ffb3e8e0",
+     "text": "[wake w-mv6fvs07-d37f3bb3] Verifier (reviewer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881341650,
+     "event": "tool",
+     "sessionId": "stub-3396ffb3e8e0",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fvw0he41690d5ab\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881341649,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n      \"botId\": \"bot-56eb243b\"\n    },\n    \"title\": \"Hi from verifier\",\n    \"body\": \"verifier here.\",\n    \"clientPostId\": \"wake:w-mv6fvs07-d37f3bb3:1\"\n  }\n}"
+    }
+   ],
+   "moa": [
+    {
+     "at": 1791881341671,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881341672,
+     "event": "session/new",
+     "sessionId": "stub-3d1cfa44a6fe",
+     "cwd": "/home/owner/.wmux-verify-f92cfe5e/factory/bots/bot-405d667b"
+    },
+    {
+     "at": 1791881346674,
+     "event": "prompt",
+     "sessionId": "stub-3d1cfa44a6fe",
+     "text": "[wake w-mv6fvs07-e31de668] Moa (coordinator) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881346806,
+     "event": "tool",
+     "sessionId": "stub-3d1cfa44a6fe",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fvzzp7bdddd6775\",\n    \"seq\": 5,\n    \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881346805,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n      \"botId\": \"bot-405d667b\"\n    },\n    \"title\": \"Hi from moa\",\n    \"body\": \"moa here.\",\n    \"clientPostId\": \"wake:w-mv6fvs07-e31de668:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881331484,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-48-50-verify-f92cfe5e",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-48-50-verify-f92cfe5e"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the card names only one bot",
+   "failing": [
+    "card_names_every_bot"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.refs.botIds",
+     "value": [
+      "bot-7d307144"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "a bot woke twice for the message",
+   "failing": [
+    "one_wake_per_bot"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-dup",
+      "botId": "bot-7d307144",
+      "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
+      "reason": {
+       "kind": "human",
+       "text": "Hi",
+       "source": "desktop",
+       "clientMessageId": "c-mv6fvs0522d0731b0b",
+       "runId": "run-c-mv6fvs0522d0731b0b",
+       "room": true
+      },
+      "threadId": "general",
+      "priority": 0,
+      "enqueuedAt": 1791881336455,
+      "attempts": 1,
+      "state": "done"
+     }
+    }
+   ]
+  },
+  {
+   "why": "a wake left the message run",
+   "failing": [
+    "one_run_for_the_message"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.0.reason.runId",
+     "value": "run-other"
+    }
+   ]
+  },
+  {
+   "why": "a bot got no directed fact",
+   "failing": [
+    "one_directed_fact_each"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "facts.1"
+    }
+   ]
+  },
+  {
+   "why": "the HQ bot answered in a thread",
+   "failing": [
+    "moa_answered_in_general"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.4.threadId",
+     "value": "t-x"
+    }
+   ]
+  }
+ ]
+}

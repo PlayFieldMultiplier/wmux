@@ -1,0 +1,193 @@
+{
+ "note": "Synthetic (hand-written): the real-model scenarios are run by hand; this pins the grading rule.",
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "triage-real-issue",
+  "run": 1,
+  "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+  "botKeys": {
+   "triage": "bot-bbbb0001"
+  },
+  "injected": [],
+  "actions": [],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "facts": [],
+  "wakes": [
+   {
+    "id": "w-0001fa",
+    "botId": "bot-bbbb0001",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-1"
+     ],
+     "trigger": {
+      "kind": "issue.opened"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1,
+    "attempts": 1,
+    "state": "done",
+    "threadId": "issue:github.com/acme/app#21"
+   },
+   {
+    "id": "w-0001fa",
+    "botId": "bot-bbbb0001",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.review_requested:wtask-1@2"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1,
+    "attempts": 1,
+    "state": "done",
+    "threadId": "issue:github.com/acme/app#21"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-bbbb0001",
+    "role": "triage",
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "enabled": true
+   }
+  ],
+  "ledger": [
+   {
+    "id": "wtask-1",
+    "status": "review_requested",
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-bbbb0001"
+     },
+     "preset": "repro"
+    }
+   }
+  ],
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-1",
+    "seq": 1,
+    "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+    "threadId": "issue:github.com/acme/app#21",
+    "kind": "triage",
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-11111111-2222-3333-4444-555555555555",
+     "botId": "bot-bbbb0001"
+    },
+    "title": "README heading is misspelled",
+    "body": "Repro worker started; draft PR follows."
+   }
+  ],
+  "stub": {},
+  "workers": [],
+  "gh": {
+   "calls": [],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "number": 2,
+        "isDraft": true,
+        "state": "OPEN"
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  },
+  "records": []
+ },
+ "fail": [
+  {
+   "why": "the triage card fell back to general",
+   "failing": [
+    "triage_card_in_issue_thread"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.0.threadId",
+     "value": "general"
+    }
+   ]
+  },
+  {
+   "why": "no repro worker",
+   "failing": [
+    "repro_worker_started"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "ledger",
+     "value": []
+    }
+   ]
+  },
+  {
+   "why": "neither a draft PR nor no-repro",
+   "failing": [
+    "draft_pr_or_no_repro"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "gh.state",
+     "value": {
+      "login": "octo",
+      "repos": {}
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,286 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "narrative-name-no-wake",
+  "run": 1,
+  "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+  "botKeys": {
+   "lead": "bot-2fbd8700",
+   "triage": "bot-b150a448",
+   "verifier": "bot-f7ace48f"
+  },
+  "injected": [
+   {
+    "label": "to-lead",
+    "kind": "card",
+    "id": "c-mv53zqvoae48af3dc5",
+    "threadId": "general",
+    "at": 1791800900051
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "to-lead",
+    "at": 1791800900051
+   },
+   {
+    "do": "waitFor",
+    "label": "lead done",
+    "at": 1791800900054,
+    "doneAt": 1791800905581,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800905581,
+    "doneAt": 1791800910611,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53zqvo-8f651fc5ae29",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800900052,
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "ref": {
+     "botId": "bot-2fbd8700",
+     "messageId": "c-mv53zqvoae48af3dc5"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Lead: ask @triage and @Verifier how it went.",
+     "cardId": "c-mv53zqvoae48af3dc5",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53zqvo-6ce4617c",
+    "botId": "bot-2fbd8700",
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "reason": {
+     "kind": "human",
+     "text": "Lead: ask @triage and @Verifier how it went.",
+     "source": "desktop",
+     "clientMessageId": "c-mv53zqvoae48af3dc5"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791800900052,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-2fbd8700",
+    "role": "lead",
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "enabled": true
+   },
+   {
+    "id": "bot-b150a448",
+    "role": "triage",
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "enabled": true
+   },
+   {
+    "id": "bot-f7ace48f",
+    "role": "verifier",
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53zqvoae48af3dc5",
+    "seq": 1,
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791800900052,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Status",
+    "refs": {
+     "botId": "bot-2fbd8700"
+    },
+    "body": "Lead: ask @triage and @Verifier how it went."
+   },
+   {
+    "id": "c-mv53zuvda330f2a84e",
+    "seq": 2,
+    "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791800905225,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff",
+     "botId": "bot-2fbd8700"
+    },
+    "title": "Round-up",
+    "clientPostId": "wake:w-mv53zqvo-6ce4617c:1",
+    "body": "Verifier finished; Triage idle. @triage @verifier have a look."
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800905080,
+     "event": "prompt",
+     "text": "[wake w-mv53zqvo-6ce4617c] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800905226,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53zuvda330f2a84e\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791800905225,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-02971ec4-f1b9-45ca-8aab-a07ca7f7faff\",\n      \"botId\": \"bot-2fbd8700\"\n    },\n    \"title\": \"Round-up\",\n    \"body\": \"Verifier finished; Triage idle. @triage @verifier have a look.\",\n    \"clientPostId\": \"wake:w-mv53zqvo-6ce4617c:1\"\n  }\n}"
+    }
+   ],
+   "triage": [],
+   "verifier": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800900075,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "a name in the text woke the triage bot",
+   "failing": [
+    "triage_not_woken"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-b150a448",
+      "reason": {
+       "kind": "manual",
+       "by": "human"
+      },
+      "state": "done",
+      "priority": 1,
+      "attempts": 1,
+      "enqueuedAt": 1
+     }
+    }
+   ]
+  }
+ ]
+}

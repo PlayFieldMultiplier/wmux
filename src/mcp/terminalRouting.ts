@@ -58,6 +58,11 @@ export interface TerminalRoutingDeps {
   getPinnedRoute: () => PinnedRoute | null;
   /** Claim (and pin) a dedicated workspace + PTY for an external caller. */
   claimPinnedRoute: () => Promise<PinnedRoute>;
+  /** Set for a caller that must never claim a workspace of its own (a
+   *  factory bot: its panes are its tasks', named by ptyId and routed by its
+   *  token). The external branch then throws this message instead of
+   *  claiming or reusing a pin. */
+  noClaim?: string;
   /** Injectable sleep for tests. */
   sleep?: (ms: number) => Promise<void>;
   /** Grace attempts for rpc-down. Default 4. */
@@ -167,6 +172,7 @@ async function resolveExternal(
   deps: TerminalRoutingDeps,
   explicitPtyId?: string,
 ): Promise<TerminalRoute> {
+  if (deps.noClaim) throw new Error(deps.noClaim);
   const pin = deps.getPinnedRoute();
 
   if (explicitPtyId) {

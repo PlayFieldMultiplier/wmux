@@ -17,6 +17,7 @@ vi.mock('electron', () => ({
 }));
 
 import { registerWorktaskHandlers } from '../worktask.handler';
+import { forgetBotWorkerSession, noteBotWorkerSession, reloadBotWorkerSessionsForTests } from '../../../agents/botWorkerMergeGuard';
 import { IPC } from '../../../../shared/constants';
 import type { DaemonClient } from '../../../DaemonClient';
 
@@ -107,6 +108,28 @@ describe('worktask:refire (§3·F2 — 원래 initialCommand 재전송)', () => 
     expect(daemon.writes[0].sessionId).toBe('pty-1');
     expect(daemon.writes[0].data).toContain('claude');
     expect(daemon.writes[0].data.endsWith('\r')).toBe(true);
+  });
+
+  it('re-fires a bot worker\'s launch line with the merge-lane guard after a restart, or types nothing', async () => {
+    daemon = makeDaemon([]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    const wt = seedWorktree('task-bot', true);
+    reloadBotWorkerSessionsForTests();
+    noteBotWorkerSession('pty-bot', 'ws-task');
+    // The app restarts between the spawn and the re-fire: only the durable record knows the pane.
+    reloadBotWorkerSessionsForTests();
+    try {
+      const ok = (await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-bot', worktreePath: wt, initialCommand: 'claude "$(cat \'/x/prompt.md\')"' })) as { ok: boolean };
+      expect(ok.ok).toBe(true);
+      expect(daemon.writes[0].data).toMatch(/^claude --settings="[^"]*factory[\\/]worker-settings\.json" /);
+      const refused = (await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-bot', worktreePath: wt, initialCommand: 'codex "$(cat \'/x/prompt.md\')"' })) as { ok: boolean; error?: string };
+      expect(refused.ok).toBe(false);
+      expect(refused.error).toMatch(/merge-lane guard/);
+      expect(daemon.writes).toHaveLength(1);
+    } finally {
+      forgetBotWorkerSession('pty-bot');
+      reloadBotWorkerSessionsForTests();
+    }
   });
 
   it('prompt.md 소실이면 재발사 거부(원문 프롬프트를 흘리지 않음)', async () => {

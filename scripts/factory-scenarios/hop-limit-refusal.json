@@ -1,0 +1,91 @@
+{
+  "name": "hop-limit-refusal",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Moa and the lead ping-pong dispatch and result, never naming replyTo; the router carries the chain from the handoff that woke each turn. Moa starts the chain as a Coordinator, so depth climbs 0..MAX_DEPTH (6) and the next hop is refused max_depth with a refusal card and a handoff.refused fact; nothing past it is delivered.",
+  "setup": {
+    "bots": [
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "title": "Next step",
+                    "body": "Do the next step."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "lead",
+        "role": "lead",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Step done",
+                    "body": "Done; what next?"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "wake",
+      "label": "kick-moa",
+      "bot": "moa"
+    },
+    {
+      "do": "waitFor",
+      "label": "refusal",
+      "cond": {
+        "handoffs": {
+          "status": "refused"
+        }
+      },
+      "timeoutMs": 180000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs"
+    ],
+    "code": "max_depth",
+    "startDepth": 0,
+    "maxDepth": 6
+  }
+}

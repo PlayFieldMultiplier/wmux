@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
-// `workspace.close` asks the shared pre-close check before any dispose: Moa's
-// HQ is never closed, and it does not count toward the last-workspace guard.
-// With [HQ, A], closing A used to pass the total-count check, dispose A's
-// sessions, and then have removeWorkspace refuse — A left open, dead and empty.
+// `workspace.close` asks the shared pre-close check before any dispose: the
+// last workspace is never closed. A refusal after the dispose would leave the
+// workspace open, dead and empty. An earlier version's HQ workspace is an
+// ordinary workspace now.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Pane, Workspace } from '../../../shared/types';
-import type { MoaState } from '../../../shared/moa';
 import { useStore } from '../../stores';
 import { handleRpcMethod } from '../useRpcBridge';
 
@@ -16,14 +15,6 @@ function ws(id: string): Workspace {
   };
   return { id, name: id, rootPane, activePaneId: `${id}-p` };
 }
-function moa(hq: string | null): MoaState {
-  return {
-    config: { enabled: true, onboarded: true, level: 1, maxTurnsPerHour: 20, bubbles: true, reduceMotion: false, defaultReason: null },
-    hq: { workspaceId: hq, state: hq ? 'ok' : 'unset' },
-    archive: { unacked: 0, total: 0 },
-  };
-}
-
 let dispose: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   dispose = vi.fn(() => Promise.resolve());
@@ -31,42 +22,33 @@ beforeEach(() => {
   useStore.setState({ paneGate: 'ready', surfaceAgent: {} });
 });
 
-describe('workspace.close and Moa', () => {
-  it('[HQ, A]: closing A is refused with an error and nothing is disposed', async () => {
-    useStore.setState({ workspaces: [ws('hq'), ws('a')], activeWorkspaceId: 'a', moa: moa('hq'), moaHqSeed: null });
+describe('workspace.close and the last workspace', () => {
+  it('[A]: closing A is refused with an error and nothing is disposed', async () => {
+    useStore.setState({ workspaces: [ws('a')], activeWorkspaceId: 'a', moa: null });
     const res = await handleRpcMethod('workspace.close', { id: 'a' }) as { error?: string; ok?: boolean };
     expect(res.error).toMatch(/only workspace/);
     expect(dispose).not.toHaveBeenCalled();
-    expect(useStore.getState().workspaces.map((w) => w.id)).toEqual(['hq', 'a']);
+    expect(useStore.getState().workspaces.map((w) => w.id)).toEqual(['a']);
   });
 
-  it('closing the HQ itself is refused with an error and nothing is disposed', async () => {
-    useStore.setState({ workspaces: [ws('hq'), ws('a'), ws('b')], activeWorkspaceId: 'a', moa: moa('hq'), moaHqSeed: null });
-    const res = await handleRpcMethod('workspace.close', { id: 'hq' }) as { error?: string };
-    expect(res.error).toMatch(/Moa's workspace/);
-    expect(dispose).not.toHaveBeenCalled();
-  });
-
-  it('before main answers, the remembered HQ id guards the same way', async () => {
-    useStore.setState({ workspaces: [ws('hq'), ws('a')], activeWorkspaceId: 'a', moa: null, moaHqSeed: 'hq' });
-    const res = await handleRpcMethod('workspace.close', { id: 'a' }) as { error?: string };
-    expect(res.error).toMatch(/only workspace/);
-    expect(dispose).not.toHaveBeenCalled();
-  });
-
-  it('[HQ, A, B]: closing A still goes through', async () => {
-    useStore.setState({ workspaces: [ws('hq'), ws('a'), ws('b')], activeWorkspaceId: 'a', moa: moa('hq'), moaHqSeed: null });
-    const res = await handleRpcMethod('workspace.close', { id: 'a' }) as { ok?: boolean };
-    expect(res.ok).toBe(true);
-    expect(dispose).toHaveBeenCalledWith('pty-a');
-    expect(useStore.getState().workspaces.map((w) => w.id)).toEqual(['hq', 'b']);
+  it('an earlier version\'s HQ workspace closes like any other, whatever localStorage remembers', async () => {
+    localStorage.setItem('wmux.moa.hqWorkspaceId', 'hq');
+    try {
+      useStore.setState({ workspaces: [ws('hq'), ws('a')], activeWorkspaceId: 'a', moa: null });
+      const res = await handleRpcMethod('workspace.close', { id: 'hq' }) as { ok?: boolean };
+      expect(res.ok).toBe(true);
+      expect(dispose).toHaveBeenCalledWith('pty-hq');
+      expect(useStore.getState().workspaces.map((w) => w.id)).toEqual(['a']);
+    } finally {
+      localStorage.clear();
+    }
   });
 });
 
 describe('workspace.close and live agent panes', () => {
   it('a workspace with a running agent is refused without force and nothing is disposed', async () => {
     useStore.setState({
-      workspaces: [ws('a'), ws('b')], activeWorkspaceId: 'a', moa: moa(null), moaHqSeed: null,
+      workspaces: [ws('a'), ws('b')], activeWorkspaceId: 'a', moa: null,
       surfaceAgent: { 'pty-b': { name: 'Claude Code', status: 'idle' } },
     });
     const res = await handleRpcMethod('workspace.close', { id: 'b' }) as { error?: string };
@@ -77,7 +59,7 @@ describe('workspace.close and live agent panes', () => {
 
   it('with force it closes', async () => {
     useStore.setState({
-      workspaces: [ws('a'), ws('b')], activeWorkspaceId: 'a', moa: moa(null), moaHqSeed: null,
+      workspaces: [ws('a'), ws('b')], activeWorkspaceId: 'a', moa: null,
       surfaceAgent: { 'pty-b': { name: 'Claude Code', status: 'idle' } },
     });
     const res = await handleRpcMethod('workspace.close', { id: 'b', force: true }) as { ok?: boolean };
@@ -91,7 +73,7 @@ describe('workspace.close and live agent panes', () => {
       id: 'r-s', ptyId: '', title: '', shell: '', cwd: '', surfaceType: 'remote-terminal',
       remoteOwned: true, remoteHostId: 'host-1', remoteSessionId: 'sess-1',
     } as never];
-    useStore.setState({ workspaces: [ws('a'), remote], activeWorkspaceId: 'a', moa: moa(null), moaHqSeed: null });
+    useStore.setState({ workspaces: [ws('a'), remote], activeWorkspaceId: 'a', moa: null });
     const res = await handleRpcMethod('workspace.close', { id: 'r' }) as { error?: string };
     expect(res.error).toMatch(/1 remote session\(s\).*--force/);
     expect(useStore.getState().workspaces.map((w) => w.id)).toEqual(['a', 'r']);

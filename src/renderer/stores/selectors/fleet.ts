@@ -1293,7 +1293,7 @@ export function fleetTitle(pane: FleetPane, mission?: WorkTask): string {
  *  FleetView subscribes to them shallowly (so the 2 s decay clock does not
  *  re-derive the board) and passes them in; a caller holding the live store
  *  omits them and they are derived from the same state here. */
-export type FleetBoardState = FleetSelectorState & Pick<StoreState, 'surfaceOutputAt'> & Partial<Pick<StoreState, 'moa' | 'moaHqSeed'>> & {
+export type FleetBoardState = FleetSelectorState & Pick<StoreState, 'surfaceOutputAt'> & {
   /** Produced by `selectUnverifiablePaneMinutes`; derived when absent. */
   unverifiablePaneMinutes?: Record<string, number>;
 };
@@ -1329,26 +1329,14 @@ export function selectFleetBoard(
   return { panes, groups };
 }
 
-/** The workspace Fleet leaves off as Moa's: the known HQ, whether or not Moa
- *  is on. Main may report no HQ id while Moa is off, so the remembered one
- *  (the seed) still counts: Moa's own terminal is never a worker. */
-export function fleetHqId(state: Pick<FleetBoardState, 'moa' | 'moaHqSeed'>): string | null {
-  return state.moa?.hq.workspaceId ?? state.moaHqSeed ?? null;
-}
-
 /** The board's rows before grouping — shared by the board and its counts so
- *  both read the same panes with the same liveness inputs. Moa's HQ workspace
- *  is left out: Moa is the main bot, not a worker on the board, and what it
- *  waits on reaches the operator through its own panel ("Waiting on you" and
- *  its permission card). `selectFleetPanes` itself keeps the HQ, since the
- *  workspace mirror (pane_list) and per-workspace roll-ups read it. */
+ *  both read the same panes with the same liveness inputs. */
 function fleetBoardPanes(
   state: FleetBoardState,
   hookRunningByPtyId: Record<string, boolean>,
   unverifiable: Record<string, number>,
 ): FleetPane[] {
   const surfaceAgent = state.surfaceAgent ?? {};
-  const hq = fleetHqId(state);
   // Use the same turn/liveness inputs as the sidebar and Deck roster. Missing
   // these optional inputs silently classified active hook-driven turns as idle.
   return selectFleetPanes({
@@ -1366,7 +1354,7 @@ function fleetBoardPanes(
     agentAliveByPtyId: state.agentAliveByPtyId,
     hookRunningByPtyId,
     remoteWorkspaces: state.remoteWorkspaces,
-  }).filter((pane) => pane.workspaceId !== hq).map((pane) => ({
+  }).map((pane) => ({
     ...pane,
     agentName: surfaceAgent[pane.ptyId]?.name || pane.agentName,
     unverifiable: !!unverifiable[pane.ptyId],
@@ -1406,7 +1394,7 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
     state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
     state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
     state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.remoteWorkspaces,
-    state.usageLimitWaiting, fleetHqId(state),
+    state.usageLimitWaiting,
   ];
   const memo = sectionCountsMemo;
   if (memo && inputs.every((value, i) => Object.is(value, memo.inputs[i]))

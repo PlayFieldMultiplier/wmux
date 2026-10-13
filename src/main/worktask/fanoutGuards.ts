@@ -285,8 +285,9 @@ export class FanOutGuards {
     const open = this.openWorkspaceIds();
     if (!open) throw new Error('the open workspace list is not available yet');
     const stamps = this.loadLineage();
+    const dormant = dormantTaskWorkspaces();
     let n = 0;
-    for (const ws of open) if (stamps.has(ws)) n++;
+    for (const ws of open) if (stamps.has(ws) && !dormant.has(ws)) n++;
     return n;
   }
 
@@ -627,6 +628,24 @@ export function stampFanoutTaskPane(
   const origin = sanitizeFanoutOrigin(options?.fanoutOrigin);
   if (origin) guards.markTask(ws, owner, origin);
   else guards.markTask(ws, owner);
+}
+
+/** Task workspaces kept open after their task ended and their agent was
+ *  stopped (factory worker reclaim): no agent runs there, so they hold no
+ *  live slot. A resumed worker is live again and is not in this set. */
+let dormantSource: () => ReadonlySet<string> = () => new Set();
+
+function dormantTaskWorkspaces(): ReadonlySet<string> {
+  try {
+    return dormantSource();
+  } catch {
+    return new Set();
+  }
+}
+
+/** Install (or clear, with null) the dormant task-workspace source. */
+export function setDormantTaskWorkspaces(source: (() => ReadonlySet<string>) | null): void {
+  dormantSource = source ?? (() => new Set());
 }
 
 let hosted: FanOutGuards | null = null;
