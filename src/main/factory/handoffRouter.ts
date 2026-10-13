@@ -1109,6 +1109,13 @@ export class HandoffRouter {
       }
     }
     for (const h of asks.filter((a) => a.status === 'queued')) {
+      // Answered before its turn, but not closed (a stop or a failed write
+      // between the two): it closes with that answer, never asked again.
+      const stored = this.storedAnswer(h.id);
+      if (stored) {
+        this.finalizeAnswer(h, stored.payload.body, stored.payload.body === DISMISSED_ANSWER);
+        continue;
+      }
       if (now - h.createdAt > HANDOFF_LIMITS.ASK_PERSON_TTL_MS) {
         this.expire(h, 'it waited past the question\'s time limit without being asked');
         continue;
@@ -1192,7 +1199,7 @@ export class HandoffRouter {
    *  a closed question always has its answer to deliver (a restart delivers
    *  a queued one); a second call reuses the stored answer. */
   private finalizeAnswer(ask: Handoff, text: string, dismissed: boolean): boolean {
-    const stored = [...this.records.values()].find((r) => r.kind === 'answer' && r.replyTo === ask.id);
+    const stored = this.storedAnswer(ask.id);
     const reply = stored ?? this.answerFor(ask, text, dismissed);
     // Not stored: the ask stays open and the next reconcile tries again.
     if (!stored && !this.put(reply)) return false;
@@ -1204,6 +1211,11 @@ export class HandoffRouter {
     if (!bot || !bot.enabled) this.refuse(reply, 'no_addressee', 'the bot that asked is not enabled');
     else this.deliver(reply, bot);
     return true;
+  }
+
+  /** The answer handoff stored for a question, if any. */
+  private storedAnswer(askId: string): Handoff | undefined {
+    return [...this.records.values()].find((r) => r.kind === 'answer' && r.replyTo === askId);
   }
 
   private answerFor(ask: Handoff, text: string, dismissed: boolean): Handoff {
