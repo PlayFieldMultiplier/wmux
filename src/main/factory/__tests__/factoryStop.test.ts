@@ -11,7 +11,7 @@ vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() 
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
-import { STOPPED_BY_OWNER, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isWakeStoppedByOwner, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
+import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isWakeStoppedByOwner, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
 import { factoryStopHandler } from '../../ipc/handlers/factory.handler';
 
 const LEAD = 'bot-0000000a';
@@ -291,5 +291,41 @@ describe('stopFactoryWork and resumed workers', () => {
     expect(stopResumed).toHaveBeenCalledWith(TRIAGE);
     const failing = ports({ stopResumed: async () => { throw new Error('daemon gone'); } });
     expect(await stopFactoryWork(failing.p, {})).toMatchObject({ ok: false, code: 'partial' });
+  });
+});
+
+describe('late stops and stopped wakes (review fixes, PR #2164)', () => {
+  it('stops only the tasks whose launch was under way at the stop; new work the bot starts right after runs', async () => {
+    const r = ports({ now: () => 1_000, launchesInFlight: (botId) => (botId === LEAD ? ['t-late'] : []) });
+    const off = installLateStopSweep({ ...r.p, onTransition: (fn) => ledger.onTransition(fn) });
+    await stopFactoryWork(r.p, { botId: LEAD });
+    await task('t-late', LEAD);
+    await task('t-new', LEAD);
+    await vi.waitFor(() => expect(ledger.get('t-late')?.status).toBe('cancelled'));
+    await new Promise((res) => setTimeout(res, 30));
+    expect(ledger.get('t-new')?.status).toBe('working');
+    off();
+  });
+
+  it('a resumed worker the stop could not stop makes the stop partial, and those it stopped still count', async () => {
+    const r = ports({ stopResumed: async () => ({ stopped: 1, failed: 1 }) });
+    expect(await stopFactoryWork(r.p, { botId: TRIAGE })).toMatchObject({ ok: false, code: 'partial', workersStopped: 1 });
+  });
+
+  it('a stopped wake is remembered by age, not pushed out by later stops; late stops expire', async () => {
+    let now = 1_000;
+    let wake = 0;
+    const runtime = { currentTurn: () => ({ wakeId: `w-${++wake}` }), interrupt: () => ({ ok: true }) };
+    const r = ports({ now: () => now, runtime: () => runtime, botIds: () => [LEAD] });
+    for (let i = 0; i < 600; i++) await stopFactoryWork(r.p, {});
+    expect(isWakeStoppedByOwner('w-1')).toBe(true);
+    expect(__lateStopCountForTesting()).toBe(1);
+    now += STOPPED_WAKE_KEEP_MS + 1;
+    await stopFactoryWork({ ...r.p, botIds: () => [] }, {});
+    expect(__lateStopCountForTesting()).toBe(0);
+    expect(isWakeStoppedByOwner('w-1')).toBe(true); // pruned only when another wake is remembered
+    await stopFactoryWork(r.p, {});
+    expect(isWakeStoppedByOwner('w-1')).toBe(false);
+    expect(isWakeStoppedByOwner(`w-${wake}`)).toBe(true);
   });
 });

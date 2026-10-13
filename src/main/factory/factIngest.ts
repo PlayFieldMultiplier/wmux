@@ -30,6 +30,7 @@ import type { PrVerdictRecord } from '../../shared/prVerdict';
 import type { MergeEffect } from '../../shared/moaDecision';
 import type { BotRefusal } from '../../shared/botSurface';
 import { taskOriginThread } from '../../shared/room';
+import type { FactAppendResult } from './factLog';
 
 const OPEN_TASK: ReadonlySet<LedgerStatus> = new Set<LedgerStatus>(['working', 'input_required', 'review_requested']);
 const TEXT_CAP = 500;
@@ -206,6 +207,11 @@ export function watchMergeEffects(
   };
 }
 
+/** Drafts kept while the log cannot write (facts.jsonl not writable), and
+ *  how often they are offered again. */
+export const FACT_INGEST_RETRY_MAX = 500;
+export const FACT_INGEST_RETRY_MS = 5_000;
+
 export interface FactIngestPorts {
   subscribeBus?: Subscribe<WmuxEvent>;
   findTaskByWorkspace?: (taskWorkspaceId: string) => LedgerEntry | null;
@@ -213,6 +219,7 @@ export interface FactIngestPorts {
   onVerdictRecorded?: Subscribe<PrVerdictRecord>;
   onMergeEffect?: Subscribe<MergeEffect>;
   log?: (line: string) => void;
+  setTimer?: (fn: () => void, ms: number) => { cancel(): void };
 }
 
 export interface FactIngest {
@@ -222,15 +229,76 @@ export interface FactIngest {
   dispose(): void;
 }
 
-export function startFactIngest(sink: { append(draft: FactDraft): Fact | null }, ports: FactIngestPorts): FactIngest {
+/**
+ * A sink with `appendResult` (the fact log) says why a draft was refused: a
+ * draft the log could not write is kept (FACT_INGEST_RETRY_MAX, oldest
+ * dropped first) and offered again before the next draft and every
+ * FACT_INGEST_RETRY_MS, so a fact is not lost while the file is unwritable.
+ */
+export function startFactIngest(sink: { append(draft: FactDraft): Fact | null; appendResult?(draft: FactDraft): FactAppendResult }, ports: FactIngestPorts): FactIngest {
   const log = ports.log ?? ((line: string) => console.warn(line));
+  const setTimer = ports.setTimer ?? ((fn: () => void, ms: number) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return { cancel: () => clearTimeout(t) };
+  });
   const offs: Array<() => void> = [];
   let disposed = false;
+  const unwritten: FactDraft[] = [];
+  let timer: { cancel(): void } | null = null;
+  /** false when the log could not write it (it is kept to retry). */
+  const write = (what: string, draft: FactDraft): boolean => {
+    if (!sink.appendResult) {
+      sink.append(draft);
+      return true;
+    }
+    const r = sink.appendResult(draft);
+    if (r.ok || r.code === 'duplicate') return true;
+    if (r.code !== 'write_failed') {
+      log(`[facts] ingest ${what}: ${draft.kind} refused (${r.code})`);
+      return true;
+    }
+    return false;
+  };
+  const arm = (): void => {
+    if (timer || disposed || unwritten.length === 0) return;
+    timer = setTimer(() => {
+      timer = null;
+      flush();
+    }, FACT_INGEST_RETRY_MS);
+  };
+  /** Offer the kept drafts again, oldest first; stop at the first that still
+   *  cannot be written. */
+  const flush = (): boolean => {
+    while (unwritten.length > 0 && !disposed) {
+      let ok = false;
+      try {
+        ok = write('retry', unwritten[0]);
+      } catch (err) {
+        log(`[facts] ingest retry failed: ${String(err)}`);
+      }
+      if (!ok) break;
+      unwritten.shift();
+    }
+    arm();
+    return unwritten.length === 0;
+  };
+  const keep = (what: string, draft: FactDraft): void => {
+    if (unwritten.length === 0) log(`[facts] ingest ${what}: the fact log cannot write; facts are kept and written once it can`);
+    unwritten.push(draft);
+    if (unwritten.length > FACT_INGEST_RETRY_MAX) {
+      unwritten.shift();
+      log(`[facts] ingest: more than ${FACT_INGEST_RETRY_MAX} facts wait for the log; the oldest was dropped`);
+    }
+    arm();
+  };
   const put = (what: string, make: () => FactDraft | null): void => {
     if (disposed) return;
     try {
       const draft = make();
-      if (draft) sink.append(draft);
+      if (!draft) return;
+      // In order: the new draft waits behind the ones kept before it.
+      if (!flush() || !write(what, draft)) keep(what, draft);
     } catch (err) {
       log(`[facts] ingest ${what} failed: ${String(err)}`);
     }
@@ -253,6 +321,8 @@ export function startFactIngest(sink: { append(draft: FactDraft): Fact | null },
     dispose() {
       if (disposed) return;
       disposed = true;
+      timer?.cancel();
+      timer = null;
       for (const off of offs.splice(0)) {
         try { off(); } catch { /* best-effort */ }
       }

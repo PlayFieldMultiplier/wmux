@@ -14,12 +14,16 @@
 //     (workerReportNudge.ts submitToWorkerPane), which waits while someone
 //     types there and gives up after its deadline (`held`: nothing typed);
 //   - the rate: one message in flight per task, at least MIN_GAP_MS apart,
-//     at most PER_HOUR in a rolling hour (attempts count, delivered or not).
+//     at most PER_HOUR in a rolling hour (attempts count, delivered or not);
+//   - the origin: a message from a wake that carried outside text
+//     (wakeTaint.ts) goes only to a task recorded as started from outside
+//     text, so a task recorded clean only ever took clean instructions.
 // The text goes in after one fixed line naming the bot and the task, so the
 // worker can tell it from the owner's typing.
 
 import { BOT_WORKER_MESSAGE_LIMITS, type BotWorkerMessageResult } from '../../shared/bot';
 import type { LedgerEntry } from '../../shared/ledger';
+import { runningWakeTainted } from './wakeTaint';
 
 export const WORKER_MESSAGE_TASK_RE = /^wtask-[A-Za-z0-9_-]{1,80}$/;
 
@@ -36,6 +40,9 @@ export interface WorkerMessagePorts {
   refusal?: (botId: string) => string | null;
   /** The bot's display name. */
   botName: (botId: string) => string;
+  /** Whether the bot's running wake carried outside text (unknown: true).
+   *  Default: the wake taint tracker. */
+  senderTainted?: (botId: string) => boolean;
   now?: () => number;
 }
 
@@ -104,6 +111,18 @@ export async function deliverWorkerMessage(
   if (!row || origin?.kind !== 'bot' || origin.botId !== botId) return refuse('not_found', 'no task you started has this id');
   if (row.status !== 'working' && row.status !== 'input_required') {
     return refuse('not_running', `the task is ${row.status}: its worker is not taking messages (worker_resume restarts an ended task's worker)`);
+  }
+  // Read in the same tick as the task: the wake that sends is the one asking.
+  if (origin.tainted === false) {
+    let tainted = true;
+    try {
+      tainted = (ports.senderTainted ?? runningWakeTainted)(botId) !== false;
+    } catch {
+      tainted = true;
+    }
+    if (tainted) {
+      return refuse('not_now', 'this task was started from clean input, and this wake carried outside text: it takes messages only from a clean wake');
+    }
   }
   const now = (ports.now ?? Date.now)();
   const limited = limiter.take(taskId, now);
