@@ -309,3 +309,49 @@ describe('Codex 0.158 composer', () => {
     expect(codexComposerEmpty(await render(screen(placeholder, '← for agents · ? for shortcuts  Press enter to confirm')))).toBe(false);
   });
 });
+
+describe('Codex 0.162 scrolled-back transcript', () => {
+  // Captured live on codex-cli 0.162.1 at 40x27 (2026-10-13): a wheel-up during
+  // a turn leaves a `New activity · ↓ Back to bottom · esc` banner over the
+  // composer and swaps the shortcut hint under the footer.
+  const withUndimmed = (rows: string[], undimmed: string[]) => Object.assign(rows, { undimmed });
+  const empty = () => withUndimmed(
+    ['  19', ' New activity · ↓ Back to bottom · esc', '', '› Ask Codex to do anything', '',
+      '  GPT-6.1-Sol low · /private/tmp/claude…', '  New activity · enter/esc latest'],
+    ['  19', ' New activity · ↓ Back to bottom · esc', '', '›', '',
+      '  GPT-6.1-Sol low · /private/tmp/claude…', '                 enter/esc']);
+
+  it('reads the empty composer as empty while scrolled back', () => {
+    expect(codexComposerEmpty(empty())).toBe(true);
+    // A wide pane keeps the shortcut hint after it.
+    const wide = empty(); wide[6] = '  New activity · enter/esc latest · ? shortcuts';
+    expect(codexComposerEmpty(wide)).toBe(true);
+  });
+
+  it('still refuses a draft, which turns the hint into `esc latest`', () => {
+    const draft = withUndimmed(
+      ['  19', ' New activity · ↓ Back to bottom · esc', '', '› Reply with just the word PONG.', '',
+        '  GPT-6.1-Sol low · /private/tmp/claude…', '  New activity · esc latest'],
+      ['  19', ' New activity · ↓ Back to bottom · esc', '', '› Reply with just the word PONG.', '',
+        '  GPT-6.1-Sol low · /private/tmp/claude…', '                 esc']);
+    expect(codexComposerEmpty(draft)).toBe(false);
+    const unknown = empty(); unknown[6] = '  New activity · enter to confirm';
+    expect(codexComposerEmpty(unknown)).toBe(false);
+  });
+
+  it('sends into it when idle, and holds while the title spinner says Codex is still working', async () => {
+    const f = fixture(); f.state.slug = 'codex'; f.state.status = 'idle';
+    f.show(empty());
+    let title: { title: string; at: number } | null = { title: '⠼ Rust review | wmux', at: Date.now() };
+    f.deps.readTitle = () => title;
+    expect(await deliverChatPrompt('conversation-1', 'next', f.deps)).toBe('busy');
+    expect(f.write).not.toHaveBeenCalled();
+    // A spinner frame older than the refresh window proves nothing.
+    title = { title: '⠼ Rust review | wmux', at: Date.now() - 10_000 };
+    expect(await deliverChatPrompt('conversation-1', 'next', f.deps)).toBe('sent');
+    title = { title: 'Rust review | wmux', at: Date.now() };
+    expect(await deliverChatPrompt('conversation-1', 'again', f.deps)).toBe('sent');
+    expect(f.write).toHaveBeenNthCalledWith(1, '\x1b[200~next\x1b[201~');
+    expect(f.write).toHaveBeenNthCalledWith(2, '\r');
+  });
+});

@@ -1,6 +1,6 @@
 import { deliverScheduledPrompt, type ScheduledPromptDeliveryDeps } from '../sessionPromptDelivery';
 import type { ChatSendResult } from '../../shared/transcript/turnEvents';
-import { screenBlocksChatSend } from './chatScreenGate';
+import { screenBlocksChatSend, titleShowsRunningTurn } from './chatScreenGate';
 import { quoteImagePathForPty } from '../../shared/imagePaste';
 
 /** Screen rows, optionally with a dim-blanked copy of each row (same indexes). */
@@ -15,6 +15,8 @@ export interface ChatDeliveryDeps extends ScheduledPromptDeliveryDeps {
   idleOnly?: boolean;
   /** Why a `blocked` answer came from the screen: a dialog on it, or no composer at all. */
   onScreenHold?: (why: 'dialog' | 'no-composer') => void;
+  /** The pane's latest window title and when it was set (`at` 0 = never). */
+  readTitle?: () => { title: string; at: number } | null;
 }
 
 /** Keep transcript identity and approval checks inside the daemon, including
@@ -58,6 +60,15 @@ export async function deliverChatPrompt(
   // Codex's empty composer is a known placeholder. A draft, menu, picker or
   // unknown CLI layout cannot inherit permission from an idle status.
   if (initial.slug === 'codex' && !codexComposerEmpty(rows)) return 'unconfirmed';
+  // A hook's idle can arrive while Codex keeps working (compaction, a follow-up
+  // step), and a transcript scrolled back hides the `esc to interrupt` row. The
+  // spinner Codex keeps in the window title is the evidence that survives both:
+  // Enter now would land in the running turn, not start the next one.
+  if (initial.slug === 'codex' && initial.status !== 'running') {
+    let title: { title: string; at: number } | null = null;
+    try { title = deps.readTitle?.() ?? null; } catch { /* no title = no title evidence */ }
+    if (titleShowsRunningTurn(title, 'codex', Date.now())) return 'busy';
+  }
   let keyboardOwned = true;
   return deliverScheduledPrompt(initial.slug, initial.incarnationId, text, {
     ...deps,
@@ -191,10 +202,18 @@ export function codexComposerVisible(rows: ChatScreenRows | null): boolean {
  * `? for shortcut` when a right-aligned `⚠ N warning(s) · f2 to view` badge
  * shares the row. */
 const CODEX_SHORTCUT_HINT = /^\s*(?:← for agents · )?\? for shortcuts?(?:\s+⚠\s*\d+ warnings? · f2 to view)?$/;
+/** The hint Codex 0.162 draws in place of CODEX_SHORTCUT_HINT while its
+ * transcript is scrolled back and new output arrived: `New activity · enter/esc
+ * latest`, with ` · ? shortcuts` when the pane is wide enough. The `enter/`
+ * form is drawn only over an empty composer (a draft turns it into `esc
+ * latest`), and Enter then still submits a pasted prompt (captured live on
+ * 0.162.1 at 40x27, 2026-10-13). */
+const CODEX_SCROLLED_HINT = /^\s*New activity · enter\/esc latest(?: · \? shortcuts?)?(?:\s+⚠\s*\d+ warnings? · f2 to view)?$/;
 
-/** Codex 0.156–0.158 TUI; positive evidence, not an absence-of-errors heuristic.
+/** Codex 0.156–0.162 TUI; positive evidence, not an absence-of-errors heuristic.
  * Match only the bottom composer with its own model/cwd footer. 0.157 adds a
- * shortcut hint under the footer (CODEX_SHORTCUT_HINT); with `undimmed` rows a
+ * shortcut hint under the footer (CODEX_SHORTCUT_HINT, or CODEX_SCROLLED_HINT
+ * while the transcript is scrolled back); with `undimmed` rows a
  * prompt row holding only dim text (placeholder or suggestion) is empty, typed
  * text is not. */
 export function codexComposerEmpty(rows: ChatScreenRows | null): boolean {
@@ -205,7 +224,7 @@ export function codexComposerEmpty(rows: ChatScreenRows | null): boolean {
   if (at === undefined) return false;
   const empty = /^\s*› Ask Codex to do anything\s*$/.test(tail[at]) || /^\s*›$/.test(rows.undimmed?.[at]?.trimEnd() ?? '');
   if (!empty) return false;
-  const below = tail.slice(at + 1).filter(row => row.trim() && !CODEX_SHORTCUT_HINT.test(row));
+  const below = tail.slice(at + 1).filter(row => row.trim() && !CODEX_SHORTCUT_HINT.test(row) && !CODEX_SCROLLED_HINT.test(row));
   return below.length === 1 && /^\s*\S.+ · (?:[A-Za-z]:[\\/]|\/|~)/.test(below[0]);
 }
 

@@ -1,12 +1,80 @@
 import { sendRequest } from '../client';
 import { printResult, ensureOk, parseFlag, hasFlag } from '../utils';
 import { resolveSelfContext, getParentPidDefault, type SelfContext } from '../identity';
-import type { RpcResponse } from '../../shared/rpc';
+import type { RpcMethod, RpcResponse } from '../../shared/rpc';
+
+type Rpc = (method: RpcMethod, params?: Record<string, unknown>) => Promise<RpcResponse>;
+
+/** The explicit target: `--to` or its older spelling `--pane` (a ptyId or a `#pane` name). */
+export function explicitTarget(args: string[]): string | undefined {
+  return parseFlag(args, '--to') ?? parseFlag(args, '--pane');
+}
+
+/**
+ * A `#name` target (`#w1-2`, `#backend`, as pane_list's paneTag shows it) →
+ * that pane's terminal ptyId, through `pane.resolveName`. Anything else is a
+ * ptyId and passes through unchanged. Throws with wmux's own reason on a miss.
+ */
+export async function resolveExplicitTarget(value: string, rpc: Rpc): Promise<string> {
+  const trimmed = value.trim();
+  if (trimmed.charAt(0) !== '#') return value;
+  const response = await rpc('pane.resolveName', { name: trimmed });
+  if (!response.ok) throw new Error(response.error);
+  const res = response.result as { ok?: unknown; error?: unknown; target?: { ptyId?: unknown; paneTag?: unknown } } | null;
+  if (!res || res.ok !== true || !res.target) {
+    throw new Error(res && typeof res.error === 'string' ? res.error : `no pane named "${trimmed}"`);
+  }
+  if (typeof res.target.ptyId !== 'string' || !res.target.ptyId) {
+    throw new Error(`pane ${String(res.target.paneTag ?? trimmed)} has no local terminal`);
+  }
+  return res.target.ptyId;
+}
+
+/**
+ * The agent running in pane `ptyId`, from a `pane.list` result: its tag and
+ * agent name, or undefined when no agent is detected there.
+ */
+export function agentInPane(paneList: unknown, ptyId: string): { paneTag?: string; agentName: string } | undefined {
+  const panes = (paneList as { panes?: unknown } | null)?.panes;
+  if (!Array.isArray(panes)) return undefined;
+  for (const pane of panes as Array<{ paneTag?: unknown; agents?: unknown }>) {
+    if (!Array.isArray(pane?.agents)) continue;
+    const agent = (pane.agents as Array<{ ptyId?: unknown; agentName?: unknown }>).find((a) => a?.ptyId === ptyId);
+    if (agent && typeof agent.agentName === 'string' && agent.agentName) {
+      return { ...(typeof pane.paneTag === 'string' ? { paneTag: pane.paneTag } : {}), agentName: agent.agentName };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A send or key that resolved to the caller's OWN pane (no `--to`/`--pane`/
+ * `--active`) while an agent runs there types into that agent's input. When
+ * the caller is that agent (its shell tool runs `wmux send`), the text never
+ * reaches another pane. Returns the warning to print, or undefined. Best
+ * effort: an unanswered pane.list prints nothing.
+ */
+export async function selfTargetWarning(target: Record<string, unknown>, rpc: Rpc): Promise<string | undefined> {
+  if (typeof target.ptyId !== 'string' || !target.ptyId) return undefined;
+  let response: RpcResponse;
+  try {
+    response = await rpc('pane.list', typeof target.workspaceId === 'string' ? { workspaceId: target.workspaceId } : {});
+  } catch {
+    return undefined;
+  }
+  if (!response.ok) return undefined;
+  const agent = agentInPane(response.result, target.ptyId);
+  if (!agent) return undefined;
+  const pane = agent.paneTag ? `pane ${agent.paneTag}` : 'this pane';
+  return `Warning: no target given, so this went to your own ${pane}, where ${agent.agentName} is running: ` +
+    'it was typed into that agent\'s input, not into any other pane. ' +
+    'To reach another pane, pass --to <#pane|ptyId> (see `wmux list-panes`).';
+}
 
 /**
  * Resolve the routing params for a terminal-IO command.
  *
- *   --pane <ptyId>  → explicit target (no identity lookup)
+ *   --to <#pane|ptyId> (or --pane) → explicit target (no identity lookup)
  *   --active        → legacy behavior: whatever pane is focused in the UI
  *   (default)       → self-targeting: the pane whose shell spawned this CLI,
  *                     resolved via the verified PID-map walk. Falls back to
@@ -30,8 +98,8 @@ export async function resolveTargetParams(
   args: string[],
   mode: 'require-pty' | 'workspace-scope-ok',
 ): Promise<Record<string, unknown>> {
-  const explicitPane = parseFlag(args, '--pane');
-  if (explicitPane) return { ptyId: explicitPane };
+  const explicitPane = explicitTarget(args);
+  if (explicitPane) return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
   if (hasFlag(args, '--active')) return {};
 
   const ctx: SelfContext = await resolveSelfContext({
@@ -52,7 +120,7 @@ export function stripInputFlags(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '--pane') {
+    if (a === '--pane' || a === '--to') {
       i++; // skip value
       continue;
     }
@@ -60,6 +128,16 @@ export function stripInputFlags(args: string[]): string[] {
     out.push(a);
   }
   return out;
+}
+
+/** resolveTargetParams for a command: an unresolvable `#pane` exits with wmux's reason. */
+async function targetOrExit(args: string[], mode: 'require-pty' | 'workspace-scope-ok' = 'require-pty'): Promise<Record<string, unknown>> {
+  try {
+    return await resolveTargetParams(args, mode);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
 }
 
 export async function handleInput(
@@ -76,7 +154,7 @@ export async function handleInput(
         console.error('Error: send requires <text>');
         process.exit(1);
       }
-      const target = await resolveTargetParams(args, 'require-pty');
+      const target = await targetOrExit(args);
       const params: Record<string, unknown> = { text, ...target };
       if (hasFlag(args, '--submit')) params.submit = true;
       if (hasFlag(args, '--raw')) params.raw = true;
@@ -87,6 +165,10 @@ export async function handleInput(
         ensureOk(response);
         console.log(params.submit ? 'Text sent and submitted.' : 'Text sent.');
       }
+      if (!explicitTarget(args) && !hasFlag(args, '--active')) {
+        const warning = await selfTargetWarning(target, sendRequest);
+        if (warning) console.error(warning);
+      }
       break;
     }
 
@@ -96,7 +178,7 @@ export async function handleInput(
         console.error('Error: send-key requires <keystroke>');
         process.exit(1);
       }
-      const target = await resolveTargetParams(args, 'require-pty');
+      const target = await targetOrExit(args);
       response = await sendRequest('input.sendKey', { key, ...target });
       if (jsonMode) {
         printResult(response);
@@ -104,11 +186,15 @@ export async function handleInput(
         ensureOk(response);
         console.log(`Key sent: ${key}`);
       }
+      if (!explicitTarget(args) && !hasFlag(args, '--active')) {
+        const warning = await selfTargetWarning(target, sendRequest);
+        if (warning) console.error(warning);
+      }
       break;
     }
 
     case 'read-screen': {
-      const target = await resolveTargetParams(args, 'workspace-scope-ok');
+      const target = await targetOrExit(args, 'workspace-scope-ok');
       const params: Record<string, unknown> = { ...target };
       const tail = parseFlag(args, '--tail');
       if (tail && Number.isFinite(parseInt(tail, 10))) {

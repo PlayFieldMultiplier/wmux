@@ -52,13 +52,18 @@ PANE COMMANDS
   split [--direction right|down]    Split the active pane (default: right)
 
 INPUT COMMANDS
-  send <text> [--submit]            Send text to your own pane (--submit presses Enter)
-  send-key <keystroke>              Send a key (e.g. Enter, ctrl-c, Tab)
-  read-screen [--tail <n>]          Read the current terminal screen content
+  send <text> [--submit] [--to <#pane|ptyId>]
+                                    Type text into a pane (--submit presses Enter)
+  send-key <keystroke> [--to <#pane|ptyId>]
+                                    Send a key (e.g. Enter, ctrl-c, Tab)
+  read-screen [--tail <n>] [--to <#pane|ptyId>]
+                                    Read the current terminal screen content
 
-  Inside a wmux pane these target the pane you ran the command from
-  (verified PID-map identity). Options: --pane <ptyId> to target another
-  pane explicitly, --active to target the UI-focused pane instead.
+  Without --to these target the pane you ran the command from (verified
+  PID-map identity). An agent running "wmux send" from its own shell types
+  into its OWN input that way: to reach another pane, name it with
+  --to (a #name as "wmux list-panes" shows it, e.g. #w1-2, or a ptyId).
+  --pane is the older spelling of --to; --active targets the UI-focused pane.
 
 BROWSER PANE
   open <url> [--workspace <id>]     Open/reuse a browser pane at <url>
@@ -208,6 +213,7 @@ EXAMPLES
   wmux list-workspaces
   wmux new-workspace --name dev
   wmux send "echo hello" --submit
+  wmux send "run the tests" --submit --to #w1-2
   wmux notify "Done" "Build finished"
   wmux open http://localhost:3000
   wmux identify --json
