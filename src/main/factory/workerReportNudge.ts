@@ -89,6 +89,8 @@ export function installReportNudge(ports: ReportNudgePorts): ReportNudger {
       return;
     }
     if (sentTo !== ptyId || surfaced.has(taskId)) return;
+    // Held while the write runs (a turn end meanwhile moves nothing twice);
+    // kept only once it landed, so a failed write is tried at the next one.
     surfaced.add(taskId);
     const r = await ports.ledger.update({
       id: taskId,
@@ -100,7 +102,11 @@ export function installReportNudge(ports: ReportNudgePorts): ReportNudger {
       log(`[factory] report nudge: ${taskId} not moved: ${String(err)}`);
       return null;
     });
-    if (r?.ok && !r.noop) note(row, 'Worker still has not reported its task', 'The task needs a look: the worker answered twice without recording a result. It keeps running.');
+    if (!r?.ok) {
+      surfaced.delete(taskId);
+      return;
+    }
+    if (!r.noop) note(row, 'Worker still has not reported its task', 'The task needs a look: the worker answered twice without recording a result. It keeps running.');
   };
 
   return {

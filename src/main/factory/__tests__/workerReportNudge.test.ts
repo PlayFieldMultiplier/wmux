@@ -98,3 +98,27 @@ describe('report nudge overlap', () => {
     expect(slow).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('report nudge escalation retry (review fixes, PR #2164)', () => {
+  it('a move to input_required that did not land is tried again at the next turn end', async () => {
+    const t = setup(row());
+    t.stop();
+    await t.flush();
+    t.update.mockResolvedValueOnce({ ok: false, error: 'persist_failed', message: 'disk' } as never);
+    t.stop();
+    await t.flush();
+    expect(t.update).toHaveBeenCalledTimes(1);
+    expect(t.note).toHaveBeenCalledTimes(1); // only the reminder card
+    t.update.mockRejectedValueOnce(new Error('daemon gone'));
+    t.stop();
+    await t.flush();
+    expect(t.update).toHaveBeenCalledTimes(2);
+    t.stop();
+    await t.flush();
+    expect(t.update).toHaveBeenCalledTimes(3);
+    expect(t.note).toHaveBeenCalledTimes(2);
+    t.stop();
+    await t.flush();
+    expect(t.update).toHaveBeenCalledTimes(3);
+  });
+});
