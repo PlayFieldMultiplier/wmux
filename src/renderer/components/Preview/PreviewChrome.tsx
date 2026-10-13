@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
 import { HIT_TARGET_24 } from '../hitArea';
@@ -36,9 +36,12 @@ export function ZoomControls({ zoom, fitted, onZoom, onFit }: {
 }) {
   const t = useT();
   const [draft, setDraft] = useState<string | null>(null);
+  // Escape blurs the field; the blur must not then apply what was typed.
+  const cancelled = useRef(false);
   useEffect(() => { setDraft(null); }, [zoom]);
   const commit = () => {
-    const next = draft === null ? null : parseZoomInput(draft);
+    const next = draft === null || cancelled.current ? null : parseZoomInput(draft);
+    cancelled.current = false;
     setDraft(null);
     if (next !== null) onZoom(next);
   };
@@ -57,7 +60,7 @@ export function ZoomControls({ zoom, fitted, onZoom, onFit }: {
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); commit(); e.currentTarget.blur(); }
-          if (e.key === 'Escape') { e.preventDefault(); setDraft(null); e.currentTarget.blur(); }
+          if (e.key === 'Escape') { e.preventDefault(); cancelled.current = true; e.currentTarget.blur(); }
         }}
         onContextMenu={(e) => { e.preventDefault(); onZoom(1); }}
         title={t('preview.zoomField')}

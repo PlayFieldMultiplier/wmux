@@ -46,7 +46,9 @@ function extensionOf(filePath: string): string {
 
 /** The preview type for a path, or null when it opens as text. */
 export function previewTypeOf(filePath: string): PreviewType | null {
-  return PREVIEW_TYPES[extensionOf(filePath)] ?? null;
+  const ext = extensionOf(filePath);
+  // Own keys only: `x.constructor` must not find Object.prototype.constructor.
+  return Object.hasOwn(PREVIEW_TYPES, ext) ? PREVIEW_TYPES[ext] : null;
 }
 
 export function isPreviewablePath(filePath: string): boolean {

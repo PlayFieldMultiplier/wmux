@@ -194,12 +194,64 @@ describe('following the file', () => {
     if (!opened.ok) throw new Error('open failed');
     expect(previewStatsForTests()).toMatchObject({ tokens: 1, watchedDirs: 1, polling: true });
 
-    s.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
-    s.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true });
+    // A blocked navigation (a file dropped on the window) commits nothing.
+    s.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
     expect(previewStatsForTests().tokens).toBe(1);
 
-    s.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+    s.emit('did-navigate');
     expect(previewStatsForTests()).toEqual({ tokens: 0, watchedDirs: 0, polling: false });
     expect((await get(previewUrl(opened.token, file, 1))).status).toBe(404);
+  });
+
+  it('drops an open that was still checking when the page reloaded', async () => {
+    const file = path.join(dir, 'slow.png');
+    fs.writeFileSync(file, PNG);
+    const s = sender();
+    const pending = openPreview(asSender(s), file);
+    s.emit('did-navigate');
+    expect(await pending).toEqual({ ok: false, reason: 'missing' });
+    expect(previewStatsForTests().tokens).toBe(0);
+  });
+
+  it('notices a swap that keeps the size and mtime', async () => {
+    const file = path.join(dir, 'same.png');
+    fs.writeFileSync(file, PNG);
+    const s = sender();
+    const opened = await openPreview(asSender(s), file);
+    if (!opened.ok) throw new Error('open failed');
+    const st = fs.statSync(file);
+    const twin = path.join(dir, 'twin.tmp');
+    fs.writeFileSync(twin, Buffer.from(PNG));
+    fs.utimesSync(twin, st.atime, st.mtime);
+    fs.renameSync(twin, file);
+    await waitFor(() => s.sent.length >= 1);
+    expect(s.sent[0]).toMatchObject({ exists: true, complete: true, version: 2 });
+  });
+
+  it('shows a stable file that never gets its end marker after a grace period', async () => {
+    const file = path.join(dir, 'motion.png');
+    fs.writeFileSync(file, Buffer.concat([PNG, Buffer.from('trailing data after IEND')]));
+    const s = sender();
+    const opened = await openPreview(asSender(s), file);
+    expect(opened).toMatchObject({ ok: true, complete: false });
+    await waitFor(() => s.sent.length >= 1, 8000);
+    expect(s.sent[0]).toMatchObject({ exists: true, complete: true, version: 2 });
+  }, 12000);
+});
+
+describe('types follow the real file', () => {
+  it('types a symlink by its target, and never matches Object.prototype names', async () => {
+    const svg = path.join(dir, 'real.svg');
+    fs.writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>');
+    const alias = path.join(dir, 'alias.png');
+    fs.symlinkSync(svg, alias);
+    const opened = await openPreview(asSender(sender()), alias);
+    expect(opened).toMatchObject({ ok: true, mime: 'image/svg+xml' });
+    if (!opened.ok) return;
+    expect((await get(previewUrl(opened.token, alias, 1))).headers.get('content-type')).toBe('image/svg+xml');
+
+    const odd = path.join(dir, 'x.constructor');
+    fs.writeFileSync(odd, 'x');
+    expect(await openPreview(asSender(sender()), odd)).toEqual({ ok: false, reason: 'unsupported' });
   });
 });

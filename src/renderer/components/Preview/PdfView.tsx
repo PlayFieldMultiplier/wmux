@@ -16,11 +16,19 @@ let pdfjsPromise: Promise<PdfJs> | null = null;
  *  and data files are same-origin files under `pdfjs/` (vite.renderer.config). */
 function loadPdfJs(): Promise<PdfJs> {
   pdfjsPromise ??= import('pdfjs-dist').then((pdfjs) => {
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfjsAsset('build/pdf.worker.min.mjs');
+    // Hand pdf.js a worker we start ourselves. Given only a URL, it judges the
+    // packaged file:// page (origin "null") cross-origin and wraps the worker
+    // in a blob: URL, which the CSP refuses, so every PDF would parse on the
+    // main thread beside the terminals. One worker serves every document.
+    pdfjs.GlobalWorkerOptions.workerPort = new Worker(pdfjsAsset('build/pdf.worker.min.mjs'), { type: 'module' });
     return pdfjs;
   });
   return pdfjsPromise;
 }
+
+/** Largest canvas a page renders into; past it the page renders at a lower
+ *  resolution and is scaled up, instead of asking for gigabytes at 2000%. */
+const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 
 function pdfjsAsset(rel: string): string {
   return new URL(`pdfjs/${rel}`, document.baseURI).toString();
@@ -288,10 +296,15 @@ function PdfPage({ doc, index, top, left, width, height, scale, root }: {
     if (!near || !canvas) return;
     let cancelled = false;
     let task: RenderTask | null = null;
+    let rendered: { cleanup: () => boolean } | null = null;
     doc.getPage(index + 1).then((page) => {
       if (cancelled) return;
+      rendered = page;
       const dpr = window.devicePixelRatio || 1;
-      const viewport = page.getViewport({ scale: scale * dpr });
+      const base = page.getViewport({ scale: 1 });
+      const wanted = scale * dpr;
+      const cap = Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, base.width * base.height));
+      const viewport = page.getViewport({ scale: Math.min(wanted, cap) });
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
       task = page.render({ canvas, viewport });
@@ -300,6 +313,9 @@ function PdfPage({ doc, index, top, left, width, height, scale, root }: {
     return () => {
       cancelled = true;
       task?.cancel();
+      // Off screen (or re-rendering at a new zoom): let pdf.js drop the page's
+      // decoded images, so a long scanned PDF does not pile up memory.
+      rendered?.cleanup();
     };
   }, [doc, index, scale, near]);
 

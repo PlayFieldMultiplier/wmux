@@ -55,6 +55,8 @@ const SETTLE_MS = 150;
 const SETTLE_MAX_ROUNDS = 40;
 /** Backstop for watchers a platform silently drops (macOS on a removed dir). */
 const POLL_MS = 2000;
+/** How long a stable file may lack its end marker before it is shown anyway. */
+const INCOMPLETE_GRACE_MS = 3000;
 const REWATCH_MIN_MS = 500;
 const REWATCH_MAX_MS = 8000;
 
@@ -67,6 +69,10 @@ interface Entry {
   mime: string;
   sender: WebContents;
   state: PreviewFileState;
+  /** The last check that was reported, for change detection. */
+  last: FileStat;
+  /** When the file was first seen stable but without its end marker. */
+  incompleteSince: number | null;
   settling: boolean;
 }
 
@@ -80,12 +86,25 @@ interface DirWatch {
 const entries = new Map<string, Entry>();
 const senderTokens = new Map<number, Set<string>>();
 const hookedSenders = new WeakSet<WebContents>();
+/** Bumps whenever a renderer's tokens are dropped, so an open that was in
+ *  flight across a reload does not register for the page that is gone. */
+const senderGeneration = new Map<number, number>();
 const dirWatches = new Map<string, DirWatch>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-type FileStat = Omit<PreviewFileState, 'version'>;
+/** What a check of the file found. Identity (dev/ino/ctime) catches a swap
+ *  that keeps the size and mtime, e.g. `cp -p` or an atomic rename. */
+interface FileStat {
+  exists: boolean;
+  complete: boolean;
+  size: number;
+  mtimeMs: number;
+  dev: number;
+  ino: number;
+  ctimeMs: number;
+}
 
-const MISSING: FileStat = { exists: false, complete: false, size: 0, mtimeMs: 0 };
+const MISSING: FileStat = { exists: false, complete: false, size: 0, mtimeMs: 0, dev: 0, ino: 0, ctimeMs: 0 };
 
 async function readTail(canonical: string, size: number): Promise<Uint8Array> {
   const length = Math.min(size, PREVIEW_TAIL_BYTES);
@@ -107,14 +126,22 @@ async function statFile(requestedPath: string): Promise<FileStat> {
     const st = await fs.promises.stat(canonical);
     if (!st.isFile()) return MISSING;
     const complete = looksComplete(canonical, await readTail(canonical, st.size));
-    return { exists: true, complete, size: st.size, mtimeMs: st.mtimeMs };
+    return { exists: true, complete, size: st.size, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino, ctimeMs: st.ctimeMs };
   } catch {
     return MISSING;
   }
 }
 
 function sameStat(a: FileStat, b: FileStat): boolean {
-  return a.exists === b.exists && a.complete === b.complete && a.size === b.size && a.mtimeMs === b.mtimeMs;
+  return a.exists === b.exists && a.complete === b.complete && a.size === b.size && a.mtimeMs === b.mtimeMs
+    && a.dev === b.dev && a.ino === b.ino && a.ctimeMs === b.ctimeMs;
+}
+
+function publish(entry: Entry, stat: FileStat, complete: boolean): void {
+  entry.state = { exists: stat.exists, complete, size: stat.size, mtimeMs: stat.mtimeMs, version: entry.state.version + 1 };
+  if (entry.sender.isDestroyed()) return;
+  const event: PreviewChangedEvent = { token: entry.token, ...entry.state };
+  entry.sender.send(IPC.PREVIEW_CHANGED, event);
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -130,12 +157,20 @@ async function settle(entry: Entry): Promise<void> {
       if (!entries.has(entry.token)) return;
       const next = await statFile(entry.requestedPath);
       if (sameStat(prev, next)) {
-        if (sameStat(entry.state, next)) return;
-        entry.state = { ...next, version: entry.state.version + 1 };
-        if (!entry.sender.isDestroyed()) {
-          const event: PreviewChangedEvent = { token: entry.token, ...entry.state };
-          entry.sender.send(IPC.PREVIEW_CHANGED, event);
+        if (sameStat(entry.last, next)) {
+          // A file whose end marker never shows up but which has stopped
+          // changing is taken as final (a format with data after its marker):
+          // the view's decoder has the last word on it.
+          if (next.exists && !entry.state.complete && entry.incompleteSince !== null
+            && Date.now() - entry.incompleteSince >= INCOMPLETE_GRACE_MS) {
+            entry.incompleteSince = null;
+            publish(entry, next, true);
+          }
+          return;
         }
+        entry.last = next;
+        entry.incompleteSince = next.exists && !next.complete ? Date.now() : null;
+        publish(entry, next, next.complete);
         return;
       }
       prev = next;
@@ -226,6 +261,7 @@ function release(token: string): void {
 }
 
 function releaseSender(senderId: number): void {
+  senderGeneration.set(senderId, (senderGeneration.get(senderId) ?? 0) + 1);
   const tokens = senderTokens.get(senderId);
   if (!tokens) return;
   for (const token of [...tokens]) release(token);
@@ -241,11 +277,15 @@ function trackSender(sender: WebContents): Set<string> {
   if (hookedSenders.has(sender)) return tokens;
   hookedSenders.add(sender);
   const senderId = sender.id;
-  // A reload or a new page starts a renderer that holds none of these tokens.
-  sender.on('did-start-navigation', (details) => {
-    if (details.isMainFrame && !details.isSameDocument) releaseSender(senderId);
+  // A committed reload or new page starts a renderer that holds none of these
+  // tokens. `did-navigate` fires only for a main-frame, cross-document commit,
+  // so a navigation the window blocks (a file dropped on it) changes nothing.
+  sender.on('did-navigate', () => releaseSender(senderId));
+  sender.on('render-process-gone', () => releaseSender(senderId));
+  sender.once('destroyed', () => {
+    releaseSender(senderId);
+    senderGeneration.delete(senderId);
   });
-  sender.once('destroyed', () => releaseSender(senderId));
   return tokens;
 }
 
@@ -256,13 +296,16 @@ export async function openPreview(sender: WebContents, filePath: unknown): Promi
   if (!path.isAbsolute(filePath)) return { ok: false, reason: 'unsupported' };
   const requested = previewTypeOf(filePath);
   if (!requested) return { ok: false, reason: 'unsupported' };
+  trackSender(sender);
+  const generation = senderGeneration.get(sender.id) ?? 0;
   if (isSensitivePath(path.resolve(filePath))) return { ok: false, reason: 'denied' };
   const canonical = await resolveAccessiblePath(filePath);
   if (!canonical) {
     return { ok: false, reason: fs.existsSync(filePath) ? 'denied' : 'missing' };
   }
-  // A symlink is judged on what it points at.
-  if (previewTypeOf(canonical)?.kind !== requested.kind) return { ok: false, reason: 'unsupported' };
+  // A symlink is judged, and typed, by what it points at.
+  const actual = previewTypeOf(canonical);
+  if (actual?.kind !== requested.kind) return { ok: false, reason: 'unsupported' };
   let st: fs.Stats;
   try {
     st = await fs.promises.stat(canonical);
@@ -277,6 +320,10 @@ export async function openPreview(sender: WebContents, filePath: unknown): Promi
   } catch {
     return { ok: false, reason: 'missing' };
   }
+  // The page that asked may have reloaded or closed while we checked.
+  if (sender.isDestroyed() || (senderGeneration.get(sender.id) ?? 0) !== generation) {
+    return { ok: false, reason: 'missing' };
+  }
 
   const tokens = trackSender(sender);
   const dir = path.dirname(canonical);
@@ -289,10 +336,12 @@ export async function openPreview(sender: WebContents, filePath: unknown): Promi
     requestedPath: filePath,
     dir,
     baseName: path.basename(canonical),
-    kind: requested.kind,
-    mime: requested.mime,
+    kind: actual.kind,
+    mime: actual.mime,
     sender,
     state: { exists: true, complete, size: st.size, mtimeMs: st.mtimeMs, version: 1 },
+    last: { exists: true, complete, size: st.size, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino, ctimeMs: st.ctimeMs },
+    incompleteSince: complete ? null : Date.now(),
     settling: false,
   };
   entries.set(token, entry);
@@ -330,19 +379,29 @@ export async function servePreview(request: Request): Promise<Response> {
   if (!entry) return notFound();
 
   const canonical = await resolveAccessiblePath(entry.requestedPath);
-  if (!canonical || previewTypeOf(canonical)?.kind !== entry.kind) return notFound();
+  const type = canonical ? previewTypeOf(canonical) : null;
+  if (!canonical || type?.kind !== entry.kind) return notFound();
 
   let handle: fs.promises.FileHandle;
   try {
     // O_NONBLOCK: opening a FIFO for reading must not wait for a writer.
-    handle = await fs.promises.open(canonical, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+    // O_NOFOLLOW: the checked path is canonical, so a symlink here was swapped in.
+    handle = await fs.promises.open(
+      canonical,
+      fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0),
+    );
   } catch {
     return notFound();
   }
   let size: number;
   try {
     const st = await handle.stat();
-    if (!st.isFile() || st.size > PREVIEW_MAX_BYTES[entry.kind]) {
+    // A folder above the file may have been swapped between the check and the
+    // open: the handle must be the very file a fresh check lands on.
+    const again = await resolveAccessiblePath(entry.requestedPath);
+    const atPath = again === canonical ? await fs.promises.stat(again) : null;
+    if (!st.isFile() || st.size > PREVIEW_MAX_BYTES[entry.kind]
+      || !atPath || atPath.dev !== st.dev || atPath.ino !== st.ino) {
       await handle.close();
       return notFound();
     }
@@ -353,7 +412,7 @@ export async function servePreview(request: Request): Promise<Response> {
   }
 
   const headers = new Headers({
-    'content-type': entry.mime,
+    'content-type': type.mime,
     'content-length': String(size),
     'x-content-type-options': 'nosniff',
     'cache-control': 'no-store',
