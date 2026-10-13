@@ -82,11 +82,13 @@ export const freshLaneFacts = {
   },
 };
 
-/** The squash merge of an effect, with the subject GitHub would give it. */
-export async function squashMergeEffect(e: MergeEffect): Promise<PrWriteResult> {
+/** The squash merge of an effect, with the subject GitHub would give it.
+ *  `authorize` is the executor's gate, asked by the merge right before it
+ *  writes. */
+export async function squashMergeEffect(e: MergeEffect, authorize: () => string | null): Promise<PrWriteResult> {
   // The subject GitHub would give a squash: the title and the number.
   const head = await ghPrReviewService.checks(e.repoPath, e.repoKey, e.prNumber, true);
   return ghPrReviewService.merge(e.repoPath, e.repoKey, e.prNumber, {
     expectHead: e.expectHead, subject: moaMergeSubject(head.ok ? head.value.head.title : '', e.prNumber), body: '',
-  });
+  }, authorize);
 }

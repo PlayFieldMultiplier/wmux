@@ -120,6 +120,23 @@ describe('merge', () => {
     expect(await failing.svc.merge('/r', KEY, 7, { expectHead: SHA, subject: 's', body: '' })).toMatchObject({ ok: false, code: 'blocked', reason: 'checks-failing' });
     expect(gh(failing.calls, 'pr', 'merge')).toHaveLength(0);
   });
+
+  it('asks the gate after its last read and writes nothing when the gate refuses', async () => {
+    const { svc, calls } = make(okState());
+    const readsAtGate: number[] = [];
+    const gate = vi.fn(() => { readsAtGate.push(calls.length); return 'revoked'; });
+    const r = await svc.merge('/r', KEY, 7, { expectHead: SHA, subject: 's', body: '' }, gate);
+    expect(r).toMatchObject({ ok: false, code: 'invalid' });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(readsAtGate).toEqual([gh(calls, 'pr', 'view').length]);
+    expect(gh(calls, 'pr', 'merge')).toHaveLength(0);
+  });
+
+  it('merges when the gate allows it', async () => {
+    const { svc, calls } = make(okState());
+    expect(await svc.merge('/r', KEY, 7, { expectHead: SHA, subject: 's', body: '' }, () => null)).toMatchObject({ ok: true });
+    expect(gh(calls, 'pr', 'merge')).toHaveLength(1);
+  });
 });
 
 describe('updateBranch', () => {

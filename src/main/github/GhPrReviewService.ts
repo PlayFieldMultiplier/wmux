@@ -582,8 +582,10 @@ export class GhPrReviewService {
    * Squash-merge with the subject and body given (an empty body stays empty:
    * no commit list, no trailers). Refused when the head is not the one shown,
    * or when the PR cannot merge now; GitHub is also told the head to expect.
+   * `authorize`, when given, is asked last, right before the merge is sent:
+   * a reason from it means nothing is written.
    */
-  merge(repoPath: string, key: string, number: number, req: PrMergeRequest): Promise<PrWriteResult> {
+  merge(repoPath: string, key: string, number: number, req: PrMergeRequest, authorize?: () => string | null): Promise<PrWriteResult> {
     return this.write(async () => {
       const state = await this.readState(repoPath, key, number);
       if (state.head.headRefOid !== req.expectHead) {
@@ -591,6 +593,8 @@ export class GhPrReviewService {
       }
       const block: MergeBlock | null = mergeBlock(state.head, state.checks);
       if (block) return { ok: false, code: 'blocked', reason: block, message: `the pull request cannot be merged now (${block})` };
+      const denied = authorize?.() ?? null;
+      if (denied) return { ok: false, code: 'invalid', message: `the merge is not authorized now (${denied})` };
       const { host } = this.repo(key);
       await this.gh(host, [
         'pr', 'merge', String(number), '--repo', key, '--squash',
