@@ -204,6 +204,8 @@ export function openUrlInBrowserPaneImpl(
       const { paneId } = existing;
       let surface = existing.surface;
       if (opts.newTab) {
+        // The tab the user is on, which need not be the first browser tab.
+        const priorActiveId = findLeafById(ws.rootPane, paneId)?.activeSurfaceId ?? surface.id;
         // The new tab keeps the pane's session unless the caller named one.
         state.addBrowserSurface(paneId, targetUrl, opts.partition ?? surface.browserPartition, targetWsId);
         const ws2 = deps.getState().workspaces.find((w) => w.id === targetWsId);
@@ -214,7 +216,7 @@ export function openUrlInBrowserPaneImpl(
           // A background tab: an active new tab's webview takes keyboard focus
           // once it loads, and focusPane:false means the user keeps typing in
           // their terminal (`wmux open --new`).
-          state.setActiveSurface(paneId, surface.id, targetWsId);
+          state.setActiveSurface(paneId, priorActiveId, targetWsId);
           return {
             ok: true,
             surfaceId: added.id,

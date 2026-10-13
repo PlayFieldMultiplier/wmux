@@ -406,6 +406,21 @@ describe('openUrlInBrowserPaneImpl', () => {
       expect(leaf.activeSurfaceId).toBe(oldId);
     });
 
+    it('newTab with focusPane:false keeps the tab the user is on, not the first one', () => {
+      const { deps } = makeDeps(store);
+      const rootId = activeWs(store).rootPane.id;
+      store.getState().addBrowserSurface(rootId, 'https://first.example');
+      store.getState().addBrowserSurface(rootId, 'https://second.example');
+      const second = getLeafPanes(activeWs(store).rootPane)[0].surfaces
+        .find((s) => s.browserUrl === 'https://second.example')!;
+      expect(getLeafPanes(activeWs(store).rootPane)[0].activeSurfaceId).toBe(second.id);
+
+      const result = openUrlInBrowserPaneImpl('http://localhost:3000', { newTab: true, focusPane: false }, deps);
+
+      expect(result.ok).toBe(true);
+      expect(getLeafPanes(activeWs(store).rootPane)[0].activeSurfaceId).toBe(second.id);
+    });
+
     it('newTab with no browser pane yet splits one as usual', () => {
       const { deps } = makeDeps(store);
       const result = openUrlInBrowserPaneImpl('http://localhost:3000', { newTab: true }, deps);
