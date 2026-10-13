@@ -191,8 +191,10 @@ export class ReclaimedWorkers {
   }
 
   put(rec: ReclaimedWorker): Promise<void> {
+    const prior = this.records.get(rec.taskId);
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
+    if (prior && prior.state !== rec.state) this.notifyState(rec, prior.state, rec.state, rec.at);
     // Oldest first, never a live worker (resumed, or not yet stopped).
     for (const [id, r] of this.records) {
       if (this.records.size <= RECLAIMED_WORKERS_MAX) break;
@@ -210,17 +212,31 @@ export class ReclaimedWorkers {
    *  counts a resumed worker's run from these). */
   onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number) => void) | null = null;
 
+  private notifyState(r: ReclaimedWorker, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number): void {
+    try {
+      this.onStateChange?.({ taskId: r.taskId, botId: r.botId }, from, to, at);
+    } catch (err) {
+      console.warn(`[factory] reclaimed worker state listener threw: ${String(err)}`);
+    }
+  }
+
+  /** The task's ended row moved to another workspace (a system write that
+   *  bumps its rev, not a new end): the end this record was made for is now
+   *  at `to`. Only when it was made for `from`. */
+  advanceEndRev(taskId: string, from: number, to: number): void {
+    const r = this.records.get(taskId);
+    if (!r || r.endRev !== from || to === from) return;
+    r.endRev = to;
+    void this.persister.schedule().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
+  }
+
   setState(taskId: string, state: ReclaimedWorker['state'], at: number): boolean {
     const r = this.records.get(taskId);
     if (!r || r.state === state) return false;
     const from = r.state;
     r.state = state;
     r.at = at;
-    try {
-      this.onStateChange?.({ taskId, botId: r.botId }, from, state, at);
-    } catch (err) {
-      console.warn(`[factory] reclaimed worker state listener threw: ${String(err)}`);
-    }
+    this.notifyState(r, from, state, at);
     void this.persister.schedule().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
     return true;
   }
@@ -515,10 +531,11 @@ export interface WorkerResumePorts {
    *  as its launch, through the bot worker spawn. Absent: a resume whose pane
    *  is gone is refused. */
   respawn?: (input: WorkerRespawnInput) => Promise<{ ok: true; workspaceId: string; sessionId: string } | { ok: false; message: string }>;
-  /** Name the reopened workspace as the task's in its ledger row (a system
-   *  write), so the worker there reads and moves its own task; false when
-   *  it could not be written. */
-  rebindTask?: (taskId: string, workspaceId: string) => Promise<boolean>;
+  /** Name the worker's workspace as the task's in its ledger row (a system
+   *  write, nothing when it names it already), so the worker there reads and
+   *  moves its own task: the row's rev before and after, or null when it
+   *  could not be written. */
+  rebindTask?: (taskId: string, workspaceId: string) => Promise<{ from: number; to: number } | null>;
   /** Whether a folder exists (default: fs). */
   folderExists?: (dir: string) => boolean;
   note?: (workspaceId: string, threadId: ThreadId, title: string, body: string) => void;
@@ -662,6 +679,11 @@ async function resumeOnce(
   if (live.agentProcessAlive !== false && live.commandRunning !== false) {
     return refuse('unknown_state', 'what runs in the worker\'s pane cannot be told; open it and resume from there');
   }
+  // A pane a resume opened earlier whose task was not moved to it then.
+  if (!(await rebindTaskTo(ports, rec.taskId, workerWorkspaceOf(rec)))) {
+    return refuse('not_reopened', 'the task could not be moved to the worker\'s pane; try again');
+  }
+  if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   let typed = false;
   try {
     typed = ports.typeLine(pane.sessionId, line);
@@ -717,8 +739,12 @@ async function respawnOnce(
   await ports.store.movePane(rec.taskId, r.workspaceId, { ...pane, sessionId: r.sessionId }).catch((err) => {
     console.warn(`[factory] reclaimed workers not written: ${String(err)}`);
   });
-  const rebound = await (ports.rebindTask?.(rec.taskId, r.workspaceId) ?? Promise.resolve(true)).catch(() => false);
-  if (!rebound) console.warn(`[factory] task ${rec.taskId}: the ledger row still names the worker's old workspace`);
+  if (!(await rebindTaskTo(ports, rec.taskId, r.workspaceId))) {
+    // A worker that cannot read or move its task does not run: its agent is
+    // stopped once it is up, and a later resume (in this pane) tries again.
+    await stopRelaunched(ports, rec.taskId, r.sessionId);
+    return refuse('not_reopened', 'the task could not be moved to the worker\'s new pane; try again');
+  }
   if (stopped()) {
     // The pane opened with the line as its launch after the stop ran: its
     // agent is stopped here once it is up.
@@ -726,6 +752,17 @@ async function respawnOnce(
     return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   }
   return launched(ports, rec, r.sessionId, pane.resumeSessionId, r.workspaceId, by, message, onLaunched, 'in a new pane in the task worktree');
+}
+
+/** The task's ledger row names `workspaceId` (written now when it named
+ *  another); the reclaim record's end follows the row's new rev. True
+ *  without the port. */
+async function rebindTaskTo(ports: WorkerResumePorts, taskId: string, workspaceId: string): Promise<boolean> {
+  if (!ports.rebindTask) return true;
+  const r = await ports.rebindTask(taskId, workspaceId).catch(() => null);
+  if (!r) return false;
+  ports.store.advanceEndRev(taskId, r.from, r.to);
+  return true;
 }
 
 /** Wait (bounded) for an agent a resume launched after a stop, then stop it.

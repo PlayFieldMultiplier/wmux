@@ -516,17 +516,24 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     expect(store.get(ID)?.state).toBe('resumed');
   });
 
-  it('a worker resumed in a new workspace owns its ledger row there', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+  async function ledgerWithEndedTask(): Promise<TaskLedger> {
     fs.mkdirSync(path.join(dir, 'ledger'));
     const ledger = new TaskLedger({ dir: path.join(dir, 'ledger') });
-    await ledger.register({ id: ID, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'perf-A' });
+    await ledger.register({ id: ID, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'perf-A', dispatch: { origin: { kind: 'bot', botId: BOT } } });
     await ledger.update({ id: ID, status: 'failed', actor: { kind: 'system', workspaceId: 'daemon' }, expectedRev: 1 });
-    const rebindTask = vi.fn(async (taskId: string, workspaceId: string) => {
-      const r = await ledger.rebindTaskWorkspace({ id: taskId, taskWorkspaceId: workspaceId, actor: { kind: 'system', workspaceId: 'daemon' }, expectedRev: ledger.get(taskId)?.rev ?? 0 });
-      return r.ok;
-    });
+    return ledger;
+  }
+  const rebindOn = (ledger: TaskLedger) => vi.fn(async (taskId: string, workspaceId: string) => {
+    const from = ledger.get(taskId)?.rev ?? 0;
+    const r = await ledger.rebindTaskWorkspace({ id: taskId, taskWorkspaceId: workspaceId, actor: { kind: 'system', workspaceId: 'daemon' }, expectedRev: from });
+    return r.ok ? { from, to: r.entry.rev } : null;
+  });
+
+  it('a worker resumed in a new workspace owns its ledger row there, and the reclaim does not take the move for a new end', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const ledger = await ledgerWithEndedTask();
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, ledger.get(ID) as LedgerEntry, 'failed');
+    const rebindTask = rebindOn(ledger);
     const p: WorkerResumePorts = {
       store,
       typeLine: vi.fn(() => true),
@@ -538,8 +545,54 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: true, workspaceId: 'ws-new' });
     expect(rebindTask).toHaveBeenCalledWith(ID, 'ws-new');
     expect(ledger.findByTaskWorkspace('ws-new')?.id).toBe(ID);
+    expect(isReclaimedSince(store.get(ID), ledger.get(ID) as LedgerEntry)).toBe(true);
+    // The reclaim's catch-up leaves the resumed worker running.
+    const { ports, stopAgent } = reclaimPorts(store, [session({ id: 'daemon-9' })], { allRows: () => ledger.list({}), row: (id) => ledger.get(id) });
+    const off = installWorkerReclaim(ports);
+    await new Promise((r) => setTimeout(r, 10));
+    off();
+    expect(stopAgent).not.toHaveBeenCalled();
+    expect(store.get(ID)?.state).toBe('resumed');
     const rev = ledger.get(ID)?.rev ?? 0;
     expect(await ledger.update({ id: ID, status: 'working', actor: { kind: 'worker', workspaceId: 'ws-new' }, expectedRev: rev })).toMatchObject({ ok: true });
+  });
+
+  it('a task that could not be moved to the new pane runs no worker there; the next resume moves it', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const ledger = await ledgerWithEndedTask();
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, ledger.get(ID) as LedgerEntry, 'failed');
+    const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
+    const typeLine = vi.fn(() => true);
+    const failing: WorkerResumePorts = {
+      store,
+      typeLine,
+      stopAgent,
+      agentAlive: async () => true,
+      listSessions: async () => [],
+      folderExists: () => true,
+      respawn: async () => ({ ok: true, workspaceId: 'ws-new', sessionId: 'daemon-9' }),
+      rebindTask: async () => null,
+    };
+    expect(await resumeWorker(failing, ID, { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_reopened' });
+    expect(stopAgent).toHaveBeenCalledWith('daemon-9');
+    expect(store.get(ID)?.state).toBe('stopped');
+    expect(ledger.get(ID)?.taskWorkspaceId).toBe('ws-task');
+    // The pane stays; the next resume types into it and moves the task first.
+    const live = { ...failing, listSessions: async () => [session({ id: 'daemon-9', agentProcessAlive: false, commandRunning: false })], rebindTask: rebindOn(ledger) };
+    expect(await resumeWorker(live, ID, { kind: 'owner' })).toMatchObject({ ok: true, workspaceId: 'ws-new' });
+    expect(ledger.get(ID)?.taskWorkspaceId).toBe('ws-new');
+    expect(typeLine).toHaveBeenCalledWith('daemon-9', expect.any(String));
+  });
+
+  it('a record replaced while its worker was resumed tells the budget it ended', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    const p: WorkerResumePorts = { store, typeLine: vi.fn(() => true), listSessions: async () => [dead()] };
+    expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: true });
+    const seen: string[] = [];
+    store.onStateChange = (_rec, from, to) => seen.push(`${from}->${to}`);
+    await store.put({ ...(store.get(ID) as NonNullable<ReturnType<typeof store.get>>), state: 'stopping', at: 9_000 });
+    expect(seen).toEqual(['resumed->stopping']);
   });
 
   it('the budget hears a resumed worker start and end, and the fan-out reads its live count', async () => {
