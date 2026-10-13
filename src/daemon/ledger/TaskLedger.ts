@@ -354,7 +354,8 @@ export class TaskLedger {
         id: input.id,
         taskWorkspaceId: input.taskWorkspaceId,
         ownerWorkspaceId: input.ownerWorkspaceId,
-        title: truncateHead(input.title, LEDGER_SUMMARY_MAX_BYTES),
+        // Redacted before the cut, so a cut never keeps part of a value.
+        title: truncateHead(this.redact(input.title), LEDGER_SUMMARY_MAX_BYTES),
         status: 'working',
         rev: 1,
         updatedAt: this.now(),
@@ -446,12 +447,12 @@ export class TaskLedger {
             entry,
           };
         }
-        forcedReason = truncateHead(reason, LEDGER_SUMMARY_MAX_BYTES);
+        forcedReason = truncateHead(this.redact(reason), LEDGER_SUMMARY_MAX_BYTES);
       }
     }
     const given =
       typeof input.summary === 'string' && input.summary.trim().length > 0
-        ? truncateHead(input.summary.trim(), LEDGER_SUMMARY_MAX_BYTES)
+        ? truncateHead(this.redact(input.summary.trim()), LEDGER_SUMMARY_MAX_BYTES)
         : undefined;
     const base = given ?? entry.summary;
     const summary =
@@ -514,7 +515,7 @@ export class TaskLedger {
       }
       const updated: LedgerEntry = this.redact({
         ...entry,
-        gate: boundGate(gate),
+        gate: boundGate(this.redact(gate)),
         rev: entry.rev + 1,
         updatedAt: this.now(),
         updatedBy: actor,
@@ -543,7 +544,7 @@ export class TaskLedger {
         rev: entry.rev + 1,
         updatedAt: this.now(),
         updatedBy: actor,
-        summary: truncateHead(summary, LEDGER_SUMMARY_MAX_BYTES),
+        summary: truncateHead(this.redact(summary), LEDGER_SUMMARY_MAX_BYTES),
       });
       try {
         await this.append({ op: 'entry', entry: updated });

@@ -53,7 +53,7 @@ import type { ResumeBinding } from '../../../shared/agentResume';
 import type { AgentSlug } from '../../../shared/events';
 import { createDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import { isWslShell, type WslTarget } from '../../../shared/wsl';
-import { resolvePtyCreateCwdForShell, type PtyCwdSource } from '../../pty/resolvePtyCwd';
+import { resolvePtyCreateCwdForShell, type PtyCwdSource, type ResolvedPtyCwd } from '../../pty/resolvePtyCwd';
 import { FANOUT_TASK_PORT_ENV } from '../../worktask/fanoutEnvironment';
 import { agentDisplayToSlug } from '../../../shared/agentIdentity';
 import { wslDistroArgs, isWslDistroSpawnArgs } from '../../../shared/wslDistro';
@@ -262,6 +262,19 @@ const RESIZE_RETRY_DELAY_MS = 20;
  * falls back to homedir, which is exactly the "panes land in home" symptom, so
  * this makes future reports diagnosable straight from the log.
  */
+/**
+ * A create carrying secrets starts in the folder its grant was checked
+ * against, or not at all: never a recovery folder, and never the home
+ * fallback of a folder that is gone. Null when it may start. Pure.
+ */
+export function secretCreateCwdRefusal(granted: unknown, resolution: ResolvedPtyCwd): string | null {
+  if (resolution.source !== 'requested' || !resolution.safeCwd || typeof granted !== 'string' || !granted
+    || path.resolve(resolution.safeCwd) !== path.resolve(granted)) {
+    return 'PTY_CREATE: a worker with secrets starts only in the folder its grant names';
+  }
+  return null;
+}
+
 function logCwdResolution(
   sessionId: string,
   incoming: string | undefined,
@@ -422,6 +435,7 @@ export function registerPTYHandlers(
       // A bot worker's named secrets, from its single-use grant: they go to
       // the daemon apart from `env` (DaemonCreateSessionParams.secretEnv).
       const secretEnv = secretEnvForCreate(options, botWorker);
+      const grantedCwd = options?.cwd;
       options = withLaunchSessionPin(withBotWorkerMergeGuard(withWmuxTools(await withAccountQuota(options)), botWorker));
 
       // X8 exec-style unit: a supervised wmux.json leaf runs its command as the
@@ -440,6 +454,10 @@ export function registerPTYHandlers(
       // both modes pick the same default.
       const shell = options?.shell || (process.platform === 'win32' ? new ShellDetector().getDefault() : (process.env.SHELL || '/bin/bash'));
       const cwdResolution = resolvePtyCreateCwdForShell(options?.cwd, options?.recoveryCwds, shell);
+      if (secretEnv) {
+        const refusal = secretCreateCwdRefusal(grantedCwd, cwdResolution);
+        if (refusal) throw new Error(refusal);
+      }
       const safeCwd = cwdResolution.safeCwd;
       let effectiveCwd = safeCwd ?? (isWslShell(shell) ? '~' : homedir());
       // #1103 — the renderer's WSL distro choice, applied at the one place

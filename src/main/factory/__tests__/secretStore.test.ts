@@ -9,6 +9,7 @@ vi.mock('electron', () => ({ safeStorage: {} }));
 import { SecretStore, type SecretCrypto, type SecretCryptoState } from '../secretStore';
 import {
   __resetRedactedSecretsForTesting,
+  redactStoredSecretEdges,
   redactStoredSecrets,
   redactStoredSecretsDeep,
   secretForms,
@@ -239,6 +240,22 @@ describe('redaction', () => {
   it('redacts object keys too', () => {
     const out = redactStoredSecretsDeep({ [VALUE]: true, nested: { [`x${VALUE}`]: 1 } });
     expect(JSON.stringify(out)).not.toContain(VALUE);
+  });
+
+  it('a window of a longer text that starts or ends inside a value masks that piece', () => {
+    // The last row of a value wrapped across rows, then the prompt.
+    expect(redactStoredSecretEdges(`${VALUE.slice(8)}\r\n$ `)).toBe('[secret:NPM_TOKEN]\r\n$ ');
+    // A piece of it that wrapped again inside the window.
+    expect(redactStoredSecretEdges(`${VALUE.slice(4, 12)}\r\n${VALUE.slice(12)}\r\nok`)).toBe('[secret:NPM_TOKEN]\r\nok');
+    // A window that ends inside a value.
+    expect(redactStoredSecretEdges(`$ echo\r\n${VALUE.slice(0, 10)}`)).toBe('$ echo\r\n[secret:NPM_TOKEN]');
+    // A whole value anywhere, as always; ordinary text and very short pieces stay.
+    expect(redactStoredSecretEdges(`a ${VALUE} b`)).toBe('a [secret:NPM_TOKEN] b');
+    expect(redactStoredSecretEdges('xyz plain text')).toBe('xyz plain text');
+    expect(redactStoredSecretEdges(`${VALUE.slice(-5)} next`)).toBe(`${VALUE.slice(-5)} next`);
+    // Only on request in the deep walk: a screen read asks for it.
+    expect(redactStoredSecretsDeep({ lines: [VALUE.slice(9)] })).toEqual({ lines: [VALUE.slice(9)] });
+    expect(redactStoredSecretsDeep({ lines: [VALUE.slice(9)] }, { edges: true })).toEqual({ lines: ['[secret:NPM_TOKEN]'] });
   });
 
   it('is the identity with nothing stored', () => {

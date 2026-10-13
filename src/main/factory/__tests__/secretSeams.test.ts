@@ -9,8 +9,9 @@ import { WakeQueue, wakeQueuePath } from '../wakeQueue';
 import type { WakeItem } from '../../../shared/wake';
 import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort } from '../handoffRouter';
 import { RoomWriter, type FactoryRoomPorts } from '../roomWriter';
-import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretRedaction';
-import { wrapHandler } from '../../ipc/wrapHandler';
+import { __resetRedactedSecretsForTesting, redactStoredSecretsDeep, setRedactedSecrets } from '../secretRedaction';
+import { buildArgsSummary, wrapHandler } from '../../ipc/wrapHandler';
+import { LEDGER_SUMMARY_MAX_BYTES, TaskLedger } from '../../../daemon/ledger/TaskLedger';
 
 const VALUE = 'sk_live_SeamValue0123456789abc';
 let dir = '';
@@ -86,6 +87,23 @@ describe('redaction seams', () => {
     }
     expect(lines.join('')).toContain('[secret:STRIPE_SECRET_KEY]');
     expect(lines.join('')).not.toContain(VALUE);
+  });
+
+  it('an argument summary is redacted before it is cut, so no part of a value is kept', () => {
+    const summary = buildArgsSummary([{ note: `${'x'.repeat(180)}${VALUE}` }]) ?? '';
+    expect(summary).not.toContain(VALUE.slice(0, 8));
+  });
+
+  it('ledger text is redacted before it is cut, so no part of a value is kept', async () => {
+    const ledger = new TaskLedger({ dir: path.join(dir, 'ledger'), redact: redactStoredSecretsDeep });
+    const pad = 'a'.repeat(LEDGER_SUMMARY_MAX_BYTES - 10);
+    const entry = await ledger.register({ id: 'task-1', taskWorkspaceId: 'ws-t', ownerWorkspaceId: 'ws-o', title: `${pad}${VALUE}` });
+    expect(entry.title).not.toContain(VALUE.slice(0, 8));
+    const closed = await ledger.closeTask('task-1', undefined, `${pad}${VALUE}`);
+    expect(closed?.summary).not.toContain(VALUE.slice(0, 8));
+    const gated = await ledger.recordGate('task-2', { exitCode: 0, tail: `${VALUE}${'z'.repeat(LEDGER_SUMMARY_MAX_BYTES * 8)}`, at: 1, command: 'x', recordedBy: 'system' });
+    expect(gated.ok).toBe(false);
+    for (const f of fs.readdirSync(path.join(dir, 'ledger'))) expect(fs.readFileSync(path.join(dir, 'ledger', f), 'utf8')).not.toContain(VALUE.slice(0, 8));
   });
 });
 

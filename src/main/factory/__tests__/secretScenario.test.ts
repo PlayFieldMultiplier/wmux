@@ -228,6 +228,16 @@ describe('bot secret scenario', () => {
     }
     expect(screen).toMatchObject({ ok: true });
     expect(JSON.stringify(screen)).toContain('[secret:GH_TOKEN]');
+    // A tail read whose window starts on the value's second row.
+    router.register('input.readScreen' as RpcMethod, async () => ({ ptyId: 'daemon-task1', text: `${VALUE.slice(20)}\r\n$ ` }));
+    const tailToken = mintBotToken(BOT);
+    let tail: unknown;
+    try {
+      tail = await router.dispatch({ id: 'r2', method: 'input.readScreen' as RpcMethod, params: {}, commanderToken: tailToken }, { externalWire: true });
+    } finally {
+      revokeCommanderToken(tailToken);
+    }
+    expect(tail).toMatchObject({ ok: true, result: { text: '[secret:GH_TOKEN]\r\n$ ' } });
 
     // ── 6. grep: nothing holds the value ──
     facts.dispose();

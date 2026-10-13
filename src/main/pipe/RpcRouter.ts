@@ -8,7 +8,7 @@ import type {
 } from '../../shared/rpc';
 import { sanitizeClientDisplayName } from '../../shared/rpc';
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
-import { isAlwaysEnforcedMethod } from '../mcp/methodCapabilityMap';
+import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } from '../mcp/methodCapabilityMap';
 import { isLocalExternalWireContext } from '../mcp/rpcProvenance';
 import { resolveCommanderToken } from '../deck/commanderTrust';
 import { COMMANDER_TEARDOWN_DENY } from '../../shared/commanderSurface';
@@ -691,8 +691,9 @@ export class RpcRouter {
         id: request.id,
         ok: true,
         // A bot never reads a stored bot secret back (a worker pane's screen
-        // among them): factory/secretRedaction.ts.
-        result: ctx.bot ? redactStoredSecretsDeep(result) : result,
+        // among them): factory/secretRedaction.ts. A screen read is a window
+        // of the terminal, so a value cut at its edge is masked too.
+        result: ctx.bot ? redactStoredSecretsDeep(result, { edges: readsScreen(request.method) }) : result,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -703,6 +704,11 @@ export class RpcRouter {
       };
     }
   }
+}
+
+/** Whether a method's result is text read off a terminal screen. */
+function readsScreen(method: string): boolean {
+  return (METHOD_CAPABILITY as Record<string, RequiredCapability | undefined>)[method]?.riskClass === 'terminal-content';
 }
 
 /**

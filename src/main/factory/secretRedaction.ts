@@ -100,18 +100,73 @@ export function redactStoredSecrets(text: string): string {
   return out;
 }
 
+/** A piece of a value shorter than this at a text's edge is left as it is:
+ *  too short to tell from ordinary text. */
+const EDGE_FRAGMENT_MIN = 6;
+
+function withoutBreaks(text: string): { t: string; at: number[] } {
+  let t = '';
+  const at: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '\r' || c === '\n') continue;
+    t += c;
+    at.push(i);
+  }
+  return { t, at };
+}
+
+/**
+ * `text` redacted, and also a piece of a stored value it starts or ends
+ * with (at least EDGE_FRAGMENT_MIN characters, line breaks inside it
+ * skipped): a window cut from a longer text, such as the last rows of a
+ * terminal, may begin or end inside a value. Identity when nothing matches.
+ */
+export function redactStoredSecretEdges(text: string): string {
+  let out = redactStoredSecrets(text);
+  if (needles.length === 0 || typeof out !== 'string' || out.length < EDGE_FRAGMENT_MIN) return out;
+  for (const n of needles) {
+    let { t, at } = withoutBreaks(out);
+    if (t.length < EDGE_FRAGMENT_MIN) break;
+    // The longest end of the value the text starts with.
+    const head = t.slice(0, EDGE_FRAGMENT_MIN);
+    for (let i = n.text.indexOf(head, 1); i > 0; i = n.text.indexOf(head, i + 1)) {
+      const piece = n.text.slice(i);
+      if (t.startsWith(piece)) {
+        out = n.marker + out.slice(at[piece.length - 1] + 1);
+        ({ t, at } = withoutBreaks(out));
+        break;
+      }
+    }
+    if (t.length < EDGE_FRAGMENT_MIN) continue;
+    // The longest start of the value the text ends with.
+    const tail = t.slice(-EDGE_FRAGMENT_MIN);
+    for (let j = n.text.lastIndexOf(tail, n.text.length - EDGE_FRAGMENT_MIN - 1); j >= 0; j = j === 0 ? -1 : n.text.lastIndexOf(tail, j - 1)) {
+      const piece = n.text.slice(0, j + EDGE_FRAGMENT_MIN);
+      if (t.endsWith(piece)) {
+        out = out.slice(0, at[t.length - piece.length]) + n.marker;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 const MAX_DEPTH = 12;
 
 /** A copy of `value` with every string in it (keys included) redacted; the
  *  same reference when nothing changed. Depth-capped: deeper structure is
- *  returned as-is only when nothing is stored. */
-export function redactStoredSecretsDeep<T>(value: T): T {
+ *  returned as-is only when nothing is stored. `edges`: each string is
+ *  also cleared of a value's piece at its start or end
+ *  (redactStoredSecretEdges), for results that are a window of a longer
+ *  text. */
+export function redactStoredSecretsDeep<T>(value: T, opts: { edges?: boolean } = {}): T {
   if (needles.length === 0) return value;
-  return walk(value, 0) as T;
+  return walk(value, 0, opts.edges === true ? redactStoredSecretEdges : redactStoredSecrets) as T;
 }
 
-function walk(value: unknown, depth: number): unknown {
-  if (typeof value === 'string') return redactStoredSecrets(value);
+function walk(value: unknown, depth: number, redact: (text: string) => string): unknown {
+  if (typeof value === 'string') return redact(value);
   if (!value || typeof value !== 'object') return value;
   // Past the cap the structure is serialised and redacted as text rather than
   // passed through unseen.
@@ -127,7 +182,7 @@ function walk(value: unknown, depth: number): unknown {
   if (Array.isArray(value)) {
     let changed = false;
     const out = value.map((v) => {
-      const r = walk(v, depth + 1);
+      const r = walk(v, depth + 1, redact);
       if (r !== v) changed = true;
       return r;
     });
@@ -138,8 +193,8 @@ function walk(value: unknown, depth: number): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     // Keys too: a value used as a key is replaced like any other text.
-    const key = redactStoredSecrets(k);
-    const r = walk(v, depth + 1);
+    const key = redact(k);
+    const r = walk(v, depth + 1, redact);
     if (r !== v || key !== k) changed = true;
     out[key] = r;
   }
