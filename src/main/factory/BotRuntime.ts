@@ -219,7 +219,16 @@ export interface BotRuntimePorts {
   /** A turn finished: the bot's open questions the owner's words in it
    *  answered close (handoffRouter.ts closeAnsweredInChat). */
   onTurnDone?: (profile: BotProfile, item: WakeItem) => void;
+  /** Whether the modules a wake prompt reads from (rooms, handoffs,
+   *  routines) have started. Until then no turn starts, for at most
+   *  CONTEXT_WAIT_MS. Absent: ready. */
+  contextReady?: () => boolean;
 }
+
+/** Longest the runtime waits at launch for the modules its wake prompts
+ *  read from; past it, a module that failed to start holds no bot. */
+export const CONTEXT_WAIT_MS = 60_000;
+const CONTEXT_POLL_MS = 200;
 
 export type BotLifecycleEvent = 'parked' | 'resumed' | 'disabled' | 'enabled' | 'removed';
 
@@ -268,6 +277,9 @@ export class BotRuntime {
   private kickPending = false;
   private heldTimer: unknown = null;
   private heldAt: number | null = null;
+  private contextTimer: unknown = null;
+  private contextWaitSince: number | null = null;
+  private contextSeen = false;
   private disposed = false;
   /** Held wakes the owner let through by resuming their bot (this app run). */
   private readonly released = new Set<string>();
@@ -504,6 +516,7 @@ export class BotRuntime {
       this.halt();
       return;
     }
+    if (!this.contextReady()) return;
     const cap = settings.globalConcurrentBots;
     const now = this.now();
     // Bots with work, most urgent next item first.
@@ -581,6 +594,37 @@ export class BotRuntime {
         console.error(`[factory] bot ${profile.id} turn crashed: ${String(err)}`);
       });
     }
+  }
+
+  /** Whether the wake prompt's sources are up (BotRuntimePorts.contextReady);
+   *  once they are, or once CONTEXT_WAIT_MS passed, it stays true. While not,
+   *  a pass is retried shortly. */
+  private contextReady(): boolean {
+    const check = ports.contextReady;
+    if (!check || this.contextSeen) return true;
+    let ok = false;
+    try {
+      ok = check();
+    } catch {
+      ok = false;
+    }
+    const now = this.now();
+    this.contextWaitSince ??= now;
+    if (!ok && now - this.contextWaitSince >= CONTEXT_WAIT_MS) {
+      console.warn('[factory] bots start without every factory module running');
+      ok = true;
+    }
+    if (ok) {
+      this.contextSeen = true;
+      return true;
+    }
+    if (this.contextTimer === null) {
+      this.contextTimer = this.setTimer(() => {
+        this.contextTimer = null;
+        this.kick();
+      }, CONTEXT_POLL_MS);
+    }
+    return false;
   }
 
   /** Whether a wake carries the owner's words: their message, or a handoff
@@ -848,6 +892,7 @@ export class BotRuntime {
     if (this.disposed) return;
     this.disposed = true;
     if (this.heldTimer !== null) this.clearTimer(this.heldTimer);
+    if (this.contextTimer !== null) this.clearTimer(this.contextTimer);
     for (const run of this.running.values()) {
       try {
         run.adapter?.interrupt();

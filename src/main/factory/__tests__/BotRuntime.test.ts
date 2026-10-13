@@ -5,9 +5,9 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrainAdapter, BrainEvent, BrainStartOptions } from '../../deck/BrainAdapter';
-import { BotRuntime, BotSessionStore, ROOM_RUN_STAGGER_MS, botSessionsPath, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
+import { BotRuntime, BotSessionStore, CONTEXT_WAIT_MS, ROOM_RUN_STAGGER_MS, botSessionsPath, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
 import type { BotEngineFactory, BotEngineSpawnInput } from '../botEngines';
 import { BotStore, botsFilePath } from '../botStore';
 import { WakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -656,6 +656,39 @@ describe('BotRuntime', () => {
     r.runtime.wake(id);
     await settle();
     expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual(['/old', '/new', null]);
+  });
+
+  it('no turn starts before the modules its wake prompt reads from are up; then it runs', async () => {
+    let up = false;
+    setBotRuntimePorts({ contextReady: () => up });
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    expect(timers).toHaveLength(1);
+    up = true;
+    timers[0].fn();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    expect(r.adapters[0].prompts).toHaveLength(1);
+  });
+
+  it('a module that never starts holds the bots for CONTEXT_WAIT_MS at most', async () => {
+    setBotRuntimePorts({ contextReady: () => false });
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    clock += CONTEXT_WAIT_MS;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    timers[timers.length - 1].fn();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it('a timed-out turn ends its session: the retry runs on a fresh one', async () => {
