@@ -82,8 +82,10 @@ export interface ReclaimedWorker {
   /** The ledger status the task ended in. */
   ended: 'completed' | 'cancelled' | 'failed';
   sessions: ReclaimedSession[];
-  /** stopped: the agent was stopped (or none ran); resumed: relaunched. */
-  state: 'stopped' | 'resumed';
+  /** stopping: recorded, its agent not yet known to be stopped (a later look
+   *  tries again; it still counts as live); stopped: the agent was stopped
+   *  (or none ran); resumed: relaunched. */
+  state: 'stopping' | 'stopped' | 'resumed';
   at: number;
   /** The workspace the worker's pane lives in when a resume opened a new
    *  one (absent: taskWorkspaceId). */
@@ -132,7 +134,10 @@ export function reclaimedSessionOf(s: WorkerSessionInfo): ReclaimedSession | nul
   if (!s.id || typeof s.spawnCwd !== 'string' || !s.spawnCwd) return null;
   const b = s.resumeBinding;
   const out: ReclaimedSession = { sessionId: s.id, cwd: s.spawnCwd };
-  if (b && b.agent === 'claude' && typeof b.sessionId === 'string' && isPlausibleResumeSessionId('claude', b.sessionId)) {
+  // A conversation is recorded only with the folder it was started in: one
+  // started elsewhere (a `cd` before the launch) resumes only there.
+  const sameFolder = typeof b?.cwd !== 'string' || !b.cwd || normalizeResumeCwd(b.cwd) === normalizeResumeCwd(s.spawnCwd);
+  if (b && sameFolder && b.agent === 'claude' && typeof b.sessionId === 'string' && isPlausibleResumeSessionId('claude', b.sessionId)) {
     out.resumeSessionId = b.sessionId;
     if (typeof b.permissionMode === 'string' && PERMISSION_MODES.has(b.permissionMode)) out.permissionMode = b.permissionMode as PermissionMode;
   }
@@ -144,7 +149,7 @@ function isRecord(v: unknown): v is ReclaimedWorker {
   const r = v as Record<string, unknown>;
   return typeof r.taskId === 'string' && typeof r.botId === 'string' && typeof r.ownerWorkspaceId === 'string'
     && typeof r.taskWorkspaceId === 'string' && typeof r.title === 'string' && typeof r.threadId === 'string'
-    && (r.ended === 'completed' || r.ended === 'cancelled' || r.ended === 'failed') && (r.state === 'stopped' || r.state === 'resumed')
+    && (r.ended === 'completed' || r.ended === 'cancelled' || r.ended === 'failed') && (r.state === 'stopping' || r.state === 'stopped' || r.state === 'resumed')
     && typeof r.at === 'number' && Array.isArray(r.sessions)
     && r.sessions.every((s) => !!s && typeof (s as ReclaimedSession).sessionId === 'string' && typeof (s as ReclaimedSession).cwd === 'string')
     && (r.paneWorkspaceId === undefined || typeof r.paneWorkspaceId === 'string')
@@ -184,10 +189,10 @@ export class ReclaimedWorkers {
   put(rec: ReclaimedWorker): Promise<void> {
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
-    // Oldest first, never a resumed worker (it is live and counted).
+    // Oldest first, never a live worker (resumed, or not yet stopped).
     for (const [id, r] of this.records) {
       if (this.records.size <= RECLAIMED_WORKERS_MAX) break;
-      if (r.state !== 'resumed') this.records.delete(id);
+      if (r.state === 'stopped') this.records.delete(id);
     }
     return this.persister.schedule();
   }
@@ -235,6 +240,9 @@ export interface WorkerReclaimPorts {
   onTransition: (fn: (t: { entry: LedgerEntry; from: string | null; to: string }) => void) => () => void;
   /** Every ledger row, read once at install (catch-up). */
   allRows?: () => LedgerEntry[];
+  /** The task's ledger row now: a row that reopened (failed → working)
+   *  while the reclaim waited has nothing stopped. Absent: not re-read. */
+  row?: (taskId: string) => LedgerEntry | null;
   store: ReclaimedWorkers;
   worktreeOf: (entry: LedgerEntry) => Promise<string | null>;
   listSessions: () => Promise<WorkerSessionInfo[]>;
@@ -254,10 +262,24 @@ export interface WorkerReclaimPorts {
 /** Attempts per ended task before the reclaim gives it up. */
 export const RECLAIM_ATTEMPTS_MAX = 3;
 
+/** Whether the task's row is open now (it reopened since it ended). Pure
+ *  over its read; a row that cannot be read is not counted as open. */
+function reopened(ports: Pick<WorkerReclaimPorts, 'row'>, taskId: string): boolean {
+  let now: LedgerEntry | null = null;
+  try {
+    now = ports.row?.(taskId) ?? null;
+  } catch {
+    now = null;
+  }
+  return !!now && (now.status === 'working' || now.status === 'input_required' || now.status === 'review_requested');
+}
+
 /**
  * Stop the worker of one ended bot task and record how to resume it. Never
  * throws; the record, or null when nothing was recorded (no worktree, no
- * pane started in it, or a stop the daemon refused).
+ * pane started in it, a stop the daemon refused, or a task that reopened).
+ * A record whose stops did not all succeed stays `stopping` (still live) and
+ * is tried again.
  */
 export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntry, ended: 'completed' | 'cancelled' | 'failed'): Promise<ReclaimedWorker | null> {
   const log = ports.log ?? ((m: string) => console.warn(m));
@@ -271,6 +293,18 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
     const sessions = await ports.listSessions();
     const ids = new Set(await sessionsStartedIn([worktree], { listSessions: async () => sessions }));
     const panes = sessions.filter((s) => ids.has(s.id)).map(reclaimedSessionOf).filter((s): s is ReclaimedSession => !!s);
+    if (reopened(ports, entry.id)) return null;
+    // An earlier attempt that did not finish: its recorded conversations are
+    // kept (a stopped agent may no longer show its binding).
+    const prior = ports.store.get(entry.id);
+    const kept = prior?.state === 'stopping' ? prior.sessions : [];
+    for (const p of panes) {
+      const old = kept.find((k) => k.sessionId === p.sessionId);
+      if (!p.resumeSessionId && old?.resumeSessionId) {
+        p.resumeSessionId = old.resumeSessionId;
+        if (old.permissionMode) p.permissionMode = old.permissionMode;
+      }
+    }
     const rec: ReclaimedWorker = {
       taskId: entry.id,
       botId: entry.dispatch?.origin.botId ?? '',
@@ -279,9 +313,11 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
       title: entry.title,
       threadId: taskThreadOf(entry),
       ended,
-      sessions: panes,
-      state: 'stopped',
+      sessions: [...panes, ...kept.filter((k) => !panes.some((p) => p.sessionId === k.sessionId))],
+      // No pane left in the worktree: nothing to stop.
+      state: panes.length === 0 ? 'stopped' : 'stopping',
       at: now(),
+      ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
     };
     // On disk before anything is stopped: a stopped worker always has its
     // conversation recorded. A write that fails stops nothing.
@@ -292,8 +328,15 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
       log(`[factory] reclaim: ${entry.id} not recorded, its worker keeps running: ${String(err)}`);
       return null;
     }
+    // No pane left in the worktree: recorded so it no longer counts as a
+    // live worker.
+    if (panes.length === 0) return rec;
     let failed = 0;
+    let attempted = 0;
     for (const p of panes) {
+      // The task reopened meanwhile: what still runs is its worker again.
+      if (reopened(ports, entry.id)) break;
+      attempted++;
       try {
         const r = await ports.stopAgent(p.sessionId);
         if (r.ok !== true) {
@@ -305,14 +348,23 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
         log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${String(err)}`);
       }
     }
-    if (panes.length > 0 && failed === panes.length) {
+    if (attempted === 0) {
+      // Reopened before any stop: nothing was stopped, the record is as it was.
+      await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
+      return null;
+    }
+    if (failed === attempted && !prior) {
       // Nothing was stopped: no record, so a later look tries again.
       await ports.store.remove(entry.id).catch(() => undefined);
       return null;
     }
-    // No pane left in the worktree: nothing to stop, recorded so it no
-    // longer counts as a live worker.
-    if (panes.length === 0) return rec;
+    // Stopped only once every pane's stop succeeded; else it stays
+    // `stopping` (still live for the agent budget) and a later look retries.
+    if (failed > 0) return ports.store.get(entry.id);
+    ports.store.setState(entry.id, 'stopped', now());
+    // Reopened part way: the conversation stays recorded, no card (the
+    // task is open again, and its open row counts what still runs).
+    if (attempted < panes.length) return ports.store.get(entry.id);
     const resumable = panes.some((p) => resumeLineFor(p) !== null);
     const pane = ended === 'failed'
       ? 'Its pane stays open until you have looked at it, then closes.'
@@ -330,11 +382,18 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
       /* the card is best effort */
     }
     ports.changed?.();
-    return rec;
+    return ports.store.get(entry.id);
   } catch (err) {
     log(`[factory] reclaim of ${entry.id} failed: ${String(err)}`);
     return null;
   }
+}
+
+/** Whether a record already covers this end of the task: stopped, or
+ *  resumed after it. A `stopping` record is tried again, and so is a task
+ *  that reopened and ended again since. Pure. */
+export function isReclaimedSince(rec: ReclaimedWorker | null, entry: Pick<LedgerEntry, 'updatedAt'>): boolean {
+  return !!rec && rec.state !== 'stopping' && rec.at >= entry.updatedAt;
 }
 
 /** Install the reclaim on bot task ends. Returns the unsubscribe. */
@@ -343,10 +402,12 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
   const inFlight = new Set<string>();
   const attempts = new Map<string, number>();
   const run = (entry: LedgerEntry, ended: 'completed' | 'cancelled' | 'failed'): void => {
-    if (inFlight.has(entry.id) || ports.store.get(entry.id)) return;
-    const n = attempts.get(entry.id) ?? 0;
+    if (inFlight.has(entry.id) || isReclaimedSince(ports.store.get(entry.id), entry)) return;
+    // Per end: a task that reopened and ended again is tried afresh.
+    const key = `${entry.id}@${entry.rev}`;
+    const n = attempts.get(key) ?? 0;
     if (n >= RECLAIM_ATTEMPTS_MAX) return;
-    attempts.set(entry.id, n + 1);
+    attempts.set(key, n + 1);
     inFlight.add(entry.id);
     void reclaimWorker(ports, entry, ended).finally(() => inFlight.delete(entry.id));
   };
@@ -393,7 +454,8 @@ export type WorkerResumeCode =
   | 'invalid_argument'
   | 'not_started'
   | 'worktree_gone'
-  | 'not_reopened';
+  | 'not_reopened'
+  | 'not_now';
 
 export type WorkerResumeResult =
   | {
@@ -444,12 +506,30 @@ export interface WorkerResumePorts {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   agentWaitMs?: number;
+  /** Whether the task was started from outside text (its dispatch taint;
+   *  unknown counts as true). */
+  taskTainted?: (taskId: string) => boolean;
+  /** Whether the bot's running wake carried outside text (unknown: true). A
+   *  bot's message from such a wake goes only to a task recorded as started
+   *  from outside text. */
+  senderTainted?: (botId: string) => boolean;
+  /** Why the bot's own worker budget refuses one more worker now, or null
+   *  (a bot's resume starts a worker like its fan-out does). */
+  botWorkerRefusal?: (botId: string) => string | null;
 }
 
 /** Tasks whose resume is being typed now, or whose workspace is being
  *  cleared: one of either at a time per task. */
 const resuming = new Set<string>();
 const clearing = new Set<string>();
+
+/** Bumped by every stop of resumed workers (all bots, or one): a resume
+ *  that was under way when a stop ran launches nothing more. */
+let stopAllSeq = 0;
+const botStopSeq = new Map<string, number>();
+function stopMark(botId: string): string {
+  return `${stopAllSeq}:${botStopSeq.get(botId) ?? 0}`;
+}
 
 function refuse(code: WorkerResumeCode, message: string): WorkerResumeResult {
   return { ok: false, code, message };
@@ -490,12 +570,31 @@ async function resumeOnce(
   if (!rec) return refuse('not_reclaimed', 'this task\'s worker was not stopped by wmux, so there is nothing to resume');
   if (by.kind === 'bot' && rec.botId !== by.botId) return refuse('not_yours', 'a bot resumes only the workers of tasks it started');
   if (rec.state === 'resumed') return refuse('already_running', 'this worker was resumed already');
+  if (rec.state === 'stopping') return refuse('busy', 'this worker is still being stopped; try again in a moment');
+  // Read in the same tick as the request: a stop of resumed workers from
+  // here on ends this resume.
+  const mark = stopMark(rec.botId);
+  const stopped = (): boolean => stopMark(rec.botId) !== mark;
+  if (by.kind === 'bot') {
+    const text = typeof message === 'string' ? message.trim() : '';
+    if (text && (ports.taskTainted?.(taskId) ?? true) === false && (ports.senderTainted?.(by.botId) ?? true) !== false) {
+      return refuse('not_now', 'a message from a wake that carried outside text goes only to a task started from outside text; resume without a message, or write it from a clean wake');
+    }
+    let budget: string | null = null;
+    try {
+      budget = ports.botWorkerRefusal?.(by.botId) ?? null;
+    } catch (err) {
+      budget = `the worker budget could not be read: ${String(err)}`;
+    }
+    if (budget) return refuse('not_now', budget);
+  }
   const pane = rec.sessions.find((s) => resumeLineFor(s) !== null);
   const line = pane ? resumeLineFor(pane) : null;
   if (!pane || !line || !pane.resumeSessionId) return refuse('no_conversation', 'no conversation was recorded for this worker');
   const sessions = await ports.listSessions();
+  if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   const live = sessions.find((s) => s.id === pane.sessionId);
-  if (!live) return respawnOnce(ports, rec, pane, line, sessions, by, message, onLaunched);
+  if (!live) return respawnOnce(ports, rec, pane, line, sessions, by, message, onLaunched, stopped);
   // Both the folder the pane was started in and the one its shell is in now
   // (a `cd` moves where a typed line runs) must be the task folder.
   const here = [live.spawnCwd, live.cwd].filter((d): d is string => typeof d === 'string' && d.length > 0);
@@ -529,6 +628,7 @@ async function respawnOnce(
   by: { kind: 'owner' } | { kind: 'bot'; botId: string },
   message: string | undefined,
   onLaunched: (() => void) | undefined,
+  stopped: () => boolean,
 ): Promise<WorkerResumeResult> {
   if (!ports.respawn || !pane.resumeSessionId) return refuse('pane_gone', 'the worker\'s pane is closed');
   let exists = false;
@@ -544,6 +644,7 @@ async function respawnOnce(
   const busy = sessions.some((s) => s.agentProcessAlive === true
     && [s.spawnCwd, s.cwd].some((d) => typeof d === 'string' && d.length > 0 && normalizeResumeCwd(d) === home));
   if (busy) return refuse('already_running', 'an agent is already running in the task\'s worktree');
+  if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   let r: Awaited<ReturnType<NonNullable<WorkerResumePorts['respawn']>>>;
   try {
     r = await ports.respawn({
@@ -562,7 +663,31 @@ async function respawnOnce(
   await ports.store.movePane(rec.taskId, r.workspaceId, { ...pane, sessionId: r.sessionId }).catch((err) => {
     console.warn(`[factory] reclaimed workers not written: ${String(err)}`);
   });
+  if (stopped()) {
+    // The pane opened with the line as its launch after the stop ran: its
+    // agent is stopped here once it is up.
+    await stopRelaunched(ports, rec.taskId, r.sessionId);
+    return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
+  }
   return launched(ports, rec, r.sessionId, pane.resumeSessionId, r.workspaceId, by, message, onLaunched, 'in a new pane in the task worktree');
+}
+
+/** Wait (bounded) for an agent a resume launched after a stop, then stop it.
+ *  Until that stop succeeds the worker counts as resumed (live), so a later
+ *  stop reaches it. */
+async function stopRelaunched(ports: WorkerResumePorts, taskId: string, sessionId: string): Promise<void> {
+  const now = ports.now ?? Date.now;
+  ports.store.setState(taskId, 'resumed', now());
+  ports.changed?.();
+  if (!ports.stopAgent) return;
+  const sleep = ports.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const deadline = now() + (ports.agentWaitMs ?? RESUME_AGENT_WAIT_MS);
+  while (now() < deadline) {
+    if (await (ports.agentAlive?.(sessionId) ?? Promise.resolve(true)).catch(() => false)) break;
+    await sleep(1000);
+  }
+  const r = await ports.stopAgent(sessionId).catch(() => null);
+  if (r?.ok === true && ports.store.setState(taskId, 'stopped', now())) ports.changed?.();
 }
 
 /** The line runs: mark the worker resumed, then deliver the message. */
@@ -607,34 +732,40 @@ async function launched(
  *  yet: still live for the agent budget. Pure over its inputs. */
 export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number): number {
   const since = now - RECLAIM_CATCHUP_MS;
-  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !store.get(e.id)).length;
+  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e)).length;
 }
 
 /** How the Bots page shows a reclaimed worker (BotTaskView.worker). Pure. */
 export function reclaimedWorkerState(rec: ReclaimedWorker | null): 'resumable' | 'stopped' | 'resumed' | null {
-  if (!rec) return null;
+  if (!rec || rec.state === 'stopping') return null;
   if (rec.state === 'resumed') return 'resumed';
   return rec.sessions.some((s) => resumeLineFor(s) !== null) ? 'resumable' : 'stopped';
 }
 
 /** Stop the resumed workers of one bot, or of every bot (the owner's stop,
  *  a bot's stop_my_work): their rows ended long ago, so the ledger stop does
- *  not reach them. How many it stopped. */
-export async function stopResumedWorkers(ports: WorkerResumePorts, botId?: string): Promise<number> {
-  if (!ports.stopAgent) return 0;
+ *  not reach them. A resume still under way launches nothing more. How many
+ *  it stopped, and how many it could not (still resumed: a later stop tries
+ *  again). */
+export async function stopResumedWorkers(ports: WorkerResumePorts, botId?: string): Promise<{ stopped: number; failed: number }> {
+  if (botId === undefined) stopAllSeq++;
+  else botStopSeq.set(botId, (botStopSeq.get(botId) ?? 0) + 1);
+  if (!ports.stopAgent) return { stopped: 0, failed: 0 };
   const now = ports.now ?? Date.now;
   let n = 0;
+  let failed = 0;
   for (const rec of ports.store.all()) {
     if (rec.state !== 'resumed' || (botId !== undefined && rec.botId !== botId)) continue;
-    let stopped = true;
+    let ok = true;
     for (const s of rec.sessions) {
       const r = await ports.stopAgent(s.sessionId).catch(() => ({ ok: false }));
-      if (r.ok !== true) stopped = false;
+      if (r.ok !== true) ok = false;
     }
-    if (stopped && ports.store.setState(rec.taskId, 'stopped', now())) n++;
+    if (!ok) failed++;
+    else if (ports.store.setState(rec.taskId, 'stopped', now())) n++;
   }
   if (n > 0) ports.changed?.();
-  return n;
+  return { stopped: n, failed };
 }
 
 /** A resumed worker whose agent exited is stopped again (resumable). */
@@ -698,6 +829,9 @@ export interface WorkerClearPorts {
   /** Whether `workspaceId` is this task's own workspace by main's records
    *  (its ledger row, or the lineage stamp of a pane a resume opened). */
   isTaskWorkspace: (rec: ReclaimedWorker, workspaceId: string) => boolean;
+  /** Whether the task's row is open again (it reopened after it ended): its
+   *  workspace is the worker's again and is never closed here. */
+  taskOpen?: (taskId: string) => boolean;
   /** Close one workspace through the renderer's workspace.close (its guards
    *  apply); true only when it closed. */
   closeWorkspace: (workspaceId: string) => Promise<boolean>;
@@ -771,6 +905,13 @@ export function createWorkerClear(ports: WorkerClearPorts): WorkerClear {
       const cur = ports.store.get(rec.taskId);
       const openNow = ports.openWorkspaces();
       if (!cur || !openNow || workerWorkspaceOf(cur) !== ws || clearVerdict(cur, openNow.has(ws), ports.viewedWorkspace()) !== 'clear') continue;
+      let open = true;
+      try {
+        open = ports.taskOpen?.(cur.taskId) ?? false;
+      } catch {
+        open = true; // cannot tell: it stays
+      }
+      if (open) continue;
       let own = false;
       try {
         own = ports.isTaskWorkspace(cur, ws);

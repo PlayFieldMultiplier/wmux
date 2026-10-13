@@ -20,12 +20,15 @@ import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { worktreeFromMissions } from './verifyPreset';
 import { AgentSlots, setAgentSlots } from './agentSlots';
+import { checkWorkers } from './budget';
+import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
 import {
   ReclaimedWorkers,
   createWorkerClear,
   installWorkerReclaim,
+  isReclaimedSince,
   isTaskWorkspaceOf,
   noteWorkerAgentExit,
   setWorkerResumePorts,
@@ -83,6 +86,19 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const s = await rpc('daemon.listSessions', {});
     return Array.isArray(s) ? (s as WorkerSessionInfo[]) : [];
   };
+  /** Whether a task's row is open (a reclaimed task can reopen: failed → working). */
+  const taskOpen = (taskId: string): boolean => {
+    const st = ledger.get(taskId)?.status;
+    return st === 'working' || st === 'input_required' || st === 'review_requested';
+  };
+  /** Resumed workers still live outside an open row: resumed after their
+   *  task's last end (an open row, or an end not reclaimed yet, counts them
+   *  already). */
+  const resumedLive = (botId?: string): number => reclaimed.all().filter((r) => {
+    if (r.state !== 'resumed' || (botId !== undefined && r.botId !== botId)) return false;
+    const row = ledger.get(r.taskId);
+    return !row || (!taskOpen(r.taskId) && isReclaimedSince(r, row));
+  }).length;
 
   // Reclaim + resume. A record file this version cannot read leaves the
   // reclaim off (workers keep running, as before), never overwritten.
@@ -109,6 +125,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         return entry && Array.isArray(entry.ptyIds) ? entry.ptyIds : null;
       },
       listSessions,
+      taskOpen,
       isTaskWorkspace: (rec, workspaceId) => isTaskWorkspaceOf(
         rec,
         workspaceId,
@@ -127,6 +144,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     offs.push(installWorkerReclaim({
       onTransition: (fn) => ledger.onTransition(fn),
       allRows: () => ledger.list({}),
+      row: (taskId) => ledger.get(taskId),
       store: reclaimed,
       worktreeOf: (entry) => worktreeFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry),
       listSessions,
@@ -174,13 +192,26 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
           return 'error' in r ? { ok: false as const, message: r.error } : { ok: true as const, workspaceId: r.workspaceId, sessionId: r.ptyId };
         },
       } : {}),
+      // A bot's message from a wake that carried outside text goes only to a
+      // task started from outside text (unknown counts as outside text).
+      taskTainted: (taskId) => ledger.get(taskId)?.dispatch?.origin.tainted !== false,
+      senderTainted: runningWakeTainted,
+      // A bot's resume starts a worker: its own worker budget applies.
+      botWorkerRefusal: (botId) => {
+        const store = getBotStore();
+        const profile = store?.get(botId);
+        if (!store || !profile) return 'the bot was removed';
+        const open = ledger.list({ openOnly: true }).filter((r) => r.dispatch?.origin.kind === 'bot' && r.dispatch.origin.botId === botId).length;
+        const c = checkWorkers(profile.budget, store.usageOf(botId), open + resumedLive(botId), 1, Date.now());
+        return c.ok ? null : `this bot's worker budget refuses another worker now (${c.reason})`;
+      },
       note,
       changed,
     });
     // A reclaimed worker's workspace still open (a failed task the owner has
     // not looked at, one they are viewing, one with a busy pane) runs no
-    // agent: it holds no live fan-out slot.
-    setDormantTaskWorkspaces(() => new Set(reclaimed.all().filter((r) => r.state === 'stopped').map((r) => workerWorkspaceOf(r))));
+    // agent: it holds no live fan-out slot (unless its task reopened).
+    setDormantTaskWorkspaces(() => new Set(reclaimed.all().filter((r) => r.state === 'stopped' && !taskOpen(r.taskId)).map((r) => workerWorkspaceOf(r))));
     offs.push(() => setDormantTaskWorkspaces(null));
     offs.push(() => setWorkerResumePorts(null));
     const sweep = setInterval(() => {
@@ -214,7 +245,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     // Open tasks, ended bot tasks whose worker is not reclaimed yet, resumed
     // workers.
     liveWorkers: () => ledger.list({ openOnly: true }).length
-      + (reclaimOn ? unreclaimedEndedWorkers(ledger.list({}), reclaimed, Date.now()) + reclaimed.all().filter((r) => r.state === 'resumed').length : 0),
+      + (reclaimOn ? unreclaimedEndedWorkers(ledger.list({}), reclaimed, Date.now()) + resumedLive() : 0),
     // A spawned worker whose row was not written: while its workspace lives
     // and still no row names it.
     stillHeld: (workspaceId) => !ledger.findByTaskWorkspace(workspaceId)

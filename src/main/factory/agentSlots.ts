@@ -17,6 +17,9 @@
 // and counts.
 
 export const SLOT_WAIT_MAX_MS = 30 * 60_000;
+/** A granted slot neither released nor held by then (its launch ended on a
+ *  path that did neither) stops counting: the cap never shrinks for good. */
+export const SLOT_GRANT_MAX_MS = 15 * 60_000;
 const POLL_MS = 2_000;
 
 export interface WaitingWorker {
@@ -43,6 +46,7 @@ export interface AgentSlotPorts {
   onWaiting?: (w: WaitingWorker, inUse: number, cap: number) => void;
   /** The waiting list changed. */
   changed?: () => void;
+  log?: (msg: string) => void;
   now?: () => number;
   maxWaitMs?: number;
   pollMs?: number;
@@ -59,8 +63,15 @@ interface Waiter {
   refusal?: () => string | null;
 }
 
+interface Grant {
+  botId?: string;
+  taskId?: string;
+  at: number;
+}
+
 export class AgentSlots {
-  private granted = 0;
+  /** Granted slots not yet released or held. */
+  private readonly grants = new Set<Grant>();
   /** Spawned workers with no ledger row, counted until stillHeld says no. */
   private readonly held = new Set<string>();
   private readonly queue: Waiter[] = [];
@@ -71,6 +82,12 @@ export class AgentSlots {
 
   /** Agents counted against the cap now. Never throws. */
   inUse(): number {
+    const at = (this.ports.now ?? Date.now)();
+    for (const g of [...this.grants]) {
+      if (at - g.at < SLOT_GRANT_MAX_MS) continue;
+      (this.ports.log ?? ((m: string) => console.warn(m)))(`[factory] the agent slot granted for ${g.taskId ?? 'a launch'} was never released; it no longer counts`);
+      this.grants.delete(g);
+    }
     for (const ws of [...this.held]) {
       let keep = false;
       try {
@@ -80,7 +97,7 @@ export class AgentSlots {
       }
       if (!keep) this.held.delete(ws);
     }
-    let n = this.granted + this.held.size;
+    let n = this.grants.size + this.held.size;
     try {
       n += Math.max(0, this.ports.runningBots()) + Math.max(0, this.ports.liveWorkers());
     } catch {
@@ -93,11 +110,20 @@ export class AgentSlots {
     return this.queue.map((q) => ({ ...q.w }));
   }
 
+  /** The tasks of `botId` waiting for a slot or holding a granted one (their
+   *  launch is under way and not yet registered). */
+  inFlight(botId: string): string[] {
+    const out = new Set<string>();
+    for (const q of this.queue) if (q.w.botId === botId) out.add(q.w.taskId);
+    for (const g of this.grants) if (g.botId === botId && g.taskId) out.add(g.taskId);
+    return [...out];
+  }
+
   /** Wait for a slot for a bot's new worker (FIFO). `refusal` is asked on
    *  every re-check while it waits: a reason ends the wait unlaunched. */
   acquire(w: Omit<WaitingWorker, 'since'>, refusal?: () => string | null): Promise<SlotGrant> {
     if (this.disposed) return Promise.resolve({ ok: false, reason: 'the agent factory stopped' });
-    if (this.queue.length === 0 && this.inUse() < this.cap()) return Promise.resolve(this.grant());
+    if (this.queue.length === 0 && this.inUse() < this.cap()) return Promise.resolve(this.grant(w));
     const now = this.ports.now ?? Date.now;
     const waiter: WaitingWorker = { ...w, since: now() };
     return new Promise<SlotGrant>((resolve) => {
@@ -146,7 +172,7 @@ export class AgentSlots {
     }
     while (this.queue.length > 0 && this.inUse() < this.cap()) {
       const q = this.queue.shift() as Waiter;
-      q.resolve(this.grant());
+      q.resolve(this.grant(q.w));
       changed = true;
     }
     if (changed) this.ports.changed?.();
@@ -170,15 +196,16 @@ export class AgentSlots {
     }
   }
 
-  private grant(): SlotGrant {
-    this.granted++;
+  private grant(w?: Pick<WaitingWorker, 'botId' | 'taskId'>): SlotGrant {
     let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
-      this.granted = Math.max(0, this.granted - 1);
+      this.grants.delete(g);
       this.kick();
     };
+    const g: Grant = { ...(w ? { botId: w.botId, taskId: w.taskId } : {}), at: (this.ports.now ?? Date.now)() };
+    this.grants.add(g);
     return {
       ok: true,
       release,

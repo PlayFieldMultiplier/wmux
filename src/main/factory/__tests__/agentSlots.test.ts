@@ -1,7 +1,7 @@
 // One budget for bots and workers: a bot's new worker past it waits for a
 // slot, first come first served, and a stop ends the wait.
 import { describe, expect, it, vi } from 'vitest';
-import { AgentSlots, type AgentSlotPorts } from '../agentSlots';
+import { AgentSlots, SLOT_GRANT_MAX_MS, type AgentSlotPorts } from '../agentSlots';
 
 function slots(over: Partial<AgentSlotPorts> & { bots?: () => number; workers?: () => number } = {}) {
   let now = 0;
@@ -101,5 +101,35 @@ describe('AgentSlots held workers', () => {
     const g = await s.acquire(w('a'));
     if (g.ok) g.hold('ws-task');
     expect(s.inUse()).toBe(0);
+  });
+});
+
+describe('AgentSlots grants (review fixes, PR #2164)', () => {
+  it('a grant neither released nor held stops counting after SLOT_GRANT_MAX_MS', async () => {
+    const { s, advance } = slots({ bots: () => 0, log: () => undefined });
+    const g = await s.acquire(w('a'));
+    expect(g.ok).toBe(true);
+    expect(s.inUse()).toBe(1);
+    advance(SLOT_GRANT_MAX_MS - 1);
+    expect(s.inUse()).toBe(1);
+    advance(1);
+    expect(s.inUse()).toBe(0);
+    // A late release of it changes nothing.
+    if (g.ok) g.release();
+    expect(s.inUse()).toBe(0);
+  });
+
+  it('lists a bot\'s launches under way: waiting or granted, until released', async () => {
+    const { s } = slots({ bots: () => 0 });
+    const a = await s.acquire(w('a'));
+    await s.acquire({ ...w('x'), botId: 'bot-0000000b' });
+    const b = await s.acquire(w('b'));
+    void s.acquire(w('c'));
+    await Promise.resolve();
+    expect(s.inFlight('bot-0000000a').sort()).toEqual(['a', 'b', 'c']);
+    if (a.ok) a.release();
+    if (b.ok) b.hold('ws-b');
+    await Promise.resolve();
+    expect(s.inFlight('bot-0000000a')).toEqual(['c']);
   });
 });

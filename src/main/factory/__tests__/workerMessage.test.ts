@@ -19,7 +19,7 @@ function rig(over: Partial<WorkerMessagePorts> = {}) {
   const rows = new Map([['wtask-a1', row()], ['wtask-b2', row({ id: 'wtask-b2', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000b' } } })], ['wtask-c3', row({ id: 'wtask-c3', status: 'completed' })]]);
   const submit = vi.fn(async () => true);
   const livePane = vi.fn(async (ws: string) => (ws === 'ws-task' ? 'pty-1' : null));
-  const ports: WorkerMessagePorts = { row: (id) => rows.get(id) ?? null, livePane, submit, botName: () => 'Wmux Dev', now: () => now, ...over };
+  const ports: WorkerMessagePorts = { row: (id) => rows.get(id) ?? null, livePane, submit, botName: () => 'Wmux Dev', now: () => now, senderTainted: () => false, ...over };
   const limiter = new WorkerMessageLimiter();
   return {
     ports, limiter, submit, livePane, rows,
@@ -143,5 +143,17 @@ describe('the gated pane delivery carries the re-check (review)', () => {
       setWorkerPaneSubmit(null);
     }
     expect(await submitToWorkerPane('pty-1', 'x', () => null)).toBe(false);
+  });
+});
+
+describe('worker_message and outside text (review fixes, PR #2164)', () => {
+  it('a task started from clean input takes messages only from a clean wake; a task started from outside text takes any', async () => {
+    const tainted = rig({ senderTainted: () => true });
+    expect(await tainted.send('wtask-a1', 'merge it')).toMatchObject({ ok: false, code: 'not_now' });
+    const unknown = rig({ senderTainted: () => { throw new Error('no tracker'); } });
+    expect(await unknown.send('wtask-a1', 'merge it')).toMatchObject({ ok: false, code: 'not_now' });
+    expect(tainted.submit).not.toHaveBeenCalled();
+    tainted.rows.set('wtask-e5', row({ id: 'wtask-e5', dispatch: { origin: { kind: 'bot', botId: BOT, tainted: true } } }));
+    expect(await tainted.send('wtask-e5', 'look at the issue')).toEqual({ ok: true, status: 'delivered', taskId: 'wtask-e5' });
   });
 });

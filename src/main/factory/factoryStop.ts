@@ -18,8 +18,10 @@
 //   6. a worker resumed after its task ended (workerReclaim.ts) has its agent
 //      stopped again.
 // The wake is marked stopped before it is interrupted, so the fan-out launch
-// check refuses at once; a task that fan-out was already launching is
-// stopped when it registers. 3 and 4 run even when the row could not be
+// check refuses at once; a task that fan-out was already launching (it held
+// an agent slot at the stop, agentSlots.ts) is stopped when it registers,
+// and only such a task: new work the bot starts afterwards runs. 3 and 4 run
+// even when the row could not be
 // written. Rows that ended by themselves are left alone; a task stopped
 // before has its worker stopped again (a session that outlived that stop),
 // counted only when one was left, so a second stop counts nothing.
@@ -27,6 +29,7 @@
 import type { LedgerEntry } from '../../shared/ledger';
 import type { LedgerListFilter, LedgerUpdateInput, LedgerUpdateResult } from '../../daemon/ledger/TaskLedger';
 import { markStoppedByOwner, unmarkStoppedByOwner } from '../deck/fanoutCallerNotify';
+import { getAgentSlots } from './agentSlots';
 
 /** The ledger summary of a task the owner stopped. */
 export const STOPPED_BY_OWNER = 'stopped by owner';
@@ -67,8 +70,13 @@ export interface FactoryStopPorts {
    *  it paused. Absent: no routines are kept. */
   pauseRoutines?: (botId?: string) => number;
   /** Stop the resumed workers of one bot, or of every bot (workerReclaim.ts):
-   *  their tasks ended, so step 2 does not reach them; how many it stopped. */
-  stopResumed?: (botId?: string) => Promise<number>;
+   *  their tasks ended, so step 2 does not reach them; how many it stopped
+   *  (and how many it could not). */
+  stopResumed?: (botId?: string) => Promise<number | { stopped: number; failed: number }>;
+  /** The tasks of a bot whose launch is under way past its launch check (an
+   *  agent slot granted, not yet registered), or null when that cannot be
+   *  told. Default: the factory's agent slots. */
+  launchesInFlight?: (botId: string) => string[] | null;
   log?: (msg: string) => void;
   now?: () => number;
 }
@@ -110,10 +118,15 @@ export const LATE_STOP_WINDOW_MS = 120_000;
 /** How far back a stopped task's worker is stopped again by a later stop. */
 export const STOP_RETRY_MS = 24 * 3_600_000;
 
-const STOPPED_WAKES_MAX = 500;
-const stoppedWakes = new Set<string>();
-/** botId → until when a task it registers is stopped on registration. */
-const lateStops = new Map<string, number>();
+/** How long a stopped wake is remembered: longer than any launch of it can
+ *  still be waiting (a slot wait, an approval). */
+export const STOPPED_WAKE_KEEP_MS = 24 * 3_600_000;
+/** wakeId → when it was stopped. */
+const stoppedWakes = new Map<string, number>();
+/** botId → until when, and which of its tasks (their launch was under way at
+ *  the stop) are stopped as they register. `taskIds` null: which ones could
+ *  not be told, so any task it registers until then is. */
+const lateStops = new Map<string, { until: number; taskIds: ReadonlySet<string> | null }>();
 /** botId → the wake of a bot that stopped itself (keepTurn): a task it
  *  registers while that wake still runs is stopped on registration; once the
  *  turn has ended the bot may start work again at once. */
@@ -125,13 +138,19 @@ export function isWakeStoppedByOwner(wakeId: string): boolean {
   return stoppedWakes.has(wakeId);
 }
 
-function rememberStoppedWake(wakeId: string): void {
-  stoppedWakes.add(wakeId);
-  while (stoppedWakes.size > STOPPED_WAKES_MAX) {
-    const oldest = stoppedWakes.values().next().value as string | undefined;
-    if (oldest === undefined) break;
-    stoppedWakes.delete(oldest);
-  }
+function rememberStoppedWake(wakeId: string, now: number): void {
+  for (const [id, at] of stoppedWakes) if (now - at > STOPPED_WAKE_KEEP_MS) stoppedWakes.delete(id);
+  stoppedWakes.delete(wakeId);
+  stoppedWakes.set(wakeId, now);
+}
+
+function pruneLateStops(now: number): void {
+  for (const [botId, l] of lateStops) if (now > l.until) lateStops.delete(botId);
+}
+
+/** Tests only: how many bots have a late stop remembered. */
+export function __lateStopCountForTesting(): number {
+  return lateStops.size;
 }
 
 /** Tests only. */
@@ -208,13 +227,23 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
     ids = scope.botId !== undefined ? [scope.botId] : [];
   }
   const runtime = ports.runtime();
+  pruneLateStops(now);
+  const inFlight = ports.launchesInFlight ?? ((botId: string) => getAgentSlots()?.inFlight(botId) ?? null);
   for (const botId of ids) {
-    if (scope.keepTurn !== true) lateStops.set(botId, now + LATE_STOP_WINDOW_MS);
+    if (scope.keepTurn !== true) {
+      let taskIds: string[] | null = null;
+      try {
+        taskIds = inFlight(botId);
+      } catch {
+        taskIds = null;
+      }
+      lateStops.set(botId, { until: now + LATE_STOP_WINDOW_MS, taskIds: taskIds ? new Set(taskIds) : null });
+    }
     if (!runtime) continue;
     try {
       const turn = runtime.currentTurn(botId);
       if (!turn) continue;
-      if (turn.wakeId) rememberStoppedWake(turn.wakeId);
+      if (turn.wakeId) rememberStoppedWake(turn.wakeId, now);
       if (scope.keepTurn === true) {
         if (turn.wakeId) turnStops.set(botId, turn.wakeId);
         continue;
@@ -252,7 +281,15 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
   }
   if (ports.stopResumed) {
     try {
-      workersStopped += await ports.stopResumed(scope.botId);
+      const r = await ports.stopResumed(scope.botId);
+      if (typeof r === 'number') workersStopped += r;
+      else {
+        workersStopped += r.stopped;
+        if (r.failed > 0) {
+          failures++;
+          log(`[factory] stop: ${r.failed} resumed worker(s) were not stopped`);
+        }
+      }
     } catch (err) {
       failures++;
       log(`[factory] stop: resumed workers were not stopped: ${String(err)}`);
@@ -274,18 +311,21 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
 }
 
 /**
- * A task registered by a bot within LATE_STOP_WINDOW_MS of the owner
- * stopping that bot came from a fan-out that was already launching: it is
- * stopped as it registers. So is one a bot that stopped itself registers
- * while the turn that stopped is still running. Returns the unsubscribe.
+ * A task whose launch was under way when the owner stopped its bot (it held
+ * an agent slot then) is stopped as it registers, within
+ * LATE_STOP_WINDOW_MS; a task the bot starts after the stop is not. So is
+ * one a bot that stopped itself registers while the turn that stopped is
+ * still running. Returns the unsubscribe.
  */
 export function installLateStopSweep(ports: FactoryStopPorts & { onTransition: (fn: (t: { entry: LedgerEntry; from: string | null }) => void) => () => void }): () => void {
   const log = ports.log ?? ((m: string) => console.warn(m));
   return ports.onTransition((t) => {
     const botId = t.entry.dispatch?.origin.kind === 'bot' ? t.entry.dispatch.origin.botId : undefined;
     if (t.from !== null || !botId) return;
-    const until = lateStops.get(botId);
-    const late = until !== undefined && (ports.now ?? Date.now)() <= until;
+    const now = (ports.now ?? Date.now)();
+    pruneLateStops(now);
+    const l = lateStops.get(botId);
+    const late = l !== undefined && now <= l.until && (l.taskIds === null || l.taskIds.has(t.entry.id));
     const stoppedWake = turnStops.get(botId);
     let inStoppedTurn = false;
     if (stoppedWake !== undefined) {
