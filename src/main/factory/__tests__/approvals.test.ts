@@ -509,6 +509,22 @@ describe('the phone operator\'s route (main side)', () => {
     expect(handlePhoneBotApprovalCommand('workspaces.botApprovalDecide', { requestId: req.requestId, decision: 'approve' }, svc)).toEqual({ refused: { code: 'not_pending', message: 'the request is denied' } });
   });
 
+  it('logs the paired device a decision came from; a malformed device id is not logged', async () => {
+    const { handlePhoneBotApprovalCommand } = await import('../../phone/PhoneBotApprovals');
+    const logs: string[] = [];
+    const r = rig({ log: (line: string) => logs.push(line) });
+    const svc = () => r.svc;
+    const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'green' });
+    handlePhoneBotApprovalCommand('workspaces.botApprovalDecide', { requestId: req.requestId, decision: 'approve', deviceId: 'dev-1' }, svc);
+    handlePhoneBotApprovalCommand('workspaces.botApprovalDecide', { requestId: req.requestId, decision: 'undo', deviceId: 'dev-1' }, svc);
+    handlePhoneBotApprovalCommand('workspaces.botApprovalDecide', { requestId: req.requestId, decision: 'deny', deviceId: 'a b\nc' }, svc);
+    expect(logs).toEqual([
+      `[factory] approval ${req.requestId} approved by owner (phone, device dev-1)`,
+      `[factory] approval ${req.requestId} undone by owner (phone, device dev-1)`,
+      `[factory] approval ${req.requestId} denied by owner (phone)`,
+    ]);
+  });
+
   it('refuses a malformed id or decision, an unknown request, and answers unavailable before the store runs', async () => {
     const { handlePhoneBotApprovalCommand } = await import('../../phone/PhoneBotApprovals');
     const r = rig();

@@ -11,8 +11,9 @@
 //   - the main window (BOT_APPROVAL_IPC, ipc/handlers/approval.handler.ts:
 //     sender-checked) — the card's Approve / Deny / Always allow / Undo and
 //     the composer's "Approve N pending" chip;
-//   - the phone's operator route (`decide(…, 'phone')`, operator token only:
-//     phone/PhoneBotApprovals.ts, daemon/web/botApprovals.ts);
+//   - the phone's approval route (`decide(…, 'phone')`: the operator token,
+//     or a paired device with an explicit input grant, whose id the log
+//     records; phone/PhoneBotApprovals.ts, daemon/web/botApprovals.ts);
 //   - a message the owner typed: a `human` card (written only by the owner's
 //     composer, or a phone using the operator token) in the same thread, after the pending approval
 //     cards, that isOwnerApprovalText reads as "go" approves the thread's
@@ -294,8 +295,9 @@ export function ruleCovers(rule: ApprovalRule, r: Pick<ApprovalRequest, 'action'
 const PHONE_OPERATOR_POST = `phone:${createHash('sha256').update('operator').digest('hex').slice(0, 16)}:`;
 
 /** Whether an owner card may approve by its words: the desktop composer's,
- *  or a phone's sent with the operator token (a paired device decides
- *  nothing, as on the operator-only approval route). Pure. */
+ *  or a phone's sent with the operator token (a paired device's message
+ *  approves nothing; a device with an explicit input grant decides on the
+ *  approval route). Pure. */
 export function typedApprovalSourceAllowed(card: Pick<RoomCard, 'clientPostId'>): boolean {
   const id = card.clientPostId;
   return typeof id !== 'string' || !id.startsWith('phone:') || id.startsWith(PHONE_OPERATOR_POST);
@@ -614,16 +616,19 @@ export class ApprovalService {
     return { ok: true };
   }
 
-  /** The owner's decision on one request (main window or phone only). */
-  decide(raw: unknown, by: 'desktop' | 'phone'): { ok: true; request: ApprovalView; rule?: ApprovalRule } | Refusal {
+  /** The owner's decision on one request (main window or phone only).
+   *  `deviceId`: the paired device a phone decision came from (the
+   *  operator token has none); it is logged with the decision. */
+  decide(raw: unknown, by: 'desktop' | 'phone', deviceId?: string): { ok: true; request: ApprovalView; rule?: ApprovalRule } | Refusal {
     const p = (raw && typeof raw === 'object' ? raw : {}) as Partial<ApprovalDecideRequest>;
     const r = typeof p.requestId === 'string' ? this.requests.get(p.requestId) : undefined;
     if (!r) return refuse('not_found', 'no such request');
     this.expire();
     const cur = this.requests.get(r.requestId) as StoredApproval;
+    const via = by === 'phone' && deviceId ? `phone, device ${deviceId}` : by;
     switch (p.decision) {
       case 'approve':
-        return this.approve(cur, 'owner', by);
+        return this.approve(cur, 'owner', via);
       case 'always': {
         // Only merges are carried out by a rule (and never a release or a
         // push to a default branch).
@@ -636,13 +641,14 @@ export class ApprovalService {
         };
         if (!existing && this.rules.size >= APPROVAL_LIMITS.RULES_MAX) return refuse('too_many', `at most ${APPROVAL_LIMITS.RULES_MAX} rules`);
         // The rule and the approval are one write: neither stands alone.
-        const res = this.approve(cur, 'owner', by, undefined, existing ? undefined : rule);
+        const res = this.approve(cur, 'owner', via, undefined, existing ? undefined : rule);
         return res.ok ? { ...res, rule } : res;
       }
       case 'deny': {
         if (cur.state !== 'pending') return refuse('not_pending', `the request is ${cur.state}`);
         const next: StoredApproval = { ...cur, state: 'denied', decidedBy: 'owner', decidedAt: this.now(), updatedAt: this.now() };
         if (!this.put(next)) return refuse('write_failed', 'the decision could not be stored');
+        this.log(`[factory] approval ${cur.requestId} denied by owner (${via})`);
         this.closeCard(next);
         this.changed(next.workspaceId);
         this.tellDecided(next, `The owner denied: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'Do not ask for it again unless the owner says so.');
@@ -657,6 +663,7 @@ export class ApprovalService {
         delete next.executeAfter;
         delete next.ruleId;
         if (!this.put(next)) return refuse('write_failed', 'the decision could not be stored');
+        this.log(`[factory] approval ${cur.requestId} undone by owner (${via})`);
         this.clearTimer(next.requestId);
         this.reopenCard(next);
         this.changed(next.workspaceId);
@@ -667,7 +674,7 @@ export class ApprovalService {
     }
   }
 
-  private approve(cur: StoredApproval, approver: ApprovalApprover, by: 'desktop' | 'phone' | 'typed' | 'rule', ruleId?: string, newRule?: ApprovalRule): { ok: true; request: ApprovalView } | Refusal {
+  private approve(cur: StoredApproval, approver: ApprovalApprover, by: string, ruleId?: string, newRule?: ApprovalRule): { ok: true; request: ApprovalView } | Refusal {
     if (cur.state !== 'pending') return refuse('not_pending', `the request is ${cur.state}`);
     const at = this.now();
     const next: StoredApproval = {

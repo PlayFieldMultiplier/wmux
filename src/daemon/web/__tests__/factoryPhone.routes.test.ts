@@ -9,6 +9,7 @@ import type { MoaWakeService } from '../../phone/MoaWakeService';
 import { DesktopPhoneBridge } from '../../phone/DesktopPhoneBridge';
 import { RoomWriter } from '../../../main/factory/roomWriter';
 import { handlePhoneRoomCommand, withPhoneFactory, type PhoneFactoryPorts } from '../../../main/phone/PhoneFactory';
+import { handlePhoneBotApprovalCommand } from '../../../main/phone/PhoneBotApprovals';
 import { parsePhoneSidebarSnapshot } from '../../../shared/phoneFleetSidebar';
 import { PHONE_ROOM_LIMITS } from '../../../shared/phoneRooms';
 import type { BotProfile, BotStatus } from '../../../shared/bot';
@@ -30,6 +31,11 @@ const bot = (over: Partial<BotProfile>): BotProfile => ({
   ...over,
 } as BotProfile);
 
+const APPROVAL = {
+  requestId: 'apr-aaaaaaaa1', action: 'merge', workspaceId: 'ws-1', threadId: 'general', botId: 'bot-1111bbbb',
+  repoKey: 'github.com/o/r', prNumber: 3, reason: 'ready', tainted: false, state: 'pending', createdAt: 1, updatedAt: 1,
+};
+
 const legacySidebar = {
   activeWorkspaceId: 'ws-1',
   workspaces: [{ id: 'ws-1', order: 0, pinned: false }, { id: 'ws-hq', order: 1, pinned: false }],
@@ -46,6 +52,7 @@ describe('factory phone routes', () => {
   let handoffs: Handoff[];
   let legacyMoa: boolean;
   let roomDir: string;
+  let approvals: { get: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     roomDir = fs.mkdtempSync(path.join(tmp, 'rooms-'));
@@ -55,6 +62,7 @@ describe('factory phone routes', () => {
     roomsUp = true;
     handoffs = [];
     legacyMoa = false;
+    approvals = { get: vi.fn(() => APPROVAL), decide: vi.fn(() => ({ ok: true, request: { ...APPROVAL, state: 'denied', decidedBy: 'owner', decidedAt: 2 } })) };
   });
   afterEach(async () => { if (server?.isRunning) await server.stop(); server = undefined; });
 
@@ -79,6 +87,8 @@ describe('factory phone routes', () => {
         if (data.command === 'workspaces.list') {
           const parsed = parsePhoneSidebarSnapshot({ ...legacySidebar, ...(legacyMoa ? { moa: true } : {}) })!;
           result = { workspaces: [], sidebar: withPhoneFactory(parsed, ports()) };
+        } else if (data.command.startsWith('workspaces.botApproval')) {
+          result = handlePhoneBotApprovalCommand(data.command, data.payload, () => approvals as never);
         } else {
           result = handlePhoneRoomCommand(data.command, data.payload, ports());
         }
@@ -89,12 +99,25 @@ describe('factory phone routes', () => {
     if (opts.desktop !== false) {
       bridge.register('main', opts.announce ?? ['moa.wake', 'factory.message', 'workspaces.roomThreads', 'workspaces.roomCards']);
     }
+    // d1: input granted explicitly; d2: paired before grants existed (may
+    // type, grant never set); d3: no input grant; d4: revoked; d5: revoked
+    // while its request is read (every credential check after the first).
+    const roster: Record<string, { allowInput: boolean; explicit: boolean }> = {
+      d1: { allowInput: true, explicit: true },
+      d2: { allowInput: true, explicit: false },
+      d3: { allowInput: false, explicit: false },
+      d5: { allowInput: true, explicit: true },
+    };
+    let d5Checks = 0;
     const devices: WebDeviceResolver = {
       async mint() { throw new Error('unused'); },
       async resolve(deviceId, secret) {
-        return deviceId === 'd1' && secret === 's1' ? { ok: true, deviceId, allowInput: true } : { ok: false, reason: 'unknown' };
+        if (deviceId === 'd4' || (deviceId === 'd5' && d5Checks++ > 0)) return { ok: false, reason: 'revoked' };
+        const d = roster[deviceId];
+        return d && secret === `s${deviceId.slice(1)}` ? { ok: true, deviceId, allowInput: d.allowInput } : { ok: false, reason: 'unknown' };
       },
       list: () => [{ deviceId: 'd1', name: 'd1', createdAt: 0, lastSeenAt: 0, allowInput: true }],
+      hasExplicitInputGrant: (deviceId) => roster[deviceId]?.explicit === true && deviceId !== 'd4',
     };
     const live = [{ id: 's1', cwd: '/x', cols: 80, rows: 24, state: 'detached', env: { WMUX_WORKSPACE_ID: 'ws-1', WMUX_WORKSPACE_NAME: 'One' }, cmd: '/bin/zsh' }];
     const sessionManager = Object.assign(new EventEmitter(), {
@@ -106,12 +129,18 @@ describe('factory phone routes', () => {
       moaWake: () => ({}) as MoaWakeService,
       moaPane: () => null,
     });
-    await server.start({ port: 0, host: '127.0.0.1', allowInput: opts.allowInput ?? true, allowUpload: false, allowTranscript: opts.allowTranscript ?? true });
+    const info = await server.start({ port: 0, host: '127.0.0.1', allowInput: opts.allowInput ?? true, allowUpload: false, allowTranscript: opts.allowTranscript ?? true });
     const get = async (route: string, auth = 'Bearer d1.s1', caps?: string) => {
       const res = await fetch(`http://127.0.0.1:${server!.status().port}${route}`, { headers: { Authorization: auth, ...(caps !== undefined ? { 'X-Wmux-Client-Caps': caps } : {}) } });
       return { status: res.status, body: await res.json() as Record<string, unknown>, cache: res.headers.get('cache-control') };
     };
-    return { get, bridge };
+    const post = async (route: string, body: unknown, auth = 'Bearer d1.s1') => {
+      const res = await fetch(`http://127.0.0.1:${server!.status().port}${route}`, {
+        method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      return { status: res.status, body: await res.json() as Record<string, unknown>, cache: res.headers.get('cache-control') };
+    };
+    return { get, post, bridge, operator: `Bearer ${info.token as string}` };
   }
 
   describe('/api/config', () => {
@@ -271,6 +300,52 @@ describe('factory phone routes', () => {
       expect(await r.get('/api/rooms/ws-1/cards')).toMatchObject({ status: 503, body: { error: 'rooms-unavailable' } });
       r.bridge.disconnect('main');
       expect(await r.get('/api/rooms/ws-1/threads')).toMatchObject({ status: 503, body: { error: 'desktop-unavailable' } });
+    });
+  });
+
+  describe('/api/bot-approvals', () => {
+    const APPROVAL_COMMANDS = ['workspaces.botApproval', 'workspaces.botApprovalDecide'];
+    const route = '/api/bot-approvals/apr-aaaaaaaa1';
+    const decide = (r: { post: (route: string, body: unknown, auth?: string) => Promise<{ status: number; body: Record<string, unknown> }> }, auth?: string) =>
+      r.post(`${route}/decision`, { decision: 'deny' }, auth);
+
+    it('/api/config announces the routes to the operator and to a device', async () => {
+      const r = await start({ announce: APPROVAL_COMMANDS });
+      expect((await r.get('/api/config', r.operator)).body.botApprovals).toBe(true);
+      expect((await r.get('/api/config')).body.botApprovals).toBe(true);
+      await server!.stop();
+      const without = await start();
+      expect((await without.get('/api/config')).body).not.toHaveProperty('botApprovals');
+    });
+
+    it('every paired device reads; the operator and an explicitly granted device decide', async () => {
+      const r = await start({ announce: APPROVAL_COMMANDS });
+      for (const auth of [r.operator, 'Bearer d1.s1', 'Bearer d2.s2', 'Bearer d3.s3']) {
+        expect(await r.get(route, auth)).toMatchObject({ status: 200, cache: 'no-store', body: { request: { requestId: 'apr-aaaaaaaa1', state: 'pending' } } });
+      }
+      expect(await decide(r, r.operator)).toMatchObject({ status: 200, body: { request: { state: 'denied', decidedBy: 'owner' } } });
+      expect(approvals.decide).toHaveBeenLastCalledWith({ requestId: 'apr-aaaaaaaa1', decision: 'deny' }, 'phone', undefined);
+      expect(await decide(r, 'Bearer d1.s1')).toMatchObject({ status: 200, body: { request: { state: 'denied' } } });
+      // Main records the device that decided.
+      expect(approvals.decide).toHaveBeenLastCalledWith({ requestId: 'apr-aaaaaaaa1', decision: 'deny' }, 'phone', 'd1');
+    });
+
+    it('refuses a legacy grant, no grant, a revoked device and a device revoked mid-request', async () => {
+      const r = await start({ announce: APPROVAL_COMMANDS });
+      expect(await decide(r, 'Bearer d2.s2')).toMatchObject({ status: 403, body: { error: 'read-only: this device has no explicit input grant' } });
+      expect(await decide(r, 'Bearer d3.s3')).toMatchObject({ status: 403, body: { error: 'read-only: this device was paired without permission to type' } });
+      expect(await decide(r, 'Bearer d4.s4')).toMatchObject({ status: 401, body: { error: 'unauthorized', reason: 'revoked' } });
+      expect((await r.get(route, 'Bearer d4.s4')).status).toBe(401);
+      expect(await decide(r, 'Bearer d5.s5')).toMatchObject({ status: 401, body: { error: 'authorization-expired' } });
+      expect(approvals.decide).not.toHaveBeenCalled();
+    });
+
+    it('a read-only server answers reads and refuses every decision', async () => {
+      const r = await start({ announce: APPROVAL_COMMANDS, allowInput: false });
+      expect((await r.get(route)).status).toBe(200);
+      expect(await decide(r, r.operator)).toMatchObject({ status: 403, body: { error: 'read-only' } });
+      expect(await decide(r, 'Bearer d1.s1')).toMatchObject({ status: 403, body: { error: 'read-only' } });
+      expect(approvals.decide).not.toHaveBeenCalled();
     });
   });
 });

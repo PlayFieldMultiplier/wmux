@@ -183,7 +183,7 @@ import { FACTORY_PHONE_MESSAGE_CAPABILITY, MOA_WAKE_COMMAND } from '../../shared
 import { FLEET_TICKET_ROUTE_PREFIX, fleetTicketDetailResponse, fleetTicketsFields } from './fleetTickets';
 import { factoryOn, moaConfigFields } from './factoryConfig';
 import { ROOMS_ROUTE, roomsResponse, roomsSupported } from './rooms';
-import { BOT_APPROVALS_ROUTE, botApprovalsResponse, botApprovalsSupported } from './botApprovals';
+import { BOT_APPROVALS_ROUTE, botApprovalDecisionRefusal, botApprovalsResponse, botApprovalsSupported, type BotApprovalsCaller } from './botApprovals';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
 // Type only — the channel service implementation stays out of this module.
@@ -2783,9 +2783,9 @@ export class WebTerminalServer {
         // here. OMITTED, not false, exactly when they would answer 503
         // `channels-unavailable` — the shape a pre-channels daemon serves.
         ...(this.deps.channels ? { channels: true } : {}),
-        // `/api/bot-approvals/*` answer here: the operator token and a
-        // desktop that announced both commands. OMITTED otherwise.
-        ...(principal.kind === 'operator' && botApprovalsSupported(this.availableDesktop()) ? { botApprovals: true } : {}),
+        // `/api/bot-approvals/*` answer here: a desktop that announced both
+        // commands. OMITTED otherwise. A decision still needs the grant.
+        ...(botApprovalsSupported(this.availableDesktop()) ? { botApprovals: true } : {}),
         // Whether `/api/devices` answers here, and how much of the roster this
         // caller may see and act on (see handleDeviceList). OMITTED, not
         // false, when the device store cannot list, revoke and set grants —
@@ -2986,14 +2986,22 @@ export class WebTerminalServer {
         .then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'}));
       return;
     }
-    // A bot's approval request, read or decided by the operator (botApprovals.ts).
+    // A bot's approval request: read by any caller, decided by the operator
+    // or a device with an explicit input grant (botApprovals.ts).
     const botApprovalRoute = BOT_APPROVALS_ROUTE.exec(p);
     if (botApprovalRoute && ((req.method === 'GET' && !botApprovalRoute[2]) || (req.method === 'POST' && botApprovalRoute[2]))) {
-      const answer = (body: unknown) => void botApprovalsResponse(botApprovalRoute[1], botApprovalRoute[2] ? 'decision' : 'get', body, { operator: principal.kind === 'operator', desktop: this.availableDesktop(), readOnly: this.opts?.allowInput !== true })
+      const caller = this.botApprovalsCaller(principal);
+      const readOnly = this.opts?.allowInput !== true;
+      const reauthorize = async () => {
+        const fresh = await this.authenticate(req,url,false).catch(() => ({ok:false as const}));
+        return fresh.ok && sameCaller(principal, fresh.principal) ? this.botApprovalsCaller(fresh.principal) : null;
+      };
+      const answer = (body: unknown) => void botApprovalsResponse(botApprovalRoute[1], botApprovalRoute[2] ? 'decision' : 'get', body, { caller, desktop: this.availableDesktop(), readOnly, reauthorize })
         .then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'}));
-      if (req.method === 'GET') answer(undefined);
-      else if (principal.kind !== 'operator') this.json(res,403,{error:'operator-only'},{'Cache-Control':'no-store'});
-      else if (this.opts?.allowInput !== true) this.json(res,403,{error:'read-only'},{'Cache-Control':'no-store'});
+      if (req.method === 'GET') { answer(undefined); return; }
+      // Refused before the body is read; checked again once it is in.
+      const refused = botApprovalDecisionRefusal(caller, readOnly);
+      if (refused) this.json(res,refused.status,refused.body,{'Cache-Control':'no-store'});
       else this.readJsonBody(req,res,answer);
       return;
     }
@@ -9848,6 +9856,15 @@ export class WebTerminalServer {
   private mayInput(principal: WebPrincipal): boolean {
     if (this.opts?.allowInput !== true) return false;
     return principal.kind === 'operator' || principal.allowInput;
+  }
+
+  /** A principal as the bot approval routes see it: a device's grant under
+   *  the ceiling and whether the roster holds one set explicitly. */
+  private botApprovalsCaller(principal: WebPrincipal): BotApprovalsCaller {
+    if (principal.kind === 'operator') return { kind: 'operator' };
+    let explicitInputGrant = false;
+    try { explicitInputGrant = this.deps.devices?.hasExplicitInputGrant?.(principal.deviceId) === true; } catch { explicitInputGrant = false; }
+    return { kind: 'device', deviceId: principal.deviceId, mayInput: this.mayInput(principal), explicitInputGrant };
   }
 
   /** The 403 for a caller the grant above refused, worded for whichever gate said no. */

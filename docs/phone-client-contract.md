@@ -4228,11 +4228,24 @@ bot-authored), checked before anything else; no input grant. Every answer is
 
 A bot asks the owner before a merge, a push to a default branch, opening or
 closing an issue, a comment or a release; the request shows as an `approval`
-card whose `refs.approvalId` names it. The operator answers it here. Both
-routes take the **operator token only**: a paired device gets
-`403 {error:"operator-only"}`, checked first. `/api/config` carries
-`botApprovals: true` for the operator when the attached desktop answers
-them (omitted otherwise).
+card whose `refs.approvalId` names it. The owner answers it here.
+
+- **Read** (`GET`): the operator token or any paired device that is not
+  revoked. No input grant is needed: the view carries no bot-written text.
+- **Decide** (`POST …/decision`): the operator token, or a paired device whose
+  input grant is on **and was set explicitly** — the rule of
+  [Phone git write actions](#phone-git-write-actions-push-pr-create-merge-not-served-yet).
+  A device paired before grants existed reads as allowed for typing but is
+  refused here until the desktop sets its grant in "Paired devices". A server
+  started without `--allow-input` takes no decision from anyone. These checks
+  run before the body is read and again once it is in, on the credential the
+  request carries: it must still be the same caller (the operator token, or
+  the same device), not revoked and still granted, or the decision is refused
+  and nothing is decided. The desktop records which device decided.
+
+`/api/config` carries `botApprovals: true` for every caller when the attached
+desktop answers these routes (omitted otherwise). It does not say whether
+this caller may decide; a refused decision answers `403` as below.
 
 **`GET /api/bot-approvals/:requestId`** — the request now.
 
@@ -4267,8 +4280,11 @@ and repository, merges only (`canAlwaysAllow`).
 |---|---|
 | `200 {request}` | The request after the read or the decision. |
 | `400 {error:"invalid-decision"}` | A malformed body. |
-| `403 {error:"operator-only"}` | Not the operator token. |
+| `401 {error:"unauthorized", reason?}` | The credential does not authenticate (unknown, or `reason:"revoked"`). |
+| `401 {error:"authorization-expired"}` | A decision whose credential no longer authenticates as the same caller once the body was read (for example, the device was revoked meanwhile). Nothing was decided. |
 | `403 {error:"read-only"}` | A decision on a server started without `--allow-input` (reads still answer). |
+| `403 {error:"read-only: this device was paired without permission to type", detail}` | A decision from a device without the input grant. |
+| `403 {error:"read-only: this device has no explicit input grant", detail}` | A decision from a device whose grant was never set explicitly (paired before grants existed). The desktop has to set it first. |
 | `404 {error:"approval-not-found"}` | No such request. |
 | `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the merge started), `not_ruleable`, `too_many`, `write_failed`. |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |

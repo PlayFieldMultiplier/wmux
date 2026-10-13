@@ -1,12 +1,14 @@
-// ─── A bot's approval requests, as the phone's operator sees and answers them
+// ─── A bot's approval requests, as the phone sees and answers them
 //
 //   GET  /api/bot-approvals/:requestId            → 200 {request}
 //   POST /api/bot-approvals/:requestId/decision   {decision, ruleScope?} → 200 {request}
 //
 // The requests live in Electron main (factory/approvals.ts). The daemon gates
-// (the operator token only: a paired device gets 403 `operator-only`), asks
-// main over the desktop bridge with the two commands below, and parses main's
-// reply with the same allowlist main projected with. A decision is main's:
+// (any caller reads; a decision takes the operator token or a paired device
+// with an explicit input grant, and the daemon sends that device's id along
+// as `deviceId`), asks main over the desktop bridge with the two commands
+// below, and parses main's reply with the same allowlist main projected
+// with. A decision is main's:
 // `ApprovalService.decide(…, 'phone')`, the same rules as the desktop card
 // (an approved merge waits APPROVAL_UNDO_MS with Undo; `always` is offered
 // for a merge only). The view carries no bot-written text (the request's
