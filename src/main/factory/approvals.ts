@@ -18,8 +18,9 @@
 //     composer, or a phone using the operator token) in the same thread, after the pending approval
 //     cards, that isOwnerApprovalText reads as "go" approves the thread's
 //     pending requests shown right above it (after the owner's previous
-//     message there) — unless a question asked since then is still open
-//     (the words may answer that instead).
+//     message there; a reply to one approval card, that request only) —
+//     unless a question asked since then is still open (the words may
+//     answer that instead).
 //
 // A request's card goes where the bot talks with the owner — the thread of
 // the owner's latest message to it, usually `general` — and links the PR's
@@ -336,6 +337,8 @@ export function typedApprovalTargets(
   const above: Array<{ id: string; seq: number }> = [];
   for (const r of pending) {
     if (r.state !== 'pending' || r.workspaceId !== message.workspaceId || r.threadId !== message.threadId || !r.cardId || !to.has(r.botId)) continue;
+    // A reply to one approval card is about that request only.
+    if (message.replyTo && r.cardId !== message.replyTo) continue;
     const card = cards(r.cardId);
     if (!card || card.kind !== 'approval' || card.threadId !== message.threadId || card.seq >= message.seq || card.seq <= previousOwner) continue;
     if (before.length > 0 && card.seq < reach) continue;
@@ -364,7 +367,7 @@ export class ApprovalService {
   private rules = new Map<string, ApprovalRule>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
   /** Requests asked per turn (`<wakeId>#<attempt>`), for default keys. */
-  private readonly ordinals = new Map<string, number>();
+  private readonly ordinals = new Map<string, { n: number; botId: string; wakeId: string }>();
   /** Owner cards already read for approval: each is read once. */
   private readonly typedSeen = new Set<string>();
   /** Merge approvals the file held, now pending again (reopened on resume). */
@@ -477,7 +480,7 @@ export class ApprovalService {
     if (!repoKey || !repoPath) return refuse('no_repo', 'this bot has no repository to act on');
 
     // One request per (bot, key): a retried turn gets the first one back.
-    const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(wake);
+    const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(bot.botId, wake);
     const prior = [...this.requests.values()].find((r) => r.botId === bot.botId && r.clientRequestId === clientRequestId);
     if (prior) return { ok: true, request: approvalView(prior), duplicate: true };
     const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending');
@@ -568,14 +571,31 @@ export class ApprovalService {
 
   /** `wake:<wakeId>:a<n>`, n counting this turn's requests from 1: a
    *  retried turn (the next attempt) asks again under the same keys. */
-  private nextOrdinal(wake: ApprovalWake): string {
+  private nextOrdinal(botId: string, wake: ApprovalWake): string {
     const turn = `${wake.wakeId}#${wake.attempt}`;
-    const n = (this.ordinals.get(turn) ?? 0) + 1;
-    this.ordinals.set(turn, n);
+    const n = (this.ordinals.get(turn)?.n ?? 0) + 1;
+    this.ordinals.delete(turn);
+    this.ordinals.set(turn, { n, botId, wakeId: wake.wakeId });
+    // A turn still running keeps its count: the oldest turn that ended goes
+    // first, and a running one only when every kept turn is running.
     while (this.ordinals.size > 200) {
-      const first = this.ordinals.keys().next().value;
-      if (first === undefined) break;
-      this.ordinals.delete(first);
+      let drop: string | undefined;
+      for (const [key, v] of this.ordinals) {
+        if (key === turn) continue;
+        let running = false;
+        try {
+          running = this.ports.runningWake(v.botId)?.wakeId === v.wakeId;
+        } catch {
+          running = false;
+        }
+        if (!running) {
+          drop = key;
+          break;
+        }
+      }
+      drop ??= this.ordinals.keys().next().value;
+      if (drop === undefined) break;
+      this.ordinals.delete(drop);
     }
     return `wake:${wake.wakeId}:a${n}`;
   }
@@ -770,14 +790,18 @@ export class ApprovalService {
     const rule = [...this.rules.values()].find((x) => ruleCovers(x, r));
     if (!rule) return;
     let why: string | null;
-    if (r.tainted) why = 'started from outside text';
+    // A rule decides only a request whose card the owner can see.
+    if (!r.cardId) why = 'its card could not be posted';
+    else if (r.tainted) why = 'started from outside text';
     else if (r.action !== 'merge') why = 'only merges are carried out by a rule';
     else {
       const host = this.ports.merge();
       why = host ? await host.ruleCheck(r).catch((err: unknown) => `check failed: ${String(err)}`) : 'the merge lane is not running';
     }
     const cur = this.requests.get(requestId);
-    if (!cur || cur.state !== 'pending') return;
+    // Any change to the request while the check ran (an owner decision, an
+    // undo) stands: the check's result applies only to the request it read.
+    if (!cur || cur !== r || cur.state !== 'pending') return;
     // The owner may have revoked it while the check read GitHub.
     const still = this.rules.get(rule.ruleId);
     if (!why && (!still || !ruleCovers(still, cur))) why = 'the rule was revoked';
@@ -1128,17 +1152,23 @@ function params(raw: unknown): Record<string, unknown> {
 }
 
 /** The bot RPCs: a bot only asks and reads its own requests. */
-export function registerApprovalRpc(router: Pick<FactoryRouter, 'register'>, service: () => ApprovalService | null): void {
+/** `startFailure`: why the store did not start (approvals stay off until it
+ *  is fixed), or null while it may still start. */
+export function registerApprovalRpc(router: Pick<FactoryRouter, 'register'>, service: () => ApprovalService | null, startFailure: () => string | null = () => null): void {
+  const notStarted = (): Refusal => {
+    const why = startFailure();
+    return refuse('not_started', why ? `approvals are off until the owner fixes factory/${APPROVALS_FILENAME}: ${why}`.slice(0, 300) : 'approvals are not running yet');
+  };
   router.register(BOT_APPROVAL_RPC.request, async (raw: unknown, ctx: RpcContext | undefined) => {
     if (!ctx?.bot) return refuse('not_bot', 'approval_request is a bot\'s');
     const s = service();
-    if (!s) return refuse('not_started', 'approvals are not running yet');
+    if (!s) return notStarted();
     return s.request(ctx.bot, params(raw));
   });
   router.register(BOT_APPROVAL_RPC.list, async (raw: unknown, ctx: RpcContext | undefined) => {
     if (!ctx?.bot) return refuse('not_bot', 'approval_list is a bot\'s');
     const s = service();
-    if (!s) return refuse('not_started', 'approvals are not running yet');
+    if (!s) return notStarted();
     return s.listFor(ctx.bot, params(raw));
   });
 }

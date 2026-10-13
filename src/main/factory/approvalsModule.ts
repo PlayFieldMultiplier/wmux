@@ -10,7 +10,10 @@ import { APPROVALS_FILENAME, APPROVAL_LIMITS, ApprovalService, getApprovalServic
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 
 registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
-  registerApprovalRpc(router, getApprovalService);
+  // Why the store did not start: bots asking for approval are told, so the
+  // owner hears that approvals are off and what to fix.
+  let startFailure: string | null = null;
+  registerApprovalRpc(router, getApprovalService, () => startFailure);
   let off: (() => void) | null = null;
   return {
     async start() {
@@ -58,9 +61,11 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
           },
         });
       } catch (err) {
-        console.warn(`[factory] approvals did not start: ${String(err)}`);
+        startFailure = String(err);
+        console.error(`[factory] approvals did not start: ${startFailure}`);
         return;
       }
+      startFailure = null;
       setApprovalService(service);
       const log = getFactLog();
       off = log ? log.subscribe((f) => service.onFact(f)) : null;

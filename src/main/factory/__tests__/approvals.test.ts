@@ -194,6 +194,19 @@ describe('approval requests (bot side)', () => {
     expect(r.svc.listForOperator(WS)).toHaveLength(1);
   });
 
+  it('a turn still running keeps its request count while many other turns ask', async () => {
+    const r = rig();
+    const a = await r.ask(DEV, { action: 'issue_create', reason: 'first' });
+    for (let i = 0; i < 210; i += 1) {
+      r.state.wakes.set(OTHER.id, { wakeId: `w-o${i}`, attempt: 1, threadId: null, tainted: false });
+      await r.svc.request(binding(OTHER), { action: 'issue_create', reason: 'x' });
+    }
+    const b = await r.svc.request(binding(DEV), { action: 'issue_create', reason: 'second' });
+    expect(b).toMatchObject({ ok: true });
+    expect((b as { duplicate?: true }).duplicate).toBeUndefined();
+    expect((b as { request: { requestId: string } }).request.requestId).not.toBe(a.requestId);
+  });
+
   it('a retried turn (the next attempt) asks again under the same default keys', async () => {
     const r = rig();
     const a = await r.ask(DEV, { action: 'issue_create', reason: 'file it' });
@@ -208,6 +221,19 @@ describe('approval requests (bot side)', () => {
     const mine = r.svc.listFor(binding(DEV), {});
     expect(mine).toMatchObject({ ok: true, requests: [{ botId: DEV.id }] });
     expect((mine as { requests: unknown[] }).requests).toHaveLength(1);
+  });
+
+  it('a store that did not start tells the asking bot that approvals are off and what to fix', async () => {
+    const handlers = new Map<string, (raw: unknown, ctx?: RpcContext) => Promise<unknown>>();
+    let failure: string | null = null;
+    registerApprovalRpc({ register: (m: string, h: never) => handlers.set(m, h) } as never, () => null, () => failure);
+    const asBot = { origin: 'local', bot: binding(DEV) } as unknown as RpcContext;
+    expect(await handlers.get(BOT_APPROVAL_RPC.request)?.({ action: 'merge', prNumber: 1, reason: 'x' }, asBot)).toMatchObject({ ok: false, code: 'not_started', message: 'approvals are not running yet' });
+    failure = 'Error: Unreadable approvals storage';
+    const res = await handlers.get(BOT_APPROVAL_RPC.list)?.({}, asBot) as { code: string; message: string };
+    expect(res.code).toBe('not_started');
+    expect(res.message).toContain('factory/approvals.json');
+    expect(res.message).toContain('Unreadable approvals storage');
   });
 
   it('the bot RPCs answer only a bot; no bot RPC decides', async () => {
@@ -367,6 +393,17 @@ describe('typed approval (the owner\'s own words in the thread)', () => {
     expect(r.svc.get(a.requestId)?.state).toBe('pending');
   });
 
+  it('a reply to one approval card approves only that request', async () => {
+    const r = rig();
+    const a = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    const b = await r.ask(DEV, { action: 'merge', prNumber: 2, reason: 'y' });
+    const posted = r.writer.post({ workspaceId: WS, kind: 'human', actor: { kind: 'human' }, title: 'merge it', refs: { botId: DEV.id }, replyTo: a.cardId as string });
+    if (!posted.ok) throw new Error('post failed');
+    expect(r.svc.onOwnerCard(posted.card)).toEqual([a.requestId]);
+    expect(r.svc.get(a.requestId)?.state).toBe('approved');
+    expect(r.svc.get(b.requestId)?.state).toBe('pending');
+  });
+
   it('words to one bot approve only that bot\'s requests', async () => {
     const r = rig();
     const mine = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
@@ -406,7 +443,9 @@ describe('typed approval (the owner\'s own words in the thread)', () => {
     // Cards read that do not reach back to a request's card: that request is not approved.
     expect(typedApprovalTargets(msg as never, pending as never, get, [{ ...first, seq: 4 }] as never)).toEqual(['apr-b']);
     expect(typedApprovalTargets({ ...msg, replyTo: 'q' } as never, pending as never, get, none)).toEqual([]);
-    expect(typedApprovalTargets({ ...msg, replyTo: 'c1' } as never, pending as never, get, none)).toEqual(['apr-a', 'apr-b']);
+    // A reply to one approval card approves only that card's request.
+    expect(typedApprovalTargets({ ...msg, replyTo: 'c1' } as never, pending as never, get, none)).toEqual(['apr-a']);
+    expect(typedApprovalTargets({ ...msg, replyTo: 'c2' } as never, pending as never, get, none)).toEqual(['apr-b']);
     expect(typedApprovalTargets({ ...msg, title: 'merge them and also delete the repo' } as never, pending as never, get, none)).toEqual([]);
     // Only the requests right above: the owner said something else at seq 4.
     const said = [{ seq: 4, kind: 'human', actor: { kind: 'human' }, title: 'Hi' }];
@@ -456,6 +495,39 @@ describe('always allow (remembered rules)', () => {
     expect(r.svc.get(a.requestId)?.state).toBe('pending');
     const issue = await r.ask(DEV, { action: 'issue_create', reason: 'y' });
     expect(r.svc.decide({ requestId: issue.requestId, decision: 'always' }, 'desktop')).toMatchObject({ ok: false, code: 'not_ruleable' });
+  });
+
+  it('an owner decision made while the rule check reads GitHub stands', async () => {
+    const r = rig();
+    const a = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    r.svc.decide({ requestId: a.requestId, decision: 'always' }, 'desktop');
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: null, tainted: false });
+    (r.host.ruleCheck as ReturnType<typeof vi.fn>).mockImplementationOnce(async (req: StoredApproval) => {
+      expect(r.svc.decide({ requestId: req.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true });
+      expect(r.svc.decide({ requestId: req.requestId, decision: 'undo' }, 'desktop')).toMatchObject({ ok: true, request: { state: 'pending' } });
+      return null;
+    });
+    const b = await r.ask(DEV, { action: 'merge', prNumber: 2, reason: 'y' });
+    expect(b.state).toBe('pending');
+    expect(b.decidedBy).toBeUndefined();
+    expect(r.svc.get(b.requestId)).toMatchObject({ state: 'pending' });
+  });
+
+  it('a rule decides only a request whose card was posted', async () => {
+    const r = rig();
+    const a = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    r.svc.decide({ requestId: a.requestId, decision: 'always' }, 'desktop');
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: null, tainted: false });
+    const post = r.writer.post.bind(r.writer);
+    const spy = vi.spyOn(r.writer, 'post').mockImplementation((input) => (input.kind === 'approval' ? { ok: false, code: 'invalid', message: 'refused' } as never : post(input)));
+    try {
+      const b = await r.ask(DEV, { action: 'merge', prNumber: 2, reason: 'y' });
+      expect(b.cardId).toBeUndefined();
+      expect(b).toMatchObject({ state: 'pending', ruleSkipped: 'its card could not be posted' });
+      expect(r.host.ruleCheck).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('a rule revoked while its check reads GitHub approves nothing', async () => {
