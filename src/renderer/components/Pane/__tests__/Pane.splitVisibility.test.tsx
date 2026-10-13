@@ -16,7 +16,7 @@
  * Pane.notificationRing.test.tsx (the pure helper is the load-bearing piece).
  */
 import { describe, it, expect } from 'vitest';
-import { pickSplitShownSurfaces, pickOverlaySurfaces, resolveRemoteAttachPaneId, isSplitBrowserExpanded } from '../Pane';
+import { pickSplitShownSurfaces, resolveRemoteAttachPaneId, isSplitWorkExpanded, isTerminalKindSurfaceType, isWorkSurfaceType } from '../Pane';
 
 const T = (id: string) => ({ id });
 
@@ -25,14 +25,14 @@ describe('pickSplitShownSurfaces — split visibility decoupled from focus', () 
     const r = pickSplitShownSurfaces([T('term-1')], [T('brow-1')], 'term-1');
     expect(r.shownTerminalId).toBe('term-1');
     // The regression: the browser side must STILL show its surface, not blank.
-    expect(r.shownBrowserId).toBe('brow-1');
+    expect(r.shownWorkId).toBe('brow-1');
   });
 
   it('common 1 terminal + 1 browser: BOTH sides shown when the browser is focused', () => {
     const r = pickSplitShownSurfaces([T('term-1')], [T('brow-1')], 'brow-1');
     // The regression in the other direction: the terminal side must not blank.
     expect(r.shownTerminalId).toBe('term-1');
-    expect(r.shownBrowserId).toBe('brow-1');
+    expect(r.shownWorkId).toBe('brow-1');
   });
 
   it('neither side blanks for EITHER focus target (the core invariant)', () => {
@@ -41,89 +41,72 @@ describe('pickSplitShownSurfaces — split visibility decoupled from focus', () 
     for (const active of ['term-1', 'brow-1']) {
       const r = pickSplitShownSurfaces(terminals, browsers, active);
       expect(r.shownTerminalId).toBeDefined();
-      expect(r.shownBrowserId).toBeDefined();
+      expect(r.shownWorkId).toBeDefined();
     }
   });
 
   it('multiple terminal tabs: the FOCUSED terminal shows; browser side shows its first', () => {
     const r = pickSplitShownSurfaces([T('term-1'), T('term-2')], [T('brow-1')], 'term-2');
     expect(r.shownTerminalId).toBe('term-2'); // active tab on the terminal side
-    expect(r.shownBrowserId).toBe('brow-1'); // browser side keeps its first, never blank
+    expect(r.shownWorkId).toBe('brow-1'); // browser side keeps its first, never blank
   });
 
   it('multiple browser tabs: the FOCUSED browser shows; terminal side shows its first', () => {
     const r = pickSplitShownSurfaces([T('term-1'), T('term-2')], [T('brow-1'), T('brow-2')], 'brow-2');
     expect(r.shownTerminalId).toBe('term-1'); // terminal side falls back to first (active is a browser)
-    expect(r.shownBrowserId).toBe('brow-2'); // active browser tab
+    expect(r.shownWorkId).toBe('brow-2'); // active browser tab
   });
 
   it('active surface absent from both lists: each side falls back to its first', () => {
     const r = pickSplitShownSurfaces([T('term-1')], [T('brow-1')], 'stale-id');
     expect(r.shownTerminalId).toBe('term-1');
-    expect(r.shownBrowserId).toBe('brow-1');
+    expect(r.shownWorkId).toBe('brow-1');
   });
 
   it('defensive: empty side yields undefined (no throw) without affecting the other', () => {
     expect(pickSplitShownSurfaces([], [T('brow-1')], 'brow-1')).toEqual({
       shownTerminalId: undefined,
-      shownBrowserId: 'brow-1',
+      shownWorkId: 'brow-1',
     });
     expect(pickSplitShownSurfaces([T('term-1')], [], 'term-1')).toEqual({
       shownTerminalId: 'term-1',
-      shownBrowserId: undefined,
+      shownWorkId: undefined,
     });
   });
 });
 
-// F6 — split(terminal+browser) 혼재 페인에서 diff·editor가 누락되지 않아야 한다.
-describe('pickOverlaySurfaces — F6 mixed-split diff/editor routing', () => {
-  it('terminal+browser+diff 혼재에서 diff 서피스를 오버레이 집합으로 추출', () => {
-    const surfaces = [
-      { id: 's1', surfaceType: 'terminal' },
-      { id: 's2', surfaceType: 'browser' },
-      { id: 's3', surfaceType: 'diff' },
-    ];
-    const overlay = pickOverlaySurfaces(surfaces);
-    // 스플릿이 terminals·browsers만 렌더하므로 diff는 오버레이로 별도 라우팅돼야 한다.
-    expect(overlay.map((s) => s.id)).toEqual(['s3']);
+describe('pane surface kinds — terminal column vs work area', () => {
+  it('local and remote terminals (and legacy untyped surfaces) are terminal-kind', () => {
+    for (const t of [undefined, 'terminal', 'remote-terminal']) {
+      expect(isTerminalKindSurfaceType(t)).toBe(true);
+      expect(isWorkSurfaceType(t)).toBe(false);
+    }
   });
 
-  it('editor도 오버레이 집합에 포함(diff와 동일 처리)', () => {
-    const surfaces = [
-      { id: 't', surfaceType: 'terminal' },
-      { id: 'b', surfaceType: 'browser' },
-      { id: 'e', surfaceType: 'editor' },
-      { id: 'd', surfaceType: 'diff' },
-    ];
-    expect(pickOverlaySurfaces(surfaces).map((s) => s.id)).toEqual(['e', 'd']);
+  it('browser, editor, diff and placeholder go to the work area', () => {
+    for (const t of ['browser', 'editor', 'diff', 'placeholder']) {
+      expect(isWorkSurfaceType(t)).toBe(true);
+      expect(isTerminalKindSurfaceType(t)).toBe(false);
+    }
   });
 
-  it('순수 terminal/browser만이면 오버레이 없음(회귀 방지)', () => {
-    const surfaces = [
-      { id: 't', surfaceType: 'terminal' },
-      { id: 'b', surfaceType: 'browser' },
-      { id: 'legacy', surfaceType: undefined },
-    ];
-    expect(pickOverlaySurfaces(surfaces)).toEqual([]);
+  it('retired git / review surfaces belong to neither side', () => {
+    for (const t of ['git', 'review']) {
+      expect(isWorkSurfaceType(t)).toBe(false);
+      expect(isTerminalKindSurfaceType(t)).toBe(false);
+    }
+  });
+});
+
+describe('pickSplitShownSurfaces — the work side remembers what it last showed', () => {
+  it('focusing a terminal keeps the last shown work tab, not the first', () => {
+    const r = pickSplitShownSurfaces([T('term-1')], [T('brow-1'), T('edit-1')], 'term-1', 'edit-1');
+    expect(r.shownWorkId).toBe('edit-1');
   });
 
-  it('git·review는 오버레이 집합에서 제외(2026-07-20 워크스페이스 헤더로 이관)', () => {
-    // 페인 surface 폐지 후 git/review는 페인 오버레이가 아니라 중앙 표면으로 산다.
-    const surfaces = [
-      { id: 't', surfaceType: 'terminal' },
-      { id: 'g', surfaceType: 'git' },
-      { id: 'r', surfaceType: 'review' },
-    ];
-    expect(pickOverlaySurfaces(surfaces)).toEqual([]);
-  });
-
-  it('#1100 CodeRabbit round 1 — remote-terminal도 오버레이 집합에 포함 (terminal+browser+remote 혼재에서 사라지지 않아야 함)', () => {
-    const surfaces = [
-      { id: 't', surfaceType: 'terminal' },
-      { id: 'b', surfaceType: 'browser' },
-      { id: 'r', surfaceType: 'remote-terminal' },
-    ];
-    expect(pickOverlaySurfaces(surfaces).map((s) => s.id)).toEqual(['r']);
+  it('a remembered tab that was closed falls back to the first', () => {
+    const r = pickSplitShownSurfaces([T('term-1')], [T('brow-1')], 'term-1', 'gone');
+    expect(r.shownWorkId).toBe('brow-1');
   });
 });
 
@@ -149,18 +132,18 @@ describe('resolveRemoteAttachPaneId — #1140 split-into-a-pane vs the #1100 tab
   });
 });
 
-describe('isSplitBrowserExpanded — #2140 browser fills the split pane', () => {
+describe('isSplitWorkExpanded — #2140 the work area fills the pane', () => {
   it('expands while a browser is active and both sides exist', () => {
-    expect(isSplitBrowserExpanded(true, [T('term-1')], [T('brow-1')], 'brow-1')).toBe(true);
-    expect(isSplitBrowserExpanded(false, [T('term-1')], [T('brow-1')], 'brow-1')).toBe(false);
+    expect(isSplitWorkExpanded(true, [T('term-1')], [T('brow-1')], 'brow-1')).toBe(true);
+    expect(isSplitWorkExpanded(false, [T('term-1')], [T('brow-1')], 'brow-1')).toBe(false);
   });
 
   it('an active terminal is never hidden, in the same render that activates it', () => {
-    expect(isSplitBrowserExpanded(true, [T('term-1'), T('term-2')], [T('brow-1')], 'term-2')).toBe(false);
+    expect(isSplitWorkExpanded(true, [T('term-1'), T('term-2')], [T('brow-1')], 'term-2')).toBe(false);
   });
 
   it('losing either side drops the mode', () => {
-    expect(isSplitBrowserExpanded(true, [], [T('brow-1')], 'brow-1')).toBe(false);
-    expect(isSplitBrowserExpanded(true, [T('term-1')], [], 'term-1')).toBe(false);
+    expect(isSplitWorkExpanded(true, [], [T('brow-1')], 'brow-1')).toBe(false);
+    expect(isSplitWorkExpanded(true, [T('term-1')], [], 'term-1')).toBe(false);
   });
 });

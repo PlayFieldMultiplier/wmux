@@ -335,6 +335,9 @@ interface SurfaceTabsProps {
    *  under the strip (the design system's focus signal; the pane border stays
    *  a quiet hairline). */
   paneActive?: boolean;
+  /** Whether the active tab here takes the accent bar. False while focus is on
+   *  the work area's strip beside it, so a pane shows one accent. */
+  tabAccent?: boolean;
   // Owning workspace and pane id, used to build the drag-export payload.
   // These are now always provided by the PaneContainer prop chain so the
   // payload always names the correct workspace, even in multiview where
@@ -384,6 +387,7 @@ export default function SurfaceTabs({
   workspace,
   paneId,
   paneActive = false,
+  tabAccent = true,
   onSelect,
   onClose,
   onSplitHorizontal,
@@ -890,7 +894,7 @@ export default function SurfaceTabs({
       // Bridge P1.6 — h-10 (40px chrome module): matches sidebar header/footer,
       // deck tabs, and the agent toolbar so all top/bottom hairlines align.
       // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/app/shell/TitleBar.tsx), MIT License, Copyright (c) 2026 Nick
-      data-pane-focused={paneActive ? 'true' : undefined}
+      data-pane-focused={paneActive && tabAccent ? 'true' : undefined}
       className="wmux-pane-header flex items-center h-10"
       // The strip's bottom hairline lines up with the deck header and the
       // titlebar seam. Focus is a tone change on that hairline (and an accent
