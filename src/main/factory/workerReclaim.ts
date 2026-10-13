@@ -206,11 +206,21 @@ export class ReclaimedWorkers {
     return this.persister.schedule();
   }
 
+  /** Told of every state change made through setState (the agent budget
+   *  counts a resumed worker's run from these). */
+  onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number) => void) | null = null;
+
   setState(taskId: string, state: ReclaimedWorker['state'], at: number): boolean {
     const r = this.records.get(taskId);
     if (!r || r.state === state) return false;
+    const from = r.state;
     r.state = state;
     r.at = at;
+    try {
+      this.onStateChange?.({ taskId, botId: r.botId }, from, state, at);
+    } catch (err) {
+      console.warn(`[factory] reclaimed worker state listener threw: ${String(err)}`);
+    }
     void this.persister.schedule().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
     return true;
   }
@@ -527,6 +537,17 @@ export interface WorkerResumePorts {
    *  (a bot's resume starts a worker like its fan-out does). `starting`:
    *  the bot's other resumes under way, not yet counted as resumed. */
   botWorkerRefusal?: (botId: string, starting: number) => string | null;
+}
+
+/** The bot's resumed workers still live outside an open ledger row (the
+ *  worker lifecycle host sets the count; 0 while it is not running).
+ *  Without a bot id: every bot's. */
+let resumedLiveCount: ((botId?: string) => number) | null = null;
+export function setResumedLiveCount(fn: ((botId?: string) => number) | null): void {
+  resumedLiveCount = fn;
+}
+export function resumedWorkersLive(botId?: string): number {
+  return resumedLiveCount?.(botId) ?? 0;
 }
 
 /** Tasks whose resume is being typed now, or whose workspace is being

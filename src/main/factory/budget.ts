@@ -133,16 +133,25 @@ export function recordTurn(usage: BotUsage, now: number): void {
   usage.turns.push(now);
 }
 
-export function recordWorkerStart(usage: BotUsage, taskId: string, now: number): void {
+/** A task's worker starts once: a second start of the same task records
+ *  nothing. `resumed`: the task's stopped worker runs again, a new interval
+ *  (unless one is still open). */
+export function recordWorkerStart(usage: BotUsage, taskId: string, now: number, opts: { resumed?: boolean } = {}): void {
   pruneUsage(usage, now);
-  if (usage.workers.some((w) => w.taskId === taskId)) return;
+  const mine = usage.workers.filter((w) => w.taskId === taskId);
+  if (opts.resumed ? mine.some((w) => w.endedAt === undefined) : mine.length > 0) return;
   usage.workers.push({ taskId, startedAt: now });
 }
 
-/** Returns false when the worker was not running. */
+/** Returns false when the worker was not running. An end that comes before
+ *  any start of the task is kept as an empty interval, so a start recorded
+ *  after it does not open one that never ends. */
 export function recordWorkerEnd(usage: BotUsage, taskId: string, now: number): boolean {
   const w = usage.workers.find((x) => x.taskId === taskId && x.endedAt === undefined);
-  if (!w) return false;
+  if (!w) {
+    if (!usage.workers.some((x) => x.taskId === taskId)) usage.workers.push({ taskId, startedAt: now, endedAt: now });
+    return false;
+  }
   w.endedAt = Math.max(now, w.startedAt);
   return true;
 }

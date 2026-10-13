@@ -134,6 +134,7 @@ import { getWakeQueue } from '../../factory/wakeQueue';
 import { getVerdictedTasks } from '../../factory/verdictedTasks';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
 import { getAgentSlots } from '../../factory/agentSlots';
+import { resumedWorkersLive } from '../../factory/workerReclaim';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { Fact } from '../../../shared/facts';
 
@@ -768,12 +769,16 @@ function defaultBotPort(): FanOutBotPort | null {
     currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
     currentWakeThread: (botId) => runtime.currentTurn(botId)?.threadId ?? null,
     currentWakeTainted: (botId) => runningWakeTainted(botId),
-    openWorkers: (botId) => countOpenBotWorkers(getTaskLedger().list({ openOnly: true }), botId, (ids) => {
-      const kept = getVerdictedTasks();
-      const found = verdictedTaskIds(ids.filter((id) => !kept?.has(id)));
-      for (const id of ids) if (kept?.has(id)) found.add(id);
-      return found;
-    }),
+    // Open bot tasks, plus resumed workers whose task row has ended.
+    openWorkers: (botId) => {
+      const open = countOpenBotWorkers(getTaskLedger().list({ openOnly: true }), botId, (ids) => {
+        const kept = getVerdictedTasks();
+        const found = verdictedTaskIds(ids.filter((id) => !kept?.has(id)));
+        for (const id of ids) if (kept?.has(id)) found.add(id);
+        return found;
+      });
+      return { bot: open.bot + resumedWorkersLive(botId), factory: open.factory + resumedWorkersLive() };
+    },
     usage: (botId) => store.usageOf(botId),
     workersStarted: (botId, taskIds) => {
       const now = Date.now();

@@ -17,6 +17,8 @@ import {
   reclaimedWorkerState,
   resumeLineFor,
   resumeWorker,
+  resumedWorkersLive,
+  setResumedLiveCount,
   stopResumedWorkers,
   unreclaimedEndedWorkers,
   RECLAIMED_WORKERS_MAX,
@@ -538,5 +540,24 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     expect(ledger.findByTaskWorkspace('ws-new')?.id).toBe(ID);
     const rev = ledger.get(ID)?.rev ?? 0;
     expect(await ledger.update({ id: ID, status: 'working', actor: { kind: 'worker', workspaceId: 'ws-new' }, expectedRev: rev })).toMatchObject({ ok: true });
+  });
+
+  it('the budget hears a resumed worker start and end, and the fan-out reads its live count', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    const seen: string[] = [];
+    store.onStateChange = (rec, from, to) => seen.push(`${rec.botId}:${rec.taskId}:${from}->${to}`);
+    const p: WorkerResumePorts = { store, typeLine: vi.fn(() => true), listSessions: async () => [dead()] };
+    expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: true });
+    expect(noteWorkerAgentExit(store, 'daemon-1')).toBe(true);
+    expect(seen).toEqual([`${BOT}:${ID}:stopped->resumed`, `${BOT}:${ID}:resumed->stopped`]);
+    expect(resumedWorkersLive(BOT)).toBe(0);
+    setResumedLiveCount((botId) => (botId === BOT ? 2 : 5));
+    try {
+      expect(resumedWorkersLive(BOT)).toBe(2);
+      expect(resumedWorkersLive()).toBe(5);
+    } finally {
+      setResumedLiveCount(null);
+    }
   });
 });

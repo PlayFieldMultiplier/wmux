@@ -306,6 +306,27 @@ describe('budget windows', () => {
     expect(checkWorkers(budget, u, 0, 1, HOUR_MS)).toEqual({ ok: false, reason: 'worker_hours_day' });
     expect(checkWorkers(budget, u, 0, 1, 26 * HOUR_MS).ok).toBe(true);
   });
+
+  it('an end recorded before the start leaves no interval that never ends', () => {
+    const u = emptyUsage();
+    expect(recordWorkerEnd(u, 't1', HOUR_MS)).toBe(false);
+    recordWorkerStart(u, 't1', 2 * HOUR_MS);
+    expect(u.workers.filter((w) => w.endedAt === undefined)).toHaveLength(0);
+    expect(workerHoursDay(u, 10 * HOUR_MS)).toBe(0);
+  });
+
+  it('a resumed worker opens a new interval after its earlier one ended, never two at once', () => {
+    const u = emptyUsage();
+    recordWorkerStart(u, 't1', 0);
+    recordWorkerEnd(u, 't1', HOUR_MS);
+    recordWorkerStart(u, 't1', 2 * HOUR_MS);
+    expect(u.workers).toHaveLength(1);
+    recordWorkerStart(u, 't1', 2 * HOUR_MS, { resumed: true });
+    recordWorkerStart(u, 't1', 2 * HOUR_MS, { resumed: true });
+    expect(u.workers).toHaveLength(2);
+    expect(recordWorkerEnd(u, 't1', 3 * HOUR_MS)).toBe(true);
+    expect(workerHoursDay(u, 3 * HOUR_MS)).toBe(2);
+  });
 });
 
 describe('WakeQueue', () => {

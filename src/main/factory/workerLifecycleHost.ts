@@ -20,7 +20,7 @@ import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { worktreeFromMissions } from './verifyPreset';
 import { AgentSlots, setAgentSlots } from './agentSlots';
-import { checkWorkers } from './budget';
+import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
@@ -31,6 +31,7 @@ import {
   isReclaimedSince,
   isTaskWorkspaceOf,
   noteWorkerAgentExit,
+  setResumedLiveCount,
   setWorkerResumePorts,
   type WorkerRespawnInput,
   type WorkerSessionInfo,
@@ -226,6 +227,17 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     setDormantTaskWorkspaces(() => new Set(reclaimed.all().filter((r) => r.state === 'stopped' && !taskOpen(r.taskId)).map((r) => workerWorkspaceOf(r))));
     offs.push(() => setDormantTaskWorkspaces(null));
     offs.push(() => setWorkerResumePorts(null));
+    // A resumed worker runs on its bot's worker budget: counted live by the
+    // fan-out's check, and its run (resume to stop) in the bot's hours.
+    setResumedLiveCount(resumedLive);
+    offs.push(() => setResumedLiveCount(null));
+    reclaimed.onStateChange = (rec, from, to, at) => {
+      const store = getBotStore();
+      if (!store?.get(rec.botId)) return;
+      if (to === 'resumed') store.mutateUsage(rec.botId, (u) => recordWorkerStart(u, rec.taskId, at, { resumed: true }));
+      else if (from === 'resumed') store.mutateUsage(rec.botId, (u) => { recordWorkerEnd(u, rec.taskId, at); });
+    };
+    offs.push(() => { reclaimed.onStateChange = null; });
     const sweep = setInterval(() => {
       const resumed = reclaimed.all().filter((r) => r.state === 'resumed' && Date.now() - r.at >= RESUMED_SETTLE_MS);
       if (resumed.length === 0) {
