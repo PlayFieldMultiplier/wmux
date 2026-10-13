@@ -31,6 +31,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import { taskThreadOf, type ThreadId } from '../../shared/room';
 import { getFanOutGuards } from '../worktask/fanoutGuards';
 import { isTaskGateReport } from '../factory/taskGate';
+import { STOPPED_BY_OWNER } from '../factory/factoryStop';
 import { getTaskLedger } from './taskLedgerHost';
 
 export interface FanoutCallerEvent {
@@ -175,7 +176,13 @@ export interface BotFanoutWakePorts {
   /** A transition whose wake another path sends (a bot verify task's report:
    *  the verify gate wakes the bot once the gate it runs is recorded). */
   wokenElsewhere?: (t: { entry: LedgerEntry; to: string }) => boolean;
+  now?: () => number;
 }
+
+/** How far back, at install, a bot task's last move is woken again: a wake
+ *  lost to an app exit between the move and the wake queue's write. The
+ *  queue drops a wake it already holds (same task, status and rev). */
+export const BOT_TASK_WAKE_RECOVER_MS = 3_600_000;
 
 /**
  * A task a factory bot started reports to that bot through its wake queue,
@@ -189,24 +196,47 @@ export interface BotFanoutWakePorts {
  * Returns the unsubscribe.
  */
 export function installBotFanoutWake(ports: BotFanoutWakePorts, instance?: TaskLedger): () => void {
-  return (instance ?? getTaskLedger()).onTransition((t) => {
+  const ledger = instance ?? getTaskLedger();
+  const wake = (t: { entry: LedgerEntry; to: string }, botId: string): void => {
+    const trigger = BOT_TASK_WAKE[t.to];
+    if (!trigger || ports.wokenElsewhere?.(t) === true) return;
+    if (isTaskGateReport(t.entry, t.to)) return;
+    if (t.to === 'cancelled' && stoppedByOwner.has(t.entry.id)) return;
+    ports.enqueue({
+      botId,
+      workspaceId: t.entry.ownerWorkspaceId,
+      // The rev makes each transition its own wake: a task that asks for
+      // input twice wakes its bot twice.
+      reason: { kind: 'facts', factIds: [`task.${t.to}:${t.entry.id}@${t.entry.rev}`], trigger: { kind: trigger } },
+      priority: 1,
+      threadId: taskThreadOf(t.entry),
+    });
+  };
+  // Recent moves whose wake may not have been written before the app exited.
+  const since = (ports.now ?? Date.now)() - BOT_TASK_WAKE_RECOVER_MS;
+  let rows: LedgerEntry[] = [];
+  try {
+    rows = ledger.list({});
+  } catch {
+    rows = [];
+  }
+  for (const entry of rows) {
+    const origin = entry.dispatch?.origin;
+    if (!origin || origin.kind !== 'bot' || !origin.botId || entry.updatedAt < since) continue;
+    // The owner's stop wakes nobody (its in-memory mark is gone after a restart).
+    if (entry.status === 'cancelled' && entry.summary === STOPPED_BY_OWNER && entry.updatedBy.kind === 'system') continue;
+    try {
+      wake({ entry, to: entry.status }, origin.botId);
+    } catch (err) {
+      console.warn(`[factory] could not wake bot ${origin.botId} for task ${entry.id}: ${String(err)}`);
+    }
+  }
+  return ledger.onTransition((t) => {
     const origin = t.entry.dispatch?.origin;
     if (!origin || origin.kind !== 'bot' || !origin.botId) return;
     try {
       if (WORKER_ENDED.has(t.to)) ports.onWorkerEnded?.(origin.botId, t.entry.id);
-      const trigger = BOT_TASK_WAKE[t.to];
-      if (!trigger || ports.wokenElsewhere?.(t) === true) return;
-      if (isTaskGateReport(t.entry, t.to)) return;
-      if (t.to === 'cancelled' && stoppedByOwner.has(t.entry.id)) return;
-      ports.enqueue({
-        botId: origin.botId,
-        workspaceId: t.entry.ownerWorkspaceId,
-        // The rev makes each transition its own wake: a task that asks for
-        // input twice wakes its bot twice.
-        reason: { kind: 'facts', factIds: [`task.${t.to}:${t.entry.id}@${t.entry.rev}`], trigger: { kind: trigger } },
-        priority: 1,
-        threadId: taskThreadOf(t.entry),
-      });
+      wake(t, origin.botId);
     } catch (err) {
       console.warn(`[factory] could not wake bot ${origin.botId} for task ${t.entry.id}: ${String(err)}`);
     }
