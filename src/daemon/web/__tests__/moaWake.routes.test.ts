@@ -127,9 +127,11 @@ describe('POST/GET /api/moa/messages', () => {
       queueMicrotask(() => {
         const p = data.payload as { clientMessageId: string; text: string; actor: string; mode?: 'factory' };
         // A factory send goes through main's real dispatcher (its factory handler is the test's).
-        const result: MoaWakeResult = p.mode === 'factory'
-          ? handlePhoneMoaWake(p)
-          : handler(p);
+        if (p.mode === 'factory') {
+          void handlePhoneMoaWake(p).then((result) => bridge.complete(clientId, { requestId: data.requestId, ok: true, result }));
+          return;
+        }
+        const result: MoaWakeResult = handler(p);
         // Both lines in one pipe read: the report is handled before the accept's continuation runs.
         if (mainMode === 'fail-first') void wakeService.recordFailure(p.actor, p.clientMessageId, 'spawn-failed');
         bridge.complete(clientId, { requestId: data.requestId, ok: true, result });
@@ -498,7 +500,7 @@ describe('POST/GET /api/moa/messages', () => {
       queuedTexts = [];
       bridge.register('main', ['moa.wake', 'factory.message']);
       const seen = new Set<string>();
-      setFactoryPhoneMessageHandler((p) => {
+      setFactoryPhoneMessageHandler(async (p) => {
         if (!factoryOn) return null;
         const key = `${p.actor}|${p.clientMessageId}`;
         if (seen.has(key)) return { ok: false, code: 'duplicate' };

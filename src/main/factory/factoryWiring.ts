@@ -374,6 +374,26 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
   return { ok: false, code: 'duplicate' };
 }
 
+/**
+ * The phone's answer once the message's wake is on disk (a restart then still
+ * runs it), as the desktop's owner message waits. A failed write answers a
+ * retryable `busy`: the same message id posts the same card and its one wake
+ * again, and that retry writes it.
+ */
+export async function factoryPhoneMessageSaved(payload: MoaWakePayload, deps: FactoryPhoneDeps): Promise<MoaWakeResult | null> {
+  const r = factoryPhoneMessage(payload, deps);
+  if (!r?.ok) return r;
+  const wakes = deps.ports().wakes;
+  if (!wakes?.flush) return r;
+  try {
+    await wakes.flush();
+  } catch (err) {
+    console.warn(`[factory] phone message wake not on disk: ${String(err)}`);
+    return { ok: false, code: 'busy' };
+  }
+  return r;
+}
+
 // ── Tasks: views, stop ─────────────────────────────────────────────────────
 
 type Daemon = Pick<NonNullable<ReturnType<FactoryHostDeps['getDaemonClient']>>, 'rpc'>;
@@ -514,7 +534,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     }
   });
 
-  setFactoryPhoneMessageHandler((payload) => factoryPhoneMessage(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
+  setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
 
   const morning = new MorningSchedule({
     file: path.join(deps.wmuxDir(), 'factory', MORNING_SCHEDULE_FILENAME),

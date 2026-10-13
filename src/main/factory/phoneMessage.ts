@@ -9,8 +9,9 @@
 import type { MoaWakePayload, MoaWakeResult } from '../../shared/moaWake';
 
 /** The agent factory's taker of a phone message to Moa: null when the
- *  factory is off. Installed by the factory wiring. */
-export type FactoryPhoneMessageHandler = (payload: MoaWakePayload) => MoaWakeResult | null;
+ *  factory is off. Resolves once the message's wake is on disk. Installed by
+ *  the factory wiring. */
+export type FactoryPhoneMessageHandler = (payload: MoaWakePayload) => Promise<MoaWakeResult | null>;
 
 let factoryHandler: FactoryPhoneMessageHandler | null = null;
 
@@ -19,10 +20,11 @@ export function setFactoryPhoneMessageHandler(h: FactoryPhoneMessageHandler | nu
 }
 
 /**
- * The bridge command. A malformed payload throws (the daemon validated it, so
- * this is not a phone-reachable answer).
+ * The bridge command, answered once the message's wake is on disk. A
+ * malformed payload rejects (the daemon validated it, so this is not a
+ * phone-reachable answer).
  */
-export function handlePhoneMoaWake(raw: Record<string, unknown>): MoaWakeResult {
+export async function handlePhoneMoaWake(raw: Record<string, unknown>): Promise<MoaWakeResult> {
   const { clientMessageId, text, actor, deviceId, mode } = raw;
   if (typeof clientMessageId !== 'string' || clientMessageId.length === 0 || clientMessageId.length > 128 ||
       typeof text !== 'string' || !text.trim() || typeof actor !== 'string' || actor.length === 0 || actor.length > 256 ||
@@ -33,7 +35,7 @@ export function handlePhoneMoaWake(raw: Record<string, unknown>): MoaWakeResult 
   const payload: MoaWakePayload = { clientMessageId, text, actor, mode, ...(typeof deviceId === 'string' ? { deviceId } : {}) };
   let r: MoaWakeResult | null = null;
   try {
-    r = factoryHandler?.(payload) ?? null;
+    r = (await factoryHandler?.(payload)) ?? null;
   } catch (err) {
     console.warn(`[factory] phone message failed: ${String(err)}`);
     return { ok: false, code: 'hq_unknown' };

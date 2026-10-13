@@ -21,6 +21,7 @@ import {
   bufferedBotHooks,
   factFromBotHook,
   factoryPhoneMessage,
+  factoryPhoneMessageSaved,
   factoryTrust,
   isBotOwnedTaskFact,
   ownerLoginTarget,
@@ -481,6 +482,26 @@ describe('phone → HQ bot', () => {
     const [device, operator] = writer.read('ws-hq').cards;
     expect(typedApprovalSourceAllowed(device)).toBe(false);
     expect(typedApprovalSourceAllowed(operator)).toBe(true);
+  });
+
+  it('answers once the wake is on disk; a failed write is a retryable busy and the retry wakes the bot once', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { d, writer, queue } = deps();
+    let failing = true;
+    const flush = vi.fn(async () => {
+      if (failing) throw new Error('disk full');
+      await queue.flush();
+    });
+    const wakes = { enqueue: (input: Parameters<typeof queue.enqueue>[0]) => queue.enqueue(input), flush };
+    const dd = { ...d, ports: () => ({ ...d.ports(), wakes }) };
+    expect(await factoryPhoneMessageSaved(payload, dd)).toEqual({ ok: false, code: 'busy' });
+    failing = false;
+    expect(await factoryPhoneMessageSaved(payload, dd)).toEqual({ ok: true, accepted: true, queued: true });
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(queue.list({ states: ['queued'] })).toHaveLength(1);
+    expect(writer.read('ws-hq').cards).toHaveLength(1);
+    // A refusal never waits on the disk.
+    expect(await factoryPhoneMessageSaved(payload, deps({ bots: [] }).d)).toEqual({ ok: false, code: 'hq_missing' });
   });
 });
 
