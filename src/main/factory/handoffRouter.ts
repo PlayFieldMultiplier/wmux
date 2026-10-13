@@ -1057,6 +1057,11 @@ export class HandoffRouter {
           return { ok: false, code: 'not_pending', message: `question ${handoffId} was answered already` };
         }
         await this.reconcileBody();
+        // Resolved but not closed: the answer could not be stored yet (the
+        // next reconcile tries again).
+        if (this.records.get(handoffId)?.status === 'delivered' && this.decisionOf(h)?.status === 'resolved') {
+          return { ok: false, code: 'write_failed', message: 'the answer could not be stored' };
+        }
       } else {
         return { ok: false, code: 'not_pending', message: `question ${handoffId} is ${h.status}` };
       }
@@ -1178,15 +1183,29 @@ export class HandoffRouter {
     }, this.now());
   }
 
-  /** The owner answered: close the question and send the answer to the bot
-   *  that asked (an `answer` handoff, delivered like any other). */
+  /** The owner answered: store the answer to the bot that asked (an
+   *  `answer` handoff), then close the question and deliver the answer like
+   *  any other handoff. The answer is on disk before the question closes, so
+   *  a closed question always has its answer to deliver (a restart delivers
+   *  a queued one); a second call reuses the stored answer. */
   private finalizeAnswer(ask: Handoff, text: string, dismissed: boolean): boolean {
+    const stored = [...this.records.values()].find((r) => r.kind === 'answer' && r.replyTo === ask.id);
+    const reply = stored ?? this.answerFor(ask, text, dismissed);
     // Not stored: the ask stays open and the next reconcile tries again.
+    if (!stored && !this.put(reply)) return false;
     if (!this.put({ ...ask, status: 'answered' })) return false;
     this.closeQuestionCard(ask);
     if (!dismissed) this.noteOverride(ask, text);
+    if (reply.status !== 'queued') return true;
+    const bot = ask.from.kind === 'bot' ? safeGet(this.opts.ports().bots, ask.from.botId) : null;
+    if (!bot || !bot.enabled) this.refuse(reply, 'no_addressee', 'the bot that asked is not enabled');
+    else this.deliver(reply, bot);
+    return true;
+  }
+
+  private answerFor(ask: Handoff, text: string, dismissed: boolean): Handoff {
     const id = newId('h');
-    const reply: Handoff = {
+    return {
       version: 1,
       id,
       runId: ask.runId,
@@ -1209,10 +1228,6 @@ export class HandoffRouter {
       createdAt: this.now(),
       updatedAt: this.now(),
     };
-    const bot = ask.from.kind === 'bot' ? safeGet(this.opts.ports().bots, ask.from.botId) : null;
-    if (!bot || !bot.enabled) this.refuse(reply, 'no_addressee', 'the bot that asked is not enabled');
-    else this.deliver(reply, bot);
-    return true;
   }
 }
 

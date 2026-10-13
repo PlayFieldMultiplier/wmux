@@ -551,6 +551,31 @@ describe('ask_person', () => {
     await queue.flush();
   });
 
+  it('the answer is on disk before its question closes; an answer that cannot be stored leaves the question open', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    const ask = await h.router.askPerson(binding(lead), { title: 'Ship it?', body: '' });
+    if (!ask.ok) throw new Error('not asked');
+    fs.chmodSync(file, 0o444);
+    try {
+      expect(await h.router.answer(ask.handoffId, 'Yes')).toMatchObject({ ok: false, code: 'write_failed' });
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
+    expect(h.router.get(ask.handoffId)).toMatchObject({ status: 'delivered' });
+    expect(h.wakes).toHaveLength(0);
+    // The resolved decision is settled again once the file takes writes.
+    await h.router.reconcile();
+    expect(h.router.get(ask.handoffId)).toMatchObject({ status: 'answered' });
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { id: string; kind: string; status: string; replyTo?: string });
+    const answerAt = lines.findIndex((l) => l.kind === 'answer' && l.replyTo === ask.handoffId);
+    const closedAt = lines.findIndex((l) => l.id === ask.handoffId && l.status === 'answered');
+    expect(answerAt).toBeGreaterThanOrEqual(0);
+    expect(answerAt).toBeLessThan(closedAt);
+    expect(h.wakes).toEqual([expect.objectContaining({ botId: lead.id, reason: { kind: 'handoff', handoffId: lines[answerAt].id } })]);
+  });
+
   it('the answer wakes the asker in the question\'s thread, so its next post without a thread lands there', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);
