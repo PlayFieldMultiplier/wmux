@@ -18,8 +18,25 @@ import { tokenize, launcherStem } from './agentResume';
 import { splitModelEnvMarker } from './workerLaunch';
 import { stripPromptFileArgument } from './promptFileArgument';
 
+/** `gh <group> <verb>` in every spelling gh runs it: with global options
+ *  (`-R o/r`, `--repo=o/r`, `--hostname h`) before the group, between the
+ *  group and the verb, or both. The verb is a whole word after options, so
+ *  `gh pr -R o/r view 3 --json mergeable` is not `merge`. Pure. */
+export function ghSubcommandDeny(group: string, verb: string): string[] {
+  return [
+    `Bash(gh ${group} ${verb}*)`,
+    `Bash(gh -* ${group} ${verb}*)`,
+    ...['', '-* '].flatMap((pre) => [`Bash(gh ${pre}${group} -* ${verb})`, `Bash(gh ${pre}${group} -* ${verb} *)`]),
+  ];
+}
+
+/** `gh api<rest>`, also after global options. Pure. */
+export function ghApiDeny(rest: string): string[] {
+  return [`Bash(gh api${rest})`, `Bash(gh -* api${rest})`];
+}
+
 /** The deny rules that send a merge through the lane instead of `gh`. */
-export const BOT_WORKER_MERGE_DENY: readonly string[] = ['Bash(gh pr merge*)', 'Bash(gh api*merge*)'];
+export const BOT_WORKER_MERGE_DENY: readonly string[] = [...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*')];
 
 /** The default branch names every worker's push rules cover, whatever a
  *  repository's own default branch reads (see the default-branches file
@@ -76,13 +93,15 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
  *  send a POST). They go to the owner as approval requests
  *  (shared/botApproval.ts). Reads (`gh release view`, a `gh api` GET) pass. */
 export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
-  ...['create', 'close', 'comment', 'delete', 'reopen', 'edit', 'transfer', 'lock', 'unlock', 'pin', 'unpin'].map((v) => `Bash(gh issue ${v}*)`),
-  ...['comment', 'review', 'close', 'reopen', 'edit', 'lock', 'unlock'].map((v) => `Bash(gh pr ${v}*)`),
-  ...['create', 'edit', 'delete', 'upload', 'delete-asset'].map((v) => `Bash(gh release ${v}*)`),
-  ...['create', 'edit', 'delete', 'rename', 'archive', 'unarchive', 'sync'].map((v) => `Bash(gh repo ${v}*)`),
-  ...['secret', 'variable'].flatMap((g) => [`Bash(gh ${g} set*)`, `Bash(gh ${g} delete*)`]),
-  ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [`Bash(gh api*-X*${x}*)`, `Bash(gh api*--method*${x}*)`])),
-  'Bash(gh api* -f*)', 'Bash(gh api* -F*)', 'Bash(gh api*--field*)', 'Bash(gh api*--raw-field*)', 'Bash(gh api*--input*)',
+  ...['create', 'close', 'comment', 'delete', 'reopen', 'edit', 'transfer', 'lock', 'unlock', 'pin', 'unpin'].flatMap((v) => ghSubcommandDeny('issue', v)),
+  ...['comment', 'review', 'close', 'reopen', 'edit', 'lock', 'unlock'].flatMap((v) => ghSubcommandDeny('pr', v)),
+  ...['create', 'edit', 'delete', 'upload', 'delete-asset'].flatMap((v) => ghSubcommandDeny('release', v)),
+  ...['create', 'edit', 'delete', 'rename', 'archive', 'unarchive', 'sync'].flatMap((v) => ghSubcommandDeny('repo', v)),
+  ...['secret', 'variable'].flatMap((g) => [...ghSubcommandDeny(g, 'set'), ...ghSubcommandDeny(g, 'delete')]),
+  ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [...ghApiDeny(`*-X*${x}*`), ...ghApiDeny(`*--method*${x}*`)])),
+  ...['* -f*', '* -F*', '*--field*', '*--raw-field*', '*--input*'].flatMap(ghApiDeny),
+  // An alias names any of the acts above under another word.
+  ...ghSubcommandDeny('alias', 'set'), ...ghSubcommandDeny('alias', 'import'),
 ];
 
 /** Everything a bot's worker is refused. */

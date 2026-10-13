@@ -85,6 +85,21 @@ describe('bot worker deny rules', () => {
     'git branch wtask/a -u origin/develop',
     // Collateral of the no-destination rule: `git stash` (no "push") still works.
     'git stash push',
+    // gh's global options before the group, between the group and the verb, or both.
+    'gh -R o/r pr merge 3 --squash',
+    'gh --repo o/r pr merge 3',
+    'gh --repo=o/r pr merge 3',
+    'gh pr -R o/r merge 3 --squash',
+    'gh pr --repo=o/r merge',
+    'gh -R o/r pr --repo o/r merge 3',
+    'gh -R o/r issue close 4',
+    'gh issue -R o/r comment 4 --body hi',
+    'gh --repo o/r release create v1',
+    'gh -R o/r secret set TOKEN',
+    'gh --hostname example.com api -X PUT repos/o/r/pulls/3/merge',
+    'gh --hostname example.com api repos/o/r/issues -f title=x',
+    'gh alias set pm "pr merge"',
+    'gh alias import aliases.yml',
   ])('refuses %s', (cmd) => {
     expect(denied(cmd)).toBe(true);
   });
@@ -108,6 +123,13 @@ describe('bot worker deny rules', () => {
     'git config user.name bot',
     'git branch -a',
     'git stash',
+    'gh -R o/r pr view 3 --json mergeable',
+    'gh pr -R o/r view 3 --json mergeable,mergeStateStatus',
+    'gh -R o/r pr checks 3',
+    'gh -R o/r pr create --title x --body y',
+    'gh -R o/r issue view 4',
+    'gh issue -R o/r list',
+    'gh alias list',
   ])('lets %s through', (cmd) => {
     expect(denied(cmd)).toBe(false);
   });
