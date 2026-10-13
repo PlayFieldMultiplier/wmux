@@ -11,6 +11,7 @@ import { mintBotToken, __resetCommanderTrustForTesting } from '../../../deck/com
 import type { PTYManager } from '../../../pty/PTYManager';
 import type { TaskLedger } from '../../../../daemon/ledger/TaskLedger';
 import type { LedgerDispatch } from '../../../../shared/ledger';
+import { setRedactedSecrets } from '../../../factory/secretRedaction';
 
 const { sendToRendererMock } = vi.hoisted(() => ({ sendToRendererMock: vi.fn() }));
 vi.mock('../_bridge', () => ({ sendToRenderer: sendToRendererMock }));
@@ -69,6 +70,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetCommanderTrustForTesting();
+  setRedactedSecrets([]);
 });
 
 describe('input.readScreen — bot scope', () => {
@@ -97,5 +99,33 @@ describe('input.readScreen — bot scope', () => {
     expect(named.ok).toBe(false);
     const active = await asBot(router, { workspaceId: 'ws-stranger' });
     expect(active).toMatchObject({ ok: true, result: { text: 'ACTIVE OF ws-bot' } });
+  });
+});
+
+describe('input.readScreen — stored secrets on a bot\'s read', () => {
+  const VALUE = 'SECRETVALUE-0123456789abcdef';
+  const rows = ['older row', `prefix ${VALUE.slice(0, -4)}`, `${VALUE.slice(-4)} after`, 'last row'];
+
+  it('masks a value wrapped across the top edge of the requested rows as one value', async () => {
+    setRedactedSecrets([{ name: 'TOKEN', value: VALUE }]);
+    const reads: Array<Record<string, unknown>> = [];
+    sendToRendererMock.mockImplementation((_w: unknown, method: string, params: Record<string, unknown>) => {
+      if (method === 'input.findOwnerWorkspace') return Promise.resolve({ workspaceId: PANE_OWNERS[params['ptyId'] as string] ?? null });
+      if (method === 'input.readScreen') {
+        reads.push(params);
+        return Promise.resolve({ ptyId: params['ptyId'], text: rows.slice(-(params['tail_lines'] as number)).join('\n') });
+      }
+      return Promise.resolve(null);
+    });
+    const res = await asBot(wire(), { ptyId: 'pty-own', tail_lines: 2 });
+    expect(reads[0]?.['tail_lines']).toBeGreaterThan(2);
+    expect(res).toMatchObject({ ok: true, result: { text: 'prefix [secret:TOKEN] after\nlast row' } });
+    expect(String(res.result?.['text'])).not.toContain('cdef');
+  });
+
+  it('with nothing stored the read is passed through unchanged', async () => {
+    const res = await asBot(wire(), { ptyId: 'pty-own', tail_lines: 2 });
+    expect(res).toMatchObject({ ok: true, result: { text: 'SCREEN' } });
+    expect(sendToRendererMock.mock.calls.find((c) => c[1] === 'input.readScreen')?.[2]).toMatchObject({ tail_lines: 2 });
   });
 });

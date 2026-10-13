@@ -58,6 +58,7 @@ import {
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { getWorkerResumePorts, workerWorkspaceOf } from '../../factory/workerReclaim';
+import { hasRedactedSecrets, redactStoredSecrets } from '../../factory/secretRedaction';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 
 type GetWindow = () => BrowserWindow | null;
@@ -543,6 +544,40 @@ export function decideTerminalOmittedTarget(senderPtyId: string): {
       'cannot resolve "the active terminal" for an agent caller — it would loop ' +
       'into your own pane or a non-deterministic sibling. Pass an explicit ptyId ' +
       '(call surface_list() to find the target PTY ID).',
+  };
+}
+
+/** The renderer's row count for a read with no `tail_lines`
+ *  (renderer/utils/terminalTail.ts DEFAULT_READ_TAIL_LINES). */
+const READ_SCREEN_DEFAULT_TAIL_LINES = 300;
+/** Rows read above a bot's requested tail, so a stored secret value wrapped
+ *  across the tail's first rows is masked as a whole. */
+const SECRET_CONTEXT_ROWS = 64;
+
+/**
+ * A bot's screen read: with stored secrets, the tail is read with rows above
+ * it, masked, and only then cut to the rows asked for, so a value wrapped
+ * across the tail's top edge is masked as one value. Any other read goes to
+ * the renderer as it is (RpcRouter still masks a bot's result).
+ */
+async function readScreenFor(getWindow: GetWindow, params: Record<string, unknown>, forBot: boolean): Promise<unknown> {
+  if (!forBot || !hasRedactedSecrets() || params['full_scrollback'] === true) {
+    return sendToRenderer(getWindow, 'input.readScreen', params);
+  }
+  const rawTail = params['tail_lines'];
+  const cap = typeof rawTail === 'number' && Number.isFinite(rawTail) && rawTail > 0
+    ? Math.floor(rawTail)
+    : READ_SCREEN_DEFAULT_TAIL_LINES;
+  const read = await sendToRenderer(getWindow, 'input.readScreen', { ...params, tail_lines: cap + SECRET_CONTEXT_ROWS });
+  if (read === null || typeof read !== 'object' || Array.isArray(read)) return read;
+  const r = read as Record<string, unknown>;
+  if (typeof r['text'] !== 'string') return read;
+  const tail = redactStoredSecrets(r['text']).split('\n').slice(-cap);
+  const below = r['rowsBelowCursor'];
+  return {
+    ...r,
+    text: tail.join('\n'),
+    ...(typeof below === 'number' ? { rowsBelowCursor: Math.min(below, tail.length) } : {}),
   };
 }
 
@@ -1572,21 +1607,21 @@ export function registerInputRpc(
         bot ? botTaskLane(bot) : taskOwnerLane(p, ctx),
       );
       if (access.lane !== 'task-owner') {
-        return sendToRenderer(getWindow, 'input.readScreen', p);
+        return readScreenFor(getWindow, p, !!bot);
       }
       // The renderer re-checks the pty against `workspaceId`, and the caller's
       // own workspace does not hold it — name the task workspace the lane
       // resolved, never a caller-supplied one.
-      const read = await sendToRenderer(getWindow, 'input.readScreen', {
+      const read = await readScreenFor(getWindow, {
         ...p,
         workspaceId: access.taskWorkspaceId,
-      });
+      }, !!bot);
       return read !== null && typeof read === 'object' && !Array.isArray(read)
         ? { ...(read as Record<string, unknown>), ...untrustedLabel(access) }
         : { value: read, ...untrustedLabel(access) };
     }
 
-    const result = await sendToRenderer(getWindow, 'input.readScreen', p);
+    const result = await readScreenFor(getWindow, p, !!bot);
     const readPtyId =
       result !== null &&
       typeof result === 'object' &&
