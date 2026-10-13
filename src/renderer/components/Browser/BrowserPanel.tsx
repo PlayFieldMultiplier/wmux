@@ -11,6 +11,10 @@ import {
 } from '../../utils/browserPane';
 import { isPrivateBrowserPartition } from '../../../shared/privateBrowser';
 import { isPrivateSessionReady, privateSessionReady } from '../../utils/privateSessionGate';
+import { formatElementHandoff, parseInspectedElement, HANDOFF_NOTE_MAX, type InspectedElement } from '../../../shared/browserElementHandoff';
+import { findWorkspaceSurfaceById } from '../../utils/paneTraversal';
+import { findLeaf } from '../../../shared/paneUtils';
+import { injectText } from '../AgentToolbar/inject';
 
 // The <webview> intrinsic comes from @types/react's built-in
 // WebViewHTMLAttributes — with the automatic JSX runtime (React.JSX
@@ -111,7 +115,13 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
     return () => { alive = false; };
   }, [sessionReady]);
   const [inspecting, setInspecting] = useState(false);
-  const [inspectInfo, setInspectInfo] = useState<string | null>(null);
+  // The element the user picked with the inspector, waiting to be handed to
+  // the pane's agent (or copied), and the note going with it.
+  const [handoff, setHandoff] = useState<InspectedElement | null>(null);
+  const [handoffNote, setHandoffNote] = useState('');
+  // Fresh per inspector session: only a result carrying it is accepted, so a
+  // page cannot raise the hand-off bar by logging a lookalike message.
+  const inspectNonceRef = useRef('');
 
   // browser_request_help — the open ask for THIS surface, if any. The record is
   // the stored object (selectHelpRequestForSurface returns it as-is), so a bare
@@ -375,6 +385,8 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
   const injectInspector = useCallback(() => {
     const wv = webviewRef.current;
     if (!wv || !isReady) return;
+    const nonce = crypto.randomUUID();
+    inspectNonceRef.current = nonce;
     // 이 오버레이/라벨은 게스트 웹뷰(임의의 외부 페이지) 내부에 주입된다.
     // wmux 테마 CSS 변수가 없는 문서라서 색은 의도적으로 자립 hex로 둔다
     // (테마 토큰 승격 대상 아님 — 외부 페이지 위 오버레이).
@@ -414,12 +426,8 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
             })
             .join(' ');
           const openTag = '<' + tag + (attrs ? ' ' + attrs : '') + '>';
-
-          const lines = [];
-          lines.push('[Inspector] ' + document.title + ' (' + location.href + ')');
-          lines.push('selector: ' + selector);
-          lines.push(openTag);
-          return { text: lines.join('\\n'), selector: selector };
+          const text = (el.innerText || el.textContent || '').trim().slice(0, 400);
+          return { title: document.title, url: location.href, selector: selector, tag: openTag, text: text };
         }
 
         function onMove(e) {
@@ -451,9 +459,7 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
           e.stopImmediatePropagation();
           const el = document.elementFromPoint(e.clientX, e.clientY);
           if (!el || el === overlay || el === label || el.id?.startsWith('__wmux')) return;
-          const ctx = buildContext(el);
-          navigator.clipboard.writeText(ctx.text).catch(() => {});
-          console.log('__wmux_inspect_result__' + JSON.stringify({ contextText: ctx.text, selector: ctx.selector }));
+          console.log('__wmux_inspect_result__' + ${JSON.stringify(nonce)} + ':' + JSON.stringify(buildContext(el)));
         }
 
         document.addEventListener('mousemove', onMove, true);
@@ -484,7 +490,7 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
         injectInspector();
       } else {
         removeInspector();
-        setInspectInfo(null);
+        inspectNonceRef.current = '';
       }
       return !prev;
     });
@@ -495,20 +501,55 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
     const wv = webviewRef.current;
     if (!wv) return;
     const onConsole = (e: Electron.ConsoleMessageEvent) => {
-      if (e.message.startsWith('__wmux_inspect_result__')) {
-        try {
-          const data = JSON.parse(e.message.slice('__wmux_inspect_result__'.length));
-          setInspectInfo(`Copied to clipboard — paste into Claude to describe this element`);
-          setTimeout(() => setInspectInfo(null), 3000);
-          // Auto-disable inspector after selection
-          removeInspector();
-          setInspecting(false);
-        } catch { /* ignore */ }
-      }
+      const nonce = inspectNonceRef.current;
+      const prefix = `__wmux_inspect_result__${nonce}:`;
+      if (!nonce || !e.message.startsWith(prefix)) return;
+      // One pick per inspector session; the nonce is spent either way.
+      inspectNonceRef.current = '';
+      removeInspector();
+      setInspecting(false);
+      let picked: InspectedElement | null = null;
+      try { picked = parseInspectedElement(JSON.parse(e.message.slice(prefix.length))); } catch { /* not ours */ }
+      if (!picked) return;
+      setHandoffNote('');
+      setHandoff(picked);
     };
     wv.addEventListener('console-message', onConsole as EventListener);
     return () => { wv.removeEventListener('console-message', onConsole as EventListener); };
   }, [removeInspector, discarded, sessionReady]);
+
+  // The terminal the hand-off goes to: the one focused in this browser's own
+  // pane, else that pane's first local terminal. A string key, so the selector
+  // only re-renders this panel when the answer changes.
+  const handoffTargetKey = useStore((s) => {
+    const ws = s.workspaces.find((w) => w.id === workspaceId);
+    const at = ws ? findWorkspaceSurfaceById(ws, surfaceId) : null;
+    const leaf = ws && at && !at.stashed ? findLeaf(ws.rootPane, at.paneId) : null;
+    if (!leaf) return '';
+    const terminals = leaf.surfaces.filter((x) => (!x.surfaceType || x.surfaceType === 'terminal') && x.ptyId);
+    const target = terminals.find((x) => x.id === leaf.activeSurfaceId) ?? terminals[0];
+    return target ? JSON.stringify([leaf.id, target.id, target.ptyId, target.title || '']) : '';
+  });
+  const handoffTarget = handoffTargetKey
+    ? (JSON.parse(handoffTargetKey) as [string, string, string, string])
+    : null;
+  const closeHandoff = useCallback(() => {
+    setHandoff(null);
+    setHandoffNote('');
+  }, []);
+  const sendHandoff = useCallback(() => {
+    if (!handoff || !handoffTarget) return;
+    const [paneId, terminalSurfaceId, ptyId] = handoffTarget;
+    void injectText(ptyId, formatElementHandoff(handoff, handoffNote), false);
+    // Focus the terminal: the line sits there unsent until the user presses Enter.
+    useStore.getState().setActiveSurface(paneId, terminalSurfaceId, workspaceId);
+    closeHandoff();
+  }, [handoff, handoffNote, handoffTarget, workspaceId, closeHandoff]);
+  const copyHandoff = useCallback(() => {
+    if (!handoff) return;
+    void navigator.clipboard.writeText(formatElementHandoff(handoff, handoffNote)).catch(() => undefined);
+    closeHandoff();
+  }, [handoff, handoffNote, closeHandoff]);
 
   const handleOpenDevTools = useCallback(() => {
     try {
@@ -650,30 +691,131 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
           </button>
         </div>
       )}
-      {/* Inspector toast */}
-      {inspectInfo && (
+      {/* Inspector → agent hand-off. Same slot and grammar as the help bar
+          above: a transient band, not a chrome row. The picked element is page
+          text, rendered as text only. */}
+      {handoff && (
         <div
-          className="flex items-center gap-2 px-3 py-1.5 text-xs shrink-0"
+          data-browser-handoff-bar
+          role="group"
+          aria-label={t('browser.handoff.barLabel')}
+          className="flex flex-col gap-1.5 px-3 py-2 shrink-0"
           style={{
-            backgroundColor: 'var(--accent-blue)',
-            color: 'var(--bg-base)',
-            fontFamily: 'ui-monospace, monospace',
+            backgroundColor: 'var(--bg-surface)',
+            borderBottom: '1px solid color-mix(in srgb, var(--text-main) 6%, transparent)',
           }}
         >
-          {inspectInfo}
+          <div className="flex items-baseline gap-2 min-w-0" style={{ fontSize: 12 }}>
+            <span
+              data-browser-handoff-selector
+              className="shrink-0 truncate max-w-[50%]"
+              style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--text-main)' }}
+              title={handoff.tag || handoff.selector}
+            >
+              {handoff.selector}
+            </span>
+            {handoff.text && (
+              <span className="truncate min-w-0" style={{ color: 'var(--text-sub)' }} title={handoff.text}>
+                {handoff.text}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 min-w-0">
+            <input
+              data-browser-handoff-note
+              autoFocus
+              value={handoffNote}
+              maxLength={HANDOFF_NOTE_MAX}
+              onChange={(e) => setHandoffNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  if (handoffTarget) sendHandoff(); else copyHandoff();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  closeHandoff();
+                }
+                e.stopPropagation();
+              }}
+              placeholder={t('browser.handoff.notePlaceholder')}
+              aria-label={t('browser.handoff.notePlaceholder')}
+              className="flex-1 min-w-0 rounded-[5px] px-2 outline-none"
+              style={{
+                minHeight: 26,
+                fontSize: 13,
+                color: 'var(--text-main)',
+                backgroundColor: 'var(--bg-base)',
+                border: '1px solid color-mix(in srgb, var(--text-main) 12%, transparent)',
+              }}
+            />
+            <button
+              type="button"
+              data-browser-handoff-copy
+              onClick={copyHandoff}
+              className="shrink-0 px-2.5 rounded-[5px] border transition-colors"
+              style={handoffTarget ? {
+                minHeight: 24,
+                fontSize: 13,
+                color: 'var(--text-sub)',
+                backgroundColor: 'color-mix(in srgb, var(--text-main) 6%, transparent)',
+                borderColor: 'color-mix(in srgb, var(--text-main) 10%, transparent)',
+                transitionDuration: '120ms',
+              } : {
+                minHeight: 24,
+                fontSize: 13,
+                fontWeight: 600,
+                color: 'var(--bg-base)',
+                backgroundColor: 'var(--accent)',
+                borderColor: 'transparent',
+                transitionDuration: '120ms',
+              }}
+              title={handoffTarget ? undefined : t('browser.handoff.noTerminal')}
+            >
+              {t('browser.handoff.copy')}
+            </button>
+            {handoffTarget && (
+              <button
+                type="button"
+                data-browser-handoff-send
+                onClick={sendHandoff}
+                className="shrink-0 px-2.5 rounded-[5px] font-semibold transition-colors truncate max-w-[45%]"
+                style={{
+                  minHeight: 24,
+                  fontSize: 13,
+                  color: 'var(--bg-base)',
+                  backgroundColor: 'var(--accent)',
+                  boxShadow: 'inset 0 1px 0 color-mix(in srgb, var(--surface-highlight) 22%, transparent)',
+                  transitionDuration: '120ms',
+                }}
+                title={t('browser.handoff.sendHint')}
+              >
+                {t('browser.handoff.send', { name: handoffTarget[3] || t('surface.terminal') })}
+              </button>
+            )}
+            <button
+              type="button"
+              data-browser-handoff-close
+              onClick={closeHandoff}
+              className="shrink-0 ui-icon-btn w-6 h-6 flex items-center justify-center"
+              title={t('browser.handoff.close')}
+              aria-label={t('browser.handoff.close')}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
-      {inspecting && !inspectInfo && (
+      {inspecting && (
         <div
+          data-browser-inspector-hint
           className="flex items-center gap-2 px-3 py-1 text-xs shrink-0"
           style={{
             backgroundColor: 'var(--bg-base)',
             color: 'var(--accent-blue)',
             borderBottom: '1px solid var(--accent-blue)',
-            fontFamily: 'ui-monospace, monospace',
           }}
         >
-          Inspector ON — hover to see elements, click to copy selector
+          {t('browser.inspector.hint')}
         </div>
       )}
 
