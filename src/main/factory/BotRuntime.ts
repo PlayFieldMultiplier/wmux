@@ -70,6 +70,9 @@ export interface BotSessionRecord {
   sessionId: string;
   /** The account the conversation runs on (null: the default login). */
   accountId?: string | null;
+  /** The repository the conversation worked on (null: none). A session is
+   *  resumed only on the same one; a record without it predates it. */
+  repoPath?: string | null;
   updatedAt: number;
 }
 
@@ -101,7 +104,13 @@ export class BotSessionStore {
       if (!r || typeof r.sessionId !== 'string' || r.sessionId.length === 0 || r.sessionId.length > 200) continue;
       if (!Number.isSafeInteger(r.updatedAt)) continue;
       const accountId = typeof r.accountId === 'string' || r.accountId === null ? r.accountId : undefined;
-      this.sessions.set(botId, { sessionId: r.sessionId, ...(accountId !== undefined ? { accountId } : {}), updatedAt: r.updatedAt as number });
+      const repoPath = typeof r.repoPath === 'string' || r.repoPath === null ? r.repoPath : undefined;
+      this.sessions.set(botId, {
+        sessionId: r.sessionId,
+        ...(accountId !== undefined ? { accountId } : {}),
+        ...(repoPath !== undefined ? { repoPath } : {}),
+        updatedAt: r.updatedAt as number,
+      });
     }
   }
 
@@ -710,7 +719,9 @@ export class BotRuntime {
       return { ok: false, message: String(err) };
     }
     if (!spawned.ok) return { ok: false, message: spawned.message };
-    const saved = this.deps.sessions.get(profile.id);
+    // A conversation about another repository is not resumed.
+    const prior = this.deps.sessions.get(profile.id);
+    const saved = prior && (prior.repoPath === undefined || prior.repoPath === (profile.repo?.repoPath ?? null)) ? prior : null;
     spawned.adapter.start({
       systemPrompt: redactStoredSecrets((this.deps.systemPrompt ?? ports.systemPrompt ?? defaultBotSystemPrompt)(profile)),
       ...(saved ? { resumeSessionId: saved.sessionId, ...(saved.accountId !== undefined ? { resumeAccountId: saved.accountId } : {}) } : {}),
@@ -783,7 +794,7 @@ export class BotRuntime {
         const sessionId = result.sessionId ?? s.live.adapter.sessionId;
         if (sessionId) {
           const accountId = s.live.adapter.conversationAccountId;
-          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), updatedAt: this.now() });
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, updatedAt: this.now() });
         }
       } else {
         errorMessage = result.error;

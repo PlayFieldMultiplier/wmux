@@ -643,18 +643,22 @@ describe('BotRuntime', () => {
     r.adapters[0].end();
     await settle();
     expect(r.spawns.map((s) => s.profile.repo?.repoPath)).toEqual(['/old']);
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', repoPath: '/old' });
     r.store.update(id, { repo: { repoKey: 'github.com/o/new', repoPath: '/new' } });
     r.runtime.profileChanged(id);
     expect(r.adapters[0].disposed).toBe(true);
     r.runtime.wake(id);
     await settle();
-    r.adapters[1].end();
+    // The conversation about /old is not resumed on /new.
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-2' }]);
     await settle();
     r.store.update(id, { repo: null });
     r.runtime.profileChanged(id);
     expect(r.adapters[1].disposed).toBe(true);
     r.runtime.wake(id);
     await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBeUndefined();
     expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual(['/old', '/new', null]);
   });
 
