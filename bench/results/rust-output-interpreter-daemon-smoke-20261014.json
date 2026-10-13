@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "scope": "Real bundled daemon; combined Rust PTY/ring/text; synthetic workload; no LLM or renderer",
+  "sourceNote": "Measured the uncommitted output-interpreter implementation on parent 9f5f3e0ef25c6e4112096bb83249089c03f0f9de",
+  "daemonRuns": 6,
+  "textRpcCalls": 210,
+  "remainingProcesses": [],
+  "daemonExits": [
+    {
+      "code": 0,
+      "signal": null
+    },
+    {
+      "code": 0,
+      "signal": null
+    },
+    {
+      "code": 0,
+      "signal": null
+    },
+    {
+      "code": 0,
+      "signal": null
+    },
+    {
+      "code": 0,
+      "signal": null
+    },
+    {
+      "code": 0,
+      "signal": null
+    }
+  ]
+}

@@ -2,12 +2,22 @@
 const { app } = require('electron');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { NativeTransport, NativeRing, nativeCoreCapabilities } = require('../../../dist/wmux-native/index.cjs');
+const { NativeTransport, NativeRing, NativeOutputDecoder, NativeOutputInterpreter, nativeCoreCapabilities } = require('../../../dist/wmux-native/index.cjs');
 let transport, ended = false, output = '';
 const timer = setTimeout(() => { transport?.close(); app.exit(1); }, 15000);
 app.whenReady().then(() => {
   assert(nativeCoreCapabilities().includes('pty-v1'));
   assert(nativeCoreCapabilities().includes('output-chunk-v1'));
+  assert(nativeCoreCapabilities().includes('output-interpreter-v1'));
+  const interpreter = new NativeOutputInterpreter();
+  const probe = new NativeOutputDecoder().feed(Buffer.from('\x1b[?2004h\x1b]7;file:///tmp/한글\x07\x1b]133;C\x07'), false);
+  try {
+    const events = interpreter.feedChunk(probe, probe.byteLength);
+    assert.deepEqual(Array.from(events.codes), [7, 133]);
+    assert.deepEqual(events.data, ['file:///tmp/한글', 'C']);
+    assert(interpreter.isSet(2004));
+    assert.equal(interpreter.preamble(probe.byteLength + 1), '\x1b[?2004h');
+  } finally { probe.dispose(); interpreter.dispose(); }
   const ring = new NativeRing(1024);
   const pump = () => {
     if (ended) return;

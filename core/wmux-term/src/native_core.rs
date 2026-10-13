@@ -30,6 +30,7 @@ pub fn native_core_capabilities() -> Vec<String> {
         "pty-v1".into(),
         "frozen-ring-v1".into(),
         "output-chunk-v1".into(),
+        "output-interpreter-v1".into(),
         "ansi-v2".into(),
     ]
 }

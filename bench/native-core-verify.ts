@@ -1,3 +1,4 @@
+import { verifyOutputInterpreter } from './native-interpreter-verify';
 import { StringDecoder } from 'node:string_decoder';
 import { DaemonPTYBridge } from '../src/daemon/DaemonPTYBridge';
 import assert from 'node:assert/strict';
@@ -139,6 +140,7 @@ async function verifyPausedDisposal(): Promise<void> {
 
 async function main() {
   process.env.WMUX_TERMINAL_CORE = 'rust';
+  checks.push(...verifyOutputInterpreter());
   verifyRing();
   verifyOutputChunks();
   const threadsBefore = threadCount();

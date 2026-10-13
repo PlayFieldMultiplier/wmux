@@ -1,7 +1,7 @@
 name: Native terminal core
 on:
   pull_request:
-    paths: ['core/wmux-term/**', 'src/daemon/**', 'src/shared/**', 'src/main/pty/**', 'src/main/ipc/handlers/*terminalCore*', 'src/renderer/components/Settings/**', 'bench/native-core-verify.ts', 'bench/fixtures/**', 'scripts/*native*', 'scripts/*rust*', 'scripts/__tests__/generateRustUnicode11.test.mjs', 'forge.config.ts', 'package.json', 'package-lock.json', '.github/workflows/native-terminal-core.yml']
+    paths: ['core/wmux-term/**', 'src/daemon/**', 'src/shared/**', 'src/main/pty/**', 'src/main/ipc/handlers/*terminalCore*', 'src/renderer/components/Settings/**', 'bench/native-core-verify.ts', 'bench/native-interpreter-verify.ts', 'bench/fixtures/**', 'scripts/*native*', 'scripts/*rust*', 'scripts/__tests__/generateRustUnicode11.test.mjs', 'forge.config.ts', 'package.json', 'package-lock.json', '.github/workflows/native-terminal-core.yml']
   workflow_dispatch:
     inputs:
       soak:
@@ -51,6 +51,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox core/wmux-term/spike/native-transport-electron.cjs
       - name: Backend, snapshot, input and lifecycle contracts
         run: npx vitest run src/shared/__tests__/terminalPty.test.ts src/shared/__tests__/terminalCoreSettings.test.ts src/daemon/__tests__/RingBuffer.test.ts src/daemon/__tests__/TextSnapshotBackend.test.ts src/daemon/__tests__/AnsiSnapshotBackend.test.ts src/daemon/__tests__/RustSnapshot.test.ts src/daemon/__tests__/DaemonPTYBridge.nativeOutput.test.ts src/daemon/__tests__/SessionPipe.inputBackpressure.test.ts src/main/pty/__tests__/PTYManager.wsl.test.ts src/main/ipc/handlers/__tests__/terminalCore.handler.test.ts src/renderer/components/Settings/__tests__/TerminalEngineSetting.test.tsx
+      - name: Output interpretation contracts
+        run: npx vitest run src/daemon/__tests__/OutputInterpreter.test.ts src/daemon/util/__tests__/outputModeTracker.test.ts src/main/pty/__tests__/OscParser.test.ts
       - name: Retain native verification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

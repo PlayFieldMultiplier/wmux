@@ -1,0 +1,455 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "checks": [
+    "output interpreter: 4420 differential feeds (OSC/modes/preamble, seeded splits, Unicode and >4 GiB offsets)",
+    "output interpreter: native chunks, recovered mode seeding, mute/discard/replay, prompt/event order and disposal",
+    "ring: 6,000 seeded operations + geometry churn match JS oracle",
+    "output: native UTF-8 + direct ring writes match StringDecoder for every fixture split and 5,000 malformed streams",
+    "snapshot: immutable native ring, geometry and undimmed text match xterm",
+    "output: real PTY feeds DaemonPTYBridge and native ring without a JS byte delivery subscriber",
+    "PTY: explicit environment, arguments, cwd and dimensions",
+    "PTY: child observes resize; owned descendant is gone after root exit",
+    "PTY: paused bulk output, UTF-8, final output before one exit",
+    "PTY: disposal with paused bulk output reclaims every worker",
+    "PTY: 4 MiB async input hash matches without blocking Node",
+    "PTY: bounded input queue, explicit backpressure and blocked-writer termination",
+    "PTY: exec failure propagates without closing the spawn-error pipe or replaying the command",
+    "PTY: soak 120000 ms, 2850 native bridge/ring output/exit cycles",
+    "PTY: 1/6/32 concurrent sessions and 100 lifecycle cycles"
+  ],
+  "passed": 15,
+  "inputElapsedMs": 408,
+  "threadsBefore": 7,
+  "threadsAfter": 7,
+  "nativeWorkersAfter": 0,
+  "soakMemory": [
+    {
+      "elapsedMs": 0,
+      "cycles": 0,
+      "rss": 321765376,
+      "heapUsed": 15664392,
+      "external": 23339691
+    },
+    {
+      "elapsedMs": 2026,
+      "cycles": 50,
+      "rss": 344834048,
+      "heapUsed": 26932360,
+      "external": 6668549
+    },
+    {
+      "elapsedMs": 4035,
+      "cycles": 101,
+      "rss": 376422400,
+      "heapUsed": 28080312,
+      "external": 6668549
+    },
+    {
+      "elapsedMs": 6064,
+      "cycles": 153,
+      "rss": 379518976,
+      "heapUsed": 20871024,
+      "external": 6615529
+    },
+    {
+      "elapsedMs": 8083,
+      "cycles": 205,
+      "rss": 381108224,
+      "heapUsed": 27829840,
+      "external": 6668549
+    },
+    {
+      "elapsedMs": 10120,
+      "cycles": 258,
+      "rss": 429834240,
+      "heapUsed": 50034776,
+      "external": 6827609
+    },
+    {
+      "elapsedMs": 12134,
+      "cycles": 309,
+      "rss": 432390144,
+      "heapUsed": 48654888,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 14140,
+      "cycles": 361,
+      "rss": 434126848,
+      "heapUsed": 68241080,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 16145,
+      "cycles": 412,
+      "rss": 434929664,
+      "heapUsed": 66220800,
+      "external": 6879394
+    },
+    {
+      "elapsedMs": 18152,
+      "cycles": 463,
+      "rss": 435945472,
+      "heapUsed": 10355784,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 20168,
+      "cycles": 515,
+      "rss": 436682752,
+      "heapUsed": 30050928,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 22183,
+      "cycles": 566,
+      "rss": 437305344,
+      "heapUsed": 29104704,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 24204,
+      "cycles": 619,
+      "rss": 437911552,
+      "heapUsed": 59349184,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 26227,
+      "cycles": 671,
+      "rss": 438534144,
+      "heapUsed": 68173584,
+      "external": 6879394
+    },
+    {
+      "elapsedMs": 28237,
+      "cycles": 723,
+      "rss": 439664640,
+      "heapUsed": 22334336,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 30245,
+      "cycles": 775,
+      "rss": 438812672,
+      "heapUsed": 41300280,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 32269,
+      "cycles": 826,
+      "rss": 439500800,
+      "heapUsed": 38268136,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 34303,
+      "cycles": 879,
+      "rss": 440139776,
+      "heapUsed": 67288736,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 36329,
+      "cycles": 931,
+      "rss": 440942592,
+      "heapUsed": 20872544,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 38347,
+      "cycles": 983,
+      "rss": 441565184,
+      "heapUsed": 27191776,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 40376,
+      "cycles": 1035,
+      "rss": 442122240,
+      "heapUsed": 46255728,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 42380,
+      "cycles": 1086,
+      "rss": 442695680,
+      "heapUsed": 42331800,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 44415,
+      "cycles": 1139,
+      "rss": 443269120,
+      "heapUsed": 60973840,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 46417,
+      "cycles": 1190,
+      "rss": 443842560,
+      "heapUsed": 16782136,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 48455,
+      "cycles": 1242,
+      "rss": 444432384,
+      "heapUsed": 24492120,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 50478,
+      "cycles": 1294,
+      "rss": 444989440,
+      "heapUsed": 43681904,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 52500,
+      "cycles": 1346,
+      "rss": 445562880,
+      "heapUsed": 50480200,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 54515,
+      "cycles": 1395,
+      "rss": 446136320,
+      "heapUsed": 26642968,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 56533,
+      "cycles": 1447,
+      "rss": 446709760,
+      "heapUsed": 45279880,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 58539,
+      "cycles": 1498,
+      "rss": 447283200,
+      "heapUsed": 41336624,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 60575,
+      "cycles": 1550,
+      "rss": 447856640,
+      "heapUsed": 60644744,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 62612,
+      "cycles": 1601,
+      "rss": 448413696,
+      "heapUsed": 57190824,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 64621,
+      "cycles": 1652,
+      "rss": 448987136,
+      "heapUsed": 53469976,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 66630,
+      "cycles": 1702,
+      "rss": 449544192,
+      "heapUsed": 51421248,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 68656,
+      "cycles": 1754,
+      "rss": 450150400,
+      "heapUsed": 58667696,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 70662,
+      "cycles": 1804,
+      "rss": 450707456,
+      "heapUsed": 57271536,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 72695,
+      "cycles": 1856,
+      "rss": 451297280,
+      "heapUsed": 63835472,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 74713,
+      "cycles": 1907,
+      "rss": 451887104,
+      "heapUsed": 60709552,
+      "external": 6879394
+    },
+    {
+      "elapsedMs": 76751,
+      "cycles": 1957,
+      "rss": 452476928,
+      "heapUsed": 58667208,
+      "external": 6879394
+    },
+    {
+      "elapsedMs": 78763,
+      "cycles": 2006,
+      "rss": 453001216,
+      "heapUsed": 35645712,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 80772,
+      "cycles": 2057,
+      "rss": 453574656,
+      "heapUsed": 44223560,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 82801,
+      "cycles": 2108,
+      "rss": 454180864,
+      "heapUsed": 40514480,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 84806,
+      "cycles": 2159,
+      "rss": 454737920,
+      "heapUsed": 38431952,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 86828,
+      "cycles": 2210,
+      "rss": 455294976,
+      "heapUsed": 47602288,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 88840,
+      "cycles": 2255,
+      "rss": 447234048,
+      "heapUsed": 33751840,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 90846,
+      "cycles": 2298,
+      "rss": 199950336,
+      "heapUsed": 63644720,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 92867,
+      "cycles": 2342,
+      "rss": 204963840,
+      "heapUsed": 39961720,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 94878,
+      "cycles": 2385,
+      "rss": 204718080,
+      "heapUsed": 17093488,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 96881,
+      "cycles": 2428,
+      "rss": 205504512,
+      "heapUsed": 36464808,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 98885,
+      "cycles": 2472,
+      "rss": 206241792,
+      "heapUsed": 24187152,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 100905,
+      "cycles": 2517,
+      "rss": 206831616,
+      "heapUsed": 63186040,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 102908,
+      "cycles": 2563,
+      "rss": 207405056,
+      "heapUsed": 18861464,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 104932,
+      "cycles": 2608,
+      "rss": 207929344,
+      "heapUsed": 58983544,
+      "external": 6826374
+    },
+    {
+      "elapsedMs": 106957,
+      "cycles": 2653,
+      "rss": 208535552,
+      "heapUsed": 57184848,
+      "external": 6773354
+    },
+    {
+      "elapsedMs": 109003,
+      "cycles": 2696,
+      "rss": 207765504,
+      "heapUsed": 21636656,
+      "external": 6614294
+    },
+    {
+      "elapsedMs": 111177,
+      "cycles": 2738,
+      "rss": 131416064,
+      "heapUsed": 40566000,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 113269,
+      "cycles": 2759,
+      "rss": 29032448,
+      "heapUsed": 38071016,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 115309,
+      "cycles": 2783,
+      "rss": 147193856,
+      "heapUsed": 25980616,
+      "external": 6667314
+    },
+    {
+      "elapsedMs": 117366,
+      "cycles": 2815,
+      "rss": 152567808,
+      "heapUsed": 45925280,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 119366,
+      "cycles": 2841,
+      "rss": 158613504,
+      "heapUsed": 43929856,
+      "external": 6720334
+    },
+    {
+      "elapsedMs": 120056,
+      "cycles": 2850,
+      "rss": 157188096,
+      "heapUsed": 33286800,
+      "external": 6667314
+    }
+  ]
+}

@@ -38,7 +38,18 @@ export interface NativeTerminalCore {
   nativeCoreCapabilities(): string[];
   NativeRing: new (capacity: number) => NativeRingStorage;
   NativeOutputDecoder?: new () => { feed(bytes: Uint8Array, finish: boolean): NativeOutputChunk };
+  NativeOutputInterpreter?: new () => NativeOutputInterpreter;
   NativeTransport: new (command: string, args: string[], cwd: string, env: Record<string, string>, cols: number, rows: number, wake: () => void, conptyDll?: string) => NativeTransport;
+}
+export interface NativeOscBatch { codes: Float64Array; data: string[] }
+export interface NativeOutputInterpreter {
+  feed(text: string, streamEndOffset: number, includeOsc: boolean): NativeOscBatch | null;
+  feedChunk(chunk: NativeOutputChunk, streamEndOffset: number): NativeOscBatch | null;
+  isSet(mode: number): boolean;
+  readonly altScreen: boolean;
+  preamble(windowStartOffset: number): string;
+  reset(): void;
+  dispose(): void;
 }
 export interface NativeTransport {
   readonly pid: number;
@@ -83,6 +94,7 @@ export function loadNativeTerminalCore(capability: string): NativeTerminalCore {
   if (capability === 'pty-v1' && (typeof cached.module.NativeTransport !== 'function' || typeof cached.module.NativeRing !== 'function' ||
       !cached.module.nativeCoreCapabilities().includes('ring-v1'))) throw new Error('Native terminal core lacks the combined PTY/ring contract');
   if (capability === 'ring-v1' && typeof cached.module.NativeRing !== 'function') throw new Error('Native terminal core lacks ring storage');
+  if (capability === 'output-interpreter-v1' && typeof cached.module.NativeOutputInterpreter !== 'function') throw new Error('Native terminal core lacks output interpretation');
   return cached.module;
 }
 

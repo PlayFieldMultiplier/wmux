@@ -1,0 +1,206 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "node": "v24.15.0",
+  "scope": "Parser microbenchmark; same process, one warm-up, five alternating-order repeats. No application-memory or interactive-latency claim.",
+  "results": [
+    {
+      "workload": "plain-log",
+      "bytes": 4198400,
+      "samples": [
+        {
+          "backend": "node",
+          "elapsedMs": 3.8351669999999984,
+          "cpuMs": 4.122,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.0896660000000011,
+          "cpuMs": 1.182,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.0420420000000021,
+          "cpuMs": 1.046,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 3.6553330000000024,
+          "cpuMs": 3.673,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 3.4310410000000005,
+          "cpuMs": 3.436,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.0832499999999996,
+          "cpuMs": 1.084,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.0714159999999993,
+          "cpuMs": 1.127,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 3.4627079999999992,
+          "cpuMs": 3.469,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 3.454584000000004,
+          "cpuMs": 3.46,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.0474999999999994,
+          "cpuMs": 1.048,
+          "events": 0
+        }
+      ]
+    },
+    {
+      "workload": "colored-log",
+      "bytes": 4198912,
+      "samples": [
+        {
+          "backend": "node",
+          "elapsedMs": 5.481999999999999,
+          "cpuMs": 5.478,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 2.9057500000000047,
+          "cpuMs": 2.906,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 2.869917000000001,
+          "cpuMs": 2.87,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 4.735625000000006,
+          "cpuMs": 4.742,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.187207999999998,
+          "cpuMs": 5.191,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 2.8474159999999955,
+          "cpuMs": 2.847,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 2.887749999999997,
+          "cpuMs": 2.881,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.170874999999995,
+          "cpuMs": 5.175,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.441874999999996,
+          "cpuMs": 5.992,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 2.875583000000006,
+          "cpuMs": 2.876,
+          "events": 0
+        }
+      ]
+    },
+    {
+      "workload": "mode-osc",
+      "bytes": 4202496,
+      "samples": [
+        {
+          "backend": "node",
+          "elapsedMs": 32.074790999999976,
+          "cpuMs": 36.65,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 26.819333,
+          "cpuMs": 28.577,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 26.413290999999987,
+          "cpuMs": 26.473,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 33.764375,
+          "cpuMs": 33.822,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 30.878667000000007,
+          "cpuMs": 31.063,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 27.119916999999987,
+          "cpuMs": 27.166,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 28.07329199999998,
+          "cpuMs": 28.117,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 30.08220799999998,
+          "cpuMs": 30.14,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 30.10304100000002,
+          "cpuMs": 30.158,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 26.623458000000028,
+          "cpuMs": 26.646,
+          "events": 165888
+        }
+      ]
+    }
+  ]
+}

@@ -387,3 +387,55 @@ WSL and signed distribution remain unverified. The eight-hour soak started
 separately; a running soak is not a pass. Its runner allows 16 MiB of report
 output because eight hours of two-second memory samples exceed the default
 1 MiB child-output limit.
+
+### Output interpretation follow-up (roadmap stage 2)
+
+Rust-backed daemon PTYs now use the additive `output-interpreter-v1` capability
+for DEC mode tracking, replay preambles and OSC extraction. `feedChunk` reads the
+normalized native chunk directly. Only mode carry (256 UTF-16 units) and partial
+OSC payloads (64 Ki UTF-16 units) are retained. OSC codes cross N-API in one typed
+array per batch, with payload strings alongside; the daemon receives the same
+ordered `{ code, data }` callbacks. Node PTYs and older native modules retain the
+existing JS interpreter. This choice is per bridge, tied to the actual PTY
+backend; it does not add another daemon or replay a spawn.
+
+Ring writes still precede mode updates, then OSC callbacks, agent interpretation
+and output delivery. Recovered history seeds modes without replaying old OSC
+events. Muted output does not enter the interpreter; an explicitly held/replayed
+chunk is interpreted once after capture. Ring offsets remain JS-safe byte
+counters, including values beyond 4 GiB. Cleanup disposes the native interpreter.
+
+This is a compatibility port of `OutputModeTracker` and `OscParser`, not a claim
+of complete VT parsing. It deliberately retains the reference OSC contract:
+the two-byte introducer and ESC-backslash terminator must each arrive in one
+decoded chunk. Fixing arbitrary split introducers/terminators requires a shared
+reference change and separate qualification. Title/CWD sanitation, notification
+policy, OSC 133 subcommand interpretation/timestamps, prompt logs and agent
+status stay in Node. The local Electron PTY bridge also retains JS interpretation.
+Full ANSI/private-parser-state parity remains a later stage-2 item.
+
+Validation adds 4,423 differential feeds against both JS references, including
+every code-point split of a mixed stream, seeded mixed chunks, OSC overflow,
+Unicode carry, resets and replay-window offsets. A real native-chunk bridge
+fixture checks mode-only recovery, mute/discard/replay, prompt offsets, callback
+order and disposal. These run inside the three-OS native verifier alongside its
+existing PTY lifecycle and snapshot checks.
+
+Reproduce parser-only measurements after building the native module:
+
+```sh
+node scripts/rust-output-interpreter-bench.mjs out/interpreter-new.json
+```
+
+The recorded macOS arm64 sample uses the production adapter and callbacks,
+roughly 4 MiB per workload, one warm-up and five alternating-order repeats in
+one process. Median JS → Rust elapsed times were 3.46 → 1.07 ms for plain logs,
+5.19 → 2.88 ms for colored logs and 30.88 → 26.82 ms for an intentionally dense
+mode/OSC stream. Event counts matched. These are small parser microbenchmarks
+on a host also running the preceding core's soak; they do not establish daemon
+RSS savings, interactive latency or real-team performance. Raw measurements:
+`bench/results/rust-output-interpreter-macos-20261014.json`.
+
+The earlier eight-hour run is pinned to the preceding PTY/buffer implementation;
+it does not qualify this new interpreter. This follow-up needs its own adoption
+and cross-platform evidence before default/release promotion.

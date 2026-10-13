@@ -46,3 +46,13 @@ mod native_transport;
     not(target_arch = "wasm32")
 ))]
 mod native_output;
+
+#[cfg(any(test, feature = "native-core"))]
+mod output_interpreter;
+
+#[cfg(all(
+    feature = "native-core",
+    feature = "bindings",
+    not(target_arch = "wasm32")
+))]
+mod native_interpreter;

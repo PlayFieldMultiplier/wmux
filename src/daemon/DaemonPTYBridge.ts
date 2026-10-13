@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import type { IPty } from 'node-pty';
 import type { AgentStatus } from '../shared/types';
-import { OscParser } from '../main/pty/OscParser';
+import { OutputInterpreter, type OutputModes } from './OutputInterpreter';
 import { TerminalNotificationParser } from '../main/pty/oscNotification';
 import { AgentDetector, drawsCodexBanner, type AgentEventStatus } from '../main/pty/AgentDetector';
 import { ActivityMonitor } from '../main/pty/ActivityMonitor';
@@ -12,7 +12,6 @@ import { parseOsc7Cwd, detectPromptCwd } from '../main/pty/cwdDetect';
 import { sanitizeTitle } from '../main/pty/titleDetect';
 import { RingBuffer } from './RingBuffer';
 import { PromptEventLog, parseOsc133Payload } from './PromptEventLog';
-import { OutputModeTracker } from './util/outputModeTracker';
 import { RESIZE_REDRAW_GUARD_MS } from '../main/notification/idleSuppression';
 import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
 import { isFreshSessionSource } from '../shared/hooks/signal-types';
@@ -92,8 +91,8 @@ export function scanStartupDa1(text: string): 'answer' | 'more' | 'closed' {
  *                 new size from the session's own meta.
  */
 export class DaemonPTYBridge extends EventEmitter {
-  private oscParser: OscParser | null = null;
-  private modeTracker: OutputModeTracker | null = null;
+  private outputInterpreter: OutputInterpreter | null = null;
+  private modeTracker: OutputModes | null = null;
   private agentDetector: AgentDetector | null = null;
   private activityMonitor: ActivityMonitor | null = null;
   private dataDisposable: (() => void) | null = null;
@@ -351,7 +350,7 @@ export class DaemonPTYBridge extends EventEmitter {
    * window that no longer contains the mode switches can still be replayed
    * faithfully — see util/outputModeTracker.ts.
    */
-  get outputModes(): OutputModeTracker | null {
+  get outputModes(): OutputModes | null {
     return this.modeTracker;
   }
 
@@ -1041,8 +1040,8 @@ export class DaemonPTYBridge extends EventEmitter {
     sessionId: string,
     promptLog?: PromptEventLog,
   ): void {
-    const oscParser = new OscParser();
-    this.oscParser = oscParser;
+    const interpreter = new OutputInterpreter((ptyProcess as TerminalPty).backend === 'rust' ? 'rust' : 'node');
+    this.outputInterpreter = interpreter;
 
     // Fed from the same place the ring is written, so the tracked modes always
     // describe exactly the bytes the ring holds.
@@ -1054,11 +1053,11 @@ export class DaemonPTYBridge extends EventEmitter {
     // started at power-on defaults here would report "no alt screen" for a pane
     // that has been inside vim since before the daemon restarted. One pass over
     // the ring, once per PTY lifetime.
-    const modeTracker = new OutputModeTracker();
+    const modeTracker = interpreter.modes;
     this.modeTracker = modeTracker;
     const prefilled = ringBuffer.readAll();
     if (prefilled.length > 0) {
-      modeTracker.feed(prefilled.toString('utf8'), ringBuffer.totalBytesWritten);
+      interpreter.seedModes(prefilled.toString('utf8'), ringBuffer.totalBytesWritten);
     }
 
     const agentDetector = new AgentDetector();
@@ -1181,7 +1180,7 @@ export class DaemonPTYBridge extends EventEmitter {
 
     // OSC events → cwd (OSC 7), prompt/command markers (OSC 133), and
     // desktop notifications (OSC 9/777/99)
-    oscParser.onOsc((event) => {
+    interpreter.onOsc((event) => {
       if (event.code === 0 || event.code === 2) {
         // OSC 0/2 window title (e.g. Claude Code `/rename`). OSC 1 (icon-only)
         // is ignored. Sanitized here so the daemon→main payload is already safe.
@@ -1282,8 +1281,7 @@ export class DaemonPTYBridge extends EventEmitter {
         else ringBuffer.write(buf ?? Buffer.from(data));
         // AFTER the ring write: the tracker's offsets are in the ring's own
         // coordinate system, so it needs the counter this chunk already moved.
-        modeTracker.feed(data, ringBuffer.totalBytesWritten);
-        oscParser.process(data);
+        interpreter.feed(data, ringBuffer.totalBytesWritten, nativeChunk);
         // After the mode tracker and OSC 133 have seen this chunk (see noteCodexOutput).
         this.noteCodexOutput(data);
 
@@ -1583,7 +1581,8 @@ export class DaemonPTYBridge extends EventEmitter {
     this.lastTitle = '';
     this.lastTitleAt = 0;
     this.awaitingHuman = false;
-    this.oscParser = null;
+    this.outputInterpreter?.dispose();
+    this.outputInterpreter = null;
     this.modeTracker = null;
     this.agentDetector = null;
     this.activityMonitor = null;
