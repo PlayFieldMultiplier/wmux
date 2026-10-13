@@ -6,7 +6,7 @@
 // renderer never names a path in a URL: it asks main to open a path, gets an
 // unguessable token back, and loads `wmux-preview://<token>/<name>?v=<version>`.
 
-export type PreviewKind = 'image' | 'pdf';
+export type PreviewKind = 'image' | 'pdf' | 'html';
 
 interface PreviewType {
   kind: PreviewKind;
@@ -25,13 +25,85 @@ const PREVIEW_TYPES: Record<string, PreviewType> = {
   // Rendered only through <img>, where an SVG's scripts never run.
   svg: { kind: 'image', mime: 'image/svg+xml' },
   pdf: { kind: 'pdf', mime: 'application/pdf' },
+  // Rendered in a sandboxed <webview> on its own partition, never in the app.
+  html: { kind: 'html', mime: 'text/html; charset=utf-8' },
+  htm: { kind: 'html', mime: 'text/html; charset=utf-8' },
 };
 
 /** Largest file each kind will serve. Past this the tab says so instead. */
 export const PREVIEW_MAX_BYTES: Record<PreviewKind, number> = {
   image: 64 * 1024 * 1024,
   pdf: 256 * 1024 * 1024,
+  html: 64 * 1024 * 1024,
 };
+
+// ─── HTML preview ───────────────────────────────────────────────────────────
+// A page and the files beside it are served over `wmux-html://<token>/<path>`,
+// registered only on the `preview-html` partition (no `wmux-` prefix, so the
+// browser profile allowlist never matches it). The token's root is the page's
+// git worktree (or its folder outside one). The page is offline unless its tab
+// allows the network.
+
+export const HTML_PREVIEW_SCHEME = 'wmux-html';
+export const HTML_PREVIEW_PARTITION = 'preview-html';
+
+const HTML_ASSET_MIME: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  cjs: 'text/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  map: 'application/json; charset=utf-8',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/plain; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  xml: 'application/xml',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  ico: 'image/x-icon',
+  bmp: 'image/bmp',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  wasm: 'application/wasm',
+  pdf: 'application/pdf',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+};
+
+/** Content type for a file a previewed page loads; unknown types are opaque bytes. */
+export function htmlAssetMime(filePath: string): string {
+  const ext = extensionOf(filePath);
+  return Object.hasOwn(HTML_ASSET_MIME, ext) ? HTML_ASSET_MIME[ext] : 'application/octet-stream';
+}
+
+/** `wmux-html://<token>/a/b%20c.html` for a root-relative path written with `/`. */
+export function htmlPreviewUrl(token: string, relativePath: string): string {
+  const encoded = relativePath.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  return `${HTML_PREVIEW_SCHEME}://${token}/${encoded}`;
+}
+
+/** The token a `wmux-html:` URL belongs to, or null. */
+export function htmlPreviewToken(url: string): string | null {
+  const match = /^wmux-html:\/\/([0-9a-f]{32})(?:[/?#]|$)/.exec(url);
+  return match ? match[1] : null;
+}
+
+/** An http(s) link a previewed page tried to open, held for the person to open. */
+export interface PreviewLinkEvent {
+  token: string;
+  url: string;
+}
 
 export const PREVIEW_PROTOCOL_SCHEME = 'wmux-preview';
 
@@ -109,7 +181,14 @@ export interface PreviewFileState {
 }
 
 export type PreviewOpenResult =
-  | ({ ok: true; token: string; kind: PreviewKind; mime: string } & PreviewFileState)
+  | ({
+      ok: true;
+      token: string;
+      kind: PreviewKind;
+      mime: string;
+      /** html only: the page's path inside the token's root, `/`-separated. */
+      path?: string;
+    } & PreviewFileState)
   | { ok: false; reason: 'denied' | 'unsupported' | 'too-large' | 'missing' | 'limit' };
 
 export interface PreviewChangedEvent extends PreviewFileState {

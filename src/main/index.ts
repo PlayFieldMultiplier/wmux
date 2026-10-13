@@ -97,6 +97,7 @@ import { PluginHostLoader } from './plugins/PluginHostLoader';
 import { registerPluginProtocolHandler } from './plugins/pluginProtocol';
 import { registerPrivilegedSchemes } from './privilegedSchemes';
 import { registerPreviewProtocol } from './preview/previewProtocol';
+import { isHtmlPreviewContents, registerHtmlPreview } from './preview/previewHtml';
 import { registerPluginHostHandlers } from './ipc/handlers/pluginHost.handler';
 import { registerProjectConfigHandlers } from './ipc/handlers/projectConfig.handler';
 import { registerChannelLocalHandlers } from './ipc/handlers/channelLocal.handler';
@@ -1973,6 +1974,7 @@ app.on('ready', async () => {
   registerPluginProtocolHandler(() => pluginHostLoader);
   // Before the renderer loads: a restored session opens its preview tabs at once.
   registerPreviewProtocol();
+  registerHtmlPreview();
   markBoot('plugins-loaded');
 
   mainWindow = createWindow({ deferLoad: true });
@@ -2658,11 +2660,12 @@ app.on('ready', async () => {
 // runs), and this handler is the actual gate: never create a new window;
 // load http(s) popups (target=_blank links) in the SAME webview instead so
 // in-pane browsing keeps working. Applies to every <webview> guest — the
-// only one in the app is BrowserPanel. Known limitation: window.open-based
-// OAuth flows that postMessage back to their opener cannot work with the
-// same-view replacement.
+// only browser webview in the app is BrowserPanel. Known limitation:
+// window.open-based OAuth flows that postMessage back to their opener cannot
+// work with the same-view replacement. The HTML preview's guests are not
+// browser panes and keep their own policy (main/preview/previewHtml.ts).
 app.on('web-contents-created', (_event, contents) => {
-  if (contents.getType() !== 'webview') return;
+  if (contents.getType() !== 'webview' || isHtmlPreviewContents(contents)) return;
   contents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
       void contents.loadURL(url);

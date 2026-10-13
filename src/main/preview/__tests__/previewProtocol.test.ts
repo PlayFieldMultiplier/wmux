@@ -72,11 +72,11 @@ afterEach(() => {
 });
 
 describe('privileged schemes', () => {
-  it('registers the plugin and preview schemes in one call', () => {
+  it('registers the plugin, preview and html preview schemes in one call', () => {
     registerPrivilegedSchemes();
     expect(electron.registerSchemesAsPrivileged).toHaveBeenCalledTimes(1);
     const schemes = electron.registerSchemesAsPrivileged.mock.calls[0][0].map((s: { scheme: string }) => s.scheme);
-    expect(schemes).toEqual([PLUGIN_PROTOCOL_SCHEME, PREVIEW_PROTOCOL_SCHEME]);
+    expect(schemes).toEqual([PLUGIN_PROTOCOL_SCHEME, PREVIEW_PROTOCOL_SCHEME, 'wmux-html']);
   });
 });
 

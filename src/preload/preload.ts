@@ -47,7 +47,7 @@ import type { ComputerUseSettingsPayload } from '../shared/computer/config';
 import type { QuickLaunchSettingsPayload } from '../shared/quickLaunch';
 import type { ResumeBinding } from '../shared/agentResume';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
-import type { PreviewChangedEvent, PreviewOpenResult } from '../shared/filePreview';
+import type { PreviewChangedEvent, PreviewLinkEvent, PreviewOpenResult } from '../shared/filePreview';
 import type {
   WorkspaceSettleChangedPayload,
   WorkspaceSettleCommand,
@@ -1371,6 +1371,13 @@ const electronAPI = {
       const listener = (_event: Electron.IpcRendererEvent, payload: PreviewChangedEvent) => callback(payload);
       ipcRenderer.on(IPC.PREVIEW_CHANGED, listener);
       return () => { ipcRenderer.removeListener(IPC.PREVIEW_CHANGED, listener); };
+    },
+    // HTML preview: the page is offline until its tab allows the network.
+    setNetwork: (token: string, allowed: boolean) => ipcRenderer.invoke(IPC.PREVIEW_SET_NETWORK, token, allowed) as Promise<boolean>,
+    onLink: (callback: (event: PreviewLinkEvent) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: PreviewLinkEvent) => callback(payload);
+      ipcRenderer.on(IPC.PREVIEW_LINK, listener);
+      return () => { ipcRenderer.removeListener(IPC.PREVIEW_LINK, listener); };
     },
   },
   git: {

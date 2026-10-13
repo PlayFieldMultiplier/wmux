@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPreviewBytes, isPreviewablePath, looksComplete, previewTypeOf, previewUrl } from '../filePreview';
+import { formatPreviewBytes, htmlAssetMime, htmlPreviewToken, htmlPreviewUrl, isPreviewablePath, looksComplete, previewTypeOf, previewUrl } from '../filePreview';
 
 describe('file preview types (#2150)', () => {
   it('opens images and PDFs as previews, by extension and case-insensitively', () => {
@@ -35,5 +35,18 @@ describe('file preview types (#2150)', () => {
     expect(looksComplete('a.pdf', new TextEncoder().encode('1 0 obj << /Type'))).toBe(false);
     expect(looksComplete('a.webp', Uint8Array.from([1]))).toBe(true);
     expect(looksComplete('a.png', new Uint8Array())).toBe(false);
+  });
+
+  it('opens HTML pages as html previews, served by token with a root-relative path', () => {
+    expect(previewTypeOf('/repo/coverage/index.HTML')?.kind).toBe('html');
+    expect(previewTypeOf('/repo/a.htm')?.kind).toBe('html');
+    const token = 'c'.repeat(32);
+    const url = htmlPreviewUrl(token, 'docs/my page.html');
+    expect(url).toBe(`wmux-html://${token}/docs/my%20page.html`);
+    expect(htmlPreviewToken(url)).toBe(token);
+    expect(htmlPreviewToken('https://example.com/')).toBeNull();
+    expect(htmlAssetMime('/r/app.mjs')).toBe('text/javascript; charset=utf-8');
+    expect(htmlAssetMime('/r/blob.bin')).toBe('application/octet-stream');
+    expect(htmlAssetMime('/r/x.constructor')).toBe('application/octet-stream');
   });
 });

@@ -711,6 +711,9 @@ export const IPC = {
   PREVIEW_OPEN: 'preview:open',
   PREVIEW_CLOSE: 'preview:close',
   PREVIEW_CHANGED: 'preview:changed',
+  // HTML preview: allow a page's network; an http(s) link it tried to open
+  PREVIEW_SET_NETWORK: 'preview:set-network',
+  PREVIEW_LINK: 'preview:link',
   // Scrollback persistence
   SCROLLBACK_DUMP: 'scrollback:dump',
   SCROLLBACK_LOAD: 'scrollback:load',

@@ -770,6 +770,14 @@ A pane is a terminal column plus, when it needs one, a work area.
   up with one line of `--attention-text` in the footer; that line is state, so
   it is the only colour on the tab. Transparency shows on a checkerboard drawn
   from the theme.
+- **HTML preview.** An `.html` file opens rendered in the same preview tab,
+  in a sandboxed page that never runs in the app. The footer carries the
+  page's one network control, `Offline` until pressed (`Network on`,
+  pressed state as above), and a held link: a page never navigates away or
+  opens anything on its own; a link it tries to open shows in the footer
+  with an Open button. The header adds View source, which opens the file
+  as text. A change in the page's folder reloads it in place, keeping the
+  scroll and the focus.
 
 ## The one-boundary rule
 
@@ -1103,6 +1111,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-11 | Owner decision: bring back the file tree as an opt-in column opposite the sidebar, independent of Moa, between the panes and the dock, with its own bare titlebar toggle before Moa's. Amends "the dock opposite the sidebar is Moa's" and "Moa's icon, the right panel's only toggle" | #1440 dropped the toggle with the old right panel, which left the tree mounted but unreachable. A file tree answers "what is in this project" without leaving the terminals, a different job from Moa's conversation, so it gets its own column rather than a dock tab; placing it inside the dock edge keeps rail pages covering it with the panes |
 | 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
 | 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
+| 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
 
 ### Desktop conversation view
 

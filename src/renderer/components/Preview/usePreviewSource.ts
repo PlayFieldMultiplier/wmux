@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  htmlPreviewUrl,
   previewUrl,
   type PreviewChangedEvent,
   type PreviewKind,
@@ -13,6 +14,7 @@ export type PreviewSource =
   | { status: 'error'; reason: FailReason }
   | {
       status: 'ready';
+      token: string;
       kind: PreviewKind;
       mime: string;
       /** URL of the newest settled version. Viewers swap to it only once it loads. */
@@ -47,7 +49,9 @@ export function usePreviewSource(filePath: string): PreviewSource {
       setSource((prev) => prev.status !== 'ready' ? prev : {
         ...prev,
         // Only a whole file is worth loading; otherwise keep showing the last one.
-        url: event.exists && event.complete ? previewUrl(event.token, filePath, event.version) : prev.url,
+        // An html page keeps its URL: the view reloads it in place on a new version.
+        url: prev.kind === 'html' ? prev.url
+          : event.exists && event.complete ? previewUrl(event.token, filePath, event.version) : prev.url,
         exists: event.exists,
         complete: event.complete,
         size: event.exists && event.complete ? event.size : prev.size,
@@ -67,9 +71,12 @@ export function usePreviewSource(filePath: string): PreviewSource {
       token = result.token;
       setSource({
         status: 'ready',
+        token: result.token,
         kind: result.kind,
         mime: result.mime,
-        url: previewUrl(result.token, filePath, result.version),
+        url: result.kind === 'html'
+          ? htmlPreviewUrl(result.token, result.path ?? '')
+          : previewUrl(result.token, filePath, result.version),
         exists: result.exists,
         complete: result.complete,
         size: result.size,

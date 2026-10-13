@@ -1541,6 +1541,7 @@ function SplitSurfaceView({
           key={surface.id}
           filePath={surface.previewFilePath || ''}
           isActive={drawn}
+          paneId={pane.id}
         />
       );
     }

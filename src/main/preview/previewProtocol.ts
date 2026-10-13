@@ -260,8 +260,40 @@ function release(token: string): void {
   ensurePolling();
 }
 
+/** Other preview kinds (HTML, main/preview/previewHtml.ts) keep their own
+ *  tokens and drop them on the same renderer lifecycle events. */
+const senderReleaseListeners: Array<(senderId: number) => void> = [];
+
+export function onSenderReleased(listener: (senderId: number) => void): void {
+  senderReleaseListeners.push(listener);
+}
+
+/** Start following a renderer's lifecycle; returns its current generation. */
+export function watchSender(sender: WebContents): number {
+  trackSender(sender);
+  return senderGeneration.get(sender.id) ?? 0;
+}
+
+/** True while `sender` is alive and has not navigated since `generation`. */
+export function senderStillCurrent(sender: WebContents, generation: number): boolean {
+  return !sender.isDestroyed() && (senderGeneration.get(sender.id) ?? 0) === generation;
+}
+
+interface KindHandler {
+  open: (sender: WebContents, filePath: string) => Promise<PreviewOpenResult>;
+  close: (sender: WebContents, token: string) => void;
+}
+
+let htmlHandler: KindHandler | null = null;
+
+/** The HTML preview registers here, so one open/close IPC serves every kind. */
+export function setHtmlPreviewHandler(handler: KindHandler): void {
+  htmlHandler = handler;
+}
+
 function releaseSender(senderId: number): void {
   senderGeneration.set(senderId, (senderGeneration.get(senderId) ?? 0) + 1);
+  for (const listener of senderReleaseListeners) listener(senderId);
   const tokens = senderTokens.get(senderId);
   if (!tokens) return;
   for (const token of [...tokens]) release(token);
@@ -296,6 +328,9 @@ export async function openPreview(sender: WebContents, filePath: unknown): Promi
   if (!path.isAbsolute(filePath)) return { ok: false, reason: 'unsupported' };
   const requested = previewTypeOf(filePath);
   if (!requested) return { ok: false, reason: 'unsupported' };
+  if (requested.kind === 'html') {
+    return htmlHandler ? htmlHandler.open(sender, filePath) : { ok: false, reason: 'unsupported' };
+  }
   trackSender(sender);
   const generation = senderGeneration.get(sender.id) ?? 0;
   if (isSensitivePath(path.resolve(filePath))) return { ok: false, reason: 'denied' };
@@ -359,6 +394,7 @@ export async function openPreview(sender: WebContents, filePath: unknown): Promi
 
 export function closePreview(sender: WebContents, token: unknown): void {
   if (typeof token !== 'string') return;
+  htmlHandler?.close(sender, token);
   const entry = entries.get(token);
   if (entry && entry.sender.id === sender.id) release(token);
 }
