@@ -40,7 +40,8 @@
 //                     head-unchanged (mergeBlock inside merge() refuses failing
 //                     or pending checks). Right before the merge the gh login
 //                     must be the one the request recorded, and the gate
-//                     (lane and approval) is asked once more. With no approval
+//                     (lane and approval) is asked once more, and by the
+//                     merge itself after its last read. With no approval
 //                     port nothing merges for a request (`approval-not-wired`).
 // A failure after the claim that may or may not have reached GitHub ends
 // `uncertain`, never `done`.
@@ -153,8 +154,12 @@ function startOfLocalDay(t: number): number {
 export interface MoaMergeExecutorPorts {
   effects: MoaEffectStore;
   facts: MergeLaneFactsReader;
-  /** The squash merge itself (GhPrReviewService.merge with expectHead). */
-  merge: (effect: MergeEffect) => Promise<PrWriteResult>;
+  /** The squash merge itself (GhPrReviewService.merge with expectHead).
+   *  `authorize` is the executor's gate: the merge asks it after its own
+   *  last read, right before the GitHub write, and writes nothing (any
+   *  non-ok result) when it returns a reason; the executor then ends the
+   *  try refused with that reason. */
+  merge: (effect: MergeEffect, authorize: () => string | null) => Promise<PrWriteResult>;
   /** trustedAuthors, askerBranches, the PR's verdicts and its author
    *  workspaces for this effect, read by main now (never cached). */
   laneContext: (effect: MergeEffect, facts: PrLaneFacts) => Promise<Omit<MergeLaneContext, 'expectHead'>>;
@@ -293,12 +298,19 @@ export class MoaMergeExecutor {
       const wrongIdentity = isApproval && approval ? await approval.identity(claimed) : await this.ports.identity?.(claimed);
       if (wrongIdentity) return await end('refused', wrongIdentity);
       // The last word before GitHub: a revocation, an undo or the kill switch
-      // that landed during the reads above stops the merge.
-      const lateDenied = isLane
+      // that landed during the reads above stops the merge — asked here and
+      // again by the merge after its own reads.
+      const gate = (): string | null => (isLane
         ? this.authorizeLane(claimed)
-        : isApproval && approval ? approval.authorize(claimed) ?? (claimed.approvedBy === 'rule' ? this.authorizeLane(claimed) : null) : null;
+        : isApproval && approval ? approval.authorize(claimed) ?? (claimed.approvedBy === 'rule' ? this.authorizeLane(claimed) : null) : null);
+      const lateDenied = gate();
       if (lateDenied) return await end('refused', lateDenied);
-      const r = await this.ports.merge(claimed);
+      const inMerge: { denied: string | null } = { denied: null };
+      const r = await this.ports.merge(claimed, () => {
+        inMerge.denied = gate();
+        return inMerge.denied;
+      });
+      if (inMerge.denied) return await end('refused', inMerge.denied);
       if (r.ok) {
         const after = await this.read(claimed);
         const oid = after && after.state === 'MERGED' && after.headRefOid === claimed.expectHead ? after.mergeCommitOid ?? undefined : undefined;

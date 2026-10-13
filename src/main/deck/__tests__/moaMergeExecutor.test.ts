@@ -464,6 +464,21 @@ describe('approval effects (owner and rule)', () => {
     expect(b.merge).not.toHaveBeenCalled();
   });
 
+  it('a revocation that lands during the merge\'s own reads stops it before the write', async () => {
+    const s = await approvalSetup('owner');
+    let wrote = false;
+    s.merge.mockImplementationOnce(async (...args: unknown[]) => {
+      // The merge's own reads (checks, the head) run; the request is undone meanwhile.
+      s.authorize.mockReturnValue('approval-not-approved' as never);
+      const authorize = args[1] as () => string | null;
+      if (authorize()) return { ok: false, code: 'invalid', message: 'not authorized' };
+      wrote = true;
+      return { ok: true };
+    });
+    expect(await s.exec.run(s.e.id)).toMatchObject({ status: 'refused', reason: 'approval-not-approved' });
+    expect(wrote).toBe(false);
+  });
+
   it('a moved head is refused head-moved, before any merge', async () => {
     const s = await approvalSetup('owner', { facts: { ...LANE_FACTS, headRefOid: 'c'.repeat(40) } });
     expect(await s.exec.run(s.e.id)).toMatchObject({ status: 'refused', reason: 'head-moved' });
