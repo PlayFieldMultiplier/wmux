@@ -611,9 +611,6 @@ export const de = {
   'schedules.detail.browser_needs_consent': "Ein Browser-Aufruf wurde abgelehnt: Die Browser-Richtlinie des Bereichs hat sich seit der Freigabe geändert. Speichere den Zeitplan erneut, um ihn freizugeben.",
   'schedules.detail.browser_policy_denied': "Ein Browser-Aufruf wurde von der Website-Richtlinie des Bereichs abgelehnt.",
   'schedules.detail.browser_consent_unattended': "Eine Browser-Aktion brauchte die Zustimmung einer Person (ein Seitenskript, ein Download oder Anmeldedaten einer sensiblen Website), und bei einem geplanten Lauf ist niemand da, der gefragt werden kann. Sie wurde abgelehnt. Eine Antwort „Immer in diesem Bereich“ in diesem Bereich gilt auch für seine geplanten Läufe.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet-Übersicht (lokale Daten, ohne Moa beantwortet):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: Diese Datei enthält Passwörter oder Schlüssel und wurde daher nicht hochgeladen. Entfernen Sie sie aus der Änderung (oder tragen Sie sie in .gitignore ein) und versuchen Sie es erneut.",
   'git.secret.value': "{path}, Zeile {line}, sieht wie ein Passwort oder API-Schlüssel aus und wurde daher nicht hochgeladen. Entfernen Sie ihn aus dem Code und versuchen Sie es erneut.",
   'git.secret.scanFailed': "wmux konnte diese Änderung nicht lesen, um sie auf Passwörter und Schlüssel zu prüfen, daher wurde sie nicht hochgeladen. Versuchen Sie es erneut; falls es weiter fehlschlägt, lässt sich die Prüfung unter Einstellungen › Allgemein ausschalten.",

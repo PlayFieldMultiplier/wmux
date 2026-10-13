@@ -1811,13 +1811,6 @@ export const en = {
   'moa.settings.level1': "1 · Report and hand off on request (default)",
   'moa.settings.level2': "2 · Run an approved goal",
   'moa.settings.level3': "3 · Run an approved goal (merge not enabled yet)",
-  'moa.settings.fleetFastPath': "Answer Fleet questions locally",
-  'moa.settings.fleetFastPathDesc': "Short status questions typed here, like \"Who needs me?\" or \"Fleet status\", are answered from the Fleet board on this computer without a Moa turn. Anything else still goes to Moa.",
-  // Moa Fleet fast path: the local answer, worded here from main's counts.
-  // Counted phrases are `.one`/`.other` pairs picked by Intl.PluralRules;
-  // each `.other` must read right for every count `.one` does not take.
-  'moa.fleetAnswer.intro': "Fleet snapshot (local data, answered without Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'settings.tabRoles': 'Roles & fan-out',
   'settings.tabRemote': 'Remote & phone',
   'settings.tabLan': 'LAN',

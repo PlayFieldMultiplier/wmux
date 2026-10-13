@@ -614,9 +614,6 @@ export const it = {
   'schedules.detail.browser_needs_consent': "Una chiamata del browser è stata rifiutata: la policy del riquadro è cambiata dopo l'autorizzazione. Salva di nuovo la pianificazione per autorizzarla.",
   'schedules.detail.browser_policy_denied': "Una chiamata del browser è stata rifiutata dalla policy dei siti del riquadro.",
   'schedules.detail.browser_consent_unattended': "Un'azione del browser richiedeva l'approvazione di una persona (uno script della pagina, un download o i dati di accesso di un sito sensibile) e un'esecuzione pianificata non ha nessuno a cui chiedere, quindi è stata rifiutata. Una risposta \"Sempre in questo riquadro\" data in quel riquadro vale anche per le sue esecuzioni pianificate.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Stato di Fleet (dati locali, risposta senza Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: questo file contiene password o chiavi, quindi non è stato caricato. Toglilo dalla modifica (o aggiungilo a .gitignore) e riprova.",
   'git.secret.value': "{path}, riga {line}, sembra una password o una chiave API, quindi non è stato caricato. Toglila dal codice e riprova.",
   'git.secret.scanFailed': "wmux non è riuscito a leggere questa modifica per controllare password e chiavi, quindi non è stata caricata. Riprova; se continua a non riuscire, puoi disattivare il controllo in Impostazioni › Generale.",

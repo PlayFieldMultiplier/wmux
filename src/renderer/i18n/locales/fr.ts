@@ -614,9 +614,6 @@ export const fr = {
   'schedules.detail.browser_needs_consent': "Un appel du navigateur a été refusé : la politique du volet a changé depuis l'autorisation. Enregistrez à nouveau la planification pour l'autoriser.",
   'schedules.detail.browser_policy_denied': "Un appel du navigateur a été refusé par la politique de sites du volet.",
   'schedules.detail.browser_consent_unattended': "Une action du navigateur demandait l'accord d'une personne (un script de page, un téléchargement ou les données de connexion d'un site sensible), et une exécution planifiée n'a personne à qui demander : elle a été refusée. Une réponse « Toujours dans ce volet » donnée dans ce volet vaut aussi pour ses exécutions planifiées.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "État de Fleet (données locales, réponse sans Moa) :",
-  'moa.fleetAnswer.row': "{title} ({workspace}) : {reason}",
   'git.secret.file': "{path} : ce fichier contient des mots de passe ou des clés, il n'a donc pas été envoyé. Retirez-le de la modification (ou ajoutez-le à .gitignore) et réessayez.",
   'git.secret.value': "{path}, ligne {line}, ressemble à un mot de passe ou une clé d'API, il n'a donc pas été envoyé. Retirez-le du code et réessayez.",
   'git.secret.scanFailed': "wmux n'a pas pu lire cette modification pour y chercher des mots de passe ou des clés, elle n'a donc pas été envoyée. Réessayez ; si l'échec persiste, cette vérification peut être désactivée dans Paramètres › Général.",

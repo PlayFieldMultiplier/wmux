@@ -614,9 +614,6 @@ export const bs = {
   'schedules.detail.browser_needs_consent': "Poziv preglednika je odbijen: pravila okna su se promijenila nakon odobrenja rasporeda. Ponovo spremite raspored da ga odobrite.",
   'schedules.detail.browser_policy_denied': "Pravila stranica okna odbila su poziv preglednika.",
   'schedules.detail.browser_consent_unattended': "Radnja preglednika trebala je odobrenje osobe (skripta stranice, preuzimanje ili podaci za prijavu osjetljive stranice), a zakazano pokretanje nema koga pitati, pa je odbijena. Odgovor \"Uvijek u ovom oknu\" dat u tom oknu važi i za njegova zakazana pokretanja.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Pregled Fleet (lokalni podaci, odgovor bez Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: ova datoteka sadrži lozinke ili ključeve, pa nije poslana. Uklonite je iz izmjene (ili dodajte u .gitignore) i pokušajte ponovo.",
   'git.secret.value': "{path}, red {line}, izgleda kao lozinka ili API ključ, pa nije poslano. Uklonite ga iz koda i pokušajte ponovo.",
   'git.secret.scanFailed': "wmux nije mogao pročitati ovu izmjenu da je provjeri na lozinke i ključeve, pa nije poslana. Pokušajte ponovo; ako i dalje ne uspijeva, provjeru možete isključiti u Postavke › Opšte.",

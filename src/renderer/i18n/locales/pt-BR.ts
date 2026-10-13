@@ -615,9 +615,6 @@ export const ptBR = {
   'schedules.detail.browser_needs_consent': "Uma chamada do navegador foi recusada: a política do painel mudou depois da autorização. Salve o agendamento de novo para autorizá-lo.",
   'schedules.detail.browser_policy_denied': "Uma chamada do navegador foi recusada pela política de sites do painel.",
   'schedules.detail.browser_consent_unattended': "Uma ação do navegador precisava da aprovação de uma pessoa (um script da página, um download ou os dados de login de um site sensível) e uma execução agendada não tem a quem perguntar, então ela foi recusada. Uma resposta \"Sempre neste painel\" dada nesse painel também vale para as execuções agendadas dele.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Status do Fleet (dados locais, respondido sem o Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: este arquivo contém senhas ou chaves, então não foi enviado. Remova-o da alteração (ou adicione ao .gitignore) e tente de novo.",
   'git.secret.value': "{path}, linha {line}, parece uma senha ou chave de API, então não foi enviado. Tire-a do código e tente de novo.",
   'git.secret.scanFailed': "O wmux não conseguiu ler esta alteração para verificar senhas e chaves, então ela não foi enviada. Tente de novo; se continuar falhando, a verificação pode ser desligada em Configurações › Geral.",

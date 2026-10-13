@@ -613,9 +613,6 @@ export const da = {
   'schedules.detail.browser_needs_consent': "Et browserkald blev afvist: rudens politik er ændret, efter planen blev godkendt. Gem planen igen for at godkende den.",
   'schedules.detail.browser_policy_denied': "Et browserkald blev afvist af rudens webstedspolitik.",
   'schedules.detail.browser_consent_unattended': "En browserhandling krævede samtykke fra en person (et sidescript, en download eller loginoplysninger til et følsomt websted), og en planlagt kørsel har ingen at spørge, så den blev afvist. Et \"Altid i denne rude\"-svar givet i den rude gælder også rudens planlagte kørsler.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet-status (lokale data, besvaret uden Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: filen indeholder adgangskoder eller nøgler, så den blev ikke uploadet. Fjern den fra ændringen (eller tilføj den til .gitignore), og prøv igen.",
   'git.secret.value': "{path} linje {line} ligner en adgangskode eller API-nøgle, så den blev ikke uploadet. Fjern den fra koden, og prøv igen.",
   'git.secret.scanFailed': "wmux kunne ikke læse ændringen for at tjekke den for adgangskoder og nøgler, så den blev ikke uploadet. Prøv igen; hvis det bliver ved med at fejle, kan tjekket slås fra under Indstillinger › Generelt.",

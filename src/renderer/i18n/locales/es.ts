@@ -615,9 +615,6 @@ export const es = {
   'schedules.detail.browser_needs_consent': "Se rechazó una llamada del navegador: la política del panel cambió después de autorizar la programación. Guárdala de nuevo para autorizarla.",
   'schedules.detail.browser_policy_denied': "La política de sitios del panel rechazó una llamada del navegador.",
   'schedules.detail.browser_consent_unattended': "Una acción del navegador necesitaba la aprobación de una persona (un script de página, una descarga o los datos de inicio de sesión de un sitio sensible) y una ejecución programada no tiene a quién preguntar, así que se rechazó. Una respuesta «Siempre en este panel» dada en ese panel también cubre sus ejecuciones programadas.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Estado de Fleet (datos locales, respondido sin Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: este archivo contiene contraseñas o claves, así que no se subió. Quítalo del cambio (o añádelo a .gitignore) e inténtalo de nuevo.",
   'git.secret.value': "{path}, línea {line}, parece una contraseña o clave de API, así que no se subió. Sácala del código e inténtalo de nuevo.",
   'git.secret.scanFailed': "wmux no pudo leer este cambio para comprobar si contiene contraseñas o claves, así que no se subió. Inténtalo de nuevo; si sigue fallando, puedes desactivar esta comprobación en Ajustes › General.",

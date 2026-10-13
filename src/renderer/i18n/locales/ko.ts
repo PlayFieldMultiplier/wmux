@@ -1331,11 +1331,6 @@ export const ko = {
   'moa.settings.level1': "1 · 보고, 요청 시 넘겨주기 (기본)",
   'moa.settings.level2': "2 · 승인된 목표 실행",
   'moa.settings.level3': "3 · 승인된 목표 실행 (병합은 아직 비활성)",
-  'moa.settings.fleetFastPath': "Fleet 질문은 이 컴퓨터에서 답하기",
-  'moa.settings.fleetFastPathDesc': "여기에 입력한 \"작업 상태\", \"내가 봐야 할 작업\" 같은 짧은 상태 질문은 Moa 턴 없이 이 컴퓨터의 Fleet 보드로 답합니다. 그 밖의 메시지는 그대로 Moa에게 갑니다.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet 현황 (이 컴퓨터의 데이터로, Moa 없이 답했습니다):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'settings.tabRoles': '역할·팬아웃',
   'settings.tabRemote': '원격·휴대폰',
   'settings.tabLan': 'LAN',

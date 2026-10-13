@@ -1922,11 +1922,6 @@ export const zh = {
   'moa.settings.level1': "1 · 报告，按请求移交（默认）",
   'moa.settings.level2': "2 · 执行已批准的目标",
   'moa.settings.level3': "3 · 执行已批准的目标（合并尚未启用）",
-  'moa.settings.fleetFastPath': "在本机回答 Fleet 问题",
-  'moa.settings.fleetFastPathDesc': "在这里输入的简短状态问题，例如 \"Who needs me?\" 或 \"Fleet status\"，会直接用本机的 Fleet 看板回答，不启动 Moa 回合。其他消息仍然交给 Moa。",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet 概况（用本机数据回答，未经过 Moa）：",
-  'moa.fleetAnswer.row': "{title}（{workspace}）：{reason}",
   'settings.tabRoles': '角色与扇出',
   'settings.tabRemote': '远程与手机',
   'settings.tabLan': '局域网',

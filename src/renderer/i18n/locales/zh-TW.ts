@@ -650,9 +650,6 @@ export const zhTW = {
   'schedules.detail.browser_needs_consent': "瀏覽器呼叫遭拒：授權此排程後窗格的瀏覽器政策已變更。請重新儲存排程以授權。",
   'schedules.detail.browser_policy_denied': "窗格的網站政策拒絕了瀏覽器呼叫。",
   'schedules.detail.browser_consent_unattended': "瀏覽器操作(頁面指令碼、下載或敏感網站的登入資料)需要有人確認,但排程執行沒有人可以詢問,因此已被拒絕。在該窗格中回答「在此窗格中一律允許」也適用於它的排程執行。",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet 概況（用本機資料回答，未經過 Moa）：",
-  'moa.fleetAnswer.row': "{title}（{workspace}）：{reason}",
   'git.secret.file': "{path}:此檔案包含密碼或金鑰,因此未上傳。請將其移出變更(或加入 .gitignore)後再試。",
   'git.secret.value': "{path} 第 {line} 行看起來像密碼或 API 金鑰,因此未上傳。請將其移出程式碼後再試。",
   'git.secret.scanFailed': "wmux 無法讀取此變更以檢查密碼或金鑰,因此未上傳。請再試一次;若持續失敗,可在 設定 › 一般 中關閉此檢查。",

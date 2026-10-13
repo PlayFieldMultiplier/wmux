@@ -614,9 +614,6 @@ export const nb = {
   'schedules.detail.browser_needs_consent': "Et nettleserkall ble avvist: panelets retningslinjer endret seg etter at planen ble godkjent. Lagre planen på nytt for å godkjenne den.",
   'schedules.detail.browser_policy_denied': "Et nettleserkall ble avvist av panelets nettstedsregler.",
   'schedules.detail.browser_consent_unattended': "En nettleserhandling trengte samtykke fra en person (et sideskript, en nedlasting eller påloggingsdata for et sensitivt nettsted), og en planlagt kjøring har ingen å spørre, så den ble avvist. Et «Alltid i denne ruten»-svar gitt i den ruten gjelder også rutens planlagte kjøringer.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet-status (lokale data, besvart uten Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: filen inneholder passord eller nøkler, så den ble ikke lastet opp. Fjern den fra endringen (eller legg den i .gitignore) og prøv igjen.",
   'git.secret.value': "{path} linje {line} ser ut som et passord eller en API-nøkkel, så den ble ikke lastet opp. Fjern den fra koden og prøv igjen.",
   'git.secret.scanFailed': "wmux kunne ikke lese endringen for å sjekke den for passord og nøkler, så den ble ikke lastet opp. Prøv igjen; hvis det fortsetter å feile, kan sjekken slås av under Innstillinger › Generelt.",

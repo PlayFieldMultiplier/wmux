@@ -663,9 +663,6 @@ export const ja = {
   'schedules.detail.browser_needs_consent': "ブラウザの呼び出しが拒否されました: このスケジュールを許可した後にペインのブラウザポリシーが変わりました。スケジュールを保存し直して許可してください。",
   'schedules.detail.browser_policy_denied': "ペインのサイトポリシーがブラウザの呼び出しを拒否しました。",
   'schedules.detail.browser_consent_unattended': "ブラウザー操作(ページスクリプト、ダウンロード、機密サイトのサインイン情報)に人の承認が必要でしたが、スケジュール実行には確認できる人がいないため拒否されました。そのペインで「このペインで常に許可」と答えると、そのペインのスケジュール実行にも適用されます。",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Fleet の状況（このコンピュータのデータで、Moa を使わずに回答）：",
-  'moa.fleetAnswer.row': "{title}（{workspace}）: {reason}",
   'git.secret.file': "{path}: このファイルにはパスワードやキーが含まれているため、アップロードしませんでした。変更から外す(または .gitignore に追加する)と再試行できます。",
   'git.secret.value': "{path} の {line} 行目がパスワードや API キーのように見えるため、アップロードしませんでした。コードから外して再試行してください。",
   'git.secret.scanFailed': "この変更を読み取れず、パスワードやキーの確認ができなかったため、アップロードしませんでした。もう一度試し、失敗が続く場合は設定 › 一般でこの確認をオフにできます。",

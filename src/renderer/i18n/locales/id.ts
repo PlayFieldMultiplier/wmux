@@ -614,9 +614,6 @@ export const id = {
   'schedules.detail.browser_needs_consent': "Panggilan browser ditolak: kebijakan panel berubah setelah jadwal ini diizinkan. Simpan jadwal lagi untuk mengizinkannya.",
   'schedules.detail.browser_policy_denied': "Panggilan browser ditolak oleh kebijakan situs panel.",
   'schedules.detail.browser_consent_unattended': "Tindakan browser memerlukan persetujuan seseorang (skrip halaman, unduhan, atau data masuk situs sensitif), dan jalankan terjadwal tidak punya siapa pun untuk ditanya, jadi tindakan itu ditolak. Jawaban \"Selalu di panel ini\" yang diberikan di panel itu juga berlaku untuk jalankan terjadwalnya.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Ringkasan Fleet (data lokal, dijawab tanpa Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: file ini berisi kata sandi atau kunci, jadi tidak diunggah. Keluarkan dari perubahan (atau tambahkan ke .gitignore) lalu coba lagi.",
   'git.secret.value': "{path} baris {line} tampak seperti kata sandi atau kunci API, jadi tidak diunggah. Keluarkan dari kode lalu coba lagi.",
   'git.secret.scanFailed': "wmux tidak dapat membaca perubahan ini untuk memeriksa kata sandi dan kunci, jadi tidak diunggah. Coba lagi; jika terus gagal, pemeriksaan ini bisa dimatikan di Pengaturan › Umum.",

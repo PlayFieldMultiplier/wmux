@@ -615,9 +615,6 @@ export const ms = {
   'schedules.detail.browser_needs_consent': "Panggilan pelayar ditolak: dasar anak tetingkap berubah selepas jadual ini dibenarkan. Simpan jadual semula untuk membenarkannya.",
   'schedules.detail.browser_policy_denied': "Panggilan pelayar ditolak oleh dasar tapak anak tetingkap.",
   'schedules.detail.browser_consent_unattended': "Tindakan pelayar memerlukan kebenaran seseorang (skrip halaman, muat turun atau data log masuk tapak sensitif), dan larian berjadual tiada sesiapa untuk ditanya, jadi ia ditolak. Jawapan \"Sentiasa pada anak tetingkap ini\" yang diberikan dalam anak tetingkap itu turut meliputi larian berjadualnya.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Ringkasan Fleet (data setempat, dijawab tanpa Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: fail ini mengandungi kata laluan atau kunci, jadi tidak dimuat naik. Keluarkan daripada perubahan (atau tambah ke .gitignore) dan cuba lagi.",
   'git.secret.value': "{path} baris {line} kelihatan seperti kata laluan atau kunci API, jadi tidak dimuat naik. Keluarkan daripada kod dan cuba lagi.",
   'git.secret.scanFailed': "wmux tidak dapat membaca perubahan ini untuk menyemak kata laluan dan kunci, jadi tidak dimuat naik. Cuba lagi; jika terus gagal, semakan ini boleh dimatikan di Tetapan › Umum.",

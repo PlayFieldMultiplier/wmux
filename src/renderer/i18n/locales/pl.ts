@@ -1789,11 +1789,6 @@ export const pl = {
   'moa.settings.level1': "1 · Raportuje i przekazuje na prośbę (domyślnie)",
   'moa.settings.level2': "2 · Realizuje zatwierdzony cel",
   'moa.settings.level3': "3 · Realizuje zatwierdzony cel (scalanie jeszcze wyłączone)",
-  'moa.settings.fleetFastPath': "Odpowiadaj lokalnie na pytania o Fleet",
-  'moa.settings.fleetFastPathDesc': "Krótkie pytania o stan wpisane tutaj, np. „Who needs me?” lub „Fleet status”, dostają odpowiedź z tablicy Fleet na tym komputerze, bez tury Moa. Wszystko inne nadal trafia do Moa.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Stan Fleet (dane lokalne, odpowiedź bez Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'settings.tabRoles': 'Role i fan-out',
   'settings.tabRemote': 'Zdalnie i telefon',
   'settings.tabLan': 'LAN',

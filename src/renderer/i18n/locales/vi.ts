@@ -609,9 +609,6 @@ export const vi = {
   'schedules.detail.browser_needs_consent': "Một lệnh gọi trình duyệt bị từ chối: chính sách của ô đã thay đổi sau khi cấp quyền cho lịch. Hãy lưu lại lịch để cấp quyền.",
   'schedules.detail.browser_policy_denied': "Chính sách trang của ô đã từ chối một lệnh gọi trình duyệt.",
   'schedules.detail.browser_consent_unattended': "Một thao tác trình duyệt cần một người đồng ý (tập lệnh trang, tải xuống hoặc dữ liệu đăng nhập của một trang nhạy cảm), và lần chạy theo lịch không có ai để hỏi nên đã bị từ chối. Câu trả lời \"Luôn trong ngăn này\" đưa ra trong ngăn đó cũng áp dụng cho các lần chạy theo lịch của ngăn.",
-  // Moa Fleet fast path: the local answer (see en.ts).
-  'moa.fleetAnswer.intro': "Tình trạng Fleet (dữ liệu cục bộ, trả lời không qua Moa):",
-  'moa.fleetAnswer.row': "{title} ({workspace}): {reason}",
   'git.secret.file': "{path}: tệp này chứa mật khẩu hoặc khóa nên không được tải lên. Bỏ nó khỏi thay đổi (hoặc thêm vào .gitignore) rồi thử lại.",
   'git.secret.value': "{path} dòng {line} trông giống mật khẩu hoặc khóa API nên không được tải lên. Bỏ nó khỏi mã rồi thử lại.",
   'git.secret.scanFailed': "wmux không đọc được thay đổi này để kiểm tra mật khẩu và khóa nên không tải lên. Hãy thử lại; nếu vẫn lỗi, có thể tắt bước kiểm tra này trong Cài đặt › Chung.",

@@ -88,6 +88,3 @@ export interface MoaPendingDecision {
   /** A brain's own card: the operator may close it as not needed. */
   dismissible?: true;
 }
-
-/** Moa's mascot states. */
-export type MoaMascotState = 'idle' | 'working' | 'needs-you' | 'done';
