@@ -70,6 +70,9 @@ export interface BotSessionRecord {
   sessionId: string;
   /** The account the conversation runs on (null: the default login). */
   accountId?: string | null;
+  /** The repository the conversation worked on (null: none). A session is
+   *  resumed only on the same one; a record without it predates it. */
+  repoPath?: string | null;
   updatedAt: number;
 }
 
@@ -101,7 +104,13 @@ export class BotSessionStore {
       if (!r || typeof r.sessionId !== 'string' || r.sessionId.length === 0 || r.sessionId.length > 200) continue;
       if (!Number.isSafeInteger(r.updatedAt)) continue;
       const accountId = typeof r.accountId === 'string' || r.accountId === null ? r.accountId : undefined;
-      this.sessions.set(botId, { sessionId: r.sessionId, ...(accountId !== undefined ? { accountId } : {}), updatedAt: r.updatedAt as number });
+      const repoPath = typeof r.repoPath === 'string' || r.repoPath === null ? r.repoPath : undefined;
+      this.sessions.set(botId, {
+        sessionId: r.sessionId,
+        ...(accountId !== undefined ? { accountId } : {}),
+        ...(repoPath !== undefined ? { repoPath } : {}),
+        updatedAt: r.updatedAt as number,
+      });
     }
   }
 
@@ -161,9 +170,16 @@ export interface BotRuntimeDeps {
   onStatus?: (status: BotStatus) => void;
 }
 
+/** What a live session is bound to: its engine and the repository it
+ *  reads (botEngines.ts gives the adapter the root at spawn). */
+function sessionKey(profile: Pick<BotProfile, 'engine' | 'repo'>): string {
+  return JSON.stringify([profile.engine, profile.repo?.repoPath ?? null]);
+}
+
 interface LiveSession {
   adapter: BrainAdapter;
-  /** The engine it was spawned for: a profile edit to another engine respawns. */
+  /** The engine and repository it was spawned for (sessionKey): a profile
+   *  edit to another engine or repository respawns. */
   engineKey: string;
   /** A turn completed on it in this app run. */
   attached: boolean;
@@ -212,7 +228,16 @@ export interface BotRuntimePorts {
   /** A turn finished: the bot's open questions the owner's words in it
    *  answered close (handoffRouter.ts closeAnsweredInChat). */
   onTurnDone?: (profile: BotProfile, item: WakeItem) => void;
+  /** Whether the modules a wake prompt reads from (rooms, handoffs,
+   *  routines) have started. Until then no turn starts, for at most
+   *  CONTEXT_WAIT_MS. Absent: ready. */
+  contextReady?: () => boolean;
 }
+
+/** Longest the runtime waits at launch for the modules its wake prompts
+ *  read from; past it, a module that failed to start holds no bot. */
+export const CONTEXT_WAIT_MS = 60_000;
+const CONTEXT_POLL_MS = 200;
 
 export type BotLifecycleEvent = 'parked' | 'resumed' | 'disabled' | 'enabled' | 'removed';
 
@@ -261,6 +286,9 @@ export class BotRuntime {
   private kickPending = false;
   private heldTimer: unknown = null;
   private heldAt: number | null = null;
+  private contextTimer: unknown = null;
+  private contextWaitSince: number | null = null;
+  private contextSeen = false;
   private disposed = false;
   /** Held wakes the owner let through by resuming their bot (this app run). */
   private readonly released = new Set<string>();
@@ -396,7 +424,7 @@ export class BotRuntime {
   }
 
   /** A profile changed (bot.update): a disabled bot loses its session and
-   *  its queue; an engine change respawns on the next turn. */
+   *  its queue; an engine or repository change respawns on the next turn. */
   profileChanged(botId: string): void {
     const profile = this.deps.store.get(botId);
     if (!profile || !profile.enabled) {
@@ -407,7 +435,7 @@ export class BotRuntime {
     } else {
       this.lifecycle(botId, 'enabled');
       const live = this.live.get(botId);
-      if (live && live.engineKey !== JSON.stringify(profile.engine) && !this.running.has(botId)) this.endSession(botId);
+      if (live && live.engineKey !== sessionKey(profile) && !this.running.has(botId)) this.endSession(botId);
     }
     this.kick();
     this.pushStatus(botId);
@@ -497,6 +525,7 @@ export class BotRuntime {
       this.halt();
       return;
     }
+    if (!this.contextReady()) return;
     const cap = settings.globalConcurrentBots;
     const now = this.now();
     // Bots with work, most urgent next item first.
@@ -576,6 +605,37 @@ export class BotRuntime {
     }
   }
 
+  /** Whether the wake prompt's sources are up (BotRuntimePorts.contextReady);
+   *  once they are, or once CONTEXT_WAIT_MS passed, it stays true. While not,
+   *  a pass is retried shortly. */
+  private contextReady(): boolean {
+    const check = ports.contextReady;
+    if (!check || this.contextSeen) return true;
+    let ok = false;
+    try {
+      ok = check();
+    } catch {
+      ok = false;
+    }
+    const now = this.now();
+    this.contextWaitSince ??= now;
+    if (!ok && now - this.contextWaitSince >= CONTEXT_WAIT_MS) {
+      console.warn('[factory] bots start without every factory module running');
+      ok = true;
+    }
+    if (ok) {
+      this.contextSeen = true;
+      return true;
+    }
+    if (this.contextTimer === null) {
+      this.contextTimer = this.setTimer(() => {
+        this.contextTimer = null;
+        this.kick();
+      }, CONTEXT_POLL_MS);
+    }
+    return false;
+  }
+
   /** Whether a wake carries the owner's words: their message, or a handoff
    *  that does (an answer, an approved or requested dispatch). A handoff
    *  that cannot be read counts: holding it never loses it. */
@@ -641,7 +701,7 @@ export class BotRuntime {
   }
 
   private session(profile: BotProfile): { ok: true; live: LiveSession } | { ok: false; message: string } {
-    const engineKey = JSON.stringify(profile.engine);
+    const engineKey = sessionKey(profile);
     const cur = this.live.get(profile.id);
     if (cur && cur.engineKey === engineKey) return { ok: true, live: cur };
     if (cur) this.endSession(profile.id);
@@ -659,7 +719,9 @@ export class BotRuntime {
       return { ok: false, message: String(err) };
     }
     if (!spawned.ok) return { ok: false, message: spawned.message };
-    const saved = this.deps.sessions.get(profile.id);
+    // A conversation about another repository is not resumed.
+    const prior = this.deps.sessions.get(profile.id);
+    const saved = prior && (prior.repoPath === undefined || prior.repoPath === (profile.repo?.repoPath ?? null)) ? prior : null;
     spawned.adapter.start({
       systemPrompt: redactStoredSecrets((this.deps.systemPrompt ?? ports.systemPrompt ?? defaultBotSystemPrompt)(profile)),
       ...(saved ? { resumeSessionId: saved.sessionId, ...(saved.accountId !== undefined ? { resumeAccountId: saved.accountId } : {}) } : {}),
@@ -732,7 +794,7 @@ export class BotRuntime {
         const sessionId = result.sessionId ?? s.live.adapter.sessionId;
         if (sessionId) {
           const accountId = s.live.adapter.conversationAccountId;
-          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), updatedAt: this.now() });
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, updatedAt: this.now() });
         }
       } else {
         errorMessage = result.error;
@@ -841,6 +903,7 @@ export class BotRuntime {
     if (this.disposed) return;
     this.disposed = true;
     if (this.heldTimer !== null) this.clearTimer(this.heldTimer);
+    if (this.contextTimer !== null) this.clearTimer(this.contextTimer);
     for (const run of this.running.values()) {
       try {
         run.adapter?.interrupt();

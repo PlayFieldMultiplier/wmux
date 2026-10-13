@@ -5,9 +5,9 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrainAdapter, BrainEvent, BrainStartOptions } from '../../deck/BrainAdapter';
-import { BotRuntime, BotSessionStore, ROOM_RUN_STAGGER_MS, botSessionsPath, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
+import { BotRuntime, BotSessionStore, CONTEXT_WAIT_MS, ROOM_RUN_STAGGER_MS, botSessionsPath, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
 import type { BotEngineFactory, BotEngineSpawnInput } from '../botEngines';
 import { BotStore, botsFilePath } from '../botStore';
 import { WakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -632,6 +632,67 @@ describe('BotRuntime', () => {
     r.runtime.profileChanged(id);
     expect(r.adapters[0].disposed).toBe(true);
     expect(r.runtime.status(id)?.presence).toBe('unknown');
+  });
+
+  it('a bot\'s session follows its repository: another repository, or none, starts a fresh session', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.store.update(id, { repo: { repoKey: 'github.com/o/old', repoPath: '/old' } });
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath)).toEqual(['/old']);
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', repoPath: '/old' });
+    r.store.update(id, { repo: { repoKey: 'github.com/o/new', repoPath: '/new' } });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[0].disposed).toBe(true);
+    r.runtime.wake(id);
+    await settle();
+    // The conversation about /old is not resumed on /new.
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-2' }]);
+    await settle();
+    r.store.update(id, { repo: null });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[1].disposed).toBe(true);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBeUndefined();
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual(['/old', '/new', null]);
+  });
+
+  it('no turn starts before the modules its wake prompt reads from are up; then it runs', async () => {
+    let up = false;
+    setBotRuntimePorts({ contextReady: () => up });
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    expect(timers).toHaveLength(1);
+    up = true;
+    timers[0].fn();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    expect(r.adapters[0].prompts).toHaveLength(1);
+  });
+
+  it('a module that never starts holds the bots for CONTEXT_WAIT_MS at most', async () => {
+    setBotRuntimePorts({ contextReady: () => false });
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    clock += CONTEXT_WAIT_MS;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    timers[timers.length - 1].fn();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it('a timed-out turn ends its session: the retry runs on a fresh one', async () => {

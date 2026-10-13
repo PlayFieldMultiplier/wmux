@@ -140,7 +140,7 @@ describe('handoff.send — addressee, attribution, delivery', () => {
     expect(botSeesFact(verifier, received)).toBe(false);
     expect(h.rooms.read('ws1').cards.map((c) => c.kind)).toEqual(['fact']);
     expect(h.rooms.read('hq').cards).toHaveLength(1);
-    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'moa (moa)', title: 'Fix the login bug', body: 'details' });
+    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'moa (moa)', title: 'Fix the login bug', body: 'details', fromWorkspaceId: 'hq' });
   });
 
   it('any bot may dispatch into another workspace (messaging is every bot\'s); its chain starts at depth 1', async () => {
@@ -551,6 +551,31 @@ describe('ask_person', () => {
     await queue.flush();
   });
 
+  it('the answer is on disk before its question closes; an answer that cannot be stored leaves the question open', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    const ask = await h.router.askPerson(binding(lead), { title: 'Ship it?', body: '' });
+    if (!ask.ok) throw new Error('not asked');
+    fs.chmodSync(file, 0o444);
+    try {
+      expect(await h.router.answer(ask.handoffId, 'Yes')).toMatchObject({ ok: false, code: 'write_failed' });
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
+    expect(h.router.get(ask.handoffId)).toMatchObject({ status: 'delivered' });
+    expect(h.wakes).toHaveLength(0);
+    // The resolved decision is settled again once the file takes writes.
+    await h.router.reconcile();
+    expect(h.router.get(ask.handoffId)).toMatchObject({ status: 'answered' });
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { id: string; kind: string; status: string; replyTo?: string });
+    const answerAt = lines.findIndex((l) => l.kind === 'answer' && l.replyTo === ask.handoffId);
+    const closedAt = lines.findIndex((l) => l.id === ask.handoffId && l.status === 'answered');
+    expect(answerAt).toBeGreaterThanOrEqual(0);
+    expect(answerAt).toBeLessThan(closedAt);
+    expect(h.wakes).toEqual([expect.objectContaining({ botId: lead.id, reason: { kind: 'handoff', handoffId: lines[answerAt].id } })]);
+  });
+
   it('the answer wakes the asker in the question\'s thread, so its next post without a thread lands there', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);
@@ -664,6 +689,30 @@ describe('ask_person', () => {
     expect(await h.router.answer(a.handoffId, 'again')).toMatchObject({ ok: false, code: 'not_pending' });
     expect(await h.router.answer('h-nope', 'x')).toMatchObject({ ok: false, code: 'not_found' });
     expect(h.wakes).toHaveLength(2);
+  });
+
+  it('a queued question whose answer was stored but not closed closes with it after a restart, never asked again', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const a = await h.router.askPerson(binding(lead), { title: 'a', body: '', threadId: 'task:t' });
+    const b = await h.router.askPerson(binding(other), { title: 'b', body: '', threadId: 'task:t' });
+    if (!a.ok || !b.ok) throw new Error('asks failed');
+    expect(await h.router.answer(b.handoffId, 'later')).toMatchObject({ ok: true, status: 'answered' });
+    h.router.dispose();
+    // A stop between the two writes: the answer is on disk, the close is not.
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+    const closedAt = lines.findIndex((l) => { const r = JSON.parse(l) as { id: string; status: string }; return r.id === b.handoffId && r.status === 'answered'; });
+    fs.writeFileSync(file, `${lines.slice(0, closedAt).join('\n')}\n`);
+    const again = await harness([lead, other]);
+    expect(again.router.get(b.handoffId)).toMatchObject({ status: 'answered' });
+    expect(again.wakes.filter((w) => w.botId === other.id)).toHaveLength(1);
+    // Once a's question closes, b's is not raised in the thread.
+    expect(await again.router.answer(a.handoffId, 'now')).toMatchObject({ ok: true, status: 'answered' });
+    await again.router.reconcile();
+    expect(loadWorkspaceDecisions('ws1', dir).filter((d) => d.handoffId === b.handoffId)).toEqual([]);
+    expect(again.wakes.filter((w) => w.botId === other.id)).toHaveLength(1);
   });
 
   it('caps open questions per workspace', async () => {

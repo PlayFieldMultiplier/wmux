@@ -131,6 +131,9 @@ export interface HumanMessageInput {
   toBotId?: string;
   replyTo?: string;
   clientPostId?: string;
+  /** The owner's whole message when `body` is the card's capped copy (the
+   *  phone takes messages longer than a card holds): the wake carries it. */
+  wakeText?: string;
   source: 'desktop' | 'phone';
 }
 
@@ -163,7 +166,9 @@ export type HumanMessageResult =
 export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomPorts>, input: HumanMessageInput): HumanMessageResult {
   const { workspaceId, source } = input;
   const threadId = input.threadId ?? GENERAL_THREAD;
-  const text = (typeof input.body === 'string' && input.body.trim() ? input.body : input.title).trim();
+  const text = (typeof input.wakeText === 'string' && input.wakeText.trim()
+    ? input.wakeText
+    : typeof input.body === 'string' && input.body.trim() ? input.body : input.title).trim();
   const wake = (card: RoomCard, to: BotProfile, said: string, room: boolean): string | undefined => {
     try {
       return ports.wakes?.enqueue({
@@ -173,7 +178,9 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
           kind: 'human',
           text: said.slice(0, HUMAN_WAKE_TEXT_MAX),
           source,
-          clientMessageId: card.clientPostId ?? card.id,
+          // The card's own id: a clientPostId is unique within one room
+          // only, and the queue dedupes per bot across rooms.
+          clientMessageId: card.id,
           runId: humanRunId(card.id),
           ...(room ? { room: true as const } : {}),
         },
@@ -233,7 +240,9 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     if (Date.now() - card.at >= HUMAN_RETRY_WINDOW_MS) return r;
     const ids = cardAddressees(card);
     if (ids.length === 0) return r;
-    const said = (card.body?.trim() ? card.body : card.title).trim();
+    const fromCard = (card.body?.trim() ? card.body : card.title).trim();
+    // The retry's whole message when the card holds its capped copy.
+    const said = input.wakeText?.trim() && card.body !== undefined && capBody(input.wakeText) === card.body ? input.wakeText.trim() : fromCard;
     const results: HumanAddresseeResult[] = [];
     for (const id of ids) {
       const bot = safeGet(ports, id);

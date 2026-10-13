@@ -34,6 +34,8 @@ export interface WakeHandoffSummary {
   /** It carries the owner's words: an answer, or a dispatch the owner
    *  approved or asked for. A budget refusal holds such a wake. */
   ownerWords?: boolean;
+  /** The sender's workspace, when the sender is a bot. */
+  fromWorkspaceId?: string;
 }
 
 /** The tail of the wake's room thread. */
@@ -204,6 +206,15 @@ export function buildWakePrompt(input: WakePromptInput): string {
         lines.push('', `${h.from} mentioned you in the room (card ${r.cardId}): ${h.title}`, fenceData(h.body, 'message'));
       } else {
         lines.push('', `A bot mentioned you in card ${r.cardId}. Read it with room_read.`);
+      }
+      // A card in another workspace's room is not in this bot's room: its
+      // answer reaches the sender through mentions, not reply_to.
+      if (h?.fromWorkspaceId && h.fromWorkspaceId !== profile.workspaceId) {
+        lines.push(
+          `That card is in another workspace's room, which reply_to cannot reach. A mention is a turn in a conversation: answer that bot with a short card in your room that mentions it (room_post mentions: ${r.fromBotId}) and answers it, acknowledges it or says what you will do, or act on it. `
+            + 'End the turn without posting only when it asks nothing of you and just closes an exchange (thanks, ok), or when your latest post in this thread already answered it.',
+        );
+        break;
       }
       lines.push(
         'A mention is a turn in a conversation: answer that bot in the room with a short card (reply_to its card) that answers it, acknowledges it or says what you will do, or act on it. '

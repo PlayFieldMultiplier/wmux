@@ -358,6 +358,8 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
     workspaceId: bot.workspaceId,
     title: oneLine(payload.text, ROOM_LIMITS.TITLE_MAX) || 'Message',
     body: capBody(payload.text),
+    // The card holds a capped copy; the bot's wake carries the whole message.
+    wakeText: payload.text,
     toBotId: bot.id,
     clientPostId,
     source: 'phone',
@@ -497,6 +499,9 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     readThreadTail: (workspaceId, threadId, n) => threadTail(getRoomWriter(), workspaceId, threadId, n),
     wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),
+    // The runtime starts before these modules (modules.ts): a wake restored
+    // at launch waits for its handoff, thread and routine to be readable.
+    contextReady: () => getRoomWriter() !== null && getHandoffRouter() !== null && getRoutineStore() !== null,
   });
 
   const offHookFacts = onBotHook((ev) => {

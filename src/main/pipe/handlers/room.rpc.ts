@@ -196,7 +196,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
   if (p.kind !== undefined && p.kind !== 'human') return refusal('card_kind', 'the owner posts human cards');
   if (!isRoomWorkspaceId(p.workspaceId)) return refusal('invalid', 'workspaceId is required');
   if (p.to !== undefined && !isBotRole(p.to)) return refusal('invalid', 'to is not a bot role');
-  return postHumanMessage(writer, ports, {
+  const posted = postHumanMessage(writer, ports, {
     workspaceId: p.workspaceId,
     ...(namedThread !== undefined ? { threadId: namedThread } : {}),
     title: p.title,
@@ -208,6 +208,18 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     ...(p.clientPostId ? { clientPostId: p.clientPostId } : {}),
     source: 'desktop',
   });
+  // The owner hears "sent" once the wakes are on disk: a restart then still
+  // runs them. A failed write is retryable with the same clientPostId (the
+  // same card, its wakes queued once).
+  if (posted.ok && posted.addressees?.some((a) => a.wakeId) && ports.wakes?.flush) {
+    try {
+      await ports.wakes.flush();
+    } catch (err) {
+      console.warn(`[factory] rooms: owner message wakes not on disk: ${String(err)}`);
+      return { ok: false, code: 'write_failed', message: 'The message is posted, but its wakes could not be saved. Send it again.', card: posted.card, addressees: posted.addressees };
+    }
+  }
+  return posted;
 }
 
 /** A bot card's mentions split into the bots that wake (existing, enabled,

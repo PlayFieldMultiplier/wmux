@@ -225,6 +225,13 @@ describe('TriggerEngine', () => {
     expect(h.engine.route(fact('schedule.fired', { ref: { botId: moa.id, scheduleId: 'morning' } })).map((w) => w.botId)).toEqual([moa.id]);
   });
 
+  it('a delivered handoff wakes its addressee once: its handoff.received fact adds no facts wake', () => {
+    const lead = bot('bot-00000001', 'lead', { triggers: [{ kind: 'handoff.received' }] });
+    const h = harness([lead]);
+    expect(h.engine.route(fact('handoff.received', { workspaceId: 'ws-1', ref: { handoffId: 'h-1', botId: lead.id } }))).toEqual([]);
+    expect(h.enqueued).toEqual([]);
+  });
+
   it('a throwing directory or queue never throws into the fact log', () => {
     const bad = new TriggerEngine({
       factLog: { append: () => null, subscribe: () => () => undefined, readSince: () => ({ facts: [], cursor: null }) },

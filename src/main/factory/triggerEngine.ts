@@ -203,9 +203,12 @@ export class TriggerEngine {
    *  Never throws (the fact log calls this). */
   route(fact: Fact): WakeItem[] {
     // A directed human message already queued its addressee's own wake
-    // (humanMessage.ts), and so did a bot's routine firing (routines.ts):
-    // one message or firing is one turn, so no trigger adds another.
+    // (humanMessage.ts), so did a delivered handoff (handoffRouter.ts, the
+    // wake that carries its run and depth) and a bot's routine firing
+    // (routines.ts): one message, hop or firing is one turn, so no trigger
+    // adds another.
     if (fact.kind === 'human.message' && fact.ref?.botId) return [];
+    if (fact.kind === 'handoff.received' && fact.ref?.botId) return [];
     if (isRoutineFact(fact)) return [];
     let bots: BotProfile[];
     try {

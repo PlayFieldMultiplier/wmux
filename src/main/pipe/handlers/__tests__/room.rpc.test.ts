@@ -163,7 +163,7 @@ describe('room.post', () => {
     const runId = `run-${r.card.id}`;
     expect(s.wakes).toEqual([lead, verifier].map((b) => ({
       botId: b.id, workspaceId: 'ws1',
-      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: 'cm-1', runId, room: true },
+      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: r.card.id, runId, room: true },
       priority: 0, threadId: 'general', overCap: true,
     })));
     // Same client id: the same card, no second fact or wake.
@@ -176,6 +176,24 @@ describe('room.post', () => {
     expect(await handleRoomPost({ workspaceId: 'ws1', title: 'x', to: 'boss' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
     expect(await handleRoomPost({ workspaceId: 'ws1', title: 'x', kind: 'status' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'card_kind' });
     expect(await handleRoomPost({ title: 'x' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+  });
+
+  it('the owner hears "sent" once the wakes are on disk; a failed write is a retryable refusal', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    let fail = true;
+    let flushed = 0;
+    const wakes = s.ports.wakes as FactoryRoomPorts['wakes'];
+    s.ports.wakes = { enqueue: (i) => wakes.enqueue(i), flush: async () => { flushed++; if (fail) throw new Error('disk full'); } };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const first = await handleRoomPost({ workspaceId: 'ws1', title: 'Ship it', clientPostId: 'cm-9' }, OPERATOR, s.deps);
+    warn.mockRestore();
+    expect(first).toMatchObject({ ok: false, code: 'write_failed', card: { kind: 'human' } });
+    fail = false;
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Ship it', clientPostId: 'cm-9' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    expect(flushed).toBe(2);
+    expect(s.wakes).toHaveLength(1);
+    expect(s.writer.read('ws1').cards).toHaveLength(1);
   });
 
   it('the owner\'s mentions wake only those bots, in any workspace; one mention is a 1:1 (refs.botId)', async () => {

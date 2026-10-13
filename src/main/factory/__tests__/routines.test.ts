@@ -289,6 +289,17 @@ describe('RoutineStore', () => {
     expect(r.store.pauseFor(B, 'stop')).toBe(0);
   });
 
+  it('a pause also takes back the routine\'s wake parked with its bot, so a resumed bot does not run it', () => {
+    const r = rig();
+    const a = set(r, A);
+    if (!a.ok) throw new Error('create');
+    clock += HOUR;
+    r.store.tick();
+    r.queued[0].state = 'parked';
+    r.store.pause({ kind: 'owner' }, a.routine.id, true);
+    expect(r.queued.map((w) => w.state)).toEqual(['dropped']);
+  });
+
   it('a removed bot\'s routines go; the store reloads what it wrote and drops what is malformed', async () => {
     const r = rig();
     set(r, A);

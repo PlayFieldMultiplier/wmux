@@ -55,6 +55,17 @@ describe('buildWakePrompt — group rooms and routines', () => {
     expect(buildWakePrompt({ item: item(r), profile })).toContain('A bot mentioned you in card c-9. Read it with room_read.');
   });
 
+  it('a mention from another workspace\'s room is answered by mentioning the sender, not by reply_to', () => {
+    const r = { kind: 'mention' as const, cardId: 'c-9', handoffId: 'h-9', fromBotId: 'bot-00000002' };
+    const handoff = { handoffId: 'h-9', kind: 'message', from: 'Wmux Dev (lead)', title: 'Can you check #12?', body: 'CI is red' };
+    const remote = buildWakePrompt({ item: item(r), profile, handoff: { ...handoff, fromWorkspaceId: 'ws2' } });
+    expect(remote).toContain('another workspace\'s room, which reply_to cannot reach');
+    expect(remote).toContain('room_post mentions: bot-00000002');
+    expect(remote).not.toContain('(reply_to its card)');
+    const local = buildWakePrompt({ item: item(r), profile, handoff: { ...handoff, fromWorkspaceId: 'ws1' } });
+    expect(local).toContain('(reply_to its card)');
+  });
+
   it('a routine wake names the routine and shows what the bot wrote for it', () => {
     const r = { kind: 'routine' as const, routineId: 'r-abcdefgh', dueAt: Date.UTC(2026, 9, 13, 9) };
     const text = buildWakePrompt({ item: item(r), profile, routine: { routineId: 'r-abcdefgh', title: 'Check PRs', prompt: 'Read the open PRs.', schedule: 'every 1 h' } });
