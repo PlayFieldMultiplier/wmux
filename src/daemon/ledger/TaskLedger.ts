@@ -530,6 +530,48 @@ export class TaskLedger {
     });
   }
 
+  /** A task's worker reopened in a new workspace (a resume whose pane was
+   *  gone): the row names that workspace from now on, so the worker there
+   *  reads and moves its own task. SYSTEM only; the same compare-and-swap as
+   *  `update()`. Bumps the rev; no status change, no transition event. */
+  rebindTaskWorkspace(input: {
+    id: string;
+    taskWorkspaceId: string;
+    actor: LedgerActor;
+    expectedRev: number;
+  }): Promise<LedgerUpdateResult> {
+    return this.serialize(async () => {
+      const entry = this.entries.get(input.id);
+      if (!entry) return { ok: false, error: 'not_found', message: `no ledger entry for task ${input.id}` };
+      if (input.actor.kind !== 'system') {
+        return { ok: false, error: 'not_authorized', message: 'only the system may move a task to another workspace', entry };
+      }
+      if (input.expectedRev !== entry.rev) {
+        return {
+          ok: false,
+          error: 'stale_rev',
+          message: `expectedRev ${input.expectedRev} but the entry is at rev ${entry.rev} — re-read and retry`,
+          entry,
+        };
+      }
+      if (entry.taskWorkspaceId === input.taskWorkspaceId) return { ok: true, entry, noop: true };
+      const updated: LedgerEntry = this.redact({
+        ...entry,
+        taskWorkspaceId: input.taskWorkspaceId,
+        rev: entry.rev + 1,
+        updatedAt: this.now(),
+        updatedBy: input.actor,
+      });
+      try {
+        await this.append({ op: 'entry', entry: updated });
+      } catch (err) {
+        return { ok: false, error: 'persist_failed', message: `ledger write failed: ${String(err)}`, entry };
+      }
+      this.entries.set(input.id, updated);
+      return { ok: true, entry: updated };
+    });
+  }
+
   /** WorkTask closed or detached: force-terminate the entry (`cancelled`)
    *  unless it already reached `completed`. Returns the resulting entry, or
    *  null for an unknown id; the previous entry when the write failed. */

@@ -505,6 +505,10 @@ export interface WorkerResumePorts {
    *  as its launch, through the bot worker spawn. Absent: a resume whose pane
    *  is gone is refused. */
   respawn?: (input: WorkerRespawnInput) => Promise<{ ok: true; workspaceId: string; sessionId: string } | { ok: false; message: string }>;
+  /** Name the reopened workspace as the task's in its ledger row (a system
+   *  write), so the worker there reads and moves its own task; false when
+   *  it could not be written. */
+  rebindTask?: (taskId: string, workspaceId: string) => Promise<boolean>;
   /** Whether a folder exists (default: fs). */
   folderExists?: (dir: string) => boolean;
   note?: (workspaceId: string, threadId: ThreadId, title: string, body: string) => void;
@@ -692,6 +696,8 @@ async function respawnOnce(
   await ports.store.movePane(rec.taskId, r.workspaceId, { ...pane, sessionId: r.sessionId }).catch((err) => {
     console.warn(`[factory] reclaimed workers not written: ${String(err)}`);
   });
+  const rebound = await (ports.rebindTask?.(rec.taskId, r.workspaceId) ?? Promise.resolve(true)).catch(() => false);
+  if (!rebound) console.warn(`[factory] task ${rec.taskId}: the ledger row still names the worker's old workspace`);
   if (stopped()) {
     // The pane opened with the line as its launch after the stop ran: its
     // agent is stopped here once it is up.

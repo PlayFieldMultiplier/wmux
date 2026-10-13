@@ -25,6 +25,7 @@ import {
   type WorkerSessionInfo,
 } from '../workerReclaim';
 import { STOPPED_BY_OWNER } from '../factoryStop';
+import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 
 const BOT = 'bot-0000000a';
 const UUID = '2eca904b-b4cc-4243-81d3-67a121351892';
@@ -511,5 +512,31 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     };
     expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_now' });
     expect(store.get(ID)?.state).toBe('resumed');
+  });
+
+  it('a worker resumed in a new workspace owns its ledger row there', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    fs.mkdirSync(path.join(dir, 'ledger'));
+    const ledger = new TaskLedger({ dir: path.join(dir, 'ledger') });
+    await ledger.register({ id: ID, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'perf-A' });
+    await ledger.update({ id: ID, status: 'failed', actor: { kind: 'system', workspaceId: 'daemon' }, expectedRev: 1 });
+    const rebindTask = vi.fn(async (taskId: string, workspaceId: string) => {
+      const r = await ledger.rebindTaskWorkspace({ id: taskId, taskWorkspaceId: workspaceId, actor: { kind: 'system', workspaceId: 'daemon' }, expectedRev: ledger.get(taskId)?.rev ?? 0 });
+      return r.ok;
+    });
+    const p: WorkerResumePorts = {
+      store,
+      typeLine: vi.fn(() => true),
+      listSessions: async () => [],
+      folderExists: () => true,
+      respawn: async () => ({ ok: true, workspaceId: 'ws-new', sessionId: 'daemon-9' }),
+      rebindTask,
+    };
+    expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: true, workspaceId: 'ws-new' });
+    expect(rebindTask).toHaveBeenCalledWith(ID, 'ws-new');
+    expect(ledger.findByTaskWorkspace('ws-new')?.id).toBe(ID);
+    const rev = ledger.get(ID)?.rev ?? 0;
+    expect(await ledger.update({ id: ID, status: 'working', actor: { kind: 'worker', workspaceId: 'ws-new' }, expectedRev: rev })).toMatchObject({ ok: true });
   });
 });

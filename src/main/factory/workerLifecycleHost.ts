@@ -192,6 +192,18 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
           return 'error' in r ? { ok: false as const, message: r.error } : { ok: true as const, workspaceId: r.workspaceId, sessionId: r.ptyId };
         },
       } : {}),
+      // The reopened workspace is the task's from now on (a system write at
+      // the rev just read; one retry when another write landed in between).
+      rebindTask: async (taskId, workspaceId) => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const row = ledger.get(taskId);
+          if (!row) return false;
+          const r = await ledger.rebindTaskWorkspace({ id: taskId, taskWorkspaceId: workspaceId, actor: { kind: 'system', workspaceId: 'daemon' }, expectedRev: row.rev });
+          if (r.ok) return true;
+          if (r.error !== 'stale_rev') return false;
+        }
+        return false;
+      },
       // A bot's message from a wake that carried outside text goes only to a
       // task started from outside text (unknown counts as outside text).
       taskTainted: (taskId) => ledger.get(taskId)?.dispatch?.origin.tainted !== false,
