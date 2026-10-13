@@ -28,6 +28,7 @@ import {
 } from '../botSecret.rpc';
 import { BOT_SECRET_IPC } from '../../../../shared/botSecret';
 import type { RpcContext } from '../../../../shared/rpc';
+import { phoneRoomCard } from '../../../../shared/phoneRooms';
 import type { WakeEnqueueInput } from '../../../factory/wakeQueue';
 
 const crypto: SecretCrypto = {
@@ -91,6 +92,16 @@ describe('secret_request', () => {
     expect(writer.get('ws-1', a.cardId)).toMatchObject({ kind: 'secret_request', replyTo: owner.card.id, refs: { secretName: 'NPM_TOKEN' } });
     const b = handleLoginRequest({ service: 'github', why: 'push', threadId: 'task:t-1' }, botCtx, deps) as { cardId: string };
     expect(writer.get('ws-1', b.cardId)?.replyTo).toBeUndefined();
+  });
+
+  it('reaches the phone as a name: a stored value in the bot\'s words is redacted, and refs carry the name only', () => {
+    store.set('NPM_TOKEN', 'abcdefgh12345678');
+    const a = handleSecretRequest({ name: 'NPM_TOKEN', label: 'npm token abcdefgh12345678', why: 'publish with abcdefgh12345678', refs: { value: 'abcdefgh12345678' } }, botCtx, deps) as { cardId: string };
+    const card = writer.get('ws-1', a.cardId);
+    const phone = card ? phoneRoomCard(card, () => null) : null;
+    expect(phone).toMatchObject({ kind: 'secret_request', refs: { secretName: 'NPM_TOKEN' } });
+    expect(Object.keys(phone?.refs ?? {})).toEqual(['secretName']);
+    expect(JSON.stringify(phone)).not.toContain('abcdefgh12345678');
   });
 
   it('secret_list: names and use for a bot or the operator, never values', () => {

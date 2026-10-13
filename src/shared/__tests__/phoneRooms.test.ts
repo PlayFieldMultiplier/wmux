@@ -11,6 +11,7 @@ import {
   type PhoneRoomCardsReply,
 } from '../phoneRooms';
 import type { RoomCard } from '../room';
+import { CARD_KINDS } from '../../main/factory/roomWriter';
 
 const card = (seq: number, over: Partial<RoomCard> = {}): RoomCard => ({
   version: 1, id: `c-${seq}`, seq, workspaceId: 'ws-1', threadId: 'general', kind: 'status', at: 1000 + seq,
@@ -38,8 +39,30 @@ describe('phone room cards', () => {
     expect(parsePhoneRoomCard({ ...owner, clientMessageId: 'a\nb' })?.clientMessageId).toBeUndefined();
   });
 
-  it('refuses a card without identity, a known kind or a valid thread', () => {
-    expect(parsePhoneRoomCard({ ...card(1), kind: 'secret' })).toBeNull();
+  it('passes every card kind main writes, and a later kind by its name; a malformed kind is refused', () => {
+    for (const kind of CARD_KINDS) expect(phoneRoomCard(card(1, { kind }), () => null)?.kind, kind).toBe(kind);
+    expect(parsePhoneRoomCard({ ...card(1), kind: 'some_later_kind' })?.kind).toBe('some_later_kind');
+    for (const kind of [undefined, 7, '', 'Status', 'a b', 'x'.repeat(41)]) expect(parsePhoneRoomCard({ ...card(1), kind }), String(kind)).toBeNull();
+    const t = { threadId: 'general', title: 'General', lastAt: 0, lastSeq: 1, cardCount: 1, openQuestions: 0, lastKind: 'routine', status: 'open', unread: null };
+    expect(parsePhoneRoomThreadsReply({ workspaceId: 'ws-1', threads: [t] }, 'ws-1')?.threads.map((x) => x.lastKind)).toEqual(['routine']);
+  });
+
+  it('carries the refs a phone reads and the greeting mark; a secret_request names its secret, never a value', () => {
+    const refs = {
+      botIds: ['bot-1111bbbb', 'bot-1111bbbb', 'nope'], threadId: 'pr:github.com/o/r#3', routineId: 'rt-1', label: 'github',
+      secretName: 'NPM_TOKEN', approvalId: 'apr-aaaaaaaa1', ptyId: 'p-1', messageId: 'm-1', value: 'hunter2', secret: 'hunter2',
+    };
+    expect(phoneRoomCard(card(1, { kind: 'secret_request', refs: refs as never }), () => null)?.refs).toEqual({
+      botIds: ['bot-1111bbbb'], threadId: 'pr:github.com/o/r#3', routineId: 'rt-1', label: 'github', secretName: 'NPM_TOKEN', approvalId: 'apr-aaaaaaaa1',
+    });
+    expect(parsePhoneRoomCard({ ...card(1), kind: 'secret_request', refs: { secretName: 'not a name' } })?.refs).toBeUndefined();
+    expect(phoneRoomCard(card(2, { kind: 'question', greeting: true }), () => null)?.greeting).toBe(true);
+    expect(parsePhoneRoomCard({ ...card(2), greeting: true })?.greeting).toBeUndefined();
+    // The desktop's Undo record of a job change stays on the desktop.
+    expect(phoneRoomCard(card(3, { kind: 'job_changed', jobChange: { botId: 'bot-1111bbbb', previous: null, next: 'x' } }), () => null)).not.toHaveProperty('jobChange');
+  });
+
+  it('refuses a card without identity, a kind or a valid thread', () => {
     expect(parsePhoneRoomCard({ ...card(1), threadId: 'nope' })).toBeNull();
     expect(parsePhoneRoomCard({ ...card(1), id: 'a b' })).toBeNull();
     expect(parsePhoneRoomCard({ ...card(1), actor: { kind: 'bot' } })).toBeNull();

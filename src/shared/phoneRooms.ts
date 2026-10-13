@@ -9,10 +9,14 @@
 // This module is the allowlist for that reply, used on both sides: main
 // projects with it and the daemon parses what main forwarded with it. A
 // field not listed here never reaches the phone; a card that does not parse
-// is dropped alone. The bridge drops a reply over 128 KiB, so main fits every
-// page to PHONE_ROOM_LIMITS.replyBytes.
+// is dropped alone. Every card kind passes (a kind is a well-formed name,
+// not one from a list): a client draws a kind it does not know by its title
+// and body. The bridge drops a reply over 128 KiB, so main fits every page to
+// PHONE_ROOM_LIMITS.replyBytes.
 
+import { BOT_ID_RE } from './bot';
 import { APPROVAL_ID_RE } from './botApproval';
+import { isBotSecretName } from './botSecret';
 import { parseThreadId, ROOM_LIMITS, type CardKind, type RoomCard, type ThreadId, type ThreadStatus, type ThreadSummary } from './room';
 import { PHONE_BOT_ROLES, clampSidebarString, type PhoneBotRole } from './phoneFleetSidebar';
 
@@ -43,11 +47,17 @@ export function isPhoneRoomWorkspaceId(value: unknown): value is string {
   return typeof value === 'string' && ROOM_WORKSPACE_ID_RE.test(value) && value !== '.' && value !== '..';
 }
 
-const CARD_KINDS: readonly CardKind[] = [
-  'fact', 'dispatch', 'status', 'triage', 'verdict', 'report', 'plan', 'proposal', 'opinion', 'question', 'human', 'refusal', 'budget',
-  // A bot's approval request; refs.approvalId names it for /api/bot-approvals.
-  'approval',
-];
+/** A card kind as the phone sees it: one of CardKind today, and any later
+ *  kind passes too (the client draws an unknown one generically). */
+export type PhoneRoomCardKind = CardKind | (string & Record<never, never>);
+
+/** A kind name: what CardKind's names look like, so a later kind passes. */
+const CARD_KIND_RE = /^[a-z][a-z0-9_]{0,39}$/;
+
+function cardKind(value: unknown): PhoneRoomCardKind | undefined {
+  return typeof value === 'string' && CARD_KIND_RE.test(value) ? value : undefined;
+}
+
 const THREAD_STATUSES: readonly ThreadStatus[] = ['open', 'quiet', 'closed'];
 
 export type PhoneRoomActor =
@@ -68,6 +78,18 @@ export interface PhoneRoomRefs {
   /** An `approval` card's request (shared/phoneBotApprovals.ts). */
   approvalId?: string;
   url?: string;
+  /** The bots the card is addressed to (an owner message's addressees, a
+   *  bot card's mentions). */
+  botIds?: string[];
+  /** The subject's thread when the card sits in another one (an `approval`
+   *  card in `general` links its PR's thread). */
+  threadId?: ThreadId;
+  /** A `routine` card's routine. */
+  routineId?: string;
+  /** A `secret_request` card: the env name asked for, never a value. */
+  secretName?: string;
+  /** A `login_request` card: the service (`github`, `website`, …). */
+  label?: string;
 }
 
 /** One card as the phone sees it: no other workspace's ids, and no
@@ -76,7 +98,7 @@ export interface PhoneRoomCard {
   id: string;
   seq: number;
   threadId: ThreadId;
-  kind: CardKind;
+  kind: PhoneRoomCardKind;
   at: number;
   actor: PhoneRoomActor;
   title: string;
@@ -85,12 +107,15 @@ export interface PhoneRoomCard {
   state?: 'open' | 'resolved';
   replyTo?: string;
   closes?: true;
+  /** A `question` card that is the bot's greeting question (asked in its
+   *  first wake); it closes once the bot has a job. */
+  greeting?: true;
   /** An owner (`human`) card a phone sent only: the clientMessageId it was
    *  sent under, so the app can find its own message. */
   clientMessageId?: string;
 }
 
-export type PhoneRoomThread = ThreadSummary;
+export type PhoneRoomThread = Omit<ThreadSummary, 'lastKind'> & { lastKind: PhoneRoomCardKind };
 
 export interface PhoneRoomThreadsReply {
   workspaceId: string;
@@ -177,13 +202,20 @@ function parseRefs(value: unknown): PhoneRoomRefs | undefined {
   if (pr !== undefined) out.pr = pr;
   const issue = positive(value.issue);
   if (issue !== undefined) out.issue = issue;
-  for (const key of ['headSha', 'taskId', 'botId', 'handoffId', 'check', 'factId', 'decisionId'] as const) {
+  for (const key of ['headSha', 'taskId', 'botId', 'handoffId', 'check', 'factId', 'decisionId', 'routineId', 'label'] as const) {
     const v = line(value[key], PHONE_ROOM_LIMITS.ref);
     if (v !== undefined) out[key] = v;
   }
   if (typeof value.approvalId === 'string' && APPROVAL_ID_RE.test(value.approvalId)) out.approvalId = value.approvalId;
   const url = httpUrl(value.url);
   if (url !== undefined) out.url = url;
+  if (Array.isArray(value.botIds)) {
+    const ids = [...new Set(value.botIds.filter((id): id is string => typeof id === 'string' && BOT_ID_RE.test(id)))].slice(0, ROOM_LIMITS.MENTIONS_MAX);
+    if (ids.length > 0) out.botIds = ids;
+  }
+  const linked = parseThreadId(value.threadId);
+  if (linked) out.threadId = linked;
+  if (isBotSecretName(value.secretName)) out.secretName = value.secretName;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -193,7 +225,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
   const id = cardId(value.id);
   const seq = seqNumber(value.seq);
   const threadId = parseThreadId(value.threadId);
-  const kind = (CARD_KINDS as readonly unknown[]).includes(value.kind) ? value.kind as CardKind : undefined;
+  const kind = cardKind(value.kind);
   const at = positive(value.at);
   const actor = parseActor(value.actor);
   const title = line(value.title, PHONE_ROOM_LIMITS.title) ?? '';
@@ -209,6 +241,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
     ...(value.state === 'open' || value.state === 'resolved' ? { state: value.state } : {}),
     ...(replyTo ? { replyTo } : {}),
     ...(value.closes === true ? { closes: true as const } : {}),
+    ...(value.greeting === true && kind === 'question' ? { greeting: true as const } : {}),
     ...(clientMessageId ? { clientMessageId } : {}),
   };
 }
@@ -221,7 +254,7 @@ export function parsePhoneRoomThread(value: unknown): PhoneRoomThread | null {
   const lastSeq = seqNumber(value.lastSeq);
   const cardCount = seqNumber(value.cardCount);
   const openQuestions = seqNumber(value.openQuestions);
-  const lastKind = (CARD_KINDS as readonly unknown[]).includes(value.lastKind) ? value.lastKind as CardKind : undefined;
+  const lastKind = cardKind(value.lastKind);
   const status = (THREAD_STATUSES as readonly unknown[]).includes(value.status) ? value.status as ThreadStatus : undefined;
   const unread = value.unread === null ? null : seqNumber(value.unread);
   if (!threadId || lastAt === undefined || lastSeq === undefined || cardCount === undefined || openQuestions === undefined ||

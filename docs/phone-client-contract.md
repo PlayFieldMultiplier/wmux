@@ -4195,18 +4195,45 @@ arrival order (`seq`, increasing; never sort by `at`).
   more cards follow it. A page can hold fewer than `limit` cards: replies are
   kept under 112 KiB, so large bodies shorten a page (a forward page then says
   `hasMore: true`; the newest page keeps its newest cards).
-- `kind`: `fact`, `dispatch`, `status`, `triage`, `verdict`, `report`,
-  `plan`, `proposal`, `opinion`, `question`, `human`, `refusal`, `budget`,
-  `approval` (a bot asking the owner for an act; see
-  [Bot approvals](#bot-approvals-apibot-approvals)).
-  A card of a kind this list does not name is left out of the page.
+- `kind` — every card is served, whatever its kind. The kinds today:
+  - Written by a bot (`actor.kind: "bot"`): `dispatch`, `status`, `triage`,
+    `verdict`, `report`, `plan`, `proposal`, `opinion`.
+  - Written by the desktop for a bot, `actor` is that bot: `question` (the bot
+    asks the owner; answered through the approvals inbox), `approval` (a bot
+    asking the owner for an act, `refs.approvalId`; see
+    [Bot approvals](#bot-approvals-apibot-approvals)), `secret_request` (a bot
+    asks for a named secret, `refs.secretName`; the value is entered on the
+    desktop and never appears in a room), `login_request` (a bot asks the
+    owner to log in, `refs.label` the service and, for a website, `refs.url`
+    the login page), `routine` (a routine created or changed,
+    `refs.routineId`; `actor` may also be the owner or the system), `job_changed` (a bot's
+    job changed; `actor` may also be the owner; Undo is on the desktop).
+  - The owner: `human` (`actor.kind: "human"`), from the desktop or a phone.
+  - System cards (`actor.kind: "system"`): `fact` (something that happened,
+    such as a PR opened, CI finished, a question closed, a turn interrupted
+    when the app quit), `refusal` (something refused: a bot's call, a merge,
+    an approved act that could not run), `budget` (a bot is out of turns or
+    its wakes are held), and `status` for a merge carried out.
+
+  A later desktop may add kinds. **Render a kind you do not know generically
+  from its `title` and `body`**; never drop it. A kind is lower-case letters,
+  digits and `_`.
 - `actor`: `{kind:"bot", botId, role?, name?}`, `{kind:"human"}` (the owner,
   from the desktop or a phone) or `{kind:"system"}`.
 - `title` — one line, at most 200 characters. `body` — markdown, at most 8,192
   characters, with control and bidi-override characters removed. Optional.
-- `refs` — optional: `pr`, `issue`, `headSha`, `taskId`, `botId`,
+- `refs` — optional, any of: `pr`, `issue`, `headSha`, `taskId`, `botId`,
   `handoffId`, `check`, `factId`, `decisionId`, `approvalId` (an `approval`
-  card's request, `apr-…`), and `url` (http or https only).
+  card's request, `apr-…`), `url` (http or https only), `botIds` (the bots the
+  card is addressed to: an owner message's addressees, a bot card's mentions),
+  `threadId` (the subject's thread when the card sits in another one: an
+  `approval` card in `general` links its PR's thread), `routineId` (a
+  `routine` card's routine), `secretName` (a `secret_request` card's env
+  name, such as `NPM_TOKEN`; a name only, never a value) and `label` (a
+  `login_request` card's service). No other ref reaches the phone.
+- `greeting: true` — on a `question` card only: the bot's greeting question,
+  asked in its first turn after the owner added it. It closes once the bot has
+  a job.
 - `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
   `closes: true` — the card records the end of its thread's subject.
 - `replyTo` — the id of a card of the same thread this one answers. A card a
