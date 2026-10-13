@@ -456,6 +456,24 @@ describe('phone → HQ bot', () => {
     expect(factoryPhoneMessage({ ...payload, actor: 'device:other' }, d)).toMatchObject({ ok: true, queued: true });
   });
 
+  it('a phone message longer than a card wakes the bot with the whole message, on a first send and on a retry', () => {
+    const long = `${'x'.repeat(8192)} Do not merge or push.`;
+    const { d, writer, queue } = deps();
+    expect(factoryPhoneMessage({ ...payload, text: long }, d)).toEqual({ ok: true, accepted: true, queued: true });
+    expect(writer.read('ws-hq').cards[0].body).toHaveLength(8192);
+    expect(queue.list({ states: ['queued'] }).map((i) => (i.reason as { text: string }).text)).toEqual([long]);
+
+    const r = deps();
+    let full = true;
+    const wakes = { enqueue: (input: Parameters<typeof r.queue.enqueue>[0]) => (full ? null : r.queue.enqueue(input)) };
+    const dd = { ...r.d, ports: () => ({ ...r.d.ports(), wakes }) };
+    const msg = { ...payload, clientMessageId: 'm-long', text: long };
+    expect(factoryPhoneMessage(msg, dd)).toEqual({ ok: false, code: 'busy' });
+    full = false;
+    expect(factoryPhoneMessage(msg, dd)).toEqual({ ok: true, accepted: true, queued: true });
+    expect(r.queue.list({ states: ['queued'] }).map((i) => (i.reason as { text: string }).text)).toEqual([long]);
+  });
+
   it('the card a phone message leaves tells typed approval the operator from a paired device', () => {
     const { d, writer } = deps();
     factoryPhoneMessage(payload, d);

@@ -358,6 +358,8 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
     workspaceId: bot.workspaceId,
     title: oneLine(payload.text, ROOM_LIMITS.TITLE_MAX) || 'Message',
     body: capBody(payload.text),
+    // The card holds a capped copy; the bot's wake carries the whole message.
+    wakeText: payload.text,
     toBotId: bot.id,
     clientPostId,
     source: 'phone',
