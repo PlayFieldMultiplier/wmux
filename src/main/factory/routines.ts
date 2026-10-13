@@ -203,6 +203,10 @@ export interface RoutineStoreDeps {
   wakes: () => (WakeSinkApi & Partial<Pick<WakeQueue, 'list' | 'drop'>>) | null;
   factLog: () => Pick<FactLogApi, 'append'> | null;
   rooms: () => Pick<RoomWriter, 'append'> | null;
+  /** The card a bot's routine card answers now: the owner message its
+   *  running wake is about, when in that room and thread (wakeReplyTo).
+   *  Missing: none. */
+  replyTo?: (botId: string, workspaceId: string, threadId: ThreadId) => string | undefined;
   /** "Run bots" is on. */
   factoryEnabled: () => boolean;
   /** Told after every change, for the renderer (BOT_EVENT). */
@@ -515,15 +519,17 @@ export class RoutineStore {
 
   private card(r: StoredRoutine, actor: Party, verb: string): void {
     try {
+      const threadId = (r.threadId ?? GENERAL_THREAD) as ThreadId;
+      const replyTo = actor.kind === 'bot' ? this.deps.replyTo?.(actor.botId, r.workspaceId, threadId) : undefined;
       this.deps.rooms()?.append({
         workspaceId: r.workspaceId,
-        threadId: (r.threadId ?? GENERAL_THREAD) as ThreadId,
+        threadId,
         kind: 'routine',
         actor,
         title: `${verb}: ${r.title}`,
         body: `${scheduleLabel(r.schedule)}\n\n${r.prompt}`,
         refs: { routineId: r.id, botId: r.botId },
-      });
+      }, replyTo ? { replyTo } : undefined);
     } catch (err) {
       this.log(`routine card not written: ${String(err)}`);
     }

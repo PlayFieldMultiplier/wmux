@@ -27,7 +27,7 @@
 import type { RpcContext, RpcMethod } from '../../../shared/rpc';
 import { BOT_EVENT, BOT_ID_RE, BOT_JOB_MAX, BOT_RPC, type BotProfile, type BotStatus } from '../../../shared/bot';
 import type { FactoryRefusal } from '../../../shared/botSurface';
-import { parseThreadId } from '../../../shared/room';
+import { parseThreadId, type ThreadId } from '../../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryRouter } from '../../factory/factoryHost';
 import { BotStore, botsFilePath, setBotStore } from '../../factory/botStore';
 import { WakeQueue, wakeQueuePath, setWakeQueue } from '../../factory/wakeQueue';
@@ -42,7 +42,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { WakeTaskSummary } from '../../factory/wakePrompt';
 import { greetNewBot } from '../../factory/botCreate';
 import { getHandoffRouter } from '../../factory/handoffRouter';
-import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread } from '../../factory/roomWriter';
+import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
 
 type Refusal = FactoryRefusal<'not_authorized' | 'not_started' | 'invalid_argument' | 'not_found' | 'not_running' | 'too_many_bots' | 'dropped' | 'not_owner_words'>;
 
@@ -88,7 +88,12 @@ export interface SetJobPorts {
   runningWakeId: (botId: string) => string | null;
   /** That wake's thread, or null (the card then lands in `general`). */
   runningThread: (botId: string) => string | null;
-  post: (card: { workspaceId: string; threadId?: string; actor: { kind: 'bot'; workspaceId: string; botId: string } | { kind: 'human' }; title: string; body?: string; refs: { botId: string; botIds: string[] }; jobChange: { botId: string; previous: string | null; next: string | null } }) => void;
+  /** The owner card that started that wake (RunningWake.ownerCardId), or
+   *  null. Missing: none. */
+  ownerCardId?: (botId: string) => string | null;
+  /** `replyTo`: the owner card the card answers, kept only when it is a
+   *  `human` card of the card's room and thread (wakeReplyTo). */
+  post: (card: { workspaceId: string; threadId?: string; actor: { kind: 'bot'; workspaceId: string; botId: string } | { kind: 'human' }; title: string; body?: string; refs: { botId: string; botIds: string[] }; jobChange: { botId: string; previous: string | null; next: string | null }; replyTo?: string }) => void;
   /** The bot has a job now (set by itself or the owner): its greeting
    *  question closes (handoffRouter.ts closeIntroQuestions). */
   jobGiven?: (botId: string) => void;
@@ -97,8 +102,13 @@ export interface SetJobPorts {
 const defaultSetJobPorts: SetJobPorts = {
   runningWakeId: (botId) => runningWake(resolveRoomPorts(), botId)?.wakeId ?? null,
   runningThread: (botId) => runningWakeThread(resolveRoomPorts(), botId),
-  post: (card) => {
-    getRoomWriter()?.append({ ...card, kind: 'job_changed', threadId: (card.threadId ?? 'general') as never });
+  ownerCardId: (botId) => runningWake(resolveRoomPorts(), botId)?.ownerCardId ?? null,
+  post: ({ replyTo: candidate, ...card }) => {
+    const writer = getRoomWriter();
+    if (!writer) return;
+    const threadId = (card.threadId ?? 'general') as ThreadId;
+    const replyTo = wakeReplyTo(writer, candidate ? { ownerCardId: candidate } : null, card.workspaceId, threadId);
+    writer.append({ ...card, kind: 'job_changed', threadId }, replyTo ? { replyTo } : undefined);
   },
   jobGiven: (botId) => {
     void getHandoffRouter()?.closeIntroQuestions(botId).catch(() => undefined);
@@ -168,6 +178,7 @@ export function registerBotRpcHandlers(router: FactoryRouter, live: () => Live |
     if (next !== r.previous) {
       l.runtime.profileChanged(botId);
       const thread = caller.kind === 'bot' ? setJobPorts.runningThread(botId) : null;
+      const ownerCardId = caller.kind === 'bot' ? setJobPorts.ownerCardId?.(botId) ?? null : null;
       setJobPorts.post({
         workspaceId: r.bot.workspaceId,
         ...(thread ? { threadId: thread } : {}),
@@ -176,6 +187,7 @@ export function registerBotRpcHandlers(router: FactoryRouter, live: () => Live |
         ...(next !== null ? { body: next } : {}),
         refs: { botId, botIds: [botId] },
         jobChange: { botId, previous: r.previous, next },
+        ...(ownerCardId ? { replyTo: ownerCardId } : {}),
       });
     }
     return { ok: true, bot: pipeProfile(r.bot), previous: r.previous, ...(next === r.previous ? { unchanged: true } : {}) };

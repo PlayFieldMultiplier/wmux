@@ -98,7 +98,7 @@ describe('bot.* auth matrix', () => {
 describe('bot.setJob', () => {
   type Posted = Parameters<SetJobPorts['post']>[0];
   type Wake = { state: string; reason: { kind: string }; owner?: 'other' } | null;
-  function rigJob(wake: Wake) {
+  function rigJob(wake: Wake, ownerCardId: string | null = null) {
     const store = new BotStore(botsFilePath(dir));
     const created = store.create({ workspaceId: 'ws-1', name: 'Wmux Issue' });
     if (!created.ok) throw new Error('create');
@@ -114,6 +114,7 @@ describe('bot.setJob', () => {
     registerBotRpcHandlers(router, () => ({ store, runtime, queue }), {
       runningWakeId: () => (wake ? 'w-run' : null),
       runningThread: () => 'issue:github.com/acme/app#3',
+      ownerCardId: () => ownerCardId,
       post: (c) => { posted.push(c); },
       jobGiven: (id) => { given.push(id); },
     });
@@ -140,6 +141,16 @@ describe('bot.setJob', () => {
     expect(r.posted).toHaveLength(1);
     // Having a job closes the greeting question (A5).
     expect(r.given).toContain(r.botId);
+    await r.store.flush();
+  });
+
+  it('a job the bot sets in an owner-message wake answers that message; the owner\'s own change answers nothing', async () => {
+    const r = rigJob({ state: 'running', reason: { kind: 'human' } }, 'c-owner');
+    expect(await r.call({ job: 'Triage new issues.' })).toMatchObject({ ok: true });
+    expect(r.posted[0]).toMatchObject({ actor: { kind: 'bot' }, replyTo: 'c-owner' });
+    expect(await r.call({ botId: r.botId, job: 'Review PRs.' }, OPERATOR)).toMatchObject({ ok: true });
+    expect(r.posted[1]).toMatchObject({ actor: { kind: 'human' } });
+    expect(r.posted[1]).not.toHaveProperty('replyTo');
     await r.store.flush();
   });
 

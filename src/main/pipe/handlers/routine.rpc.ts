@@ -32,7 +32,7 @@ import { RoutineStore, getRoutineStore, routinesPath, scheduleLabel, setRoutineS
 import { getBotDirectory } from '../../factory/botStore';
 import { getWakeQueue, currentWakeItem } from '../../factory/wakeQueue';
 import { getFactLog } from '../../factory/factLog';
-import { getRoomWriter, resolveRoomPorts, runningWake, wakeOrdinals } from '../../factory/roomWriter';
+import { getRoomWriter, resolveRoomPorts, runningWake, wakeOrdinals, wakeReplyTo } from '../../factory/roomWriter';
 import { getFactorySettings, onFactorySettingsChanged } from '../../factory/factorySettings';
 import { setBotRuntimePorts, type BotLifecycleEvent } from '../../factory/BotRuntime';
 import { summarizeHandoff } from '../../factory/handoffRouter';
@@ -160,6 +160,10 @@ export function createRoutineModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'get
         wakes: getWakeQueue,
         factLog: getFactLog,
         rooms: getRoomWriter,
+        replyTo: (botId, workspaceId, threadId) => {
+          const writer = getRoomWriter();
+          return writer ? wakeReplyTo(writer, runningWake(resolveRoomPorts(), botId), workspaceId, threadId) : undefined;
+        },
         factoryEnabled: () => getFactorySettings().enabled,
         emit: (payload: BotEventPayload) => {
           const win = deps.getMainWindow();

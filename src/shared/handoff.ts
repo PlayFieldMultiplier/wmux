@@ -52,6 +52,10 @@ export interface Handoff {
   /** ask_person: asked in the bot's first (`intro`) wake — its greeting
    *  question, which closes once the bot has a job. Main-written. */
   intro?: true;
+  /** ask_person: the owner card the asking turn was answering
+   *  (RunningWake.ownerCardId); the question card replies to it when it is
+   *  raised in that card's thread. Main-written. */
+  ownerCardId?: string;
   createdAt: number;
   updatedAt: number;
 }

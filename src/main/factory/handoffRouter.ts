@@ -99,6 +99,7 @@ import {
   sanitizeParty,
   sanitizeRefs,
   wakeOrdinals,
+  wakeReplyTo,
   writeFactCards,
   type FactoryRoomPorts,
   type RoomWriter,
@@ -270,6 +271,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(refusal ? { refusal } : {}),
     ...(isClientId(h.clientHandoffId) ? { clientHandoffId: h.clientHandoffId } : {}),
     ...(h.intro === true && h.kind === 'ask_person' ? { intro: true as const } : {}),
+    ...(h.kind === 'ask_person' && typeof h.ownerCardId === 'string' && ID_RE.test(h.ownerCardId) ? { ownerCardId: h.ownerCardId } : {}),
     createdAt: h.createdAt,
     updatedAt: h.updatedAt,
   };
@@ -879,6 +881,7 @@ export class HandoffRouter {
         status: 'queued',
         ...(clientHandoffId ? { clientHandoffId } : {}),
         ...(asking?.reasonKind === 'intro' ? { intro: true as const } : {}),
+        ...(asking?.ownerCardId ? { ownerCardId: asking.ownerCardId } : {}),
         createdAt: this.now(),
         updatedAt: this.now(),
       };
@@ -945,7 +948,11 @@ export class HandoffRouter {
     this.put({ ...h, status: 'delivered' });
     if (this.questionCardId(h)) return { decision };
     const options = h.payload.options?.length ? `\n\nOptions: ${h.payload.options.join(' / ')}` : '';
-    this.opts.rooms()?.append({
+    const writer = this.opts.rooms();
+    // Raised now or later (queued behind the thread's open decision), the
+    // question answers the owner message the bot asked it about.
+    const replyTo = writer ? wakeReplyTo(writer, h, ws, h.threadId) : undefined;
+    writer?.append({
       workspaceId: ws,
       threadId: h.threadId,
       kind: 'question',
@@ -955,7 +962,7 @@ export class HandoffRouter {
       refs: { ...(h.payload.refs ?? {}), handoffId: h.id, decisionId: decision.id },
       state: 'open',
       ...(h.intro ? { greeting: true as const } : {}),
-    });
+    }, replyTo ? { replyTo } : undefined);
     return { decision };
   }
 

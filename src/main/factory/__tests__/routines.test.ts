@@ -43,7 +43,7 @@ function track(s: RoutineStore): RoutineStore {
   return s;
 }
 
-function rig(over: { bots?: BotProfile[]; enabled?: boolean } = {}) {
+function rig(over: { bots?: BotProfile[]; enabled?: boolean; replyTo?: (botId: string, workspaceId: string, threadId: string) => string | undefined } = {}) {
   const bots = over.bots ?? [profile(A), profile(B)];
   const facts: FactDraft[] = [];
   const wakes: WakeEnqueueInput[] = [];
@@ -63,7 +63,8 @@ function rig(over: { bots?: BotProfile[]; enabled?: boolean } = {}) {
       drop: (id: string) => { const w = queued.find((x) => x.id === id); if (w) w.state = 'dropped'; return (w ?? null) as never; },
     }),
     factLog: () => ({ append: (d) => { facts.push(d); return null; } }),
-    rooms: () => ({ append: (c) => { cards.push(c); return null; } }),
+    rooms: () => ({ append: (c, extra) => { cards.push(extra?.replyTo ? { ...c, replyTo: extra.replyTo } as RoomCardInput : c); return null; } }),
+    ...(over.replyTo ? { replyTo: over.replyTo } : {}),
     factoryEnabled: () => state.enabled,
     emit: (e) => events.push(e),
     newId: () => `r-test${String(n += 1).padStart(6, '0')}`,
@@ -79,6 +80,21 @@ function rig(over: { bots?: BotProfile[]; enabled?: boolean } = {}) {
 const hourly: RoutineSchedule = { kind: 'interval', everyMs: HOUR };
 const set = (r: ReturnType<typeof rig>, botId = A, extra: Record<string, unknown> = {}) =>
   r.store.set({ botId, workspaceId: 'ws-1' }, { title: 'Check PRs', prompt: 'Read the open PRs and say what needs me.', schedule: hourly, ...extra });
+
+describe('routine cards answer the owner message', () => {
+  it('a bot\'s routine card replies to the owner message its wake is about; the owner\'s does not', () => {
+    const asked: string[] = [];
+    const r = rig({ replyTo: (botId, ws, thread) => { asked.push(`${botId} ${ws} ${thread}`); return 'c-owner'; } });
+    const made = set(r);
+    if (!made.ok) throw new Error('set failed');
+    expect(r.cards[0]).toMatchObject({ kind: 'routine', actor: { kind: 'bot', botId: A }, replyTo: 'c-owner' });
+    expect(asked).toEqual([`${A} ws-1 general`]);
+    r.store.pause({ kind: 'owner' }, made.routine.id, true);
+    expect(r.cards[1]).toMatchObject({ kind: 'routine', actor: { kind: 'human' } });
+    expect(r.cards[1]).not.toHaveProperty('replyTo');
+    expect(asked).toHaveLength(1);
+  });
+});
 
 describe('schedules', () => {
   it('parseSchedule: an interval between the floor and 30 days; a daily time with optional weekdays', () => {

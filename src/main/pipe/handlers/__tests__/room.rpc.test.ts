@@ -356,6 +356,35 @@ describe('a bot\'s reply links the owner message its wake answers', () => {
   });
 });
 
+describe('a question a bot asks about an owner message answers it, raised now or after a restart', () => {
+  it('the question card replies to the owner card, also when it was queued and the router restarted', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const s = setup([lead, verifier]);
+    const m = ((await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title: 'should we ship?' }, OPERATOR, s.deps)) as { card: { id: string } }).card;
+    s.ports.currentWake = () => ({ wakeId: 'w-q', attempt: 1, ownerCardId: m.id });
+    s.ports.currentWakeThread = () => 'general' as never;
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    const router = new HandoffRouter({ file, decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    const first = await handleAskPerson({ title: 'Ship now?' }, asBot(lead), { router: () => router }) as { ok: boolean; decisionId?: string };
+    // The thread holds the lead's open question: the verifier's waits.
+    const second = await handleAskPerson({ title: 'Run the slow suite first?' }, asBot(verifier), { router: () => router }) as { ok: boolean; status: string };
+    expect([first.ok, !!first.decisionId, second.status]).toEqual([true, true, 'queued']);
+    const questions = () => s.writer.read('ws1').cards.filter((c) => c.kind === 'question');
+    expect(questions().map((c) => [c.title, c.replyTo])).toEqual([['Ship now?', m.id]]);
+    // The lead's question closes; a new router (an app restart) raises the
+    // queued one from its stored record.
+    const q = questions()[0];
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => router })).toMatchObject({ ok: true });
+    expect(questions()).toHaveLength(1);
+    s.ports.currentWake = () => null;
+    const restarted = new HandoffRouter({ file, decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await restarted.start();
+    expect(questions().map((c) => [c.title, c.replyTo])).toEqual([['Ship now?', m.id], ['Run the slow suite first?', m.id]]);
+  });
+});
+
 describe('one PR is one thread however the caller spells it', () => {
   it('posts, reads, read positions, handoffs and questions all use the canonical thread', async () => {
     const lead = bot('ws1', 'lead');
