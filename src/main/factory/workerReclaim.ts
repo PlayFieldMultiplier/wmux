@@ -93,6 +93,9 @@ export interface ReclaimedWorker {
   /** When the owner was first seen viewing the task's workspace after it
    *  ended (a `failed` task is cleared only after this). */
   seenAt?: number;
+  /** The ledger rev of the end this record was made for (absent: older
+   *  records, compared by time). */
+  endRev?: number;
 }
 
 /** The workspace a reclaimed worker's pane lives in. Pure. */
@@ -153,7 +156,8 @@ function isRecord(v: unknown): v is ReclaimedWorker {
     && typeof r.at === 'number' && Array.isArray(r.sessions)
     && r.sessions.every((s) => !!s && typeof (s as ReclaimedSession).sessionId === 'string' && typeof (s as ReclaimedSession).cwd === 'string')
     && (r.paneWorkspaceId === undefined || typeof r.paneWorkspaceId === 'string')
-    && (r.seenAt === undefined || typeof r.seenAt === 'number');
+    && (r.seenAt === undefined || typeof r.seenAt === 'number')
+    && (r.endRev === undefined || typeof r.endRev === 'number');
 }
 
 /** The reclaimed workers, persisted under `<wmuxDir>/factory/`. */
@@ -317,6 +321,7 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
       // No pane left in the worktree: nothing to stop.
       state: panes.length === 0 ? 'stopped' : 'stopping',
       at: now(),
+      endRev: entry.rev,
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
     };
     // On disk before anything is stopped: a stopped worker always has its
@@ -391,9 +396,10 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
 
 /** Whether a record already covers this end of the task: stopped, or
  *  resumed after it. A `stopping` record is tried again, and so is a task
- *  that reopened and ended again since. Pure. */
-export function isReclaimedSince(rec: ReclaimedWorker | null, entry: Pick<LedgerEntry, 'updatedAt'>): boolean {
-  return !!rec && rec.state !== 'stopping' && rec.at >= entry.updatedAt;
+ *  that reopened and ended again since (a newer rev). Pure. */
+export function isReclaimedSince(rec: ReclaimedWorker | null, entry: Pick<LedgerEntry, 'updatedAt' | 'rev'>): boolean {
+  if (!rec || rec.state === 'stopping') return false;
+  return rec.endRev !== undefined ? rec.endRev >= entry.rev : rec.at >= entry.updatedAt;
 }
 
 /** Install the reclaim on bot task ends. Returns the unsubscribe. */
@@ -514,14 +520,18 @@ export interface WorkerResumePorts {
    *  from outside text. */
   senderTainted?: (botId: string) => boolean;
   /** Why the bot's own worker budget refuses one more worker now, or null
-   *  (a bot's resume starts a worker like its fan-out does). */
-  botWorkerRefusal?: (botId: string) => string | null;
+   *  (a bot's resume starts a worker like its fan-out does). `starting`:
+   *  the bot's other resumes under way, not yet counted as resumed. */
+  botWorkerRefusal?: (botId: string, starting: number) => string | null;
 }
 
 /** Tasks whose resume is being typed now, or whose workspace is being
  *  cleared: one of either at a time per task. */
 const resuming = new Set<string>();
 const clearing = new Set<string>();
+/** botId → its resumes past the budget check, until each is counted as
+ *  resumed or ends. */
+const botStarting = new Map<string, number>();
 
 /** Bumped by every stop of resumed workers (all bots, or one): a resume
  *  that was under way when a stop ran launches nothing more. */
@@ -552,9 +562,25 @@ export async function resumeWorker(
   if (resuming.has(taskId)) return refuse('busy', 'this worker is being resumed already');
   if (clearing.has(taskId)) return refuse('busy', 'this worker\'s pane is being closed; try again in a moment');
   resuming.add(taskId);
+  const booking = { botId: '', done: true };
+  const unbook = (): void => {
+    if (booking.done) return;
+    booking.done = true;
+    const n = (botStarting.get(booking.botId) ?? 1) - 1;
+    if (n > 0) botStarting.set(booking.botId, n);
+    else botStarting.delete(booking.botId);
+  };
   try {
-    return await resumeOnce(ports, taskId, by, message, onLaunched);
+    return await resumeOnce(ports, taskId, by, message, () => {
+      unbook();
+      onLaunched?.();
+    }, (botId) => {
+      booking.botId = botId;
+      booking.done = false;
+      botStarting.set(botId, (botStarting.get(botId) ?? 0) + 1);
+    });
   } finally {
+    unbook();
     resuming.delete(taskId);
   }
 }
@@ -565,6 +591,7 @@ async function resumeOnce(
   by: { kind: 'owner' } | { kind: 'bot'; botId: string },
   message: string | undefined,
   onLaunched: (() => void) | undefined,
+  book: (botId: string) => void,
 ): Promise<WorkerResumeResult> {
   const rec = ports.store.get(taskId);
   if (!rec) return refuse('not_reclaimed', 'this task\'s worker was not stopped by wmux, so there is nothing to resume');
@@ -582,11 +609,13 @@ async function resumeOnce(
     }
     let budget: string | null = null;
     try {
-      budget = ports.botWorkerRefusal?.(by.botId) ?? null;
+      budget = ports.botWorkerRefusal?.(by.botId, botStarting.get(by.botId) ?? 0) ?? null;
     } catch (err) {
       budget = `the worker budget could not be read: ${String(err)}`;
     }
     if (budget) return refuse('not_now', budget);
+    // Counted against the bot's budget from here, in this same tick.
+    book(by.botId);
   }
   const pane = rec.sessions.find((s) => resumeLineFor(s) !== null);
   const line = pane ? resumeLineFor(pane) : null;
@@ -686,8 +715,10 @@ async function stopRelaunched(ports: WorkerResumePorts, taskId: string, sessionI
     if (await (ports.agentAlive?.(sessionId) ?? Promise.resolve(true)).catch(() => false)) break;
     await sleep(1000);
   }
+  // Stopped only when an agent was found and stopped: a launch not seen yet
+  // stays resumed (live), for the exit sweep or a later stop.
   const r = await ports.stopAgent(sessionId).catch(() => null);
-  if (r?.ok === true && ports.store.setState(taskId, 'stopped', now())) ports.changed?.();
+  if (r?.ok === true && r.stopped === true && ports.store.setState(taskId, 'stopped', now())) ports.changed?.();
 }
 
 /** The line runs: mark the worker resumed, then deliver the message. */
@@ -905,13 +936,6 @@ export function createWorkerClear(ports: WorkerClearPorts): WorkerClear {
       const cur = ports.store.get(rec.taskId);
       const openNow = ports.openWorkspaces();
       if (!cur || !openNow || workerWorkspaceOf(cur) !== ws || clearVerdict(cur, openNow.has(ws), ports.viewedWorkspace()) !== 'clear') continue;
-      let open = true;
-      try {
-        open = ports.taskOpen?.(cur.taskId) ?? false;
-      } catch {
-        open = true; // cannot tell: it stays
-      }
-      if (open) continue;
       let own = false;
       try {
         own = ports.isTaskWorkspace(cur, ws);
@@ -935,6 +959,15 @@ export function createWorkerClear(ports: WorkerClearPorts): WorkerClear {
           notBefore.set(ws, at + CLEAR_RETRY_MS);
           continue;
         }
+        // Read right before the close: a task that reopened is the worker's
+        // again.
+        let reopenedNow = true;
+        try {
+          reopenedNow = ports.taskOpen?.(cur.taskId) ?? false;
+        } catch {
+          reopenedNow = true; // cannot tell: it stays
+        }
+        if (reopenedNow) continue;
         let ok = false;
         try {
           ok = await ports.closeWorkspace(ws);

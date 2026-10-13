@@ -186,3 +186,22 @@ describe('installBotFanoutWake recovery at install (review fixes, PR #2164)', ()
     off();
   });
 });
+
+describe('installBotFanoutWake recovery and the queue (review fixes, second pass)', () => {
+  it('never offers again a wake the queue already holds', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-bot-wake-known-'));
+    try {
+      const ledger = new TaskLedger({ dir });
+      await ledger.register({ id: 'wtask-k', taskWorkspaceId: 'wtask-k-ws', ownerWorkspaceId: 'ws-1', title: 'k', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' }, preset: 'default' } });
+      const r = await ledger.update({ id: 'wtask-k', status: 'failed', actor: { kind: 'worker', workspaceId: 'wtask-k-ws' }, expectedRev: ledger.get('wtask-k')?.rev ?? 0 });
+      if (!r.ok) throw new Error(r.message);
+      const enqueue = vi.fn();
+      const wakeKnown = vi.fn(() => true);
+      installBotFanoutWake({ enqueue, wakeKnown }, ledger)();
+      expect(wakeKnown).toHaveBeenCalledWith('bot-0000000a', `task.failed:wtask-k@${ledger.get('wtask-k')?.rev}`);
+      expect(enqueue).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

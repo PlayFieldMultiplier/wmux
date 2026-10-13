@@ -32,6 +32,7 @@ import { taskThreadOf, type ThreadId } from '../../shared/room';
 import { getFanOutGuards } from '../worktask/fanoutGuards';
 import { isTaskGateReport } from '../factory/taskGate';
 import { STOPPED_BY_OWNER } from '../factory/factoryStop';
+import { WakeQueue, getWakeQueue } from '../factory/wakeQueue';
 import { getTaskLedger } from './taskLedgerHost';
 
 export interface FanoutCallerEvent {
@@ -176,7 +177,16 @@ export interface BotFanoutWakePorts {
   /** A transition whose wake another path sends (a bot verify task's report:
    *  the verify gate wakes the bot once the gate it runs is recorded). */
   wokenElsewhere?: (t: { entry: LedgerEntry; to: string }) => boolean;
+  /** Whether the bot's wake queue already holds a wake for this fact id
+   *  (any state but dropped). Default: the factory's wake queue. */
+  wakeKnown?: (botId: string, factId: string) => boolean;
   now?: () => number;
+}
+
+function queueKnows(botId: string, factId: string): boolean {
+  const q = getWakeQueue();
+  if (!(q instanceof WakeQueue)) return false;
+  return q.list({ botId }).some((i) => i.state !== 'dropped' && i.reason.kind === 'facts' && i.reason.factIds.includes(factId));
 }
 
 /** How far back, at install, a bot task's last move is woken again: a wake
@@ -197,17 +207,21 @@ export const BOT_TASK_WAKE_RECOVER_MS = 3_600_000;
  */
 export function installBotFanoutWake(ports: BotFanoutWakePorts, instance?: TaskLedger): () => void {
   const ledger = instance ?? getTaskLedger();
-  const wake = (t: { entry: LedgerEntry; to: string }, botId: string): void => {
+  const wake = (t: { entry: LedgerEntry; to: string }, botId: string, recovering = false): void => {
     const trigger = BOT_TASK_WAKE[t.to];
     if (!trigger || ports.wokenElsewhere?.(t) === true) return;
     if (isTaskGateReport(t.entry, t.to)) return;
     if (t.to === 'cancelled' && stoppedByOwner.has(t.entry.id)) return;
+    // The rev makes each transition its own wake: a task that asks for
+    // input twice wakes its bot twice.
+    const factId = `task.${t.to}:${t.entry.id}@${t.entry.rev}`;
+    // A recovery never offers a wake the queue holds (not even as a
+    // duplicate record, which would push older records out).
+    if (recovering && (ports.wakeKnown ?? queueKnows)(botId, factId)) return;
     ports.enqueue({
       botId,
       workspaceId: t.entry.ownerWorkspaceId,
-      // The rev makes each transition its own wake: a task that asks for
-      // input twice wakes its bot twice.
-      reason: { kind: 'facts', factIds: [`task.${t.to}:${t.entry.id}@${t.entry.rev}`], trigger: { kind: trigger } },
+      reason: { kind: 'facts', factIds: [factId], trigger: { kind: trigger } },
       priority: 1,
       threadId: taskThreadOf(t.entry),
     });
@@ -226,7 +240,7 @@ export function installBotFanoutWake(ports: BotFanoutWakePorts, instance?: TaskL
     // The owner's stop wakes nobody (its in-memory mark is gone after a restart).
     if (entry.status === 'cancelled' && entry.summary === STOPPED_BY_OWNER && entry.updatedBy.kind === 'system') continue;
     try {
-      wake({ entry, to: entry.status }, origin.botId);
+      wake({ entry, to: entry.status }, origin.botId, true);
     } catch (err) {
       console.warn(`[factory] could not wake bot ${origin.botId} for task ${entry.id}: ${String(err)}`);
     }

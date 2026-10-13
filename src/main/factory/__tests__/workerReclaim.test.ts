@@ -10,6 +10,7 @@ import {
   createWorkerClear,
   installWorkerReclaim,
   isReclaimableEnd,
+  isReclaimedSince,
   noteWorkerAgentExit,
   reclaimWorker,
   reclaimedSessionOf,
@@ -433,5 +434,82 @@ describe('reclaim state and reopen (review fixes, PR #2164)', () => {
     expect(await createWorkerClear({ ...clearPorts, taskOpen: () => true }).reconcile()).toBe(0);
     expect(closeWorkspace).not.toHaveBeenCalled();
     expect(await createWorkerClear({ ...clearPorts, taskOpen: () => false }).reconcile()).toBe(1);
+  });
+});
+
+describe('reclaim and resume races (review fixes, second pass)', () => {
+  const ID = 'wtask-abc-12345678';
+  const dead = (over: Partial<WorkerSessionInfo> = {}) => session({ agentProcessAlive: false, ...over });
+
+  it('a task that reopens while the clear reads the sessions keeps its workspace', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    let open = false;
+    const closeWorkspace = vi.fn(async () => true);
+    const clear = createWorkerClear({
+      store,
+      openWorkspaces: () => new Set(['ws-task']),
+      viewedWorkspace: () => 'ws-other',
+      workspacePtys: () => [],
+      listSessions: async () => { open = true; return []; },
+      isTaskWorkspace: () => true,
+      taskOpen: () => open,
+      closeWorkspace,
+    });
+    expect(await clear.reconcile()).toBe(0);
+    expect(closeWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('two resumes of one bot at once are both held to its worker budget', async () => {
+    const a = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(a, [session()]).ports, row('completed'), 'completed');
+    await reclaimWorker(reclaimPorts(a, [session({ id: 'daemon-2' })]).ports, row('completed', { id: 'wtask-def-12345678' }), 'completed');
+    const releases: Array<() => void> = [];
+    const ports: WorkerResumePorts = {
+      store: a,
+      typeLine: vi.fn(() => true),
+      listSessions: () => new Promise((resolve) => { releases.push(() => resolve([dead(), dead({ id: 'daemon-2' })])); }),
+      // A budget of one worker: the other resume under way counts.
+      botWorkerRefusal: (_botId, starting) => (starting >= 1 ? 'concurrent_workers' : null),
+    };
+    const first = resumeWorker(ports, ID, { kind: 'bot', botId: BOT });
+    const second = await resumeWorker(ports, 'wtask-def-12345678', { kind: 'bot', botId: BOT });
+    expect(second).toMatchObject({ ok: false, code: 'not_now' });
+    for (const r of releases) r();
+    expect(await first).toMatchObject({ ok: true });
+    // Once counted as resumed, the booking is gone.
+    const third = await resumeWorker({ ...ports, listSessions: async () => [dead({ id: 'daemon-2' })] }, 'wtask-def-12345678', { kind: 'bot', botId: BOT });
+    expect(third).toMatchObject({ ok: true });
+  });
+
+  it('a record covers the end it was made for by rev: a later end of the same task is not covered', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const rec = await reclaimWorker(reclaimPorts(store, [session()]).ports, row('failed', { rev: 3 }), 'failed');
+    expect(rec?.endRev).toBe(3);
+    expect(isReclaimedSince(store.get(ID), row('failed', { rev: 3, updatedAt: 99_999 }))).toBe(true);
+    expect(isReclaimedSince(store.get(ID), row('failed', { rev: 5, updatedAt: 1 }))).toBe(false);
+  });
+
+  it('a relaunch the stop did not find running stays resumed (live) rather than stopped', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    let t = 0;
+    const p: WorkerResumePorts = {
+      store,
+      typeLine: vi.fn(() => true),
+      stopAgent: vi.fn(async () => ({ ok: true, stopped: false })),
+      listSessions: async () => [],
+      folderExists: () => true,
+      agentAlive: async () => false,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      agentWaitMs: 3_000,
+      respawn: async () => {
+        await stopResumedWorkers(p, BOT);
+        return { ok: true, workspaceId: 'ws-new', sessionId: 'daemon-9' };
+      },
+    };
+    expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_now' });
+    expect(store.get(ID)?.state).toBe('resumed');
   });
 });

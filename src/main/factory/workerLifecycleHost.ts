@@ -197,12 +197,12 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       taskTainted: (taskId) => ledger.get(taskId)?.dispatch?.origin.tainted !== false,
       senderTainted: runningWakeTainted,
       // A bot's resume starts a worker: its own worker budget applies.
-      botWorkerRefusal: (botId) => {
+      botWorkerRefusal: (botId, starting) => {
         const store = getBotStore();
         const profile = store?.get(botId);
         if (!store || !profile) return 'the bot was removed';
         const open = ledger.list({ openOnly: true }).filter((r) => r.dispatch?.origin.kind === 'bot' && r.dispatch.origin.botId === botId).length;
-        const c = checkWorkers(profile.budget, store.usageOf(botId), open + resumedLive(botId), 1, Date.now());
+        const c = checkWorkers(profile.budget, store.usageOf(botId), open + resumedLive(botId) + starting, 1, Date.now());
         return c.ok ? null : `this bot's worker budget refuses another worker now (${c.reason})`;
       },
       note,
