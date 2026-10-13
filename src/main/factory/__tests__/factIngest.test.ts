@@ -245,3 +245,56 @@ describe('watchMergeEffects', () => {
     expect(seen).toEqual(['done', 'refused']);
   });
 });
+
+describe('startFactIngest while the log cannot write (review fixes, PR #2164)', () => {
+  it('keeps a fact the log could not write and writes it, in order, once the log can', () => {
+    let writable = false;
+    const written: string[] = [];
+    let fire: (t: LedgerTransition) => void = () => undefined;
+    const timers: Array<() => void> = [];
+    const sink = {
+      append: vi.fn(() => null),
+      appendResult: vi.fn((d: FactDraft) => {
+        if (!writable) return { ok: false as const, code: 'write_failed' as const };
+        written.push(String(d.ref?.taskId));
+        return { ok: true as const, fact: { ...d, id: 'f', seq: written.length, dedupeKey: 'k' } as never };
+      }),
+    };
+    const log = vi.fn();
+    const ingest = startFactIngest(sink, {
+      onLedgerTransition: (fn) => { fire = fn; return () => undefined; },
+      log,
+      setTimer: (fn) => { timers.push(fn); return { cancel: () => undefined }; },
+    });
+    fire(transition('working', 'failed', { id: 'wtask-1' }));
+    fire(transition('working', 'failed', { id: 'wtask-2' }));
+    expect(written).toEqual([]);
+    expect(log).toHaveBeenCalledTimes(1);
+    writable = true;
+    // The next draft waits behind the kept ones.
+    fire(transition('working', 'failed', { id: 'wtask-3' }));
+    expect(written).toEqual(['wtask-1', 'wtask-2', 'wtask-3']);
+    // A kept draft is also written by the retry timer alone.
+    writable = false;
+    fire(transition('working', 'failed', { id: 'wtask-4' }));
+    writable = true;
+    for (const t of timers.splice(0)) t();
+    expect(written).toEqual(['wtask-1', 'wtask-2', 'wtask-3', 'wtask-4']);
+    expect(sink.append).not.toHaveBeenCalled();
+    ingest.dispose();
+  });
+
+  it('a duplicate is not kept, and another refusal is logged', () => {
+    let fire: (t: LedgerTransition) => void = () => undefined;
+    let code: 'duplicate' | 'too_large' = 'duplicate';
+    const sink = { append: vi.fn(() => null), appendResult: vi.fn(() => ({ ok: false as const, code })) };
+    const log = vi.fn();
+    startFactIngest(sink, { onLedgerTransition: (fn) => { fire = fn; return () => undefined; }, log, setTimer: () => ({ cancel: () => undefined }) });
+    fire(transition('working', 'failed'));
+    expect(log).not.toHaveBeenCalled();
+    code = 'too_large';
+    fire(transition('working', 'failed'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('too_large'));
+    expect(sink.appendResult).toHaveBeenCalledTimes(2);
+  });
+});
