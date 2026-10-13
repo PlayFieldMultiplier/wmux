@@ -123,6 +123,18 @@ describe('opening a preview', () => {
     expect(await openPreview(s, huge)).toEqual({ ok: false, reason: 'too-large' });
   });
 
+  it('refuses a symlink into ~/.ssh even when home is reached through another spelling', async () => {
+    // Home as given is a symlinked path (as a Windows 8.3 short name or a
+    // symlinked home would be); the target's canonical path uses the real one.
+    const alias = path.join(dir, 'home-alias');
+    fs.symlinkSync(home, alias);
+    vi.mocked(os.homedir).mockReturnValue(alias);
+    fs.writeFileSync(path.join(home, '.ssh', 'id.png'), PNG);
+    const link = path.join(dir, 'innocent.png');
+    fs.symlinkSync(path.join(home, '.ssh', 'id.png'), link);
+    expect(await openPreview(asSender(sender()), link)).toEqual({ ok: false, reason: 'denied' });
+  });
+
   it('answers 404 for a malformed, unknown or closed token', async () => {
     const file = path.join(dir, 'a.png');
     fs.writeFileSync(file, PNG);
