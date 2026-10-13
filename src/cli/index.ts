@@ -62,7 +62,7 @@ INPUT COMMANDS
   Without --to these target the pane you ran the command from (verified
   PID-map identity). An agent running "wmux send" from its own shell types
   into its OWN input that way: to reach another pane, name it with
-  --to (a #name as "wmux list-panes" shows it, e.g. #w1-2, or a ptyId).
+  --to (a quoted #name as "wmux list-panes" shows it, e.g. '#w1-2', or a ptyId).
   --pane is the older spelling of --to; --active targets the UI-focused pane.
 
 BROWSER PANE
@@ -213,7 +213,7 @@ EXAMPLES
   wmux list-workspaces
   wmux new-workspace --name dev
   wmux send "echo hello" --submit
-  wmux send "run the tests" --submit --to #w1-2
+  wmux send "run the tests" --submit --to '#w1-2'
   wmux notify "Done" "Build finished"
   wmux open http://localhost:3000
   wmux identify --json

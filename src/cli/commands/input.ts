@@ -100,6 +100,11 @@ export async function resolveTargetParams(
 ): Promise<Record<string, unknown>> {
   const explicitPane = explicitTarget(args);
   if (explicitPane) return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
+  // A target flag whose value went missing must not fall back to this pane: an
+  // unquoted `--to #w1-2` loses its value to the shell (`#` starts a comment).
+  for (const flag of ['--to', '--pane']) {
+    if (hasFlag(args, flag)) throw new Error(`${flag} needs a pane: a ptyId or a quoted '#name' (an unquoted # starts a shell comment)`);
+  }
   if (hasFlag(args, '--active')) return {};
 
   const ctx: SelfContext = await resolveSelfContext({

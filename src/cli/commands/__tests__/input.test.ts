@@ -88,6 +88,15 @@ describe('wmux send targets', () => {
     expect(stripInputFlags(['a', '--to', '#w1-1', 'b', '--pane', 'p', '--submit'])).toEqual(['a', 'b']);
   });
 
+  it('exits before typing anything when --to lost its value', async () => {
+    // `wmux send "x" --to #w1-2` unquoted: the shell drops `#w1-2` as a comment.
+    await expect(handleInput('send', ['x', '--submit', '--to'], false)).rejects.toThrow(ExitCalled);
+    await expect(handleInput('send-key', ['enter', '--pane', '--submit'], false)).rejects.toThrow(ExitCalled);
+    expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything());
+    expect(rpc).not.toHaveBeenCalledWith('input.sendKey', expect.anything());
+    expect(selfContext).not.toHaveBeenCalled();
+  });
+
   it('exits before typing anything when a #name does not resolve', async () => {
     await expect(handleInput('send', ['x', '--to', '#nope'], false)).rejects.toThrow(ExitCalled);
     expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything());
