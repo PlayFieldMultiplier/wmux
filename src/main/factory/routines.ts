@@ -384,13 +384,14 @@ export class RoutineStore {
     this.dropQueued(r);
   }
 
-  /** A paused routine runs no more: its wake still waiting in the queue is
-   *  taken back (one already running goes on to its end). */
+  /** A paused routine runs no more: its wake still waiting in the queue or
+   *  parked with its bot is taken back (one already running goes on to its
+   *  end). */
   private dropQueued(r: StoredRoutine): void {
     try {
       const q = this.deps.wakes();
       if (!q?.list || !q.drop) return;
-      for (const w of q.list({ botId: r.botId, states: ['queued'] })) {
+      for (const w of q.list({ botId: r.botId, states: ['queued', 'parked'] })) {
         if (w.reason.kind === 'routine' && w.reason.routineId === r.id) q.drop(w.id, 'expired');
       }
     } catch (err) {
