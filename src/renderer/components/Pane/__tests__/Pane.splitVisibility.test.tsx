@@ -16,7 +16,7 @@
  * Pane.notificationRing.test.tsx (the pure helper is the load-bearing piece).
  */
 import { describe, it, expect } from 'vitest';
-import { pickSplitShownSurfaces, pickOverlaySurfaces, resolveRemoteAttachPaneId } from '../Pane';
+import { pickSplitShownSurfaces, pickOverlaySurfaces, resolveRemoteAttachPaneId, isSplitBrowserExpanded } from '../Pane';
 
 const T = (id: string) => ({ id });
 
@@ -146,5 +146,21 @@ describe('resolveRemoteAttachPaneId — #1140 split-into-a-pane vs the #1100 tab
     // pane the user explicitly asked to split away from — worse than doing
     // nothing, since the cap warning already told them why the split refused.
     expect(resolveRemoteAttachPaneId('horizontal', 'pane-A', false)).toBeNull();
+  });
+});
+
+describe('isSplitBrowserExpanded — #2140 browser fills the split pane', () => {
+  it('expands while a browser is active and both sides exist', () => {
+    expect(isSplitBrowserExpanded(true, [T('term-1')], [T('brow-1')], 'brow-1')).toBe(true);
+    expect(isSplitBrowserExpanded(false, [T('term-1')], [T('brow-1')], 'brow-1')).toBe(false);
+  });
+
+  it('an active terminal is never hidden, in the same render that activates it', () => {
+    expect(isSplitBrowserExpanded(true, [T('term-1'), T('term-2')], [T('brow-1')], 'term-2')).toBe(false);
+  });
+
+  it('losing either side drops the mode', () => {
+    expect(isSplitBrowserExpanded(true, [], [T('brow-1')], 'brow-1')).toBe(false);
+    expect(isSplitBrowserExpanded(true, [T('term-1')], [], 'term-1')).toBe(false);
   });
 });

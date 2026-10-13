@@ -110,6 +110,24 @@ export function composePaneClassName(opts: {
 }
 
 /**
+ * #2140 — whether the browser side of the terminal+browser split fills the
+ * pane. Derived in render rather than reset in an effect: the commit that
+ * activates a terminal must already show it, or the pane focus driver focuses
+ * a display:none xterm and the keystrokes go nowhere.
+ */
+export function isSplitBrowserExpanded(
+  requested: boolean,
+  terminals: ReadonlyArray<{ id: string }>,
+  browsers: ReadonlyArray<{ id: string }>,
+  activeSurfaceId: string,
+): boolean {
+  return requested
+    && terminals.length > 0
+    && browsers.length > 0
+    && !terminals.some((s) => s.id === activeSurfaceId);
+}
+
+/**
  * Choose which terminal and which browser surface is SHOWN on each side of the
  * terminal+browser split (`SplitSurfaceView` hasBoth). Both sides are laid out
  * side by side and must stay visible, but a pane has a single `activeSurfaceId`,
@@ -1380,20 +1398,20 @@ function SplitSurfaceView({
   const hasBoth = terminals.length > 0 && browsers.length > 0;
 
   // #2140 — the browser side of the split can take the whole pane without
-  // closing the terminal. The terminal panel is only hidden: it stays mounted,
-  // display:none makes it skip fit (the PTY keeps its size), and the split
-  // widths come back unchanged on restore.
+  // closing the terminal. The terminal panel is only hidden: it stays mounted
+  // and is treated like a background tab (no fit, so the PTY keeps its size),
+  // and the split widths come back unchanged on restore.
   const setActiveSurface = useStore((s) => s.setActiveSurface);
-  const [browserExpanded, setBrowserExpanded] = useState(false);
-  const activeIsTerminal = terminals.some((s) => s.id === activeSurfaceId);
+  const [expandRequested, setExpandRequested] = useState(false);
+  const browserExpanded = isSplitBrowserExpanded(expandRequested, terminals, browsers, activeSurfaceId);
   useEffect(() => {
-    // Picking a terminal tab restores the split, so a focused terminal is
-    // never hidden; losing either side drops the mode with it.
-    if (activeIsTerminal || !hasBoth) setBrowserExpanded(false);
-  }, [activeIsTerminal, hasBoth]);
+    // Activating a terminal or losing a side ends the mode for good, so the
+    // next browser activation does not silently re-expand.
+    if (!browserExpanded) setExpandRequested(false);
+  }, [browserExpanded]);
   const toggleBrowserExpanded = useCallback((browserSurfaceId: string) => {
     if (!browserExpanded) setActiveSurface(pane.id, browserSurfaceId, workspaceId);
-    setBrowserExpanded(!browserExpanded);
+    setExpandRequested(!browserExpanded);
   }, [browserExpanded, setActiveSurface, pane.id, workspaceId]);
 
   if (pane.surfaces.length === 0) {
