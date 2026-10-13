@@ -1023,7 +1023,7 @@ export const en = {
   'browser.title': 'Browser',
   'preview.loading': "Loading…",
   'preview.waiting': "Waiting for the file to be written again",
-  'preview.updateFailed': "Couldn't load the newest version. Showing the last one.",
+  'preview.updateFailed': "Showing the last complete version",
   'preview.openExternal': "Open in default app",
   'preview.openFolder': "Open containing folder",
   'preview.copyPath': "Copy path",

@@ -752,7 +752,7 @@ export const ko = {
   'browser.title': '브라우저',
   'preview.loading': "불러오는 중…",
   'preview.waiting': "파일이 다시 써지길 기다리는 중",
-  'preview.updateFailed': "최신 버전을 불러오지 못해 직전 버전을 보여 주고 있어요.",
+  'preview.updateFailed': "마지막 완성본을 보여 주는 중",
   'preview.openExternal': "기본 앱으로 열기",
   'preview.openFolder': "폴더 열기",
   'preview.copyPath': "경로 복사",

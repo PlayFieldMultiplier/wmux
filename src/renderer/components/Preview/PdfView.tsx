@@ -88,6 +88,8 @@ export default function PdfView({ url, size, exists, complete }: { url: string; 
   const scale = zoom ?? fitWidthZoom(maxWidth, Math.max(1, viewWidth - PAD * 2));
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+  const fittedRef = useRef(zoom === null);
+  fittedRef.current = zoom === null;
 
   useEffect(() => {
     let cancelled = false;
@@ -136,7 +138,14 @@ export default function PdfView({ url, size, exists, complete }: { url: string; 
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
-    const measure = () => setViewWidth(el.clientWidth);
+    const measure = () => {
+      // A fitted page rescales with the pane (expand, split drag): stay on the same spot.
+      const current = loadedRef.current;
+      if (current && fittedRef.current && el.clientWidth > 0) {
+        pendingAnchor.current = anchorAt(el.scrollTop, current.pages, scaleRef.current);
+      }
+      setViewWidth(el.clientWidth);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
