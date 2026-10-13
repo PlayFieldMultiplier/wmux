@@ -59,6 +59,7 @@ import {
   runningWakeThread,
   sanitizeRefs,
   setRoomWriter,
+  wakeReplyTo,
   writeFactCards,
   writeBotHookCard,
   wakeOrdinals,
@@ -155,7 +156,11 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     }
     // Main pins the thread: the one named, else the running wake's.
     const threadId = namedThread ?? runningWakeThread(ports, bot.botId) ?? GENERAL_THREAD;
-    const clientPostId = p.clientPostId ?? wakeOrdinals.next(runningWake(ports, bot.botId), 'post');
+    const wake = runningWake(ports, bot.botId);
+    const clientPostId = p.clientPostId ?? wakeOrdinals.next(wake, 'post');
+    // A card the bot names no parent for answers the owner message its wake
+    // is about, when it lands in that message's thread.
+    const replyTo = p.replyTo ?? wakeReplyTo(writer, wake, bot.workspaceId, threadId);
     const { valid, dropped } = settleMentions(ports, bot, mentions ?? []);
     const r = writer.post({
       workspaceId: bot.workspaceId,
@@ -166,7 +171,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
       ...(p.body ? { body: p.body } : {}),
       ...(refs || valid.length > 0 ? { refs: { ...(refs ?? {}), ...(valid.length > 0 ? { botIds: valid } : {}) } } : {}),
       ...(p.kind === 'proposal' || p.kind === 'plan' ? { state: 'open' as const } : {}),
-      ...(p.replyTo ? { replyTo: p.replyTo } : {}),
+      ...(replyTo ? { replyTo } : {}),
       ...(clientPostId ? { clientPostId } : {}),
     });
     if (!r.ok) return r;

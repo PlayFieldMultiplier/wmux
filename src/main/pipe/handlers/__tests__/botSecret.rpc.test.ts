@@ -82,6 +82,17 @@ describe('secret_request', () => {
     expect(writer.read('ws-1', {}).cards).toHaveLength(1);
   });
 
+  it('a request made in an owner-message wake answers that message, in its thread only', () => {
+    const owner = writer.post({ workspaceId: 'ws-1', kind: 'human', actor: { kind: 'human' }, title: 'publish it' });
+    if (!owner.ok) throw new Error('post failed');
+    const wake = { wakeId: 'w-1', attempt: 1, ownerCardId: owner.card.id };
+    deps = { ...deps, ports: () => ({ currentWake: () => wake }) };
+    const a = handleSecretRequest({ name: 'NPM_TOKEN', label: 'npm token', why: 'publish' }, botCtx, deps) as { cardId: string };
+    expect(writer.get('ws-1', a.cardId)).toMatchObject({ kind: 'secret_request', replyTo: owner.card.id, refs: { secretName: 'NPM_TOKEN' } });
+    const b = handleLoginRequest({ service: 'github', why: 'push', threadId: 'task:t-1' }, botCtx, deps) as { cardId: string };
+    expect(writer.get('ws-1', b.cardId)?.replyTo).toBeUndefined();
+  });
+
   it('secret_list: names and use for a bot or the operator, never values', () => {
     store.set('NPM_TOKEN', 'abcdefgh12345678');
     for (const ctx of [botCtx, operatorCtx]) {

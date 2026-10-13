@@ -40,6 +40,7 @@ import {
   runningWake,
   runningWakeThread,
   wakeOrdinals,
+  wakeReplyTo,
   type FactoryRoomPorts,
   type RoomWriter,
 } from '../../factory/roomWriter';
@@ -83,18 +84,22 @@ function notStarted(): FactoryRefusal<'not_started'> {
   return refusal('not_started', 'the key store is not running yet');
 }
 
-/** The thread and idempotency key of a card a bot's call posts. */
+/** The thread, idempotency key and default parent (the owner message the
+ *  running wake answers: wakeReplyTo) of a card a bot's call posts. */
 function botCardPlace(
   p: Record<string, unknown>,
   ports: Partial<FactoryRoomPorts>,
-  botId: string,
-): { threadId: ThreadId; clientPostId?: string } | FactoryRefusal<'invalid'> {
+  bot: BotBinding,
+  writer: Pick<RoomWriter, 'get'>,
+): { threadId: ThreadId; clientPostId?: string; replyTo?: string } | FactoryRefusal<'invalid'> {
   const named = p.threadId === undefined ? undefined : parseThreadId(p.threadId);
   if (named === null) return refusal('invalid', 'threadId is not a thread id');
   if (p.clientRequestId !== undefined && !isClientId(p.clientRequestId)) return refusal('invalid', 'clientRequestId is not a valid key');
-  const threadId = named ?? runningWakeThread(ports, botId) ?? GENERAL_THREAD;
-  const clientPostId = (p.clientRequestId as string | undefined) ?? wakeOrdinals.next(runningWake(ports, botId), 'post');
-  return { threadId, ...(clientPostId ? { clientPostId } : {}) };
+  const threadId = named ?? runningWakeThread(ports, bot.botId) ?? GENERAL_THREAD;
+  const wake = runningWake(ports, bot.botId);
+  const clientPostId = (p.clientRequestId as string | undefined) ?? wakeOrdinals.next(wake, 'post');
+  const replyTo = wakeReplyTo(writer, wake, bot.workspaceId, threadId);
+  return { threadId, ...(clientPostId ? { clientPostId } : {}), ...(replyTo ? { replyTo } : {}) };
 }
 
 /** `botSecret.request`: a `secret_request` card in the bot's own room. */
@@ -117,7 +122,7 @@ export function handleSecretRequest(raw: unknown, ctx: RpcContext | undefined, d
     return refusal('invalid', `why is required (at most ${BOT_SECRET_LIMITS.WHY_MAX} characters)`);
   }
   const ports = deps.ports();
-  const place = botCardPlace(p, ports, bot.botId);
+  const place = botCardPlace(p, ports, bot, writer);
   if ('ok' in place) return place;
   const r = writer.post({
     workspaceId: bot.workspaceId,
@@ -128,6 +133,7 @@ export function handleSecretRequest(raw: unknown, ctx: RpcContext | undefined, d
     body: p.why.trim(),
     refs: { secretName: p.name },
     state: 'open',
+    ...(place.replyTo ? { replyTo: place.replyTo } : {}),
     ...(place.clientPostId ? { clientPostId: place.clientPostId } : {}),
   });
   if (!r.ok) return refusal('invalid', r.message);
@@ -193,7 +199,7 @@ export function handleLoginRequest(raw: unknown, ctx: RpcContext | undefined, de
     return refusal('invalid', `why is required (at most ${BOT_SECRET_LIMITS.WHY_MAX} characters)`);
   }
   const ports = deps.ports();
-  const place = botCardPlace(p, ports, bot.botId);
+  const place = botCardPlace(p, ports, bot, writer);
   if ('ok' in place) return place;
   const r = writer.post({
     workspaceId: bot.workspaceId,
@@ -204,6 +210,7 @@ export function handleLoginRequest(raw: unknown, ctx: RpcContext | undefined, de
     body: p.why.trim(),
     refs: { label: service, ...(url ? { url } : {}) },
     state: 'open',
+    ...(place.replyTo ? { replyTo: place.replyTo } : {}),
     ...(place.clientPostId ? { clientPostId: place.clientPostId } : {}),
   });
   if (!r.ok) return refusal('invalid', r.message);

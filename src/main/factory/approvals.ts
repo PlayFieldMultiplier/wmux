@@ -89,7 +89,7 @@ import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
 import { normalizeRepoKey } from './repoWatch';
 import { laneRefusalLine } from './laneRefusalText';
-import type { RoomWriter } from './roomWriter';
+import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
 import type { BotDirectoryApi } from './triggerEngine';
 
@@ -156,6 +156,9 @@ export interface ApprovalWake {
   tainted: boolean;
   /** The wake carries the owner's own message. */
   ownerWords?: boolean;
+  /** The owner card that started the wake (RunningWake.ownerCardId): the
+   *  request's card answers it when it lands in that card's thread. */
+  ownerCardId?: string;
 }
 
 /** What the approvals reach of the merge executor (mergeLaneHost.ts). */
@@ -533,7 +536,7 @@ export class ApprovalService {
       updatedAt: at,
     };
     if (!this.put(record)) return refuse('write_failed', 'the request could not be stored');
-    const card = this.postCard(record, profile);
+    const card = this.postCard(record, profile, still);
     if (card) this.put({ ...record, cardId: card.id });
     this.changed(record.workspaceId);
     await this.applyRule(record.requestId);
@@ -1035,9 +1038,10 @@ export class ApprovalService {
 
   // ── cards ──
 
-  private postCard(r: StoredApproval, profile: BotProfile): RoomCard | null {
+  private postCard(r: StoredApproval, profile: BotProfile, wake: ApprovalWake): RoomCard | null {
     const writer = this.ports.rooms();
     if (!writer) return null;
+    const replyTo = wakeReplyTo(writer, wake, r.workspaceId, r.threadId);
     const what = `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;
     const subjectThread = r.prNumber !== undefined ? prThreadId(r.repoKey, r.prNumber) : r.issueNumber !== undefined ? issueThreadId(r.repoKey, r.issueNumber) : null;
     const lines = [
@@ -1061,6 +1065,7 @@ export class ApprovalService {
         ...(subjectThread && subjectThread !== r.threadId ? { threadId: subjectThread } : {}),
       },
       state: 'open',
+      ...(replyTo ? { replyTo } : {}),
       clientPostId: `approval:${r.requestId}`,
     });
     return res.ok ? res.card : null;

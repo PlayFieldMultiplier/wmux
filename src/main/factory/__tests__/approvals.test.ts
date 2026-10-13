@@ -118,6 +118,21 @@ describe('approval requests (bot side)', () => {
     expect(card?.body).not.toContain('outside text');
   });
 
+  it('the request card answers the owner message that started the wake, when it lands in its thread', async () => {
+    const r = rig();
+    const said = r.ownerSays('PR 1 looks done');
+    r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: 'general' as never, tainted: false, ownerWords: true, ownerCardId: said.id });
+    const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'green' });
+    expect(r.writer.get(WS, req.cardId as string)).toMatchObject({ kind: 'approval', threadId: 'general', replyTo: said.id });
+    // An owner card in another thread is not answered across threads.
+    const other = r.ownerSays('and the issue', 'task:t-2');
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: 'general' as never, tainted: false, ownerCardId: other.id });
+    const next = await r.ask(DEV, { action: 'comment', prNumber: 1, reason: 'note' });
+    const card = r.writer.get(WS, next.cardId as string);
+    expect(card?.threadId).toBe('general');
+    expect(card?.replyTo).toBeUndefined();
+  });
+
   it('a reason is the bot\'s own account: sentences quoting the owner\'s words are left out', async () => {
     expect(withoutOwnerQuotes('PR #2 at af06b88: verify gate passed. Owner said "머지할거 머지해".', ['머지할거  머지해'])).toBe('PR #2 at af06b88: verify gate passed.');
     expect(withoutOwnerQuotes('Diff is 1 line. 사용자가 「merge it」라고 했습니다.', ['Merge it'])).toBe('Diff is 1 line.');

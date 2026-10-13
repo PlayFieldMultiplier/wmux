@@ -248,6 +248,15 @@ describe('factory phone routes', () => {
       expect(card).not.toHaveProperty('clientPostId');
     });
 
+    it('a bot\'s reply carries replyTo: the owner card it answers', async () => {
+      const owner = writer.post({ workspaceId: 'ws-1', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'status?' });
+      if (!owner.ok) throw new Error('post failed');
+      writer.post({ workspaceId: 'ws-1', threadId: 'general', kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-1', botId: 'bot-1111bbbb' }, title: 'green', replyTo: owner.card.id });
+      const { get } = await start();
+      const cards = (await get('/api/rooms/ws-1/cards?thread=general')).body.cards as Array<Record<string, unknown>>;
+      expect(cards.map((c) => [c.kind, c.replyTo])).toEqual([['human', undefined], ['status', owner.card.id]]);
+    });
+
     it('pages forward by seq and stays under the bridge budget with large bodies', async () => {
       post(30, 'general', 'y'.repeat(8000));
       const { get } = await start();

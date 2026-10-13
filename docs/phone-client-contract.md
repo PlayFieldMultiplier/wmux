@@ -4115,7 +4115,8 @@ off the desktop says so and the Moa path above runs with the same id.
 
 `GET /api/moa/messages/:clientMessageId` reads `state: "queued"` for such a
 message: final, it never moves to `accepted`. There is no `cardId` yet: find
-the reply by reading the HQ room after the message's own `human` card.
+the message's own `human` card in the HQ room by its `clientMessageId`, then
+the bot's replies by their `replyTo` (below), which names that card.
 
 **`/api/workspaces`.** With the factory on, each row of a workspace that has
 bots carries them, and their room's open questions:
@@ -4207,8 +4208,15 @@ arrival order (`seq`, increasing; never sort by `at`).
   `handoffId`, `check`, `factId`, `decisionId`, `approvalId` (an `approval`
   card's request, `apr-…`), and `url` (http or https only).
 - `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
-  `replyTo` — a card of the same thread this one answers. `closes: true` — the
-  card records the end of its thread's subject.
+  `closes: true` — the card records the end of its thread's subject.
+- `replyTo` — the id of a card of the same thread this one answers. A card a
+  bot writes while it handles an owner message (its turn started from a
+  `human` card) carries that `human` card's id, unless the bot named another
+  parent or wrote the card in a different thread. Match a bot's replies to
+  your message by it rather than by order: when the owner sends two messages
+  in a row, or several bots answer one message in a group room, each reply
+  names the message it answers. A card a bot writes for any other reason (a
+  fact, a handoff, a routine) has none.
 
 Both routes are read-only and need `--allow-transcript` (card text is
 bot-authored), checked before anything else; no input grant. Every answer is

@@ -111,6 +111,9 @@ export interface RunningWake {
   /** The one fan-out task the wake is about (its facts name that task
    *  only): a question asked in it is about that task. */
   taskId?: string;
+  /** An owner-message wake: the owner's `human` card that started it, which
+   *  the cards the bot writes in its turn answer (wakeReplyTo). */
+  ownerCardId?: string;
 }
 
 type RoomPortsResolver = () => Partial<FactoryRoomPorts> | null;
@@ -229,6 +232,26 @@ export function runningWake(ports: Partial<FactoryRoomPorts>, botId: string): Ru
     return w && typeof w.wakeId === 'string' && w.wakeId ? w : null;
   } catch {
     return null;
+  }
+}
+
+/** The card a bot's card answers by default: the owner card that started
+ *  the bot's running wake, when that `human` card is in the room and thread
+ *  the bot's card lands in (a reply stays in its card's thread). Undefined
+ *  otherwise, and for any wake no owner message started. Never throws. */
+export function wakeReplyTo(
+  writer: Pick<RoomWriter, 'get'>,
+  wake: Pick<RunningWake, 'ownerCardId'> | null | undefined,
+  workspaceId: string,
+  threadId: ThreadId,
+): string | undefined {
+  const id = wake?.ownerCardId;
+  if (!id) return undefined;
+  try {
+    const card = writer.get(workspaceId, id);
+    return card && card.kind === 'human' && card.actor.kind === 'human' && card.threadId === threadId ? card.id : undefined;
+  } catch {
+    return undefined;
   }
 }
 

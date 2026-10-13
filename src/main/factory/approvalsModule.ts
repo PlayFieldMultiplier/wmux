@@ -14,7 +14,7 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
   let off: (() => void) | null = null;
   return {
     async start() {
-      const [{ getFactLog }, { getBotDirectory }, { getRoomWriter }, laneGh, { currentWakeItem, latestOwnerWakeThread, getWakeQueue }, { getBotRuntime }, { getWakeTaint }, { getApprovalMergeHost }, { BOT_EVENT }] = await Promise.all([
+      const [{ getFactLog }, { getBotDirectory }, { getRoomWriter, resolveRoomPorts, runningWake: roomWake }, laneGh, { currentWakeItem, latestOwnerWakeThread, getWakeQueue }, { getBotRuntime }, { getWakeTaint }, { getApprovalMergeHost }, { BOT_EVENT }] = await Promise.all([
         import('./factLog'),
         import('./botStore'),
         import('./roomWriter'),
@@ -36,9 +36,11 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
             const turn = getBotRuntime()?.currentTurn(botId);
             if (!item || !turn || turn.wakeId !== item.id) return null;
             const taint = getWakeTaint();
+            const room = roomWake(resolveRoomPorts(), botId);
             return {
               wakeId: item.id, attempt: Math.max(1, item.attempts), threadId: item.threadId ?? null,
               tainted: taint ? taint.wakeTainted(item) : true, ownerWords: item.reason.kind === 'human',
+              ...(room?.wakeId === item.id && room.ownerCardId ? { ownerCardId: room.ownerCardId } : {}),
             };
           },
           conversationThread: latestOwnerWakeThread,

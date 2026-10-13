@@ -109,6 +109,11 @@ export function humanRunId(cardId: string): string {
   return `run-${cardId}`;
 }
 
+/** The owner card a run names (humanRunId), or null when it names none. */
+export function humanCardIdOfRun(runId: unknown): string | null {
+  return typeof runId === 'string' && runId.startsWith('run-') && runId.length > 4 ? runId.slice(4) : null;
+}
+
 /** One owner message, already validated by its caller (the room composer
  *  through room.post, or the phone). */
 export interface HumanMessageInput {

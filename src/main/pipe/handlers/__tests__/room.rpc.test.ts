@@ -9,7 +9,7 @@ import type { WakeItem } from '../../../../shared/wake';
 import { loadThreadDecision } from '../../../deck/deckDecisionStore';
 import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, setHandoffRouter } from '../../../factory/handoffRouter';
 import { RoomWriter, type FactoryRoomPorts } from '../../../factory/roomWriter';
-import { humanAddressees } from '../../../factory/humanMessage';
+import { humanAddressees, humanCardIdOfRun, humanRunId } from '../../../factory/humanMessage';
 import { botSeesFact } from '../../../factory/triggerEngine';
 import {
   createRoomModule,
@@ -284,6 +284,75 @@ describe('room.post', () => {
     const dirOf = (bots: BotProfile[]) => ({ listEnabled: () => bots, get: () => null });
     expect(humanAddressee(dirOf([moa]), 'hq', undefined)).toMatchObject({ bot: { id: moa.id }, role: 'moa' });
     expect(humanAddressee(dirOf([moa]), 'ws1', undefined)).toEqual({ bot: null, role: null });
+  });
+});
+
+describe('a bot\'s reply links the owner message its wake answers', () => {
+  type Card = { id: string; threadId: string; replyTo?: string };
+  /** Each bot runs the wake given here, as main's runningWakeOf derives it
+   *  from the wake item (its id, and the owner card its run names). */
+  function rig(bots: BotProfile[]) {
+    const s = setup(bots);
+    const running = new Map<string, { wakeId: string; attempt: number; ownerCardId?: string; thread: string | null }>();
+    s.ports.currentWake = (botId) => running.get(botId) ?? null;
+    s.ports.currentWakeThread = (botId) => (running.get(botId)?.thread ?? null) as never;
+    /** Run the n-th queued wake (1-based) for its bot. */
+    const run = (n: number) => {
+      const w = s.wakes[n - 1];
+      const ownerCardId = w.reason.kind === 'human' ? humanCardIdOfRun(w.reason.runId) : null;
+      running.set(w.botId, { wakeId: `w-${n}`, attempt: 1, thread: w.threadId ?? null, ...(ownerCardId ? { ownerCardId } : {}) });
+    };
+    const owner = async (title: string, extra: Record<string, unknown> = {}) =>
+      ((await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title, ...extra }, OPERATOR, s.deps)) as { card: Card }).card;
+    const reply = async (b: BotProfile, extra: Record<string, unknown> = {}) =>
+      ((await handleRoomPost({ kind: 'status', title: 'on it', ...extra }, asBot(b), s.deps)) as { ok: boolean; card: Card });
+    return { ...s, running, run, owner, reply };
+  }
+
+  it('a run names its owner card and nothing else does', () => {
+    expect(humanCardIdOfRun(humanRunId('c-abc'))).toBe('c-abc');
+    for (const v of [undefined, '', 'run-', 'h-1', 42]) expect(humanCardIdOfRun(v)).toBeNull();
+  });
+
+  it('one bot: its cards answer the owner message; an explicit replyTo and another thread stay as given', async () => {
+    const lead = bot('ws1', 'lead');
+    const r = rig([lead]);
+    const m = await r.owner('fix the login', { mentions: [lead.id] });
+    r.run(1);
+    expect((await r.reply(lead)).card).toMatchObject({ threadId: 'general', replyTo: m.id });
+    const own = (await r.reply(lead, { title: 'first' })).card;
+    expect((await r.reply(lead, { title: 'second', replyTo: own.id })).card.replyTo).toBe(own.id);
+    // A card in another thread answers nothing by default, and is still posted.
+    const elsewhere = await r.reply(lead, { threadId: 'task:t-9' });
+    expect(elsewhere.ok).toBe(true);
+    expect(elsewhere.card.replyTo).toBeUndefined();
+    // A wake no owner message started links nothing.
+    r.running.set(lead.id, { wakeId: 'w-h', attempt: 1, thread: 'general' });
+    expect((await r.reply(lead, { title: 'handoff work' })).card.replyTo).toBeUndefined();
+  });
+
+  it('two owner messages back to back: each wake\'s cards answer its own message', async () => {
+    const lead = bot('ws1', 'lead');
+    const r = rig([lead]);
+    const m1 = await r.owner('first ask', { mentions: [lead.id] });
+    const m2 = await r.owner('second ask', { mentions: [lead.id] });
+    r.run(1);
+    expect((await r.reply(lead, { title: 'about the first' })).card.replyTo).toBe(m1.id);
+    r.run(2);
+    expect((await r.reply(lead, { title: 'about the second' })).card.replyTo).toBe(m2.id);
+  });
+
+  it('a group room: every bot\'s card answers the one owner message', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const r = rig([lead, verifier]);
+    const m = await r.owner('status, everyone?');
+    expect(r.wakes.map((w) => w.botId)).toEqual([lead.id, verifier.id]);
+    r.run(1);
+    r.run(2);
+    const a = (await r.reply(lead)).card;
+    const b = (await r.reply(verifier)).card;
+    expect([a.replyTo, b.replyTo]).toEqual([m.id, m.id]);
   });
 });
 

@@ -348,7 +348,8 @@ describe('lookups the runtime and rooms read', () => {
     expect(runningWakeOf('bot-2')).toEqual({ wakeId: mention?.id, attempt: 1, handoffId: 'h-2', reasonKind: 'mention' });
     const human = queue.enqueue({ botId: 'bot-3', workspaceId: 'ws-1', reason: { kind: 'human', text: 'Hi', source: 'desktop', runId: 'run-c-1', room: true }, priority: 0 });
     queue.start(human?.id ?? '');
-    expect(runningWakeOf('bot-3')).toEqual({ wakeId: human?.id, attempt: 1, runId: 'run-c-1', reasonKind: 'human' });
+    // An owner-message wake names the owner card its run was started from.
+    expect(runningWakeOf('bot-3')).toEqual({ wakeId: human?.id, attempt: 1, runId: 'run-c-1', reasonKind: 'human', ownerCardId: 'c-1' });
     // A wake about one task names it (a question asked in it is about it).
     const task = queue.enqueue({ botId: 'bot-4', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['task.input_required:wtask-7@2'], trigger: { kind: 'task.input_required' } }, priority: 1 });
     queue.start(task?.id ?? '');

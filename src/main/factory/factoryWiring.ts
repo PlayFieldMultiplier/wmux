@@ -67,7 +67,7 @@ import { getApprovalService } from './approvals';
 import { wakeContext, type WakeContextPorts } from './wakeContext';
 import { readUiLocale } from '../quit/quitAndStopCopy';
 import { setFactoryPhoneMessageHandler } from './phoneMessage';
-import { postHumanMessage } from './humanMessage';
+import { humanCardIdOfRun, postHumanMessage } from './humanMessage';
 import { phoneBot } from './phoneBot';
 import { ghIssueService, splitRepoKey } from '../github/GhIssueService';
 import { MORNING_SCHEDULE_FILENAME, MORNING_SCHEDULE_ID, MorningSchedule, localDay } from './morningSchedule';
@@ -310,6 +310,7 @@ export function runningWakeOf(botId: string): RunningWake | null {
   if (!item) return null;
   const r = item.reason;
   const taskIds = new Set(r.kind === 'facts' ? r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null) : []);
+  const ownerCardId = r.kind === 'human' ? humanCardIdOfRun(r.runId) : null;
   return {
     wakeId: item.id,
     attempt: Math.max(1, item.attempts),
@@ -317,6 +318,7 @@ export function runningWakeOf(botId: string): RunningWake | null {
     ...(r.kind === 'human' && r.runId ? { runId: r.runId } : {}),
     reasonKind: r.kind,
     ...(taskIds.size === 1 ? { taskId: [...taskIds][0] } : {}),
+    ...(ownerCardId ? { ownerCardId } : {}),
   };
 }
 
