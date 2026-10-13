@@ -13,8 +13,12 @@
 //     refuses dot-paths (.env, .git, …) below the page's own folder chain,
 //     and serves only a regular file within the size cap, from the handle it
 //     checked (O_NOFOLLOW, dev/inode re-check), with nosniff and no-store.
-//   - the page is offline by default: the session cancels every http(s)/ws(s)
-//     request unless the person allowed the network for that page's tab.
+//   - the page is offline by default, enforced by the session, not by hooks
+//     that miss traffic: the `preview-html` session's proxy is a closed port
+//     (loopback included), WebRTC may use only proxied UDP, http(s)/ws(s)
+//     requests are cancelled as well, and pages ask for no DNS prefetch. A tab
+//     whose person allowed the network remounts on `preview-html-online`,
+//     which serves a token's files only while that allowance holds.
 //   - the page never leaves its origin: top-level navigations and popups are
 //     refused, and an http(s) link is handed to the tab, which shows it for
 //     the person to open (never opened automatically). Sub-frames may load
@@ -22,7 +26,7 @@
 //   - permissions are denied except clipboard writes and fullscreen;
 //     downloads are cancelled.
 
-import { app, ipcMain, session, webContents, type CustomScheme, type Session, type WebContents } from 'electron';
+import { app, ipcMain, session, type CustomScheme, type Session, type WebContents } from 'electron';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,6 +34,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { IPC } from '../../shared/constants';
 import {
+  HTML_PREVIEW_ONLINE_PARTITION,
   HTML_PREVIEW_PARTITION,
   HTML_PREVIEW_SCHEME,
   PREVIEW_MAX_BYTES,
@@ -57,6 +62,9 @@ const MAX_TOKENS_PER_SENDER = 32;
 const SETTLE_MS = 300;
 const POLL_MS = 2000;
 const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen']);
+const MAX_SERVED_TRACKED = 2000;
+/** Offline responses also tell the page it may load nothing but its own files. */
+const OFFLINE_CSP = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:";
 
 interface HtmlEntry {
   token: string;
@@ -67,8 +75,10 @@ interface HtmlEntry {
   page: string;
   /** Leading segments of the page's folder: dot-names there are allowed. */
   pageDirSegments: string[];
-  /** The folder watched for changes (the page's own folder). */
+  /** The folder watched for changes (the root, or the page's folder on Linux). */
   watchDir: string;
+  /** Real paths this page has loaded: only their changes reload it. */
+  served: Set<string>;
   sender: WebContents;
   version: number;
   exists: boolean;
@@ -81,7 +91,8 @@ interface HtmlEntry {
 
 const entries = new Map<string, HtmlEntry>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-let previewSession: Session | null = null;
+let offlineSession: Session | null = null;
+let onlineSession: Session | null = null;
 
 const caseInsensitiveFs = process.platform === 'darwin' || process.platform === 'win32';
 
@@ -96,7 +107,7 @@ function isHomeOrFsRoot(dir: string): boolean {
   let realHome = home;
   try { realHome = fs.realpathSync.native(home); } catch { /* keep the given spelling */ }
   const d = norm(dir);
-  return d === norm(home) || d === norm(realHome) || path.parse(dir).root.replace(/[\\/]+$/, '') === d;
+  return d === norm(home) || d === norm(realHome) || norm(path.parse(dir).root) === d;
 }
 
 /** The nearest folder at or above `dir` that holds a `.git` entry. */
@@ -110,9 +121,23 @@ function findGitRoot(dir: string): string | null {
   }
 }
 
-/** The page's git worktree, or its folder; never home, a filesystem root or a credential store. */
+/** For a page inside node_modules: its own package folder (`@scope/pkg` too). */
+function packageRoot(pageDir: string): string | null {
+  const parts = pageDir.split(path.sep);
+  const at = parts.lastIndexOf('node_modules');
+  if (at === -1 || at + 1 >= parts.length) return null;
+  const take = parts[at + 1].startsWith('@') && at + 2 < parts.length ? at + 3 : at + 2;
+  return parts.slice(0, take).join(path.sep) || null;
+}
+
+/**
+ * The page's git worktree, or its folder; never home, a filesystem root or a
+ * credential store. A page shipped inside node_modules is third-party: it gets
+ * only its package's folder, not the project around it.
+ */
 export function chooseHtmlRoot(pageDir: string): string | null {
-  const candidates = [findGitRoot(pageDir), pageDir].filter((c): c is string => c !== null);
+  const pkg = packageRoot(pageDir);
+  const candidates = (pkg ? [pkg, pageDir] : [findGitRoot(pageDir), pageDir]).filter((c): c is string => c !== null);
   for (const candidate of candidates) {
     if (!isHomeOrFsRoot(candidate) && !isSensitivePath(candidate)) return candidate;
   }
@@ -153,7 +178,11 @@ function startWatcher(entry: HtmlEntry): void {
     // Recursive where the OS watches a tree natively (macOS FSEvents, Windows);
     // Linux would walk the tree with one inotify watch per folder.
     const recursive = process.platform === 'darwin' || process.platform === 'win32';
-    const watcher = fs.watch(entry.watchDir, { persistent: false, recursive }, () => scheduleReload(entry));
+    const watcher = fs.watch(entry.watchDir, { persistent: false, recursive }, (_event, fileName) => {
+      // Only a file the page actually loaded counts; an agent working in the
+      // rest of the repo (.git, caches, other sources) never reloads it.
+      if (fileName === null || entry.served.has(path.join(entry.watchDir, String(fileName)))) scheduleReload(entry);
+    });
     watcher.on('error', () => {
       watcher.close();
       if (entry.watcher === watcher) entry.watcher = null;
@@ -213,7 +242,11 @@ export async function openHtmlPreview(sender: WebContents, filePath: string): Pr
   const owned = [...entries.values()].filter((e) => e.sender.id === sender.id).length;
   if (owned >= MAX_TOKENS_PER_SENDER) return { ok: false, reason: 'limit' };
 
-  const page = path.relative(root, canonical).split(path.sep).join('/');
+  // The folder by its real path, the file by the name that was opened: a
+  // `latest.html` symlink is followed on every request, so retargeting it
+  // shows the new page (still only if it resolves inside the root).
+  const opened = path.join(pageDir, path.basename(filePath));
+  const page = path.relative(root, sameOrInside(root, opened) ? opened : canonical).split(path.sep).join('/');
   const token = randomBytes(16).toString('hex');
   const entry: HtmlEntry = {
     token,
@@ -221,7 +254,9 @@ export async function openHtmlPreview(sender: WebContents, filePath: string): Pr
     root,
     page,
     pageDirSegments: page.split('/').slice(0, -1),
-    watchDir: pageDir,
+    // The whole root where the OS watches a tree natively; the page's folder on Linux.
+    watchDir: process.platform === 'darwin' || process.platform === 'win32' ? root : pageDir,
+    served: new Set([canonical]),
     sender,
     version: 1,
     exists: true,
@@ -283,7 +318,7 @@ export async function resolveInsideRoot(entry: Pick<HtmlEntry, 'root' | 'pageDir
   return real;
 }
 
-export async function serveHtmlPreview(request: Request): Promise<Response> {
+export async function serveHtmlPreview(request: Request, online = false): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('method not allowed', { status: 405 });
   let url: URL;
   try {
@@ -294,14 +329,16 @@ export async function serveHtmlPreview(request: Request): Promise<Response> {
   const token = url.hostname;
   if (!PREVIEW_TOKEN_REGEX.test(token)) return notFound();
   const entry = entries.get(token);
-  if (!entry) return notFound();
+  // The online session serves a token only while its tab allows the network.
+  if (!entry || (online && !entry.network)) return notFound();
   let rawPath: string;
   try {
     rawPath = decodeURIComponent(url.pathname);
   } catch {
     return new Response('bad request', { status: 400 });
   }
-  let real = await resolveInsideRoot(entry, rawPath);
+  let servedRaw = rawPath;
+  let real = await resolveInsideRoot(entry, servedRaw);
   if (!real) return notFound();
 
   let st: fs.Stats;
@@ -315,7 +352,8 @@ export async function serveHtmlPreview(request: Request): Promise<Response> {
     if (!url.pathname.endsWith('/')) {
       return new Response(null, { status: 301, headers: { location: `${url.pathname}/${url.search}` } });
     }
-    real = await resolveInsideRoot(entry, `${rawPath}/index.html`);
+    servedRaw = `${rawPath}/index.html`;
+    real = await resolveInsideRoot(entry, servedRaw);
     if (!real) return notFound();
   }
 
@@ -328,8 +366,11 @@ export async function serveHtmlPreview(request: Request): Promise<Response> {
   let size: number;
   try {
     const opened = await handle.stat();
-    const atPath = await fs.promises.stat(real);
-    if (!opened.isFile() || opened.size > PREVIEW_MAX_BYTES.html || atPath.dev !== opened.dev || atPath.ino !== opened.ino) {
+    // A folder above the file may have been swapped between the check and the
+    // open: resolve the request again and require the very file we hold.
+    const again = await resolveInsideRoot(entry, servedRaw);
+    const atPath = again === real ? await fs.promises.stat(again) : null;
+    if (!opened.isFile() || opened.size > PREVIEW_MAX_BYTES.html || !atPath || atPath.dev !== opened.dev || atPath.ino !== opened.ino) {
       await handle.close();
       return notFound();
     }
@@ -343,11 +384,14 @@ export async function serveHtmlPreview(request: Request): Promise<Response> {
     'content-length': String(size),
     'x-content-type-options': 'nosniff',
     'cache-control': 'no-store',
+    'x-dns-prefetch-control': 'off',
   });
+  if (!online) headers.set('content-security-policy', OFFLINE_CSP);
   if (size === 0 || request.method === 'HEAD') {
     await handle.close();
     return new Response(null, { status: 200, headers });
   }
+  if (entry.served.size < MAX_SERVED_TRACKED) entry.served.add(real);
   const stream = handle.createReadStream({ start: 0, end: size - 1 });
   return new Response(Readable.toWeb(stream) as ReadableStream, { status: 200, headers });
 }
@@ -369,7 +413,7 @@ export function htmlNavigationVerdict(fromUrl: string, toUrl: string, isMainFram
 }
 
 export function isHtmlPreviewContents(contents: WebContents): boolean {
-  return previewSession !== null && contents.session === previewSession;
+  return contents.session === offlineSession || contents.session === onlineSession;
 }
 
 function handOffLink(guest: WebContents, url: string): void {
@@ -383,6 +427,8 @@ function handOffLink(guest: WebContents, url: string): void {
 }
 
 function guardGuest(contents: WebContents): void {
+  // WebRTC may not open its own UDP sockets; offline, the proxy refuses the rest.
+  contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   contents.setWindowOpenHandler(({ url }) => {
     if (htmlNavigationVerdict(contents.getURL(), url, true) === 'hand-off') handOffLink(contents, url);
     return { action: 'deny' };
@@ -402,29 +448,33 @@ function guardGuest(contents: WebContents): void {
   });
 }
 
-/** Offline unless the page's tab allowed the network. */
-function networkAllowed(webContentsId: number | undefined): boolean {
-  if (webContentsId === undefined) return false;
-  const guest = webContents.fromId(webContentsId);
-  if (!guest || !isHtmlPreviewContents(guest)) return false;
-  const token = htmlPreviewToken(guest.getURL());
-  return token ? entries.get(token)?.network === true : false;
+/** Shared by both preview sessions: what a page may do besides load its files. */
+function lockDownSession(ses: Session, online: boolean): void {
+  ses.protocol.handle(HTML_PREVIEW_SCHEME, (request) => serveHtmlPreview(request, online));
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(ALLOWED_PERMISSIONS.has(permission)));
+  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
+  ses.on('will-download', (event) => event.preventDefault());
 }
 
 /** Must run after `app.whenReady()` and before the main renderer loads. */
 export function registerHtmlPreview(): void {
-  const ses = session.fromPartition(HTML_PREVIEW_PARTITION);
-  previewSession = ses;
-  // The ONLY session that can resolve wmux-html:.
-  ses.protocol.handle(HTML_PREVIEW_SCHEME, serveHtmlPreview);
-  ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
-    callback({ cancel: !networkAllowed(details.webContentsId) });
+  const offline = session.fromPartition(HTML_PREVIEW_PARTITION);
+  const online = session.fromPartition(HTML_PREVIEW_ONLINE_PARTITION);
+  offlineSession = offline;
+  onlineSession = online;
+  // These two sessions, and only these, can resolve wmux-html:.
+  lockDownSession(offline, false);
+  lockDownSession(online, true);
+  // Offline means the network stack has nowhere to go: every connection,
+  // loopback included, is sent to a closed port, and the hooks that do see
+  // requests cancel them too.
+  void offline.setProxy({ proxyRules: 'http://127.0.0.1:9', proxyBypassRules: '<-loopback>' });
+  offline.enableNetworkEmulation({ offline: true });
+  offline.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (_details, callback) => {
+    callback({ cancel: true });
   });
-  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(ALLOWED_PERMISSIONS.has(permission)));
-  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
-  ses.on('will-download', (event) => event.preventDefault());
   app.on('web-contents-created', (_event, contents) => {
-    if (contents.getType() === 'webview' && contents.session === ses) guardGuest(contents);
+    if (contents.getType() === 'webview' && isHtmlPreviewContents(contents)) guardGuest(contents);
   });
   onSenderReleased((senderId) => {
     for (const entry of [...entries.values()]) if (entry.sender.id === senderId) release(entry.token);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
 import { IconX } from '../icons';
-import { HTML_PREVIEW_PARTITION, formatPreviewBytes, type PreviewLinkEvent } from '../../../shared/filePreview';
+import { HTML_PREVIEW_ONLINE_PARTITION, HTML_PREVIEW_PARTITION, formatPreviewBytes, type PreviewLinkEvent } from '../../../shared/filePreview';
 import { PreviewFooter } from './PreviewChrome';
 
 const CHIP = `inline-flex items-center h-[22px] px-2 rounded-[5px] text-[11px] shrink-0 ${FOCUS_RING}`;
@@ -10,8 +10,8 @@ const CHIP = `inline-flex items-center h-[22px] px-2 rounded-[5px] text-[11px] s
 /**
  * A local HTML page in a sandboxed <webview> on the `preview-html` partition
  * (main/preview/previewHtml.ts): never the app renderer, never a browser pane
- * (no data-surface-id, no popups, no CDP registration). Offline until the
- * person allows the network for this tab. When the page's folder changes it
+ * (no data-surface-id, no CDP registration). Offline until the person allows
+ * the network for this tab, which remounts it on the online session. When the page's folder changes it
  * reloads in place, which keeps the scroll, and gives back the focus it had
  * before the load, so an agent rewriting a report never pulls the cursor out
  * of the terminal. A link the page tries to open is held here for the person
@@ -50,7 +50,7 @@ export default function HtmlView({ token, url, version, size, exists }: {
     };
     webview.addEventListener('did-finish-load', onLoaded);
     return () => { webview.removeEventListener('did-finish-load', onLoaded); };
-  }, []);
+  }, [network]);
 
   // A settled change in the page's folder: reload in place.
   useEffect(() => {
@@ -72,10 +72,8 @@ export default function HtmlView({ token, url, version, size, exists }: {
   const toggleNetwork = () => {
     const next = !network;
     void window.electronAPI?.preview?.setNetwork(token, next).then((ok) => {
-      if (!ok) return;
-      setNetwork(next);
-      noteFocus();
-      try { webviewRef.current?.reload(); } catch { /* reloads on attach anyway */ }
+      // The page moves to the other session: the webview remounts there.
+      if (ok) setNetwork(next);
     });
   };
 
@@ -93,9 +91,10 @@ export default function HtmlView({ token, url, version, size, exists }: {
     <div className="flex flex-col flex-1 min-h-0">
       <div className="relative flex-1 min-h-0 bg-white">
         <webview
+          key={network ? 'online' : 'offline'}
           ref={webviewRef as React.RefObject<Electron.WebviewTag>}
           src={url}
-          partition={HTML_PREVIEW_PARTITION}
+          partition={network ? HTML_PREVIEW_ONLINE_PARTITION : HTML_PREVIEW_PARTITION}
           // Lets a target=_blank link reach main, which refuses every popup
           // and hands an http(s) one to this tab's footer.
           allowpopups={'true' as unknown as boolean}

@@ -46,6 +46,8 @@ export const PREVIEW_MAX_BYTES: Record<PreviewKind, number> = {
 
 export const HTML_PREVIEW_SCHEME = 'wmux-html';
 export const HTML_PREVIEW_PARTITION = 'preview-html';
+/** Where a page runs once its tab allowed the network; never the default. */
+export const HTML_PREVIEW_ONLINE_PARTITION = 'preview-html-online';
 
 const HTML_ASSET_MIME: Record<string, string> = {
   html: 'text/html; charset=utf-8',

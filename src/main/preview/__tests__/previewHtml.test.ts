@@ -70,6 +70,13 @@ describe('html preview root', () => {
     fs.mkdirSync(loose);
     expect(chooseHtmlRoot(loose)).toBe(loose);
     expect(chooseHtmlRoot(home)).toBeNull();
+    // Third-party pages get only their own package, never the project.
+    const scoped = path.join(repo, 'node_modules', '@scope', 'pkg', 'docs');
+    fs.mkdirSync(scoped, { recursive: true });
+    expect(chooseHtmlRoot(scoped)).toBe(path.join(repo, 'node_modules', '@scope', 'pkg'));
+    const plain = path.join(repo, 'node_modules', 'lib', 'coverage');
+    fs.mkdirSync(plain, { recursive: true });
+    expect(chooseHtmlRoot(plain)).toBe(path.join(repo, 'node_modules', 'lib'));
     expect(chooseHtmlRoot(path.parse(dir).root)).toBeNull();
   });
 });
@@ -117,10 +124,28 @@ describe('serving a page', () => {
     expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(page.headers.get('x-content-type-options')).toBe('nosniff');
     expect(page.headers.get('cache-control')).toBe('no-store');
+    expect(page.headers.get('x-dns-prefetch-control')).toBe('off');
+    expect(page.headers.get('content-security-policy')).toBe("default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:");
+    // The online session serves the token only once its tab allowed the network.
+    expect((await serveHtmlPreview(new Request(htmlPreviewUrl(opened.token, 'docs/api/foo.html')), true)).status).toBe(404);
     const css = await get(htmlPreviewUrl(opened.token, 'docs/_static/x.css'));
     expect(await css.text()).toBe('h1{color:red}');
     expect(css.headers.get('content-type')).toBe('text/css; charset=utf-8');
     expect((await get(htmlPreviewUrl(opened.token, '.env'))).status).toBe(404);
+  });
+
+  it('follows a latest.html symlink on every request, so retargeting it shows the new page', async () => {
+    const out = path.join(repo, 'docs');
+    fs.writeFileSync(path.join(out, 'v1.html'), 'one');
+    fs.writeFileSync(path.join(out, 'v2.html'), 'two');
+    fs.symlinkSync('v1.html', path.join(out, 'latest.html'));
+    const opened = await openHtmlPreview(asSender(sender()), path.join(out, 'latest.html'));
+    if (!opened.ok) throw new Error('open failed');
+    expect(opened.path).toBe('docs/latest.html');
+    expect(await (await get(htmlPreviewUrl(opened.token, 'docs/latest.html'))).text()).toBe('one');
+    fs.unlinkSync(path.join(out, 'latest.html'));
+    fs.symlinkSync('v2.html', path.join(out, 'latest.html'));
+    expect(await (await get(htmlPreviewUrl(opened.token, 'docs/latest.html'))).text()).toBe('two');
   });
 
   it('redirects a folder URL to its slash form, then serves its index.html', async () => {

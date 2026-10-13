@@ -320,7 +320,7 @@ export function createWindow(opts: { deferLoad?: boolean } = {}): BrowserWindow 
   }
 
   // Harden webview security: strip preload, enforce contextIsolation
-  mainWindow.webContents.on('will-attach-webview', (_event, webPreferences) => {
+  mainWindow.webContents.on('will-attach-webview', (_event, webPreferences, params) => {
     delete webPreferences.preload;
     delete (webPreferences as Record<string, unknown>)['preloadURL'];
     webPreferences.nodeIntegration = false;
@@ -328,6 +328,11 @@ export function createWindow(opts: { deferLoad?: boolean } = {}): BrowserWindow 
     webPreferences.sandbox = true;
     // Ensure web security (same-origin policy) is not accidentally disabled
     (webPreferences as Record<string, unknown>)['webSecurity'] = true;
+    // A previewed HTML page (main/preview/previewHtml.ts) is untrusted: it may
+    // not spam alert()/confirm() modals over the app.
+    if (typeof params.partition === 'string' && params.partition.startsWith('preview-html')) {
+      (webPreferences as Record<string, unknown>)['disableDialogs'] = true;
+    }
   });
 
   // Block all navigations except dev server — prevents file drag opening in
