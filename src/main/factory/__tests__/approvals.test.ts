@@ -233,7 +233,7 @@ describe('approval requests (bot side)', () => {
     const res = await handlers.get(BOT_APPROVAL_RPC.list)?.({}, asBot) as { code: string; message: string };
     expect(res.code).toBe('not_started');
     expect(res.message).toContain('factory/approvals.json');
-    expect(res.message).toContain('Unreadable approvals storage');
+    expect(res.message).not.toContain('Unreadable approvals storage');
   });
 
   it('the bot RPCs answer only a bot; no bot RPC decides', async () => {

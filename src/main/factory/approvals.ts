@@ -1153,11 +1153,11 @@ function params(raw: unknown): Record<string, unknown> {
 
 /** The bot RPCs: a bot only asks and reads its own requests. */
 /** `startFailure`: why the store did not start (approvals stay off until it
- *  is fixed), or null while it may still start. */
+ *  is fixed; the detail stays in main's log), or null while it may still
+ *  start. */
 export function registerApprovalRpc(router: Pick<FactoryRouter, 'register'>, service: () => ApprovalService | null, startFailure: () => string | null = () => null): void {
   const notStarted = (): Refusal => {
-    const why = startFailure();
-    return refuse('not_started', why ? `approvals are off until the owner fixes factory/${APPROVALS_FILENAME}: ${why}`.slice(0, 300) : 'approvals are not running yet');
+    return refuse('not_started', startFailure() ? `approvals are off until the owner fixes factory/${APPROVALS_FILENAME} (see the wmux log)` : 'approvals are not running yet');
   };
   router.register(BOT_APPROVAL_RPC.request, async (raw: unknown, ctx: RpcContext | undefined) => {
     if (!ctx?.bot) return refuse('not_bot', 'approval_request is a bot\'s');
