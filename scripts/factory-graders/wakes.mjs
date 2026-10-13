@@ -31,7 +31,9 @@ export function directedFactOnlyAddressee(snap, expect) {
     criterion('card_names_its_addressee', JSON.stringify(card?.refs?.botIds ?? null) === JSON.stringify([addresseeId]) && card?.refs?.botId === addresseeId, JSON.stringify(card?.refs ?? null)),
     criterion('addressee_woken_once', addressee.length === 1 && addressee[0].reason?.kind === 'human', addressee.map((w) => w.reason?.kind).join(', ') || 'no wake'),
   ];
-  for (const key of expect.bystanders ?? [expect.bystander]) {
+  const bystanders = expect.bystanders ?? (expect.bystander ? [expect.bystander] : []);
+  if (bystanders.length === 0) out.push(criterion('bystanders_named', false, 'the scenario names no bystander'));
+  for (const key of bystanders) {
     out.push(criterion(`${key}_not_woken`, wakesOf(snap, key).length === 0, `${wakesOf(snap, key).length} wake(s) of ${key}`));
   }
   return out;

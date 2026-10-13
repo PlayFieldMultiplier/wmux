@@ -50,6 +50,31 @@ function readState() {
   }
 }
 
+/** The calls that change the state hold this lock from their read to their
+ *  write, so two of them never lose one's change. A lock older than
+ *  LOCK_STALE_MS was left by a call that died, and is taken over. */
+const LOCK_STALE_MS = 10_000;
+function lockState() {
+  if (!STATE) return;
+  const lock = `${STATE}.lock`;
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  for (const until = Date.now() + 30_000; Date.now() < until;) {
+    try {
+      fs.closeSync(fs.openSync(lock, 'wx'));
+      process.on('exit', () => {
+        try { fs.unlinkSync(lock); } catch { /* already gone */ }
+      });
+      return;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(lock);
+      } catch { /* released meanwhile */ }
+      Atomics.wait(wait, 0, 0, 10);
+    }
+  }
+  fail('fake-gh: the state lock was not released', true);
+}
+
 function writeState(state) {
   const tmp = `${STATE}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
@@ -350,9 +375,10 @@ function issue(state, f) {
   return fail(`fake-gh: unsupported issue ${sub}`, false);
 }
 
-const state = readState();
 const [cmd, ...rest] = argv;
 const f = flags(rest);
+if (cmd === 'pr' && (f.positional[0] === 'create' || f.positional[0] === 'merge')) lockState();
+const state = readState();
 switch (cmd) {
   case '--version':
   case 'version':

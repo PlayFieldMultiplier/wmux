@@ -108,3 +108,12 @@ describe('scoring rule', () => {
     expect(gradeSnapshot({ name: 'no-such-scenario', expect: {} }, { ...ok }).status).toBe('error');
   });
 });
+
+describe('a scenario that names no bystander', () => {
+  it('fails its directed-fact grade instead of grading an unnamed bot', async () => {
+    const { directedFactOnlyAddressee } = await import('../factory-graders/wakes.mjs');
+    const names = directedFactOnlyAddressee({ facts: [], cards: [], wakes: [], injected: [], botKeys: {} }, { message: 'm', addressee: 'a' }).map((c) => c.id ?? c.name);
+    expect(names).toContain('bystanders_named');
+    expect(names.some((n) => String(n).startsWith('undefined'))).toBe(false);
+  });
+});

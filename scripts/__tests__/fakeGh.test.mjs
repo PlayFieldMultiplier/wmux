@@ -75,4 +75,14 @@ describe('fake gh', () => {
     expect(r.err).not.toMatch(/rate limit/i);
     expect(log().at(-1)).toMatchObject({ argv: ['release', 'list'], handled: false, exit: 1 });
   });
+
+  it('state-changing calls run one at a time: concurrent creates all land', async () => {
+    const { spawn } = await import('node:child_process');
+    const env = { ...process.env, FACTORY_E2E_GH_STATE: path.join(dir, 'state.json') };
+    await Promise.all([2, 3, 4, 5, 6, 7].map((i) => new Promise((resolve) => {
+      spawn(process.execPath, [FAKE, 'pr', 'create', '-R', 'acme/app', '--head', `b${i}`, '--title', `t${i}`], { cwd: dir, env, stdio: 'ignore' }).on('exit', resolve);
+    })));
+    expect(state().repos['github.com/acme/app'].prs).toHaveLength(7);
+    expect(fs.existsSync(path.join(dir, 'state.json.lock'))).toBe(false);
+  });
 });

@@ -141,7 +141,15 @@ export function readCards(wmuxDir) {
   const cards = [];
   let errors = 0;
   for (const n of names) {
-    const parsed = parseJsonl(fs.readFileSync(path.join(dir, n), 'utf8'));
+    let text;
+    try {
+      text = fs.readFileSync(path.join(dir, n), 'utf8');
+    } catch {
+      // Gone between the listing and the read: counted, not fatal.
+      errors += 1;
+      continue;
+    }
+    const parsed = parseJsonl(text);
     errors += parsed.errors;
     cards.push(...parsed.rows);
   }
