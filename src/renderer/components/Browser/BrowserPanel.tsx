@@ -525,8 +525,13 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
       // pane) pulls keyboard focus onto the webview. Clicking *inside* page
       // content already focuses the guest natively, but pane-switch clicks and
       // clicks on our own chrome do not — without this, keyboard input stays
-      // dead after such a click (#252).
-      onClick={() => webviewRef.current?.focus()}
+      // dead after such a click (#252). A click on one of our own controls
+      // keeps its focus: the address bar took the click, then lost it to the
+      // webview, so nothing typed there ever reached it.
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest('input, textarea, select, button, [contenteditable="true"]')) return;
+        webviewRef.current?.focus();
+      }}
       style={{
         position: 'absolute',
         inset: 0,
