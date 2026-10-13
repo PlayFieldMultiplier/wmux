@@ -128,6 +128,8 @@ export const ms = {
   'browser.forward': 'Ke hadapan',
   'browser.reload': 'Muat semula',
   'browser.close': 'Tutup',
+  'browser.expand': 'Kembangkan pelayar',
+  'browser.showTerminal': 'Tunjukkan terminal',
   'browser.devToolsTooltip': 'Buka DevTools (F12)',
   'browser.title': 'Pelayar',
   'palette.cmd.openPrivateBrowser': "Buka tab pelayar peribadi",

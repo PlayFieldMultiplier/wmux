@@ -128,6 +128,8 @@ export const tr = {
   'browser.forward': 'İleri',
   'browser.reload': 'Yeniden yükle',
   'browser.close': 'Kapat',
+  'browser.expand': 'Tarayıcıyı genişlet',
+  'browser.showTerminal': 'Terminali göster',
   'browser.devToolsTooltip': 'DevTools\'u aç (F12)',
   'browser.title': 'Tarayıcı',
   'palette.cmd.openPrivateBrowser': "Gizli tarayıcı sekmesi aç",

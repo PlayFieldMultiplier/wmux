@@ -1017,6 +1017,8 @@ export const en = {
   'browser.forward': 'Forward',
   'browser.reload': 'Reload',
   'browser.close': 'Close',
+  'browser.expand': 'Expand browser',
+  'browser.showTerminal': 'Show terminal',
   'browser.devToolsTooltip': 'Open DevTools (F12)',
   'browser.title': 'Browser',
   'palette.cmd.openPrivateBrowser': "Open Private Browser Tab",

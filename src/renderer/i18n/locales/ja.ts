@@ -130,6 +130,8 @@ export const ja = {
   'browser.forward': '進む',
   'browser.reload': '再読み込み',
   'browser.close': '閉じる',
+  'browser.expand': 'ブラウザを拡大',
+  'browser.showTerminal': 'ターミナルを表示',
   'browser.devToolsTooltip': 'DevToolsを開く (F12)',
   'browser.title': 'ブラウザ',
   'palette.cmd.openPrivateBrowser': "シークレットタブを開く",

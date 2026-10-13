@@ -128,6 +128,8 @@ export const th = {
   'browser.forward': 'ไปข้างหน้า',
   'browser.reload': 'โหลดใหม่',
   'browser.close': 'ปิด',
+  'browser.expand': 'ขยายเบราว์เซอร์',
+  'browser.showTerminal': 'แสดงเทอร์มินัล',
   'browser.devToolsTooltip': 'เปิด DevTools (F12)',
   'browser.title': 'เบราว์เซอร์',
   'palette.cmd.openPrivateBrowser': "เปิดแท็บเบราว์เซอร์ส่วนตัว",

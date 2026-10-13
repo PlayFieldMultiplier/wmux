@@ -128,6 +128,8 @@ export const uk = {
   'browser.forward': 'Уперед',
   'browser.reload': 'Оновити',
   'browser.close': 'Закрити',
+  'browser.expand': 'Розгорнути браузер',
+  'browser.showTerminal': 'Показати термінал',
   'browser.devToolsTooltip': 'Відкрити DevTools (F12)',
   'browser.title': 'Браузер',
   'palette.cmd.openPrivateBrowser': "Відкрити приватну вкладку браузера",

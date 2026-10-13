@@ -128,6 +128,8 @@ export const id = {
   'browser.forward': 'Maju',
   'browser.reload': 'Muat ulang',
   'browser.close': 'Tutup',
+  'browser.expand': 'Perluas browser',
+  'browser.showTerminal': 'Tampilkan terminal',
   'browser.devToolsTooltip': 'Buka DevTools (F12)',
   'browser.title': 'Peramban',
   'palette.cmd.openPrivateBrowser': "Buka tab browser privat",

@@ -64,6 +64,17 @@ function IconInspect() {
   );
 }
 
+/** A pane with the terminal column on the left: drawn while the split shows,
+ *  dropped while the browser fills the pane. */
+function IconExpand({ expanded }: { expanded: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <rect x="1.8" y="2.6" width="10.4" height="8.8" rx="1" />
+      {!expanded && <line x1="5.4" y1="2.6" x2="5.4" y2="11.4" />}
+    </svg>
+  );
+}
+
 function IconClose() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -102,6 +113,9 @@ interface BrowserToolbarProps {
   onToggleInspect: () => void;
   onOpenDevTools: () => void;
   onClose: () => void;
+  /** Terminal+browser split only (#2140): the browser fills the pane. */
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +137,8 @@ export default function BrowserToolbar({
   onToggleInspect,
   onOpenDevTools,
   onClose,
+  expanded = false,
+  onToggleExpanded,
 }: BrowserToolbarProps) {
   const t = useT();
   const [inputValue, setInputValue] = useState(currentUrl);
@@ -305,6 +321,22 @@ export default function BrowserToolbar({
       >
         <IconDevTools />
       </button>
+
+      {/* Expand over the terminal / restore the split (#2140) */}
+      {onToggleExpanded && (
+        <button
+          className={expanded
+            ? `${btnBase} text-[var(--accent-blue)] bg-[var(--bg-surface)] cursor-pointer`
+            : btnEnabled}
+          onClick={onToggleExpanded}
+          title={expanded ? t('browser.showTerminal') : t('browser.expand')}
+          aria-label={expanded ? t('browser.showTerminal') : t('browser.expand')}
+          aria-pressed={expanded}
+          tabIndex={-1}
+        >
+          <IconExpand expanded={expanded} />
+        </button>
+      )}
 
       {/* Close */}
       <button

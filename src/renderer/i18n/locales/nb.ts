@@ -128,6 +128,8 @@ export const nb = {
   'browser.forward': 'Frem',
   'browser.reload': 'Last på nytt',
   'browser.close': 'Lukk',
+  'browser.expand': 'Utvid nettleser',
+  'browser.showTerminal': 'Vis terminal',
   'browser.devToolsTooltip': 'Åpne DevTools (F12)',
   'browser.title': 'Nettleser',
   'palette.cmd.openPrivateBrowser': "Åpne privat nettleserfane",

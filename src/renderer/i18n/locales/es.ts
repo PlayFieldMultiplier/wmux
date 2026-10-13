@@ -128,6 +128,8 @@ export const es = {
   'browser.forward': 'Adelante',
   'browser.reload': 'Recargar',
   'browser.close': 'Cerrar',
+  'browser.expand': 'Expandir navegador',
+  'browser.showTerminal': 'Mostrar terminal',
   'browser.devToolsTooltip': 'Abrir DevTools (F12)',
   'browser.title': 'Navegador',
   'palette.cmd.openPrivateBrowser': "Abrir pestaña de navegador privada",

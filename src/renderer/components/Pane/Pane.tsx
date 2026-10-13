@@ -1379,6 +1379,23 @@ function SplitSurfaceView({
 
   const hasBoth = terminals.length > 0 && browsers.length > 0;
 
+  // #2140 — the browser side of the split can take the whole pane without
+  // closing the terminal. The terminal panel is only hidden: it stays mounted,
+  // display:none makes it skip fit (the PTY keeps its size), and the split
+  // widths come back unchanged on restore.
+  const setActiveSurface = useStore((s) => s.setActiveSurface);
+  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const activeIsTerminal = terminals.some((s) => s.id === activeSurfaceId);
+  useEffect(() => {
+    // Picking a terminal tab restores the split, so a focused terminal is
+    // never hidden; losing either side drops the mode with it.
+    if (activeIsTerminal || !hasBoth) setBrowserExpanded(false);
+  }, [activeIsTerminal, hasBoth]);
+  const toggleBrowserExpanded = useCallback((browserSurfaceId: string) => {
+    if (!browserExpanded) setActiveSurface(pane.id, browserSurfaceId, workspaceId);
+    setBrowserExpanded(!browserExpanded);
+  }, [browserExpanded, setActiveSurface, pane.id, workspaceId]);
+
   if (pane.surfaces.length === 0) {
     return (
       <div className="flex-1 min-h-0 min-w-0 relative overflow-clip flex items-center justify-center text-[var(--text-muted)] text-sm" {...tokenAttrs('textMuted', 'text')}>
@@ -1479,9 +1496,15 @@ function SplitSurfaceView({
   const overlayActive = others.some((s) => s.id === activeSurfaceId);
   return (
     <div className="flex-1 min-h-0 min-w-0 relative overflow-clip">
-      <Group orientation="horizontal" className="h-full w-full" resizeTargetMinimumSize={{ coarse: 37, fine: 16 }}>
-        {/* Terminal panel */}
-        <Panel defaultSize={50} minSize={20}>
+      <Group
+        orientation="horizontal"
+        className={`h-full w-full${browserExpanded ? ' [&>[data-split-terminal]]:!hidden' : ''}`}
+        resizeTargetMinimumSize={{ coarse: 37, fine: 16 }}
+      >
+        {/* Terminal panel. Hidden through the Group's class while the browser
+            is expanded: the library writes display:flex inline, so only an
+            !important rule can override it. */}
+        <Panel defaultSize={50} minSize={20} data-split-terminal="">
           <div className="h-full w-full min-h-0 min-w-0 relative overflow-clip">
             {terminals.map((surface) => (
               <TerminalSurface
@@ -1490,7 +1513,7 @@ function SplitSurfaceView({
                 paneId={pane.id}
                 chatViewEnabled={chatViewEnabled}
                 isActive={surface.id === activeSurfaceId}
-                visible={surface.id === shownTerminalId}
+                visible={!browserExpanded && surface.id === shownTerminalId}
                 isWorkspaceVisible={isWorkspaceVisible}
                 onPtyCreated={(ptyId) => onPtyCreated(surface.id, ptyId)}
                 workspaceId={workspaceId}
@@ -1499,7 +1522,10 @@ function SplitSurfaceView({
           </div>
         </Panel>
 
-        <Separator className="w-px bg-[var(--border-soft)] hover:bg-[var(--accent-blue)] transition-colors cursor-col-resize" />
+        <Separator
+          disabled={browserExpanded}
+          className={`w-px bg-[var(--border-soft)] hover:bg-[var(--accent-blue)] transition-colors cursor-col-resize${browserExpanded ? ' hidden' : ''}`}
+        />
 
         {/* Browser panel */}
         <Panel defaultSize={50} minSize={20}>
@@ -1517,6 +1543,8 @@ function SplitSurfaceView({
                 isZoomHidden={isZoomHidden}
                 occluded={overlayActive}
                 onClose={() => onCloseSurface(surface.id)}
+                expanded={browserExpanded}
+                onToggleExpanded={() => toggleBrowserExpanded(surface.id)}
               />
             ))}
           </div>

@@ -128,6 +128,8 @@ export const ru = {
   'browser.forward': 'Вперёд',
   'browser.reload': 'Обновить',
   'browser.close': 'Закрыть',
+  'browser.expand': 'Развернуть браузер',
+  'browser.showTerminal': 'Показать терминал',
   'browser.devToolsTooltip': 'Открыть DevTools (F12)',
   'browser.title': 'Браузер',
   'palette.cmd.openPrivateBrowser': "Открыть приватную вкладку браузера",

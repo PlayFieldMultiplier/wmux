@@ -50,6 +50,10 @@ interface BrowserPanelProps {
    *  thread it (fail open: never throttle on missing signal). */
   isWorkspaceVisible?: boolean;
   onClose: () => void;
+  /** Terminal+browser split only (#2140): whether this side fills the pane,
+   *  and the toggle the toolbar shows. Absent → no toggle. */
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }
 
 /**
@@ -71,7 +75,7 @@ export function computeEffectiveVisibility(input: {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, partition, isActive, visible, isZoomHidden, isWorkspaceVisible, occluded, onClose }: BrowserPanelProps) {
+export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, partition, isActive, visible, isZoomHidden, isWorkspaceVisible, occluded, onClose, expanded, onToggleExpanded }: BrowserPanelProps) {
   const t = useT();
   const updateBrowserUrl = useStore((s) => s.updateBrowserUrl);
   const webviewRef = useRef<Electron.WebviewTag>(null);
@@ -562,6 +566,8 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
         onToggleInspect={handleToggleInspect}
         onOpenDevTools={handleOpenDevTools}
         onClose={onClose}
+        expanded={expanded}
+        onToggleExpanded={onToggleExpanded}
       />
 
       {/* browser_request_help — the agent hands one step to the human.

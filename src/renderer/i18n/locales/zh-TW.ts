@@ -128,6 +128,8 @@ export const zhTW = {
   'browser.forward': '下一頁',
   'browser.reload': '重新整理',
   'browser.close': '關閉',
+  'browser.expand': '展開瀏覽器',
+  'browser.showTerminal': '顯示終端機',
   'browser.devToolsTooltip': '開啟開發人員工具 (F12)',
   'browser.title': '瀏覽器',
   'palette.cmd.openPrivateBrowser': "開啟無痕瀏覽器分頁",

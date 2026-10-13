@@ -128,6 +128,8 @@ export const bs = {
   'browser.forward': 'Naprijed',
   'browser.reload': 'Ponovo učitaj',
   'browser.close': 'Zatvori',
+  'browser.expand': 'Proširi preglednik',
+  'browser.showTerminal': 'Prikaži terminal',
   'browser.devToolsTooltip': 'Otvori DevTools (F12)',
   'browser.title': 'Preglednik',
   'palette.cmd.openPrivateBrowser': "Otvori privatnu karticu preglednika",

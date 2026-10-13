@@ -128,6 +128,8 @@ export const da = {
   'browser.forward': 'Frem',
   'browser.reload': 'Genindlæs',
   'browser.close': 'Luk',
+  'browser.expand': 'Udvid browser',
+  'browser.showTerminal': 'Vis terminal',
   'browser.devToolsTooltip': 'Åbn DevTools (F12)',
   'browser.title': 'Browser',
   'palette.cmd.openPrivateBrowser': "Åbn privat browserfane",

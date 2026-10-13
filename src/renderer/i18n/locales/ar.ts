@@ -128,6 +128,8 @@ export const ar = {
   'browser.forward': 'تقدم',
   'browser.reload': 'إعادة تحميل',
   'browser.close': 'إغلاق',
+  'browser.expand': 'توسيع المتصفح',
+  'browser.showTerminal': 'إظهار الطرفية',
   'browser.devToolsTooltip': 'فتح DevTools (F12)',
   'browser.title': 'المتصفح',
   'palette.cmd.openPrivateBrowser': "فتح علامة تبويب متصفح خاصة",

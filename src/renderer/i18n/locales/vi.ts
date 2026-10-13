@@ -128,6 +128,8 @@ export const vi = {
   'browser.forward': 'Tiến tới',
   'browser.reload': 'Tải lại',
   'browser.close': 'Đóng',
+  'browser.expand': 'Mở rộng trình duyệt',
+  'browser.showTerminal': 'Hiện terminal',
   'browser.devToolsTooltip': 'Mở DevTools (F12)',
   'browser.title': 'Trình duyệt',
   'palette.cmd.openPrivateBrowser': "Mở tab trình duyệt riêng tư",
