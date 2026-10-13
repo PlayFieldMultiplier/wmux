@@ -3,7 +3,9 @@
 // What the owner types into a bot's secret-request modal, kept as Electron
 // safeStorage ciphertext (the OS keychain / DPAPI / the Linux secret
 // service) in a 0600 file: `{version:1, secrets:[{name, cipher, label?,
-// requestedBy?, createdAt, updatedAt, lastUsed?:{botId, at}}]}`. Main decrypts
+// requestedBy?, createdAt, updatedAt, lastUsed?:{botId, at}}], retired?:
+// [{name, cipher, at}]}` (`retired`: replaced and deleted values, encrypted
+// the same way, so they stay redacted across restarts). Main decrypts
 // the values once, after the app is ready, and holds them in memory for the
 // two uses it has: a worker spawn's env (secretGrants.ts) and redaction
 // (secretRedaction.ts). Nothing here returns a value to a caller outside
@@ -78,6 +80,16 @@ export interface SecretStoreOptions {
 const BOT_ID_MAX = 128;
 /** Replaced or deleted values still redacted (workers started before may hold them). */
 const RETIRED_MAX = 64;
+/** A retired value stays redacted this long after it was replaced. */
+const RETIRED_KEEP_MS = 30 * 24 * 3600_000;
+
+interface Retired { name: string; value: string; cipher: string; at: number }
+
+function isStoredRetired(raw: unknown): raw is { name: string; cipher: string; at: number } {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  return isBotSecretName(r.name) && typeof r.cipher === 'string' && r.cipher.length > 0 && typeof r.at === 'number';
+}
 const LABEL_MAX = BOT_SECRET_LIMITS.LABEL_MAX;
 
 function isStored(raw: unknown): raw is StoredSecret {
@@ -116,9 +128,9 @@ function entryOf(r: StoredSecret): BotSecretEntry {
 export class SecretStore {
   private held = new Map<string, Held>();
   private loaded = false;
-  /** Values replaced or deleted in this run: still redacted, since a worker
-   *  started before keeps them in its environment. Memory only. */
-  private retired: Array<{ name: string; value: string }> = [];
+  /** Values replaced or deleted: still redacted, since a worker started
+   *  before keeps them in its environment. Kept (encrypted) in the file. */
+  private retired: Retired[] = [];
   /** The file exists but could not be read: nothing is written over it. */
   private unreadable = false;
   private readonly now: () => number;
@@ -154,6 +166,7 @@ export class SecretStore {
    *  is not overwritten until a change is made). */
   load(): void {
     this.held.clear();
+    this.retired = [];
     this.unreadable = false;
     let raw: unknown = null;
     let exists = true;
@@ -185,6 +198,16 @@ export class SecretStore {
       if (value === null) this.log(`${record.name} cannot be decrypted here; enter it again to use it`);
       this.held.set(record.name, { record, value });
       if (this.held.size >= BOT_SECRET_LIMITS.STORED_MAX) break;
+    }
+    const retired = readable ? (raw as { retired?: unknown }).retired : undefined;
+    const since = this.now() - RETIRED_KEEP_MS;
+    for (const item of canDecrypt && Array.isArray(retired) ? retired.slice(-RETIRED_MAX) : []) {
+      if (!isStoredRetired(item) || item.at < since) continue;
+      try {
+        this.retired.push({ name: item.name, value: this.opts.crypto.decrypt(Buffer.from(item.cipher, 'base64')), cipher: item.cipher, at: item.at });
+      } catch {
+        /* not decryptable here: nothing to match */
+      }
     }
     this.loaded = true;
     this.publish(false);
@@ -242,8 +265,9 @@ export class SecretStore {
     });
     const next = new Map(this.held);
     next.set(name, { record, value });
-    if (!this.persist(next)) return { ok: false, code: 'write_failed', message: 'The key could not be written to disk.' };
-    if (prior?.value != null && prior.value !== value) this.retire(name, prior.value);
+    const retired = prior?.value != null && prior.value !== value ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
+    if (!this.persist(next, retired)) return { ok: false, code: 'write_failed', message: 'The key could not be written to disk.' };
+    this.retired = retired;
     this.held = next;
     this.publish(true);
     return { ok: true, entry: entryOf(record) };
@@ -255,8 +279,9 @@ export class SecretStore {
     const prior = this.held.get(name);
     const next = new Map(this.held);
     next.delete(name);
-    if (!this.persist(next)) return false;
-    if (prior?.value != null) this.retire(name, prior.value);
+    const retired = prior?.value != null ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
+    if (!this.persist(next, retired)) return false;
+    this.retired = retired;
     this.held = next;
     this.publish(true);
     return true;
@@ -291,13 +316,16 @@ export class SecretStore {
     this.publish(true);
   }
 
-  private retire(name: string, value: string): void {
-    this.retired.push({ name, value });
-    if (this.retired.length > RETIRED_MAX) this.retired.splice(0, this.retired.length - RETIRED_MAX);
+  /** The retired list with one more value (the newest kept, one entry per
+   *  value). */
+  private retiring(name: string, value: string, cipher: string): Retired[] {
+    const since = this.now() - RETIRED_KEEP_MS;
+    const next = [...this.retired.filter((r) => r.value !== value && r.at >= since), { name, value, cipher, at: this.now() }];
+    return next.slice(-RETIRED_MAX);
   }
 
   private publish(changed: boolean): void {
-    const entries: Array<{ name: string; value: string }> = [...this.retired];
+    const entries: Array<{ name: string; value: string }> = this.retired.map((r) => ({ name: r.name, value: r.value }));
     for (const [name, h] of this.held) if (h.value != null) entries.push({ name, value: h.value });
     setRedactedSecrets(entries);
     if (changed) {
@@ -307,9 +335,13 @@ export class SecretStore {
     }
   }
 
-  private persist(map: ReadonlyMap<string, Held>): boolean {
+  private persist(map: ReadonlyMap<string, Held>, retired: readonly Retired[] = this.retired): boolean {
     const file = this.opts.file;
-    const body = `${JSON.stringify({ version: SECRETS_FILE_VERSION, secrets: [...map.values()].map((h) => h.record) })}\n`;
+    const body = `${JSON.stringify({
+      version: SECRETS_FILE_VERSION,
+      secrets: [...map.values()].map((h) => h.record),
+      ...(retired.length > 0 ? { retired: retired.map((r) => ({ name: r.name, cipher: r.cipher, at: r.at })) } : {}),
+    })}\n`;
     const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

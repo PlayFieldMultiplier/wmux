@@ -154,6 +154,30 @@ describe('SecretStore', () => {
     expect(redactStoredSecrets(`${VALUE} npm_SecondValue987654321`)).toBe('[secret:NPM_TOKEN] [secret:NPM_TOKEN]');
   });
 
+  it('a replaced or deleted value stays redacted after a restart, never kept in clear', () => {
+    let now = 1_000;
+    const store = new SecretStore({ file, crypto: fakeCrypto(), now: () => now });
+    store.load();
+    store.set('NPM_TOKEN', VALUE);
+    store.set('NPM_TOKEN', 'npm_SecondValue987654321');
+    store.set('GH_TOKEN', 'ghp_ThirdValue1234567890');
+    store.delete('GH_TOKEN');
+    const text = fs.readFileSync(file, 'utf8');
+    for (const v of [VALUE, 'npm_SecondValue987654321', 'ghp_ThirdValue1234567890']) expect(text).not.toContain(v);
+    __resetRedactedSecretsForTesting();
+    const again = new SecretStore({ file, crypto: fakeCrypto(), now: () => now });
+    again.load();
+    expect(again.list().map((e) => e.name)).toEqual(['NPM_TOKEN']);
+    expect(redactStoredSecrets(`${VALUE} ghp_ThirdValue1234567890`)).toBe('[secret:NPM_TOKEN] [secret:GH_TOKEN]');
+    // Past the keep window a retired value is no longer matched.
+    now += 31 * 24 * 3600_000;
+    __resetRedactedSecretsForTesting();
+    const later = new SecretStore({ file, crypto: fakeCrypto(), now: () => now });
+    later.load();
+    expect(redactStoredSecrets(VALUE)).toBe(VALUE);
+    expect(redactStoredSecrets('npm_SecondValue987654321')).toBe('[secret:NPM_TOKEN]');
+  });
+
   it('never keeps a label that holds the value, and refuses a value that is not well-formed text', () => {
     const store = new SecretStore({ file, crypto: fakeCrypto() });
     store.load();

@@ -32,6 +32,7 @@ import { resolveBackgroundLaunch, type BackgroundLaunch } from '../account/backg
 import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './commanderTrust';
 import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
 import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOutputNamesProtected } from '../factory/botRepoRead';
+import { redactStoredSecretsDeep } from '../factory/secretRedaction';
 import type { BotBinding } from '../../shared/bot';
 import { SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
@@ -998,14 +999,29 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       };
     };
     const postToolUse = async (hookInput: { tool_name?: string; tool_response?: unknown }) => {
-      if (hookInput.tool_name !== 'Grep') return {};
+      const toolName = hookInput.tool_name ?? '';
+      // wmux MCP results are redacted where main answers them (RpcRouter).
+      if (toolName.startsWith('mcp__wmux__')) return {};
+      // A stored bot secret never reaches the model in a read's result: the
+      // result goes on with each value replaced by its marker.
+      const redacted = (): Record<string, unknown> => {
+        let out: unknown;
+        try {
+          out = redactStoredSecretsDeep(hookInput.tool_response);
+        } catch {
+          out = null;
+        }
+        if (out === hookInput.tool_response) return {};
+        return { hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: out ?? 'wmux: this result was withheld because it could not be checked for stored secrets.' } };
+      };
+      if (toolName !== 'Grep') return redacted();
       let withhold = true;
       try {
         withhold = grepOutputNamesProtected(hookInput.tool_response, root, fs.realpathSync.native(root));
       } catch {
         /* fail closed */
       }
-      if (!withhold) return {};
+      if (!withhold) return redacted();
       logDenied('Grep', 'the result named a protected file');
       return {
         hookSpecificOutput: {

@@ -217,6 +217,23 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
     vi.restoreAllMocks();
   });
 
+  it('a stored bot secret in a Read or Grep result reaches the model as its marker', async () => {
+    const { setRedactedSecrets, __resetRedactedSecretsForTesting } = await import('../../factory/secretRedaction');
+    setRedactedSecrets([{ name: 'NPM_TOKEN', value: 'npm_AbCdEf123456789xyz' }]);
+    try {
+      const post = postHook(await optionsFor(repo));
+      const read = await post({ tool_name: 'Read', tool_response: { type: 'text', file: { filePath: path.join(repo, 'config.json'), content: '{"token":"npm_AbCdEf123456789xyz"}' } } });
+      expect(read).toMatchObject({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: { file: { content: '{"token":"[secret:NPM_TOKEN]"}' } } } });
+      const grep = await post({ tool_name: 'Grep', tool_response: { mode: 'content', filenames: [], content: `${path.join(repo, 'src', 'a.ts')}:1:npm_AbCdEf123456789xyz` } });
+      expect(JSON.stringify(grep)).not.toContain('npm_AbCdEf123456789xyz');
+      expect(JSON.stringify(grep)).toContain('[secret:NPM_TOKEN]');
+      // Nothing stored in it: the result passes untouched.
+      expect(await post({ tool_name: 'Read', tool_response: { file: { content: 'plain' } } })).toEqual({});
+    } finally {
+      __resetRedactedSecretsForTesting();
+    }
+  });
+
   it('without a repository the bot keeps no built-in tools and no hooks', async () => {
     const o = await optionsFor(undefined);
     expect(o.tools).toEqual([]);
