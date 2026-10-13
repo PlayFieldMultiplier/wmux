@@ -36,6 +36,8 @@ function render(props: Partial<React.ComponentProps<typeof WorkTabs>> = {}) {
     onSelect: vi.fn(),
     onClose: vi.fn(),
     onToggleExpanded: vi.fn(),
+    workspaceId: 'ws-1',
+    paneId: 'pane-1',
     ...props,
   };
   act(() => { root.render(React.createElement(WorkTabs, merged)); });
@@ -86,6 +88,22 @@ describe('WorkTabs', () => {
     render({ readOnly: true });
     expect(expandButton()).toBeNull();
     expect(document.querySelector('[data-work-tab-close]')).toBeNull();
+  });
+
+  it('double-click renames a work tab through the store', () => {
+    const updateSurfaceTitle = vi.fn();
+    act(() => { useStore.setState({ updateSurfaceTitle } as never); });
+    render();
+    const tab = document.querySelector<HTMLElement>('[data-work-tab-id="e1"]')!;
+    act(() => { tab.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
+    const input = document.querySelector<HTMLInputElement>('[data-work-tab-rename]')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setValue.call(input, 'config');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(updateSurfaceTitle).toHaveBeenCalledWith('e1', 'config');
   });
 
   it('workTabTitle falls back to the browser label', () => {

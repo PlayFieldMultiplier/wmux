@@ -43,6 +43,10 @@ export type DiffPanelSource =
 interface DiffPanelProps {
   source: DiffPanelSource;
   isActive: boolean;
+  /** Focus is on this tab. Defaults to `isActive`; differs in a pane's work
+   *  area, where the tab stays drawn while focus is on the terminal beside it,
+   *  so a workspace diff reloads when focus comes back to it. */
+  focused?: boolean;
   surfaceId: string;
   /** 렌더러 신원 앵커(채널 포스트용). */
   verifiedWorkspaceId: string;
@@ -328,7 +332,7 @@ function IconComment() {
   );
 }
 
-export default function DiffPanel({ source, isActive, surfaceId, verifiedWorkspaceId }: DiffPanelProps) {
+export default function DiffPanel({ source, isActive, focused = isActive, surfaceId, verifiedWorkspaceId }: DiffPanelProps) {
   // source는 렌더마다 새 객체일 수 있으므로(호출부 인라인 구성) 원시값으로 분해해
   // load 콜백의 dep로 쓴다 — 객체 identity를 dep에 넣으면 매 렌더 refetch 루프.
   const isTask = source.kind === 'task';
@@ -447,11 +451,11 @@ export default function DiffPanel({ source, isActive, surfaceId, verifiedWorkspa
 
   // 워크스페이스 diff는 파생 데이터 — 탭 재활성화(비활성→활성 전이) 때 재읽기.
   // 태스크 모드는 기존 수동 Reload 계약 유지(채택 selection이 refetch로 날아가면 안 됨).
-  const wasActiveRef = useRef(isActive);
+  const wasActiveRef = useRef(focused);
   useEffect(() => {
-    if (!isTask && isActive && !wasActiveRef.current) void load();
-    wasActiveRef.current = isActive;
-  }, [isActive, isTask, load]);
+    if (!isTask && focused && !wasActiveRef.current) void load();
+    wasActiveRef.current = focused;
+  }, [focused, isTask, load]);
 
   const filesByPath = useMemo(() => {
     const map = new Map<string, DiffReadFile>();

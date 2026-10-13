@@ -1,10 +1,12 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Surface } from '../../../shared/types';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
 import { HIT_TARGET_24 } from '../hitArea';
 import { IconLock } from '../icons';
 import { isPrivateBrowserSurface } from '../../../shared/privateBrowser';
+import { useStore } from '../../stores';
+import { RENAME_ACTIVE_TAB_EVENT } from '../../utils/commandActions';
 
 /**
  * The work area's tab strip (DESIGN.md "Pane: terminals and work area"): the
@@ -46,6 +48,8 @@ export default function WorkTabs({
   onSelect,
   onClose,
   onToggleExpanded,
+  workspaceId,
+  paneId,
 }: {
   surfaces: ReadonlyArray<Surface>;
   /** The work tab drawn in the work area (focused or last shown). */
@@ -61,8 +65,56 @@ export default function WorkTabs({
   onSelect: (surfaceId: string) => void;
   onClose: (surfaceId: string) => void;
   onToggleExpanded: () => void;
+  workspaceId: string;
+  paneId: string;
 }) {
   const t = useT();
+  const updateSurfaceTitle = useStore((s) => s.updateSurfaceTitle);
+  const resetSurfaceTitle = useStore((s) => s.resetSurfaceTitle);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const cancelRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const startRename = (s: Surface) => {
+    if (readOnly) return;
+    setEditName(s.title || '');
+    setEditingId(s.id);
+  };
+  const commitRename = (surfaceId: string) => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      setEditingId(null);
+      return;
+    }
+    const trimmed = editName.trim();
+    if (trimmed) updateSurfaceTitle(surfaceId, trimmed);
+    else resetSurfaceTitle(surfaceId);
+    setEditingId(null);
+  };
+  useEffect(() => {
+    if (editingId) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editingId]);
+  // The renameTab action renames the focused tab of the focused pane; while
+  // that focus is on a work tab, this strip answers (the terminal strip stands
+  // down, see SurfaceTabs' tabAccent).
+  useEffect(() => {
+    if (readOnly || !focused) return;
+    const onRenameActiveTab = (): void => {
+      const st = useStore.getState();
+      const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId);
+      if (!ws || ws.id !== workspaceId || ws.activePaneId !== paneId) return;
+      const target = surfaces.find((s) => s.id === shownId);
+      if (target) {
+        setEditName(target.title || '');
+        setEditingId(target.id);
+      }
+    };
+    document.addEventListener(RENAME_ACTIVE_TAB_EVENT, onRenameActiveTab);
+    return () => document.removeEventListener(RENAME_ACTIVE_TAB_EVENT, onRenameActiveTab);
+  }, [readOnly, focused, workspaceId, paneId, surfaces, shownId]);
   const expandLabel = expanded ? t('pane.showTerminal') : t('pane.expandWork');
   return (
     <div
@@ -96,13 +148,34 @@ export default function WorkTabs({
               }`}
               title={s.surfaceType === 'browser' ? (s.browserUrl || title) : (s.editorFilePath || title)}
               onClick={() => onSelect(s.id)}
+              onDoubleClick={readOnly ? undefined : () => startRename(s)}
             >
               {isPrivateBrowserSurface(s) && (
                 <span className="shrink-0" role="img" aria-label={t('browser.privateTab')}>
                   <IconLock size={12} />
                 </span>
               )}
-              <span className="truncate min-w-0 max-w-[120px]">{title}</span>
+              {editingId === s.id ? (
+                <input
+                  ref={inputRef}
+                  data-work-tab-rename
+                  className="ui-mini-input text-[var(--text-main)] text-xs font-mono px-1 py-0 border border-[var(--text-muted)] max-w-[120px]"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onBlur={() => commitRename(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename(s.id);
+                    if (e.key === 'Escape') {
+                      cancelRef.current = true;
+                      setEditingId(null);
+                    }
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <span className="truncate min-w-0 max-w-[120px]">{title}</span>
+              )}
               {!readOnly && (
                 <button
                   data-work-tab-close

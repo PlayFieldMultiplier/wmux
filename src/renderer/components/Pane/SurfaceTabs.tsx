@@ -338,6 +338,12 @@ interface SurfaceTabsProps {
   /** Whether the active tab here takes the accent bar. False while focus is on
    *  the work area's strip beside it, so a pane shows one accent. */
   tabAccent?: boolean;
+  /** All of the pane's tabs, when this strip shows only its terminals (the
+   *  work strip holds the rest) — the pane label's #1021 rule counts them all. */
+  paneSurfaceCount?: number;
+  /** False when the strip ends at the work strip's seam rather than the pane
+   *  corner, so it reserves no room for the corner zoom control. */
+  atPaneCorner?: boolean;
   // Owning workspace and pane id, used to build the drag-export payload.
   // These are now always provided by the PaneContainer prop chain so the
   // payload always names the correct workspace, even in multiview where
@@ -388,6 +394,8 @@ export default function SurfaceTabs({
   paneId,
   paneActive = false,
   tabAccent = true,
+  paneSurfaceCount,
+  atPaneCorner = true,
   onSelect,
   onClose,
   onSplitHorizontal,
@@ -630,12 +638,14 @@ export default function SurfaceTabs({
       const st = useStore.getState();
       const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId);
       if (!ws || ws.id !== workspace.id || ws.activePaneId !== paneId) return;
+      // Focus is on the work strip beside this one: that strip answers.
+      if (!tabAccent) return;
       const target = surfaces.find((s) => s.id === activeSurfaceId) ?? surfaces[0];
       if (target) startRename(target);
     };
     document.addEventListener(RENAME_ACTIVE_TAB_EVENT, onRenameActiveTab);
     return () => document.removeEventListener(RENAME_ACTIVE_TAB_EVENT, onRenameActiveTab);
-  }, [readOnly, workspace.id, paneId, surfaces, activeSurfaceId, startRename]);
+  }, [readOnly, workspace.id, paneId, surfaces, activeSurfaceId, startRename, tabAccent]);
 
   useEffect(() => {
     if (paneEditing) {
@@ -906,7 +916,7 @@ export default function SurfaceTabs({
         // absolutely over this strip's right end, so the strip's flow content
         // stops short of it. With a cluster there is nothing to clear — the
         // zoom verb is one of its buttons.
-        paddingRight: paneHeaderTailGap({ clusterShown: paneClusterWidth({ mode }) > 0 }),
+        paddingRight: atPaneCorner ? paneHeaderTailGap({ clusterShown: paneClusterWidth({ mode }) > 0 }) : 0,
 
       }}
       data-pane-tabs-active={paneActive ? 'true' : undefined}
@@ -960,7 +970,7 @@ export default function SurfaceTabs({
           layout shift lands on an interaction, not on idle chrome), when the
           user names the pane (explicit intent to see it), or while the rename
           editor is open (reachable from the pane-actions menu). */}
-      {(paneEditing || hasUserLabel || surfaces.length > 1) && (paneEditing ? (
+      {(paneEditing || hasUserLabel || (paneSurfaceCount ?? surfaces.length) > 1) && (paneEditing ? (
         <>
         <input
           ref={paneInputRef}

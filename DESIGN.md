@@ -732,7 +732,8 @@ A pane is a terminal column plus, when it needs one, a work area.
 └───────────────────────────────┴─────────────────────────────────────┘
 ```
 
-- **Two kinds of surface.** Terminals (local and remote) keep the pane tab
+- **Two kinds of surface.** Terminals (local and remote, and the
+  placeholders a mirror shows for a slot it cannot draw) keep the pane tab
   strip and draw in the left column. Browser, editor and diff tabs are work
   surfaces and draw in the work area on the right. A pane holding only one
   kind draws it across the whole pane under one strip, as before.
@@ -743,7 +744,8 @@ A pane is a terminal column plus, when it needs one, a work area.
 - **The work area comes and goes with its tabs.** It appears with the first
   work tab and goes when the last one closes; the terminals refit once each
   time. The pane cluster (split, browser, stash, zoom) stays at the end of
-  the terminal strip.
+  the terminal strip; while the work area is expanded that strip shrinks to
+  its tabs and the cluster folds to its ⋮.
 - **Expand (◫).** The work strip's one button hides the terminal column so
   the work area fills the pane; pressed, it reads Show terminal. The
   terminals stay mounted and keep their size (a hidden column is a

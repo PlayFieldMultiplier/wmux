@@ -76,15 +76,15 @@ describe('pickSplitShownSurfaces — split visibility decoupled from focus', () 
 });
 
 describe('pane surface kinds — terminal column vs work area', () => {
-  it('local and remote terminals (and legacy untyped surfaces) are terminal-kind', () => {
-    for (const t of [undefined, 'terminal', 'remote-terminal']) {
+  it('local and remote terminals, legacy untyped surfaces and mirror placeholders are terminal-kind', () => {
+    for (const t of [undefined, 'terminal', 'remote-terminal', 'placeholder']) {
       expect(isTerminalKindSurfaceType(t)).toBe(true);
       expect(isWorkSurfaceType(t)).toBe(false);
     }
   });
 
-  it('browser, editor, diff and placeholder go to the work area', () => {
-    for (const t of ['browser', 'editor', 'diff', 'placeholder']) {
+  it('browser, editor and diff go to the work area', () => {
+    for (const t of ['browser', 'editor', 'diff']) {
       expect(isWorkSurfaceType(t)).toBe(true);
       expect(isTerminalKindSurfaceType(t)).toBe(false);
     }

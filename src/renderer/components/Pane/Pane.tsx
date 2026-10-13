@@ -112,17 +112,20 @@ export function composePaneClassName(opts: {
 
 /**
  * A pane is a terminal column plus a work area (DESIGN.md "Pane: terminals and
- * work area"). Terminal surfaces — local and remote — stay on the pane tab
- * strip and draw on the left; work surfaces draw on the right under their own
+ * work area"). Terminal surfaces — local, remote and placeholders — stay on
+ * the pane tab strip and draw on the left; work surfaces draw on the right under their own
  * tab strip. `git` / `review` surfaces are retired and belong to neither.
  */
 export function isTerminalKindSurfaceType(surfaceType: string | undefined): boolean {
-  return surfaceType === undefined || surfaceType === 'terminal' || surfaceType === 'remote-terminal';
+  // A placeholder stands in for a surface a mirror cannot draw — most often a
+  // terminal slot (open elsewhere, not listed) — so it stays in the terminal
+  // column and never splits a pane on its own.
+  return isTerminalSurfaceType(surfaceType) || surfaceType === 'remote-terminal'
+    || surfaceType === 'placeholder';
 }
 
 export function isWorkSurfaceType(surfaceType: string | undefined): boolean {
-  return surfaceType === 'browser' || surfaceType === 'editor' || surfaceType === 'diff'
-    || surfaceType === 'placeholder';
+  return surfaceType === 'browser' || surfaceType === 'editor' || surfaceType === 'diff';
 }
 
 /**
@@ -718,9 +721,9 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     if (!workExpanded) setWorkExpandRequested(false);
   }, [workExpanded]);
   const toggleWorkExpanded = useCallback(() => {
-    if (!workExpanded && shownWorkId) setActiveSurface(pane.id, shownWorkId);
+    if (!workExpanded && shownWorkId) setActiveSurface(pane.id, shownWorkId, workspace.id);
     setWorkExpandRequested(!workExpanded);
-  }, [workExpanded, shownWorkId, setActiveSurface, pane.id]);
+  }, [workExpanded, shownWorkId, setActiveSurface, pane.id, workspace.id]);
   // The header splits where the body does. The body's widths change on every
   // separator drag, so they reach the header as CSS variables, not state —
   // a re-render of the whole pane per pointer move would be the cost.
@@ -759,7 +762,9 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
   // In a split the terminal strip's "active" tab is the terminal shown there.
   const stripActiveSurfaceId = split ? (shownTerminalId ?? pane.activeSurfaceId) : pane.activeSurfaceId;
   const activeSurfaceType = pane.surfaces.find((s) => s.id === stripActiveSurfaceId)?.surfaceType;
-  const hasUsageLimit = useStore((s) => !!activeSurfacePtyId && !!s.usageLimits[activeSurfacePtyId]);
+  // Keyed on the terminal the strip shows, which is what draws the chip.
+  const stripPtyId = pane.surfaces.find((s) => s.id === stripActiveSurfaceId)?.ptyId;
+  const hasUsageLimit = useStore((s) => !!stripPtyId && !!s.usageLimits[stripPtyId]);
   const headerExtraChrome = paneHeaderExtraChromeWidth({
     chatToggle: chatViewEnabled && isTerminalSurfaceType(activeSurfaceType),
     enforcedModelBadge: showsEnforcedModelBadge({
@@ -768,9 +773,11 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     }),
     usageLimitChip: hasUsageLimit,
   });
-  const actionsMode: PaneActionsMode = paneActionsSetting && !readOnly
-    ? paneActionsMode(stripWidth, headerExtraChrome)
-    : 'none';
+  // While the work area is expanded the terminal strip sizes to its content,
+  // so its width cannot judge the cluster; it keeps the ⋮ form instead.
+  const actionsMode: PaneActionsMode = !paneActionsSetting || readOnly
+    ? 'none'
+    : split?.expanded ? 'overflow' : paneActionsMode(stripWidth, headerExtraChrome);
   // The full usage-limit chip needs room beyond the compact floor counted above.
   const usageLimitCompact = hasUsageLimit && stripWidth != null && stripWidth > 0
     && stripWidth < PANE_ACTIONS_MIN_PANE_WIDTH + headerExtraChrome + USAGE_LIMIT_CHIP_FULL_WIDTH;
@@ -1054,7 +1061,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       {/* One header line split where the body is: the terminal strip over the
           terminal column, a seam continuing the body's separator, and the work
           strip over the work area. While the work area is expanded the
-          terminal strip keeps its tabs only (one click restores the split). */}
+          terminal strip shrinks to its tabs and the ⋮ (a terminal tab click
+          restores the split). */}
       <div
         ref={splitHeaderRef}
         className="flex min-w-0 shrink-0"
@@ -1069,6 +1077,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         surfaces={split ? splitTerminals : pane.surfaces}
         activeSurfaceId={stripActiveSurfaceId}
         tabAccent={!split || !workFocused}
+        paneSurfaceCount={pane.surfaces.length}
+        atPaneCorner={!split}
         workspace={workspace}
         paneId={pane.id}
         paneActive={isActive}
@@ -1098,9 +1108,11 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
             readOnly={readOnly}
             tailGap={paneHeaderTailGap({ clusterShown: paneClusterWidth({ mode: actionsMode }) > 0 })}
             style={{ flex: workExpanded ? '1 1 0px' : 'var(--wmux-split-work) 1 0px' }}
-            onSelect={(surfaceId) => setActiveSurface(pane.id, surfaceId)}
+            onSelect={(surfaceId) => setActiveSurface(pane.id, surfaceId, workspace.id)}
             onClose={handleCloseSurfaceFromTab}
             onToggleExpanded={toggleWorkExpanded}
+            workspaceId={workspace.id}
+            paneId={pane.id}
           />
         </>
       )}
@@ -1552,6 +1564,7 @@ function SplitSurfaceView({
               : { kind: 'task', taskId: surface.diffTaskId || '' }
           }
           isActive={drawn}
+          focused={isActive}
           surfaceId={surface.id}
           verifiedWorkspaceId={surface.diffOwnerWorkspaceId || workspaceId}
         />
