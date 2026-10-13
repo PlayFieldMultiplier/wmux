@@ -55,10 +55,6 @@ interface BrowserPanelProps {
    *  thread it (fail open: never throttle on missing signal). */
   isWorkspaceVisible?: boolean;
   onClose: () => void;
-  /** Terminal+browser split only (#2140): whether this side fills the pane,
-   *  and the toggle the toolbar shows. Absent → no toggle. */
-  expanded?: boolean;
-  onToggleExpanded?: () => void;
 }
 
 /**
@@ -80,7 +76,7 @@ export function computeEffectiveVisibility(input: {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, partition, isActive, visible, isZoomHidden, isWorkspaceVisible, occluded, onClose, expanded, onToggleExpanded }: BrowserPanelProps) {
+export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, partition, isActive, visible, isZoomHidden, isWorkspaceVisible, occluded, onClose }: BrowserPanelProps) {
   const t = useT();
   const updateBrowserUrl = useStore((s) => s.updateBrowserUrl);
   const webviewRef = useRef<Electron.WebviewTag>(null);
@@ -581,8 +577,13 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
       // pane) pulls keyboard focus onto the webview. Clicking *inside* page
       // content already focuses the guest natively, but pane-switch clicks and
       // clicks on our own chrome do not — without this, keyboard input stays
-      // dead after such a click (#252).
-      onClick={() => webviewRef.current?.focus()}
+      // dead after such a click (#252). A click on one of our own controls
+      // keeps its focus: the address bar took the click, then lost it to the
+      // webview, so nothing typed there ever reached it.
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest('input, textarea, select, button, [contenteditable="true"]')) return;
+        webviewRef.current?.focus();
+      }}
       style={{
         position: 'absolute',
         inset: 0,
@@ -622,8 +623,6 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
         onToggleInspect={handleToggleInspect}
         onOpenDevTools={handleOpenDevTools}
         onClose={onClose}
-        expanded={expanded}
-        onToggleExpanded={onToggleExpanded}
       />
 
       {/* browser_request_help — the agent hands one step to the human.

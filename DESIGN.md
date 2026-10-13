@@ -720,6 +720,45 @@ symlinked folders not followed) and shows only the matching files and
 folders with the folders leading to them; the matched part of a name is
 emphasised by weight, not a wash.
 
+## Pane: terminals and work area
+
+A pane is a terminal column plus, when it needs one, a work area.
+
+```
+┌ pane tab strip ───────────────┬ work strip ───────────────────── [◫]┐
+│ ⠿ w1-1  Zsh  claude  [cluster]│ Example Domain   app.tsx   diff     │
+├───────────────────────────────┼─────────────────────────────────────┤
+│ terminal (the hero)           │ browser / editor / diff             │
+└───────────────────────────────┴─────────────────────────────────────┘
+```
+
+- **Two kinds of surface.** Terminals (local and remote, and the
+  placeholders a mirror shows for a slot it cannot draw) keep the pane tab
+  strip and draw in the left column. Browser, editor and diff tabs are work
+  surfaces and draw in the work area on the right. A pane holding only one
+  kind draws it across the whole pane under one strip, as before.
+- **One header line.** The work strip sits on the pane header's line, split
+  where the body is split: the body's separator continues up through the
+  header as the seam between the two strips. Dragging the separator moves
+  both. No second header row, and no line of its own between the strips.
+- **The work area comes and goes with its tabs.** It appears with the first
+  work tab and goes when the last one closes; the terminals refit once each
+  time. The pane cluster (split, browser, stash, zoom) stays at the end of
+  the terminal strip; while the work area is expanded that strip shrinks to
+  its tabs and the cluster folds to its ⋮.
+- **Expand (◫).** The work strip's one button hides the terminal column so
+  the work area fills the pane; pressed, it reads Show terminal. The
+  terminals stay mounted and keep their size (a hidden column is a
+  background tab), and the split widths come back unchanged. Picking a
+  terminal tab restores the split. Pressed state is `--selection-emphasis`
+  (`ui-icon-btn-active`), never colour.
+- **Which tab is shown.** Each side shows its own tab: the focused one when
+  focus is on that side, otherwise the one it last showed. Focusing a
+  terminal never swaps the page beside it.
+- **One accent per pane.** The accent bar marks the active tab on whichever
+  strip holds the pane's focus; the other strip's active tab keeps the quiet
+  bar.
+
 ## The one-boundary rule
 
 **Each element draws at most one boundary, and adjacent elements share it.**
@@ -1050,6 +1089,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-10 | Owner decision (PC rail, same day): no computer column. The frame is one rail again; the sidebar title is the PC switcher ("Workspaces · <PC> ▾", a dropdown with each computer's state, needs-you count and settings), one badge beside it sums the unselected computers' needs-you, and the collapsed sidebar gets one switcher item. Supersedes the row above | A 48px column took width from every window for a scope most sessions never change; the title already names what the list shows |
 | 2026-10-10 | Owner direction (#1987 PR3): the Worktrees tab takes the who-acts-next grammar — In use · Uncommitted changes · No open PR · Cleanup candidates (a merged PR counts) · No workspace — with a summary line, plus snooze (1 hour / 1 day / 1 week / until it changes; any change of state ends it early) kept per viewer. Headers stay neutral; the PR knowledge is only what the page already read, so a repo whose list is not held shows no No open PR | Three groups said where a workspace sat but not what each worktree wanted. Uncommitted work nobody is on, unshipped branches and merged leftovers are the three things a worktree asks of the owner; snooze lets a known one stop asking without deleting it. Reading every repo's PR list for this tab would cost gh calls the page otherwise never makes |
 | 2026-10-11 | Owner decision: bring back the file tree as an opt-in column opposite the sidebar, independent of Moa, between the panes and the dock, with its own bare titlebar toggle before Moa's. Amends "the dock opposite the sidebar is Moa's" and "Moa's icon, the right panel's only toggle" | #1440 dropped the toggle with the old right panel, which left the tree mounted but unreachable. A file tree answers "what is in this project" without leaving the terminals, a different job from Moa's conversation, so it gets its own column rather than a dock tab; placing it inside the dock edge keeps rail pages covering it with the panes |
+| 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
 
 ### Desktop conversation view
 
