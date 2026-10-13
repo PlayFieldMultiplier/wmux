@@ -1120,8 +1120,20 @@ export class FanOutService {
     };
   }
 
+  /** One task's spawn (spawnOneInSlot). An agent slot it was granted is
+   *  given back on every way out, a throw included, unless it was already
+   *  released or held. */
+  private async spawnOne(ctx: Parameters<FanOutService['spawnOneInSlot']>[0]): Promise<FanOutTaskResult> {
+    const slot = { settle: (): void => undefined };
+    try {
+      return await this.spawnOneInSlot(ctx, slot);
+    } finally {
+      slot.settle();
+    }
+  }
+
   /** 태스크 1개 스폰(①~⑤). 실패 시 태스크 단위 보상. */
-  private async spawnOne(ctx: {
+  private async spawnOneInSlot(ctx: {
     index: number;
     title: string;
     prompt: string;
@@ -1166,7 +1178,7 @@ export class FanOutService {
     awaitLaunchSlot?: (task: { taskId: string; title: string }) => Promise<LaunchSlot>;
     /** See FanOutRequest.secretNames. */
     secretNames?: string[];
-  }): Promise<FanOutTaskResult> {
+  }, slotGuard: { settle: () => void }): Promise<FanOutTaskResult> {
     const base: FanOutTaskResult = { index: ctx.index, title: ctx.title, ok: false };
     if (ctx.agentChoice) base.agent = ctx.agentChoice.agent;
 
@@ -1347,8 +1359,23 @@ export class FanOutService {
         await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
         return { ...base, error: `not launched: ${slot.reason}`, ...preserved };
       }
-      releaseSlot = slot.release;
-      if (slot.hold) holdSlot = slot.hold;
+      // Released or held once; whatever is left is released on the way out.
+      let settled = false;
+      const granted = slot;
+      releaseSlot = () => {
+        if (settled) return;
+        settled = true;
+        granted.release();
+      };
+      if (granted.hold) {
+        const hold = granted.hold;
+        holdSlot = (workspaceId) => {
+          if (settled) return;
+          settled = true;
+          hold(workspaceId);
+        };
+      }
+      slotGuard.settle = () => releaseSlot();
     }
 
     // The caller's last word before anything is launched.

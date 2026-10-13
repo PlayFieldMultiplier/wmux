@@ -13,6 +13,7 @@ import type { TaskWorktreeManager, TaskWorktreePlan } from '../TaskWorktreeManag
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, setFanOutGuardsForTests } from '../fanoutGuards';
+import { setSecretGrantSource } from '../../factory/secretGrants';
 
 const SHA = 'b'.repeat(40);
 let root: string;
@@ -208,5 +209,25 @@ describe('FanOutService — detached checkout + dispatch record', () => {
     expect(res.tasks[0].workspaceId).toBe('ws-task-1');
     expect(hold).toHaveBeenCalledWith('ws-task-1');
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it('a slot granted to a task whose launch then throws is given back once', async () => {
+    const r = rig();
+    const release = vi.fn();
+    const hold = vi.fn();
+    setSecretGrantSource(() => ({ values: () => { throw new Error('key store failed'); } }) as never);
+    try {
+      await r.svc.start({
+        ...base,
+        checkout: { sha: SHA, detached: true },
+        secretNames: ['API_KEY'],
+        awaitLaunchSlot: async () => ({ ok: true, release, hold }),
+      }).catch(() => undefined);
+    } finally {
+      setSecretGrantSource(null);
+    }
+    expect(r.spawn).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(hold).not.toHaveBeenCalled();
   });
 });
