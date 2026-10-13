@@ -1,10 +1,51 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'node:fs';
 import path from 'node:path';
 import pkg from './package.json';
 
+// The PDF preview (#2150) runs pdf.js with its worker, CMaps (CJK text),
+// standard fonts and WebAssembly decoders as plain same-origin files under
+// `pdfjs/` next to the page: no blob: or inline worker, nothing the
+// production CSP has to loosen for. Served from node_modules in dev, copied
+// into the bundle on build.
+const PDFJS_DIR = path.resolve(__dirname, 'node_modules/pdfjs-dist');
+const PDFJS_FILES: Record<string, string> = {
+  'build/pdf.worker.min.mjs': 'build/pdf.worker.min.mjs',
+  cmaps: 'cmaps',
+  standard_fonts: 'standard_fonts',
+  wasm: 'wasm',
+  iccs: 'iccs',
+};
+
+function pdfjsAssets(): Plugin {
+  return {
+    name: 'wmux-pdfjs-assets',
+    configureServer(server) {
+      server.middlewares.use('/pdfjs/', (req, res, next) => {
+        const rel = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '');
+        const top = Object.keys(PDFJS_FILES).find((key) => rel === key || rel.startsWith(`${key}/`));
+        const file = top ? path.join(PDFJS_DIR, rel) : '';
+        if (!file || !file.startsWith(PDFJS_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+          next();
+          return;
+        }
+        if (file.endsWith('.mjs')) res.setHeader('Content-Type', 'text/javascript');
+        if (file.endsWith('.wasm')) res.setHeader('Content-Type', 'application/wasm');
+        fs.createReadStream(file).pipe(res);
+      });
+    },
+    writeBundle(options) {
+      if (!options.dir) return;
+      for (const [from, to] of Object.entries(PDFJS_FILES)) {
+        fs.cpSync(path.join(PDFJS_DIR, from), path.join(options.dir, 'pdfjs', to), { recursive: true });
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), pdfjsAssets()],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },

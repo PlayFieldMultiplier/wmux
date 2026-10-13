@@ -294,3 +294,27 @@ describe('name filter', () => {
     }
   });
 });
+
+describe('opening a file from the tree (#2150)', () => {
+  it('opens an image or PDF in a preview tab, and other files in the editor', async () => {
+    readDir.mockImplementation(async (dir: string) => [
+      { name: 'plot.png', path: `${dir}/plot.png`, isDirectory: false, isSymlink: false },
+      { name: 'README.md', path: `${dir}/README.md`, isDirectory: false, isSymlink: false },
+    ]);
+    resolveRepo.mockResolvedValue({ ok: true, repoPath: '/code/two' });
+    act(() => root.render(createElement(FileTreePanel, { position: 'right' })));
+    await flush();
+    const rows = [...container.querySelectorAll('[data-file-tree-row="file"]')] as HTMLElement[];
+    const row = (name: string) => rows.find((r) => r.textContent?.includes(name))!;
+    act(() => { row('plot.png').click(); });
+    act(() => { row('README.md').click(); });
+    const ws = useStore.getState().workspaces[0];
+    const pane = ws.rootPane.type === 'branch' ? ws.rootPane.children[1] : ws.rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf');
+    expect(pane.surfaces.map((s) => [s.surfaceType, s.previewFilePath ?? s.editorFilePath])).toEqual([
+      ['terminal', undefined],
+      ['preview', '/code/two/plot.png'],
+      ['editor', '/code/two/README.md'],
+    ]);
+  });
+});

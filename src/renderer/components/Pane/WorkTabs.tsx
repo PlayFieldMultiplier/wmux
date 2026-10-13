@@ -15,13 +15,13 @@ import { RENAME_ACTIVE_TAB_EVENT } from '../../utils/commandActions';
  * place the body is, and uses the pane strip's tab grammar.
  */
 export function workTabTitle(
-  surface: Pick<Surface, 'title' | 'surfaceType' | 'editorFilePath'>,
+  surface: Pick<Surface, 'title' | 'surfaceType' | 'editorFilePath' | 'previewFilePath'>,
   browserLabel: string,
 ): string {
   if (surface.title) return surface.title;
-  if (surface.surfaceType === 'editor' && surface.editorFilePath) {
-    return surface.editorFilePath.split(/[\\/]/).pop() || surface.editorFilePath;
-  }
+  const filePath = surface.surfaceType === 'editor' ? surface.editorFilePath
+    : surface.surfaceType === 'preview' ? surface.previewFilePath : undefined;
+  if (filePath) return filePath.split(/[\\/]/).pop() || filePath;
   return browserLabel;
 }
 
@@ -146,7 +146,7 @@ export default function WorkTabs({
                   ? 'text-[var(--text-main)]'
                   : 'text-[color-mix(in_srgb,var(--text-main)_50%,transparent)] hover:text-[var(--text-main)] hover:bg-[var(--hover-fill)]'
               }`}
-              title={s.surfaceType === 'browser' ? (s.browserUrl || title) : (s.editorFilePath || title)}
+              title={s.surfaceType === 'browser' ? (s.browserUrl || title) : (s.editorFilePath || s.previewFilePath || title)}
               onClick={() => onSelect(s.id)}
               onDoubleClick={readOnly ? undefined : () => startRename(s)}
             >

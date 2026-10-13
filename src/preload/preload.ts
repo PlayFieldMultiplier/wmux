@@ -47,6 +47,7 @@ import type { ComputerUseSettingsPayload } from '../shared/computer/config';
 import type { QuickLaunchSettingsPayload } from '../shared/quickLaunch';
 import type { ResumeBinding } from '../shared/agentResume';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
+import type { PreviewChangedEvent, PreviewOpenResult } from '../shared/filePreview';
 import type {
   WorkspaceSettleChangedPayload,
   WorkspaceSettleCommand,
@@ -1360,6 +1361,16 @@ const electronAPI = {
       const listener = (_event: Electron.IpcRendererEvent, dirPath: string) => callback(dirPath);
       ipcRenderer.on(IPC.FS_CHANGED, listener);
       return () => { ipcRenderer.removeListener(IPC.FS_CHANGED, listener); };
+    },
+  },
+  // File preview (#2150): bytes are served by wmux-preview://<token>/…
+  preview: {
+    open: (filePath: string) => ipcRenderer.invoke(IPC.PREVIEW_OPEN, filePath) as Promise<PreviewOpenResult>,
+    close: (token: string) => ipcRenderer.invoke(IPC.PREVIEW_CLOSE, token) as Promise<void>,
+    onChanged: (callback: (event: PreviewChangedEvent) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: PreviewChangedEvent) => callback(payload);
+      ipcRenderer.on(IPC.PREVIEW_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.PREVIEW_CHANGED, listener); };
     },
   },
   git: {

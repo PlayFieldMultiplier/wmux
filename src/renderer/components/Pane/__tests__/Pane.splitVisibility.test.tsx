@@ -83,8 +83,8 @@ describe('pane surface kinds — terminal column vs work area', () => {
     }
   });
 
-  it('browser, editor and diff go to the work area', () => {
-    for (const t of ['browser', 'editor', 'diff']) {
+  it('browser, editor, preview and diff go to the work area', () => {
+    for (const t of ['browser', 'editor', 'preview', 'diff']) {
       expect(isWorkSurfaceType(t)).toBe(true);
       expect(isTerminalKindSurfaceType(t)).toBe(false);
     }

@@ -2830,3 +2830,16 @@ button.wmux-a2a-row:hover { background: var(--hover-fill); }
 .wmux-git-guide-current { outline: 1px solid var(--primary, currentColor); border-radius: 6px; padding: 4px 6px; }
 .wmux-git-guide-items { list-style: disc; padding-left: 18px; font-size: 12px; }
 .wmux-git-approve-ready { outline: 2px solid var(--primary, currentColor); outline-offset: 1px; }
+
+/* File preview (#2150): the checkerboard behind an image shows where it is
+ * transparent. Drawn from the theme so it reads in light and dark alike. */
+.wmux-preview-checker {
+  background-color: var(--bg-base);
+  background-image: conic-gradient(
+    color-mix(in srgb, var(--text-main) 7%, transparent) 25%,
+    transparent 0 50%,
+    color-mix(in srgb, var(--text-main) 7%, transparent) 0 75%,
+    transparent 0
+  );
+  background-size: 16px 16px;
+}

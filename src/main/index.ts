@@ -94,7 +94,9 @@ import { registerA2aChannelRpc } from './pipe/handlers/a2a.channel.rpc';
 import { registerCompanyRpc } from './pipe/handlers/company.rpc';
 import { registerEventsRpc } from './pipe/handlers/events.rpc';
 import { PluginHostLoader } from './plugins/PluginHostLoader';
-import { registerPluginSchemePrivileges, registerPluginProtocolHandler } from './plugins/pluginProtocol';
+import { registerPluginProtocolHandler } from './plugins/pluginProtocol';
+import { registerPrivilegedSchemes } from './privilegedSchemes';
+import { registerPreviewProtocol } from './preview/previewProtocol';
 import { registerPluginHostHandlers } from './ipc/handlers/pluginHost.handler';
 import { registerProjectConfigHandlers } from './ipc/handlers/projectConfig.handler';
 import { registerChannelLocalHandlers } from './ipc/handlers/channelLocal.handler';
@@ -632,10 +634,11 @@ const pipeServer = new PipeServer(rpcRouter);
 // reHardenTokenFileAcl) — a prime cold-start suspect.
 markBoot('pipe-server-ctor-done');
 
-// Plugin host (B-1). Scheme privileges MUST be registered before app
-// 'ready'; the loader itself is constructed inside the ready handler (it
-// reads ~/.wmux) and the protocol/IPC layers read it through this binding.
-registerPluginSchemePrivileges();
+// Plugin host (B-1) and file preview (#2150). Scheme privileges MUST be
+// registered before app 'ready'; the plugin loader itself is constructed
+// inside the ready handler (it reads ~/.wmux) and the protocol/IPC layers
+// read it through this binding.
+registerPrivilegedSchemes();
 let pluginHostLoader: PluginHostLoader | null = null;
 const mcpRegistrar = new McpRegistrar();
 // Shared MCP broker (Option A, WMUX_MCP_BROKER=1; default OFF). Started on
@@ -1968,6 +1971,8 @@ app.on('ready', async () => {
     logLine('warn', 'main', `plugin host load failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   registerPluginProtocolHandler(() => pluginHostLoader);
+  // Before the renderer loads: a restored session opens its preview tabs at once.
+  registerPreviewProtocol();
   markBoot('plugins-loaded');
 
   mainWindow = createWindow({ deferLoad: true });

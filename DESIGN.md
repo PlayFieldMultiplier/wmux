@@ -728,14 +728,14 @@ A pane is a terminal column plus, when it needs one, a work area.
 ┌ pane tab strip ───────────────┬ work strip ───────────────────── [◫]┐
 │ ⠿ w1-1  Zsh  claude  [cluster]│ Example Domain   app.tsx   diff     │
 ├───────────────────────────────┼─────────────────────────────────────┤
-│ terminal (the hero)           │ browser / editor / diff             │
+│ terminal (the hero)           │ browser / editor / preview / diff   │
 └───────────────────────────────┴─────────────────────────────────────┘
 ```
 
 - **Two kinds of surface.** Terminals (local and remote, and the
   placeholders a mirror shows for a slot it cannot draw) keep the pane tab
-  strip and draw in the left column. Browser, editor and diff tabs are work
-  surfaces and draw in the work area on the right. A pane holding only one
+  strip and draw in the left column. Browser, editor, preview and diff tabs
+  are work surfaces and draw in the work area on the right. A pane holding only one
   kind draws it across the whole pane under one strip, as before.
 - **One header line.** The work strip sits on the pane header's line, split
   where the body is split: the body's separator continues up through the
@@ -758,6 +758,18 @@ A pane is a terminal column plus, when it needs one, a work area.
 - **One accent per pane.** The accent bar marks the active tab on whichever
   strip holds the pane's focus; the other strip's active tab keeps the quiet
   bar.
+- **Preview tab.** An image or PDF opened from the file tree is a read-only
+  preview tab, not an editor tab. Its header is the file name, its path and
+  three actions (open in the default app, open the folder, copy the path); its
+  footer is the file's facts on the left and one zoom toolbar on the right
+  (− / zoom % / + / Fit, plus the page field for a PDF). The wheel scrolls;
+  Cmd/Ctrl + wheel zooms around the cursor; there is no click-to-zoom. It
+  opens fitted, never above 100% for an image. When the file changes on disk
+  the view updates in place, keeps its zoom and position, and never takes the
+  focus. A half-written, damaged or deleted file leaves the last good version
+  up with one line of `--attention-text` in the footer; that line is state, so
+  it is the only colour on the tab. Transparency shows on a checkerboard drawn
+  from the theme.
 
 ## The one-boundary rule
 
@@ -1090,6 +1102,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-10 | Owner direction (#1987 PR3): the Worktrees tab takes the who-acts-next grammar — In use · Uncommitted changes · No open PR · Cleanup candidates (a merged PR counts) · No workspace — with a summary line, plus snooze (1 hour / 1 day / 1 week / until it changes; any change of state ends it early) kept per viewer. Headers stay neutral; the PR knowledge is only what the page already read, so a repo whose list is not held shows no No open PR | Three groups said where a workspace sat but not what each worktree wanted. Uncommitted work nobody is on, unshipped branches and merged leftovers are the three things a worktree asks of the owner; snooze lets a known one stop asking without deleting it. Reading every repo's PR list for this tab would cost gh calls the page otherwise never makes |
 | 2026-10-11 | Owner decision: bring back the file tree as an opt-in column opposite the sidebar, independent of Moa, between the panes and the dock, with its own bare titlebar toggle before Moa's. Amends "the dock opposite the sidebar is Moa's" and "Moa's icon, the right panel's only toggle" | #1440 dropped the toggle with the old right panel, which left the tree mounted but unreachable. A file tree answers "what is in this project" without leaving the terminals, a different job from Moa's conversation, so it gets its own column rather than a dock tab; placing it inside the dock edge keeps rail pages covering it with the panes |
 | 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
+| 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
 
 ### Desktop conversation view
 

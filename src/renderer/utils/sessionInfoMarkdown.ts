@@ -93,6 +93,12 @@ function renderSurfaceLines(
       out.push(...paneLines);
       out.push(`   - Surface ID: ${s.id}`);
       if (s.browserUrl) out.push(`   - URL: ${s.browserUrl}`);
+    } else if (surfaceType === 'preview') {
+      // #2150 — a read-only file view: no PTY, so no PTY ID line.
+      out.push(`${idx}. ${activeTag}Preview`);
+      out.push(...paneLines);
+      out.push(`   - Surface ID: ${s.id}`);
+      if (s.previewFilePath) out.push(`   - File: ${s.previewFilePath}`);
     } else if (surfaceType === 'diff') {
       // J2 — diff 서피스는 PTY 없음. taskId만 표시(PTY ID 오표기 방지).
       out.push(`${idx}. ${activeTag}Diff`);

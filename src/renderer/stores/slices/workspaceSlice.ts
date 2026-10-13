@@ -1778,7 +1778,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         {
           for (const s of pane.surfaces) {
             // 유틸 surface(git·review)는 pty 없음 — 명시적으로 제외해 방어.
-            if (s.ptyId === ptyId && s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
+            if (s.ptyId === ptyId && s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
               const previousOffer = state.deadPaneRecoveryOfferByPtyId?.[ptyId];
               if ((recovery || previousOffer) && state.pendingDeadPaneRecoveryBySurfaceId) {
                 state.pendingDeadPaneRecoveryBySurfaceId[s.id] = mergeDeadPaneRecovery(
@@ -1817,7 +1817,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       const clearLeafPtyIds = (pane: PaneLeaf) => {
         for (const s of pane.surfaces) {
           // 유틸 surface(git·review)는 pty 없음 — 명시적으로 제외해 방어.
-          if (s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
+          if (s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
             s.ptyId = '';
           }
         }

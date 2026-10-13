@@ -707,6 +707,10 @@ export const IPC = {
   FS_WATCH: 'fs:watch',
   FS_UNWATCH: 'fs:unwatch',
   FS_CHANGED: 'fs:changed',
+  // File preview (#2150): open → token for wmux-preview://, close, settled change
+  PREVIEW_OPEN: 'preview:open',
+  PREVIEW_CLOSE: 'preview:close',
+  PREVIEW_CHANGED: 'preview:changed',
   // Scrollback persistence
   SCROLLBACK_DUMP: 'scrollback:dump',
   SCROLLBACK_LOAD: 'scrollback:load',

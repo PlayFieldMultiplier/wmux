@@ -3,6 +3,7 @@ import path from 'node:path';
 import { platformChoice } from '../../shared/platform';
 import { IPC } from '../../shared/constants';
 import { PLUGIN_PROTOCOL_SCHEME } from '../../shared/pluginHost';
+import { PREVIEW_PROTOCOL_SCHEME } from '../../shared/filePreview';
 import { attachFlashFrameAutoClear } from './flashFrame';
 import { windowDisplayedReporter } from './windowDisplayed';
 import {
@@ -25,12 +26,16 @@ const iconFile = `icon.${iconExt}`;
 // iTerm2 image protocol's base64 with bundled WebAssembly, and Chromium
 // refuses to compile WebAssembly under a bare `script-src 'self'`. It allows
 // WebAssembly compilation only — eval() and new Function() stay blocked.
+//
+// wmux-preview: (#2150) is an image source for the preview tab and a fetch
+// target for its PDF renderer, and nothing else: it is deliberately not a
+// frame-src, so a served SVG or PDF never becomes a document.
 export const MAIN_WINDOW_PRODUCTION_CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "connect-src 'self'",
+  `img-src 'self' data: ${PREVIEW_PROTOCOL_SCHEME}:`,
+  `connect-src 'self' ${PREVIEW_PROTOCOL_SCHEME}:`,
   "font-src 'self'",
   `frame-src 'self' https: http: ${PLUGIN_PROTOCOL_SCHEME}:`,
 ].join('; ');

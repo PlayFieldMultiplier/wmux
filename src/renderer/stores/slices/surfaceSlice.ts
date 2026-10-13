@@ -36,6 +36,9 @@ export interface SurfaceSlice {
    *  `sessionId` belongs to, which is what the liveness poll asks about. */
   addRemoteSurface: (paneId: string, hostId: string, sessionId: string, shell?: string, cwd?: string, workspaceId?: string, owned?: boolean, remoteWorkspaceId?: string) => void;
   addEditorSurface: (paneId: string, filePath: string) => void;
+  /** #2150 — read-only image/PDF tab in the pane's work area. Same rules as
+   *  addEditorSurface: one tab per file per pane, never in a shadow workspace. */
+  addPreviewSurface: (paneId: string, filePath: string) => void;
   /** J2 — diff 리뷰 서피스 추가. taskId만 영속(diff 내용은 파생 데이터).
    * 같은 taskId가 이미 열려 있으면 그 탭으로 전환. editor/browser처럼 ptyId 없음. */
   addDiffSurface: (paneId: string, taskId: string, title?: string, workspaceId?: string, ownerWorkspaceId?: string) => void;
@@ -226,6 +229,30 @@ export const createSurfaceSlice: StateCreator<StoreState, [['zustand/immer', nev
       cwd: '',
       surfaceType: 'editor',
       editorFilePath: filePath,
+    };
+    pane.surfaces.push(surface);
+    pane.activeSurfaceId = surface.id;
+  }),
+
+  addPreviewSurface: (paneId, filePath) => set((state: StoreState) => {
+    if (isShadowWorkspaceId(state.activeWorkspaceId)) return;
+    const ws = state.workspaces.find((w: Workspace) => w.id === state.activeWorkspaceId);
+    if (!ws) return;
+    const pane = findLeafPane(ws.rootPane, paneId);
+    if (!pane) return;
+    const existing = pane.surfaces.find((s) => s.surfaceType === 'preview' && s.previewFilePath === filePath);
+    if (existing) {
+      pane.activeSurfaceId = existing.id;
+      return;
+    }
+    const surface: Surface = {
+      id: generateId('surface'),
+      ptyId: '',
+      title: filePath.split(/[/\\]/).pop() || filePath,
+      shell: '',
+      cwd: '',
+      surfaceType: 'preview',
+      previewFilePath: filePath,
     };
     pane.surfaces.push(surface);
     pane.activeSurfaceId = surface.id;
