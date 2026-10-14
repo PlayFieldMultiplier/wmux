@@ -2121,6 +2121,9 @@ describe('daemon queue (chat-queue)', () => {
 
   it('a held item drains on the backup tick once its hold clears, with no hook, and the tick stops with the queue empty', async () => {
     vi.useFakeTimers();
+    // Spy after the fake install so the spies wrap the fakes and the tick still fires.
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
     try {
       const f = fixture(); f.liveClaude(); runningTurn(f, 1);
       const bridge = createChatBridge({ ...f.deps, queue: new ChatQueueStore(f.dir), queueTickMs: 5_000 });
@@ -2134,10 +2137,18 @@ describe('daemon queue (chat-queue)', () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(pastes(f)).toEqual(['\x1b[200~one\x1b[201~']);
       expect(bridge.queue('device:a', 'pane')[0]).toMatchObject({ state: 'delivered' });
-      // Nothing active: the next tick clears itself and none is left.
+      // Nothing active: the next tick clears itself and is not armed again. Assert
+      // on the bridge's own interval, not the global timer count, which counts
+      // timers other code schedules while the queue drains.
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally { vi.useRealTimers(); }
+      const ticks = setIntervalSpy.mock.calls.flatMap((call, i) => call[1] === 5_000 ? [setIntervalSpy.mock.results[i]!.value] : []);
+      expect(ticks).toHaveLength(1);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(ticks[0]);
+    } finally {
+      // Restore before leaving fake time: the spies hold the fakes as their originals.
+      setIntervalSpy.mockRestore(); clearIntervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('OpenCode: the queue watches the plugin while an item waits, and ignores the daemon detector', async () => {
