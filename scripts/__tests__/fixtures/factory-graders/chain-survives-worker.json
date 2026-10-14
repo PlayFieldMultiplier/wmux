@@ -3,12 +3,12 @@
   "schemaVersion": 1,
   "scenario": "chain-survives-worker",
   "run": 1,
-  "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+  "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
   "bots": [
    {
     "version": 1,
-    "id": "bot-393f60ef",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "bot-9672d43d",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "role": "moa",
     "template": "coordinator",
     "name": "Coordinator",
@@ -31,13 +31,13 @@
      "turnTimeoutMs": 600000
     },
     "enabled": true,
-    "createdAt": 1791989874564,
-    "updatedAt": 1791989874564
+    "createdAt": 1791991591289,
+    "updatedAt": 1791991591289
    },
    {
     "version": 1,
-    "id": "bot-b437e91e",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "bot-df73873c",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "role": "lead",
     "template": "developer",
     "name": "Developer",
@@ -61,255 +61,256 @@
     },
     "repo": {
      "repoKey": "github.com/acme/app",
-     "repoPath": "/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-A6JOJ2/app"
+     "repoPath": "/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-pRZpYy/app"
     },
     "enabled": true,
-    "createdAt": 1791989874567,
-    "updatedAt": 1791989874567
+    "createdAt": 1791991591292,
+    "updatedAt": 1791991591292
    }
   ],
   "botKeys": {
-   "lead": "bot-393f60ef",
-   "developer": "bot-b437e91e"
+   "lead": "bot-9672d43d",
+   "developer": "bot-df73873c"
   },
   "injected": [
    {
     "label": "ask",
     "kind": "card",
-    "id": "c-mv88i4jw1ba12181a0",
+    "id": "c-mv89ix6o799e507447",
     "threadId": "general",
-    "at": 1791989874570
+    "at": 1791991591294
    }
   ],
   "actions": [
    {
-    "at": 1791989874570,
+    "at": 1791991591294,
     "do": "post",
     "label": "ask",
     "result": {
      "ok": true,
      "card": {
       "version": 1,
-      "id": "c-mv88i4jw1ba12181a0",
+      "id": "c-mv89ix6o799e507447",
       "seq": 1,
-      "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+      "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
       "threadId": "general",
       "kind": "human",
-      "at": 1791989874572,
+      "at": 1791991591296,
       "actor": {
        "kind": "human"
       },
       "title": "Change A",
       "body": "Please get change A done.",
       "refs": {
-       "botId": "bot-393f60ef",
+       "botId": "bot-9672d43d",
        "botIds": [
-        "bot-393f60ef"
+        "bot-9672d43d"
        ]
       }
      },
      "addressee": {
-      "botId": "bot-393f60ef",
+      "botId": "bot-9672d43d",
       "role": "moa"
      },
-     "wakeId": "w-mv88i4jy-b0b202a7",
+     "wakeId": "w-mv89ix6q-dd562c95",
      "addressees": [
       {
-       "botId": "bot-393f60ef",
+       "botId": "bot-9672d43d",
        "role": "moa",
-       "wakeId": "w-mv88i4jy-b0b202a7"
+       "wakeId": "w-mv89ix6q-dd562c95"
       }
      ]
     }
    },
    {
-    "at": 1791989874580,
+    "at": 1791991591304,
     "do": "waitFor",
     "label": "report",
     "ok": true,
-    "doneAt": 1791989890152
+    "doneAt": 1791991606869
    },
    {
-    "at": 1791989890152,
+    "at": 1791991606869,
     "do": "waitFor",
     "label": "lead woken by the result",
     "ok": true,
-    "doneAt": 1791989890654
+    "doneAt": 1791991607372
    },
    {
-    "at": 1791989890654,
+    "at": 1791991607372,
     "do": "waitFor",
     "label": "quiet",
     "ok": true,
-    "doneAt": 1791989898689
+    "doneAt": 1791991615419
    }
   ],
   "harnessErrors": [],
   "facts": [
    {
-    "id": "f-0mv88i4jw-a9b0c9cf1d8d",
+    "id": "f-0mv89ix6o-4f11a6901b56",
     "seq": 1,
     "kind": "human.message",
-    "at": 1791989874572,
-    "dedupeKey": "human.message:c-mv88i4jw1ba12181a0:bot-393f60ef",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "at": 1791991591296,
+    "dedupeKey": "human.message:c-mv89ix6o799e507447:bot-9672d43d",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "ref": {
-     "botId": "bot-393f60ef",
-     "messageId": "c-mv88i4jw1ba12181a0:bot-393f60ef"
+     "botId": "bot-9672d43d",
+     "messageId": "c-mv89ix6o799e507447:bot-9672d43d"
     },
     "actor": {
      "kind": "human"
     },
     "payload": {
      "text": "Please get change A done.",
-     "cardId": "c-mv88i4jw1ba12181a0",
+     "cardId": "c-mv89ix6o799e507447",
      "threadId": "general",
      "source": "desktop"
     }
    },
    {
-    "id": "f-0mv88i8jz-c1f45a62c783",
+    "id": "f-0mv89j17p-57c085425c74",
     "seq": 2,
     "kind": "handoff.received",
-    "at": 1791989879759,
-    "dedupeKey": "handoff.received:h-mv88i8jw9f7a7cc61a52",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "at": 1791991596517,
+    "dedupeKey": "handoff.received:h-mv89j17m30999c3366bb",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "ref": {
-     "handoffId": "h-mv88i8jw9f7a7cc61a52",
-     "botId": "bot-b437e91e"
+     "handoffId": "h-mv89j17m30999c3366bb",
+     "botId": "bot-df73873c"
     },
     "actor": {
      "kind": "bot",
-     "id": "bot-393f60ef"
+     "id": "bot-9672d43d"
     },
     "payload": {
      "handoffKind": "dispatch",
      "title": "Change A",
-     "threadId": "general",
-     "runId": "run-c-mv88i4jw1ba12181a0",
+     "threadId": "handoff:h-mv89j17m30999c3366bb",
+     "runId": "run-c-mv89ix6o799e507447",
      "depth": 0,
      "hopsInRun": 1,
      "fromLabel": "Coordinator (moa)",
      "toLabel": "Developer (lead)",
-     "fromWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "toWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871"
+     "fromWorkspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "toWorkspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172"
     }
    },
    {
-    "id": "f-0mv88igcb-59bc09906247",
+    "id": "f-0mv89j950-9d9426099131",
     "seq": 3,
     "kind": "task.done",
-    "at": 1791989889851,
-    "dedupeKey": "task.done:wtask-mv88icos-23nrbl5a",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "at": 1791991606788,
+    "dedupeKey": "task.done:wtask-mv89j5eq-xcubhvqj",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "ref": {
-     "taskId": "wtask-mv88icos-23nrbl5a",
-     "botId": "bot-b437e91e"
+     "taskId": "wtask-mv89j5eq-xcubhvqj",
+     "botId": "bot-df73873c"
     },
     "actor": {
      "kind": "system"
     },
     "payload": {
-     "taskWorkspaceId": "ws-1f6e8f9e-8783-4067-be58-515a14033442",
+     "taskWorkspaceId": "ws-12e41e37-f924-4882-ab85-53d4a74bd20c",
      "title": "change A",
      "status": "review_requested",
      "from": "working",
      "by": "worker",
-     "summary": "fake worker: review_requested for wtask-mv88icos-23nrbl5a"
+     "summary": "fake worker: review_requested for wtask-mv89j5eq-xcubhvqj",
+     "threadId": "handoff:h-mv89j17m30999c3366bb"
     }
    },
    {
-    "id": "f-0mv88igkt-3cc55529f751",
+    "id": "f-0mv89j9g2-dcb989d30b20",
     "seq": 4,
     "kind": "handoff.received",
-    "at": 1791989890157,
-    "dedupeKey": "handoff.received:h-mv88igkqc1a4c136ae8d",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "at": 1791991607186,
+    "dedupeKey": "handoff.received:h-mv89j9fx9a9871a3b7d7",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "ref": {
-     "handoffId": "h-mv88igkqc1a4c136ae8d",
-     "botId": "bot-393f60ef"
+     "handoffId": "h-mv89j9fx9a9871a3b7d7",
+     "botId": "bot-9672d43d"
     },
     "actor": {
      "kind": "bot",
-     "id": "bot-b437e91e"
+     "id": "bot-df73873c"
     },
     "payload": {
      "handoffKind": "result",
      "title": "Change A done",
-     "threadId": "general",
-     "runId": "run-c-mv88i4jw1ba12181a0",
+     "threadId": "handoff:h-mv89j17m30999c3366bb",
+     "runId": "run-c-mv89ix6o799e507447",
      "depth": 1,
      "hopsInRun": 2,
      "fromLabel": "Developer (lead)",
      "toLabel": "Coordinator (moa)",
-     "fromWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "toWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871"
+     "fromWorkspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "toWorkspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172"
     }
    }
   ],
   "wakes": [
    {
-    "id": "w-mv88i4jy-b0b202a7",
-    "botId": "bot-393f60ef",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "w-mv89ix6q-dd562c95",
+    "botId": "bot-9672d43d",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "reason": {
      "kind": "human",
      "text": "Please get change A done.",
      "source": "desktop",
-     "clientMessageId": "c-mv88i4jw1ba12181a0",
-     "runId": "run-c-mv88i4jw1ba12181a0",
+     "clientMessageId": "c-mv89ix6o799e507447",
+     "runId": "run-c-mv89ix6o799e507447",
      "lead": true
     },
     "threadId": "general",
     "priority": 0,
-    "enqueuedAt": 1791989874574,
+    "enqueuedAt": 1791991591298,
     "attempts": 1,
     "state": "done"
    },
    {
-    "id": "w-mv88i8jw-663da017",
-    "botId": "bot-b437e91e",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "w-mv89j17n-2502688a",
+    "botId": "bot-df73873c",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "reason": {
      "kind": "handoff",
-     "handoffId": "h-mv88i8jw9f7a7cc61a52"
+     "handoffId": "h-mv89j17m30999c3366bb"
     },
-    "threadId": "general",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "priority": 1,
-    "enqueuedAt": 1791989879756,
+    "enqueuedAt": 1791991596515,
     "attempts": 1,
     "state": "done"
    },
    {
-    "id": "w-mv88igkk-8848c29d",
-    "botId": "bot-b437e91e",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "w-mv89j9fs-35c7e431",
+    "botId": "bot-df73873c",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "reason": {
      "kind": "facts",
      "factIds": [
-      "task.gated:wtask-mv88icos-23nrbl5a@4"
+      "task.gated:wtask-mv89j5eq-xcubhvqj@4"
      ],
      "trigger": {
       "kind": "task.done"
      }
     },
-    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "priority": 1,
-    "enqueuedAt": 1791989890148,
+    "enqueuedAt": 1791991607176,
     "attempts": 1,
     "state": "done"
    },
    {
-    "id": "w-mv88igkq-98c355da",
-    "botId": "bot-393f60ef",
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "w-mv89j9fz-6ae99543",
+    "botId": "bot-9672d43d",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "reason": {
      "kind": "handoff",
-     "handoffId": "h-mv88igkqc1a4c136ae8d"
+     "handoffId": "h-mv89j9fx9a9871a3b7d7"
     },
-    "threadId": "general",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "priority": 1,
-    "enqueuedAt": 1791989890154,
+    "enqueuedAt": 1791991607183,
     "attempts": 1,
     "state": "done"
    }
@@ -317,20 +318,20 @@
   "handoffs": [
    {
     "version": 1,
-    "id": "h-mv88i8jw9f7a7cc61a52",
-    "runId": "run-c-mv88i4jw1ba12181a0",
-    "threadId": "general",
+    "id": "h-mv89j17m30999c3366bb",
+    "runId": "run-c-mv89ix6o799e507447",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "depth": 0,
     "hopsInRun": 1,
     "from": {
      "kind": "bot",
-     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "botId": "bot-393f60ef"
+     "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "botId": "bot-9672d43d"
     },
     "to": {
      "kind": "bot",
-     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "botId": "bot-b437e91e"
+     "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "botId": "bot-df73873c"
     },
     "kind": "dispatch",
     "attribution": {
@@ -345,35 +346,35 @@
      "body": "Make change A in a.txt."
     },
     "status": "delivered",
-    "clientHandoffId": "wake:w-mv88i4jy-b0b202a7:h1",
-    "createdAt": 1791989879756,
-    "updatedAt": 1791989879758
+    "clientHandoffId": "wake:w-mv89ix6q-dd562c95:h1",
+    "createdAt": 1791991596514,
+    "updatedAt": 1791991596517
    },
    {
     "version": 1,
-    "id": "h-mv88igkqc1a4c136ae8d",
-    "runId": "run-c-mv88i4jw1ba12181a0",
-    "threadId": "general",
+    "id": "h-mv89j9fx9a9871a3b7d7",
+    "runId": "run-c-mv89ix6o799e507447",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "depth": 1,
     "hopsInRun": 2,
     "from": {
      "kind": "bot",
-     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "botId": "bot-b437e91e"
+     "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "botId": "bot-df73873c"
     },
     "to": {
      "kind": "bot",
-     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "botId": "bot-393f60ef"
+     "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "botId": "bot-9672d43d"
     },
     "kind": "result",
-    "replyTo": "h-mv88i8jw9f7a7cc61a52",
+    "replyTo": "h-mv89j17m30999c3366bb",
     "attribution": {
      "originator": {
       "kind": "human"
      },
      "chain": [
-      "h-mv88i8jw9f7a7cc61a52"
+      "h-mv89j17m30999c3366bb"
      ]
     },
     "landing": "wake",
@@ -382,43 +383,44 @@
      "body": "a.txt is changed."
     },
     "status": "delivered",
-    "clientHandoffId": "wake:w-mv88igkk-8848c29d:h1",
-    "createdAt": 1791989890154,
-    "updatedAt": 1791989890157
+    "clientHandoffId": "wake:w-mv89j9fs-35c7e431:h1",
+    "createdAt": 1791991607181,
+    "updatedAt": 1791991607186
    }
   ],
   "repoWatch": null,
   "ledger": [
    {
     "schemaVersion": 1,
-    "id": "wtask-mv88icos-23nrbl5a",
-    "taskWorkspaceId": "ws-1f6e8f9e-8783-4067-be58-515a14033442",
-    "ownerWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "id": "wtask-mv89j5eq-xcubhvqj",
+    "taskWorkspaceId": "ws-12e41e37-f924-4882-ab85-53d4a74bd20c",
+    "ownerWorkspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "title": "change A",
     "status": "completed",
     "rev": 4,
-    "updatedAt": 1791989890142,
+    "updatedAt": 1791991607175,
     "updatedBy": {
      "kind": "brain",
-     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871"
+     "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172"
     },
     "dispatch": {
      "origin": {
       "kind": "bot",
-      "botId": "bot-b437e91e",
-      "tainted": true
+      "botId": "bot-df73873c",
+      "tainted": false
      },
      "preset": "default",
-     "handoffId": "h-mv88i8jw9f7a7cc61a52"
+     "threadId": "handoff:h-mv89j17m30999c3366bb",
+     "handoffId": "h-mv89j17m30999c3366bb"
     },
-    "summary": "fake worker: review_requested for wtask-mv88icos-23nrbl5a",
+    "summary": "fake worker: review_requested for wtask-mv89j5eq-xcubhvqj",
     "gate": {
      "exitCode": 0,
      "tail": "\n> factory-smoke-app@1.0.0 lint\n> node -e \"process.exit(0)\"\n\n\n> factory-smoke-app@1.0.0 test\n> node -e \"process.exit(0)\"\n\n",
-     "at": 1791989890142,
+     "at": 1791991607174,
      "command": "npm test",
      "recordedBy": "system",
-     "headSha": "e613b89e04e5d30d46b9e94cfa9e061eedfa9e0e"
+     "headSha": "e64bc41b5ed84b7b4b83b5450490b250f63cfedb"
     }
    }
   ],
@@ -429,84 +431,101 @@
   "cards": [
    {
     "version": 1,
-    "id": "c-mv88i4jw1ba12181a0",
+    "id": "c-mv89ix6o799e507447",
     "seq": 1,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
     "threadId": "general",
     "kind": "human",
-    "at": 1791989874572,
+    "at": 1791991591296,
     "actor": {
      "kind": "human"
     },
     "title": "Change A",
     "body": "Please get change A done.",
     "refs": {
-     "botId": "bot-393f60ef",
+     "botId": "bot-9672d43d",
      "botIds": [
-      "bot-393f60ef"
+      "bot-9672d43d"
      ]
     }
    },
    {
     "version": 1,
-    "id": "c-mv88i8jzdfcf495d09",
+    "id": "c-mv89j17qfa5aee927a",
     "seq": 2,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-    "threadId": "general",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "kind": "fact",
-    "at": 1791989879759,
+    "at": 1791991596517,
     "actor": {
      "kind": "system"
     },
     "title": "dispatch → Developer (lead): Change A",
     "refs": {
-     "botId": "bot-b437e91e",
-     "handoffId": "h-mv88i8jw9f7a7cc61a52",
-     "factId": "f-0mv88i8jz-c1f45a62c783"
+     "botId": "bot-df73873c",
+     "handoffId": "h-mv89j17m30999c3366bb",
+     "factId": "f-0mv89j17p-57c085425c74"
     }
    },
    {
     "version": 1,
-    "id": "c-mv88igcbe875a7442e",
+    "id": "c-mv89j951a2262c1d2d",
     "seq": 3,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "kind": "fact",
-    "at": 1791989889851,
+    "at": 1791991606788,
     "actor": {
      "kind": "system"
     },
     "title": "Task done: change A",
-    "body": "fake worker: review_requested for wtask-mv88icos-23nrbl5a",
+    "body": "fake worker: review_requested for wtask-mv89j5eq-xcubhvqj",
     "refs": {
-     "taskId": "wtask-mv88icos-23nrbl5a",
-     "botId": "bot-b437e91e",
-     "factId": "f-0mv88igcb-59bc09906247"
-    },
-    "closes": true
+     "taskId": "wtask-mv89j5eq-xcubhvqj",
+     "botId": "bot-df73873c",
+     "factId": "f-0mv89j950-9d9426099131"
+    }
    },
    {
     "version": 1,
-    "id": "c-mv88igkfd429179012",
+    "id": "c-mv89j9frf8ff63bde4",
     "seq": 4,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "kind": "fact",
-    "at": 1791989890143,
+    "at": 1791991607175,
     "actor": {
      "kind": "system"
     },
     "title": "Task checked: gate passed, task completed",
-    "body": "`npm test` at e613b89e04e5d30d46b9e94cfa9e061eedfa9e0e."
+    "body": "`npm test` at e64bc41b5ed84b7b4b83b5450490b250f63cfedb."
    },
    {
     "version": 1,
-    "id": "c-mv88igks6c0e83092b",
+    "id": "c-mv89j9fzfd53a9b5eb",
     "seq": 5,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "general",
     "kind": "fact",
-    "at": 1791989890156,
+    "at": 1791991607183,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Finished: Change A",
+    "refs": {
+     "handoffId": "h-mv89j9fx9a9871a3b7d7",
+     "threadId": "handoff:h-mv89j17m30999c3366bb"
+    },
+    "replyTo": "c-mv89ix6o799e507447"
+   },
+   {
+    "version": 1,
+    "id": "c-mv89j9g26ae23d9ecb",
+    "seq": 6,
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
+    "kind": "fact",
+    "at": 1791991607186,
     "actor": {
      "kind": "system"
     },
@@ -515,133 +534,133 @@
    },
    {
     "version": 1,
-    "id": "c-mv88igku0d0474eedd",
-    "seq": 6,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-    "threadId": "general",
+    "id": "c-mv89j9g2dc30564ca0",
+    "seq": 7,
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "kind": "fact",
-    "at": 1791989890157,
+    "at": 1791991607186,
     "actor": {
      "kind": "system"
     },
     "title": "result → Coordinator (moa): Change A done",
     "refs": {
-     "botId": "bot-393f60ef",
-     "handoffId": "h-mv88igkqc1a4c136ae8d",
-     "factId": "f-0mv88igkt-3cc55529f751"
+     "botId": "bot-9672d43d",
+     "handoffId": "h-mv89j9fx9a9871a3b7d7",
+     "factId": "f-0mv89j9g2-dcb989d30b20"
     }
    },
    {
     "version": 1,
-    "id": "c-mv88igkuf9516cf3bd",
-    "seq": 7,
-    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-    "threadId": "general",
+    "id": "c-mv89j9g3a80f2b3ee8",
+    "seq": 8,
+    "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+    "threadId": "handoff:h-mv89j17m30999c3366bb",
     "kind": "report",
-    "at": 1791989890158,
+    "at": 1791991607187,
     "actor": {
      "kind": "bot",
-     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
-     "botId": "bot-393f60ef"
+     "workspaceId": "ws-ca467776-3d1c-4297-b670-70d02c42b172",
+     "botId": "bot-9672d43d"
     },
     "title": "Change A is done",
     "body": "The developer finished change A.",
-    "clientPostId": "wake:w-mv88igkq-98c355da:1"
+    "clientPostId": "wake:w-mv89j9fz-6ae99543:1"
    }
   ],
   "stub": {
    "lead": [
     {
-     "at": 1791989874611,
+     "at": 1791991591352,
      "event": "initialize"
     },
     {
-     "at": 1791989874612,
+     "at": 1791991591353,
      "event": "session/new",
-     "sessionId": "stub-7093353519de",
-     "cwd": "/home/owner/.wmux-verify-f95b7362/factory/bots/bot-393f60ef"
+     "sessionId": "stub-bee05810167a",
+     "cwd": "/home/owner/.wmux-verify-f9a089f7/factory/bots/bot-9672d43d"
     },
     {
-     "at": 1791989879615,
+     "at": 1791991596358,
      "event": "prompt",
-     "sessionId": "stub-7093353519de",
-     "text": "You are Coordinator, a bot of wmux workspace ws-238cdc8e-f600-484c-b8c7-edecf83ac871."
+     "sessionId": "stub-bee05810167a",
+     "text": "You are Coordinator, a bot of wmux workspace ws-ca467776-3d1c-4297-b670-70d02c42b172."
     },
     {
-     "at": 1791989879757,
+     "at": 1791991596516,
      "event": "tool",
-     "sessionId": "stub-7093353519de",
+     "sessionId": "stub-bee05810167a",
      "name": "handoff_send",
      "ok": true,
-     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv88i8jw9f7a7cc61a52\",\n  \"status\": \"delivered\",\n  \"threadId\": \"general\",\n  \"to\": {\n    \"botId\": \"bot-b437e91e\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\"\n  },\n  \"wakeId\": \"w-mv88i8jw-663da017\"\n}"
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89j17m30999c3366bb\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89j17m30999c3366bb\",\n  \"to\": {\n    \"botId\": \"bot-df73873c\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\"\n  },\n  \"wakeId\": \"w-mv89j17n-2502688a\"\n}"
     },
     {
-     "at": 1791989890155,
+     "at": 1791991607184,
      "event": "prompt",
-     "sessionId": "stub-7093353519de",
-     "text": "[wake w-mv88igkq-98c355da] Coordinator (coordinator) · reason: handoff · priority 1"
+     "sessionId": "stub-bee05810167a",
+     "text": "[wake w-mv89j9fz-6ae99543] Coordinator (coordinator) · reason: handoff · priority 1"
     },
     {
-     "at": 1791989890159,
+     "at": 1791991607187,
      "event": "tool",
-     "sessionId": "stub-7093353519de",
+     "sessionId": "stub-bee05810167a",
      "name": "room_post",
      "ok": true,
-     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv88igkuf9516cf3bd\",\n    \"seq\": 7,\n    \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n    \"threadId\": \"general\",\n    \"kind\": \"report\",\n    \"at\": 1791989890158,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n      \"botId\": \"bot-393f60ef\"\n    },\n    \"title\": \"Change A is done\",\n"
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv89j9g3a80f2b3ee8\",\n    \"seq\": 8,\n    \"workspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\",\n    \"threadId\": \"handoff:h-mv89j17m30999c3366bb\",\n    \"kind\": \"report\",\n    \"at\": 1791991607187,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\",\n      \"botId\": \"bot-9672d43d\"\n    },\n    \"title"
     }
    ],
    "developer": [
     {
-     "at": 1791989879783,
+     "at": 1791991596546,
      "event": "initialize"
     },
     {
-     "at": 1791989879784,
+     "at": 1791991596547,
      "event": "session/new",
-     "sessionId": "stub-d1cf9eb18e33",
-     "cwd": "/home/owner/.wmux-verify-f95b7362/factory/bots/bot-b437e91e"
+     "sessionId": "stub-ed5478926cd9",
+     "cwd": "/home/owner/.wmux-verify-f9a089f7/factory/bots/bot-df73873c"
     },
     {
-     "at": 1791989884786,
+     "at": 1791991601551,
      "event": "prompt",
-     "sessionId": "stub-d1cf9eb18e33",
-     "text": "You are Developer, a bot of wmux workspace ws-238cdc8e-f600-484c-b8c7-edecf83ac871. Your repository is github.com/acme/app."
+     "sessionId": "stub-ed5478926cd9",
+     "text": "You are Developer, a bot of wmux workspace ws-ca467776-3d1c-4297-b670-70d02c42b172. Your repository is github.com/acme/app."
     },
     {
-     "at": 1791989885014,
+     "at": 1791991601820,
      "event": "tool",
-     "sessionId": "stub-d1cf9eb18e33",
+     "sessionId": "stub-ed5478926cd9",
      "name": "fanout_start",
      "ok": true,
-     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv88i8jw-663da017:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-A6JOJ2/app\",\n  \"ownerWorkspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n  \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n  \"starting\": true,\n  \"note\": \"Accepted: the workers are"
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv89j17n-2502688a:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-pRZpYy/app\",\n  \"ownerWorkspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\",\n  \"workspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\",\n  \"starting\": true,\n  \"note\": \"Accepted: the workers are"
     },
     {
-     "at": 1791989890148,
+     "at": 1791991607177,
      "event": "prompt",
-     "sessionId": "stub-d1cf9eb18e33",
-     "text": "[wake w-mv88igkk-8848c29d] Developer (developer) · reason: facts · priority 1"
+     "sessionId": "stub-ed5478926cd9",
+     "text": "[wake w-mv89j9fs-35c7e431] Developer (developer) · reason: facts · priority 1"
     },
     {
-     "at": 1791989890155,
+     "at": 1791991607184,
      "event": "tool",
-     "sessionId": "stub-d1cf9eb18e33",
+     "sessionId": "stub-ed5478926cd9",
      "name": "handoff_send",
      "ok": true,
-     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv88igkqc1a4c136ae8d\",\n  \"status\": \"delivered\",\n  \"threadId\": \"general\",\n  \"to\": {\n    \"botId\": \"bot-393f60ef\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\"\n  },\n  \"wakeId\": \"w-mv88igkq-98c355da\"\n}"
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89j9fx9a9871a3b7d7\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89j17m30999c3366bb\",\n  \"to\": {\n    \"botId\": \"bot-9672d43d\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\"\n  },\n  \"wakeId\": \"w-mv89j9fz-6ae99543\"\n}"
     }
    ]
   },
   "workers": [
    {
-    "at": 1791989888697,
-    "pid": 73525,
-    "cwd": "/home/owner/.wmux-verify-f95b7362/worktrees/d54cf298eed5/change-a-23nrbl5a",
+    "at": 1791991605591,
+    "pid": 42946,
+    "cwd": "/home/owner/.wmux-verify-f9a089f7/worktrees/f1fb49dc5f4d/change-a-xcubhvqj",
     "event": "start",
-    "taskId": "wtask-mv88icos-23nrbl5a",
+    "taskId": "wtask-mv89j5eq-xcubhvqj",
     "args": [
      "--session-id",
-     "82d9514e-033c-404f-a9a2-3a4240e1d104",
-     "--settings=/home/owner/.wmux-verify-f95b7362/factory/worker-settings.json",
+     "8b9987ee-ac8e-4c26-a84f-6099eed8b968",
+     "--settings=/home/owner/.wmux-verify-f9a089f7/factory/worker-settings.json",
      "# Task worker\n\nYou are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin's default branch.\n\nWhat you can do here: implement the task below within the files it name",
      "--dangerously-skip-permissions",
      "--allowedTools",
@@ -651,18 +670,18 @@
     ]
    },
    {
-    "at": 1791989889854,
-    "pid": 73525,
-    "cwd": "/home/owner/.wmux-verify-f95b7362/worktrees/d54cf298eed5/change-a-23nrbl5a",
+    "at": 1791991606791,
+    "pid": 42946,
+    "cwd": "/home/owner/.wmux-verify-f9a089f7/worktrees/f1fb49dc5f4d/change-a-xcubhvqj",
     "event": "ledger_update",
     "ok": true,
-    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mv88icos-23nrbl5a\",\n    \"taskWorkspaceId\": \"ws-1f6e8f9e-8783-4067-be58-515a14033442\",\n    \"ownerWorkspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n    \"title\": \"change A\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1791989889851,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-1f6e8f9e-8783-4067-be58-515a14033442\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-b437e91e\",\n        \"tainted\": true\n      },\n      \"preset\": \"default\",\n      \"handoffId\": \"h-mv88i8jw9f7a7cc61a52\"\n    },\n    \"summary\": \"fake worker: review_requested for wtask-mv88icos-23nrbl5a\"\n  }\n}"
+    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mv89j5eq-xcubhvqj\",\n    \"taskWorkspaceId\": \"ws-12e41e37-f924-4882-ab85-53d4a74bd20c\",\n    \"ownerWorkspaceId\": \"ws-ca467776-3d1c-4297-b670-70d02c42b172\",\n    \"title\": \"change A\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1791991606788,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-12e41e37-f924-4882-ab85-53d4a74bd20c\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-df73873c\",\n        \"tainted\": false\n      },\n      \"preset\": \"default\",\n      \"threadId\": \"handoff:h-mv89j17m30999c3366bb\",\n      \"handoffId\": \"h-mv89j17m30999c3366bb\"\n    },\n    \"summary\": \"fake worker: review_requested for wtask-mv89j5eq-xcubhvqj\"\n  }\n}"
    }
   ],
   "gh": {
    "calls": [
     {
-     "at": 1791989874609,
+     "at": 1791991591285,
      "argv": [
       "api",
       "--hostname",
@@ -676,7 +695,7 @@
      "exit": 0
     },
     {
-     "at": 1791989885003,
+     "at": 1791991601806,
      "argv": [
       "repo",
       "view",
@@ -685,23 +704,23 @@
       "--jq",
       ".defaultBranchRef.name"
      ],
-     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-A6JOJ2/app",
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-pRZpYy/app",
      "handled": false,
      "exit": 1,
      "error": "fake-gh: unsupported repo"
     },
     {
-     "at": 1791989885239,
+     "at": 1791991602110,
      "argv": [
       "pr",
       "view",
       "--json",
       "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
      ],
-     "cwd": "/home/owner/.wmux-verify-f95b7362/worktrees/d54cf298eed5/change-a-23nrbl5a",
+     "cwd": "/home/owner/.wmux-verify-f9a089f7/worktrees/f1fb49dc5f4d/change-a-xcubhvqj",
      "handled": true,
      "exit": 1,
-     "error": "no pull requests found for branch \"wtask/change-a-23nrbl5a\""
+     "error": "no pull requests found for branch \"wtask/change-a-xcubhvqj\""
     }
    ],
    "state": {
@@ -802,8 +821,8 @@
   "launches": [
    {
     "ok": true,
-    "runId": "2026-10-14T14-57-52-verify-f95b7362",
-    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux-team/.claude/skills/verify-wmux/evidence/2026-10-14T14-57-52-verify-f95b7362"
+    "runId": "2026-10-14T15-26-28-verify-f9a089f7",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux-team/.claude/skills/verify-wmux/evidence/2026-10-14T15-26-28-verify-f9a089f7"
    }
   ]
  },
@@ -868,6 +887,19 @@
      "op": "set",
      "path": "handoffs.1.status",
      "value": "refused"
+    }
+   ]
+  },
+  {
+   "why": "the task from the owner's words is tainted",
+   "failing": [
+    "task_clean_from_owner_words"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "ledger.0.dispatch.origin.tainted",
+     "value": true
     }
    ]
   }

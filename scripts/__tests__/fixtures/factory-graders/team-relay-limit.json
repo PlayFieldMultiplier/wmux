@@ -1,0 +1,1958 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "team-relay-limit",
+  "run": 1,
+  "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-9cfdba53",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Coordinator",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791991864321,
+    "updatedAt": 1791991864321
+   },
+   {
+    "version": 1,
+    "id": "bot-492dbf8e",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "role": "lead",
+    "template": "researcher",
+    "name": "Researcher",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791991864324,
+    "updatedAt": 1791991864324
+   },
+   {
+    "version": 1,
+    "id": "bot-df3a1af7",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "role": "lead",
+    "template": "developer",
+    "name": "Developer",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791991864326,
+    "updatedAt": 1791991864326
+   },
+   {
+    "version": 1,
+    "id": "bot-9cef1b8a",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "role": "triage",
+    "template": "issue",
+    "name": "Issue",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791991864328,
+    "updatedAt": 1791991864328
+   },
+   {
+    "version": 1,
+    "id": "bot-16bd0836",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "role": "lead",
+    "template": "custom",
+    "name": "Bot",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791991864330,
+    "updatedAt": 1791991864330
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-9cfdba53",
+   "researcher": "bot-492dbf8e",
+   "developer": "bot-df3a1af7",
+   "issue": "bot-9cef1b8a",
+   "extra": "bot-16bd0836"
+  },
+  "injected": [
+   {
+    "label": "go",
+    "kind": "card",
+    "id": "c-mv89orv1c0ddb634bc",
+    "threadId": "general",
+    "at": 1791991864331
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791991864331,
+    "do": "post",
+    "label": "go",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv89orv1c0ddb634bc",
+      "seq": 1,
+      "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791991864333,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Go",
+      "body": "Start the relay.",
+      "refs": {
+       "botId": "bot-9cfdba53",
+       "botIds": [
+        "bot-9cfdba53"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-9cfdba53",
+      "role": "moa"
+     },
+     "wakeId": "w-mv89orv3-68582fe4",
+     "addressees": [
+      {
+       "botId": "bot-9cfdba53",
+       "role": "moa",
+       "wakeId": "w-mv89orv3-68582fe4"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791991864340,
+    "do": "waitFor",
+    "label": "depth refusal",
+    "ok": true,
+    "doneAt": 1791991885939
+   },
+   {
+    "at": 1791991885939,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791991893999
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv89orv1-b88a2e07b798",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791991864333,
+    "dedupeKey": "human.message:c-mv89orv1c0ddb634bc:bot-9cfdba53",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "botId": "bot-9cfdba53",
+     "messageId": "c-mv89orv1c0ddb634bc:bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Start the relay.",
+     "cardId": "c-mv89orv1c0ddb634bc",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv89ovx7-5c375ec1febc",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791991869595,
+    "dedupeKey": "handoff.received:h-mv89ovx3fa8de2ab8007",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89ovx3fa8de2ab8007",
+     "botId": "bot-492dbf8e"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Researcher (lead)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89ozys-300f541af4c0",
+    "seq": 3,
+    "kind": "handoff.received",
+    "at": 1791991874836,
+    "dedupeKey": "handoff.received:h-mv89ozyr2d15f8f44662",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89ozyr2d15f8f44662",
+     "botId": "bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-492dbf8e"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Found",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Researcher (lead)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89ozyx-2f24185bd689",
+    "seq": 4,
+    "kind": "handoff.received",
+    "at": 1791991874841,
+    "dedupeKey": "handoff.received:h-mv89ozys059055b3548c",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89ozys059055b3548c",
+     "botId": "bot-df3a1af7"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 1,
+     "hopsInRun": 3,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Developer (lead)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "relay": true
+    }
+   },
+   {
+    "id": "f-0mv89p44b-ca85521fd58c",
+    "seq": 5,
+    "kind": "handoff.received",
+    "at": 1791991880219,
+    "dedupeKey": "handoff.received:h-mv89p44a5fc37b44e711",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p44a5fc37b44e711",
+     "botId": "bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-df3a1af7"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Built",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 2,
+     "hopsInRun": 4,
+     "fromLabel": "Developer (lead)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89p44i-ea827229fe0d",
+    "seq": 6,
+    "kind": "handoff.received",
+    "at": 1791991880226,
+    "dedupeKey": "handoff.received:h-mv89p44c7ea6a55efc10",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p44c7ea6a55efc10",
+     "botId": "bot-9cef1b8a"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 2,
+     "hopsInRun": 5,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Issue (triage)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "relay": true
+    }
+   },
+   {
+    "id": "f-0mv89p874-74eb4a7bff5c",
+    "seq": 7,
+    "kind": "handoff.received",
+    "at": 1791991885504,
+    "dedupeKey": "handoff.received:h-mv89p86z67fd9c8ad913",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p86z67fd9c8ad913",
+     "botId": "bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cef1b8a"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Filed",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 3,
+     "hopsInRun": 6,
+     "fromLabel": "Issue (triage)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89p87b-90061bf01a9d",
+    "seq": 8,
+    "kind": "handoff.received",
+    "at": 1791991885511,
+    "dedupeKey": "handoff.received:h-mv89p8781d76cf38f59d",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p8781d76cf38f59d",
+     "botId": "bot-492dbf8e"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round again",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 4,
+     "hopsInRun": 7,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Researcher (lead)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89p87i-ecf7abc35f13",
+    "seq": 9,
+    "kind": "handoff.received",
+    "at": 1791991885518,
+    "dedupeKey": "handoff.received:h-mv89p87ic081382fc49b",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p87ic081382fc49b",
+     "botId": "bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-492dbf8e"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Found",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 5,
+     "hopsInRun": 8,
+     "fromLabel": "Researcher (lead)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89p87m-00459fb67fe8",
+    "seq": 10,
+    "kind": "handoff.received",
+    "at": 1791991885522,
+    "dedupeKey": "handoff.received:h-mv89p87jeb9613d233d3",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p87jeb9613d233d3",
+     "botId": "bot-df3a1af7"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round again",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 5,
+     "hopsInRun": 9,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Developer (lead)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "relay": true
+    }
+   },
+   {
+    "id": "f-0mv89p87s-8a54265e8478",
+    "seq": 11,
+    "kind": "handoff.received",
+    "at": 1791991885528,
+    "dedupeKey": "handoff.received:h-mv89p87s22311f6eb0e4",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p87s22311f6eb0e4",
+     "botId": "bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-df3a1af7"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Built",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 6,
+     "hopsInRun": 10,
+     "fromLabel": "Developer (lead)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7"
+    }
+   },
+   {
+    "id": "f-0mv89p87x-4dafa34bc585",
+    "seq": 12,
+    "kind": "handoff.refused",
+    "at": 1791991885533,
+    "dedupeKey": "handoff.refused:h-mv89p87wa5b79372d42a",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p87wa5b79372d42a",
+     "botId": "bot-9cef1b8a"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cef1b8a"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Filed",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 7,
+     "hopsInRun": 12,
+     "fromLabel": "Issue (triage)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "code": "max_depth",
+     "detail": "chain depth 7 is over 6"
+    }
+   },
+   {
+    "id": "f-0mv89p87y-6a5148ad8658",
+    "seq": 13,
+    "kind": "handoff.received",
+    "at": 1791991885534,
+    "dedupeKey": "handoff.received:h-mv89p87t07dab3b93861",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p87t07dab3b93861",
+     "botId": "bot-9cef1b8a"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round again",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 6,
+     "hopsInRun": 11,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Issue (triage)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "relay": true
+    }
+   },
+   {
+    "id": "f-0mv89p880-45a2de4fe69c",
+    "seq": 14,
+    "kind": "handoff.refused",
+    "at": 1791991885536,
+    "dedupeKey": "handoff.refused:h-mv89p87z30c12408dc8c",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "ref": {
+     "handoffId": "h-mv89p87z30c12408dc8c",
+     "botId": "bot-9cfdba53"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-9cfdba53"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Round again",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+     "runId": "run-c-mv89orv1c0ddb634bc",
+     "depth": 8,
+     "hopsInRun": 13,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Researcher (lead)",
+     "fromWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "toWorkspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "code": "max_depth",
+     "detail": "chain depth 8 is over 6"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv89orv3-68582fe4",
+    "botId": "bot-9cfdba53",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "human",
+     "text": "Start the relay.",
+     "source": "desktop",
+     "clientMessageId": "c-mv89orv1c0ddb634bc",
+     "runId": "run-c-mv89orv1c0ddb634bc"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791991864335,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89ovx4-67b62e1d",
+    "botId": "bot-492dbf8e",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89ovx3fa8de2ab8007"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991869592,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89ozyt-a14e3413",
+    "botId": "bot-df3a1af7",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89ozys059055b3548c"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991874837,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89p44d-06359f22",
+    "botId": "bot-9cef1b8a",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89p44c7ea6a55efc10"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991880221,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89p870-eeb0653f",
+    "botId": "bot-9cfdba53",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89p86z67fd9c8ad913"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991885500,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89p879-83b31df5",
+    "botId": "bot-492dbf8e",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89p8781d76cf38f59d"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991885509,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89p87k-d555153f",
+    "botId": "bot-df3a1af7",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89p87jeb9613d233d3"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991885520,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89p87t-3bb6a48f",
+    "botId": "bot-9cef1b8a",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89p87t07dab3b93861"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991885529,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv89p87x-2f34f110",
+    "botId": "bot-9cfdba53",
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv89p87wa5b79372d42a"
+    },
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "priority": 1,
+    "enqueuedAt": 1791991885533,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv89ovx3fa8de2ab8007",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-492dbf8e"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round",
+     "body": "Go around."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89orv3-68582fe4:h1",
+    "createdAt": 1791991869591,
+    "updatedAt": 1791991869595,
+    "next": [
+     "bot-df3a1af7",
+     "bot-9cef1b8a"
+    ]
+   },
+   {
+    "version": 1,
+    "id": "h-mv89ozyr2d15f8f44662",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-492dbf8e"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "kind": "result",
+    "replyTo": "h-mv89ovx3fa8de2ab8007",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Found",
+     "body": "r"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89ovx4-67b62e1d:h1",
+    "createdAt": 1791991874835,
+    "updatedAt": 1791991874836
+   },
+   {
+    "version": 1,
+    "id": "h-mv89ozys059055b3548c",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 1,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-df3a1af7"
+    },
+    "kind": "dispatch",
+    "replyTo": "h-mv89ozyr2d15f8f44662",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round",
+     "body": "Brief from Coordinator (moa): Round\n\nGo around.\n\nResult from Researcher (lead): Found\n\nr"
+    },
+    "status": "delivered",
+    "clientHandoffId": "forward:h-mv89ozyr2d15f8f44662",
+    "next": [
+     "bot-9cef1b8a"
+    ],
+    "relay": true,
+    "createdAt": 1791991874836,
+    "updatedAt": 1791991874840
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p44a5fc37b44e711",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 2,
+    "hopsInRun": 4,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-df3a1af7"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "kind": "result",
+    "replyTo": "h-mv89ozys059055b3548c",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Built",
+     "body": "d"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89ozyt-a14e3413:h1",
+    "createdAt": 1791991880218,
+    "updatedAt": 1791991880219
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p44c7ea6a55efc10",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 2,
+    "hopsInRun": 5,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cef1b8a"
+    },
+    "kind": "dispatch",
+    "replyTo": "h-mv89p44a5fc37b44e711",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round",
+     "body": "Brief from Coordinator (moa): Round\n\nGo around.\n\nResult from Developer (lead): Built\n\nd"
+    },
+    "status": "delivered",
+    "clientHandoffId": "forward:h-mv89p44a5fc37b44e711",
+    "relay": true,
+    "createdAt": 1791991880220,
+    "updatedAt": 1791991880226
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p86z67fd9c8ad913",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 3,
+    "hopsInRun": 6,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cef1b8a"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "kind": "result",
+    "replyTo": "h-mv89p44c7ea6a55efc10",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Filed",
+     "body": "i"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89p44d-06359f22:h1",
+    "createdAt": 1791991885499,
+    "updatedAt": 1791991885504
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p8781d76cf38f59d",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 4,
+    "hopsInRun": 7,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-492dbf8e"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round again",
+     "body": "Go around again."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89p870-eeb0653f:h1",
+    "createdAt": 1791991885508,
+    "updatedAt": 1791991885511,
+    "next": [
+     "bot-df3a1af7",
+     "bot-9cef1b8a"
+    ]
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p87ic081382fc49b",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 5,
+    "hopsInRun": 8,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-492dbf8e"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "kind": "result",
+    "replyTo": "h-mv89p8781d76cf38f59d",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913",
+      "h-mv89p8781d76cf38f59d"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Found",
+     "body": "r"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89p879-83b31df5:h1",
+    "createdAt": 1791991885518,
+    "updatedAt": 1791991885518
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p87jeb9613d233d3",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 5,
+    "hopsInRun": 9,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-df3a1af7"
+    },
+    "kind": "dispatch",
+    "replyTo": "h-mv89p87ic081382fc49b",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913",
+      "h-mv89p8781d76cf38f59d",
+      "h-mv89p87ic081382fc49b"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round again",
+     "body": "Brief from Coordinator (moa): Round again\n\nGo around again.\n\nResult from Researcher (lead): Found\n\nr"
+    },
+    "status": "delivered",
+    "clientHandoffId": "forward:h-mv89p87ic081382fc49b",
+    "next": [
+     "bot-9cef1b8a"
+    ],
+    "relay": true,
+    "createdAt": 1791991885519,
+    "updatedAt": 1791991885522
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p87s22311f6eb0e4",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 6,
+    "hopsInRun": 10,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-df3a1af7"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "kind": "result",
+    "replyTo": "h-mv89p87jeb9613d233d3",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913",
+      "h-mv89p8781d76cf38f59d",
+      "h-mv89p87ic081382fc49b",
+      "h-mv89p87jeb9613d233d3"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Built",
+     "body": "d"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv89p87k-d555153f:h1",
+    "createdAt": 1791991885528,
+    "updatedAt": 1791991885528
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p87t07dab3b93861",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 6,
+    "hopsInRun": 11,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cef1b8a"
+    },
+    "kind": "dispatch",
+    "replyTo": "h-mv89p87s22311f6eb0e4",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913",
+      "h-mv89p8781d76cf38f59d",
+      "h-mv89p87ic081382fc49b",
+      "h-mv89p87jeb9613d233d3",
+      "h-mv89p87s22311f6eb0e4"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round again",
+     "body": "Brief from Coordinator (moa): Round again\n\nGo around again.\n\nResult from Developer (lead): Built\n\nd"
+    },
+    "status": "delivered",
+    "clientHandoffId": "forward:h-mv89p87s22311f6eb0e4",
+    "relay": true,
+    "createdAt": 1791991885529,
+    "updatedAt": 1791991885534
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p87wa5b79372d42a",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 7,
+    "hopsInRun": 12,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cef1b8a"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "kind": "result",
+    "replyTo": "h-mv89p87t07dab3b93861",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913",
+      "h-mv89p8781d76cf38f59d",
+      "h-mv89p87ic081382fc49b",
+      "h-mv89p87jeb9613d233d3",
+      "h-mv89p87s22311f6eb0e4",
+      "h-mv89p87t07dab3b93861"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Filed",
+     "body": "i"
+    },
+    "status": "refused",
+    "clientHandoffId": "wake:w-mv89p87t-3bb6a48f:h1",
+    "createdAt": 1791991885532,
+    "updatedAt": 1791991885533,
+    "refusal": {
+     "code": "max_depth",
+     "detail": "chain depth 7 is over 6"
+    },
+    "relayStopped": "relay stopped: the chain reached its depth limit (6)"
+   },
+   {
+    "version": 1,
+    "id": "h-mv89p87z30c12408dc8c",
+    "runId": "run-c-mv89orv1c0ddb634bc",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "depth": 8,
+    "hopsInRun": 13,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-9cfdba53"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+     "botId": "bot-492dbf8e"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv89ovx3fa8de2ab8007",
+      "h-mv89ozyr2d15f8f44662",
+      "h-mv89ozys059055b3548c",
+      "h-mv89p44a5fc37b44e711",
+      "h-mv89p44c7ea6a55efc10",
+      "h-mv89p86z67fd9c8ad913",
+      "h-mv89p8781d76cf38f59d",
+      "h-mv89p87ic081382fc49b",
+      "h-mv89p87jeb9613d233d3",
+      "h-mv89p87s22311f6eb0e4",
+      "h-mv89p87t07dab3b93861",
+      "h-mv89p87wa5b79372d42a"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Round again",
+     "body": "Go around again."
+    },
+    "status": "refused",
+    "clientHandoffId": "wake:w-mv89p87x-2f34f110:h1",
+    "createdAt": 1791991885535,
+    "updatedAt": 1791991885536,
+    "next": [
+     "bot-df3a1af7",
+     "bot-9cef1b8a"
+    ],
+    "refusal": {
+     "code": "max_depth",
+     "detail": "chain depth 8 is over 6"
+    }
+   }
+  ],
+  "repoWatch": null,
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv89orv1c0ddb634bc",
+    "seq": 1,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791991864333,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Go",
+    "body": "Start the relay.",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "botIds": [
+      "bot-9cfdba53"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89ovx8b53004aaf4",
+    "seq": 2,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991869595,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Researcher (lead): Round",
+    "refs": {
+     "botId": "bot-492dbf8e",
+     "handoffId": "h-mv89ovx3fa8de2ab8007",
+     "factId": "f-0mv89ovx7-5c375ec1febc"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89ozyse10b3f658e",
+    "seq": 3,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991874836,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Found",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "handoffId": "h-mv89ozyr2d15f8f44662",
+     "factId": "f-0mv89ozys-300f541af4c0"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89ozyx0b540c4f12",
+    "seq": 4,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991874841,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Developer (lead): Round (forwarded by wmux)",
+    "refs": {
+     "botId": "bot-df3a1af7",
+     "handoffId": "h-mv89ozys059055b3548c",
+     "factId": "f-0mv89ozyx-2f24185bd689"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p44caa94335986",
+    "seq": 5,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991880219,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Built",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "handoffId": "h-mv89p44a5fc37b44e711",
+     "factId": "f-0mv89p44b-ca85521fd58c"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p44i9f25478c63",
+    "seq": 6,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991880226,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Issue (triage): Round (forwarded by wmux)",
+    "refs": {
+     "botId": "bot-9cef1b8a",
+     "handoffId": "h-mv89p44c7ea6a55efc10",
+     "factId": "f-0mv89p44i-ea827229fe0d"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p870adcc6a84e1",
+    "seq": 7,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "general",
+    "kind": "fact",
+    "at": 1791991885500,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Finished: Round",
+    "refs": {
+     "handoffId": "h-mv89p86z67fd9c8ad913",
+     "threadId": "handoff:h-mv89ovx3fa8de2ab8007"
+    },
+    "replyTo": "c-mv89orv1c0ddb634bc"
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p875a2c9a969cc",
+    "seq": 8,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991885504,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Filed",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "handoffId": "h-mv89p86z67fd9c8ad913",
+     "factId": "f-0mv89p874-74eb4a7bff5c"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p87b57f4f03d72",
+    "seq": 9,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991885511,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Researcher (lead): Round again",
+    "refs": {
+     "botId": "bot-492dbf8e",
+     "handoffId": "h-mv89p8781d76cf38f59d",
+     "factId": "f-0mv89p87b-90061bf01a9d"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p87i1d91c5a388",
+    "seq": 10,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991885518,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Found",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "handoffId": "h-mv89p87ic081382fc49b",
+     "factId": "f-0mv89p87i-ecf7abc35f13"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p87me747124c06",
+    "seq": 11,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991885522,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Developer (lead): Round again (forwarded by wmux)",
+    "refs": {
+     "botId": "bot-df3a1af7",
+     "handoffId": "h-mv89p87jeb9613d233d3",
+     "factId": "f-0mv89p87m-00459fb67fe8"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p87sd2b10281f7",
+    "seq": 12,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991885528,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Built",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "handoffId": "h-mv89p87s22311f6eb0e4",
+     "factId": "f-0mv89p87s-8a54265e8478"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p87x5da4db6bdb",
+    "seq": 13,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "refusal",
+    "at": 1791991885533,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (max_depth): Filed",
+    "body": "chain depth 7 is over 6",
+    "refs": {
+     "botId": "bot-9cef1b8a",
+     "handoffId": "h-mv89p87wa5b79372d42a",
+     "factId": "f-0mv89p87x-4dafa34bc585"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p87yfcfbbe6737",
+    "seq": 14,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "fact",
+    "at": 1791991885534,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Issue (triage): Round again (forwarded by wmux)",
+    "refs": {
+     "botId": "bot-9cef1b8a",
+     "handoffId": "h-mv89p87t07dab3b93861",
+     "factId": "f-0mv89p87y-6a5148ad8658"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv89p880924688a17b",
+    "seq": 15,
+    "workspaceId": "ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7",
+    "threadId": "handoff:h-mv89ovx3fa8de2ab8007",
+    "kind": "refusal",
+    "at": 1791991885536,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (max_depth): Round again",
+    "body": "chain depth 8 is over 6",
+    "refs": {
+     "botId": "bot-9cfdba53",
+     "handoffId": "h-mv89p87z30c12408dc8c",
+     "factId": "f-0mv89p880-45a2de4fe69c"
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791991864379,
+     "event": "initialize"
+    },
+    {
+     "at": 1791991864381,
+     "event": "session/new",
+     "sessionId": "stub-9acd17df9d3d",
+     "cwd": "/home/owner/.wmux-verify-f9cf0b84/factory/bots/bot-9cfdba53"
+    },
+    {
+     "at": 1791991869384,
+     "event": "prompt",
+     "sessionId": "stub-9acd17df9d3d",
+     "text": "You are Coordinator, a bot of wmux workspace ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7."
+    },
+    {
+     "at": 1791991869593,
+     "event": "tool",
+     "sessionId": "stub-9acd17df9d3d",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89ovx3fa8de2ab8007\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-492dbf8e\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"wakeId\": \"w-mv89ovx4-67b62e1d\"\n}"
+    },
+    {
+     "at": 1791991869595,
+     "event": "tool",
+     "sessionId": "stub-9acd17df9d3d",
+     "name": "handoff_send",
+     "ok": false,
+     "text": "MCP error -32602: Input validation error: Invalid arguments for tool handoff_send: Too big: expected array to have <=4 items at next"
+    },
+    {
+     "at": 1791991885502,
+     "event": "prompt",
+     "sessionId": "stub-9acd17df9d3d",
+     "text": "[wake w-mv89p870-eeb0653f] Coordinator (coordinator) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791991885510,
+     "event": "tool",
+     "sessionId": "stub-9acd17df9d3d",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89p8781d76cf38f59d\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-492dbf8e\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"wakeId\": \"w-mv89p879-83b31df5\"\n}"
+    },
+    {
+     "at": 1791991885534,
+     "event": "prompt",
+     "sessionId": "stub-9acd17df9d3d",
+     "text": "[wake w-mv89p87x-2f34f110] Coordinator (coordinator) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791991885536,
+     "event": "tool",
+     "sessionId": "stub-9acd17df9d3d",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"max_depth\",\n  \"message\": \"chain depth 8 is over 6\",\n  \"handoffId\": \"h-mv89p87z30c12408dc8c\"\n}"
+    }
+   ],
+   "researcher": [
+    {
+     "at": 1791991869629,
+     "event": "initialize"
+    },
+    {
+     "at": 1791991869630,
+     "event": "session/new",
+     "sessionId": "stub-6c0d9b19afa5",
+     "cwd": "/home/owner/.wmux-verify-f9cf0b84/factory/bots/bot-492dbf8e"
+    },
+    {
+     "at": 1791991874633,
+     "event": "prompt",
+     "sessionId": "stub-6c0d9b19afa5",
+     "text": "You are Researcher, a bot of wmux workspace ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7."
+    },
+    {
+     "at": 1791991874838,
+     "event": "tool",
+     "sessionId": "stub-6c0d9b19afa5",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89ozyr2d15f8f44662\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-9cfdba53\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"relayedTo\": {\n    \"botId\": \"bot-df3a1af7\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  }\n}"
+    },
+    {
+     "at": 1791991885510,
+     "event": "prompt",
+     "sessionId": "stub-6c0d9b19afa5",
+     "text": "[wake w-mv89p879-83b31df5] Researcher (researcher) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791991885521,
+     "event": "tool",
+     "sessionId": "stub-6c0d9b19afa5",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89p87ic081382fc49b\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-9cfdba53\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"relayedTo\": {\n    \"botId\": \"bot-df3a1af7\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  }\n}"
+    }
+   ],
+   "developer": [
+    {
+     "at": 1791991874876,
+     "event": "initialize"
+    },
+    {
+     "at": 1791991874877,
+     "event": "session/new",
+     "sessionId": "stub-d0c1d1b3391f",
+     "cwd": "/home/owner/.wmux-verify-f9cf0b84/factory/bots/bot-df3a1af7"
+    },
+    {
+     "at": 1791991879879,
+     "event": "prompt",
+     "sessionId": "stub-d0c1d1b3391f",
+     "text": "You are Developer, a bot of wmux workspace ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7."
+    },
+    {
+     "at": 1791991880223,
+     "event": "tool",
+     "sessionId": "stub-d0c1d1b3391f",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89p44a5fc37b44e711\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-9cfdba53\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"relayedTo\": {\n    \"botId\": \"bot-9cef1b8a\",\n    \"role\": \"triage\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  }\n}"
+    },
+    {
+     "at": 1791991885523,
+     "event": "prompt",
+     "sessionId": "stub-d0c1d1b3391f",
+     "text": "[wake w-mv89p87k-d555153f] Developer (developer) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791991885531,
+     "event": "tool",
+     "sessionId": "stub-d0c1d1b3391f",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89p87s22311f6eb0e4\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-9cfdba53\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"relayedTo\": {\n    \"botId\": \"bot-9cef1b8a\",\n    \"role\": \"triage\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  }\n}"
+    }
+   ],
+   "issue": [
+    {
+     "at": 1791991880288,
+     "event": "initialize"
+    },
+    {
+     "at": 1791991880289,
+     "event": "session/new",
+     "sessionId": "stub-89ba6b4f86be",
+     "cwd": "/home/owner/.wmux-verify-f9cf0b84/factory/bots/bot-9cef1b8a"
+    },
+    {
+     "at": 1791991885291,
+     "event": "prompt",
+     "sessionId": "stub-89ba6b4f86be",
+     "text": "You are Issue, a bot of wmux workspace ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7."
+    },
+    {
+     "at": 1791991885501,
+     "event": "tool",
+     "sessionId": "stub-89ba6b4f86be",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv89p86z67fd9c8ad913\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv89ovx3fa8de2ab8007\",\n  \"to\": {\n    \"botId\": \"bot-9cfdba53\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-8b9bb33e-fef6-46a4-9ff1-6adc731c27e7\"\n  },\n  \"wakeId\": \"w-mv89p870-eeb0653f\"\n}"
+    },
+    {
+     "at": 1791991885530,
+     "event": "prompt",
+     "sessionId": "stub-89ba6b4f86be",
+     "text": "[wake w-mv89p87t-3bb6a48f] Issue (issue) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791991885534,
+     "event": "tool",
+     "sessionId": "stub-89ba6b4f86be",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"max_depth\",\n  \"message\": \"chain depth 7 is over 6\",\n  \"handoffId\": \"h-mv89p87wa5b79372d42a\"\n}"
+    }
+   ],
+   "extra": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791991864171,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-14T15-31-01-verify-f9cf0b84",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux-team/.claude/skills/verify-wmux/evidence/2026-10-14T15-31-01-verify-f9cf0b84"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "depth 7 was delivered",
+   "failing": [
+    "depth_7_refused",
+    "lead_told_relay_stopped",
+    "nothing_past_cap_delivered"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.11.status",
+     "value": "delivered"
+    }
+   ]
+  },
+  {
+   "why": "the coordinator was not told the relay stopped",
+   "failing": [
+    "lead_told_relay_stopped"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.8"
+    }
+   ]
+  },
+  {
+   "why": "round two started a level late",
+   "failing": [
+    "round_two_starts_at_4"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.6.depth",
+     "value": 5
+    }
+   ]
+  }
+ ]
+}

@@ -167,6 +167,8 @@ export function chainSurvivesWorker(snap, expect) {
     criterion('dispatch_in_owner_run', !!dispatch && dispatch.runId === `run-${msg?.id}` && dispatch.depth === 0 && dispatch.to?.botId === dev,
       dispatch ? `${dispatch.runId} d${dispatch.depth} → ${dispatch.to?.botId}` : 'no dispatch'),
     criterion('task_records_the_dispatch', rows.length === 1 && rows[0].dispatch?.handoffId === dispatch?.id, rows.map((e) => e.dispatch?.handoffId ?? '-').join(', ') || 'no task'),
+    // The coordinator sent it from the owner's own words: the task is clean.
+    criterion('task_clean_from_owner_words', rows.length === 1 && rows[0].dispatch?.origin?.tainted === false, rows.map((e) => String(e.dispatch?.origin?.tainted)).join(', ') || 'no task'),
     criterion('result_from_task_wake', devFactsWakes.length >= 1 && !!result && result.createdAt >= Math.min(...devFactsWakes.map((w) => w.enqueuedAt)),
       `${devFactsWakes.length} task wake(s)`),
     criterion('result_answers_dispatch', !!result && result.replyTo === dispatch?.id && result.to?.botId === lead && result.runId === dispatch?.runId && result.depth === 1
@@ -174,5 +176,66 @@ export function chainSurvivesWorker(snap, expect) {
     criterion('lead_woken_once_by_it', leadWakes.filter((w) => w.reason?.kind === 'handoff').length === 1 && leadWakes.some((w) => w.reason?.kind === 'handoff' && w.reason.handoffId === result?.id && w.state === 'done'),
       leadWakes.map((w) => `${w.reason?.kind}:${w.state}`).join(', ')),
     criterion('no_refusals', hs.every((h) => h.status !== 'refused'), hs.filter((h) => h.status === 'refused').map((h) => h.refusal?.code).join(', ') || 'none'),
+  ];
+}
+
+/** team-relay-owner-flow: the owner's request walks researcher → developer
+ *  → issue in one run and one thread; the coordinator is woken twice (the
+ *  owner, the last result) and reports there; General points at it. */
+export function teamRelayOwnerFlow(snap, expect) {
+  const msg = injected(snap, expect.message);
+  const lead = botId(snap, expect.lead);
+  const relay = (expect.relay ?? []).map((k) => botId(snap, k));
+  const hs = arr(snap.handoffs);
+  const root = hs.find((h) => h.kind === 'dispatch' && h.from?.botId === lead && !h.relay) ?? null;
+  const run = hs.filter((h) => h.runId === root?.runId);
+  const results = relay.map((id) => run.find((h) => h.kind === 'result' && h.from?.botId === id) ?? null);
+  const forwards = run.filter((h) => h.relay === true);
+  const leadWakes = wakesOf(snap, expect.lead);
+  const rows = arr(snap.ledger).filter((e) => (expect.workers ?? []).some((k) => e.dispatch?.origin?.botId === botId(snap, k)));
+  const report = botCards(snap, expect.lead).find((c) => c.kind === 'report') ?? null;
+  const pointer = arr(snap.cards).find((c) => c.threadId === 'general' && c.actor?.kind === 'system' && c.refs?.threadId === root?.threadId) ?? null;
+  const devRow = rows.find((e) => e.dispatch?.origin?.botId === botId(snap, 'developer'));
+  return [
+    criterion('one_owner_run', !!root && root.runId === `run-${msg?.id}` && run.every((h) => h.attribution?.originator?.kind === 'human'), root ? `${root.runId}, ${run.length} hop(s)` : 'no dispatch'),
+    criterion('depths', JSON.stringify(run.map((h) => h.depth).sort((a, b) => a - b)) === '[0,1,1,2,2,3]', run.map((h) => h.depth).sort((a, b) => a - b).join(',')),
+    criterion('forwards_from_lead_carry_results', forwards.length === 2 && forwards.every((f, i) => f.from?.botId === lead && f.replyTo === results[i]?.id && f.to?.botId === relay[i + 1]),
+      forwards.map((f) => `${f.from?.botId}→${f.to?.botId} re ${f.replyTo}`).join('; ') || 'none'),
+    criterion('last_result_to_lead', !!results[2] && results[2].to?.botId === lead && results[2].replyTo === forwards[1]?.id, results[2] ? `${results[2].to?.botId} re ${results[2].replyTo}` : 'none'),
+    criterion('lead_woken_twice', leadWakes.length === 2 && leadWakes[0].reason?.kind === 'human' && leadWakes[1].reason?.kind === 'handoff' && leadWakes[1].reason.handoffId === results[2]?.id,
+      leadWakes.map((w) => `${w.reason?.kind}:${w.reason?.handoffId ?? ''}`).join(', ')),
+    criterion('one_flow_thread', !!root && root.threadId === `handoff:${root.id}` && run.every((h) => h.threadId === root.threadId)
+      && rows.length === (expect.workers ?? []).length && rows.every((e) => e.dispatch?.threadId === root.threadId),
+      [...new Set([...run.map((h) => h.threadId), ...rows.map((e) => e.dispatch?.threadId)])].join(', ')),
+    criterion('report_in_flow_thread', !!report && report.threadId === root?.threadId, report ? report.threadId : 'no report'),
+    criterion('pointer_in_general', !!pointer && pointer.replyTo === msg?.id && pointer.refs?.handoffId === results[2]?.id && !pointer.body,
+      pointer ? `${pointer.title} ↩ ${pointer.replyTo}` : 'no pointer'),
+    criterion('research_taint_carried', !!devRow && devRow.dispatch?.origin?.tainted === true, devRow ? String(devRow.dispatch?.origin?.tainted) : 'no developer task'),
+    criterion('no_refusals', hs.every((h) => h.status !== 'refused'), hs.filter((h) => h.status === 'refused').map((h) => `${h.kind}:${h.refusal?.code}`).join(', ') || 'none'),
+  ];
+}
+
+/** team-relay-limit: a relay restarted on every wake stops at the depth
+ *  cap: the last result of round two (depth 7) is refused, the coordinator
+ *  is told, and nothing deeper than the cap is delivered. */
+export function teamRelayLimit(snap, expect) {
+  const max = expect.maxDepth ?? 6;
+  const lead = botId(snap, expect.lead);
+  const hs = arr(snap.handoffs);
+  const delivered = hs.filter((h) => h.status !== 'refused');
+  const refused = hs.filter((h) => h.status === 'refused');
+  const capped = refused.find((h) => h.kind === 'result' && h.depth === max + 1 && h.refusal?.code === 'max_depth') ?? null;
+  const roundTwo = hs.find((h) => h.kind === 'dispatch' && h.from?.botId === lead && !h.relay && h.depth === 4) ?? null;
+  const stopWake = wakesOf(snap, expect.lead).find((w) => w.reason?.kind === 'handoff' && w.reason.handoffId === capped?.id) ?? null;
+  const tooLong = stubTools(snap, expect.lead, 'handoff_send').find((t) => t.ok === false) ?? null;
+  return [
+    criterion('round_one_depths', JSON.stringify(delivered.filter((h) => h.depth <= 3).map((h) => h.depth).sort((a, b) => a - b)) === '[0,1,1,2,2,3]',
+      delivered.filter((h) => h.depth <= 3).map((h) => h.depth).sort((a, b) => a - b).join(',')),
+    criterion('round_two_starts_at_4', !!roundTwo && roundTwo.status !== 'refused' && roundTwo.next?.length === 2, roundTwo ? `d${roundTwo.depth} ${roundTwo.status}` : 'none'),
+    criterion('depth_7_refused', !!capped && factsOfKind(snap, 'handoff.refused').some((f) => f.ref?.handoffId === capped.id)
+      && arr(snap.cards).some((c) => c.kind === 'refusal' && c.refs?.handoffId === capped.id), capped ? `${capped.id} ${capped.refusal?.detail}` : refused.map((h) => `${h.kind} d${h.depth} ${h.refusal?.code}`).join(', ') || 'none'),
+    criterion('lead_told_relay_stopped', !!stopWake && /depth limit/.test(capped?.relayStopped ?? ''), stopWake ? capped?.relayStopped ?? '' : 'no wake'),
+    criterion('nothing_past_cap_delivered', delivered.every((h) => h.depth <= max), delivered.filter((h) => h.depth > max).map((h) => `${h.kind} d${h.depth}`).join(', ') || 'none'),
+    criterion('five_next_refused', !!tooLong && /<=4|next is 1 to 4/.test(String(tooLong.text)), tooLong?.text?.slice(0, 160) ?? 'not refused'),
   ];
 }

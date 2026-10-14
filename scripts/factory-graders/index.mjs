@@ -54,6 +54,9 @@ export const GRADERS = {
   'routine-create-fire-pause': group.routineCreateFirePause,
   'chat-stop-all': group.chatStopAll,
   'chain-survives-worker': handoffs.chainSurvivesWorker,
+  'team-relay-owner-flow': handoffs.teamRelayOwnerFlow,
+  'team-relay-limit': handoffs.teamRelayLimit,
+  'taint-relay-lane-refused': approvals.taintRelayLaneRefused,
   'coordinator-room-wakes-lead-only': group.coordinatorRoomWakesLeadOnly,
   'taint-research-lane-refused': approvals.taintLaneRefused,
 };

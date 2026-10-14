@@ -124,3 +124,19 @@ export function approvalRuleNextTime(snap, expect) {
       next ? `${next.state} ${next.refusal ?? ''}; PR ${pr(snap, expect.pr ?? 1)?.state}` : 'no next request'),
   ];
 }
+
+/** taint-relay-lane-refused: the researcher's result reaches the developer
+ *  through a relay; the developer's task carries the taint and the lane
+ *  refuses it. */
+export function taintRelayLaneRefused(snap, expect) {
+  const dev = botId(snap, expect.lead);
+  const res = botId(snap, expect.relayFrom);
+  const forward = arr(snap.handoffs).find((h) => h.relay === true && h.to?.botId === dev) ?? null;
+  const carried = forward ? arr(snap.handoffs).find((h) => h.id === forward.replyTo) : null;
+  const rows = arr(snap.ledger).filter((e) => e.dispatch?.origin?.botId === dev);
+  return [
+    criterion('developer_woken_by_relay', !!forward && carried?.from?.botId === res && rows.length >= 1 && rows.every((e) => e.dispatch?.handoffId === forward.id),
+      forward ? `${forward.id} carries ${carried?.from?.botId}; tasks ${rows.map((e) => e.dispatch?.handoffId).join(', ')}` : 'no forward'),
+    ...taintLaneRefused(snap, expect),
+  ];
+}
