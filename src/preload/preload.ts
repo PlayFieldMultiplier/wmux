@@ -114,7 +114,8 @@ import type {
   PcRailStreamEvent,
 } from '../shared/pcRail';
 import type { PcRailFeedEvent } from '../main/remote/pcRailWire';
-import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary } from '../shared/remoteHosts';
+import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from '../shared/remoteHosts';
+import { REMOTE_SSH_IPC } from '../shared/remoteHosts';
 
 /** Mirrors {@link McpStatusPayload} in src/main/ipc/handlers/mcp.handler.ts. */
 export interface McpTargetStatusPayload {
@@ -651,7 +652,7 @@ const electronAPI = {
   fanout: {
     start: (req: Record<string, unknown>) => ipcRenderer.invoke(IPC.FANOUT_START, req),
     lineage: (workspaceIds: string[]) =>
-      ipcRenderer.invoke(IPC.FANOUT_LINEAGE, workspaceIds) as Promise<Record<string, { owner: string; at: number; origin?: import('../shared/fanoutOrigin').FanoutOrigin }>>,
+      ipcRenderer.invoke(IPC.FANOUT_LINEAGE, workspaceIds) as Promise<Record<string, import('../shared/fanoutOrigin').FanoutLineageEntry>>,
     recentAudit: (limit: number) =>
       ipcRenderer.invoke(IPC.FANOUT_AUDIT_RECENT, limit) as Promise<
         import('../main/worktask/fanoutGuards').FanOutAuditRecord[]
@@ -1183,6 +1184,8 @@ const electronAPI = {
       factoryBotCall('bot.update', { botId, patch }),
     createBot: (req: import('../shared/botCreate').FactoryBotCreateRequest) =>
       ipcRenderer.invoke(IPC.FACTORY_BOT_CREATE, req) as Promise<import('../shared/botCreate').FactoryBotCreateResult>,
+    createBotTeam: (req: import('../shared/botCreate').FactoryBotCreateTeamRequest) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_CREATE_TEAM, req) as Promise<import('../shared/botCreate').FactoryBotCreateTeamResult>,
     pickBotAvatar: () =>
       ipcRenderer.invoke(IPC.FACTORY_BOT_PICK_AVATAR) as Promise<import('../shared/botCreate').FactoryBotAvatarPickResult>,
     setBotAvatar: (botId: string, avatar: string | null) =>
@@ -1199,6 +1202,13 @@ const electronAPI = {
     // The owner resumes the stopped worker of an ended bot task.
     resumeWorker: (taskId: string) =>
       ipcRenderer.invoke(IPC.FACTORY_WORKER_RESUME, { taskId }) as Promise<import('../main/factory/workerReclaim').WorkerResumeResult>,
+    // Can the default bot engine (Claude) run here? Checked without a model turn.
+    factoryEngineReadiness: () =>
+      ipcRenderer.invoke(IPC.FACTORY_ENGINE_READINESS) as Promise<import('../shared/factoryEngine').FactoryEngineReadiness>,
+    // Start the Claude sign-in (`claude auth login` in a terminal tab of the
+    // active workspace); rejects when no tab could be opened. Poll
+    // factoryEngineReadiness to see it land.
+    factoryEngineLogin: () => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN) as Promise<void>,
     // Every bot's routines, read-only (routine.list as the operator).
     listRoutines: async (): Promise<import('../shared/botRoutine').BotRoutine[]> => {
       const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, 'routine.list', {})) as { ok?: unknown; result?: { ok?: unknown; routines?: unknown } } | null;
@@ -2001,8 +2011,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.REMOTE_WORKSPACES_LIST, hostId) as Promise<
       { ok: true; workspaces: RemoteWorkspaceSummary[] } | { ok: false; error: string; reason?: RemoteErrorReason }
     >,
-  workspaceCreate: (hostId: string, workspaceId: string, cwd?: string) =>
-    ipcRenderer.invoke(IPC.REMOTE_WORKSPACE_CREATE, hostId, workspaceId, cwd) as Promise<
+  workspaceCreate: (hostId: string, workspaceId: string, cwd?: string, name?: string) =>
+    ipcRenderer.invoke(IPC.REMOTE_WORKSPACE_CREATE, hostId, workspaceId, cwd, name) as Promise<
       { ok: true; sessionId: string } | { ok: false; error: string; reason?: RemoteErrorReason }
     >,
   sessionClose: (hostId: string, sessionId: string) =>
@@ -2074,6 +2084,21 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.on(IPC.REMOTE_POLL_TICK, listener);
     return () => { ipcRenderer.removeListener(IPC.REMOTE_POLL_TICK, listener); };
   },
+  // Add PC over SSH: main runs ssh; the renderer only names the destination.
+  sshCandidates: () => ipcRenderer.invoke(REMOTE_SSH_IPC.CANDIDATES) as Promise<string[]>,
+  sshAdd: (alias: string, requestId: string, label?: string, startAfterReboot?: boolean) =>
+    ipcRenderer.invoke(REMOTE_SSH_IPC.ADD, alias, requestId, label, startAfterReboot) as Promise<SshAddResult>,
+  sshService: (hostId: string, on: boolean) => ipcRenderer.invoke(REMOTE_SSH_IPC.SERVICE, hostId, on) as Promise<SshServiceResult>,
+  sshStates: () => ipcRenderer.invoke(REMOTE_SSH_IPC.STATES) as Promise<Record<string, SshTunnelState>>,
+  sshConfirm: (hostId: string, accept?: { resolvedHost: string; hostKeyFingerprint: string }) =>
+    ipcRenderer.invoke(REMOTE_SSH_IPC.CONFIRM, hostId, accept) as Promise<SshConfirmResult>,
+  sshRepair: (hostId: string) => ipcRenderer.invoke(REMOTE_SSH_IPC.REPAIR, hostId) as Promise<SshAddResult>,
+  sshCancel: (requestId: string) => ipcRenderer.invoke(REMOTE_SSH_IPC.CANCEL, requestId) as Promise<boolean>,
+  onSshProgress: (callback: (e: SshAddProgress) => void) => {
+    const listener = (_event: unknown, payload: SshAddProgress) => callback(payload);
+    ipcRenderer.on(REMOTE_SSH_IPC.PROGRESS, listener);
+    return () => { ipcRenderer.removeListener(REMOTE_SSH_IPC.PROGRESS, listener); };
+  },
 };
 
 // PC rail — the computer column's feeds (main polls every web-paired host and
@@ -2086,6 +2111,7 @@ export interface PcRailBridge {
   onStream(callback: (e: PcRailStreamEvent) => void): () => void;
   approvalsList(request: PcRailApprovalsRequest): Promise<PcRailApprovalsResult>;
   setMutes(request: PcRailMutesRequest): Promise<void>;
+  refresh(request: { hostId: string }): Promise<boolean>;
 }
 
 function onPcRailPush<T>(channel: string, callback: (payload: T) => void): () => void {
@@ -2109,6 +2135,7 @@ const pcRailBridge: PcRailBridge = {
   onStream: (callback) => onPcRailPush(PC_RAIL_IPC.STREAM_EVENT, callback),
   approvalsList: (request) => ipcRenderer.invoke(PC_RAIL_IPC.APPROVALS_LIST, request) as Promise<PcRailApprovalsResult>,
   setMutes: (request) => ipcRenderer.invoke(PC_RAIL_IPC.MUTES_SET, request) as Promise<void>,
+  refresh: (request) => ipcRenderer.invoke(PC_RAIL_IPC.REFRESH, request) as Promise<boolean>,
 };
 (electronAPI as Record<string, unknown>).pcRail = pcRailBridge;
 

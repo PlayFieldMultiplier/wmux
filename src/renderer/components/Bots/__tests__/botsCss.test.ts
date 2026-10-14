@@ -22,4 +22,9 @@ describe('bots.css', () => {
     // The chat it is placed in is the positioned box that bounds it.
     expect(rule('.wmux-bots-chat')).toMatch(/position:\s*relative/);
   });
+
+  it('the worker panel draws no pane done, notification or glow ring (Workspaces keeps them)', () => {
+    expect(css).toMatch(/\.wmux-bots-worker-panes \.pane-complete-blink::after,\s*\.wmux-bots-worker-panes \.notification-ring::before,\s*\.wmux-bots-worker-panes \.pane-flash::after \{ display: none; \}/);
+    expect(css).toMatch(/\.wmux-bots-worker-panes \.pane-ring-glow \{ box-shadow: none; opacity: 1;/);
+  });
 });

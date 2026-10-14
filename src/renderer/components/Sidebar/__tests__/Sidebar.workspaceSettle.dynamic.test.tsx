@@ -136,16 +136,12 @@ describe('Row menu verbs', () => {
     expect(action('snooze')).toBeNull();
   });
 
-  it('keeps the HQ workspace in view: Settle disabled with its reason, no Snooze', () => {
+  it('an old HQ workspace is a workspace like any other: Settle and Snooze are offered', () => {
     seed({}, [], 'a');
     act(() => root.render(<Sidebar />));
     openMenu('a');
-    expect(action('settle')!.disabled).toBe(true);
-    expect(action('settle')!.title).toBe('The HQ workspace always stays in view');
-    expect(action('snooze')).toBeNull();
-    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
-    openMenu('b');
     expect(action('settle')!.disabled).toBe(false);
+    expect(action('settle')!.title).toBe('');
     expect(action('snooze')).not.toBeNull();
   });
 

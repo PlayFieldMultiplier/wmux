@@ -115,6 +115,67 @@ describe('WakeTaint', () => {
     expect(t.handoffTainted('h-missing')).toBe(true);
   });
 
+  it('a researcher\'s handoff is tainted even from a clean wake; an unknown sender is too', () => {
+    const fromA = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    const fromB = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-b' };
+    const fromGone = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-c' };
+    const hs = [handoff('h-research', fromA), handoff('h-dev', fromB), handoff('h-gone', fromGone)];
+    const profiles: Record<string, { role: 'lead'; template: 'researcher' | 'developer' }> = {
+      'bot-a': { role: 'lead', template: 'researcher' },
+      'bot-b': { role: 'lead', template: 'developer' },
+    };
+    const t = make({
+      runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }),
+      bot: (id) => profiles[id] ?? null,
+    }, [], hs);
+    for (const id of ['h-research', 'h-dev', 'h-gone']) t.onFact(fact(`x-${id}`, 'handoff.received', { handoffId: id }));
+    expect(t.handoffTainted('h-research')).toBe(true);
+    expect(t.handoffTainted('h-dev')).toBe(false);
+    expect(t.handoffTainted('h-gone')).toBe(true);
+    // A directory that throws is not known to be clean (marks in memory only).
+    const broken = make({ file: undefined, runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }), bot: () => { throw new Error('x'); } }, [], hs);
+    broken.onFact(fact('x', 'handoff.received', { handoffId: 'h-dev' }));
+    expect(broken.handoffTainted('h-dev')).toBe(true);
+  });
+
+  it('a researcher\'s handoff marked clean before the rule existed reads tainted', () => {
+    const fromA = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), JSON.stringify({ version: 1, handoffs: { 'h-old': false, 'h-dev': false } }));
+    const t = make({ bot: (id) => (id === 'bot-a' ? { role: 'lead', template: 'researcher' } : { role: 'lead', template: 'developer' }) },
+      [], [handoff('h-old', fromA), handoff('h-dev', { kind: 'bot', workspaceId: 'ws', botId: 'bot-b' })]);
+    expect(t.handoffTainted('h-old')).toBe(true);
+    expect(t.handoffTainted('h-dev')).toBe(false);
+  });
+
+  it('the owner\'s answer to a question asked mid-hop is as tainted as that hop', () => {
+    const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    const human = { kind: 'human' as const };
+    const ask = (id: string, forHop?: string): Handoff => ({ ...handoff(id, fromBot), kind: 'ask_person', to: human, ...(forHop ? { forHop } : {}) });
+    const answer = (id: string, askId: string): Handoff => ({ ...handoff(id, human), kind: 'answer', replyTo: askId });
+    const hs = [handoff('h-dirty', fromBot), handoff('h-clean', fromBot), ask('a-dirty', 'h-dirty'), ask('a-clean', 'h-clean'), ask('a-none'),
+      answer('ans-dirty', 'a-dirty'), answer('ans-clean', 'a-clean'), answer('ans-none', 'a-none')];
+    const t = make({ file: undefined, runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }) }, [], hs);
+    t.onFact(fact('x1', 'handoff.received', { handoffId: 'h-clean' }));
+    expect(t.handoffTainted('ans-dirty')).toBe(true);
+    expect(t.handoffTainted('ans-clean')).toBe(false);
+    expect(t.handoffTainted('ans-none')).toBe(false);
+  });
+
+  it('a send is marked in the sender\'s turn, so a turn that ended before delivery does not taint it', () => {
+    const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 };
+    const t = make({ file: undefined, runningWake: () => running }, [], [handoff('h-sent', fromBot)]);
+    t.markSent('h-sent', 'bot-a');
+    running = null;
+    t.onFact(fact('x', 'handoff.received', { handoffId: 'h-sent' }));
+    expect(t.handoffTainted('h-sent')).toBe(false);
+    // With no running turn at the send, it is tainted.
+    const t2 = make({ file: undefined, runningWake: () => null }, [], [handoff('h-late', fromBot)]);
+    t2.markSent('h-late', 'bot-a');
+    expect(t2.handoffTainted('h-late')).toBe(true);
+  });
+
   it('an unreadable marks file starts empty', () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');

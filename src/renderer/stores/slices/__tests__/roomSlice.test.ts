@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../../index';
 import type { RoomCard, ThreadSummary } from '../../../../shared/room';
-import { ALL_THREADS, mergeCards, orderThreads, timelineKey, upsertThread } from '../roomSlice';
+import { ALL_THREADS, mergeCards, orderThreads, selectWorkerPanelHost, timelineKey, upsertThread } from '../roomSlice';
 
 const WS = 'ws-a';
 
@@ -14,7 +14,7 @@ function summary(threadId: ThreadSummary['threadId'], over: Partial<ThreadSummar
 }
 
 beforeEach(() => {
-  useStore.setState({ roomStatus: null, roomThreads: {}, roomTimelines: {}, roomSelectedThread: {}, roomReadThrough: {}, roomScope: 'workspace' });
+  useStore.setState({ roomStatus: null, roomThreads: {}, roomTimelines: {}, roomSelectedThread: {}, roomReadThrough: {} });
 });
 
 describe('orderThreads', () => {
@@ -88,5 +88,25 @@ describe('room slice', () => {
     expect(useStore.getState().noteRoomRead(WS, 'general', 4)).toBe(false);
     expect(useStore.getState().noteRoomRead(WS, 'general', 2)).toBe(false);
     expect(useStore.getState().noteRoomRead(WS, 'general', 6)).toBe(true);
+  });
+});
+
+describe('bot worker panel host', () => {
+  const leaf = (surfaceType?: string) => ({ id: 'p', type: 'leaf', surfaces: [{ id: 's', ...(surfaceType ? { surfaceType } : {}) }], activeSurfaceId: 's' });
+  const workspaces = [
+    { id: 't1', rootPane: leaf('terminal') },
+    { id: 't2', rootPane: leaf('browser') },
+  ] as never;
+
+  it('hosts a terminal-only workspace only while Bots is the page', () => {
+    const panel = { workspaceId: 't1', conversationId: 'bot:b1' };
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: panel, workspaces })).toBe('t1');
+    expect(selectWorkerPanelHost({ appRoute: 'workspaces', botsWorkerPanel: panel, workspaces })).toBeNull();
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: null, workspaces })).toBeNull();
+  });
+
+  it('leaves a workspace holding a browser (or gone) in the viewport', () => {
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: { workspaceId: 't2', conversationId: 'bot:b1' }, workspaces })).toBeNull();
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: { workspaceId: 'gone', conversationId: 'bot:b1' }, workspaces })).toBeNull();
   });
 });

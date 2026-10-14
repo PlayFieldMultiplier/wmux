@@ -11,13 +11,14 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
   let off: (() => void) | null = null;
   return {
     async start() {
-      const [{ getFactLog }, { getHandoffRouter }, { getTaskLedger }, { currentWakeItem }, { getBotRuntime }, { resolveFactsFrom }] = await Promise.all([
+      const [{ getFactLog }, { getHandoffRouter }, { getTaskLedger }, { currentWakeItem }, { getBotRuntime }, { resolveFactsFrom }, { getBotDirectory }] = await Promise.all([
         import('./factLog'),
         import('./handoffRouter'),
         import('../deck/taskLedgerHost'),
         import('./wakeQueue'),
         import('./BotRuntime'),
         import('./factoryWiring'),
+        import('./botStore'),
       ]);
       // The bot's running wake and when its turn began (the queue's item and
       // the runtime's turn must name the same wake).
@@ -31,6 +32,7 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
         handoff: (id) => getHandoffRouter()?.get(id) ?? null,
         taskRow: (id) => getTaskLedger().get(id),
         runningWake,
+        bot: (botId) => getBotDirectory()?.get(botId) ?? null,
         file: path.join(deps.wmuxDir(), 'factory', TAINT_FILENAME),
       });
       setWakeTaint(taint, runningWake);

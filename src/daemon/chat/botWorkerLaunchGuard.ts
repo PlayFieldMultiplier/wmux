@@ -7,11 +7,13 @@
 // launches carry (shared/botWorkerGuard.ts), or nothing is typed. Which panes
 // are a bot's workers comes from main's record, read fresh on every launch:
 // main writes it while the daemon runs. A record that exists but cannot be
-// read guards every pane. A line that starts no claude passes unchanged, as
-// main's own resume guard passes it.
+// read guards every pane. A codex line is refused there (main launches a bot's
+// codex worker only as the fan-out's own first launch). A line that starts no
+// claude or codex passes unchanged, as main's own resume guard passes it.
 
 import { getWmuxDir } from '../config';
 import { namesClaude, readBotWorkerSessions, spliceSettingsFlag, writeBotWorkerSettings } from '../../shared/botWorkerGuard';
+import { namesCodex } from '../../shared/codexWorkerGuard';
 
 /** The first message as terminalLaunchCommand appends it: ` -- '<text>'`,
  *  each `'` written `'\''`. */
@@ -27,6 +29,8 @@ const QUOTED_FIRST_MESSAGE = /^ -- '(?:[^']|'\\'')*'$/;
 export function guardBotWorkerLaunch(sessionId: string, line: string, head: string, dir: string = getWmuxDir()): string | null {
   const read = readBotWorkerSessions(dir);
   if ('sessions' in read && !read.sessions.has(sessionId)) return line;
+  // A codex worker starts only as main's fan-out launch (codexWorkerGuard).
+  if (namesCodex(line)) return null;
   if (!namesClaude(line)) return line;
   if (!line.startsWith(head)) return null;
   const tail = line.slice(head.length);

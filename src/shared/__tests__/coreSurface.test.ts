@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CORE_MODE_ARG, CORE_TOOL_SURFACE } from '../coreSurface';
+import { BROWSER_TOOL_SURFACE, CORE_MODE_ARG, CORE_TOOL_SURFACE } from '../coreSurface';
 import { COMMANDER_TOOL_SURFACE } from '../commanderSurface';
 import { UNLISTED_TOOLS, UNLISTED_TOOLS_SET } from '../unlistedTools';
 
@@ -48,6 +48,12 @@ describe('core surface manifest invariants', () => {
     // deepEqual, not set equality: core must preserve the canonical
     // full-profile registration order so a host's cached ordering holds.
     expect(baseline.profiles.core.toolNames).toEqual(expected);
+  });
+
+  it('names the full surface with the browser list: core plus browser, nothing else', () => {
+    const listedCore = CORE_TOOL_SURFACE.filter((name) => !UNLISTED_TOOLS_SET.has(name));
+    expect(new Set([...listedCore, ...BROWSER_TOOL_SURFACE])).toEqual(new Set(baseline.profiles.full.toolNames));
+    expect(BROWSER_TOOL_SURFACE.every((name) => name.startsWith('browser_'))).toBe(true);
   });
 
   it('matches the published core baseline exactly once the unlisted names are projected out', () => {

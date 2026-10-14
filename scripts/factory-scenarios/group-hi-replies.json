@@ -3,7 +3,7 @@
   "layer": "regression",
   "runs": 1,
   "model": "stub",
-  "description": "The owner says Hi to the room with no bot named: every enabled bot of the room wakes once (one directed fact each, one shared run, the room flag on each wake) and each answers in General; the card records every addressee.",
+  "description": "In a room without a coordinator, the owner says Hi to the room with no bot named: every enabled bot of the room wakes once (one directed fact each, one shared run, the room flag on each wake) and each answers in General; the card records every addressee.",
   "setup": {
     "bots": [
       {
@@ -70,8 +70,8 @@
         }
       },
       {
-        "key": "moa",
-        "role": "moa",
+        "key": "maintainer",
+        "role": "maintainer",
         "triggers": [],
         "script": {
           "turns": [
@@ -81,8 +81,8 @@
                   "tool": "room_post",
                   "args": {
                     "kind": "opinion",
-                    "title": "Hi from moa",
-                    "body": "moa here."
+                    "title": "Hi from maintainer",
+                    "body": "maintainer here."
                   }
                 }
               ]
@@ -134,7 +134,7 @@
       "lead",
       "triage",
       "verifier",
-      "moa"
+      "maintainer"
     ]
   }
 }

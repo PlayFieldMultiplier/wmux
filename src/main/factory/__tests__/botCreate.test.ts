@@ -11,9 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 
 import { BotStore, botsFilePath } from '../botStore';
-import { createBotFromFolder, greetNewBot, homeShortPath, resolveBotRepo, suggestBotRepo, workspaceFolder, workspaceRepo } from '../botCreate';
+import { createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, resolveBotRepo, suggestBotRepo, workspaceFolder, workspaceRepo } from '../botCreate';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
-import { factoryBotCreateHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
+import { factoryBotCreateHandler, factoryBotCreateTeamHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
 import type { FactorySettingsStore } from '../factorySettings';
 import type { GitResult } from '../../git/git';
@@ -343,5 +343,63 @@ describe('greetNewBot', () => {
     expect(greetNewBot({ ...bot, enabled: false }, enqueue)).toBeNull();
     expect(greetNewBot(bot, null)).toBeNull();
     expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('"Add team"', () => {
+  const names = { coordinator: '대장', researcher: '시장조사', developer: '구현', issue: '이슈처리', reviewer: '리뷰어' };
+  const mainFrame = { id: 'top' };
+  const webContents = { mainFrame };
+  const win = { isDestroyed: () => false, webContents } as unknown as Electron.BrowserWindow;
+
+  it('makes the five bots in order, coordinator first, on one repository read once', async () => {
+    const git = fakeGit(ok('/src/app\n'), ok('git@github.com:acme/app.git\n'));
+    const r = await createTeamFromFolder(store, { workspaceId: 'ws-1', names, repoFolder: '/src/app' }, { git, realpath: (p) => p });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.bots.map((b) => [b.template, b.name])).toEqual([
+      ['coordinator', '대장'], ['researcher', '시장조사'], ['developer', '구현'], ['issue', '이슈처리'], ['reviewer', '리뷰어'],
+    ]);
+    expect(r.bots.every((b) => b.repo?.repoKey === 'github.com/acme/app' && b.repo.repoPath === path.normalize('/src/app'))).toBe(true);
+    expect(git).toHaveBeenCalledTimes(2);
+    // The coordinator is the oldest of them: the room's lead.
+    expect(r.bots[0].createdAt).toBeLessThanOrEqual(Math.min(...r.bots.map((b) => b.createdAt)));
+  });
+
+  it('refuses before making any bot: a workspace with a coordinator, a name taken or missing', async () => {
+    store.create({ workspaceId: 'ws-2', template: 'developer', name: '구현' });
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-2', names })).toMatchObject({ ok: false, code: 'name_taken' });
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-3', names: { ...names, issue: '대장' } })).toMatchObject({ ok: false, code: 'name_taken' });
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-3', names: { ...names, reviewer: ' ' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    store.create({ workspaceId: 'ws-4', template: 'coordinator', name: 'Boss' });
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-4', names })).toMatchObject({ ok: false, code: 'has_lead' });
+    expect(store.list({ workspaceId: 'ws-3' })).toEqual([]);
+    expect(store.list({ workspaceId: 'ws-4' })).toHaveLength(1);
+    // Without a folder the team takes the workspace's repository, when it has one.
+    store.create({ workspaceId: 'ws-5', template: 'custom', name: 'Old', repo: { repoKey: 'github.com/acme/old', repoPath: '/src/old' } });
+    const inherited = await createTeamFromFolder(store, { workspaceId: 'ws-5', names });
+    expect(inherited.ok && inherited.bots.every((b) => b.repo?.repoKey === 'github.com/acme/old')).toBe(true);
+  });
+
+  it('all five or none: a create refused midway takes back the ones made', async () => {
+    const real = store.create.bind(store);
+    let n = 0;
+    const spy = vi.spyOn(store, 'create').mockImplementation((input) => (++n === 3 ? { ok: false, code: 'invalid_argument', message: 'no' } : real(input)));
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-9', names })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(store.list({ workspaceId: 'ws-9' })).toEqual([]);
+    spy.mockRestore();
+    // So the same team can be added again.
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-9', names })).toMatchObject({ ok: true });
+  });
+
+  it('answers only the main window, and only the coordinator greets the owner', async () => {
+    const greet = vi.fn();
+    const handler = factoryBotCreateTeamHandler(() => win, { store: () => store, greet });
+    expect(await handler({ sender: {}, senderFrame: mainFrame }, { workspaceId: 'ws-1', names })).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(store.list()).toEqual([]);
+    const r = await handler({ sender: webContents, senderFrame: mainFrame }, { workspaceId: 'ws-1', names });
+    expect(r).toMatchObject({ ok: true });
+    expect(greet).toHaveBeenCalledTimes(1);
+    expect(greet.mock.calls[0][0]).toMatchObject({ template: 'coordinator', name: '대장' });
   });
 });

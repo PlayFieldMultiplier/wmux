@@ -6,6 +6,7 @@ export const zhTW = {
   'sidebar.workspaces': '工作區',
   'sidebar.newWorkspace': '新增工作區',
   'sidebar.newWorkspaceTooltip': '新增工作區 (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '在 {name} 上新增工作區',
   'sidebar.hideTooltip': '隱藏側邊欄 (Ctrl+B)',
   'sidebar.expandTooltip': '展開側邊欄 (Ctrl+B)',
   'sidebar.unreadCount': '{count} 則未讀',
@@ -692,5 +693,5 @@ export const zhTW = {
   'git.secret.scanFailed': "wmux 無法讀取此變更以檢查密碼或金鑰,因此未上傳。請再試一次;若持續失敗,可在 設定 › 一般 中關閉此檢查。",
   'git.secret.more': "(另有 {count} 處)",
   'settings.secretGuard': "在提交、推送和 PR 中攔截密碼與金鑰",
-  'settings.secretGuardDesc': "Git 頁面的提交、推送和建立 PR、採用任務以及 Moa 交付時,拒絕包含 .env 檔案、私密金鑰或 API 金鑰的變更。",
+  'settings.secretGuardDesc': "Git 頁面的提交、推送和建立 PR,以及採用任務時,拒絕包含 .env 檔案、私密金鑰或 API 金鑰的變更。",
 } as const;

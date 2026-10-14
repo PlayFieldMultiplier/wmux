@@ -110,9 +110,11 @@ export interface RemoteConnectDialogProps {
   onA2aStatus?: (status: A2aRemoteStatus) => void;
   /** An A2A join succeeded and the person wants to link a pane with that PC. */
   onLinkPane: (hostId: string) => void;
+  /** Opens "Add PC over SSH" for a computer that cannot send an invite. */
+  onAddOverSsh?: () => void;
 }
 
-export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, onA2aStatus }: RemoteConnectDialogProps) {
+export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, onA2aStatus, onAddOverSsh }: RemoteConnectDialogProps) {
   const t = useT();
   const api = window.electronAPI?.a2aRemote;
   const web = window.electronAPI?.web;
@@ -569,6 +571,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
             {/* A shared-workspaces link puts that PC in the computer column,
                 which checks it and holds a connection for its alerts. */}
             <p className="wmux-remote-connect-note" data-testid="remote-connect-paste-scope">{t('remotePage.connect.pasteScope')}</p>
+            {onAddOverSsh && (
+              <Button variant="ghost" size="sm" className="self-start" onClick={onAddOverSsh} data-testid="remote-connect-add-ssh">
+                {t('remotePage.connect.addOverSsh')}
+              </Button>
+            )}
             {message && (
               <p className="wmux-a2a-note whitespace-pre-line" data-tone={message.tone === 'danger' ? 'danger' : undefined} role={message.tone === 'danger' ? 'alert' : 'status'} data-testid="remote-connect-message">
                 {message.text}

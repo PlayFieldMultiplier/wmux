@@ -24,12 +24,18 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fanout-guards-'));
 }
 
-function guards(dir: string, opts: { now?: () => number; live?: () => number; ledger?: (ws: string) => string | null } = {}) {
+function guards(dir: string, opts: {
+  now?: () => number;
+  live?: () => number;
+  ledger?: (ws: string) => string | null;
+  ledgerBot?: (ws: string) => { owner: string; botId: string; at: number } | null;
+} = {}) {
   return new FanOutGuards({
     dir,
     now: opts.now ?? (() => 1_000_000),
     countLiveTasks: opts.live ?? (() => 0),
     ledgerTaskOwner: opts.ledger ?? (() => null),
+    ledgerBotTask: opts.ledgerBot ?? (() => null),
   });
 }
 
@@ -338,6 +344,47 @@ describe('requester origin on the lineage stamp', () => {
     g.markTask('ws-b', 'ws-owner');
     g.markTask('ws-b', 'ws-owner', { kind: 'orchestrator' });
     expect(guards(dir).lineageFor(['ws-b'])['ws-b']).toEqual({ owner: 'ws-owner', at: 200, origin: { kind: 'orchestrator' } });
+  });
+});
+
+describe('a bot worker is named even without its stamp (ledger dispatch fallback)', () => {
+  const BOT = 'bot-1a2b3c4d';
+  const ledgerBot = (ws: string) => (ws === 'ws-w' ? { owner: 'ws-owner', botId: BOT, at: 42 } : null);
+
+  it('a bot stamp answers with botId beside the origin', () => {
+    const dir = tmpDir();
+    guards(dir).markTask('ws-w', 'ws-owner', { kind: 'bot', botId: BOT });
+    expect(guards(dir).lineageFor(['ws-w'])['ws-w']).toEqual({ owner: 'ws-owner', at: 1_000_000, origin: { kind: 'bot', botId: BOT }, botId: BOT });
+  });
+
+  it('no stamp at all (store set aside): the ledger row names the bot', () => {
+    const dir = tmpDir();
+    expect(guards(dir, { ledgerBot }).lineageFor(['ws-w', 'ws-plain'])).toEqual({
+      'ws-w': { owner: 'ws-owner', at: 42, origin: { kind: 'bot', botId: BOT }, botId: BOT },
+    });
+  });
+
+  it('a stamp without an origin gets the bot origin from the ledger; another owner\'s row never relabels it', () => {
+    const dir = tmpDir();
+    const g = guards(dir, { ledgerBot });
+    g.markTask('ws-w', 'ws-owner');
+    g.markTask('ws-x', 'ws-other');
+    const read = guards(dir, { ledgerBot: (ws) => (ws === 'ws-x' ? { owner: 'ws-owner', botId: BOT, at: 1 } : ledgerBot(ws)) }).lineageFor(['ws-w', 'ws-x']);
+    expect(read['ws-w']).toEqual({ owner: 'ws-owner', at: 1_000_000, origin: { kind: 'bot', botId: BOT }, botId: BOT });
+    expect(read['ws-x']).toEqual({ owner: 'ws-other', at: 1_000_000 });
+  });
+
+  it('a stamp that has an origin wins over the ledger; a throwing ledger read is skipped', () => {
+    const dir = tmpDir();
+    guards(dir).markTask('ws-w', 'ws-owner', { kind: 'gui' });
+    expect(guards(dir, { ledgerBot }).lineageFor(['ws-w'])['ws-w']).toEqual({ owner: 'ws-owner', at: 1_000_000, origin: { kind: 'gui' } });
+    expect(guards(dir, { ledgerBot: () => { throw new Error('ledger down'); } }).lineageFor(['ws-z'])).toEqual({});
+  });
+
+  it('an unreadable store still answers bot workers from the ledger', () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, FANOUT_LINEAGE_FILENAME), '{torn', 'utf8');
+    expect(guards(dir, { ledgerBot }).lineageFor(['ws-w'])['ws-w']?.botId).toBe(BOT);
   });
 });
 

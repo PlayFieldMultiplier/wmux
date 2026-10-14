@@ -96,9 +96,9 @@
     "version": 1,
     "id": "bot-405d667b",
     "workspaceId": "ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86",
-    "role": "moa",
-    "template": "coordinator",
-    "name": "Moa",
+    "role": "maintainer",
+    "template": "custom",
+    "name": "Maintainer",
     "engine": {
      "kind": "acp",
      "command": "/home/owner/.local/node/bin/node",
@@ -126,7 +126,7 @@
    "lead": "bot-7d307144",
    "triage": "bot-3acef2e1",
    "verifier": "bot-56eb243b",
-   "moa": "bot-405d667b"
+   "maintainer": "bot-405d667b"
   },
   "injected": [
    {
@@ -546,7 +546,7 @@
      "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fvw0he41690d5ab\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881341649,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2a333bbd-a76d-4b1b-b761-dfee2bdbed86\",\n      \"botId\": \"bot-56eb243b\"\n    },\n    \"title\": \"Hi from verifier\",\n    \"body\": \"verifier here.\",\n    \"clientPostId\": \"wake:w-mv6fvs07-d37f3bb3:1\"\n  }\n}"
     }
    ],
-   "moa": [
+   "maintainer": [
     {
      "at": 1791881341671,
      "event": "initialize"
@@ -756,9 +756,9 @@
    ]
   },
   {
-   "why": "the HQ bot answered in a thread",
+   "why": "the maintainer answered in a thread",
    "failing": [
-    "moa_answered_in_general"
+    "maintainer_answered_in_general"
    ],
    "mutate": [
     {

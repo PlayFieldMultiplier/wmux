@@ -6,6 +6,7 @@ export const ar = {
   'sidebar.workspaces': 'مساحات العمل',
   'sidebar.newWorkspace': 'مساحة عمل جديدة',
   'sidebar.newWorkspaceTooltip': 'مساحة عمل جديدة (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'مساحة عمل جديدة على {name}',
   'sidebar.hideTooltip': 'إخفاء الشريط الجانبي (Ctrl+B)',
   'sidebar.expandTooltip': 'إظهار الشريط الجانبي (Ctrl+B)',
   'sidebar.unreadCount': '{count} غير مقروء',
@@ -653,5 +654,5 @@ export const ar = {
   'git.secret.scanFailed': "تعذّر على wmux قراءة هذا التغيير لفحصه بحثًا عن كلمات مرور أو مفاتيح، لذلك لم يُرفع. حاول مجددًا؛ وإن استمر الفشل يمكنك إيقاف هذا الفحص من الإعدادات › عام.",
   'git.secret.more': "(و{count} أخرى)",
   'settings.secretGuard': "حظر كلمات المرور والمفاتيح في الإيداعات والدفع وطلبات السحب",
-  'settings.secretGuardDesc': "يرفض الإيداع والدفع وإنشاء طلب سحب في صفحة Git، واعتماد مهمة، وتسليم Moa أي تغيير يضيف ملف .env أو مفتاحًا خاصًا أو مفتاح API.",
+  'settings.secretGuardDesc': "يرفض الإيداع والدفع وإنشاء طلب سحب في صفحة Git، واعتماد مهمة، أي تغيير يضيف ملف .env أو مفتاحًا خاصًا أو مفتاح API.",
 } as const;

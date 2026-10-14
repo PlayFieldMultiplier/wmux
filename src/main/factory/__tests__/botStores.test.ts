@@ -391,6 +391,8 @@ describe('WakeQueue', () => {
     expect(sanitizeWakeReason({ ...base, runId: 'x'.repeat(201) })).toBeNull();
     expect(sanitizeWakeReason({ ...base, runId: 5 })).toBeNull();
     expect(sanitizeWakeReason({ ...base, room: false })).toBeNull();
+    expect(sanitizeWakeReason({ ...base, lead: true })).toEqual({ ...base, lead: true });
+    expect(sanitizeWakeReason({ ...base, lead: 'yes' })).toBeNull();
   });
 
   it('a routine wake that waited past the fact TTL is dropped expired, like facts', () => {

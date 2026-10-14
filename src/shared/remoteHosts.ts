@@ -1,4 +1,5 @@
 import type { PermissionMode } from './agentResume';
+import type { SshHostBinding } from './sshPcContract';
 
 /**
  * How often the per-host `/api/workspaces` liveness feed is refreshed (#1391).
@@ -23,6 +24,29 @@ export interface RemoteHost {
    * (Task 5) — drives the read-only banner up front. Refreshed on each
    * workspacesList call. */
   allowInput?: boolean;
+  /** Present on hosts added with "Add PC over SSH": `origin` is then
+   * `wmux-ssh://<id>` and every request goes through this binding's tunnel. */
+  ssh?: SshHostBinding;
+  /** SSH hosts: the daemon there is installed as a login service ("Start after reboot"). */
+  startAfterReboot?: boolean;
+}
+
+/** One SSH host's tunnel, as the UI shows it. `kind` is an SshFailureKind. */
+export type SshTunnelState =
+  | { state: 'idle' }
+  | { state: 'connecting' }
+  | { state: 'ready' }
+  | { state: 'failed'; kind: string; message: string; retryAt?: number };
+
+/** Tunnel refusals only the person can lift ("Check SSH connection…"). */
+export function sshNeedsIdentityCheck(state: SshTunnelState | undefined): boolean {
+  return state?.state === 'failed' && (state.kind === 'needs-confirmation' || state.kind === 'host-key-changed');
+}
+
+/** Any refusal the tunnel will not retry on its own: identity, login, a stopped web server. */
+export function sshNeedsPerson(state: SshTunnelState | undefined): boolean {
+  return sshNeedsIdentityCheck(state)
+    || (state?.state === 'failed' && (state.kind === 'auth' || state.kind === 'host-key-unknown' || state.kind === 'web-stopped'));
 }
 
 /** Renderer-safe projection — structurally cannot leak the token. */
@@ -286,3 +310,62 @@ export function parseWebUrl(raw: string): { origin: string; token: string } | nu
   if (!token) return null;
   return { origin: u.origin, token };
 }
+
+// ─── Add PC over SSH ────────────────────────────────────────────────────────
+
+/** IPC channels of the "Add PC over SSH" flow (renderer ↔ main only). */
+export const REMOTE_SSH_IPC = {
+  /** Concrete Host aliases from ~/.ssh/config. */
+  CANDIDATES: 'remote:ssh:candidates',
+  /** Install + pair + register one host; progress arrives on PROGRESS. */
+  ADD: 'remote:ssh:add',
+  PROGRESS: 'remote:ssh:progress',
+  /** Tunnel state per SSH host id. */
+  STATES: 'remote:ssh:states',
+  /** Show, then accept, a changed host key or resolved hostname. */
+  CONFIRM: 'remote:ssh:confirm',
+  /** Mint a fresh code over ssh and replace a refused credential in place. */
+  REPAIR: 'remote:ssh:repair',
+  /** Cancel an ADD in flight by its request id. */
+  CANCEL: 'remote:ssh:cancel',
+  /** Turn "Start after reboot" on or off for an SSH host. */
+  SERVICE: 'remote:ssh:service',
+} as const;
+
+export type SshAddPhase = 'connect' | 'probe' | 'install' | 'start' | 'pair' | 'register';
+
+export interface SshAddProgress {
+  requestId: string;
+  phase: SshAddPhase;
+}
+
+/**
+ * Why adding over SSH failed. `kind` is an ssh failure (auth, host-key-unknown,
+ * …), a bootstrap refusal (desktop-installed, musl, …) or a pairing failure.
+ * `message` is detail for the dialog, never a credential.
+ */
+export interface SshAddFailure {
+  ok: false;
+  kind: string;
+  message: string;
+}
+
+export type SshAddResult =
+  | { ok: true; host: RemoteHostPublic; upgradePending: boolean; viewOnly?: boolean; service?: SshServiceResult }
+  | SshAddFailure;
+
+/**
+ * "Start after reboot" on an SSH host (`wmux daemon install-service` /
+ * `uninstall-service` there). `lingerCommand` is set when the service is on
+ * but systemd stops it at logout and skips it at boot until someone with sudo
+ * runs that command on the host. `unsupported` carries the host's own hint
+ * (no systemd user manager, macOS) for running it under another supervisor.
+ */
+export type SshServiceResult =
+  | { ok: true; on: true; lingerCommand?: string }
+  | { ok: true; on: false }
+  | SshAddFailure;
+
+export type SshConfirmResult =
+  | { ok: true; applied: boolean; resolvedHost: string; hostKeyFingerprint: string }
+  | SshAddFailure;

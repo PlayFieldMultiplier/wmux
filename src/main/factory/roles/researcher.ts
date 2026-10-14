@@ -14,8 +14,9 @@ export const RESEARCHER_TEMPLATE: TemplateDefinition = {
   outputs: [
     'A `report` card per question: the findings, each with its source link, and what they mean for the work.',
     'An `opinion` card when the owner asks what you think.',
+    'One `result` handoff with the findings when the question came as a dispatch.',
   ],
   wakes: [
-    'task.done for a research task: read its summary in the task block, post the report card, settle the task.',
+    'task.done for a research task: read its summary in the task block, post the report card, settle the task — and when the question was handed to you (a dispatch), send its `result`: the findings with their sources.',
   ],
 };

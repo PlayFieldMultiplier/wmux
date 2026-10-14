@@ -72,6 +72,19 @@ import type { MoaPendingDecision } from '../../shared/moa';
 import type { WorkLink } from '../../shared/workLink';
 import { createSidebarDropLog } from '../../shared/phoneFleetSidebar';
 import { buildFleetTriage, fleetTriageScopeError } from '../utils/fleetTriage';
+import { ownerFleetState } from '../components/Sidebar/botTasks';
+
+/** The longest startup command surface.new accepts. */
+export const SURFACE_NEW_COMMAND_MAX = 4096;
+
+/** surface.new's optional `initialCommand`: undefined when absent, the
+ *  command when it is a non-empty string within SURFACE_NEW_COMMAND_MAX,
+ *  null (refused) otherwise. Pure. */
+export function surfaceNewInitialCommand(raw: unknown): string | undefined | null {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || raw.trim().length === 0 || raw.length > SURFACE_NEW_COMMAND_MAX) return null;
+  return raw;
+}
 import { workspaceCloseRefusal } from '../components/Moa/moaHqGuard';
 
 // ---------------------------------------------------------------------------
@@ -1374,7 +1387,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     });
     if (verdict.outcome === 'auto') {
       useStore.getState().pushToast({
-        message: t('fanout.autoRunToast', { count: taskCount, repo: repoPath }),
+        message: taskCount === 1
+          ? t('fanout.autoRunToastOne', { repo: repoPath })
+          : t('fanout.autoRunToast', { count: taskCount, repo: repoPath }),
         level: 'info',
       });
     }
@@ -1731,12 +1746,19 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         ? params.cwd
         : resolveStartupCwd({ splitInheritsCwd: false, profile: ws.profile, startupDirectory: store.startupDirectory }) ?? '';
 
+    // An explicit startup command (main's "Log in to Claude" tab) runs as a
+    // plain user shell and replaces the workspace profile's default pane
+    // command, as accountLogin.openTerminalTab's tab does: set before
+    // withWorkspaceProfile, which keeps an initialCommand already present.
+    const initialCommand = surfaceNewInitialCommand(params.initialCommand);
+    if (initialCommand === null) return { error: 'surface.new: initialCommand must be a non-empty string' };
     const created = await window.electronAPI.pty.create(
       withWorkspaceProfile(
         {
           ...withDefaultShell({ shell: shell || undefined }, store.defaultShell),
           cwd: cwd || undefined,
           workspaceId: ws.id,
+          ...(initialCommand ? { initialCommand, spawnKind: 'user-shell' as const } : {}),
         },
         ws.profile,
       ),
@@ -1934,7 +1956,8 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const scope = typeof params.workspaceId === 'string' ? params.workspaceId : undefined;
     const scopeError = fleetTriageScopeError(store, scope);
     if (scopeError) return { error: scopeError, retryable: false };
-    return buildFleetTriage(store, {
+    // Bot workers are the Bots page's, never on the Fleet board (botTasks.ts).
+    return buildFleetTriage(ownerFleetState(store), {
       workspaceId: scope,
       includeIdle: params.includeIdle === true,
     }, Date.now());

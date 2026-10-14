@@ -6,6 +6,7 @@ export const id = {
   'sidebar.workspaces': 'Ruang kerja',
   'sidebar.newWorkspace': 'Ruang kerja baru',
   'sidebar.newWorkspaceTooltip': 'Ruang kerja baru (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Workspace baru di {name}',
   'sidebar.hideTooltip': 'Sembunyikan bilah sisi (Ctrl+B)',
   'sidebar.expandTooltip': 'Buka bilah sisi (Ctrl+B)',
   'sidebar.unreadCount': '{count} belum dibaca',
@@ -656,5 +657,5 @@ export const id = {
   'git.secret.scanFailed': "wmux tidak dapat membaca perubahan ini untuk memeriksa kata sandi dan kunci, jadi tidak diunggah. Coba lagi; jika terus gagal, pemeriksaan ini bisa dimatikan di Pengaturan › Umum.",
   'git.secret.more': "(dan {count} lainnya)",
   'settings.secretGuard': "Blokir kata sandi dan kunci di commit, push, dan PR",
-  'settings.secretGuardDesc': "Commit, Push, dan Buat PR di halaman Git, mengadopsi tugas, serta pengiriman Moa menolak perubahan yang menambahkan file .env, kunci privat, atau kunci API.",
+  'settings.secretGuardDesc': "Commit, Push, dan Buat PR di halaman Git, serta mengadopsi tugas, menolak perubahan yang menambahkan file .env, kunci privat, atau kunci API.",
 } as const;

@@ -116,6 +116,11 @@ export interface LedgerDispatch {
    *  task's wakes and cards go there; absent (no thread, `general`, or a row
    *  written before it existed) = the task's own `task:<id>` thread. */
   threadId?: string;
+  /** A bot's task: the handoff the wake that started it delivered (a
+   *  dispatch it was given), read from main's own wake state at dispatch.
+   *  The task's wakes answer that handoff: a `result` sent from them, with no
+   *  replyTo, is that handoff's result. Absent = none. */
+  handoffId?: string;
 }
 
 // Lifecycle rules the writer enforces (stated here so the three consumers
@@ -165,6 +170,15 @@ export function canTransition(from: string, to: string): boolean {
   if (!isLedgerStatus(from) || !isLedgerStatus(to)) return false;
   if (from === to) return true;
   return LEDGER_TRANSITIONS[from].includes(to);
+}
+
+/** May `actor` see `entry` at all? The daemon (`system`) sees every task; a
+ *  brain or a worker sees the tasks its workspace owns or runs — the same set
+ *  `ledger.list` answers with. A refusal carries the entry only to an actor
+ *  that may see it. */
+export function canActorSee(actor: LedgerActor, entry: LedgerEntry): boolean {
+  if (actor.kind === 'system') return true;
+  return entry.ownerWorkspaceId === actor.workspaceId || entry.taskWorkspaceId === actor.workspaceId;
 }
 
 /** The single authorization predicate every writer calls. A worker may only

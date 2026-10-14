@@ -6,6 +6,7 @@ export const bs = {
   'sidebar.workspaces': 'Radni prostori',
   'sidebar.newWorkspace': 'Novi radni prostor',
   'sidebar.newWorkspaceTooltip': 'Novi radni prostor (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Novi radni prostor na {name}',
   'sidebar.hideTooltip': 'Sakrij bočnu traku (Ctrl+B)',
   'sidebar.expandTooltip': 'Proširi bočnu traku (Ctrl+B)',
   'sidebar.unreadCount': '{count} nepročitanih',
@@ -656,5 +657,5 @@ export const bs = {
   'git.secret.scanFailed': "wmux nije mogao pročitati ovu izmjenu da je provjeri na lozinke i ključeve, pa nije poslana. Pokušajte ponovo; ako i dalje ne uspijeva, provjeru možete isključiti u Postavke › Opšte.",
   'git.secret.more': "(i još {count})",
   'settings.secretGuard': "Blokiraj lozinke i ključeve u commitima, pushevima i PR-ovima",
-  'settings.secretGuardDesc': "Commit, Push i Create PR na Git stranici, preuzimanje zadatka i Moa isporuka odbijaju izmjenu koja dodaje .env datoteku, privatni ključ ili API ključ.",
+  'settings.secretGuardDesc': "Commit, Push i Create PR na Git stranici te preuzimanje zadatka odbijaju izmjenu koja dodaje .env datoteku, privatni ključ ili API ključ.",
 } as const;

@@ -662,6 +662,33 @@ describe('RemoteMirrorTerminal', () => {
       unmount();
     });
 
+    it('a box narrower than the route floor asks for the floor, then follows the box back up', async () => {
+      // 200 px holds 25 cols at the user's font: the request is the 40-col floor,
+      // not nothing (which left 80x24 squeezed into the box at ~6px).
+      const box = { w: 200, h: 726 };
+      const { unmount } = await mountAttached(box, { cols: 80, rows: 24 });
+      expect(paneResize).toHaveBeenCalledTimes(1);
+      expect(paneResize).toHaveBeenLastCalledWith('a1', 40, 48);
+
+      // Our grant's echo settles it; a wider box re-decides at its own size.
+      await remoteResize(40, 48);
+      await settle(30_000);
+      expect(paneResize).toHaveBeenCalledTimes(1);
+      box.w = 448;
+      await remoteResize(40, 48);
+      expect(paneResize).toHaveBeenCalledTimes(2);
+      expect(paneResize).toHaveBeenLastCalledWith('a1', 56, 48);
+      unmount();
+    });
+
+    it('never grows a grid that is already below the floor', async () => {
+      // 24 cols already fit a 120 px box by font; 40 would crop it at any font.
+      const { unmount } = await mountAttached({ w: 120, h: 726 }, { cols: 24, rows: 48 });
+      await settle(30_000);
+      expect(paneResize).not.toHaveBeenCalled();
+      unmount();
+    });
+
     it('a sidebar toggle asks the remote once, after the transition, not per frame', async () => {
       const roCallbacks: Array<() => void> = [];
       vi.stubGlobal('ResizeObserver', class {

@@ -17,8 +17,8 @@
 // message woke, the line under the box says "Queued for <bot>"; otherwise it
 // names who the message went to, as main answered. With no enabled bot in
 // this workspace, the row says so and points to Settings › Factory.
-import { useCallback, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { BotRole } from '../../../shared/bot';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { isCoordinatorBot, type BotRole } from '../../../shared/bot';
 import type { ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
@@ -65,21 +65,42 @@ export function sentFrom(r: { addressee?: { botId: string; role: BotRole } | nul
   return r.addressee ? [{ ...r.addressee, ...(r.wakeId ? { wakeId: r.wakeId } : {}) }] : null;
 }
 
+/** Whether a lone addressee is running a turn for something else, so the
+ *  message waits behind it. Pure. */
+export function deliveryQueued(sent: readonly SentTo[] | null | undefined, bots: readonly FactoryBotRow[]): boolean {
+  if (!sent || sent.length !== 1) return false;
+  const turn = bots.find((b) => b.bot.id === sent[0].botId)?.status?.currentTurn;
+  return !!turn && turn.wakeId !== sent[0].wakeId;
+}
+
+/** Whether a lone addressee has been seen taking a message up: running the
+ *  turn it woke, or — on a status read after the send (`fresh`) — idle with
+ *  nothing queued, so that turn has run. A message without a wake id is
+ *  never known taken. Pure. */
+export function deliveryTaken(sent: readonly SentTo[] | null | undefined, bots: readonly FactoryBotRow[], fresh: boolean): boolean {
+  if (!sent || sent.length !== 1 || !sent[0].wakeId) return false;
+  const status = bots.find((b) => b.bot.id === sent[0].botId)?.status;
+  if (!status) return false;
+  if (status.currentTurn) return status.currentTurn.wakeId === sent[0].wakeId;
+  return fresh && status.queueDepth === 0;
+}
+
 /** The line under the box after a send: a lone addressee queued behind a
  *  turn it is running for something else, or who the message went to (also
- *  once the bot is running the turn this message woke). */
+ *  once the bot is running the turn this message woke). `started`: the bot
+ *  has been seen taking the message up, so a later turn of its own does not
+ *  read as the message queuing again. */
 export function deliveryLine(
   sent: readonly SentTo[] | null | undefined,
   bots: readonly FactoryBotRow[],
   t: T,
+  started = false,
 ): string | null {
   if (sent === undefined) return null;
   if (sent === null || sent.length === 0) return t('room.composer.noAddressee');
   const nameOf = (s: SentTo) => bots.find((b) => b.bot.id === s.botId)?.bot.name ?? roleLabel(s.role, t);
   if (sent.length === 1) {
-    const row = bots.find((b) => b.bot.id === sent[0].botId);
-    const turn = row?.status?.currentTurn;
-    if (turn && turn.wakeId !== sent[0].wakeId) return t('room.composer.queuedFor', { name: nameOf(sent[0]) });
+    if (!started && deliveryQueued(sent, bots)) return t('room.composer.queuedFor', { name: nameOf(sent[0]) });
     return t('room.composer.sentTo', { name: nameOf(sent[0]) });
   }
   if (sent.length <= 3) return t('room.composer.sentTo', { name: sent.map(nameOf).join(', ') });
@@ -165,9 +186,17 @@ export function useMentionPicks(bots: readonly FactoryBotRow[], workspaceId: str
   return { picked, onText, toggle, reset };
 }
 
+/** The bot a room message with no bot picked goes to when the room has a
+ *  coordinator (its oldest enabled one; main's rule, humanMessage.ts), or
+ *  null when it goes to every bot. Pure. */
+export function roomLead(candidates: readonly FactoryBotRow[]): FactoryBotRow | null {
+  return [...candidates].filter((r) => r.bot.enabled && isCoordinatorBot(r.bot)).sort((a, b) => a.bot.createdAt - b.bot.createdAt)[0] ?? null;
+}
+
 /** The chip row: one chip per bot of the room (and any bot picked from
- *  elsewhere), pressed when picked; with none picked, a muted "To everyone
- *  here" says where the message goes. */
+ *  elsewhere), pressed when picked; with none picked, a muted line says
+ *  where the message goes: "To everyone here", or "To <lead>" in a room
+ *  with a coordinator. */
 export function MentionChips({ candidates, bots, picked, onToggle, t, testId }: {
   candidates: readonly FactoryBotRow[];
   bots: readonly FactoryBotRow[];
@@ -176,13 +205,14 @@ export function MentionChips({ candidates, bots, picked, onToggle, t, testId }: 
   t: T;
   testId: string;
 }): React.ReactElement {
+  const lead = roomLead(candidates);
   const elsewhere = picked
     .filter((id) => !candidates.some((r) => r.bot.id === id))
     .map((id) => bots.find((r) => r.bot.id === id))
     .filter((r): r is FactoryBotRow => !!r);
   return (
     <div role="group" aria-label={t('room.composer.to')} data-testid={`${testId}-chips`} className="flex flex-wrap items-center gap-1">
-      {picked.length === 0 && <span data-testid={`${testId}-to-room`} className="mr-0.5 text-[11px] text-[var(--text-muted)]">{t('room.composer.toRoom')}</span>}
+      {picked.length === 0 && <span data-testid={`${testId}-to-room`} className="mr-0.5 text-[11px] text-[var(--text-muted)]">{lead ? t('room.composer.toLead', { name: lead.bot.name }) : t('room.composer.toRoom')}</span>}
       {[...candidates, ...elsewhere].map((r) => {
         const on = picked.includes(r.bot.id);
         return (
@@ -217,6 +247,12 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
   const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<SentTo[] | null | undefined>(undefined);
+  // Once taken up, the last message stays sent (see deliveryLine).
+  const [started, setStarted] = useState(false);
+  const botsAtSend = useRef(bots);
+  useEffect(() => {
+    if (sent !== undefined && !started && deliveryTaken(sent, bots, bots !== botsAtSend.current)) setStarted(true);
+  }, [sent, bots, started]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const textNow = useRef(text);
   const mentions = useMentionPicks(bots, workspaceId);
@@ -252,6 +288,8 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
           mentions.reset();
         }
         setSent(sentFrom(r));
+        setStarted(false);
+        botsAtSend.current = bots;
         inputRef.current?.focus();
       } else {
         setError(r.message || t('room.composer.failed'));
@@ -279,7 +317,7 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
   const busy = next.length === 1 && next[0].status?.currentTurn ? next[0] : null;
   const line = error
     ?? (text.trim() && busy ? t('room.composer.willQueue', { name: busy.bot.name }) : null)
-    ?? deliveryLine(sent, bots, t);
+    ?? deliveryLine(sent, bots, t, started);
 
   return (
     <form

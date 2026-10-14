@@ -6,6 +6,7 @@ export const es = {
   'sidebar.workspaces': 'Espacios de trabajo',
   'sidebar.newWorkspace': 'Nuevo espacio de trabajo',
   'sidebar.newWorkspaceTooltip': 'Nuevo espacio de trabajo (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Nuevo espacio de trabajo en {name}',
   'sidebar.hideTooltip': 'Ocultar barra lateral (Ctrl+B)',
   'sidebar.expandTooltip': 'Expandir barra lateral (Ctrl+B)',
   'sidebar.unreadCount': '{count} sin leer',
@@ -657,5 +658,5 @@ export const es = {
   'git.secret.scanFailed': "wmux no pudo leer este cambio para comprobar si contiene contraseñas o claves, así que no se subió. Inténtalo de nuevo; si sigue fallando, puedes desactivar esta comprobación en Ajustes › General.",
   'git.secret.more': "(y {count} más)",
   'settings.secretGuard': "Bloquear contraseñas y claves en commits, pushes y PR",
-  'settings.secretGuardDesc': "Commit, Push y Crear PR en la página Git, adoptar una tarea y la entrega de Moa rechazan un cambio que añade un archivo .env, una clave privada o una clave de API.",
+  'settings.secretGuardDesc': "Commit, Push y Crear PR en la página Git, y adoptar una tarea, rechazan un cambio que añade un archivo .env, una clave privada o una clave de API.",
 } as const;

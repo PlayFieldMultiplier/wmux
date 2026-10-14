@@ -1,0 +1,195 @@
+{
+  "name": "team-relay-limit",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The coordinator starts a relay researcher → developer → issue and starts it again on every wake. Round one runs depths 0 to 3; round two starts at depth 4 (its dispatch answers the last result) and its last result, at depth 7, is refused max_depth with a refusal card and a handoff.refused fact; the coordinator is woken with the relay stopped, and nothing past depth 6 is delivered. A next of five bots is refused at the send.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "template": "coordinator",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.researcher}}",
+                    "next": [
+                      "{{bot.developer}}",
+                      "{{bot.issue}}"
+                    ],
+                    "title": "Round",
+                    "body": "Go around."
+                  }
+                },
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.researcher}}",
+                    "next": [
+                      "{{bot.developer}}",
+                      "{{bot.issue}}",
+                      "{{bot.extra}}",
+                      "bot-0000aaaa",
+                      "bot-0000bbbb"
+                    ],
+                    "title": "Too long",
+                    "body": "Five bots follow."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.researcher}}",
+                    "next": [
+                      "{{bot.developer}}",
+                      "{{bot.issue}}"
+                    ],
+                    "title": "Round again",
+                    "body": "Go around again."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "researcher",
+        "template": "researcher",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Found",
+                    "body": "r"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "developer",
+        "template": "developer",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Built",
+                    "body": "d"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "issue",
+        "template": "issue",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Filed",
+                    "body": "i"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "extra",
+        "template": "custom",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "say": "nothing"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "go",
+      "post": {
+        "title": "Go",
+        "body": "Start the relay.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "depth refusal",
+      "cond": {
+        "facts": {
+          "kind": "handoff.refused",
+          "min": 1
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 8000
+      },
+      "timeoutMs": 90000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs"
+    ],
+    "message": "go",
+    "lead": "lead",
+    "maxDepth": 6
+  }
+}

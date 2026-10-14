@@ -69,6 +69,7 @@ import type { MoaPendingDecision } from '../../shared/moa';
 import { HANDOFF_OPTIONS } from '../../shared/moaHandoff';
 import type { StoreState } from '../stores';
 import { resolveTaskLink } from '../utils/fanoutProvenance';
+import { selectOwnerWorkspaces } from '../components/Sidebar/botTasks';
 import { computePaneAutoName, paneDisplayName } from '../utils/paneNaming';
 import { buildSidebarTree, paneRowsFinished, splitTasksByPane, taskRollup } from '../components/Sidebar/sidebarTree';
 import { selectWorkspaceAgentStatus, surfaceAttentionStatus } from '../stores/selectors/fleet';
@@ -338,7 +339,9 @@ export function buildPhoneSidebarSnapshot(
   moaDecisions?: readonly MoaPendingDecision[],
   workLinks?: { links: readonly WorkLink[]; now: number },
 ): PhoneSidebarReply {
-  const workspaces = state.workspaces;
+  // Bot workers are the Bots page's: the phone's sidebar leaves them out as
+  // the desktop's does (Sidebar/botTasks.ts), so its counts match Fleet.
+  const workspaces = selectOwnerWorkspaces(state);
   let handoffs = new Map<string, PhoneSidebarMoaHandoff>();
   try {
     handoffs = pendingHandoffNotices(moaDecisions);

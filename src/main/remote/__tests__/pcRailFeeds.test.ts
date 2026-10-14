@@ -249,3 +249,56 @@ describe('pcRail review fixes', () => {
     hub.stop();
   });
 });
+
+describe('PcRailHub workspace-create grant', () => {
+  const sshHost = (id: string): RemoteHost => ({
+    ...host(id, `wmux-ssh://${id}`),
+    ssh: { alias: id, remotePort: 7681 } as unknown as RemoteHost['ssh'],
+  });
+  const answering = (capabilities: string[]) => vi.fn((url: string) => {
+    if (url.endsWith('/api/config')) return Promise.resolve(json({ allowInput: true, capabilities }));
+    if (url.endsWith('/api/approvals')) return Promise.resolve(json({ pending: [] }));
+    return Promise.resolve(json({ workspaces: [] }));
+  }) as unknown as typeof fetch;
+
+  it('flags only an SSH-added host that advertises the grant', async () => {
+    const { hub, feeds } = hubWith(
+      [sshHost('granted'), host('tailnet'), sshHost('old')],
+      vi.fn((url: string) => answering(url.startsWith('wmux-ssh://old') ? [] : ['workspace-create-grant'])(url)) as unknown as typeof fetch,
+    );
+    hub.start();
+    await flush();
+    await flush();
+    const roster = feeds.filter((e) => e.type === 'hosts').at(-1);
+    expect(roster).toEqual({ type: 'hosts', hosts: [
+      { id: 'granted', label: 'granted', allowInput: true, canCreateWorkspace: true },
+      { id: 'tailnet', label: 'tailnet', allowInput: true },
+      { id: 'old', label: 'old', allowInput: true },
+    ] });
+    hub.stop();
+  });
+
+  it('refresh polls early but never sooner than the floor, and coalesces into the pending poll', async () => {
+    let now = 1_000;
+    const timers: Array<{ cb: () => void; ms: number; live: boolean }> = [];
+    const fetchImpl = answering([]);
+    const { hub } = hubWith([host('h')], fetchImpl, {
+      now: () => now,
+      setTimeoutImpl: (cb, ms) => {
+        const t = { cb, ms, live: true };
+        timers.push(t);
+        return t as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutImpl: (t) => { (t as unknown as { live: boolean }).live = false; },
+    });
+    hub.start();
+    await flush();
+    await flush();
+    now += 500;
+    expect(hub.refresh('h')).toBe(true);
+    const early = timers.filter((t) => t.live).at(-1)!;
+    expect(early.ms).toBe(1_500); // 2 s after the tick that started at 1000
+    expect(hub.refresh('nope')).toBe(false);
+    hub.stop();
+  });
+});

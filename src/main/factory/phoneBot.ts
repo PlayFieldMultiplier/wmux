@@ -3,14 +3,15 @@
 // `/api/moa/messages` from the phone addresses one bot: the one pinned in
 // Settings › Bots (factory settings `phoneBotId`), while it exists and is
 // enabled; else the oldest enabled Coordinator-template bot; else the oldest
-// enabled bot in the HQ workspace's room. None of these: no phone bot (the
-// phone is told `no-hq-bot`). Pure.
+// enabled bot. No workspace is special (the HQ setting is no longer used,
+// owner decision 2026-10-14). No enabled bot: no phone bot (the phone is told
+// `no-hq-bot`). Pure.
 
 import { isCoordinatorBot, type BotProfile } from '../../shared/bot';
 
 export function phoneBot(
   bots: readonly BotProfile[],
-  settings: { phoneBotId?: string; hqWorkspaceId: string | null },
+  settings: { phoneBotId?: string },
 ): BotProfile | null {
   const enabled = bots.filter((b) => b.enabled);
   const oldest = (xs: BotProfile[]): BotProfile | null => [...xs].sort((a, b) => a.createdAt - b.createdAt)[0] ?? null;
@@ -20,5 +21,5 @@ export function phoneBot(
   }
   const coordinator = oldest(enabled.filter((b) => isCoordinatorBot(b)));
   if (coordinator) return coordinator;
-  return settings.hqWorkspaceId ? oldest(enabled.filter((b) => b.workspaceId === settings.hqWorkspaceId)) : null;
+  return oldest(enabled);
 }

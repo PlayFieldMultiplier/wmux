@@ -1,4 +1,5 @@
 import { DESKTOP_PAIR_FRAGMENT_KEY, webHostIsLoopback } from './web';
+import { SSH_ORIGIN_SCHEME } from './sshPcContract';
 
 /**
  * What the "+ Pair new computer" field was given.
@@ -43,6 +44,10 @@ export type RemotePairInputError =
  */
 export function isCredentialSafeOrigin(url: URL): boolean {
   if (url.protocol === 'https:') return true;
+  // An SSH host's stored origin: main routes it through that host's tunnel
+  // (createSshAwareFetch), and a fetch that does not know the scheme throws.
+  // Typed input never gets here — the parsers below accept http(s) text only.
+  if (url.protocol === SSH_ORIGIN_SCHEME) return true;
   return url.protocol === 'http:' && webHostIsLoopback(url.hostname);
 }
 

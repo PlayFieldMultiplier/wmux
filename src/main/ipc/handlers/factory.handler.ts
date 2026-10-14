@@ -3,7 +3,7 @@
 // (pipe/handlers/bot.rpc.ts); this reads its singletons, which are null
 // before the factory started (an empty list, null status, default settings).
 // Changes to bots reach the renderer as BOT_EVENT pushes from that module.
-// The writes (FACTORY_BOT_CREATE, FACTORY_SETTINGS_SET, and a bot's picture:
+// The writes (FACTORY_BOT_CREATE, FACTORY_BOT_CREATE_TEAM, FACTORY_SETTINGS_SET, and a bot's picture:
 // FACTORY_BOT_PICK_AVATAR, FACTORY_BOT_SET_AVATAR) act as the operator, so
 // they answer only the main window's top frame, as rpc:invoke does for the
 // other bot writes. So does FACTORY_BOT_SUGGEST_REPO, which reads a
@@ -19,12 +19,13 @@ import { wrapHandler } from '../wrapHandler';
 import { getBotStore } from '../../factory/botStore';
 import { getBotRuntime } from '../../factory/BotRuntime';
 import { getFactorySettings, getFactorySettingsStore, type FactorySettings } from '../../factory/factorySettings';
-import { createBotFromFolder, greetNewBot, suggestBotRepo, type BotRepoDeps, type BotRepoSuggestDeps } from '../../factory/botCreate';
+import { createBotFromFolder, createTeamFromFolder, greetNewBot, suggestBotRepo, type BotRepoDeps, type BotRepoSuggestDeps } from '../../factory/botCreate';
 import { getWakeQueue } from '../../factory/wakeQueue';
 import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
   FactoryBotCreateResult,
+  FactoryBotCreateTeamResult,
   FactoryBotRepoSuggestion,
 } from '../../../shared/botCreate';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
@@ -34,6 +35,12 @@ import type { BotTaskView } from '../../../shared/botTask';
 import { botTaskViews, getBotTaskSources, type BotTaskSources } from '../../factory/botTasks';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
 import { getWorkerResumePorts, resumeWorker, type WorkerResumePorts, type WorkerResumeResult } from '../../factory/workerReclaim';
+import { botClaudeConfigDir, engineReadiness, startEngineLogin, type EngineLoginDeps, type EngineReadinessDeps } from '../../factory/engineReadiness';
+import type { FactoryEngineReadiness } from '../../../shared/factoryEngine';
+import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
+import { loadClaudeCredential } from '../../claude/claudeCredential';
+import { sendToRenderer } from '../../pipe/handlers/_bridge';
+import { ShellDetector } from '../../../shared/ShellDetector';
 
 export interface FactoryBotRow {
   bot: BotProfile;
@@ -113,6 +120,47 @@ export function factoryWorkerResumeHandler(
   };
 }
 
+const DEFAULT_READINESS_DEPS: EngineReadinessDeps = {
+  claudeExecutable: resolveClaudeExecutable,
+  credential: async () => {
+    // The folder the bot engine's claude reads (it inherits main's env).
+    const r = await loadClaudeCredential(botClaudeConfigDir());
+    return r.ok ? { ok: true } : { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) };
+  },
+};
+
+/** FACTORY_ENGINE_READINESS: main window only (any other sender reads as
+ *  unknown, never as ready). */
+export function factoryEngineReadinessHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: EngineReadinessDeps = DEFAULT_READINESS_DEPS,
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<FactoryEngineReadiness> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) return { ready: false, reason: 'unknown', message: 'only the main window may ask' };
+    return engineReadiness(deps);
+  };
+}
+
+/** FACTORY_ENGINE_LOGIN: open the Claude sign-in tab; main window only. */
+export function factoryEngineLoginHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: Omit<EngineLoginDeps, 'platform'> & { platform?: NodeJS.Platform },
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<void> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may start the Claude sign-in');
+    // The sign-in goes to the folder readiness reads and the bots run on.
+    await startEngineLogin({ configDir: botClaudeConfigDir(), ...deps, platform: deps.platform ?? process.platform });
+  };
+}
+
+function defaultEngineLoginDeps(getWindow: () => BrowserWindow | null): Omit<EngineLoginDeps, 'platform'> {
+  return {
+    openTab: async (shell, initialCommand) =>
+      (await sendToRenderer(getWindow, 'surface.new', { ...(shell ? { shell } : {}), initialCommand }, { timeoutMs: 15_000 })) as { ptyId?: unknown; error?: unknown } | null,
+    windowsShell: () => new ShellDetector().getDefault(),
+  };
+}
+
 const NOT_OPERATOR: FactoryBotCreateResult = { ok: false, code: 'operator_only', message: 'only the main window may add a bot' };
 
 /** A bot just added: its first wake greets the owner (wake reason `intro`). */
@@ -131,6 +179,21 @@ export function factoryBotCreateHandler(
     if (!isMainWindowSender(e, getWindow())) return NOT_OPERATOR;
     const r = await createBotFromFolder((deps.store ?? getBotStore)(), req, deps);
     if (r.ok) (deps.greet ?? greetAddedBot)(r.bot);
+    return r;
+  };
+}
+
+/** FACTORY_BOT_CREATE_TEAM's body: the sender check, the five bots, then
+ *  the coordinator's greeting only (five greetings at once would flood the
+ *  owner). */
+export function factoryBotCreateTeamHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: BotRepoDeps & { store?: typeof getBotStore; greet?: (bot: BotProfile) => void } = {},
+): (e: { sender?: unknown; senderFrame?: unknown }, req: unknown) => Promise<FactoryBotCreateTeamResult> {
+  return async (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may add bots' };
+    const r = await createTeamFromFolder((deps.store ?? getBotStore)(), req, deps);
+    if (r.ok) (deps.greet ?? greetAddedBot)(r.bots[0]);
     return r;
   };
 }
@@ -231,12 +294,15 @@ export function registerFactoryHandlers(
     IPC.FACTORY_SETTINGS_GET,
     IPC.FACTORY_SETTINGS_SET,
     IPC.FACTORY_BOT_CREATE,
+    IPC.FACTORY_BOT_CREATE_TEAM,
     IPC.FACTORY_BOT_PICK_AVATAR,
     IPC.FACTORY_BOT_SET_AVATAR,
     IPC.FACTORY_BOT_SUGGEST_REPO,
     IPC.FACTORY_STOP_ALL,
     IPC.FACTORY_STOP_BOT,
     IPC.FACTORY_WORKER_RESUME,
+    IPC.FACTORY_ENGINE_READINESS,
+    IPC.FACTORY_ENGINE_LOGIN,
   ];
   for (const c of channels) ipcMain.removeHandler(c);
 
@@ -264,6 +330,8 @@ export function registerFactoryHandlers(
 
   ipcMain.handle(IPC.FACTORY_BOT_CREATE, wrapHandler(IPC.FACTORY_BOT_CREATE, factoryBotCreateHandler(getWindow)));
 
+  ipcMain.handle(IPC.FACTORY_BOT_CREATE_TEAM, wrapHandler(IPC.FACTORY_BOT_CREATE_TEAM, factoryBotCreateTeamHandler(getWindow)));
+
   ipcMain.handle(IPC.FACTORY_BOT_PICK_AVATAR, wrapHandler(IPC.FACTORY_BOT_PICK_AVATAR, factoryBotPickAvatarHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_BOT_SET_AVATAR, wrapHandler(IPC.FACTORY_BOT_SET_AVATAR, factoryBotSetAvatarHandler(getWindow)));
@@ -275,6 +343,10 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_STOP_BOT, wrapHandler(IPC.FACTORY_STOP_BOT, factoryStopHandler(getWindow, 'bot')));
 
   ipcMain.handle(IPC.FACTORY_WORKER_RESUME, wrapHandler(IPC.FACTORY_WORKER_RESUME, factoryWorkerResumeHandler(getWindow)));
+
+  ipcMain.handle(IPC.FACTORY_ENGINE_READINESS, wrapHandler(IPC.FACTORY_ENGINE_READINESS, factoryEngineReadinessHandler(getWindow)));
+
+  ipcMain.handle(IPC.FACTORY_ENGINE_LOGIN, wrapHandler(IPC.FACTORY_ENGINE_LOGIN, factoryEngineLoginHandler(getWindow, defaultEngineLoginDeps(getWindow))));
 
   return () => {
     for (const c of channels) ipcMain.removeHandler(c);

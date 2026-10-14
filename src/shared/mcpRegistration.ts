@@ -163,6 +163,35 @@ export function codexHasWmuxServer(configPath: string): boolean {
   }
 }
 
+/** True when the codex config at `configPath` defines a `wmux` server of any
+ *  transport (a `command` or a `url`), so a `-c mcp_servers.wmux.*` override
+ *  has a server to apply to. Missing / unreadable / malformed → false. */
+export function codexDefinesWmuxServer(configPath: string): boolean {
+  try {
+    const parsed = parseConfig(fs.readFileSync(configPath, 'utf8'), 'toml') as { mcp_servers?: { wmux?: { command?: unknown; url?: unknown } } };
+    const wmux = parsed.mcp_servers?.wmux;
+    return !!wmux && (typeof wmux.command === 'string' || typeof wmux.url === 'string');
+  } catch {
+    return false;
+  }
+}
+
+/** The tools the codex config at `configPath` approves on its `wmux` server
+ *  (`[mcp_servers.wmux.tools.<name>] approval_mode = "approve"`). Missing /
+ *  unreadable / malformed → []. */
+export function codexWmuxApprovedTools(configPath: string): string[] {
+  try {
+    const parsed = parseConfig(fs.readFileSync(configPath, 'utf8'), 'toml') as { mcp_servers?: { wmux?: { tools?: unknown } } };
+    const tools = parsed.mcp_servers?.wmux?.tools;
+    if (!tools || typeof tools !== 'object') return [];
+    return Object.entries(tools as Record<string, unknown>)
+      .filter(([, v]) => !!v && typeof v === 'object' && (v as { approval_mode?: unknown }).approval_mode === 'approve')
+      .map(([name]) => name);
+  } catch {
+    return [];
+  }
+}
+
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }

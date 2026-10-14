@@ -74,6 +74,7 @@ export const CORE_TOOL_SURFACE: readonly string[] = [
   'channel_mission_list',
   'fanout_start',
   'ledger_update',
+  'task_push',
   // Scheduled runs: draft-only propose + redacted reads.
   'automation_propose',
   'automation_list',
@@ -88,6 +89,44 @@ export const CORE_TOOL_SURFACE: readonly string[] = [
   'repl_run',
   'repl_reset',
   'repl_sessions',
+];
+
+/** The browser tools the full profile lists, in its registration order: the
+ *  full surface is CORE_TOOL_SURFACE plus these (asserted against the protocol
+ *  baseline in src/shared/__tests__/coreSurface.test.ts). */
+export const BROWSER_TOOL_SURFACE: readonly string[] = [
+  'browser_open',
+  'browser_close',
+  'browser_navigate',
+  'browser_tabs',
+  'browser_click',
+  'browser_type',
+  'browser_fill',
+  'browser_press_key',
+  'browser_scroll',
+  'browser_snapshot',
+  'browser_screenshot',
+  'browser_evaluate',
+  'browser_console',
+  'browser_network',
+  'browser_response_body',
+  'browser_cookies',
+  'browser_storage',
+  'browser_emulate',
+  'browser_resize',
+  'browser_wait',
+  'browser_request_help',
+  'browser_file_upload',
+  'browser_download',
+  'browser_wait_for_download',
+  'browser_pdf',
+  'browser_trace',
+  'browser_smart_snapshot',
+  'browser_extract_text',
+  'browser_extract_data',
+  'browser_replay',
+  'browser_repl',
+  'browser_session',
 ];
 
 /** Launch argument that selects the core profile. An argv flag, never an env

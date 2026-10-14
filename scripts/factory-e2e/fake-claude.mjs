@@ -9,7 +9,8 @@
 //
 //   1. reads its task id from the task's meta stamp
 //      (<worktrees>/.meta/<worktree folder>/task.json);
-//   2. optionally commits a file on its branch and pushes it
+//   2. optionally commits a file on its branch and has main push it with
+//      the real `task_push` tool, the only push a bot's worker has
 //      (FACTORY_E2E_WORKER_COMMIT=1; never a verify worker, whose tree is a
 //      detached PR head), so a lane scenario has a bot branch;
 //   3. a verify worker "installs dependencies" (an empty node_modules: the
@@ -104,7 +105,11 @@ async function mcpCall(name, args) {
 
 async function main() {
   const id = taskId();
-  log('start', { taskId: id, args: process.argv.slice(2).map((a) => a.slice(0, 200)) });
+  // Which CLI ran this worker (fake-codex.mjs sets codex), and whether the
+  // codex rules file main writes was in place.
+  const agent = process.env.FACTORY_E2E_WORKER_AGENT || 'claude';
+  const rulesPresent = fs.existsSync(path.join(process.cwd(), '.codex', 'rules', 'wmux-bot-worker.rules'));
+  log('start', { taskId: id, agent, rulesPresent, args: process.argv.slice(2).map((a) => a.slice(0, 200)) });
   if (!id) {
     log('no-task-id');
   } else {
@@ -115,8 +120,8 @@ async function main() {
       const add = git(['add', '-A']);
       const commit = git(['-c', 'user.name=fake-worker', '-c', 'user.email=fake-worker@example.invalid', 'commit', '-q', '-m', `worker ${id}`]);
       const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out;
-      const push = git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`]);
-      log('commit', { add: add.code, commit: commit.code, push: push.code, pushErr: push.err.slice(0, 300), branch, head: git(['rev-parse', 'HEAD']).out });
+      const push = await mcpCall('task_push', {});
+      log('commit', { add: add.code, commit: commit.code, push: push.ok ? 0 : 1, pushErr: push.ok ? '' : push.text.slice(0, 300), branch, head: git(['rev-parse', 'HEAD']).out });
     }
     // A verify worker installs the dependencies the gate needs; the scratch
     // repo has none, so an empty (git-ignored) node_modules is the install.

@@ -18,12 +18,18 @@
 //
 // A bot added here wakes once on its own (`greetNewBot`, wake reason
 // `intro`): it greets the owner and asks what to do, with choices.
+//
+// `createTeamFromFolder` is "Add team": the five bots of TEAM_TEMPLATES in
+// one workspace, the coordinator first, on one repository resolved once,
+// names checked (and refused when taken) before any bot is made.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { BotProfile } from '../../shared/bot';
-import type { FactoryBotCreateResult, FactoryBotRepoSuggestion } from '../../shared/botCreate';
+import { normalizeBotName, isCoordinatorBot } from '../../shared/bot';
+import { TEAM_TEMPLATES, type FactoryBotCreateResult, type FactoryBotCreateTeamResult, type FactoryBotRepoSuggestion } from '../../shared/botCreate';
+import { BOTS_MAX } from './botStore';
 import type { WakeItem } from '../../shared/wake';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import { git as runGit, type GitResult } from '../git/git';
@@ -113,6 +119,70 @@ export async function createBotFromFolder(
     ...(r.avatar !== undefined ? { avatar: r.avatar } : {}),
   });
   return created.ok ? { ok: true, bot: created.bot } : created;
+}
+
+/** "Add team": the five team bots, coordinator first, one repository. */
+export async function createTeamFromFolder(
+  store: BotStore | null,
+  req: unknown,
+  deps: BotRepoDeps = {},
+): Promise<FactoryBotCreateTeamResult> {
+  if (!store) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
+  const r = req && typeof req === 'object' && !Array.isArray(req) ? (req as Record<string, unknown>) : {};
+  const workspaceId = r.workspaceId;
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) return { ok: false, code: 'invalid_argument', message: 'workspaceId must be a workspace id' };
+  const raw = r.names && typeof r.names === 'object' && !Array.isArray(r.names) ? (r.names as Record<string, unknown>) : {};
+  const names: string[] = [];
+  for (const template of TEAM_TEMPLATES) {
+    const name = normalizeBotName(raw[template]);
+    if (!name) return { ok: false, code: 'invalid_argument', message: `the ${template} needs a name` };
+    names.push(name);
+  }
+  // Checked before the repository is read and again after it (a bot added
+  // meanwhile counts).
+  const refusal = (): FactoryBotCreateTeamResult | null => {
+    const key = (n: string) => n.toLocaleLowerCase();
+    const here = store.list({ workspaceId });
+    const taken = new Set(here.map((b) => key(b.name)));
+    const seen = new Set<string>();
+    for (const name of names) {
+      if (taken.has(key(name)) || seen.has(key(name))) return { ok: false, code: 'name_taken', message: `${name} is already a bot's name in this workspace` };
+      seen.add(key(name));
+    }
+    if (here.some((b) => b.enabled && isCoordinatorBot(b))) {
+      return { ok: false, code: 'has_lead', message: 'This workspace already has a coordinator: add the other bots one by one.' };
+    }
+    if (store.list().length + TEAM_TEMPLATES.length > BOTS_MAX) return { ok: false, code: 'too_many_bots', message: `at most ${BOTS_MAX} bots` };
+    return null;
+  };
+  const early = refusal();
+  if (early) return early;
+  // One repository for all five, resolved once, as "Add bot" resolves it.
+  let repo = workspaceRepo(store, workspaceId) ?? undefined;
+  if (r.repoFolder !== undefined) {
+    const resolved = await resolveBotRepo(r.repoFolder, deps);
+    if (!resolved.ok) return resolved;
+    // Read after the await: a bot added meanwhile counts.
+    const current = workspaceRepo(store, workspaceId);
+    if (current && current.repoKey !== resolved.repo.repoKey) {
+      return { ok: false, code: 'repo_mismatch', message: `This workspace's bots work on ${current.repoKey}; ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.` };
+    }
+    repo = current ?? resolved.repo;
+  }
+  const late = refusal();
+  if (late) return late;
+  // Made in one go, with no await between them: nothing else is added in between.
+  const bots: BotProfile[] = [];
+  for (const [i, template] of TEAM_TEMPLATES.entries()) {
+    const made = store.create({ workspaceId, template, name: names[i], ...(repo ? { repo } : {}) });
+    if (!made.ok) {
+      // All five or none: the ones made in this call go again.
+      for (const b of bots) store.remove(b.id);
+      return { ok: false, code: made.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: made.message };
+    }
+    bots.push(made.bot);
+  }
+  return { ok: true, bots };
 }
 
 /** Queue a new bot's first wake (`intro`: greet the owner, ask what to do

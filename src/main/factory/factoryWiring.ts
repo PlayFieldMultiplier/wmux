@@ -49,6 +49,7 @@ import type { BotProfile } from '../../shared/bot';
 import type { Fact, FactDraft } from '../../shared/facts';
 import type { MoaWakePayload, MoaWakeResult } from '../../shared/moaWake';
 import type { RoomCard, ThreadId } from '../../shared/room';
+import type { WakeItem } from '../../shared/wake';
 import type { FactorySettings } from '../../shared/factorySettings';
 import { ROOM_LIMITS } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
@@ -302,19 +303,42 @@ export function threadTail(writer: RoomWriter | null, workspaceId: string, threa
   return { cards: page.cards, truncated: writer.summary(workspaceId, threadId).cardCount > page.cards.length };
 }
 
+/** The handoff a task wake answers: the one every task of the wake was
+ *  started for (LedgerDispatch.handoffId), or null when the wake names no
+ *  task, a task's row is not readable, or its tasks were started for
+ *  different handoffs (or none). Pure over `row`. */
+export function taskWakeHandoff(reason: WakeItem['reason'], row: (taskId: string) => Pick<LedgerEntry, 'dispatch'> | null): string | null {
+  if (reason.kind !== 'facts') return null;
+  const taskIds = new Set(reason.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null));
+  let found: string | null = null;
+  for (const taskId of taskIds) {
+    let id: string | undefined;
+    try {
+      id = row(taskId)?.dispatch?.handoffId;
+    } catch {
+      return null;
+    }
+    if (!id || (found !== null && found !== id)) return null;
+    found = id;
+  }
+  return found;
+}
+
 /** The running wake of a bot, as the rooms and handoffs read it: its id, its
  *  attempt (1-based, the same for the whole turn), the handoff it carries (a
- *  handoff or a mention) and an owner message's run. */
+ *  handoff or a mention, or the one its tasks were started for) and an owner
+ *  message's run. */
 export function runningWakeOf(botId: string): RunningWake | null {
   const item = currentWakeItem(botId);
   if (!item) return null;
   const r = item.reason;
   const taskIds = new Set(r.kind === 'facts' ? r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null) : []);
   const ownerCardId = r.kind === 'human' ? humanCardIdOfRun(r.runId) : null;
+  const taskHandoff = taskWakeHandoff(r, (id) => getTaskLedger().get(id));
   return {
     wakeId: item.id,
     attempt: Math.max(1, item.attempts),
-    ...(r.kind === 'handoff' || r.kind === 'mention' ? { handoffId: r.handoffId } : {}),
+    ...(r.kind === 'handoff' || r.kind === 'mention' ? { handoffId: r.handoffId } : taskHandoff ? { handoffId: taskHandoff } : {}),
     ...(r.kind === 'human' && r.runId ? { runId: r.runId } : {}),
     reasonKind: r.kind,
     ...(taskIds.size === 1 ? { taskId: [...taskIds][0] } : {}),
@@ -516,6 +540,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   setBotRuntimePorts({
     resolveFacts: (ids) => resolveFactsFrom(getFactLog(), ids),
     resolveHandoff: summarizeHandoff,
+    taskHandoff: (item) => taskWakeHandoff(item.reason, (id) => getTaskLedger().get(id)),
     readThreadTail: (workspaceId, threadId, n) => threadTail(getRoomWriter(), workspaceId, threadId, n),
     wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),

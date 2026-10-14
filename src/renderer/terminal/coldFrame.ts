@@ -31,12 +31,22 @@ import { IncompleteEscapeSplitter } from '../../shared/incompleteEscape';
 //     paints it synchronously at END). xterm's own 1 s 2026 timeout, and the
 //     output scheduler's shorter safety deadline for a held frame, both bound
 //     a lost END.
+//
+// The cache also outlives the renderer: it is written to localStorage when the
+// app quits and every minute (persistColdFrames), and read back at startup
+// (restoreColdFrames). Without that, every pane's first reveal after a restart
+// sat blank for the daemon's replay, since nothing had been disposed yet.
+// Only while "Restore on launch" (scrollbackRestoreEnabled) is on: with it
+// off the cache stays in memory and stored frames are cleared
+// (clearPersistedColdFrames), since a screen on disk is session output too.
 
 export interface ColdFrame {
   /** Serialized viewport: SGR + cursor positioning + text, no modes. */
   frame: string;
   cols: number;
   rows: number;
+  /** When the frame was captured (epoch ms). Set by rememberColdFrame. */
+  at?: number;
 }
 
 /** One entry per recently disposed pane. Cold-park disposes a workspace at a
@@ -82,7 +92,7 @@ export function rememberColdFrame(ptyId: string, entry: ColdFrame): void {
   if (!ptyId) return;
   frames.delete(ptyId);
   if (entry.frame.length === 0 || entry.frame.length > COLD_FRAME_MAX_CHARS) return;
-  frames.set(ptyId, entry);
+  frames.set(ptyId, { ...entry, at: entry.at ?? Date.now() });
   while (frames.size > COLD_FRAME_MAX_ENTRIES) {
     const oldest = frames.keys().next().value;
     if (oldest === undefined) break;
@@ -115,18 +125,101 @@ export function dropColdFrame(ptyId: string): void {
  */
 export function captureColdFrame(ptyId: string, terminal: Terminal): void {
   if (!ptyId) return;
+  const entry = serializeViewport(terminal);
+  if (entry) rememberColdFrame(ptyId, entry);
+}
+
+function serializeViewport(terminal: Terminal): ColdFrame | null {
   try {
     const addon = new SerializeAddon();
     terminal.loadAddon(addon);
     try {
       const frame = addon.serialize({ scrollback: 0, excludeModes: true });
-      rememberColdFrame(ptyId, { frame, cols: terminal.cols, rows: terminal.rows });
+      return { frame, cols: terminal.cols, rows: terminal.rows };
     } finally {
       addon.dispose();
     }
   } catch {
     // A terminal too far into teardown to read just leaves no frame behind;
     // the next mount shows what it showed before this cache existed.
+    return null;
+  }
+}
+
+export const COLD_FRAME_STORAGE_KEY = 'wmux.coldFrames.v1';
+/** A frame older than this is not painted after a restart: the session has
+ *  likely moved on far enough that the stale screen misleads more than the
+ *  blank pane it replaces. */
+export const COLD_FRAME_PERSIST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+type StoredFrame = [ptyId: string, frame: string, cols: number, rows: number, at: number];
+
+/**
+ * Write the cache, plus the screen each live terminal shows now, to storage
+ * so the next renderer can paint them (restoreColdFrames). Live terminals win
+ * over a cached frame of the same ptyId and count as most recent. Keeps the
+ * newest COLD_FRAME_MAX_ENTRIES within the age limit. Never throws: a full or
+ * unavailable storage just leaves no frames for the next start.
+ */
+export function persistColdFrames(
+  live: Iterable<[string, Terminal]>,
+  storage: Storage | undefined = globalThis.localStorage,
+  now = Date.now(),
+): void {
+  if (!storage) return;
+  const merged = new Map<string, ColdFrame>(frames);
+  for (const [ptyId, terminal] of live) {
+    if (!ptyId) continue;
+    const entry = serializeViewport(terminal);
+    if (!entry || entry.frame.length === 0 || entry.frame.length > COLD_FRAME_MAX_CHARS) continue;
+    merged.delete(ptyId);
+    merged.set(ptyId, { ...entry, at: now });
+  }
+  const stored: StoredFrame[] = [...merged]
+    .filter(([, e]) => now - (e.at ?? now) < COLD_FRAME_PERSIST_MAX_AGE_MS)
+    .sort(([, a], [, b]) => (a.at ?? now) - (b.at ?? now))
+    .slice(-COLD_FRAME_MAX_ENTRIES)
+    .map(([ptyId, e]) => [ptyId, e.frame, e.cols, e.rows, e.at ?? now]);
+  try {
+    if (stored.length === 0) storage.removeItem(COLD_FRAME_STORAGE_KEY);
+    else storage.setItem(COLD_FRAME_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    try { storage.removeItem(COLD_FRAME_STORAGE_KEY); } catch { /* storage unavailable */ }
+  }
+}
+
+/** Remove the stored frames ("Restore on launch" is off). Never throws. */
+export function clearPersistedColdFrames(storage: Storage | undefined = globalThis.localStorage): void {
+  try { storage?.removeItem(COLD_FRAME_STORAGE_KEY); } catch { /* storage unavailable */ }
+}
+
+/**
+ * Load the frames a previous renderer persisted into the cache, oldest first so
+ * recency order holds. A frame already cached in this renderer is newer and
+ * stays. Malformed or expired entries are skipped. Never throws.
+ */
+export function restoreColdFrames(
+  storage: Storage | undefined = globalThis.localStorage,
+  now = Date.now(),
+): void {
+  if (!storage) return;
+  let parsed: unknown;
+  try {
+    const raw = storage.getItem(COLD_FRAME_STORAGE_KEY);
+    if (!raw) return;
+    parsed = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(parsed)) return;
+  const valid = parsed.filter((e): e is StoredFrame => Array.isArray(e) && e.length === 5
+    && typeof e[0] === 'string' && typeof e[1] === 'string'
+    && Number.isInteger(e[2]) && e[2] > 0 && Number.isInteger(e[3]) && e[3] > 0
+    && typeof e[4] === 'number' && now - e[4] < COLD_FRAME_PERSIST_MAX_AGE_MS);
+  valid.sort((a, b) => a[4] - b[4]);
+  for (const [ptyId, frame, cols, rows, at] of valid) {
+    if (frames.has(ptyId)) continue;
+    rememberColdFrame(ptyId, { frame, cols, rows, at });
   }
 }
 

@@ -320,7 +320,7 @@ export function typedApprovalTargets(
   if (message.replyTo && cards(message.replyTo)?.kind !== 'approval') return [];
   // Only the bots the message was addressed to (main stamped them).
   const to = new Set([message.refs?.botId, ...(message.refs?.botIds ?? [])].filter((b): b is string => typeof b === 'string'));
-  if (to.size === 0) return [];
+  if (to.size === 0 && !message.replyTo) return [];
   // Right above the message: after the owner's previous message in the
   // thread that said something else (its words were about what came before
   // it); "merge it" said twice still means the same requests.
@@ -336,9 +336,11 @@ export function typedApprovalTargets(
   const reach = before.reduce((m, c) => Math.min(m, c.seq), Infinity);
   const above: Array<{ id: string; seq: number }> = [];
   for (const r of pending) {
-    if (r.state !== 'pending' || r.workspaceId !== message.workspaceId || r.threadId !== message.threadId || !r.cardId || !to.has(r.botId)) continue;
-    // A reply to one approval card is about that request only.
-    if (message.replyTo && r.cardId !== message.replyTo) continue;
+    if (r.state !== 'pending' || r.workspaceId !== message.workspaceId || r.threadId !== message.threadId || !r.cardId) continue;
+    // A reply to one approval card is about that request only, whoever the
+    // message woke (a room with a coordinator wakes only it); words that
+    // reply to no card approve only the addressees' requests.
+    if (message.replyTo ? r.cardId !== message.replyTo : !to.has(r.botId)) continue;
     const card = cards(r.cardId);
     if (!card || card.kind !== 'approval' || card.threadId !== message.threadId || card.seq >= message.seq || card.seq <= previousOwner) continue;
     if (before.length > 0 && card.seq < reach) continue;
@@ -727,8 +729,10 @@ export class ApprovalService {
   }
 
   /** A `human` card the owner wrote (via its human.message fact): typed
-   *  approval of the thread's pending requests above it. */
-  onOwnerCard(card: RoomCard): string[] {
+   *  approval of the thread's pending requests above it. `roomWide`: the
+   *  words were to the whole room, which woke only its coordinator; they
+   *  approve for every enabled bot of the room, as a room message always did. */
+  onOwnerCard(card: RoomCard, roomWide = false): string[] {
     const writer = this.ports.rooms();
     if (!writer) return [];
     // Only a card the room store holds as the owner's counts.
@@ -748,7 +752,17 @@ export class ApprovalService {
     const pending = [...this.requests.values()].filter((r) => r.state === 'pending');
     // The thread's latest cards: what sits between the requests and the words.
     const threadCards = writer.read(stored.workspaceId, { threadId: stored.threadId }).cards;
-    const ids = typedApprovalTargets(stored, pending, (id) => writer.get(stored.workspaceId, id), threadCards);
+    let message: RoomCard = stored;
+    if (roomWide) {
+      let room: string[] = [];
+      try {
+        room = (this.ports.bots()?.listEnabled() ?? []).filter((b) => b.enabled && b.workspaceId === stored.workspaceId).map((b) => b.id);
+      } catch {
+        room = [];
+      }
+      message = { ...stored, refs: { ...(stored.refs ?? {}), botIds: room } };
+    }
+    const ids = typedApprovalTargets(message, pending, (id) => writer.get(stored.workspaceId, id), threadCards);
     const done: string[] = [];
     for (const id of ids) {
       const r = this.requests.get(id);
@@ -775,7 +789,7 @@ export class ApprovalService {
       const writer = this.ports.rooms();
       if (!cardId || !ws || !writer) return;
       const card = writer.get(ws, cardId);
-      if (card) this.onOwnerCard(card);
+      if (card) this.onOwnerCard(card, f.payload?.lead === true);
     } catch (err) {
       this.log(`[factory] typed approval not read: ${String(err)}`);
     }

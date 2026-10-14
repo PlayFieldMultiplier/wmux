@@ -6,6 +6,7 @@ export const th = {
   'sidebar.workspaces': 'พื้นที่ทำงาน',
   'sidebar.newWorkspace': 'พื้นที่ทำงานใหม่',
   'sidebar.newWorkspaceTooltip': 'พื้นที่ทำงานใหม่ (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'เวิร์กสเปซใหม่บน {name}',
   'sidebar.hideTooltip': 'ซ่อนแถบด้านข้าง (Ctrl+B)',
   'sidebar.expandTooltip': 'ขยายแถบด้านข้าง (Ctrl+B)',
   'sidebar.unreadCount': 'ยังไม่ได้อ่าน {count}',
@@ -651,5 +652,5 @@ export const th = {
   'git.secret.scanFailed': "wmux อ่านการเปลี่ยนแปลงนี้เพื่อตรวจหารหัสผ่านหรือคีย์ไม่ได้ จึงไม่ได้อัปโหลด ลองใหม่ ถ้ายังล้มเหลวสามารถปิดการตรวจนี้ได้ที่ การตั้งค่า › ทั่วไป",
   'git.secret.more': "(และอีก {count} รายการ)",
   'settings.secretGuard': "บล็อกรหัสผ่านและคีย์ในคอมมิต พุช และ PR",
-  'settings.secretGuardDesc': "คอมมิต พุช และสร้าง PR ในหน้า Git การรับงานเข้ามา และการส่งมอบของ Moa จะปฏิเสธการเปลี่ยนแปลงที่เพิ่มไฟล์ .env คีย์ส่วนตัว หรือ API key",
+  'settings.secretGuardDesc': "คอมมิต พุช และสร้าง PR ในหน้า Git รวมถึงการรับงานเข้ามา จะปฏิเสธการเปลี่ยนแปลงที่เพิ่มไฟล์ .env คีย์ส่วนตัว หรือ API key",
 } as const;

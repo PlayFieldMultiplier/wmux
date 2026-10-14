@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { BOT_ID_RE, BOT_RPC } from '../shared/bot';
 import { BOT_POSTABLE_CARD_KINDS, ROOM_LIMITS, ROOM_RPC } from '../shared/room';
-import { ASK_PERSON_RPC, HANDOFF_RPC } from '../shared/handoff';
+import { ASK_PERSON_RPC, HANDOFF_LIMITS, HANDOFF_RPC } from '../shared/handoff';
 import { registerToolModule } from './toolModules';
 
 const THREAD_ID = z
@@ -93,6 +93,7 @@ registerToolModule({
         + 'message: to to_bot_id, any bot in any workspace. dispatch: to to_bot_id, else the lead of to_workspace_id (default your workspace). '
         + 'result / refusal: to the sender of reply_to — pass the handoff id you were woken with; one result per handoff — or, without reply_to, to your workspace lead. '
         + 'It stays in the thread of the handoff it answers, else the thread you were woken for. '
+        + 'Coordinator: next on a dispatch names the bots that take the work after to_bot_id, in order; wmux passes each result on and wakes you with the last. '
         + 'Returns the handoff id and the addressee, or a refusal with its reason (chain depth, hops per run, no addressee).',
       {
         kind: z.enum(['dispatch', 'result', 'refusal', 'message']),
@@ -103,9 +104,10 @@ registerToolModule({
         reply_to: z.string().min(1).max(100).optional().describe('The handoff this answers.'),
         thread_id: THREAD_ID.optional(),
         refs: REFS,
+        next: z.array(BOT_ID).min(1).max(HANDOFF_LIMITS.MAX_RELAY).optional().describe('Dispatch, coordinator only: the bots that follow, in order.'),
       },
-      async ({ kind, title, body, to_bot_id, to_workspace_id, reply_to, thread_id, refs }) =>
-        call(HANDOFF_RPC.send, { kind, title, body, toBotId: to_bot_id, toWorkspaceId: to_workspace_id, replyTo: reply_to, threadId: thread_id, refs }),
+      async ({ kind, title, body, to_bot_id, to_workspace_id, reply_to, thread_id, refs, next }) =>
+        call(HANDOFF_RPC.send, { kind, title, body, toBotId: to_bot_id, toWorkspaceId: to_workspace_id, replyTo: reply_to, threadId: thread_id, refs, next }),
     );
 
     host.tool(

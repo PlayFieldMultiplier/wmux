@@ -34,9 +34,13 @@ polls every 60 s).
      is logged.
    - `claude` → `scripts/factory-e2e/fake-claude.mjs` (stub scenarios only): a
      scripted fan-out worker that reports `review_requested` through the real
-     `ledger_update` tool, and for a `default`-preset task commits and pushes
+     `ledger_update` tool, and for a `default`-preset task commits and pushes (through `task_push`)
      its branch. Worker panes start with the run's own `ZDOTDIR` instead of the
      user's shell rc; its `.zshrc` puts the stand-ins first on the pane's PATH.
+   - `codex` → `scripts/factory-e2e/fake-codex.mjs` (stub scenarios only):
+     answers the version and rules check main runs before a bot's codex
+     worker launches, then runs the same scripted worker, logged with
+     `agent: "codex"` (and whether main's rules file was in place).
    - an ssh stand-in (`GIT_SSH_COMMAND`) that serves the scratch repo's remote
      `ssh://git@github.com/acme/app.git` from a local bare repo, so the repo key
      is `github.com/acme/app` and fetch/push work offline. Every other remote

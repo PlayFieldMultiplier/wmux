@@ -457,12 +457,14 @@ export class RemoteHostClient implements RemotePaneEvents {
    * Returns the new pane's `sessionId` on success — the caller attaches to
    * it the same way `REMOTE_PANE_ATTACH` attaches to any other remote pane.
    */
-  async createWorkspace(workspaceId: string, cwd?: string): Promise<{ sessionId: string }> {
+  async createWorkspace(workspaceId: string, cwd?: string, name?: string): Promise<{ sessionId: string }> {
     this.assertSecure('createWorkspace');
     const res = await this.fetchImpl(`${this.host.origin}/api/sessions`, {
       method: 'POST',
       headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspaceId, ...(cwd ? { cwd } : {}) }),
+      // `workspaceName` is additive: a host that predates it ignores the field
+      // and the workspace shows its id, as before.
+      body: JSON.stringify({ workspaceId, ...(cwd ? { cwd } : {}), ...(name ? { workspaceName: name } : {}) }),
       redirect: 'error',
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });

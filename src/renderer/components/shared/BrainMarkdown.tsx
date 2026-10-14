@@ -1,4 +1,7 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/features/sessions/ui/AgentTranscript.tsx), MIT License, Copyright (c) 2026 Nick
+import { Fragment, useState } from 'react';
+import { t } from '../../i18n';
+
 // ─── Command Deck — orchestrator prose markdown (dep-free subset) ────────────
 //
 // The orchestrator's replies are model prose — headings, lists, code fences,
@@ -30,6 +33,62 @@ export interface MarkdownOptions {
    *  <img> its alt, <a> a link only when http(s)), entities decode. Never raw
    *  HTML: everything still renders as React text nodes. */
   githubHtml?: boolean;
+  /** Code blocks as the Bots chat draws them: a fill and no border (the one
+   *  boundary), a muted language label, a Copy that shows on hover or focus,
+   *  and a 320px cap that scrolls inside. Off: the plain block. */
+  richCode?: boolean;
+  /** Draw a link as something else (the Bots chat's PR and issue chips);
+   *  null keeps the plain link. Only with `links`. */
+  linkChip?: (url: string, label: string | null) => React.ReactNode | null;
+  /** Draw `@Name` mentions in plain text as something else (the Bots chat's
+   *  bot marks). `pattern` matches the whole mention, group 1 the name. */
+  mention?: { pattern: RegExp; render: (name: string, key: string) => React.ReactNode };
+}
+
+/** Plain text, with its mentions drawn by `opts.mention` when given. */
+function plainText(text: string, key: string, opts: MarkdownOptions): React.ReactNode[] {
+  const m = opts.mention;
+  if (!m || !text.includes('@')) return [text];
+  const re = new RegExp(m.pattern.source, m.pattern.flags.includes('g') ? m.pattern.flags : `${m.pattern.flags}g`);
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let hit: RegExpExecArray | null;
+  while ((hit = re.exec(text)) !== null) {
+    if (hit[0].length === 0) { re.lastIndex++; continue; }
+    if (hit.index > last) out.push(text.slice(last, hit.index));
+    out.push(<Fragment key={`${key}m${hit.index}`}>{m.render(hit[1] ?? hit[0], `${key}m${hit.index}`)}</Fragment>);
+    last = hit.index + hit[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/** A fenced code block with its language label and Copy (richCode). */
+function RichCodeBlock({ code, lang }: { code: string; lang: string }): React.ReactElement {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div data-brain-md-code data-brain-md-code-rich className="group relative my-1">
+      <div className="pointer-events-none absolute right-1.5 top-1 flex items-center gap-1.5">
+        {lang && <span data-brain-md-code-lang className="text-[11px] text-[var(--text-muted)]">{lang}</span>}
+        <button
+          type="button"
+          data-brain-md-code-copy
+          aria-label={t('botsPage.chat.copyCode')}
+          title={t('botsPage.chat.copyCode')}
+          onClick={() => {
+            void navigator.clipboard?.writeText(code).then(() => setCopied(true)).catch(() => undefined);
+          }}
+          onBlur={() => setCopied(false)}
+          className="pointer-events-auto h-[22px] rounded-[6px] px-1.5 text-[11px] text-[var(--text-sub)] opacity-0 hover:bg-[var(--hover-fill)] focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          {copied ? t('botsPage.chat.copied') : t('botsPage.chat.copyCode')}
+        </button>
+      </div>
+      <pre className="max-h-[320px] overflow-auto rounded-lg px-3 py-2 pr-20 font-mono text-[12px] leading-relaxed whitespace-pre bg-[color-mix(in_srgb,var(--text-main)_5%,transparent)] text-[var(--text-sub)]">
+        {code}
+      </pre>
+    </div>
+  );
 }
 
 const HTTP_URL = /^https?:\/\//i;
@@ -135,7 +194,7 @@ function renderInline(raw: string, keyPrefix: string, opts: MarkdownOptions = {}
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    if (match.index > lastIndex) parts.push(...plainText(text.slice(lastIndex, match.index), `${keyPrefix}p${lastIndex}`, opts));
     const m = match[0];
     if (m.startsWith('`')) {
       parts.push(
@@ -164,11 +223,13 @@ function renderInline(raw: string, keyPrefix: string, opts: MarkdownOptions = {}
         </em>,
       );
     } else if (opts.links && HTTP_URL.test(m)) {
-      parts.push(<ExternalLink key={`${keyPrefix}u${match.index}`} url={m}>{m}</ExternalLink>);
+      const chip = opts.linkChip?.(m, null);
+      parts.push(chip ? <Fragment key={`${keyPrefix}u${match.index}`}>{chip}</Fragment> : <ExternalLink key={`${keyPrefix}u${match.index}`} url={m}>{m}</ExternalLink>);
     } else {
       const link = m.match(/\[([^\]]+)\]\(([^)]+)\)/);
       if (link && opts.links && HTTP_URL.test(link[2].trim())) {
-        parts.push(<ExternalLink key={`${keyPrefix}l${match.index}`} url={link[2].trim()}>{link[1]}</ExternalLink>);
+        const chip = opts.linkChip?.(link[2].trim(), link[1]);
+        parts.push(chip ? <Fragment key={`${keyPrefix}l${match.index}`}>{chip}</Fragment> : <ExternalLink key={`${keyPrefix}l${match.index}`} url={link[2].trim()}>{link[1]}</ExternalLink>);
       } else if (link) {
         // Inert by convention (FileTreePanel does the same): the URL shows on
         // hover, and the deck never navigates on click.
@@ -187,8 +248,8 @@ function renderInline(raw: string, keyPrefix: string, opts: MarkdownOptions = {}
     }
     lastIndex = match.index + m.length;
   }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts.length > 0 ? parts : [text];
+  if (lastIndex < text.length) parts.push(...plainText(text.slice(lastIndex), `${keyPrefix}p${lastIndex}`, opts));
+  return parts.length > 0 ? parts : plainText(text, `${keyPrefix}p0`, opts);
 }
 
 /** A GFM table delimiter row: `| --- | :--: |`, at least one pipe. */
@@ -233,12 +294,17 @@ function renderBlocks(source: string, opts: MarkdownOptions, depth: number, budg
     // Fenced code block (an unclosed fence swallows to the end — streaming).
     if (line.trimStart().startsWith('```')) {
       const codeLines: string[] = [];
+      const lang = line.trimStart().slice(3).trim().split(/\s+/)[0]?.slice(0, 24) ?? '';
       i++;
       while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
         codeLines.push(lines[i]);
         i++;
       }
       i++; // skip the closing fence (or run past the end)
+      if (opts.richCode) {
+        out.push(<RichCodeBlock key={out.length} code={codeLines.join('\n')} lang={lang} />);
+        continue;
+      }
       out.push(
         <pre
           key={out.length}

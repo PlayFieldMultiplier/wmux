@@ -439,7 +439,7 @@ describe('BotRuntime', () => {
     r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'mention', cardId: 'c-1', handoffId: 'h-m', fromBotId: dev }, priority: 1 });
     await settle(10);
     expect(r.adapters[0].prompts[0]).toContain('Dev (lead) mentioned you in the room (card c-1): Look at #4');
-    expect(r.adapters[0].prompts[0]).toContain(`Other bots in this room (mention them by id): ${r.store.get(dev)?.name} = ${dev}`);
+    expect(r.adapters[0].prompts[0]).toContain(`Other bots in this room (mention them by id): ${r.store.get(dev)?.name} (${r.store.get(dev)?.template ?? 'developer'}) = ${dev}`);
     expect(r.adapters[0].prompts[0]).not.toContain(id + ';');
     r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'routine', routineId: 'r-abcdefgh', dueAt: clock }, priority: 2 });
     await settle(10);

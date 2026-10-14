@@ -54,6 +54,7 @@ import { registerExtractionTools } from './playwright/tools/extraction';
 import { registerChannelTools } from './channels';
 import { registerFanOutTools } from './fanout';
 import { registerLedgerUpdateTool, registerLedgerListTool, registerLedgerBrainUpdateTool } from './ledger';
+import { registerTaskPushTool } from './taskPush';
 import { registerWorktaskTools } from './worktask';
 import { registerGitTools } from './git';
 import { registerPaneLifecycleTools } from './paneLifecycle';
@@ -2392,6 +2393,11 @@ registerFanOutTools(server, {
 // Same walk-hit-only provenance as fan-out: the handler resolves the caller's
 // workspace from this ptyId and the ledger scopes the write to that task.
 registerLedgerUpdateTool(server, {
+  getSenderPtyId: () => verifiedPtyId(),
+  resolveWorkspaceId: requireWorkspaceId,
+});
+// task_push: the worker's own branch, pushed by main (bot workers cannot push).
+registerTaskPushTool(server, {
   getSenderPtyId: () => verifiedPtyId(),
   resolveWorkspaceId: requireWorkspaceId,
 });

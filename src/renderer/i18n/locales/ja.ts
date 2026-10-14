@@ -6,6 +6,7 @@ export const ja = {
   'sidebar.workspaces': 'ワークスペース',
   'sidebar.newWorkspace': '新しいワークスペース',
   'sidebar.newWorkspaceTooltip': '新しいワークスペース (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '{name} に新しいワークスペース',
   'sidebar.hideTooltip': 'サイドバーを隠す (Ctrl+B)',
   'sidebar.expandTooltip': 'サイドバーを展開する (Ctrl+B)',
   'sidebar.unreadCount': '未読 {count}件',
@@ -705,5 +706,5 @@ export const ja = {
   'git.secret.scanFailed': "この変更を読み取れず、パスワードやキーの確認ができなかったため、アップロードしませんでした。もう一度試し、失敗が続く場合は設定 › 一般でこの確認をオフにできます。",
   'git.secret.more': "(ほか {count} 件)",
   'settings.secretGuard': "コミット・プッシュ・PR でパスワードとキーをブロック",
-  'settings.secretGuardDesc': "Git ページのコミット・プッシュ・PR 作成、タスクの取り込み、Moa の納品で、.env ファイル、秘密鍵、API キーを含む変更を送信しません。",
+  'settings.secretGuardDesc': "Git ページのコミット・プッシュ・PR 作成とタスクの取り込みで、.env ファイル、秘密鍵、API キーを含む変更を送信しません。",
 } as const;

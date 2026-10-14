@@ -1,0 +1,1621 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "taint-relay-lane-refused",
+  "run": 1,
+  "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-e068dbe6",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Coordinator",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791992455141,
+    "updatedAt": 1791992455141
+   },
+   {
+    "version": 1,
+    "id": "bot-e67878e9",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "role": "lead",
+    "template": "researcher",
+    "name": "Researcher",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791992455142,
+    "updatedAt": 1791992455142
+   },
+   {
+    "version": 1,
+    "id": "bot-aa17f4ea",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "role": "lead",
+    "template": "developer",
+    "name": "Developer",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app"
+    },
+    "enabled": true,
+    "createdAt": 1791992455143,
+    "updatedAt": 1791992455143
+   },
+   {
+    "version": 1,
+    "id": "bot-b7aa4372",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Verifier",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [
+     {
+      "kind": "pr.opened",
+      "filter": {
+       "authorTrusted": true
+      },
+      "batch": {
+       "windowMs": 20000,
+       "max": 5
+      }
+     },
+     {
+      "kind": "pr.head_moved",
+      "filter": {
+       "authorTrusted": true
+      },
+      "batch": {
+       "windowMs": 20000,
+       "max": 5
+      }
+     },
+     {
+      "kind": "ci.failed",
+      "filter": {
+       "authorTrusted": true
+      }
+     }
+    ],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app"
+    },
+    "enabled": true,
+    "createdAt": 1791992455146,
+    "updatedAt": 1791992455146
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-e068dbe6",
+   "researcher": "bot-e67878e9",
+   "developer": "bot-aa17f4ea",
+   "verifier": "bot-b7aa4372"
+  },
+  "injected": [
+   {
+    "label": "ask",
+    "kind": "card",
+    "id": "c-mv8a2q8gfe8917e494",
+    "threadId": "general",
+    "at": 1791992515405
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791992455147,
+    "do": "waitFor",
+    "label": "repo watch baseline",
+    "ok": true,
+    "doneAt": 1791992515405
+   },
+   {
+    "at": 1791992515405,
+    "do": "post",
+    "label": "ask",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv8a2q8gfe8917e494",
+      "seq": 1,
+      "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791992515408,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Add a widget",
+      "body": "Please get a widget added.",
+      "refs": {
+       "botId": "bot-e068dbe6",
+       "botIds": [
+        "bot-e068dbe6"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-e068dbe6",
+      "role": "moa"
+     },
+     "wakeId": "w-mv8a2q8h-c47d14d6",
+     "addressees": [
+      {
+       "botId": "bot-e068dbe6",
+       "role": "moa",
+       "wakeId": "w-mv8a2q8h-c47d14d6"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791992515413,
+    "do": "waitFor",
+    "label": "worker pushed its branch",
+    "ok": true,
+    "doneAt": 1791992535504
+   },
+   {
+    "at": 1791992535504,
+    "do": "gh",
+    "op": "addPr"
+   },
+   {
+    "at": 1791992535542,
+    "do": "waitFor",
+    "label": "pr.opened",
+    "ok": true,
+    "doneAt": 1791992575237
+   },
+   {
+    "at": 1791992575237,
+    "do": "waitFor",
+    "label": "verdict recorded",
+    "ok": true,
+    "doneAt": 1791992605932
+   },
+   {
+    "at": 1791992605932,
+    "do": "waitFor",
+    "label": "lane outcome",
+    "ok": true,
+    "doneAt": 1791992605934
+   },
+   {
+    "at": 1791992605934,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791992608959
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv8a2q8g-e04409bf6008",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791992515408,
+    "dedupeKey": "human.message:c-mv8a2q8gfe8917e494:bot-e068dbe6",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "botId": "bot-e068dbe6",
+     "messageId": "c-mv8a2q8gfe8917e494:bot-e068dbe6"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Please get a widget added.",
+     "cardId": "c-mv8a2q8gfe8917e494",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv8a2u83-1d159b30c7de",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791992520579,
+    "dedupeKey": "handoff.received:h-mv8a2u800b19faa65fc8",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "handoffId": "h-mv8a2u800b19faa65fc8",
+     "botId": "bot-e67878e9"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e068dbe6"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Add a widget",
+     "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+     "runId": "run-c-mv8a2q8gfe8917e494",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Researcher (lead)",
+     "fromWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "toWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6"
+    }
+   },
+   {
+    "id": "f-0mv8a2y7b-0c2a39e71afc",
+    "seq": 3,
+    "kind": "handoff.received",
+    "at": 1791992525735,
+    "dedupeKey": "handoff.received:h-mv8a2y7a9d2d524d6c70",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "handoffId": "h-mv8a2y7a9d2d524d6c70",
+     "botId": "bot-e068dbe6"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e67878e9"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Findings",
+     "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+     "runId": "run-c-mv8a2q8gfe8917e494",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Researcher (lead)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "toWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6"
+    }
+   },
+   {
+    "id": "f-0mv8a2y7e-598e0d461537",
+    "seq": 4,
+    "kind": "handoff.received",
+    "at": 1791992525738,
+    "dedupeKey": "handoff.received:h-mv8a2y7b5263c4eae379",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "handoffId": "h-mv8a2y7b5263c4eae379",
+     "botId": "bot-aa17f4ea"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e068dbe6"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Add a widget",
+     "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+     "runId": "run-c-mv8a2q8gfe8917e494",
+     "depth": 1,
+     "hopsInRun": 3,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Developer (lead)",
+     "fromWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "toWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "relay": true
+    }
+   },
+   {
+    "id": "f-0mv8a370c-856490bf2f66",
+    "seq": 5,
+    "kind": "task.done",
+    "at": 1791992537148,
+    "dedupeKey": "task.done:wtask-mv8a32dl-5776c8cb",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "taskId": "wtask-mv8a32dl-5776c8cb",
+     "botId": "bot-aa17f4ea"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-216397d5-ab9b-44cc-b0d4-400047c316dc",
+     "title": "feat: add widget",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv8a32dl-5776c8cb",
+     "threadId": "handoff:h-mv8a2u800b19faa65fc8"
+    }
+   },
+   {
+    "id": "f-0mv8a3pqk-a20b3136fa26",
+    "seq": 6,
+    "kind": "bot.notice",
+    "at": 1791992561420,
+    "dedupeKey": "bot.notice:bot-aa17f4ea:worker.started:wtask-mv8a32dl-5776c8cb",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "botId": "bot-aa17f4ea",
+     "messageId": "worker.started:wtask-mv8a32dl-5776c8cb",
+     "taskId": "wtask-mv8a32dl-5776c8cb"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "topic": "worker.started",
+     "title": "Your worker for \"feat: add widget\" started (task wtask-mv8a32dl-5776c8cb).",
+     "body": "It reports in its ledger row; you are woken when it finishes or needs input.",
+     "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+     "tainted": true
+    }
+   },
+   {
+    "id": "f-0mv8a408c-61533c31bad1",
+    "seq": 7,
+    "kind": "pr.opened",
+    "at": 1791992575020,
+    "dedupeKey": "pr.opened:github.com/acme/app#1",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "feat: add widget",
+     "headRefName": "wtask/feat-add-widget-5776c8cb",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mv8a408c-de166fa8681d",
+    "seq": 8,
+    "kind": "ci.green",
+    "at": 1791992575020,
+    "dedupeKey": "ci.green:github.com/acme/app#1:575c893bad00c7dd6aa960d33c555de1ff35423a",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "feat: add widget",
+     "headRefName": "wtask/feat-add-widget-5776c8cb",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mv8a4nmi-6dd1947e6f13",
+    "seq": 9,
+    "kind": "task.done",
+    "at": 1791992605338,
+    "dedupeKey": "task.done:wtask-mv8a4jtd-kzvj7y74",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "ref": {
+     "taskId": "wtask-mv8a4jtd-kzvj7y74",
+     "botId": "bot-b7aa4372"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-19a13832-9b00-4cae-a0a9-496ca3259dcb",
+     "title": "verify PR #1",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv8a4jtd-kzvj7y74",
+     "threadId": "pr:github.com/acme/app#1"
+    }
+   },
+   {
+    "id": "f-0mv8a4nub-87526627b1f5",
+    "seq": 10,
+    "kind": "verdict.recorded",
+    "at": 1791992605619,
+    "dedupeKey": "verdict.recorded:github.com/acme/app#1:575c893bad00c7dd6aa960d33c555de1ff35423a:bot-b7aa4372",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+     "botId": "bot-b7aa4372",
+     "taskId": "wtask-mv8a4jtd-kzvj7y74"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-b7aa4372"
+    },
+    "payload": {
+     "verdict": "pass",
+     "summary": "The recorded gate is green at this head.",
+     "agent": "bot:verifier",
+     "gateHeadSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    }
+   },
+   {
+    "id": "f-0mv8a4nv4-7e6722d3b1f7",
+    "seq": 11,
+    "kind": "merge.refused",
+    "at": 1791992605648,
+    "dedupeKey": "merge.refused:github.com/acme/app#1:575c893bad00c7dd6aa960d33c555de1ff35423a",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "approvedBy": "lane",
+     "reason": "tainted-origin: a bot task on this branch started from outside text; the owner merges it"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv8a2q8h-c47d14d6",
+    "botId": "bot-e068dbe6",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "reason": {
+     "kind": "human",
+     "text": "Please get a widget added.",
+     "source": "desktop",
+     "clientMessageId": "c-mv8a2q8gfe8917e494",
+     "runId": "run-c-mv8a2q8gfe8917e494"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791992515409,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv8a2u81-8f8d0158",
+    "botId": "bot-e67878e9",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv8a2u800b19faa65fc8"
+    },
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "priority": 1,
+    "enqueuedAt": 1791992520577,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv8a2y7b-f97b3661",
+    "botId": "bot-aa17f4ea",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv8a2y7b5263c4eae379"
+    },
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "priority": 1,
+    "enqueuedAt": 1791992525735,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv8a377v-732370af",
+    "botId": "bot-aa17f4ea",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-mv8a32dl-5776c8cb@4"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "priority": 1,
+    "enqueuedAt": 1791992537419,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv8a408c-ec8fca91",
+    "botId": "bot-b7aa4372",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv8a408c-61533c31bad1"
+     ],
+     "trigger": {
+      "kind": "pr.opened",
+      "filter": {
+       "authorTrusted": true
+      },
+      "batch": {
+       "windowMs": 20000,
+       "max": 5
+      }
+     }
+    },
+    "threadId": "pr:github.com/acme/app#1",
+    "priority": 2,
+    "enqueuedAt": 1791992575020,
+    "notBefore": 1791992595020,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv8a4ntl-73083e44",
+    "botId": "bot-b7aa4372",
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-mv8a4jtd-kzvj7y74@3"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "pr:github.com/acme/app#1",
+    "priority": 1,
+    "enqueuedAt": 1791992605593,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv8a2u800b19faa65fc8",
+    "runId": "run-c-mv8a2q8gfe8917e494",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-e068dbe6"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-e67878e9"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Add a widget",
+     "body": "Research how, then build it."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv8a2q8h-c47d14d6:h1",
+    "createdAt": 1791992520576,
+    "updatedAt": 1791992520579,
+    "next": [
+     "bot-aa17f4ea"
+    ]
+   },
+   {
+    "version": 1,
+    "id": "h-mv8a2y7a9d2d524d6c70",
+    "runId": "run-c-mv8a2q8gfe8917e494",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-e67878e9"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-e068dbe6"
+    },
+    "kind": "result",
+    "replyTo": "h-mv8a2u800b19faa65fc8",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv8a2u800b19faa65fc8"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Findings",
+     "body": "Add a widget file to the repository."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv8a2u81-8f8d0158:h1",
+    "createdAt": 1791992525734,
+    "updatedAt": 1791992525735
+   },
+   {
+    "version": 1,
+    "id": "h-mv8a2y7b5263c4eae379",
+    "runId": "run-c-mv8a2q8gfe8917e494",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "depth": 1,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-e068dbe6"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-aa17f4ea"
+    },
+    "kind": "dispatch",
+    "replyTo": "h-mv8a2y7a9d2d524d6c70",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv8a2u800b19faa65fc8",
+      "h-mv8a2y7a9d2d524d6c70"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Add a widget",
+     "body": "Brief from Coordinator (moa): Add a widget\n\nResearch how, then build it.\n\nResult from Researcher (lead): Findings\n\nAdd a widget file to the repository."
+    },
+    "status": "delivered",
+    "clientHandoffId": "forward:h-mv8a2y7a9d2d524d6c70",
+    "relay": true,
+    "createdAt": 1791992525735,
+    "updatedAt": 1791992525738
+   }
+  ],
+  "repoWatch": {
+   "version": 1,
+   "repos": {
+    "github.com/acme/app": {
+     "lastPollAt": 1791992575020,
+     "baselineAt": 1791992514977,
+     "prsComplete": true,
+     "capped": false,
+     "prs": {
+      "1": {
+       "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+       "checks": "pass",
+       "labels": [],
+       "state": "OPEN",
+       "author": "octo"
+      }
+     },
+     "issues": {}
+    }
+   }
+  },
+  "ledger": [
+   {
+    "schemaVersion": 1,
+    "id": "wtask-mv8a32dl-5776c8cb",
+    "taskWorkspaceId": "ws-216397d5-ab9b-44cc-b0d4-400047c316dc",
+    "ownerWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "title": "feat: add widget",
+    "status": "completed",
+    "rev": 4,
+    "updatedAt": 1791992537418,
+    "updatedBy": {
+     "kind": "brain",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6"
+    },
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-aa17f4ea",
+      "tainted": true
+     },
+     "preset": "default",
+     "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+     "handoffId": "h-mv8a2y7b5263c4eae379"
+    },
+    "summary": "fake worker: review_requested for wtask-mv8a32dl-5776c8cb",
+    "gate": {
+     "exitCode": 0,
+     "tail": "\n> factory-smoke-app@1.0.0 lint\n> node -e \"process.exit(0)\"\n\n\n> factory-smoke-app@1.0.0 test\n> node -e \"process.exit(0)\"\n\n",
+     "at": 1791992537417,
+     "command": "npm test",
+     "recordedBy": "system",
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    }
+   },
+   {
+    "schemaVersion": 1,
+    "id": "wtask-mv8a4jtd-kzvj7y74",
+    "taskWorkspaceId": "ws-19a13832-9b00-4cae-a0a9-496ca3259dcb",
+    "ownerWorkspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "title": "verify PR #1",
+    "status": "completed",
+    "rev": 4,
+    "updatedAt": 1791992605620,
+    "updatedBy": {
+     "kind": "brain",
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6"
+    },
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-b7aa4372",
+      "tainted": true
+     },
+     "preset": "verify",
+     "checkout": {
+      "sha": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+      "detached": true
+     },
+     "threadId": "pr:github.com/acme/app#1"
+    },
+    "summary": "fake worker: review_requested for wtask-mv8a4jtd-kzvj7y74",
+    "gate": {
+     "exitCode": 0,
+     "tail": "\n> factory-smoke-app@1.0.0 lint\n> node -e \"process.exit(0)\"\n\n\n> factory-smoke-app@1.0.0 test\n> node -e \"process.exit(0)\"\n\n",
+     "at": 1791992605592,
+     "command": "npm test",
+     "recordedBy": "system",
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    }
+   }
+  ],
+  "verdicts": [
+   {
+    "version": 2,
+    "repoKey": "github.com/acme/app",
+    "prNumber": 1,
+    "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+    "verdict": "pass",
+    "principal": {
+     "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+     "botId": "bot-b7aa4372",
+     "agent": "bot:verifier"
+    },
+    "evidence": {
+     "taskId": "wtask-mv8a4jtd-kzvj7y74",
+     "gateHeadSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+    },
+    "summary": "The recorded gate is green at this head.",
+    "at": 1791992605619
+   }
+  ],
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv8a2q8gfe8917e494",
+    "seq": 1,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791992515408,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Add a widget",
+    "body": "Please get a widget added.",
+    "refs": {
+     "botId": "bot-e068dbe6",
+     "botIds": [
+      "bot-e068dbe6"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a2u833129b423fc",
+    "seq": 2,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "kind": "fact",
+    "at": 1791992520579,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Researcher (lead): Add a widget",
+    "refs": {
+     "botId": "bot-e67878e9",
+     "handoffId": "h-mv8a2u800b19faa65fc8",
+     "factId": "f-0mv8a2u83-1d159b30c7de"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a2y7b838b5d5678",
+    "seq": 3,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "kind": "fact",
+    "at": 1791992525735,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Findings",
+    "refs": {
+     "botId": "bot-e068dbe6",
+     "handoffId": "h-mv8a2y7a9d2d524d6c70",
+     "factId": "f-0mv8a2y7b-0c2a39e71afc"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a2y7e8fd120feb0",
+    "seq": 4,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "kind": "fact",
+    "at": 1791992525738,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Developer (lead): Add a widget (forwarded by wmux)",
+    "refs": {
+     "botId": "bot-aa17f4ea",
+     "handoffId": "h-mv8a2y7b5263c4eae379",
+     "factId": "f-0mv8a2y7e-598e0d461537"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a370e4183a0e176",
+    "seq": 5,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "kind": "fact",
+    "at": 1791992537148,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: feat: add widget",
+    "body": "fake worker: review_requested for wtask-mv8a32dl-5776c8cb",
+    "refs": {
+     "taskId": "wtask-mv8a32dl-5776c8cb",
+     "botId": "bot-aa17f4ea",
+     "factId": "f-0mv8a370c-856490bf2f66"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a377v8efe0a4813",
+    "seq": 6,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "kind": "fact",
+    "at": 1791992537419,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task checked: gate passed, task completed",
+    "body": "`npm test` at 575c893bad00c7dd6aa960d33c555de1ff35423a."
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a3781793b78f622",
+    "seq": 7,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "handoff:h-mv8a2u800b19faa65fc8",
+    "kind": "fact",
+    "at": 1791992537425,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Worker done",
+    "body": "Task completed: its Claude stopped to free memory. Its pane closes. The worktree is kept; no conversation was recorded to resume."
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a4nmi9a89728102",
+    "seq": 8,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791992605338,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: verify PR #1",
+    "body": "fake worker: review_requested for wtask-mv8a4jtd-kzvj7y74",
+    "refs": {
+     "taskId": "wtask-mv8a4jtd-kzvj7y74",
+     "botId": "bot-b7aa4372",
+     "factId": "f-0mv8a4nmi-6dd1947e6f13"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a4ntlc2da0cf22b",
+    "seq": 9,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791992605593,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verify gate passed",
+    "body": "`npm test` at 575c893bad00c7dd6aa960d33c555de1ff35423a; recorded in the ledger."
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a4nucefa0880761",
+    "seq": 10,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791992605619,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verdict pass for #1 at 575c893 by Verifier",
+    "body": "The recorded gate is green at this head.",
+    "refs": {
+     "pr": 1,
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+     "taskId": "wtask-mv8a4jtd-kzvj7y74",
+     "botId": "bot-b7aa4372",
+     "factId": "f-0mv8a4nub-87526627b1f5"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a4nuk725fb6a996",
+    "seq": 11,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791992605628,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Worker done",
+    "body": "Task completed: its Claude stopped to free memory. Its pane closes. The worktree is kept; no conversation was recorded to resume."
+   },
+   {
+    "version": 1,
+    "id": "c-mv8a4nv46b16d87e3a",
+    "seq": 12,
+    "workspaceId": "ws-80e10e8f-65d9-4588-b68d-57e33102c1e6",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "refusal",
+    "at": 1791992605648,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merge refused for #1 at 575c893",
+    "body": "- Another merge check did not pass",
+    "refs": {
+     "pr": 1,
+     "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+     "factId": "f-0mv8a4nv4-7e6722d3b1f7"
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791992515432,
+     "event": "initialize"
+    },
+    {
+     "at": 1791992515433,
+     "event": "session/new",
+     "sessionId": "stub-c2b1b092e32b",
+     "cwd": "/home/owner/.wmux-verify-f9dc4546/factory/bots/bot-e068dbe6"
+    },
+    {
+     "at": 1791992520435,
+     "event": "prompt",
+     "sessionId": "stub-c2b1b092e32b",
+     "text": "You are Coordinator, a bot of wmux workspace ws-80e10e8f-65d9-4588-b68d-57e33102c1e6."
+    },
+    {
+     "at": 1791992520578,
+     "event": "tool",
+     "sessionId": "stub-c2b1b092e32b",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv8a2u800b19faa65fc8\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv8a2u800b19faa65fc8\",\n  \"to\": {\n    \"botId\": \"bot-e67878e9\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\"\n  },\n  \"wakeId\": \"w-mv8a2u81-8f8d0158\"\n}"
+    }
+   ],
+   "researcher": [
+    {
+     "at": 1791992520602,
+     "event": "initialize"
+    },
+    {
+     "at": 1791992520603,
+     "event": "session/new",
+     "sessionId": "stub-32ef1c36d066",
+     "cwd": "/home/owner/.wmux-verify-f9dc4546/factory/bots/bot-e67878e9"
+    },
+    {
+     "at": 1791992525606,
+     "event": "prompt",
+     "sessionId": "stub-32ef1c36d066",
+     "text": "You are Researcher, a bot of wmux workspace ws-80e10e8f-65d9-4588-b68d-57e33102c1e6."
+    },
+    {
+     "at": 1791992525736,
+     "event": "tool",
+     "sessionId": "stub-32ef1c36d066",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv8a2y7a9d2d524d6c70\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv8a2u800b19faa65fc8\",\n  \"to\": {\n    \"botId\": \"bot-e068dbe6\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\"\n  },\n  \"relayedTo\": {\n    \"botId\": \"bot-aa17f4ea\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\"\n  }\n}"
+    }
+   ],
+   "developer": [
+    {
+     "at": 1791992525759,
+     "event": "initialize"
+    },
+    {
+     "at": 1791992525760,
+     "event": "session/new",
+     "sessionId": "stub-d2645b0a7bd8",
+     "cwd": "/home/owner/.wmux-verify-f9dc4546/factory/bots/bot-aa17f4ea"
+    },
+    {
+     "at": 1791992530763,
+     "event": "prompt",
+     "sessionId": "stub-d2645b0a7bd8",
+     "text": "You are Developer, a bot of wmux workspace ws-80e10e8f-65d9-4588-b68d-57e33102c1e6. Your repository is github.com/acme/app."
+    },
+    {
+     "at": 1791992531030,
+     "event": "tool",
+     "sessionId": "stub-d2645b0a7bd8",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv8a2y7b-f97b3661:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app\",\n  \"ownerWorkspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n  \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n  \"starting\": true,\n  \"note\": \"Accepted: the workers are starting, not started. Say they are starting, not that they started: a worker that could not start wakes you, and one that started reports through its task.\"\n}"
+    },
+    {
+     "at": 1791992537419,
+     "event": "prompt",
+     "sessionId": "stub-d2645b0a7bd8",
+     "text": "[wake w-mv8a377v-732370af] Developer (developer) · reason: facts · priority 1"
+    }
+   ],
+   "verifier": [
+    {
+     "at": 1791992595055,
+     "event": "initialize"
+    },
+    {
+     "at": 1791992595056,
+     "event": "session/new",
+     "sessionId": "stub-a9e94053cb62",
+     "cwd": "/home/owner/.wmux-verify-f9dc4546/factory/bots/bot-b7aa4372"
+    },
+    {
+     "at": 1791992600059,
+     "event": "prompt",
+     "sessionId": "stub-a9e94053cb62",
+     "text": "You are Verifier, a bot of wmux workspace ws-80e10e8f-65d9-4588-b68d-57e33102c1e6. Your repository is github.com/acme/app."
+    },
+    {
+     "at": 1791992600259,
+     "event": "tool",
+     "sessionId": "stub-a9e94053cb62",
+     "name": "pr_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"repoKey\": \"github.com/acme/app\",\n  \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n  \"pr\": {\n    \"number\": 1,\n    \"title\": \"feat: add widget\",\n    \"state\": \"OPEN\",\n    \"isDraft\": false,\n    \"author\": \"octo\",\n    \"headSha\": \"575c893bad00c7dd6aa960d33c555de1ff35423a\",\n    \"headRefName\": \"wtask/feat-add-widget-5776c8cb\",\n    \"baseRefName\": \"main\",\n    \"isCrossRepository\": false,\n    \"mergeStateStatus\": \"CLEAN\",\n    \"mergeable\": \"MERGEABLE\",\n    \"mergedAt\": null,\n    \"labels\": [],\n    \"labelsTruncated\": false,\n    \"files\": [\n      \"src/index.ts\"\n    ],\n    \"filesTruncated\": false,\n    \"checksHeadSha\": \"575c893bad00c7dd6aa960d33c555de1ff35423a\",\n    \"checks\": [\n      {\n        \"name\": \"build\",\n        \"bucket\": \"pass\",\n        \"required\": true\n      }\n    ],\n    \"checksTruncated\": false\n  }\n}"
+    },
+    {
+     "at": 1791992600315,
+     "event": "tool",
+     "sessionId": "stub-a9e94053cb62",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv8a408c-ec8fca91:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app\",\n  \"ownerWorkspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n  \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n  \"starting\": true,\n  \"note\": \"Accepted: the workers are starting, not started. Say they are starting, not that they started: a worker that could not start wakes you, and one that started reports through its task.\"\n}"
+    },
+    {
+     "at": 1791992605593,
+     "event": "prompt",
+     "sessionId": "stub-a9e94053cb62",
+     "text": "[wake w-mv8a4ntl-73083e44] Verifier (reviewer) · reason: facts · priority 1"
+    },
+    {
+     "at": 1791992605621,
+     "event": "tool",
+     "sessionId": "stub-a9e94053cb62",
+     "name": "pr_verdict",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"record\": {\n    \"version\": 2,\n    \"repoKey\": \"github.com/acme/app\",\n    \"prNumber\": 1,\n    \"headSha\": \"575c893bad00c7dd6aa960d33c555de1ff35423a\",\n    \"verdict\": \"pass\",\n    \"principal\": {\n      \"workspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n      \"botId\": \"bot-b7aa4372\",\n      \"agent\": \"bot:verifier\"\n    },\n    \"evidence\": {\n      \"taskId\": \"wtask-mv8a4jtd-kzvj7y74\",\n      \"gateHeadSha\": \"575c893bad00c7dd6aa960d33c555de1ff35423a\"\n    },\n    \"summary\": \"The recorded gate is green at this head.\",\n    \"at\": 1791992605619\n  }\n}"
+    }
+   ]
+  },
+  "workers": [
+   {
+    "at": 1791992534874,
+    "pid": 54390,
+    "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/feat-add-widget-5776c8cb",
+    "event": "start",
+    "taskId": "wtask-mv8a32dl-5776c8cb",
+    "args": [
+     "--session-id",
+     "dd99e3b2-996f-4f6f-9981-73249aec2674",
+     "--settings=/home/owner/.wmux-verify-f9dc4546/factory/worker-settings.json",
+     "# Task worker\n\nYou are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin's default branch.\n\nWhat you can do here: implement the task below within the files it name",
+     "--dangerously-skip-permissions",
+     "--allowedTools",
+     "mcp__wmux__ledger_update,mcp__wmux__channel_read,mcp__wmux__channel_unread,mcp__wmux__channel_ack,mcp__wmux__a2a_task_query,mcp__wmux__a2a_whoami",
+     "--disallowedTools",
+     "mcp__wmux__fanout_start,mcp__wmux__terminal_send,mcp__wmux__terminal_send_key,mcp__wmux__send_message,mcp__wmux__surface_new,mcp__wmux__pane_split,mcp__wmux__browser_*"
+    ]
+   },
+   {
+    "at": 1791992535440,
+    "pid": 54390,
+    "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/feat-add-widget-5776c8cb",
+    "event": "commit",
+    "add": 0,
+    "commit": 0,
+    "push": 0,
+    "pushErr": "",
+    "branch": "wtask/feat-add-widget-5776c8cb",
+    "head": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+   },
+   {
+    "at": 1791992537152,
+    "pid": 54390,
+    "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/feat-add-widget-5776c8cb",
+    "event": "ledger_update",
+    "ok": true,
+    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mv8a32dl-5776c8cb\",\n    \"taskWorkspaceId\": \"ws-216397d5-ab9b-44cc-b0d4-400047c316dc\",\n    \"ownerWorkspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n    \"title\": \"feat: add widget\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1791992537148,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-216397d5-ab9b-44cc-b0d4-400047c316dc\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-aa17f4ea\",\n        \"tainted\": true\n      },\n      \"preset\": \"default\",\n      \"threadId\": \"handoff:h-mv8a2u800b19faa65fc8\",\n      \"handoffId\": \"h-mv8a2y7b5263c4eae379\"\n    },\n    \"summary\": \"fake worker: review_requested for wtask-mv8a32dl-5776c8cb\"\n  }\n}"
+   },
+   {
+    "at": 1791992603662,
+    "pid": 59335,
+    "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/verify-pr-1-kzvj7y74",
+    "event": "start",
+    "taskId": "wtask-mv8a4jtd-kzvj7y74",
+    "args": [
+     "--session-id",
+     "9a2bc2f7-cc3e-4e36-a691-92fb75e0a2fe",
+     "--settings=/home/owner/.wmux-verify-f9dc4546/factory/worker-settings.json",
+     "# Verify worker\n\nYou are a verify worker. Your worktree is commit 575c893bad00c7dd6aa960d33c555de1ff35423a checked out detached: the exact head of a pull request a factory verifier bot is grading.\n\nWh",
+     "--dangerously-skip-permissions",
+     "--allowedTools",
+     "mcp__wmux__ledger_update,mcp__wmux__channel_read,mcp__wmux__channel_unread,mcp__wmux__channel_ack,mcp__wmux__a2a_task_query,mcp__wmux__a2a_whoami",
+     "--disallowedTools",
+     "mcp__wmux__fanout_start,mcp__wmux__terminal_send,mcp__wmux__terminal_send_key,mcp__wmux__send_message,mcp__wmux__surface_new,mcp__wmux__pane_split,mcp__wmux__browser_*"
+    ]
+   },
+   {
+    "at": 1791992603662,
+    "pid": 59335,
+    "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/verify-pr-1-kzvj7y74",
+    "event": "deps",
+    "nodeModules": true
+   },
+   {
+    "at": 1791992605340,
+    "pid": 59335,
+    "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/verify-pr-1-kzvj7y74",
+    "event": "ledger_update",
+    "ok": true,
+    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mv8a4jtd-kzvj7y74\",\n    \"taskWorkspaceId\": \"ws-19a13832-9b00-4cae-a0a9-496ca3259dcb\",\n    \"ownerWorkspaceId\": \"ws-80e10e8f-65d9-4588-b68d-57e33102c1e6\",\n    \"title\": \"verify PR #1\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1791992605338,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-19a13832-9b00-4cae-a0a9-496ca3259dcb\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-b7aa4372\",\n        \"tainted\": true\n      },\n      \"preset\": \"verify\",\n      \"checkout\": {\n        \"sha\": \"575c893bad00c7dd6aa960d33c555de1ff35423a\",\n        \"detached\": true\n      },\n      \"threadId\": \"pr:github.com/acme/app#1\"\n    },\n    \"summary\": \"fake worker: review_req"
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791992455118,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791992514975,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791992531016,
+     "argv": [
+      "repo",
+      "view",
+      "--json",
+      "defaultBranchRef",
+      "--jq",
+      ".defaultBranchRef.name"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app",
+     "handled": false,
+     "exit": 1,
+     "error": "fake-gh: unsupported repo"
+    },
+    {
+     "at": 1791992531290,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ],
+     "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/feat-add-widget-5776c8cb",
+     "handled": true,
+     "exit": 1,
+     "error": "no pull requests found for branch \"wtask/feat-add-widget-5776c8cb\""
+    },
+    {
+     "at": 1791992575018,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti…",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791992600256,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791992600504,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ],
+     "cwd": "/home/owner/.wmux-verify-f9dc4546/worktrees/acb083c589f4/verify-pr-1-kzvj7y74",
+     "handled": true,
+     "exit": 1,
+     "error": "no pull requests found for branch \"HEAD\""
+    },
+    {
+     "at": 1791992605617,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791992605646,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-taint-relay-lane-refused-8wta9a/app",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "state": "OPEN",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-10-14T15:42:15.507Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+         "build"
+        ],
+        "files": [
+         "src/index.ts"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 1,
+        "title": "feat: add widget",
+        "headRefName": "wtask/feat-add-widget-5776c8cb",
+        "headSha": "575c893bad00c7dd6aa960d33c555de1ff35423a"
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {
+   "pr1Head": "575c893bad00c7dd6aa960d33c555de1ff35423a",
+   "pr1Branch": "wtask/feat-add-widget-5776c8cb"
+  },
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-14T15-40-53-verify-f9dc4546",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux-team/.claude/skills/verify-wmux/evidence/2026-10-14T15-40-53-verify-f9dc4546"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the developer was not woken by the relay",
+   "failing": [
+    "developer_woken_by_relay"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "handoffs.2.relay"
+    }
+   ]
+  },
+  {
+   "why": "the developer's task from the research is marked clean",
+   "failing": [
+    "lead_task_tainted"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "ledger.0.dispatch.origin.tainted",
+     "value": false
+    }
+   ]
+  },
+  {
+   "why": "the lane refused for another reason",
+   "failing": [
+    "lane_refused_tainted"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "facts.10.payload.reason",
+     "value": "author-trusted:external-author"
+    }
+   ]
+  }
+ ]
+}

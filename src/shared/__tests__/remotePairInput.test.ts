@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { maskPairInput, normalizePairCode, parseRemotePairInput } from '../remotePairInput';
+import { isCredentialSafeOriginString, maskPairInput, normalizePairCode, parseRemotePairInput } from '../remotePairInput';
 import { buildDesktopPairLink } from '../web';
 
 const pair = (origin: string, code: string) => ({ kind: 'pair', origin, code });
@@ -81,5 +81,13 @@ describe('maskPairInput', () => {
     expect(maskPairInput('https://h.ts.net/pair?code=QWXZ7K9M')).toBe('https://h.ts.net/pair?code=••••••••');
     expect(maskPairInput('https://h.ts.net:7681 QWXZ7K9M')).toBe('https://h.ts.net:7681 ••••••••');
     expect(maskPairInput('https://h.ts.net')).toBe('https://h.ts.net');
+  });
+});
+
+describe('isCredentialSafeOriginString', () => {
+  it('accepts an SSH host origin (routed through its tunnel) but never parses one from typed input', () => {
+    expect(isCredentialSafeOriginString('wmux-ssh://host-1')).toBe(true);
+    expect(isCredentialSafeOriginString('http://office.lan:7681')).toBe(false);
+    expect(parseRemotePairInput('wmux-ssh://host-1 ABCD2345')).toEqual({ kind: 'error', reason: 'not-a-link' });
   });
 });

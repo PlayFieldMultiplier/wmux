@@ -1,16 +1,22 @@
 // ─── The bot-worker merge guard's pure parts, shared by main and the daemon ─
 //
 // A fan-out worker a bot started merges only through main's merge executor
-// (the merge lane, or an approval the owner or a remembered rule gave), and
-// leaves every other irreversible or public act to an owner approval: claude
-// launches in its pane carry `--settings` naming
-// `<wmuxDir>/factory/worker-settings.json`, whose `permissions.deny` refuses
-// them (BOT_WORKER_DENY). Main guards the launches it
+// (the merge lane, or an approval the owner or a remembered rule gave),
+// publishes its branch only through main's push (`task.push`: its own task
+// branch, fast-forward only), and leaves every other irreversible or public
+// act to an owner approval: claude launches in its pane carry `--settings`
+// naming `<wmuxDir>/factory/worker-settings.json`, whose `permissions.deny`
+// refuses them (BOT_WORKER_DENY). Main guards the launches it
 // types (src/main/agents/botWorkerMergeGuard.ts); the daemon guards the ones a
 // phone asks it to type into an existing pane. Both recognise a bot worker's
 // pane by `<wmuxDir>/factory/bot-worker-sessions.json`, which only main
 // writes; a file that exists but cannot be read counts every pane as a bot
 // worker's (fail-closed).
+//
+// Threat model: this is an intent guard against a confused or misdirected
+// model, not isolation. The rules match the commands the agent's own tool
+// runs in their usual spellings; a worker runs as the owner's user, so a
+// script, an interpreter or another program can still reach the same effects.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,24 +44,18 @@ export function ghApiDeny(rest: string): string[] {
 /** The deny rules that send a merge through the lane instead of `gh`. */
 export const BOT_WORKER_MERGE_DENY: readonly string[] = [...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*')];
 
-/** The default branch names every worker's push rules cover, whatever a
- *  repository's own default branch reads (see the default-branches file
- *  below for the others). */
+/** The default branch names main always treats as a repository's default
+ *  branch, whatever its own default branch reads (see the default-branches
+ *  file below for the others). Main's push never lands on one. */
 export const BOT_WORKER_FALLBACK_DEFAULT_BRANCHES: readonly string[] = ['main', 'master'];
 
-/** The push rules that keep a worker off one default branch: as the
- *  destination word, as a refspec's destination, or as a full ref. */
-export function pushDenyForBranch(b: string): string[] {
-  return [`Bash(git*push* ${b})`, `Bash(git*push* ${b} *)`, `Bash(git*push*:${b})`, `Bash(git*push*:${b} *)`, `Bash(git*push*refs/heads/${b}*)`];
-}
-
-/** Characters a branch name may not hold to read as itself inside a deny
- *  rule: git's forbidden ones, the rule syntax's (`*`, parentheses), quotes,
- *  shell expansion and whitespace. */
+/** Characters a branch name may not hold to read as itself in a rule or a
+ *  refspec: git's forbidden ones, the rule syntax's (`*`, parentheses),
+ *  quotes, shell expansion and whitespace. */
 const UNDENYABLE_CHAR = /[\s~^:?*[\\()"'`$]/u;
 
-/** A branch name that reads as itself inside a deny rule: a valid git branch
- *  name (any script) with none of UNDENYABLE_CHAR, not shaped like an
+/** A branch name that reads as itself in a rule or a refspec: a valid git
+ *  branch name (any script) with none of UNDENYABLE_CHAR, not shaped like an
  *  option. */
 export function isDenyableBranchName(name: unknown): name is string {
   if (typeof name !== 'string' || name.length === 0 || name.length > 255) return false;
@@ -68,24 +68,22 @@ export function isDenyableBranchName(name: unknown): name is string {
     && !name.endsWith('/') && !name.endsWith('.') && !name.endsWith('.lock') && name !== '@';
 }
 
-/** Pushes that rewrite history or land on a default branch (`main` or
- *  `master` here; a repository's own default branch is added from the
- *  default-branches file): a worker pushes only its own task branch,
- *  without force. */
+/** Every push: a worker's branch reaches the remote only through main's push
+ *  (`task.push`), so the worker's own `git push` is refused in every form —
+ *  directly or after git's global options (`-C <dir>`, `-c <key>=<value>`).
+ *  Plus what would redirect where main's push lands: a remote's URL, a push
+ *  URL, a URL rewrite or the remotes themselves; git's lower-level pushes;
+ *  and a git alias, which can name any of these. */
 export const BOT_WORKER_PUSH_DENY: readonly string[] = [
-  'Bash(git*push*--force*)', 'Bash(git*push* -f)', 'Bash(git*push* -f *)',
-  ...['u', 'v', 'q', 'n'].flatMap((x) => [`Bash(git*push* -${x}f*)`, `Bash(git*push* -f${x}*)`, `Bash(git*push* -${x}${x === 'u' ? 'v' : 'u'}f*)`]),
-  'Bash(git*push* +*)', 'Bash(git*push*:+*)',
-  // Every ref at once, or deleting one. `:**`, not `:*`: Claude Code reads a
-  // trailing `:*` as its prefix syntax and then matches the `*`s literally.
-  'Bash(git*push*--mirror*)', 'Bash(git*push*--all*)', 'Bash(git*push*--delete*)', 'Bash(git*push* -d *)', 'Bash(git*push* :**)',
-  ...BOT_WORKER_FALLBACK_DEFAULT_BRANCHES.flatMap(pushDenyForBranch),
-  // A push that names no destination goes wherever the branch's upstream or
-  // the push config says: a worker names its own branch.
-  'Bash(git*push)', 'Bash(git*push origin)', 'Bash(git*push * origin)', 'Bash(git*push*origin HEAD)', 'Bash(git*push*origin HEAD *)',
-  // The settings that redirect where a named push lands.
-  'Bash(git*config*remote.*.push*)', 'Bash(git*config*push.default*)', 'Bash(git*config*branch.*.merge*)',
-  'Bash(git*-c*push.*)', 'Bash(git*-c*remote.*)', 'Bash(git*branch*--set-upstream*)', 'Bash(git*branch* -u *)',
+  'Bash(git push)', 'Bash(git push *)', 'Bash(git -* push)', 'Bash(git -* push *)',
+  'Bash(git remote set-url*)', 'Bash(git -* remote set-url*)',
+  'Bash(git*config*remote.*.push*)', 'Bash(git*config*remote.*.url*)', 'Bash(git*config*url.*)',
+  // A remote added, renamed or removed changes what `origin` names.
+  ...['add', 'rename', 'remove', 'rm'].flatMap((v) => [`Bash(git remote ${v}*)`, `Bash(git -* remote ${v}*)`]),
+  // git's lower-level pushes.
+  ...['send-pack', 'http-push'].flatMap((v) => [`Bash(git ${v}*)`, `Bash(git -* ${v}*)`]),
+  // An alias names any of the acts above under another word.
+  'Bash(git*config*alias.*)', 'Bash(git*-c*alias.*)',
 ];
 
 /** Public acts under the owner's GitHub identity — issues, comments,
@@ -108,18 +106,16 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
 /** Everything a bot's worker is refused. */
 export const BOT_WORKER_DENY: readonly string[] = [...BOT_WORKER_MERGE_DENY, ...BOT_WORKER_PUSH_DENY, ...BOT_WORKER_PUBLIC_DENY];
 
-/** The worker's `--settings` document: every rule, plus the push rules for
- *  each repository default branch main recorded (other than main/master). */
-export function buildBotWorkerSettings(defaultBranches: readonly string[] = []): Record<string, unknown> {
-  const extra = [...new Set(defaultBranches)].filter((b) => isDenyableBranchName(b) && !BOT_WORKER_FALLBACK_DEFAULT_BRANCHES.includes(b));
-  return { permissions: { deny: [...BOT_WORKER_DENY, ...extra.flatMap(pushDenyForBranch)] } };
+/** The worker's `--settings` document: every rule. */
+export function buildBotWorkerSettings(): Record<string, unknown> {
+  return { permissions: { deny: [...BOT_WORKER_DENY] } };
 }
 
 // ── factory/worker-default-branches.json ─────────────────────────────────────
 // The default branches of the repositories bots' workers run in, as main read
-// them (GitHub's default branch, else origin/HEAD). Only main writes it; main
-// and the daemon both read it when they write the worker settings, so both
-// write the same document. Missing or unreadable: main/master only.
+// them (GitHub's default branch, else origin/HEAD). Only main writes and reads
+// it: main's push (`task.push`) never lands on one. Missing or unreadable:
+// main/master only.
 
 export const BOT_WORKER_DEFAULT_BRANCHES_VERSION = 1;
 /** Most names kept (oldest dropped first). */
@@ -142,8 +138,8 @@ export function readBotWorkerDefaultBranches(dir: string): string[] {
 }
 
 /** Main: add one repository's default branch (written whole, only when it
- *  is new). False when the name cannot be a deny rule or the file cannot be
- *  written; main/master need no record. */
+ *  is new). False when the name cannot be held (isDenyableBranchName) or the
+ *  file cannot be written; main/master need no record. */
 export function recordBotWorkerDefaultBranch(dir: string, name: string): boolean {
   if (!isDenyableBranchName(name)) return false;
   if (BOT_WORKER_FALLBACK_DEFAULT_BRANCHES.includes(name)) return true;
@@ -180,15 +176,14 @@ export function botWorkerSettingsPath(dir: string): string {
 }
 
 /**
- * Write the worker settings under `<dir>/factory/` (with the recorded
- * default branches' push rules; rewritten only when they drift) and return
- * the path. The file is replaced whole (a temporary file
+ * Write the worker settings under `<dir>/factory/` (rewritten only when they
+ * drift) and return the path. The file is replaced whole (a temporary file
  * renamed over it), so a worker starting meanwhile reads the old or the new
  * content, never a partial one. Throws when it cannot be written.
  */
 export function writeBotWorkerSettings(dir: string): string {
   const file = botWorkerSettingsPath(dir);
-  const content = `${JSON.stringify(buildBotWorkerSettings(readBotWorkerDefaultBranches(dir)), null, 2)}\n`;
+  const content = `${JSON.stringify(buildBotWorkerSettings(), null, 2)}\n`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   try {
     if (fs.readFileSync(file, 'utf8') === content) return file;
@@ -260,9 +255,17 @@ export function spliceSettingsFlag(fullCommand: string, settingsPath: string): s
   return `${marker}${command.slice(0, at)} --settings="${settingsPath}"${command.slice(at)}`;
 }
 
-/** Does any word of the line start claude? */
+/** A claude launcher as a word of its own, a path's last part, or right
+ *  next to a shell operator, quote or parenthesis. */
+const CLAUDE_LAUNCHER_ANYWHERE = /(?:^|[\s;&|()`'"/=])claude(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s;&|()`'"<>])/i;
+
+/** Does the line start claude anywhere? Every claude launcher in a line is
+ *  seen, including one written next to a shell operator, so the line is
+ *  guarded (and refused when it is not one plain command). Over-matching is
+ *  the safe side. */
 export function namesClaude(line: string): boolean {
-  return tokenize(splitModelEnvMarker(line).command).some((t) => isClaudeLauncher(t.value));
+  return tokenize(splitModelEnvMarker(line).command).some((t) => isClaudeLauncher(t.value))
+    || CLAUDE_LAUNCHER_ANYWHERE.test(line);
 }
 
 // ── factory/bot-worker-sessions.json ─────────────────────────────────────────

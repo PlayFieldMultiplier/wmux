@@ -28,6 +28,7 @@ import {
   resolveFactsFrom,
   routedFactLog,
   runningWakeOf,
+  taskWakeHandoff,
   threadTail,
 } from '../factoryWiring';
 import { createFactLog, type FactLog } from '../factLog';
@@ -358,6 +359,25 @@ describe('lookups the runtime and rooms read', () => {
     const two = queue.enqueue({ botId: 'bot-5', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['task.done:wtask-1@2', 'task.done:wtask-2@2'], trigger: { kind: 'task.done' } }, priority: 1 });
     queue.start(two?.id ?? '');
     expect(runningWakeOf('bot-5')?.taskId).toBeUndefined();
+  });
+
+  it('a task wake answers the handoff all its tasks were started for; mixed or missing ones answer none', () => {
+    const rows: Record<string, { dispatch?: { origin: { kind: string }; handoffId?: string } }> = {
+      'wtask-1': { dispatch: { origin: { kind: 'bot' }, handoffId: 'h-a' } },
+      'wtask-2': { dispatch: { origin: { kind: 'bot' }, handoffId: 'h-a' } },
+      'wtask-3': { dispatch: { origin: { kind: 'bot' }, handoffId: 'h-b' } },
+      'wtask-4': { dispatch: { origin: { kind: 'bot' } } },
+    };
+    const row = (id: string) => (rows[id] ?? null) as never;
+    const facts = (...ids: string[]) => ({ kind: 'facts' as const, factIds: ids, trigger: { kind: 'task.done' as const } });
+    expect(taskWakeHandoff(facts('task.done:wtask-1@2'), row)).toBe('h-a');
+    expect(taskWakeHandoff(facts('task.done:wtask-1@2', 'task.done:wtask-2@3', 'f-other'), row)).toBe('h-a');
+    expect(taskWakeHandoff(facts('task.done:wtask-1@2', 'task.done:wtask-3@2'), row)).toBeNull();
+    expect(taskWakeHandoff(facts('task.done:wtask-1@2', 'task.done:wtask-4@2'), row)).toBeNull();
+    expect(taskWakeHandoff(facts('task.done:wtask-gone@2'), row)).toBeNull();
+    expect(taskWakeHandoff(facts('f-1'), row)).toBeNull();
+    expect(taskWakeHandoff({ kind: 'handoff', handoffId: 'h-a' }, row)).toBeNull();
+    expect(taskWakeHandoff(facts('task.done:wtask-1@2'), () => { throw new Error('x'); })).toBeNull();
   });
 
   it('the thread of the owner\'s latest words to a bot: its newest owner-message wake that was not dropped', () => {

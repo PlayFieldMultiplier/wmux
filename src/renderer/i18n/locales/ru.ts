@@ -6,6 +6,7 @@ export const ru = {
   'sidebar.workspaces': 'Рабочие пространства',
   'sidebar.newWorkspace': 'Новое рабочее пространство',
   'sidebar.newWorkspaceTooltip': 'Новое рабочее пространство (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Новое рабочее пространство на {name}',
   'sidebar.hideTooltip': 'Скрыть боковую панель (Ctrl+B)',
   'sidebar.expandTooltip': 'Развернуть боковую панель (Ctrl+B)',
   'sidebar.unreadCount': '{count} непрочитанных',
@@ -657,5 +658,5 @@ export const ru = {
   'git.secret.scanFailed': "wmux не смог прочитать изменение, чтобы проверить его на пароли и ключи, поэтому оно не отправлено. Попробуйте снова; если ошибка повторяется, проверку можно выключить в Настройки › Общие.",
   'git.secret.more': "(и ещё {count})",
   'settings.secretGuard': "Блокировать пароли и ключи в коммитах, push и PR",
-  'settings.secretGuardDesc': "Коммит, Push и Создать PR на странице Git, принятие задачи и доставка Moa отклоняют изменение, которое добавляет файл .env, закрытый ключ или API-ключ.",
+  'settings.secretGuardDesc': "Коммит, Push и Создать PR на странице Git, а также принятие задачи отклоняют изменение, которое добавляет файл .env, закрытый ключ или API-ключ.",
 } as const;

@@ -4,7 +4,7 @@
 //                          (normalizeWorkspaces) plus the sidebar extras,
 //                          the host's focus and each row's layout
 //   GET /api/approvals   → the pending half, through parseRemoteApprovalsList
-//   GET /api/config      → allowInput, re-probed every few ticks
+//   GET /api/config      → allowInput and capabilities, re-probed every few ticks
 //
 // Every body is read through readBoundedJson and every row is bounded by
 // REMOTE_LIMITS before it leaves this module.
@@ -22,6 +22,7 @@ import {
 } from '../../shared/pcRail';
 import { normalizeWorkspaces } from './RemoteHostClient';
 import { readBoundedJson } from './readBoundedJson';
+import { HOST_CAPABILITIES } from '../../shared/sshPcContract';
 import type { PcRailFeedFailure } from './pcRailWire';
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -151,9 +152,19 @@ export async function fetchPcRailApprovals(host: RemoteHost, fetchImpl: typeof f
   return approvals ? { ok: true, approvals } : { ok: false, reason: 'unavailable' };
 }
 
-/** The host's `allowInput` flag, or undefined when the probe gave no answer. */
-export async function probePcRailAllowInput(host: RemoteHost, fetchImpl: typeof fetch = fetch): Promise<boolean | undefined> {
+/** What the rail reads from `/api/config`, or undefined when the probe gave no answer. */
+export interface PcRailHostConfig {
+  allowInput: boolean;
+  /** The host lets a granted device open a new workspace (HOST_CAPABILITIES). */
+  workspaceCreateGrant: boolean;
+}
+
+export async function probePcRailConfig(host: RemoteHost, fetchImpl: typeof fetch = fetch): Promise<PcRailHostConfig | undefined> {
   const got = await getJson(host, '/api/config', REMOTE_LIMITS.smallBodyBytes, fetchImpl);
   if (!got.ok || !isRecord(got.body)) return undefined;
-  return got.body.allowInput === true;
+  const capabilities = got.body.capabilities;
+  return {
+    allowInput: got.body.allowInput === true,
+    workspaceCreateGrant: Array.isArray(capabilities) && capabilities.includes(HOST_CAPABILITIES.workspaceCreateGrant),
+  };
 }

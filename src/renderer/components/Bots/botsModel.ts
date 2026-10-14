@@ -8,8 +8,9 @@
 //   cards     the room timelines already read (room slice), per workspace
 //   workers   the bot's tasks whose worker is still at work or waits on
 //             input (`row.tasks`, main's ledger stage) while the worker's
-//             pane is open, and fan-out task workspaces whose lineage origin
-//             names a bot (`fanoutOrigin`) with a live Fleet attention class
+//             pane is open, and the bot's other task workspaces (its lineage
+//             origin or main's bot flag, Sidebar/botTasks.ts) with a live
+//             Fleet attention class
 //
 // A 1:1 conversation is that bot's own cards (the actor is the bot; its
 // questions included), the owner's messages addressed to it (`human` cards
@@ -17,8 +18,9 @@
 // about its own work — those naming the bot, or written into a thread (other
 // than General) the bot itself wrote in, such as its PR's merge refusal or its
 // task's gate — from every room read: a message to Moa may be posted in any
-// workspace's room. A group is the whole room. The HQ room is pinned first;
-// every other conversation follows by latest activity.
+// workspace's room. A group is the whole room. Every conversation is
+// ordered by latest activity; no room is special (2026-10-14: the HQ is a
+// workspace like any other).
 //
 // Needs you lives on the 1:1 rows only — a bot's open questions, its open
 // plan (the newest one; an older plan left open is superseded) and open
@@ -29,7 +31,6 @@
 // nothing on it is counted.
 
 import type { RoomCard, ThreadSummary } from '../../../shared/room';
-import type { FanoutOrigin } from '../../../shared/fanoutOrigin';
 import type { FleetAttentionClass } from '../../stores/selectors/fleet';
 import type { RoomTimeline } from '../../stores/slices/roomSlice';
 import type { FactoryBotRow } from '../Room/factoryPorts';
@@ -60,9 +61,10 @@ interface ConversationBase {
   /** `bot:<botId>` or `room:<workspaceId>`. */
   id: string;
   workspaceId: string;
-  /** The newest message's time (a bot without any: its creation). */
+  /** The newest card's time, wmux's own lines too (a bot without any: its
+   *  creation): the list's order. */
   lastAt: number;
-  /** The newest message, for the row's preview. */
+  /** The newest message, a bot's or the owner's, for the row's preview. */
   last: RoomCard | null;
   needsYou: number;
 }
@@ -74,11 +76,27 @@ export interface BotConversation extends ConversationBase {
   /** Its live plan and open proposals, waiting on the owner's answer. */
   openApprovals: number;
   workers: BotWorker[];
+  /** The rows nested under the bot in the list (botWorkerTree). */
+  tree: BotTreeRow[];
+}
+
+/** A worker row under its bot in the list, as the Sidebar draws a task. */
+export interface BotTreeRow {
+  workspaceId: string;
+  title: string;
+  /** running · waits on the owner · errored, live; done · failed, ended. */
+  state: 'running' | 'needsYou' | 'error' | 'done' | 'failed';
+  taskId?: string;
+  /** An ended task whose stopped worker can resume the same conversation. */
+  resumable: boolean;
+  /** The task's ledger says its worker asked for input. */
+  needsInput?: boolean;
+  /** What a worker waiting on input waits for (its task's summary). */
+  summary?: string;
 }
 
 export interface RoomConversation extends ConversationBase {
   kind: 'room';
-  isHq: boolean;
   /** The room's bots, oldest first. */
   bots: FactoryBotRow[];
   /** The room's bots' live workers. */
@@ -89,11 +107,11 @@ export type Conversation = BotConversation | RoomConversation;
 
 export interface BotsInput {
   bots: readonly FactoryBotRow[];
-  hqWorkspaceId: string | null;
   /** Every card read for a workspace's room, in seq order (roomCardsByWorkspace). */
   cards: ReadonlyMap<string, readonly RoomCard[]>;
   threads: Readonly<Record<string, readonly ThreadSummary[] | undefined>>;
-  fanoutOrigin: Readonly<Record<string, FanoutOrigin | undefined>>;
+  /** Task workspace id → the bot that owns it (Sidebar/botTasks.ts). */
+  botTaskOf: Readonly<Record<string, string>>;
   /** Task workspace id → its attention class; open workspaces only. */
   workerClass: Readonly<Record<string, FleetAttentionClass | undefined>>;
   workspaceName: (workspaceId: string) => string | null;
@@ -271,7 +289,7 @@ const WORKING_STAGE: ReadonlySet<BotTaskView['stage']> = new Set<BotTaskView['st
  *  Fleet class is live. Finished or closed ones are gone. */
 export function botWorkers(
   botId: string,
-  origins: BotsInput['fanoutOrigin'],
+  owners: BotsInput['botTaskOf'],
   workerClass: BotsInput['workerClass'],
   workspaceName: BotsInput['workspaceName'],
   tasks: readonly BotTaskView[] = [],
@@ -279,8 +297,11 @@ export function botWorkers(
   const out: BotWorker[] = [];
   const seen = new Set<string>();
   for (const task of tasks) {
-    if (task.botId !== botId || !WORKING_STAGE.has(task.stage)) continue;
+    if (task.botId !== botId) continue;
     const workspaceId = task.workerWorkspaceId || task.taskWorkspaceId;
+    // A resumed worker of an ended task is live while its pane's agent is.
+    const resumedLive = task.worker === 'resumed' && !!workspaceId && LIVE_WORKER.has(workerClass[workspaceId] ?? 'idle');
+    if (!WORKING_STAGE.has(task.stage) && !resumedLive) continue;
     if (!workspaceId || seen.has(workspaceId) || workspaceName(workspaceId) === null) continue;
     seen.add(workspaceId);
     const cls = workerClass[workspaceId] ?? 'running';
@@ -291,8 +312,16 @@ export function botWorkers(
       waiting: needsInput || WAITING_WORKER.has(cls), needsInput, taskId: task.taskId, ...(summary ? { summary } : {}),
     });
   }
-  for (const [workspaceId, origin] of Object.entries(origins)) {
-    if (origin?.kind !== 'bot' || origin.botId !== botId || seen.has(workspaceId)) continue;
+  // A workspace one of the bot's tasks names follows that task's stage: a
+  // done task's pane whose agent still reads running is not a live worker.
+  const tasked = new Set<string>();
+  for (const task of tasks) {
+    if (task.botId !== botId || task.worker === 'resumed') continue;
+    if (task.taskWorkspaceId) tasked.add(task.taskWorkspaceId);
+    if (task.workerWorkspaceId) tasked.add(task.workerWorkspaceId);
+  }
+  for (const [workspaceId, owner] of Object.entries(owners)) {
+    if (owner !== botId || seen.has(workspaceId) || tasked.has(workspaceId)) continue;
     const cls = workerClass[workspaceId];
     if (!cls || !LIVE_WORKER.has(cls)) continue;
     out.push({ workspaceId, botId, name: workspaceName(workspaceId) ?? workspaceId, cls, waiting: WAITING_WORKER.has(cls) });
@@ -300,14 +329,78 @@ export function botWorkers(
   return out.sort((a, b) => a.name.localeCompare(b.name) || a.workspaceId.localeCompare(b.workspaceId));
 }
 
-function lastOf(cards: readonly RoomCard[]): RoomCard | null {
-  return cards.length > 0 ? cards[cards.length - 1] : null;
+/** A task that ended: its worker no longer runs for it. */
+const ENDED_STAGE: ReadonlySet<BotTaskView['stage']> = new Set<BotTaskView['stage']>(['coded', 'checked', 'waiting_to_merge', 'merged', 'closed', 'failed', 'cancelled']);
+
+/** The worker rows nested under a bot in the list (owner decision
+ *  2026-10-14, the Sidebar's task tree): its live workers, then its ended
+ *  tasks whose workspace is still open, newest first, then every other open
+ *  workspace the bot's fan-out made — one whose task is older than the task
+ *  list the bot reports. The Workspaces sidebar and Fleet hide every bot
+ *  worker, so each open one is listed here. A row drops off when its
+ *  workspace is cleared. Pure. */
+export function botWorkerTree(
+  botId: string,
+  workers: readonly BotWorker[],
+  tasks: readonly BotTaskView[] = [],
+  workspaceName: BotsInput['workspaceName'],
+  owners: BotsInput['botTaskOf'] = {},
+  workerClass: BotsInput['workerClass'] = {},
+): BotTreeRow[] {
+  const out: BotTreeRow[] = workers.map((w) => ({
+    workspaceId: w.workspaceId,
+    title: w.name,
+    state: w.cls === 'error' ? 'error' : w.waiting ? 'needsYou' : 'running',
+    ...(w.taskId ? { taskId: w.taskId } : {}),
+    resumable: false,
+    ...(w.needsInput ? { needsInput: true } : {}),
+    ...(w.needsInput && w.summary ? { summary: w.summary } : {}),
+  }));
+  const seen = new Set(out.map((r) => r.workspaceId));
+  const ended = tasks
+    .filter((task) => task.botId === botId && ENDED_STAGE.has(task.stage))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const task of ended) {
+    const workspaceId = task.workerWorkspaceId || task.taskWorkspaceId;
+    const name = workspaceId ? workspaceName(workspaceId) : null;
+    if (!workspaceId || name === null || seen.has(workspaceId)) continue;
+    seen.add(workspaceId);
+    out.push({
+      workspaceId,
+      title: task.title || name,
+      state: task.stage === 'failed' || task.stage === 'cancelled' ? 'failed' : 'done',
+      taskId: task.taskId,
+      resumable: task.worker === 'resumable',
+    });
+  }
+  const others: BotTreeRow[] = [];
+  for (const [workspaceId, owner] of Object.entries(owners)) {
+    if (owner !== botId || seen.has(workspaceId)) continue;
+    const name = workspaceName(workspaceId);
+    if (name === null) continue;
+    seen.add(workspaceId);
+    const cls = workerClass[workspaceId];
+    others.push({
+      workspaceId,
+      title: name,
+      state: cls === 'error' ? 'error' : cls === 'needsYou' ? 'needsYou' : cls === 'running' ? 'running' : 'done',
+      resumable: false,
+    });
+  }
+  return [...out, ...others.sort((a, b) => a.title.localeCompare(b.title) || a.workspaceId.localeCompare(b.workspaceId))];
 }
 
-/** The conversations, the HQ room first and the rest newest first. */
+/** The newest message, a bot's or the owner's: wmux's own lines (a relay
+ *  hop, a task's start) are never a conversation's preview. */
+function lastOf(cards: readonly RoomCard[]): RoomCard | null {
+  for (let i = cards.length - 1; i >= 0; i--) if (cards[i].actor.kind !== 'system') return cards[i];
+  return null;
+}
+
+/** The conversations, newest first. */
 export function buildBots(input: BotsInput): BotsModel {
   const bots = [...input.bots].sort((a, b) => a.bot.createdAt - b.bot.createdAt || a.bot.id.localeCompare(b.bot.id));
-  const rooms: RoomConversation[] = botsRooms(bots, input.hqWorkspaceId).map((workspaceId) => {
+  const rooms: RoomConversation[] = botsRooms(bots).map((workspaceId) => {
     const cards = input.cards.get(workspaceId) ?? [];
     const last = lastOf(cards);
     const threadLast = (input.threads[workspaceId] ?? []).reduce((m, th) => Math.max(m, th.lastAt), 0);
@@ -315,11 +408,10 @@ export function buildBots(input: BotsInput): BotsModel {
       kind: 'room',
       id: roomConversationId(workspaceId),
       workspaceId,
-      isHq: workspaceId === input.hqWorkspaceId,
       bots: bots.filter((r) => r.bot.workspaceId === workspaceId),
       workers: [],
       last,
-      lastAt: Math.max(last?.at ?? 0, threadLast),
+      lastAt: Math.max(cards.at(-1)?.at ?? 0, threadLast),
       needsYou: 0,
     };
   });
@@ -330,17 +422,18 @@ export function buildBots(input: BotsInput): BotsModel {
     const last = lastOf(own);
     const openQuestions = openQuestionsBy(own, row.bot.id, input.threads);
     const openApprovals = openApprovalsBy(own, row.bot.id);
-    const workers = botWorkers(row.bot.id, input.fanoutOrigin, input.workerClass, input.workspaceName, row.tasks);
+    const workers = botWorkers(row.bot.id, input.botTaskOf, input.workerClass, input.workspaceName, row.tasks);
     return {
       kind: 'bot',
       id: botConversationId(row.bot.id),
       workspaceId: row.bot.workspaceId,
       row,
       last,
-      lastAt: last?.at ?? row.bot.createdAt,
+      lastAt: own.at(-1)?.at ?? row.bot.createdAt,
       openQuestions,
       openApprovals,
       workers,
+      tree: botWorkerTree(row.bot.id, workers, row.tasks, input.workspaceName, input.botTaskOf, input.workerClass),
       // A waiting worker whose question the bot already asked counts once.
       needsYou: input.readOnly ? 0 : openQuestions + openApprovals + waitingWorkers(workers, openQuestionTasks(own, row.bot.id, input.threads)),
     };
@@ -350,10 +443,9 @@ export function buildBots(input: BotsInput): BotsModel {
   for (const room of rooms) {
     room.workers = oneToOne.filter((c) => room.bots.some((r) => r.bot.id === c.row.bot.id)).flatMap((c) => c.workers);
   }
-  const pinned = rooms.filter((r) => r.isHq);
-  const rest: Conversation[] = [...rooms.filter((r) => !r.isHq), ...oneToOne]
+  const conversations: Conversation[] = [...rooms, ...oneToOne]
     .sort((a, b) => b.lastAt - a.lastAt || a.id.localeCompare(b.id));
-  return { conversations: [...pinned, ...rest], needsYou: botsNeedsYou(oneToOne) };
+  return { conversations, needsYou: botsNeedsYou(oneToOne) };
 }
 
 /** The workers waiting on the owner that no open question already asks
@@ -369,9 +461,17 @@ export function botsNeedsYou(conversations: readonly Conversation[]): number {
   return n;
 }
 
-/** The rooms the page reads (HQ first, then every bot's workspace). */
-export function botsRooms(bots: readonly FactoryBotRow[], hqWorkspaceId: string | null): string[] {
-  const out: string[] = hqWorkspaceId ? [hqWorkspaceId] : [];
+/** A room's newest thread of a kind (its newest plan or report), by its
+ *  last card. Pure. */
+export function latestThreadOf(threads: readonly ThreadSummary[], prefix: 'plan:' | 'report:'): ThreadSummary | null {
+  let best: ThreadSummary | null = null;
+  for (const th of threads) if (th.threadId.startsWith(prefix) && (!best || th.lastSeq > best.lastSeq)) best = th;
+  return best;
+}
+
+/** The rooms the page reads: every bot's workspace. */
+export function botsRooms(bots: readonly FactoryBotRow[]): string[] {
+  const out: string[] = [];
   for (const row of bots) if (!out.includes(row.bot.workspaceId)) out.push(row.bot.workspaceId);
   return out;
 }

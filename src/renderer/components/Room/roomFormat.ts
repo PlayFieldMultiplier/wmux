@@ -1,8 +1,8 @@
-// Pure display helpers for the room dock: labels, times and the one state
-// word a card may colour.
+// Pure display helpers for rooms and bot chats: labels, times and the one
+// state word a card may colour.
 import { BOT_ROLES, botTemplate, type BotRole, type BotTemplate } from '../../../shared/bot';
 import type { Party } from '../../../shared/handoff';
-import type { CardKind, RoomCard, ThreadId } from '../../../shared/room';
+import type { CardKind, RoomCard, ThreadId, ThreadSummary } from '../../../shared/room';
 import type { FactoryBotRow } from './factoryPorts';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -21,18 +21,42 @@ export function threadRef(threadId: ThreadId, t: T): string {
 }
 
 /** A thread's name as the owner reads it, never an internal id: a PR or an
- *  issue keeps its reference, a task its title (`taskTitle`, when known),
+ *  issue keeps its reference, a task its title (`taskTitle`, when known), a
+ *  request the owner's words that opened it (`requestTitle`, when known),
  *  and a task, request, plan or report otherwise its kind word. Pure. */
-export function threadLabel(threadId: ThreadId, t: T, taskTitle?: (taskId: string) => string | null | undefined): string {
+export function threadLabel(
+  threadId: ThreadId,
+  t: T,
+  taskTitle?: (taskId: string) => string | null | undefined,
+  requestTitle?: (threadId: ThreadId) => string | null | undefined,
+): string {
   if (threadId === 'general') return t('room.thread.general');
   if (/^(pr|issue):(.+)#(\d+)$/.test(threadId)) return threadRef(threadId, t);
   const opaque = /^(task|handoff|plan|report):(.+)$/.exec(threadId);
   if (!opaque) return threadRef(threadId, t);
-  if (opaque[1] === 'task') {
-    const title = taskTitle?.(opaque[2])?.trim();
-    if (title) return title;
-  }
+  const title = opaque[1] === 'task' ? taskTitle?.(opaque[2])?.trim()
+    : opaque[1] === 'handoff' ? requestTitle?.(threadId)?.trim()
+    : undefined;
+  if (title) return title;
   return t(`room.thread.${opaque[1]}`);
+}
+
+/** Each request thread's name: the first line of the owner's message that
+ *  opened it (the card main links from the thread's opening hop,
+ *  refs.requestCardId). Pure. */
+export function requestTitles(cards: readonly RoomCard[]): Map<ThreadId, string> {
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const out = new Map<ThreadId, string>();
+  for (const c of cards) {
+    const id = c.refs?.requestCardId;
+    // Only main's line for the hop that opened this very thread names it.
+    if (!id || out.has(c.threadId) || c.actor.kind !== 'system' || c.threadId !== `handoff:${c.refs?.handoffId}`) continue;
+    const request = byId.get(id);
+    const own = request?.kind === 'human' && request.threadId === 'general' && request.workspaceId === c.workspaceId;
+    const line = own ? request.title.split('\n')[0].trim() : '';
+    if (line) out.set(c.threadId, line);
+  }
+  return out;
 }
 
 /** Whether a thread is named by its PR or issue reference (shown in mono). */
@@ -235,4 +259,11 @@ export function planTextWithNames(text: string, workspaceName: (id: string) => s
     const id = item ?? bare ?? '';
     return workspaceName(id) ?? t('room.plan.someWorkspace');
   });
+}
+
+/** The thread most recently written of a kind (`plan:` / `report:`). */
+export function latestThreadOf(threads: readonly ThreadSummary[], prefix: 'plan:' | 'report:'): ThreadSummary | null {
+  let best: ThreadSummary | null = null;
+  for (const th of threads) if (th.threadId.startsWith(prefix) && (!best || th.lastSeq > best.lastSeq)) best = th;
+  return best;
 }

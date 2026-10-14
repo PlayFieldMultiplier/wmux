@@ -67,7 +67,7 @@ import type {
   WebDiagnosis,
 } from './web';
 import type { BrowserHelpOutcome, BrowserHelpRequestInfo } from './browserHelp';
-import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary } from './remoteHosts';
+import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from './remoteHosts';
 import type {
   FirstRunCheckResult,
   RegisterMcpResult,
@@ -376,7 +376,7 @@ declare global {
          *  Resolves `{ ok: false }` (never rejects) on any failure — an
          *  unreachable host, a rejected token, or the remote's own daemon
          *  refusing the create. */
-        workspaceCreate: (hostId: string, workspaceId: string, cwd?: string) => Promise<
+        workspaceCreate: (hostId: string, workspaceId: string, cwd?: string, name?: string) => Promise<
           { ok: true; sessionId: string } | { ok: false; error: string; reason?: RemoteErrorReason }
         >;
         /** Destroy a session on `hostId` — the teardown twin of
@@ -449,6 +449,15 @@ declare global {
         /** Fires once per main-side poll round. No payload: it means only
          *  "poll now" — every bit of polling policy stays in the renderer. */
         onPollTick?: (callback: () => void) => () => void;
+        /** Add PC over SSH. Optional: absent on a preload that predates it. */
+        sshCandidates?: () => Promise<string[]>;
+        sshAdd?: (alias: string, requestId: string, label?: string, startAfterReboot?: boolean) => Promise<SshAddResult>;
+        sshService?: (hostId: string, on: boolean) => Promise<SshServiceResult>;
+        sshStates?: () => Promise<Record<string, SshTunnelState>>;
+        sshConfirm?: (hostId: string, accept?: { resolvedHost: string; hostKeyFingerprint: string }) => Promise<SshConfirmResult>;
+        sshRepair?: (hostId: string) => Promise<SshAddResult>;
+        sshCancel?: (requestId: string) => Promise<boolean>;
+        onSshProgress?: (callback: (e: SshAddProgress) => void) => () => void;
       };
     };
     clipboardAPI: {

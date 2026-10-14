@@ -6,6 +6,7 @@ import type { Workspace } from '../../../shared/types';
 import type { AgentSlug } from '../../../shared/events';
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { activeAgentSlug, leafDisplayName } from '../../utils/paneNaming';
+import { pcIconState } from '../PcRail/pcRailModel';
 
 /**
  * One row of the Remote page: a device paired with this machine, a host this
@@ -44,7 +45,13 @@ export interface RemoteSources {
   devices: WebDeviceSummary[] | null;
   info: WebTerminalInfo | null;
   hosts: RemoteHostPublic[] | null;
+  /**
+   * Each host's state from the PC rail feed (the same one the PC switcher
+   * reads), and when that feed last answered. One source, so the page and
+   * the switcher can never disagree about a host.
+   */
   hostStatus: Record<string, RemoteHostStatus>;
+  hostSeenAt: Record<string, number | null>;
   peers: LanLinkPeerSummary[] | null;
   /** Names of the remote workspaces this app has open, per host id. */
   openByHost: Record<string, string[]>;
@@ -92,18 +99,24 @@ export function buildRemoteEntries(src: RemoteSources): RemoteEntry[] {
       access: !d.allowInput ? 'view' : serverInput ? 'input' : 'input-when-on',
     }));
   const hosts: RemoteEntry[] = (src.hosts ?? []).map((h) => {
-    const status = src.hostStatus[h.id];
-    let address = h.origin;
-    try { address = new URL(h.origin).host; } catch { /* keep the stored origin */ }
+    const raw = src.hostStatus[h.id] ?? 'reachable';
+    const lastSeenAt = src.hostSeenAt[h.id] ?? null;
+    // Not answered yet stays "unknown" (the switcher's "Not checked yet").
+    const state = pcIconState({ status: raw, lastSeenAt });
+    const status = state === 'unchecked' ? 'unknown' : raw;
+    // An SSH host's stored origin (wmux-ssh://<id>) is no address: name its ssh destination.
+    let address = h.ssh?.alias ?? h.origin;
+    if (!h.ssh) try { address = new URL(h.origin).host; } catch { /* keep the stored origin */ }
     return {
       key: `host:${h.id}`,
       id: h.id,
       kind: 'host',
       name: h.label,
       shortId: shortId(h.id),
-      live: status === 'connected',
-      status: status ?? 'unknown',
-      lastSeenAt: null,
+      // Answering right now (through its tunnel, for an SSH host): the dot matches the word.
+      live: state === 'online',
+      status,
+      lastSeenAt,
       viewing: src.openByHost[h.id] ?? [],
       access: h.allowInput === undefined ? null : h.allowInput ? 'input' : 'view',
       address,

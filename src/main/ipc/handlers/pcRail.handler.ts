@@ -200,6 +200,13 @@ export function registerPcRailHandlers(deps: RegisterPcRailHandlersDeps): () => 
       }
     }));
 
+  ipcMain.removeHandler(PC_RAIL_IPC.REFRESH);
+  ipcMain.handle(PC_RAIL_IPC.REFRESH, wrapHandler(PC_RAIL_IPC.REFRESH,
+    async (_e: IpcMainInvokeEvent, request: unknown): Promise<boolean> => {
+      const hostId = parseHostId(request);
+      return hostId ? hub.refresh(hostId) : false;
+    }));
+
   return () => {
     hub.stop();
     subscribers.clear();
@@ -208,5 +215,6 @@ export function registerPcRailHandlers(deps: RegisterPcRailHandlersDeps): () => 
     ipcMain.removeAllListeners(PC_RAIL_IPC.UNSUBSCRIBE);
     ipcMain.removeHandler(PC_RAIL_IPC.APPROVALS_LIST);
     ipcMain.removeHandler(PC_RAIL_IPC.MUTES_SET);
+    ipcMain.removeHandler(PC_RAIL_IPC.REFRESH);
   };
 }

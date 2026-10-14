@@ -99,6 +99,13 @@ describe('room.post', () => {
     expect(await handleRoomPost({ kind: 'status', title: 'x' }, OPERATOR, { ...s.deps, writer: () => null })).toMatchObject({ ok: false, code: 'not_started' });
   });
 
+  it('a post cannot set the owner\'s request a thread answers (main\'s ref only)', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const r = await handleRoomPost({ kind: 'status', title: 'x', workspaceId: 'ws1', refs: { requestCardId: 'c-1', pr: 3 } }, asBot(lead), s.deps) as { ok: true; card: { refs?: Record<string, unknown> } };
+    expect(r.card.refs).toEqual({ pr: 3 });
+  });
+
   it('a bot posts only its output kinds, into its own room, as itself', async () => {
     const lead = bot('ws1', 'lead');
     const s = setup([lead]);
@@ -236,6 +243,29 @@ describe('room.post', () => {
     expect(s.writer.read('ws1').cards).toHaveLength(1);
   });
 
+  it('a room message keeps the mode it was posted with on a retry, whatever the room has become', async () => {
+    const dev = bot('ws1', 'lead');
+    const issue = bot('ws1', 'triage');
+    const bots = [dev, issue];
+    const s = setup(bots);
+    const full = new Set([issue.id]);
+    const enqueue = s.ports.wakes!.enqueue;
+    s.ports.wakes = { enqueue: (i) => (full.has(i.botId) ? null : enqueue(i)) };
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'queue_full' });
+    // A coordinator joins before the retry: the first card still went to the whole room.
+    bots.push(bot('ws1', 'moa'));
+    full.clear();
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    expect(s.wakes.map((w) => [w.botId, w.reason.kind === 'human' && w.reason.room, w.reason.kind === 'human' && w.reason.lead])).toEqual([[dev.id, true, undefined], [issue.id, true, undefined]]);
+    // A message to a room with a coordinator wakes it alone, marked as the room's lead.
+    const lead = await handleRoomPost({ workspaceId: 'ws1', title: 'Next task', clientPostId: 'cm-lead' }, OPERATOR, s.deps);
+    expect(lead).toMatchObject({ ok: true, addressees: [{ botId: bots[2].id }] });
+    expect(s.wakes[2].reason).toMatchObject({ kind: 'human', lead: true });
+    // Its fact says so too (typed approval reads it as the room's words).
+    expect(s.facts.at(-1)?.payload).toMatchObject({ lead: true });
+    expect((s.wakes[2].reason as { room?: true }).room).toBeUndefined();
+  });
+
   it('humanAddressees: mentions win, then the phone\'s toBotId (enabled only), then the role, else the whole room', () => {
     const lead = bot('ws1', 'lead');
     const verifier = bot('ws1', 'verifier');
@@ -251,6 +281,21 @@ describe('room.post', () => {
     const many = Array.from({ length: 17 }, () => bot('ws3', 'lead'));
     const room = humanAddressees({ listEnabled: () => [...many].reverse() } as unknown as FactoryRoomPorts['bots'], 'ws3', {});
     expect(room.bots.map((b) => b.id)).toEqual(many.slice(0, 16).map((b) => b.id));
+  });
+
+  it('humanAddressees: a room with an enabled coordinator talks to it alone; mentions and toBotId still win', () => {
+    const dev = bot('ws1', 'lead', { createdAt: 1 });
+    const lead = bot('ws1', 'lead', { template: 'coordinator', createdAt: 2 });
+    const younger = bot('ws1', 'moa', { createdAt: 3 });
+    const far = bot('ws2', 'moa', { createdAt: 0 });
+    const offLead = bot('ws3', 'moa', { enabled: false });
+    const ws3dev = bot('ws3', 'lead');
+    const ports = { listEnabled: () => [far, younger, dev, lead, offLead, ws3dev] } as unknown as FactoryRoomPorts['bots'];
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead], room: false, lead: true });
+    expect(humanAddressees(ports, 'ws1', { mentions: [dev.id] })).toEqual({ bots: [dev], room: false });
+    expect(humanAddressees(ports, 'ws1', { toBotId: dev.id })).toEqual({ bots: [dev], room: false });
+    // A disabled coordinator, or one in another workspace, leaves the room as it was.
+    expect(humanAddressees(ports, 'ws3', {})).toEqual({ bots: [ws3dev], room: true });
   });
 
   it('a bot card\'s mentions are settled by main and routed through the handoff router, once per card', async () => {

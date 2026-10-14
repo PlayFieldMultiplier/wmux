@@ -1,0 +1,275 @@
+{
+  "name": "team-relay-owner-tags-researcher",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "While a relay is on the developer (its worker is still at work), the owner posts in the relay's thread and mentions the researcher. The researcher wakes once on it, in that thread, in the owner card's own run, and its plain result goes to the coordinator (the room's lead), not to the developer. The relay still completes and the coordinator gets its last result.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "delayMs": 12000
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "template": "coordinator",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.researcher}}",
+                    "next": [
+                      "{{bot.developer}}",
+                      "{{bot.issue}}"
+                    ],
+                    "title": "Ship the widget",
+                    "body": "Research how widgets are added, build one, then file the follow-up issue."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "report",
+                    "title": "The widget is shipped",
+                    "body": "Research, build and the follow-up issue are done."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "researcher",
+        "template": "researcher",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "research widgets"
+                    ],
+                    "prompt": "Find out how a widget is added and write it down.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "notes.md"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "parent": "(These tasks were started for)"
+                  }
+                },
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Findings",
+                    "body": "Widgets live in widgets/; add one file."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Also: widgets need a test",
+                    "body": "Add a test for the widget."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "developer",
+        "template": "developer",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "add widget"
+                    ],
+                    "prompt": "Add the widget the findings describe.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "widgets/a.txt"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "parent": "(These tasks were started for)"
+                  }
+                },
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Widget built",
+                    "body": "widgets/a.txt is added."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "issue",
+        "template": "issue",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Follow-up filed",
+                    "body": "Issue: document the widget."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "ask",
+      "post": {
+        "title": "Ship a widget",
+        "body": "Please get a widget shipped, with a follow-up issue."
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "developer took its part",
+      "cond": {
+        "wakes": {
+          "bot": "developer",
+          "reason": "handoff",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 240000,
+      "required": true
+    },
+    {
+      "do": "rpc",
+      "label": "relay thread",
+      "method": "handoff.list",
+      "params": {
+        "workspaceId": "{{ws}}"
+      },
+      "save": {
+        "relayThread": "handoffs.0.threadId"
+      }
+    },
+    {
+      "do": "post",
+      "label": "tag",
+      "post": {
+        "title": "One more thing",
+        "body": "Researcher: what else should the widget have?",
+        "threadId": "{{saved.relayThread}}",
+        "mentions": [
+          "{{bot.researcher}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "lead woken by the last result",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "reason": "handoff",
+          "state": "done",
+          "min": 2
+        }
+      },
+      "timeoutMs": 300000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 8000
+      },
+      "timeoutMs": 90000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs",
+      "ledger"
+    ],
+    "message": "ask",
+    "tag": "tag",
+    "lead": "lead",
+    "researcher": "researcher",
+    "developer": "developer",
+    "issue": "issue"
+  }
+}

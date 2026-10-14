@@ -13,7 +13,7 @@ import { getWorkspacePtyIds } from '../../../shared/paneUtils';
 import { resolveTaskLink } from '../../utils/fanoutProvenance';
 import { workspaceHasUsageLimitWaiting } from '../../stores/slices/usageLimitSlice';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
-import { withoutBotTasks } from './botTasks';
+import { selectBotTaskOwners, withoutBotTasks } from './botTasks';
 
 export type StatusFacet = 'needsYou' | 'running' | 'usageWaiting' | 'idle';
 export type KindFacet = 'agent' | 'terminal';
@@ -177,9 +177,8 @@ export function narrowWorkspaces<T extends { id: string; name: string }>(
  *  sidebar lists, so a filtered list numbers its rows 1, 2, … The collapsed
  *  rail lists every workspace, so there the digits reach all of them. */
 export function selectShortcutWorkspaces(state: StoreState): StoreState['workspaces'] {
-  // A bot worker is never numbered, not even the active one the sidebar
-  // keeps listed: a digit must not move when the owner leaves it.
-  const listed = withoutBotTasks(listedWorkspaces(state.workspaces), state.fanoutOrigin);
+  // A bot worker is never listed, so never numbered (botTasks.ts).
+  const listed = withoutBotTasks(listedWorkspaces(state.workspaces), selectBotTaskOwners(state));
   if (!state.sidebarVisible) return listed;
   const filterOn = isFilterActive(state.sidebarFilter);
   if (!filterOn && state.sidebarSearch.trim() === '') return listed;

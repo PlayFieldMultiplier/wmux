@@ -144,14 +144,14 @@ describe('room.handler', () => {
 });
 
 describe('readFactoryStateFile', () => {
-  it('reads enabled and the HQ from a version-1 file, and anything else as off', () => {
+  it('reads enabled from a version-1 file (never an HQ), and anything else as off', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp7-room-fs-'));
     try {
       expect(readFactoryStateFile(dir)).toEqual({ enabled: false, hqWorkspaceId: null });
       fs.mkdirSync(path.join(dir, 'factory'));
       const file = path.join(dir, 'factory', 'settings.json');
       fs.writeFileSync(file, JSON.stringify({ version: 1, enabled: true, hqWorkspaceId: 'ws-hq' }));
-      expect(readFactoryStateFile(dir)).toEqual({ enabled: true, hqWorkspaceId: 'ws-hq' });
+      expect(readFactoryStateFile(dir)).toEqual({ enabled: true, hqWorkspaceId: null });
       fs.writeFileSync(file, JSON.stringify({ version: 2, enabled: true }));
       expect(readFactoryStateFile(dir)).toEqual({ enabled: false, hqWorkspaceId: null });
       fs.writeFileSync(file, JSON.stringify({ version: 1, enabled: 'yes', hqWorkspaceId: '../etc' }));
@@ -170,14 +170,15 @@ describe('liveFactoryState', () => {
     try {
       fs.mkdirSync(path.join(dir, 'factory'));
       fs.writeFileSync(path.join(dir, 'factory', 'settings.json'), JSON.stringify({ version: 1, enabled: true, hqWorkspaceId: 'ws-file' }));
-      expect(liveFactoryState(() => dir)).toEqual({ enabled: true, hqWorkspaceId: 'ws-file' });
+      // The HQ setting is read by nobody: it never comes back.
+      expect(liveFactoryState(() => dir)).toEqual({ enabled: true, hqWorkspaceId: null });
       const store = new FactorySettingsStore(path.join(dir, 'other-settings.json'));
       store.load();
-      await store.update({ enabled: true, hqWorkspaceId: 'ws-live' });
+      await store.update({ enabled: false, hqWorkspaceId: 'ws-live' });
       setFactorySettingsStore(store);
-      expect(liveFactoryState(() => dir)).toEqual({ enabled: true, hqWorkspaceId: 'ws-live' });
-      await store.update({ enabled: false });
-      expect(liveFactoryState(() => dir).enabled).toBe(false);
+      expect(liveFactoryState(() => dir)).toEqual({ enabled: false, hqWorkspaceId: null });
+      await store.update({ enabled: true });
+      expect(liveFactoryState(() => dir).enabled).toBe(true);
     } finally {
       setFactorySettingsStore(null);
       fs.rmSync(dir, { recursive: true, force: true });

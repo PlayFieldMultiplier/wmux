@@ -106,7 +106,7 @@ import * as path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { getExecEnv } from '../../shared/execEnv';
 import { LEDGER_GATE_TAIL_MAX_BYTES, type LedgerGateResult } from '../../shared/ledger';
-import { git } from '../git/git';
+import { runWorkerGitRead as git } from './workerGit';
 import type { LedgerPort } from './ledgerPort';
 
 /** 15 minutes. A gate is a lint+test run, not a build farm; past this the
@@ -354,7 +354,7 @@ const defaultSpawn: GateSpawn = (cmd, args, opts) => {
 async function defaultReadHead(worktreePath: string): Promise<string | null> {
   const [r, status] = await Promise.all([
     git(['rev-parse', 'HEAD'], worktreePath),
-    git(['status', '--porcelain', '--untracked-files=all'], worktreePath),
+    git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=all'], worktreePath),
   ]);
   const sha = r.stdout.trim();
   // A tree with changes of its own is not the commit: name none.

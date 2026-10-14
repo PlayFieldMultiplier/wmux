@@ -6,6 +6,7 @@ export const da = {
   'sidebar.workspaces': 'Arbejdsområder',
   'sidebar.newWorkspace': 'Nyt arbejdsområde',
   'sidebar.newWorkspaceTooltip': 'Nyt arbejdsområde (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Nyt arbejdsområde på {name}',
   'sidebar.hideTooltip': 'Skjul sidepanel (Ctrl+B)',
   'sidebar.expandTooltip': 'Udvid sidepanel (Ctrl+B)',
   'sidebar.unreadCount': '{count} ulæste',
@@ -655,5 +656,5 @@ export const da = {
   'git.secret.scanFailed': "wmux kunne ikke læse ændringen for at tjekke den for adgangskoder og nøgler, så den blev ikke uploadet. Prøv igen; hvis det bliver ved med at fejle, kan tjekket slås fra under Indstillinger › Generelt.",
   'git.secret.more': "(og {count} mere)",
   'settings.secretGuard': "Bloker adgangskoder og nøgler i commits, pushes og PR'er",
-  'settings.secretGuardDesc': "Commit, Push og Opret PR på Git-siden, overtagelse af en opgave og Moas levering afviser en ændring, der tilføjer en .env-fil, en privat nøgle eller en API-nøgle.",
+  'settings.secretGuardDesc': "Commit, Push og Opret PR på Git-siden samt overtagelse af en opgave afviser en ændring, der tilføjer en .env-fil, en privat nøgle eller en API-nøgle.",
 } as const;

@@ -1,24 +1,18 @@
 // @vitest-environment jsdom
 //
-// The room dock's polish: the factory-off state and its Turn on, the HQ
-// room folded to what needs the owner (open-question threads, the plan
-// folded once answered, the report folded until opened) with the timeline
-// keeping its share of the height, proposals answered in place, the
-// composer naming the real bot it queued for, and the merge lane rows of
+// Room card and composer polish: proposals answered in place, the composer
+// naming the real bot it queued for, and the merge lane rows of
 // Settings › Factory.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../../stores';
-import type { RoomCard as RoomCardData, ThreadSummary } from '../../../../shared/room';
+import type { RoomCard as RoomCardData } from '../../../../shared/room';
 import type { BotProfile, BotStatus } from '../../../../shared/bot';
 import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
-import { ALL_THREADS } from '../../../stores/slices/roomSlice';
 import { setRoomsApiForTests, type RoomsApi } from '../../../hooks/useRoomSync';
-import RoomDock, { HQ_PINNED_MIN_HEIGHT, THREADS_MIN_HEIGHT, hqVisibleThreads } from '../RoomDock';
-import { HqRoom, planFit } from '../HqRoom';
 import { RoomCard, PROPOSAL_RESOLUTION } from '../RoomCard';
-import { RoomComposer, deliveryLine, predictedAddressees, sentFrom } from '../RoomComposer';
+import { RoomComposer, deliveryLine, deliveryTaken, predictedAddressees, sentFrom } from '../RoomComposer';
 import { FactoryTab, parseDailyCap } from '../../Settings/FactoryTab';
 import {
   setFactoryBotPort,
@@ -44,7 +38,7 @@ beforeEach(() => {
   root = createRoot(container);
   useStore.setState({
     roomStatus: null, roomThreads: {}, roomTimelines: {}, roomSelectedThread: {}, roomReadThrough: {}, roomPushCount: 0, roomPushedAt: {},
-    roomScope: 'workspace', activeWorkspaceId: '', settingsInitialTab: null,
+    activeWorkspaceId: '', settingsInitialTab: null,
   });
 });
 afterEach(() => {
@@ -58,10 +52,6 @@ afterEach(() => {
 
 async function render(el: React.ReactElement) {
   await act(async () => root.render(el));
-}
-
-function summary(threadId: ThreadSummary['threadId'], over: Partial<ThreadSummary> = {}): ThreadSummary {
-  return { threadId, title: `T ${threadId}`, lastAt: 0, lastSeq: 0, cardCount: 1, openQuestions: 0, lastKind: 'status', status: 'open', unread: null, ...over };
 }
 
 function card(seq: number, over: Partial<RoomCardData> = {}): RoomCardData {
@@ -109,253 +99,6 @@ function settingsPort(view: FactorySettingsView = VIEW, available = true) {
 
 const NO_BOTS: FactoryBotPort = { available: true, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: true }) };
 
-describe('RoomDock with the factory off', () => {
-  it('says what the factory is; Turn on writes enabled through the settings port and re-reads the status', async () => {
-    const api = fakeApi();
-    setRoomsApiForTests(api as unknown as RoomsApi);
-    const port = settingsPort({ ...VIEW, enabled: false });
-    setFactorySettingsPort(port);
-    useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: null }, activeWorkspaceId: WS });
-    await render(createElement(RoomDock));
-    expect(container.querySelector('[data-testid="room-factory-off"]')?.textContent).toContain('Bots work in each workspace');
-    // Nothing of a room is drawn while off, and no room is read.
-    expect(container.querySelector('[data-testid="room-composer"]')).toBeNull();
-    expect(container.querySelector('[data-testid="room-threads"]')).toBeNull();
-    expect(api.threads).not.toHaveBeenCalled();
-    const turnOn = container.querySelector<HTMLButtonElement>('[data-testid="room-factory-turn-on"]')!;
-    expect(turnOn.className).toContain('ui-btn-primary');
-    await act(async () => turnOn.click());
-    expect(port.set).toHaveBeenCalledWith({ enabled: true });
-    expect(api.status).toHaveBeenCalled();
-    expect(useStore.getState().roomStatus?.enabled).toBe(true);
-  });
-
-  it('a runtime that has not started says so; the settings link opens Settings › Factory', async () => {
-    setRoomsApiForTests(fakeApi({ status: vi.fn(async () => ({ running: false, enabled: false, hqWorkspaceId: null })) }) as unknown as RoomsApi);
-    const port = settingsPort({ ...VIEW, enabled: false });
-    port.set.mockResolvedValueOnce(null as never);
-    setFactorySettingsPort(port);
-    useStore.setState({ roomStatus: { running: false, enabled: false, hqWorkspaceId: null }, activeWorkspaceId: WS });
-    await render(createElement(RoomDock));
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="room-factory-turn-on"]')!.click());
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Bots haven't started yet. Try again in a moment.");
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="room-factory-settings"]')!.click());
-    expect(useStore.getState().settingsInitialTab).toBe('factory');
-  });
-
-  it('without a factory settings port there is no Turn on, only the settings link', async () => {
-    setRoomsApiForTests(fakeApi() as unknown as RoomsApi);
-    setFactorySettingsPort(settingsPort(VIEW, false));
-    useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: null }, activeWorkspaceId: WS });
-    await render(createElement(RoomDock));
-    expect(container.querySelector('[data-testid="room-factory-turn-on"]')).toBeNull();
-    expect(container.querySelector('[data-testid="room-factory-settings"]')).not.toBeNull();
-  });
-});
-
-/** A clamp(min, calc(p% - k px), max) floor at a dock height. */
-function floorAt(rule: string, dock: number): number {
-  const m = /clamp\((\d+)px, calc\((\d+)% - (\d+)px\), (\d+)px\)/.exec(rule)!;
-  const [lo, pct, off, hi] = m.slice(1).map(Number);
-  return Math.min(hi, Math.max(lo, (dock * pct) / 100 - off));
-}
-
-describe('HQ room height', () => {
-  it('the floors leave room for the header, the timeline\'s 40% and the composer down to the smallest window', () => {
-    // The HQ room has no row of its own bots (its strip of every bot holds them).
-    const HEADER = 40;
-    const COMPOSER = 156; // two rows of role chips, as measured at 1280x800
-    for (const dock of [550, 650, 750, 1000]) {
-      const used = HEADER + floorAt(HQ_PINNED_MIN_HEIGHT, dock) + floorAt(THREADS_MIN_HEIGHT, dock) + 0.4 * dock + COMPOSER;
-      expect(used, `dock ${dock}px`).toBeLessThanOrEqual(dock);
-    }
-    // Full floors at the measured 800px window (dock 750): the plan's
-    // answers, and the threads toggle (28) over the All activity row (31.5),
-    // the 1px gap and one whole two-line thread row (48) — measured live, a
-    // 100px floor cut that row's second line — and not the 4px top margin of
-    // what follows (Show all threads), so nothing of it peeks in.
-    expect(floorAt(HQ_PINNED_MIN_HEIGHT, 750)).toBe(132);
-    expect(floorAt(THREADS_MIN_HEIGHT, 750)).toBe(112);
-    expect(floorAt(THREADS_MIN_HEIGHT, 750)).toBeGreaterThanOrEqual(28 + 31.5 + 1 + 48);
-  });
-
-  it('lists only the threads with an open question (and the shown one) until asked for all', () => {
-    const threads = [summary('general'), summary('pr:o/r#1', { openQuestions: 1 }), summary('task:t1'), summary('plan:p1')];
-    expect(hqVisibleThreads(threads, ALL_THREADS).map((th) => th.threadId)).toEqual(['pr:o/r#1']);
-    expect(hqVisibleThreads(threads, 'task:t1').map((th) => th.threadId)).toEqual(['pr:o/r#1', 'task:t1']);
-  });
-
-  it('the dock folds the HQ threads, unfolds them on request, and keeps the cards at least 40% of the height', async () => {
-    const threads = [summary('general'), summary('pr:o/r#1', { openQuestions: 1, title: 'Merge #1?' }), summary('task:t1'), summary('plan:p1')];
-    const plan = card(7, { workspaceId: HQ, threadId: 'plan:p1', kind: 'plan', state: 'open', title: 'Plan', actor: { kind: 'bot', workspaceId: HQ, botId: 'bot-moa' } });
-    setRoomsApiForTests(fakeApi({
-      threads: vi.fn(async () => ({ ok: true, workspaceId: HQ, threads })),
-      read: vi.fn(async () => ({ ok: true, workspaceId: HQ, threadId: null, cards: [plan], nextSinceSeq: 7, hasMore: false })),
-    }) as unknown as RoomsApi);
-    setFactoryBotPort(NO_BOTS);
-    useStore.setState({ roomStatus: { running: true, enabled: true, hqWorkspaceId: HQ }, activeWorkspaceId: '' });
-    await render(createElement(RoomDock));
-    const rows = () => [...container.querySelectorAll('[data-testid="room-thread-row"]')].map((r) => r.getAttribute('data-thread-id'));
-    expect(container.querySelector('[data-testid="room-dock"]')?.getAttribute('data-room-hq')).toBe('true');
-    expect(rows()).toEqual(['pr:o/r#1']);
-    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="room-threads-show-all"]')!;
-    expect(toggle.textContent).toBe('Show all threads (3 more)');
-    // The folded list still says how many questions wait.
-    expect(container.querySelector('[data-threads-questions]')?.textContent).toBe('1 open');
-    await act(async () => toggle.click());
-    expect(rows()).toHaveLength(4);
-    expect(container.querySelector('[data-testid="room-threads-show-all"]')?.textContent).toBe('Show only open questions');
-    // Layout contract (jsdom has no layout): the timeline holds a 40% floor,
-    // the threads give way and are capped.
-    expect(container.querySelector('[data-testid="room-timeline-region"]')?.className).toContain('min-h-[40%]');
-    const threadsRegion = container.querySelector('[data-testid="room-threads"]')!.className;
-    expect(threadsRegion).toMatch(/\bshrink\b/);
-    expect(threadsRegion).toContain('max-h-[30%]');
-    expect((container.querySelector('[data-testid="room-threads"]') as HTMLElement).style.minHeight).toBe(THREADS_MIN_HEIGHT);
-    await act(async () => { await Promise.resolve(); });
-    expect((container.querySelector('[data-testid="hq-room"]') as HTMLElement).style.minHeight).toBe(HQ_PINNED_MIN_HEIGHT);
-  });
-
-  it('the HQ room shows its bots once, in the strip of every bot', async () => {
-    setRoomsApiForTests(fakeApi({ threads: vi.fn(async () => ({ ok: true, workspaceId: HQ, threads: [] })) }) as unknown as RoomsApi);
-    const rows: FactoryBotRow[] = [{ bot: bot('bot-moa', { role: 'moa', name: 'Moa', workspaceId: HQ }), status: null }];
-    setFactoryBotPort({ ...NO_BOTS, list: async () => rows });
-    useStore.setState({ roomStatus: { running: true, enabled: true, hqWorkspaceId: HQ }, activeWorkspaceId: '' });
-    await render(createElement(RoomDock));
-    await act(async () => { await Promise.resolve(); });
-    const lists = [...container.querySelectorAll('[data-testid="room-bot-chips"]')];
-    expect(lists).toHaveLength(1);
-    expect(lists[0].closest('[data-testid="hq-bots"]')).not.toBeNull();
-  });
-
-  it('the threads keep no floor while no thread row is listed', async () => {
-    const threads = [summary('general'), summary('task:t1')];
-    setRoomsApiForTests(fakeApi({ threads: vi.fn(async () => ({ ok: true, workspaceId: HQ, threads })) }) as unknown as RoomsApi);
-    setFactoryBotPort(NO_BOTS);
-    useStore.setState({ roomStatus: { running: true, enabled: true, hqWorkspaceId: HQ }, activeWorkspaceId: '' });
-    await render(createElement(RoomDock));
-    expect(container.querySelectorAll('[data-testid="room-thread-row"]')).toHaveLength(0);
-    expect((container.querySelector('[data-testid="room-threads"]') as HTMLElement).style.minHeight).toBe('');
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="room-threads-show-all"]')!.click());
-    expect(container.querySelectorAll('[data-testid="room-thread-row"]')).toHaveLength(2);
-    expect((container.querySelector('[data-testid="room-threads"]') as HTMLElement).style.minHeight).toBe(THREADS_MIN_HEIGHT);
-  });
-
-  it('a workspace room lists every thread, with no fold toggle', async () => {
-    const threads = [summary('general'), summary('task:t1'), summary('task:t2', { openQuestions: 1 })];
-    setRoomsApiForTests(fakeApi({ threads: vi.fn(async () => ({ ok: true, workspaceId: WS, threads })) }) as unknown as RoomsApi);
-    setFactoryBotPort(NO_BOTS);
-    useStore.setState({ roomStatus: { running: true, enabled: true, hqWorkspaceId: null }, activeWorkspaceId: WS });
-    await render(createElement(RoomDock));
-    expect(container.querySelectorAll('[data-testid="room-thread-row"]')).toHaveLength(3);
-    expect(container.querySelector('[data-testid="room-threads-show-all"]')).toBeNull();
-  });
-
-  it('the plan folds once answered; the report stays folded to its title until opened; the pinned region gives way', async () => {
-    setRoomsApiForTests(fakeApi() as unknown as RoomsApi);
-    const page = (planState: 'open' | 'resolved') => useStore.getState().setRoomPage(HQ, ALL_THREADS, {
-      cards: [
-        card(1, { workspaceId: HQ, kind: 'report', title: 'Morning report', body: '- #1 merged' }),
-        card(2, { workspaceId: HQ, kind: 'plan', title: 'Plan', state: planState, body: '1. do it' }),
-      ],
-      nextSinceSeq: 2,
-      hasMore: false,
-    }, 'replace');
-    page('open');
-    await render(createElement(HqRoom, { workspaceId: HQ, allBots: [], t, workspaceName: (id: string) => id }));
-    expect(container.querySelector('[data-testid="hq-room"]')?.className).toMatch(/\bshrink\b.*max-h-\[34%\]/);
-    // Open: the answers sit right under the title, before a clamped preview.
-    const plan = container.querySelector('[data-testid="hq-plan"]')!;
-    const actions = plan.querySelector('[data-plan-actions]')!;
-    expect(plan.querySelector('[data-plan-body]')?.getAttribute('data-clamped')).toBe('true');
-    expect(actions.compareDocumentPosition(plan.querySelector('[data-plan-body]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(container.querySelector('[data-report-body]')).toBeNull();
-    expect(container.querySelector('[data-testid="hq-report"]')?.textContent).toContain('Morning report');
-    await act(async () => page('resolved'));
-    expect(container.querySelector('[data-plan-body]')).toBeNull();
-    expect(container.querySelector('[data-testid="hq-plan"]')?.textContent).toContain('Plan');
-    expect(container.querySelector('[data-plan-actions]')).toBeNull();
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-more"]')!.click());
-    expect(container.querySelector('[data-plan-body]')?.textContent).toContain('do it');
-    expect(container.querySelector('[data-plan-body]')?.getAttribute('data-clamped')).toBeNull();
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-report-more"]')!.click());
-    expect(container.querySelector('[data-report-body]')?.textContent).toContain('#1 merged');
-  });
-
-  it('a plan already answered when the room opens starts folded', async () => {
-    setRoomsApiForTests(fakeApi() as unknown as RoomsApi);
-    useStore.getState().setRoomPage(HQ, ALL_THREADS, {
-      cards: [card(2, { workspaceId: HQ, kind: 'plan', title: 'Plan', state: 'resolved', body: '1. do it' })],
-      nextSinceSeq: 2,
-      hasMore: false,
-    }, 'replace');
-    await render(createElement(HqRoom, { workspaceId: HQ, allBots: [], t, workspaceName: (id: string) => id }));
-    expect(container.querySelector('[data-plan-body]')).toBeNull();
-    expect(container.querySelector('[data-testid="hq-plan-more"]')?.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  it('with nothing pinned the region keeps no floor: the bots take their own height', async () => {
-    setRoomsApiForTests(fakeApi() as unknown as RoomsApi);
-    const bots: FactoryBotRow[] = [{ bot: bot('bot-lead'), status: null }];
-    await render(createElement(HqRoom, { workspaceId: HQ, allBots: bots, t, workspaceName: (id: string) => id, minHeight: HQ_PINNED_MIN_HEIGHT }));
-    const region = container.querySelector<HTMLElement>('[data-testid="hq-room"]')!;
-    expect(container.querySelector('[data-testid="hq-bots"]')).not.toBeNull();
-    expect(region.style.minHeight).toBe('');
-    // A pinned card brings the floor back.
-    await act(async () => useStore.getState().setRoomPage(HQ, ALL_THREADS, {
-      cards: [card(3, { workspaceId: HQ, kind: 'report', title: 'Morning report' })], nextSinceSeq: 3, hasMore: false,
-    }, 'replace'));
-    expect(region.style.minHeight).toBe(HQ_PINNED_MIN_HEIGHT);
-  });
-
-  it('an open plan gives way by its body only: the frame, title and answers never shrink', async () => {
-    setRoomsApiForTests(fakeApi() as unknown as RoomsApi);
-    useStore.getState().setRoomPage(HQ, ALL_THREADS, {
-      cards: [
-        card(1, { workspaceId: HQ, kind: 'report', title: 'Morning report', body: 'x' }),
-        card(2, { workspaceId: HQ, kind: 'plan', title: 'Plan', state: 'open', body: '1. do it' }),
-      ],
-      nextSinceSeq: 2,
-      hasMore: false,
-    }, 'replace');
-    await render(createElement(HqRoom, { workspaceId: HQ, allBots: [{ bot: bot('bot-lead'), status: null }], t, workspaceName: (id: string) => id }));
-    const plan = container.querySelector<HTMLElement>('[data-testid="hq-plan"]')!;
-    // The card itself never gives way to its neighbours; it is capped at the
-    // region's height, and inside it the body is what shrinks.
-    expect(plan.className).toMatch(/\bflex-col\b.*\bshrink-0\b.*\bmax-h-full\b/);
-    for (const child of [...plan.children] as HTMLElement[]) {
-      if (child.hasAttribute('data-plan-body')) expect(child.className).toMatch(/\bmin-h-0\b/);
-      else expect(child.className, child.outerHTML.slice(0, 60)).toMatch(/\bshrink-0\b/);
-    }
-    expect(container.querySelector('[data-testid="hq-report"]')?.className).toMatch(/\bshrink-0\b/);
-    expect(container.querySelector('[data-testid="hq-bots"]')?.className).toMatch(/\bshrink-0\b/);
-    // Opened in full, the body is what the owner asked to read: the card
-    // keeps its whole height and the region scrolls.
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-more"]')!.click());
-    expect(container.querySelector('[data-testid="hq-plan"]')!.className).not.toMatch(/max-h-full/);
-    expect(container.querySelector('[data-plan-body]')!.className).toMatch(/\bshrink-0\b/);
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-more"]')!.click());
-    // Editing has no body to give: the card keeps its whole height.
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-edit"]')!.click());
-    expect(container.querySelector('[data-testid="hq-plan"]')!.className).not.toMatch(/max-h-full/);
-  });
-
-  it('planFit: the card keeps everything but its body; a cut preview ends on its last whole line', () => {
-    // Lines of the rendered markdown need not be evenly spaced (a list after a paragraph).
-    const lines = [21, 42, 71];
-    // Every line fits: no clip; the floor is the card without its body.
-    expect(planFit({ fixedHeight: 137, bodyHeight: 71, lineBottoms: lines })).toEqual({ minHeight: 137, clipBottom: 0 });
-    // Squeezed to 60px: the third line is cut, so everything under the second goes.
-    expect(planFit({ fixedHeight: 137, bodyHeight: 60, lineBottoms: lines })).toEqual({ minHeight: 137, clipBottom: 18 });
-    // Squeezed under the first line: nothing of it shows.
-    expect(planFit({ fixedHeight: 137, bodyHeight: 10, lineBottoms: lines })).toEqual({ minHeight: 137, clipBottom: 10 });
-    // Lines the line clamp hides below a whole last line clip only the gap under it.
-    expect(planFit({ fixedHeight: 137, bodyHeight: 64, lineBottoms: [21, 42, 63, 84, 105] })).toEqual({ minHeight: 137, clipBottom: 1 });
-    // No lines measured (jsdom, an empty body): nothing is clipped.
-    expect(planFit({ fixedHeight: 137, bodyHeight: 50, lineBottoms: [] }).clipBottom).toBe(0);
-  });
-});
-
 describe('proposal cards', () => {
   it('an open proposal from a bot is approved or declined in place through room:resolve', async () => {
     const api = fakeApi();
@@ -387,6 +130,17 @@ describe('composer: the real bot it queued for', () => {
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [lead], t)).toBe('room.composer.queuedFor(name=Ada)');
     const runningMine = { ...lead, status: running('bot-lead', 'w-mine') };
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [runningMine], t)).toBe('room.composer.sentTo(name=Ada)');
+    // Taken up once, a later turn of the bot does not re-queue the message.
+    expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [lead], t, true)).toBe('room.composer.sentTo(name=Ada)');
+    // Taken up: running the turn it woke, or idle with nothing queued on a
+    // read after the send (a read from before it proves nothing).
+    const mine = [{ botId: 'bot-lead', role: 'lead' as const, wakeId: 'w-mine' }];
+    expect(deliveryTaken(mine, [runningMine], false)).toBe(true);
+    expect(deliveryTaken(mine, [lead], true)).toBe(false);
+    const idle = { ...lead, status: { ...lead.status!, currentTurn: undefined, queueDepth: 0 } };
+    expect(deliveryTaken(mine, [idle], false)).toBe(false);
+    expect(deliveryTaken(mine, [idle], true)).toBe(true);
+    expect(deliveryTaken([{ botId: 'bot-lead', role: 'lead' }], [idle], true)).toBe(false);
     expect(deliveryLine([{ botId: 'bot-moa', role: 'moa' }], [lead, moa], t)).toBe('room.composer.sentTo(name=Moa HQ)');
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead' }, { botId: 'bot-moa', role: 'moa' }], [lead, moa], t)).toBe('room.composer.sentTo(name=Ada, Moa HQ)');
     const four = ['a', 'b', 'c', 'd'].map((x) => ({ botId: `bot-${x}`, role: 'lead' as const }));

@@ -17,6 +17,10 @@ import {
   splitTrailingEscape,
   __coldFrameKeys,
   __resetColdFrames,
+  persistColdFrames,
+  restoreColdFrames,
+  COLD_FRAME_STORAGE_KEY,
+  COLD_FRAME_PERSIST_MAX_AGE_MS,
 } from '../coldFrame';
 
 // Cold-park reveal: a fresh mount of a cold-parked pane paints the frame its
@@ -319,5 +323,91 @@ describe('the swap sequence on a real parser', () => {
     expect(term.buffer.active.type).toBe('normal');
     expect(term.modes.mouseTrackingMode).toBe('none');
     expect(screen(term)[0]).toBe('new');
+  });
+});
+
+// The cache outlives a restart: persisted on quit (and every minute), read
+// back at startup, so a pane's first reveal after a restart is not blank.
+describe('cold frames across a restart', () => {
+  class MemStorage {
+    data = new Map<string, string>();
+    full = false;
+    getItem(k: string) { return this.data.get(k) ?? null; }
+    setItem(k: string, v: string) { if (this.full) throw new Error('QuotaExceededError'); this.data.set(k, v); }
+    removeItem(k: string) { this.data.delete(k); }
+  }
+  const store = () => new MemStorage() as unknown as Storage & MemStorage;
+  const frame = (text: string, at?: number): ColdFrame => ({ frame: text, cols: 40, rows: 6, at });
+  beforeEach(() => __resetColdFrames());
+
+  it('a live terminal screen and a cached frame both come back after a restart', async () => {
+    const live = headless();
+    await write(live, 'live screen');
+    rememberColdFrame('parked', frame('parked screen'));
+    const s = store();
+    persistColdFrames([['live', live as unknown as Terminal]], s);
+    __resetColdFrames(); // the renderer restarts
+    restoreColdFrames(s);
+    expect(takeColdFrame('parked')?.frame).toBe('parked screen');
+    const restored = takeColdFrame('live');
+    expect(restored).toMatchObject({ cols: 40, rows: 6 });
+    const target = headless();
+    await write(target, restored!.frame);
+    expect(screen(target)[0]).toBe('live screen');
+  });
+
+  it('a live terminal wins over an older cached frame of the same pane', async () => {
+    const live = headless();
+    await write(live, 'newer');
+    rememberColdFrame('p', frame('older'));
+    const s = store();
+    persistColdFrames([['p', live as unknown as Terminal]], s);
+    __resetColdFrames();
+    restoreColdFrames(s);
+    const target = headless();
+    await write(target, takeColdFrame('p')!.frame);
+    expect(screen(target)[0]).toBe('newer');
+  });
+
+  it('expired frames are neither written nor restored', () => {
+    const now = 10 * COLD_FRAME_PERSIST_MAX_AGE_MS;
+    rememberColdFrame('old', frame('old', now - COLD_FRAME_PERSIST_MAX_AGE_MS - 1));
+    rememberColdFrame('fresh', frame('fresh', now - 1000));
+    const s = store();
+    persistColdFrames([], s, now);
+    __resetColdFrames();
+    restoreColdFrames(s, now + COLD_FRAME_PERSIST_MAX_AGE_MS - 2000);
+    expect(__coldFrameKeys()).toEqual(['fresh']);
+    __resetColdFrames();
+    restoreColdFrames(s, now + COLD_FRAME_PERSIST_MAX_AGE_MS);
+    expect(__coldFrameKeys()).toEqual([]);
+  });
+
+  it('keeps the newest entries, oldest first on restore', () => {
+    for (let i = 0; i < COLD_FRAME_MAX_ENTRIES + 3; i++) rememberColdFrame(`p${i}`, frame(`f${i}`, 1000 + i));
+    const s = store();
+    persistColdFrames([], s, 2000);
+    __resetColdFrames();
+    restoreColdFrames(s, 2000);
+    const keys = __coldFrameKeys();
+    expect(keys).toHaveLength(COLD_FRAME_MAX_ENTRIES);
+    expect(keys[0]).toBe('p3');
+    expect(keys[keys.length - 1]).toBe(`p${COLD_FRAME_MAX_ENTRIES + 2}`);
+  });
+
+  it('a full storage or a malformed entry never throws and leaves nothing behind', () => {
+    rememberColdFrame('p', frame('x'));
+    const s = store();
+    s.data.set(COLD_FRAME_STORAGE_KEY, 'stale');
+    s.full = true;
+    expect(() => persistColdFrames([], s)).not.toThrow();
+    expect(s.getItem(COLD_FRAME_STORAGE_KEY)).toBeNull();
+    __resetColdFrames();
+    s.full = false;
+    s.setItem(COLD_FRAME_STORAGE_KEY, JSON.stringify([['ok', 'f', 40, 6, Date.now()], ['bad', 'f', 0, 6, Date.now()], 'junk']));
+    restoreColdFrames(s);
+    expect(__coldFrameKeys()).toEqual(['ok']);
+    s.setItem(COLD_FRAME_STORAGE_KEY, '{not json');
+    expect(() => restoreColdFrames(s)).not.toThrow();
   });
 });

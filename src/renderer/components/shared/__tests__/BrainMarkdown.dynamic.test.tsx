@@ -267,3 +267,25 @@ describe('renderBrainMarkdown', () => {
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
   });
 });
+
+describe('renderBrainMarkdown richCode (the Bots chat)', () => {
+  it('draws a fence with its language label and a Copy, one boundary and a capped height; off, the plain block', async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    act(() => {
+      root.render(createElement('div', null, renderBrainMarkdown('```ts\nconst a = 1;\n```', { richCode: true })));
+    });
+    const block = container.querySelector('[data-brain-md-code-rich]')!;
+    expect(block.querySelector('[data-brain-md-code-lang]')?.textContent).toBe('ts');
+    const pre = block.querySelector('pre')!;
+    expect(pre.textContent).toBe('const a = 1;');
+    expect(pre.className).toContain('max-h-[320px]');
+    expect(pre.className).not.toMatch(/\bborder\b/);
+    await act(async () => { (block.querySelector('[data-brain-md-code-copy]') as HTMLButtonElement).click(); });
+    expect(writeText).toHaveBeenCalledWith('const a = 1;');
+    vi.unstubAllGlobals();
+    render('```ts\nconst a = 1;\n```');
+    expect(container.querySelector('[data-brain-md-code-rich]')).toBeNull();
+    expect(container.querySelector('pre[data-brain-md-code]')?.className).toContain('border');
+  });
+});

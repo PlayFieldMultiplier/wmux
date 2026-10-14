@@ -13,6 +13,8 @@ export const FACTORY_SETTINGS_VERSION = 1 as const;
 export interface FactorySettings {
   version: typeof FACTORY_SETTINGS_VERSION;
   enabled: boolean;
+  /** Moa's HQ workspace from older builds. Kept readable for compatibility;
+   *  nothing uses it (no workspace is special, owner decision 2026-10-14). */
   hqWorkspaceId: string | null;
   /** GitHub logins whose PRs wake the Verifier (the owner's login included). */
   trustedAuthors: string[];
@@ -36,7 +38,7 @@ export interface FactorySettings {
   acpStub?: boolean;
   /** The bot the phone talks to (`/api/moa/messages`), pinned in Settings ›
    *  Bots. Absent: the oldest enabled Coordinator-template bot, else the
-   *  oldest enabled bot in the HQ room (main/factory/phoneBot.ts). */
+   *  oldest enabled bot (main/factory/phoneBot.ts). */
   phoneBotId?: string;
 }
 

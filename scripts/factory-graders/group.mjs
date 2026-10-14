@@ -30,6 +30,30 @@ export function groupHiReplies(snap, expect) {
   return out;
 }
 
+/** coordinator-room-wakes-lead-only: in a room with a coordinator, a
+ *  message to the room wakes the coordinator alone, as a direct message. */
+export function coordinatorRoomWakesLeadOnly(snap, expect) {
+  const msg = injected(snap, expect.message);
+  const card = arr(snap.cards).find((c) => c.id === msg?.id) ?? null;
+  const lead = botId(snap, expect.lead);
+  const human = arr(snap.wakes).filter((w) => w.reason?.kind === 'human');
+  const facts = factsOfKind(snap, 'human.message').filter((f) => f.payload?.cardId === msg?.id);
+  const out = [
+    criterion('card_names_the_lead', !!card && JSON.stringify(card.refs?.botIds ?? null) === JSON.stringify([lead]) && card.refs?.botId === lead,
+      JSON.stringify(card?.refs ?? null)),
+    criterion('only_the_lead_woken', human.length === 1 && human[0].botId === lead && human[0].state === 'done' && human[0].priority === 0,
+      human.map((w) => `${w.botId}:${w.state}`).join(', ') || 'no wake'),
+    criterion('direct_not_room_wide', human.length === 1 && human[0].reason.room === undefined && human[0].reason.lead === true && human[0].reason.runId === runOf(msg?.id),
+      human.map((w) => `${w.reason.runId}/${w.reason.room}/${w.reason.lead}`).join(', ') || 'no wake'),
+    criterion('one_directed_fact', facts.length === 1 && facts[0].ref?.botId === lead, `${facts.length} fact(s)`),
+    criterion('lead_answered', botCards(snap, expect.lead).length === 1, `${botCards(snap, expect.lead).length} card(s)`),
+  ];
+  for (const key of expect.silent ?? []) {
+    out.push(criterion(`${key}_not_woken`, wakesOf(snap, key).length === 0 && botCards(snap, key).length === 0, `${wakesOf(snap, key).length} wake(s)`));
+  }
+  return out;
+}
+
 /** structured-mention-wakes-target: the owner's mention wakes its bot; that
  *  bot's card mention wakes its target once; nobody else wakes. */
 export function structuredMentionWakesTarget(snap, expect) {

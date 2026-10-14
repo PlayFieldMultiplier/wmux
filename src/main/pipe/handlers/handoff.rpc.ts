@@ -26,6 +26,7 @@ import {
   setHandoffRouter,
 } from '../../factory/handoffRouter';
 import { getRoomWriter, resolveRoomPorts, type FactoryRoomPorts } from '../../factory/roomWriter';
+import { getWakeTaint } from '../../factory/wakeTaint';
 import { factoryCaller, refusal } from './room.rpc';
 
 function params(raw: unknown): Record<string, unknown> {
@@ -124,6 +125,7 @@ export function createHandoffModule(
         decisions: deckDecisionPort(wmuxDir),
         ports: resolve,
         rooms: getRoomWriter,
+        taint: getWakeTaint,
       });
       setHandoffRouter(router);
       await router.start();

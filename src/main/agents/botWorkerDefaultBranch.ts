@@ -1,13 +1,15 @@
-// ─── A bot repository's default branch, for its workers' push rules ────────
+// ─── A bot repository's default branch, for main's push of its workers ─────
 //
 // Before a bot's workers launch in a repository, main reads that repository's
 // default branch — GitHub's own (`gh repo view --json defaultBranchRef`),
-// else origin/HEAD — and records it in factory/worker-default-branches.json,
-// which the worker settings carry as push rules (shared/botWorkerGuard.ts).
+// else origin/HEAD — and records it in factory/worker-default-branches.json:
+// main's push of a worker's branch (`task.push`, worktask/taskPush.ts) never
+// lands on one.
 // main and master are always covered; a read that fails leaves just those.
 // A branch read but not recordable refuses the launch. One successful read
 // per repository per DEFAULT_BRANCH_TTL_MS.
 import { execFile } from 'node:child_process';
+import os from 'node:os';
 import { promisify } from 'node:util';
 import { getWmuxDir } from '../../daemon/config';
 import { getExecEnv } from '../../shared/execEnv';
@@ -54,12 +56,25 @@ export async function readRepoDefaultBranch(repoRoot: string, deps: DefaultBranc
   return null;
 }
 
+/** A repository's default branch as GitHub names it, by its `host/owner/repo`
+ *  key: read without a working folder, so no repository config is involved.
+ *  null when gh cannot tell. */
+export async function readRepoDefaultBranchByKey(repoKey: string, deps: DefaultBranchDeps = {}): Promise<string | null> {
+  const run = deps.run ?? defaultRun;
+  try {
+    const name = (await run('gh', ['repo', 'view', repoKey, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], os.tmpdir())).trim();
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
 /** What a launch learned: the default branch (null: unread, so main and
- *  master only), and whether its push rules are in the worker settings. */
+ *  master only), and whether it is recorded for main's push. */
 export interface DefaultBranchNote { name: string | null; recorded: boolean }
 
-/** Read (or reuse) the repository's default branch and record it for the
- *  worker settings. Never throws. A name read but not recorded (one no rule
+/** Read (or reuse) the repository's default branch and record it for
+ *  main's push. Never throws. A name read but not recorded (one no rule
  *  can hold, or a failed write) is `recorded: false`: the caller does not
  *  launch. Only a successful read is reused. */
 export async function noteBotRepoDefaultBranch(repoRoot: string, deps: DefaultBranchDeps = {}): Promise<DefaultBranchNote> {
@@ -76,7 +91,7 @@ export async function noteBotRepoDefaultBranch(repoRoot: string, deps: DefaultBr
   if (!name) return { name: null, recorded: false };
   // Recorded on every launch, so a file that lost it gets it back first.
   const recorded = isDenyableBranchName(name) && recordBotWorkerDefaultBranch(deps.dir ?? getWmuxDir(), name);
-  if (!recorded) console.warn(`[factory] ${repoRoot}'s default branch cannot be held by the worker push rules`);
+  if (!recorded) console.warn(`[factory] ${repoRoot}'s default branch cannot be recorded for main's push`);
   return { name, recorded };
 }
 

@@ -84,6 +84,7 @@
     "src/renderer/utils/accountLogin.ts": 2,
     "src/shared/agentResume.ts": 3,
     "src/shared/botWorkerGuard.ts": 1,
+    "src/shared/codexWorkerGuard.ts": 3,
     "src/shared/fanoutPreset.ts": 2,
     "src/shared/mcpRegistration.ts": 1,
     "src/shared/rolePresets.ts": 3,

@@ -187,7 +187,7 @@ function normalizeStashOrigin(
   };
 }
 
-function isTerminalOnlyWorkspace(ws: Workspace): boolean {
+export function isTerminalOnlyWorkspace(ws: Workspace): boolean {
   // Workspace-wide (#977): a stashed browser surface still belongs to this
   // workspace, and cold-parking on the strength of the visible tree alone would
   // unload it under an eligibility test that never looked at it.

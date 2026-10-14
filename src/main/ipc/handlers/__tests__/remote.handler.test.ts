@@ -613,7 +613,7 @@ describe('remote.handler — workspaceCreate (#1001)', () => {
     const res = await getHandler(IPC.REMOTE_WORKSPACE_CREATE)({}, 'h1', 'ws-brand-new') as { ok: true; sessionId: string };
 
     expect(res).toEqual({ ok: true, sessionId: 'web-9' });
-    expect(client.createWorkspace).toHaveBeenCalledWith('ws-brand-new', undefined);
+    expect(client.createWorkspace).toHaveBeenCalledWith('ws-brand-new', undefined, undefined);
   });
 
   it('forwards cwd when given', async () => {
@@ -623,7 +623,17 @@ describe('remote.handler — workspaceCreate (#1001)', () => {
 
     await getHandler(IPC.REMOTE_WORKSPACE_CREATE)({}, 'h1', 'ws-1', '/repo');
 
-    expect(client.createWorkspace).toHaveBeenCalledWith('ws-1', '/repo');
+    expect(client.createWorkspace).toHaveBeenCalledWith('ws-1', '/repo', undefined);
+  });
+
+  it('forwards the new workspace name', async () => {
+    const store = fakeStore([host]);
+    const client = fakeClient(host);
+    registerRemoteHandlers({ store: store as never, attachments: fakeAttachments() as never, clientFactory: () => client });
+
+    await getHandler(IPC.REMOTE_WORKSPACE_CREATE)({}, 'h1', 'ws-1', undefined, 'Workspace 2');
+
+    expect(client.createWorkspace).toHaveBeenCalledWith('ws-1', undefined, 'Workspace 2');
   });
 
   it('maps a client rejection to {ok:false} rather than throwing', async () => {

@@ -29,7 +29,9 @@ describe('cold-park reveal — cold frame wiring (source-level)', () => {
   });
 
   it('paints a cached frame only on a fresh, fitted daemon mount at the cached width', () => {
-    expect(mainEffect).toMatch(/const coldFrame = !adopted && !fixedGeometryRef\.current && isDaemonModeActive\(\)\s*\n\s*\? takeColdFrame\(ptyId\)/);
+    expect(mainEffect).toMatch(/const coldFrameEligible = !adopted && !fixedGeometryRef\.current && isDaemonModeActive\(\);/);
+    // Taken only by a fitted mount: a hidden one leaves it for its first reveal.
+    expect(mainEffect).toMatch(/const coldFrame = coldFrameEligible && initialFitRan\s*\n\s*\? takeColdFrame\(ptyId\)/);
     expect(mainEffect).toMatch(/const paintColdFrame = coldFrame !== null && initialFitRan && coldFrameFits\(coldFrame, terminal\.cols\);/);
     expect(mainEffect).toMatch(/if \(paintColdFrame\) \{\s*\n\s*terminal\.write\(coldFrame\.frame\);\s*\n\s*warmSwap\.painted\(\);/);
   });
@@ -57,18 +59,21 @@ describe('cold-park reveal — cold frame wiring (source-level)', () => {
   it('defers a cached frame the first fit did not match to the first resize at its width', () => {
     // The first fit runs with the DOM renderer's measured cell; WebGL then
     // rounds it to whole device pixels and refits (125 %: 115 -> 118 cols).
-    expect(mainEffect).toMatch(/deferredColdFrame = coldFrame !== null && !paintColdFrame && initialFitRan \? coldFrame : null;/);
-    const resize = mainEffect.slice(mainEffect.indexOf('const deferredColdFrameResize'), mainEffect.indexOf('if (isVisibleRef.current) {', mainEffect.indexOf('const deferredColdFrameResize')));
-    expect(resize).toMatch(/terminal\.onResize\(/);
+    expect(mainEffect).toMatch(/if \(coldFrame !== null && !paintColdFrame && initialFitRan\) deferColdFrame\(coldFrame, false\);/);
+    expect(mainEffect).toMatch(/deferredColdFrameResize \?\?= terminal\.onResize\(\(\{ cols \}\) => paintDeferredColdFrame\(cols\)\);/);
+    const paint = mainEffect.slice(mainEffect.indexOf('const paintDeferredColdFrame'), mainEffect.indexOf('let deferredColdFrameResize'));
     // Painted only at the cached width, once, and never after PTY output was
     // routed to this mount (routePtyData sets revealFirstDataLogged for every
-    // payload, before the resync hold-out and the scheduler).
-    expect(resize).toMatch(/if \(!frame \|\| revealFirstDataLogged \|\| !coldFrameFits\(frame, cols\)\) return;\s*\n\s*deferredColdFrame = null;\s*\n\s*terminal\.write\(frame\.frame\);\s*\n\s*warmSwap\.painted\(\);/);
+    // payload, before the resync hold-out and the scheduler) — or, over a
+    // dirty pane at its first reveal, once the reveal resync is over.
+    expect(paint).toMatch(/if \(!frame \|\| !coldFrameFits\(frame, cols\)\) return;/);
+    expect(paint).toMatch(/if \(deferredOverDirty \? !resyncRef\.current\.pending : revealFirstDataLogged\) return;\s*\n\s*deferredColdFrame = null;\s*\n\s*terminal\.write\(frame\.frame\);/);
+    expect(paint).toMatch(/if \(!deferredOverDirty\) warmSwap\.painted\(\);/);
     expect(mainEffect).toMatch(/const routePtyData = \(payload: PtyDataPayload\) => \{\s*\n\s*logRevealFirstData\(payload\);/);
     expect(mainEffect).toMatch(/if \(revealFirstDataLogged\) return;\s*\n\s*revealFirstDataLogged = true;/);
     // Nor after the attach settled (a flush with nothing replayed must not
     // leave a cosmetic frame on screen for good), at both flush listeners.
-    expect((mainEffect.match(/revealTimingT0\.delete\(ptyId\);\s*\n\s*deferredColdFrame = null;[^\n]*\n\s*if \(completeResyncFromFlush\(recoveredBytes\)\) return;/g) ?? []).length).toBe(2);
+    expect((mainEffect.match(/revealTimingT0\.delete\(ptyId\);\s*\n\s*deferredColdFrame = null;[^\n]*\n\s*attachSettled = true;\s*\n\s*if \(completeResyncFromFlush\(recoveredBytes\)\) return;/g) ?? []).length).toBe(2);
     // The resize subscription goes with the mount.
     expect(mainEffect).toMatch(/warmSwap\.cancel\(\);\s*\n\s*deferredColdFrameResize\?\.dispose\(\);\s*\n\s*deferredColdFrame = null;/);
   });

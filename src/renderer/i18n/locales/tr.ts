@@ -6,6 +6,7 @@ export const tr = {
   'sidebar.workspaces': 'Çalışma alanları',
   'sidebar.newWorkspace': 'Yeni çalışma alanı',
   'sidebar.newWorkspaceTooltip': 'Yeni çalışma alanı (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '{name} üzerinde yeni çalışma alanı',
   'sidebar.hideTooltip': 'Kenar çubuğunu gizle (Ctrl+B)',
   'sidebar.expandTooltip': 'Kenar çubuğunu genişlet (Ctrl+B)',
   'sidebar.unreadCount': '{count} okunmamış',
@@ -657,5 +658,5 @@ export const tr = {
   'git.secret.scanFailed': "wmux bu değişikliği parola ve anahtar kontrolü için okuyamadı, bu yüzden yüklenmedi. Tekrar deneyin; sürerse bu kontrol Ayarlar › Genel bölümünden kapatılabilir.",
   'git.secret.more': "(ve {count} tane daha)",
   'settings.secretGuard': "Commit, push ve PR'larda parolaları ve anahtarları engelle",
-  'settings.secretGuardDesc': "Git sayfasındaki Commit, Push ve PR oluştur, bir görevi devralma ve Moa teslimi; .env dosyası, özel anahtar veya API anahtarı ekleyen bir değişikliği reddeder.",
+  'settings.secretGuardDesc': "Git sayfasındaki Commit, Push ve PR oluştur ile bir görevi devralma; .env dosyası, özel anahtar veya API anahtarı ekleyen bir değişikliği reddeder.",
 } as const;

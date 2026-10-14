@@ -3,15 +3,15 @@
 // The rendered half of the accessible-name contract. chromeAccessibleNames.test
 // scans the source (it reaches branches a mount never would); this one proves
 // the thing actually comes out of React with a name on it, for the chrome
-// surface that mounts without the Electron preload: the toggle that opens the
-// room dock. The titlebar and the sidebar rows pull in the store,
+// surface that mounts without the Electron preload: the toggle that shows the
+// file tree column. The titlebar and the sidebar rows pull in the store,
 // the preload and xterm, so they stay with the source scan.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../stores';
-import RoomDockToggle from '../Room/RoomDockToggle';
+import FileTreeToggle from '../Titlebar/FileTreeToggle';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -22,7 +22,7 @@ beforeEach(() => {
   root = createRoot(container);
   act(() => {
     useStore.setState({
-      channelDockVisible: false,
+      fileTreeVisible: false,
       sidebarPosition: 'left',
       channelUnread: {},
       workspaces: [],
@@ -52,9 +52,9 @@ function accessibleName(btn: HTMLButtonElement): string {
 const isReadable = (name: string): boolean => /[\p{L}\p{N}]/u.test(name);
 
 describe('chrome accessible names — rendered', () => {
-  it('names the room dock toggle', () => {
+  it('names the file tree toggle', () => {
     act(() => {
-      root.render(createElement(RoomDockToggle));
+      root.render(createElement(FileTreeToggle));
     });
     const buttons = [...container.querySelectorAll('button')] as HTMLButtonElement[];
     expect(buttons.length).toBeGreaterThan(0);

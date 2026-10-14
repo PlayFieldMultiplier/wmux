@@ -13,16 +13,26 @@
 //             tainted, or a fact that cannot be found. The task ids main
 //             gives a bot's own task wakes (`task.<status>:<taskId>@<rev>`,
 //             not in the fact log) are as tainted as that task's dispatch.
-//   handoff,  the handoff's own mark: recorded when it was delivered, from
-//   mention   the sender's running wake (a send is synchronous inside the
-//             sender's turn). A handoff from the owner or the system is
+//   handoff,  the handoff's own mark: recorded when it is sent (or, failing
+//   mention   that, when it was delivered), from the sender's running wake
+//             (a send is synchronous inside the sender's turn). A dispatch
+//             wmux sends on for a relay is marked before it is stored, as
+//             tainted as the result it carries, the hop that result answers
+//             and the relay's first dispatch (an unmarked one is tainted).
+//             A handoff from the owner or the system is
 //             clean; one from a bot with no mark (delivered again after a
-//             restart, or its sender's turn already over) is tainted.
+//             restart, or its sender's turn already over) is tainted. A
+//             handoff a researcher-template bot sends is always tainted:
+//             research reads outside text whatever woke it. The owner's
+//             answer to a question asked mid-hop is as tainted as that hop.
 //   human, manual, schedule, routine, intro: clean (the owner's words, the
 //             owner's buttons, timers). Any other reason is tainted.
 //
 // Taint is by the wake's origin: text a bot reads with its tools during a
-// clean wake (pr_read, issue_read) does not mark the wake.
+// clean wake (pr_read, issue_read) does not mark the wake. The one rule by
+// template is the researcher's: its handoffs (above) and the tasks it fans out
+// (fanout.rpc.ts) are always tainted. A bot of any other template is marked by
+// its wake's origin alone.
 //
 // Consequences: a bot's fan-out records `dispatch.origin.tainted` (true or
 // false, fanout.rpc.ts; a bot task without it counts as tainted); the merge lane and a
@@ -37,6 +47,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import type { Fact, FactKind } from '../../shared/facts';
+import { botTemplate, type BotProfile } from '../../shared/bot';
 import type { Handoff } from '../../shared/handoff';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { WakeItem, WakeReason } from '../../shared/wake';
@@ -69,6 +80,8 @@ export interface WakeTaintPorts {
   taskRow: (taskId: string) => LedgerEntry | null;
   /** The wake `botId` is running now and when its turn started, or null. */
   runningWake: (botId: string) => { item: WakeItem; startedAt: number } | null;
+  /** A bot's profile (its template), or null when it is not known. */
+  bot?: (botId: string) => Pick<BotProfile, 'template' | 'role'> | null;
   /** `<wmuxDir>/factory/taint.json`; absent: marks in memory only. */
   file?: string;
   log?: (line: string) => void;
@@ -161,15 +174,30 @@ export class WakeTaint {
    *  unmarked one from a bot is tainted. */
   handoffTainted(handoffId: string): boolean {
     const mark = this.marks.get(handoffId);
-    if (mark !== undefined) return mark;
+    if (mark === true) return true;
     let h: Handoff | null;
     try {
       h = this.ports.handoff(handoffId);
     } catch {
       return true;
     }
-    if (!h) return true;
-    return h.from.kind === 'bot';
+    if (!h) return mark ?? true;
+    // A researcher's handoff is tainted whatever mark it was given.
+    if (h.from.kind === 'bot' && this.alwaysTainted(h.from.botId)) return true;
+    // The owner's answer to a question asked mid-hop resumes that hop: it
+    // is as tainted as the hop.
+    if (h.kind === 'answer' && h.replyTo && this.answerResumesTaintedHop(h.replyTo)) return true;
+    return mark ?? h.from.kind === 'bot';
+  }
+
+  private answerResumesTaintedHop(askId: string): boolean {
+    let ask: Handoff | null;
+    try {
+      ask = this.ports.handoff(askId);
+    } catch {
+      return true;
+    }
+    return !!ask?.forHop && this.handoffTainted(ask.forHop);
   }
 
   /** A handoff was delivered: mark it from its sender's running wake. Called
@@ -186,12 +214,62 @@ export class WakeTaint {
     let tainted: boolean;
     if (h.from.kind !== 'bot') {
       tainted = false;
+    } else if (h.relay === true || this.alwaysTainted(h.from.botId)) {
+      // A relay's dispatch is wmux's, in the coordinator's name: its mark
+      // is written before it is stored, never read from the coordinator's wake.
+      tainted = true;
     } else {
       // The sender's turn sent it only if that turn began before it was made.
       const running = this.ports.runningWake(h.from.botId);
       tainted = !running || running.startedAt > h.createdAt ? true : this.wakeTainted(running.item);
     }
     this.mark(handoffId, tainted);
+  }
+
+  /** A researcher-template bot's sends are always tainted; a bot that
+   *  cannot be looked up is not known to be clean either. */
+  private alwaysTainted(botId: string): boolean {
+    if (!this.ports.bot) return false;
+    try {
+      const profile = this.ports.bot(botId);
+      return !profile || botTemplate(profile) === 'researcher';
+    } catch {
+      return true;
+    }
+  }
+
+  /** A bot is sending a handoff now, inside its turn: mark it from that
+   *  turn's wake, and as tainted as any handoff it answers (`answers`). A
+   *  handoff already marked keeps its mark. Never throws. */
+  markSent(handoffId: string, senderBotId: string, answers: readonly string[] = []): void {
+    if (this.marks.has(handoffId)) return;
+    let tainted = true;
+    try {
+      const running = this.ports.runningWake(senderBotId);
+      tainted = !running || this.alwaysTainted(senderBotId) || this.wakeTainted(running.item) || answers.some((id) => this.handoffTainted(id));
+    } catch {
+      tainted = true;
+    }
+    this.mark(handoffId, tainted);
+  }
+
+  /** wmux sends a relay's dispatch on: mark it before it is stored. Tainted
+   *  when the bot whose result it carries is sending from a tainted wake
+   *  (`senderBotId`, the live path) or when any of `handoffIds` (the result
+   *  on a restart, the hop it answers, the relay's first dispatch) is.
+   *  Never throws. */
+  markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): boolean {
+    let tainted = true;
+    try {
+      const sender = from.senderBotId;
+      const running = sender ? this.ports.runningWake(sender) : null;
+      tainted = (sender ? !running || this.alwaysTainted(sender) || this.wakeTainted(running.item) : false)
+        || from.handoffIds.some((id) => this.handoffTainted(id));
+    } catch {
+      tainted = true;
+    }
+    this.mark(handoffId, tainted);
+    return tainted;
   }
 
   /** A fact from the log (subscribe). Never throws. */

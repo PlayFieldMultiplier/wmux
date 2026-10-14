@@ -19,6 +19,7 @@ import { useT } from '../../hooks/useT';
 import PaneContainer from '../Pane/PaneContainer';
 import { multiviewGridStyle, type MultiviewArrangement } from '../../utils/multiviewGrid';
 import { workspaceColorHex } from '../../../shared/workspaceColors';
+import { selectWorkerPanelHost } from '../../stores/slices/roomSlice';
 import type { Workspace } from '../../../shared/types';
 
 /** One single-view workspace pane subtree. Inactive → display:none (kept mounted).
@@ -26,8 +27,9 @@ import type { Workspace } from '../../../shared/types';
  * Cold-park (TASK-9): when `parked` is true the PaneContainer is NOT rendered —
  * unmounting it disposes the workspace's xterm/WebGL/registry entries (useTerminal
  * cleanup) WITHOUT touching the daemon PTY, so RAM stops scaling with hidden
- * workspace count. A parked slot is always hidden (parked ⇒ not active), so the
- * placeholder is never visible; it exists only to keep the mount slot alive.
+ * workspace count. A parked slot is always hidden (parked ⇒ not active, or
+ * the Bots page covers it while hosting the workspace), so the placeholder is
+ * never visible; it exists only to keep the mount slot alive.
  * Only terminal-only workspaces are ever parked (sweepColdPark gates on
  * isTerminalOnlyWorkspace), so unmounting here can never drop a browser webview
  * session or unsaved editor state — those have no daemon-side replay. */
@@ -66,9 +68,13 @@ export const MultiviewWorkspaceSlot = memo(function MultiviewWorkspaceSlot({
   arrangement,
   onActivate,
   onRemove,
+  hostedElsewhere,
 }: {
   workspace: Workspace;
   isActive: boolean;
+  /** The Bots page shows this workspace's panes in its worker panel: the
+   *  tile keeps its header and leaves the panes to that one mount. */
+  hostedElsewhere?: boolean;
   /** Count of multiview members — a change here can reflow this tile out of view. */
   multiviewCount: number;
   /** Current grid arrangement — a layout change can move this tile out of view. */
@@ -149,7 +155,7 @@ export const MultiviewWorkspaceSlot = memo(function MultiviewWorkspaceSlot({
       </div>
       <div className="flex-1 min-h-0 relative">
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
-          <PaneContainer pane={workspace.rootPane} workspace={workspace} isWorkspaceVisible={true} />
+          {hostedElsewhere ? null : <PaneContainer pane={workspace.rootPane} workspace={workspace} isWorkspaceVisible={true} />}
         </div>
       </div>
     </div>
@@ -168,6 +174,11 @@ export function WorkspaceViewport() {
   const multiviewArrangement = useStore((s) => s.multiviewArrangement);
   // Cold-park (TASK-9): parked ids render a placeholder instead of PaneContainer.
   const parkedWorkspaceIds = useStore((s) => s.parkedWorkspaceIds);
+  // A bot worker shown in the Bots page's worker panel mounts there, not
+  // here: a terminal has one mount (one xterm per PTY), so its slot renders
+  // as parked while that page shows it, and remounts (replaying from the
+  // daemon) when the page goes.
+  const hostedId = useStore(selectWorkerPanelHost);
   const paneGate = useStore((s) => s.paneGate);
   const setActiveWorkspace = useStore((s) => s.setActiveWorkspace);
   const removeMultiviewWorkspace = useStore((s) => s.removeMultiviewWorkspace);
@@ -218,6 +229,7 @@ export function WorkspaceViewport() {
             arrangement={multiviewArrangement}
             onActivate={setActiveWorkspace}
             onRemove={removeMultiviewWorkspace}
+            hostedElsewhere={ws.id === hostedId}
           />
         ))}
       </div>
@@ -239,9 +251,11 @@ export function WorkspaceViewport() {
           // render guard covers every current and future promotion path; the
           // slice still converges its state via the clears in those sites.
           parked={
-            parkedWorkspaceIds[ws.id] === true &&
-            ws.id !== activeWorkspaceId &&
-            !multiviewIds.includes(ws.id)
+            ws.id === hostedId || (
+              parkedWorkspaceIds[ws.id] === true &&
+              ws.id !== activeWorkspaceId &&
+              !multiviewIds.includes(ws.id)
+            )
           }
         />
       ))}

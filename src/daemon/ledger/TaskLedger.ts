@@ -44,6 +44,7 @@ import {
   LEDGER_SCHEMA_VERSION,
   LEDGER_TERMINAL_RETENTION_MS,
   LEDGER_TRANSITIONS,
+  canActorSee,
   canActorSet,
   canTransition,
   isLedgerStatus,
@@ -231,6 +232,7 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     ...(d.preset ? { preset: d.preset } : {}),
     ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
     ...(d.threadId ? { threadId: d.threadId } : {}),
+    ...(typeof d.handoffId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(d.handoffId) ? { handoffId: d.handoffId } : {}),
   };
 }
 
@@ -376,6 +378,15 @@ export class TaskLedger {
   private async updateLocked(input: LedgerUpdateInput): Promise<LedgerUpdateResult> {
     const entry = this.entries.get(input.id);
     if (!entry) return { ok: false, error: 'not_found', message: `no ledger entry for task ${input.id}` };
+    // Authorization comes before anything that reads the entry back: a
+    // caller that may not see this task learns nothing about it.
+    if (!canActorSee(input.actor, entry)) {
+      return {
+        ok: false,
+        error: 'not_authorized',
+        message: `${input.actor.kind} ${input.actor.workspaceId} may not change task ${input.id}`,
+      };
+    }
     if (!isLedgerStatus(input.status)) {
       return { ok: false, error: 'invalid_status', message: `unknown status "${input.status}"`, entry };
     }
@@ -503,7 +514,7 @@ export class TaskLedger {
       const entry = this.entries.get(id);
       if (!entry) return { ok: false, error: 'not_found', message: `no ledger entry for task ${id}` };
       if (actor.kind !== 'system') {
-        return { ok: false, error: 'not_authorized', message: 'only the gate runner (system) may record a gate result', entry };
+        return { ok: false, error: 'not_authorized', message: 'only the gate runner (system) may record a gate result', ...(canActorSee(actor, entry) ? { entry } : {}) };
       }
       if (expectedRev !== undefined && expectedRev !== entry.rev) {
         return {
@@ -544,7 +555,7 @@ export class TaskLedger {
       const entry = this.entries.get(input.id);
       if (!entry) return { ok: false, error: 'not_found', message: `no ledger entry for task ${input.id}` };
       if (input.actor.kind !== 'system') {
-        return { ok: false, error: 'not_authorized', message: 'only the system may move a task to another workspace', entry };
+        return { ok: false, error: 'not_authorized', message: 'only the system may move a task to another workspace', ...(canActorSee(input.actor, entry) ? { entry } : {}) };
       }
       if (input.expectedRev !== entry.rev) {
         return {

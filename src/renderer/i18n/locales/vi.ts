@@ -6,6 +6,7 @@ export const vi = {
   'sidebar.workspaces': 'Không gian làm việc',
   'sidebar.newWorkspace': 'Không gian làm việc mới',
   'sidebar.newWorkspaceTooltip': 'Không gian làm việc mới (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Không gian làm việc mới trên {name}',
   'sidebar.hideTooltip': 'Ẩn thanh bên (Ctrl+B)',
   'sidebar.expandTooltip': 'Mở thanh bên (Ctrl+B)',
   'sidebar.unreadCount': '{count} chưa đọc',
@@ -651,5 +652,5 @@ export const vi = {
   'git.secret.scanFailed': "wmux không đọc được thay đổi này để kiểm tra mật khẩu và khóa nên không tải lên. Hãy thử lại; nếu vẫn lỗi, có thể tắt bước kiểm tra này trong Cài đặt › Chung.",
   'git.secret.more': "(và {count} chỗ khác)",
   'settings.secretGuard': "Chặn mật khẩu và khóa trong commit, push và PR",
-  'settings.secretGuardDesc': "Commit, Push và Tạo PR trên trang Git, nhận việc từ tác vụ và lần giao của Moa sẽ từ chối thay đổi có thêm tệp .env, khóa riêng tư hoặc khóa API.",
+  'settings.secretGuardDesc': "Commit, Push và Tạo PR trên trang Git, cùng việc nhận việc từ tác vụ, sẽ từ chối thay đổi có thêm tệp .env, khóa riêng tư hoặc khóa API.",
 } as const;

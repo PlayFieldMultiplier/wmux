@@ -8,7 +8,7 @@ import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
 import type { FactoryBotRow } from '../../Room/factoryPorts';
 import { timelineKey, ALL_THREADS } from '../../../stores/slices/roomSlice';
 import {
-  awaitsApproval, botConversationCards, botWorkScope, botWorkers, buildBots, botsNeedsYou, botsRooms, conversationCards, greetingCardIds, isBotSystemCard,
+  awaitsApproval, botConversationCards, botWorkScope, botWorkerTree, botWorkers, buildBots, botsNeedsYou, botsRooms, conversationCards, greetingCardIds, isBotSystemCard,
   livePlanIds, openApprovalsBy, openQuestionsBy, roomCardsByWorkspace, roomEntries, taskBubbles,
   type BotsInput,
 } from '../botsModel';
@@ -37,10 +37,9 @@ const BOTS = [botRow(MOA, 'moa', 'hq', 1), botRow(LEAD, 'lead', 'w1', 2), botRow
 function input(over: Partial<BotsInput> = {}): BotsInput {
   return {
     bots: BOTS,
-    hqWorkspaceId: 'hq',
     cards: new Map(),
     threads: {},
-    fanoutOrigin: {},
+    botTaskOf: {},
     workerClass: {},
     workspaceName: (id) => ({ hq: 'HQ', w1: 'api', t1: 'wtask: fix', t2: 'wtask: docs', t3: 'wtask: old' } as Record<string, string>)[id] ?? null,
     ...over,
@@ -103,20 +102,13 @@ describe('conversationCards', () => {
 });
 
 describe('botWorkers', () => {
-  it('lists running and waiting workers of that bot; finished, idle, closed and other origins leave', () => {
-    const origins = {
-      t1: { kind: 'bot' as const, botId: LEAD },
-      t2: { kind: 'bot' as const, botId: LEAD },
-      t3: { kind: 'bot' as const, botId: LEAD },
-      t4: { kind: 'bot' as const, botId: LEAD },
-      t5: { kind: 'bot' as const, botId: VERIFIER },
-      t6: { kind: 'gui' as const },
-    };
+  it('lists running and waiting workers of that bot; finished, idle, closed and other bots\' leave', () => {
+    const owners = { t1: LEAD, t2: LEAD, t3: LEAD, t4: LEAD, t5: VERIFIER };
     const classes = { t1: 'running', t2: 'needsYou', t3: 'finished', t5: 'running', t6: 'running' } as const;
-    const ws = botWorkers(LEAD, origins, classes, (id) => ({ t1: 'b-fix', t2: 'a-docs' } as Record<string, string>)[id] ?? null);
+    const ws = botWorkers(LEAD, owners, classes, (id) => ({ t1: 'b-fix', t2: 'a-docs' } as Record<string, string>)[id] ?? null);
     expect(ws.map((w) => [w.workspaceId, w.cls, w.waiting])).toEqual([['t2', 'needsYou', true], ['t1', 'running', false]]);
     // An error waits on the owner too (Fleet counts it under Needs you).
-    expect(botWorkers(LEAD, { t1: origins.t1 }, { t1: 'error' }, () => null)[0].waiting).toBe(true);
+    expect(botWorkers(LEAD, { t1: LEAD }, { t1: 'error' }, () => null)[0].waiting).toBe(true);
   });
 });
 
@@ -144,10 +136,60 @@ describe('botWorkers from the bot\'s tasks', () => {
     ]);
   });
 
+  it('the list\'s tree: live workers, then ended tasks whose workspace is open (newest first); a cleared one drops off', () => {
+    const tasks = [
+      view('a', 't1', 'working'),
+      view('b', 't2', 'coded', { updatedAt: 5, worker: 'resumable' }),
+      view('c', 't3', 'closed', { updatedAt: 9, stage: 'failed' }),
+      view('d', 'gone', 'closed', { updatedAt: 10 }),
+      view('e', 't4', 'closed', { botId: VERIFIER }),
+    ];
+    const live = botWorkers(LEAD, { t5: LEAD }, { t1: 'running', t5: 'error' }, names, tasks);
+    const tree = botWorkerTree(LEAD, live, tasks, names);
+    expect(tree.map((r) => [r.workspaceId, r.title, r.state, r.resumable])).toEqual([
+      ['t1', 'task a', 'running', false],
+      ['t5', 'wtask: t5', 'error', false],
+      ['t3', 'task c', 'failed', false],
+      ['t2', 'task b', 'done', true],
+    ]);
+  });
+
+  it('a done task\'s pane whose agent still reads running is done, not a live worker (one state for row, panel and chat)', () => {
+    const tasks = [view('a', 't1', 'coded', { status: 'review_requested' })];
+    const live = botWorkers(LEAD, { t1: LEAD }, { t1: 'running' }, names, tasks);
+    expect(live).toEqual([]);
+    expect(botWorkerTree(LEAD, live, tasks, names).map((r) => [r.workspaceId, r.state])).toEqual([['t1', 'done']]);
+  });
+
+  it('every open workspace the bot\'s fan-out made is listed, even one whose task is older than the task list', () => {
+    // t3's task is not in the bot's (newest-first, capped) task list; its worker failed and waits to be seen.
+    const tree = botWorkerTree(LEAD, [], [], names, { t3: LEAD, t4: VERIFIER, gone: LEAD }, { t3: 'idle' });
+    expect(tree.map((r) => [r.workspaceId, r.state])).toEqual([['t3', 'done']]);
+    expect(botWorkerTree(LEAD, [], [], names, { t3: LEAD }, { t3: 'error' })[0].state).toBe('error');
+  });
+
+  it('a resumed worker of an ended task is live while its pane\'s agent runs, done once it stops', () => {
+    const tasks = [view('a', 't1', 'coded', { worker: 'resumed', workerWorkspaceId: 't2' })];
+    expect(botWorkers(LEAD, {}, { t2: 'needsYou' }, names, tasks).map((w) => [w.workspaceId, w.waiting])).toEqual([['t2', true]]);
+    const stopped = botWorkers(LEAD, {}, { t2: 'idle' }, names, tasks);
+    expect(stopped).toEqual([]);
+    expect(botWorkerTree(LEAD, stopped, tasks, names).map((r) => [r.workspaceId, r.state])).toEqual([['t2', 'done']]);
+  });
+
   it('a task workspace already listed from its task is not listed again from its origin', () => {
-    const origins = { t1: { kind: 'bot' as const, botId: LEAD }, t2: { kind: 'bot' as const, botId: LEAD } };
-    const ws = botWorkers(LEAD, origins, { t1: 'running', t2: 'needsYou' }, names, [view('a', 't1', 'working')]);
+    const ws = botWorkers(LEAD, { t1: LEAD, t2: LEAD }, { t1: 'running', t2: 'needsYou' }, names, [view('a', 't1', 'working')]);
     expect(ws.map((w) => [w.workspaceId, w.taskId ?? null])).toEqual([['t1', 'a'], ['t2', null]]);
+  });
+
+  it('a bot\'s row previews its newest message, never a system line about it, which still orders the list', () => {
+    const said = card({ workspaceId: 'w1', actor: bot('w1', LEAD), title: 'Built it', at: 2000 });
+    const relay = card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', title: 'result → Lead: Built it', refs: { botId: LEAD }, at: 2100 });
+    const row = buildBots(input({ cards: new Map([['w1', [said, relay]]]) })).conversations.find((c) => c.id === `bot:${LEAD}`)!;
+    expect(row.last?.id).toBe(said.id);
+    expect(row.lastAt).toBe(2100);
+    // Only system lines: no preview yet.
+    const quiet = buildBots(input({ cards: new Map([['w1', [relay]]]) })).conversations.find((c) => c.id === `bot:${LEAD}`)!;
+    expect(quiet.last).toBeNull();
   });
 
   it('a waiting task counts on its bot\'s row, and its room lists the room\'s bots\' workers', () => {
@@ -209,7 +251,7 @@ describe('greetingCardIds and roomEntries', () => {
 });
 
 describe('buildBots', () => {
-  it('pins the HQ room first, then rooms and bots by latest activity', () => {
+  it('orders rooms and bots by latest activity; the old HQ room is not pinned', () => {
     const cards = new Map<string, RoomCard[]>([
       ['hq', [card({ workspaceId: 'hq', actor: bot('hq', MOA), at: 100 })]],
       ['w1', [
@@ -219,18 +261,18 @@ describe('buildBots', () => {
     ]);
     const m = buildBots(input({ cards }));
     expect(m.conversations.map((c) => c.id)).toEqual([
-      'room:hq', // pinned, though its newest card is the oldest
       `bot:${LEAD}`, // 900 — ties break by id
       'room:w1', // 900
       `bot:${VERIFIER}`, // 500
       `bot:${MOA}`, // 100
+      'room:hq', // 100
     ]);
     const room = m.conversations.find((c) => c.id === 'room:w1');
     expect(room?.kind === 'room' && room.bots.map((b) => b.bot.id)).toEqual([LEAD, VERIFIER]);
   });
 
   it('a bot with no message yet sorts by its creation', () => {
-    const m = buildBots(input({ bots: [botRow(LEAD, 'lead', 'w1', 5000)], hqWorkspaceId: null }));
+    const m = buildBots(input({ bots: [botRow(LEAD, 'lead', 'w1', 5000)] }));
     expect(m.conversations.map((c) => [c.id, c.lastAt])).toEqual([[`bot:${LEAD}`, 5000], ['room:w1', 0]]);
   });
 
@@ -242,7 +284,7 @@ describe('buildBots', () => {
     ]]]);
     const m = buildBots(input({
       cards,
-      fanoutOrigin: { t1: { kind: 'bot', botId: LEAD }, t2: { kind: 'bot', botId: LEAD } },
+      botTaskOf: { t1: LEAD, t2: LEAD },
       workerClass: { t1: 'needsYou', t2: 'running' },
     }));
     const row = (id: string) => m.conversations.find((c) => c.id === id);
@@ -296,7 +338,7 @@ describe('buildBots', () => {
 
   it('read-only (bots paused): the rows are kept, nothing is counted', () => {
     const cards = new Map<string, RoomCard[]>([['w1', [card({ workspaceId: 'w1', actor: bot('w1', LEAD), kind: 'question', state: 'open' })]]]);
-    const m = buildBots(input({ cards, readOnly: true, fanoutOrigin: { t1: { kind: 'bot', botId: LEAD } }, workerClass: { t1: 'needsYou' } }));
+    const m = buildBots(input({ cards, readOnly: true, botTaskOf: { t1: LEAD }, workerClass: { t1: 'needsYou' } }));
     const lead = m.conversations.find((c) => c.id === `bot:${LEAD}`);
     expect(lead?.kind === 'bot' && lead.workers.length).toBe(1);
     expect(lead?.needsYou).toBe(0);
@@ -312,10 +354,10 @@ describe('buildBots', () => {
     expect(botConversationCards(new Map([['hq', [hello]], ['w1', [fromW1]]]), MOA).map((c) => c.id)).toEqual([hello.id, fromW1.id]);
   });
 
-  it('botsRooms: HQ first, then each bot workspace once', () => {
-    expect(botsRooms(BOTS, 'hq')).toEqual(['hq', 'w1']);
-    expect(botsRooms(BOTS, null)).toEqual(['hq', 'w1']);
-    expect(botsRooms([], 'hq')).toEqual(['hq']);
+  it('botsRooms: each bot workspace once; with no bot there is no room (no pre-made HQ)', () => {
+    expect(botsRooms(BOTS)).toEqual(['hq', 'w1']);
+    expect(botsRooms([])).toEqual([]);
+    expect(buildBots(input({ bots: [] })).conversations).toEqual([]);
   });
 });
 

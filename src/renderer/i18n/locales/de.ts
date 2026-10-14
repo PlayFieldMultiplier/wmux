@@ -6,6 +6,7 @@ export const de = {
   'sidebar.workspaces': 'Arbeitsbereiche',
   'sidebar.newWorkspace': 'Neuer Arbeitsbereich',
   'sidebar.newWorkspaceTooltip': 'Neuer Arbeitsbereich (Strg+N)',
+  'sidebar.newRemoteWorkspace': 'Neuer Arbeitsbereich auf {name}',
   'sidebar.hideTooltip': 'Seitenleiste ausblenden (Strg+B)',
   'sidebar.expandTooltip': 'Seitenleiste einblenden (Strg+B)',
   'sidebar.unreadCount': '{count} ungelesen',
@@ -653,5 +654,5 @@ export const de = {
   'git.secret.scanFailed': "wmux konnte diese Änderung nicht lesen, um sie auf Passwörter und Schlüssel zu prüfen, daher wurde sie nicht hochgeladen. Versuchen Sie es erneut; falls es weiter fehlschlägt, lässt sich die Prüfung unter Einstellungen › Allgemein ausschalten.",
   'git.secret.more': "(und {count} weitere)",
   'settings.secretGuard': "Passwörter und Schlüssel in Commits, Pushes und PRs blockieren",
-  'settings.secretGuardDesc': "Commit, Push und PR erstellen auf der Git-Seite, das Übernehmen einer Aufgabe und Moas Auslieferung lehnen eine Änderung ab, die eine .env-Datei, einen privaten Schlüssel oder einen API-Schlüssel hinzufügt.",
+  'settings.secretGuardDesc': "Commit, Push und PR erstellen auf der Git-Seite sowie das Übernehmen einer Aufgabe lehnen eine Änderung ab, die eine .env-Datei, einen privaten Schlüssel oder einen API-Schlüssel hinzufügt.",
 } as const;

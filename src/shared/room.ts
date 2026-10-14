@@ -120,6 +120,10 @@ export interface RoomCard {
     threadId?: ThreadId;
     /** `routine` card: the routine (shared/botRoutine.ts). */
     routineId?: string;
+    /** Main-written, on the hop that opens a coordinator's thread for the
+     *  owner's request: that request's own card (in General), whose words
+     *  name the thread. */
+    requestCardId?: string;
     /** `secret_request` card: the env name asked for (never a value). */
     secretName?: string;
   };

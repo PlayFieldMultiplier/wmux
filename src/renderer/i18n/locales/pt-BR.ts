@@ -6,6 +6,7 @@ export const ptBR = {
   'sidebar.workspaces': 'Espaços de trabalho',
   'sidebar.newWorkspace': 'Novo espaço de trabalho',
   'sidebar.newWorkspaceTooltip': 'Novo espaço de trabalho (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Novo workspace em {name}',
   'sidebar.hideTooltip': 'Ocultar barra lateral (Ctrl+B)',
   'sidebar.expandTooltip': 'Expandir barra lateral (Ctrl+B)',
   'sidebar.unreadCount': '{count} não lido(s)',
@@ -657,5 +658,5 @@ export const ptBR = {
   'git.secret.scanFailed': "O wmux não conseguiu ler esta alteração para verificar senhas e chaves, então ela não foi enviada. Tente de novo; se continuar falhando, a verificação pode ser desligada em Configurações › Geral.",
   'git.secret.more': "(e mais {count})",
   'settings.secretGuard': "Bloquear senhas e chaves em commits, pushes e PRs",
-  'settings.secretGuardDesc': "Commit, Push e Criar PR na página Git, adotar uma tarefa e a entrega do Moa recusam uma alteração que adiciona um arquivo .env, uma chave privada ou uma chave de API.",
+  'settings.secretGuardDesc': "Commit, Push e Criar PR na página Git, e adotar uma tarefa, recusam uma alteração que adiciona um arquivo .env, uma chave privada ou uma chave de API.",
 } as const;

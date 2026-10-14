@@ -25,6 +25,7 @@ import {
 } from '../../daemon/util/atomicWrite';
 import { importLegacyMoaHandoffs } from './handoffRouter';
 import { migrateLegacyMoa } from './legacyMigration';
+import { removeUntouchedLegacyBots } from './legacyBotCleanup';
 
 export interface FactoryMigrationContext {
   /** getWmuxDir() */
@@ -32,6 +33,9 @@ export interface FactoryMigrationContext {
   /** `<wmuxDir>/factory`, created before the first step runs. */
   factoryDir: string;
   now: number;
+  /** The `migratedAt` of the marker this run started from (the clock of the
+   *  run that wrote it), when it has one. */
+  previousMigratedAt?: number;
   /** Human-readable notes a step leaves for the log. */
   notes: string[];
 }
@@ -51,14 +55,30 @@ export const FACTORY_MIGRATION_STEPS: readonly FactoryMigrationStep[] = [
       return ctx;
     },
   },
-  // Moa's settings (deck-hq.json) become factory/settings.json and, when Moa
-  // was on, the HQ moa bot; a workspace whose brain was on gets a lead bot
-  // that is not enabled (legacyMigration.ts). Legacy files stay.
+  // Moa's settings (deck-hq.json) become factory/settings.json, with the
+  // factory off and no bots (legacyMigration.ts). Legacy files stay.
   {
     fromVersion: 1,
     toVersion: 2,
     migrate: (ctx) => {
       migrateLegacyMoa(ctx);
+      return ctx;
+    },
+  },
+  // The Moa and Lead bots an earlier build of step 1 → 2 made are removed
+  // when the owner never dealt with them (legacyBotCleanup.ts). A failure
+  // removes nothing more, leaves a note and still reaches version 3: a
+  // cleanup that cannot run must not keep the factory from starting, and
+  // what it would remove is optional.
+  {
+    fromVersion: 2,
+    toVersion: 3,
+    migrate: (ctx) => {
+      try {
+        removeUntouchedLegacyBots(ctx);
+      } catch (err) {
+        ctx.notes.push(`the Moa-era bot cleanup failed; no bots were removed (${err instanceof Error ? err.message : String(err)})`);
+      }
       return ctx;
     },
   },
@@ -77,14 +97,21 @@ export function factoryMigrationMarkerPath(wmuxDir: string): string {
 /** The recorded version: 0 when the marker is missing; throws on a marker
  *  that is not a non-negative integer version (never guesses). */
 export function readFactoryMigrationVersion(wmuxDir: string): number {
+  return readFactoryMigrationMarker(wmuxDir).version;
+}
+
+/** The marker's version (as readFactoryMigrationVersion) and, when it holds
+ *  a number there, its `migratedAt`. */
+export function readFactoryMigrationMarker(wmuxDir: string): { version: number; migratedAt?: number } {
   const file = factoryMigrationMarkerPath(wmuxDir);
-  if (!fs.existsSync(file)) return 0;
+  if (!fs.existsSync(file)) return { version: 0 };
   const raw = atomicReadJSONSync<unknown>(file);
   const version = raw && typeof raw === 'object' ? (raw as { version?: unknown }).version : undefined;
   if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) {
     throw new Error(`factory migration marker ${file} is unreadable`);
   }
-  return version;
+  const at = (raw as { migratedAt?: unknown }).migratedAt;
+  return typeof at === 'number' && Number.isFinite(at) ? { version, migratedAt: at } : { version };
 }
 
 export interface FactoryMigrationResult {
@@ -101,11 +128,18 @@ export function runFactoryMigrations(
   opts: { steps?: readonly FactoryMigrationStep[]; now?: number } = {},
 ): FactoryMigrationResult {
   const registry = factoryMigrationRegistry(opts.steps);
-  const from = readFactoryMigrationVersion(wmuxDir);
+  const marker = readFactoryMigrationMarker(wmuxDir);
+  const from = marker.version;
   if (from >= registry.currentVersion) return { from, to: from, notes: [] };
   const factoryDir = path.join(wmuxDir, 'factory');
   fs.mkdirSync(factoryDir, { recursive: true });
-  const ctx: FactoryMigrationContext = { wmuxDir, factoryDir, now: opts.now ?? Date.now(), notes: [] };
+  const ctx: FactoryMigrationContext = {
+    wmuxDir,
+    factoryDir,
+    now: opts.now ?? Date.now(),
+    ...(marker.migratedAt !== undefined ? { previousMigratedAt: marker.migratedAt } : {}),
+    notes: [],
+  };
   const { data, version } = applyMigrations<FactoryMigrationContext>(ctx, from, registry);
   atomicWriteJSONSync(factoryMigrationMarkerPath(wmuxDir), { version, migratedAt: ctx.now });
   return { from, to: version, notes: data.notes };

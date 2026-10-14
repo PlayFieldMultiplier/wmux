@@ -56,6 +56,27 @@ export interface Handoff {
    *  (RunningWake.ownerCardId); the question card replies to it when it is
    *  raised in that card's thread. Main-written. */
   ownerCardId?: string;
+  /** ask_person: the handoff the asking bot was working on (a dispatch it
+   *  had not answered yet). The answer's wake answers that hop: a result sent
+   *  from it, with no replyTo, is that hop's result. Main-written. */
+  forHop?: string;
+  /** dispatch: the bots that take the work after the addressee, in order
+   *  (a relay). Named by a coordinator only; see HandoffSendParams.next. */
+  next?: string[];
+  /** A dispatch wmux sent on for a relay: it carries the previous bot's
+   *  result to the next bot, in the coordinator's name. Main-written. */
+  relay?: true;
+  /** A relay's result the relay could not pass on: why, as the coordinator
+   *  reads it in the wake that brings it the result. Main-written. */
+  relayStopped?: string;
+  /** The coordinator's wake for a stopped relay is on disk. Main-written. */
+  relayStopTold?: true;
+  /** dispatch: the router opened its thread (a coordinator's parentless
+   *  dispatch said in General). Main-written. */
+  opensThread?: true;
+  /** result / refusal: the General card pointing at its thread is written.
+   *  Main-written. */
+  pointed?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -65,7 +86,7 @@ export interface Handoff {
  *  message at most in the reference conversation). The first hops of an
  *  owner's run — bots woken by the owner's message speaking to other bots —
  *  never meet MAX_PER_RUN; they count toward it for the hops after them. */
-export const HANDOFF_LIMITS = { MAX_DEPTH: 6, MAX_PER_RUN: 32, ASK_PERSON_TTL_MS: 7 * 24 * 3600_000 } as const;
+export const HANDOFF_LIMITS = { MAX_DEPTH: 6, MAX_PER_RUN: 32, ASK_PERSON_TTL_MS: 7 * 24 * 3600_000, MAX_RELAY: 4 } as const;
 
 export const HANDOFF_RPC = { send: 'handoff.send', answer: 'handoff.answer', list: 'handoff.list' } as const;
 
@@ -75,7 +96,8 @@ export const ASK_PERSON_RPC = 'ask.person' as const;
 /** `handoff.send` — a bot sends a dispatch / result / refusal / message. The
  *  sender is the caller's binding; the addressee is decided by the router:
  *  `toBotId` names one bot in any workspace (messaging is every bot's);
- *  else dispatch → `toWorkspaceId`'s enabled lead, result / refusal → the
+ *  else dispatch → `toWorkspaceId`'s enabled lead (its coordinator, else its
+ *  `lead`-role bot), result / refusal → the
  *  `replyTo` handoff's sender (at most one per `replyTo`). `message` needs
  *  `toBotId`. Without a threadId the handoff stays in the parent's thread,
  *  else the running wake's. */
@@ -91,6 +113,15 @@ export interface HandoffSendParams {
   refs?: FactRef;
   /** Idempotency key; default `wake:<wakeId>:h<n>` from the running wake. */
   clientHandoffId?: string;
+  /** dispatch, coordinator only: the bots (ids, at most
+   *  HANDOFF_LIMITS.MAX_RELAY, each an enabled bot of the sender's
+   *  workspace, none twice, never the sender or the addressee) that take
+   *  the work after the addressee, in order. The router walks the relay:
+   *  each bot's `result` goes to the coordinator's thread as a card and on
+   *  to the next bot as a dispatch wmux sends in the coordinator's name; the
+   *  coordinator is woken once, with the last result (or when the relay
+   *  stops: a refusal, a bot no longer enabled, a limit). */
+  next?: string[];
 }
 
 /** `ask.person` — a bot asks the owner; lands as a question card in the

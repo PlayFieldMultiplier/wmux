@@ -62,6 +62,7 @@ import { HUMAN_WORKSPACE_ID } from '../../../shared/channels';
 import { sendToRenderer } from './_bridge';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
 import { git as runGit, type GitResult } from '../../git/git';
+import { workerGitPreflight } from '../../worktask/workerGit';
 import { hostCwdForPane } from '../../pty/wslCallerCwd';
 import { getExecEnv } from '../../../shared/execEnv';
 import { metaDirForWorktree } from '../../worktask/TaskWorktreeManager';
@@ -883,14 +884,19 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     if (blocked) return blocked;
     const target = await resolveReadCwd(params, ctx);
     if ('code' in target) return deny(target.code, target.message);
-    const res = await exec('git', ['status', '--porcelain=v1', '--branch', '-z'], target.cwd);
+    // The repository may be an agent's worktree, the caller's own included: a
+    // config naming a content filter is refused before a status read could
+    // run it (worktask/workerGit.ts), and submodules are not entered.
+    const pre = await workerGitPreflight((args) => exec('git', args, target.cwd), 'read');
+    const where = target.taskId !== undefined
+      ? { target: 'task' as const, taskId: target.taskId, worktreePath: target.cwd }
+      : { target: 'caller-repo' as const, repoRoot: target.cwd };
+    if (!pre.ok) return { ok: false as const, ...where, reason: 'git-failed' as const, error: pre.error };
+    const res = await exec('git', ['status', '--porcelain=v1', '--branch', '-z', '--ignore-submodules=all'], target.cwd);
     // `target` says WHICH repository answered, in one field that is always
     // present — a caller mixing task reads and own-repo reads should not have
     // to infer it from which of two optional keys came back, and an omitted
     // task id must never be readable as "this is the task".
-    const where = target.taskId !== undefined
-      ? { target: 'task' as const, taskId: target.taskId, worktreePath: target.cwd }
-      : { target: 'caller-repo' as const, repoRoot: target.cwd };
     if (res.code !== 0) {
       return { ok: false as const, ...where, reason: 'git-failed' as const, error: res.stderr.trim() };
     }

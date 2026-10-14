@@ -100,8 +100,9 @@ export interface FactoryRoomPorts {
   currentWake?: (botId: string) => RunningWake | null;
 }
 
-/** `handoffId`: the handoff the wake delivers (a handoff or a mention);
- *  `runId`: the owner message's run (a human wake), so the handoffs the bot
+/** `handoffId`: the handoff the wake delivers (a handoff or a mention), or
+ *  for a task wake the one its tasks were started for (every task of the
+ *  wake, LedgerDispatch.handoffId); `runId`: the owner message's run (a human wake), so the handoffs the bot
  *  sends in that turn join it. */
 export interface RunningWake {
   wakeId: string; attempt: number; handoffId?: string; runId?: string;
@@ -339,7 +340,7 @@ export function sanitizeParty(value: unknown): Party | null {
 
 const REF_STRING_KEYS = [
   'taskId', 'botId', 'handoffId', 'check', 'ptyId', 'label', 'scheduleId', 'method', 'messageId', 'factId', 'decisionId',
-  'approvalId', 'routineId',
+  'approvalId', 'routineId', 'requestCardId',
 ] as const;
 
 /** The refs a card may carry: known keys with the right types only. */
@@ -948,9 +949,11 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       if (p.mention === true) return null;
       return {
         workspaces: [...new Set(workspaces)], threadId, kind: 'fact',
-        title: kind === 'answer' ? `Answered → ${to}: ${title}` : `${kind || 'handoff'} → ${to}: ${title}`,
+        title: kind === 'answer' ? `Answered → ${to}: ${title}`
+          : p.relay === true ? `${kind || 'handoff'} → ${to}: ${title} (forwarded by wmux)`
+          : `${kind || 'handoff'} → ${to}: ${title}`,
         ...(kind === 'answer' ? { body: capBody(p.answer, 1000) } : {}),
-        refs: baseRefs,
+        refs: { ...baseRefs, ...(str(p.requestCardId) ? { requestCardId: str(p.requestCardId) } : {}) },
       };
     }
     case 'task.done':

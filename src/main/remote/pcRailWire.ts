@@ -20,6 +20,8 @@ export interface PcRailHostInfo {
   allowInput?: boolean;
   /** How this desktop's credential for the host was issued; absent when unknown. */
   tokenKind?: PcRailTokenKind;
+  /** This desktop may open a new workspace on the host (its `+`). Absent otherwise. */
+  canCreateWorkspace?: true;
 }
 
 export type PcRailFeedEvent =

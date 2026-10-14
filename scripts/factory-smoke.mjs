@@ -57,6 +57,7 @@ const CLAIM_DIR = path.join(os.homedir(), '.cache', 'wmux-cdp');
 const STUB = path.join(REPO_ROOT, 'scripts', 'acp-stub.mjs');
 const FAKE_GH = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'fake-gh.mjs');
 const FAKE_CLAUDE = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'fake-claude.mjs');
+const FAKE_CODEX = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'fake-codex.mjs');
 const MCP_BUNDLE = path.join(REPO_ROOT, 'dist', 'mcp-bundle', 'index.js');
 const ELECTRON = process.platform === 'darwin'
   ? path.join(REPO_ROOT, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron')
@@ -233,7 +234,10 @@ function prepare(ctx) {
     'exit 128',
   ].join('\n'));
   sh(path.join(bin, 'gh'), `exec "${NODE}" "${FAKE_GH}" "$@"`);
-  if ((sc.model ?? 'stub') !== 'real') sh(path.join(bin, 'claude'), `exec "${NODE}" "${FAKE_CLAUDE}" "$@"`);
+  if ((sc.model ?? 'stub') !== 'real') {
+    sh(path.join(bin, 'claude'), `exec "${NODE}" "${FAKE_CLAUDE}" "$@"`);
+    sh(path.join(bin, 'codex'), `exec "${NODE}" "${FAKE_CODEX}" "$@"`);
+  }
   if (sc.setup?.repo) makeRepo(ctx);
   ctx.vars = {
     repoKey: REPO_KEY,

@@ -41,10 +41,13 @@
   border-radius: 10px;
 }
 
+/* The list is the Workspaces sidebar's column (owner decision 2026-10-14,
+   layout A): 264px on --bg-mantle, meeting the body at one --stroke seam;
+   its rows inset 8px with the sidebar's padding and 10px radius. */
 .wmux-bots-list {
   display: flex;
   flex-direction: column;
-  width: 320px;
+  width: 264px;
   flex-shrink: 0;
   min-height: 0;
   background: var(--bg-mantle);
@@ -54,7 +57,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 52px;
+  height: 44px;
   flex-shrink: 0;
   padding: 0 10px 0 16px;
 }
@@ -83,13 +86,61 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 56px;
-  padding: 8px;
+  padding: 8px 10px;
   border-radius: 10px;
   text-align: left;
 }
 .wmux-bots-row-button:hover { background: var(--hover-fill); }
 .wmux-bots-row-button.is-selected { background: var(--selection); box-shadow: var(--select-ring, none); }
+
+/* A bot's workers nest under its row as the Sidebar nests a workspace's
+   tasks (owner decision 2026-10-14): the fold toggle ("N" and a chevron)
+   inside the row's right edge, under its time; the rows indented on a
+   hairline guide under the avatar, each a status mark, the fan-out mark and
+   the title, and the branch with its diff counts under it. The open
+   conversation is one group — its row and its workers in one rounded
+   --selection fill, nothing boxed inside it (the Sidebar's selected
+   workspace); the worker shown in the panel reads in the title weight. */
+.wmux-bots-entry { border-radius: 10px; }
+.wmux-bots-entry + .wmux-bots-entry { margin-top: 2px; }
+.wmux-bots-entry.is-open { background: var(--selection); box-shadow: var(--select-ring, none); }
+.wmux-bots-entry.is-open .wmux-bots-row-button,
+.wmux-bots-entry.is-open .wmux-bots-row-button:hover { background: transparent; }
+.wmux-bots-entry.is-open .wmux-bots-row-button:not(:focus-visible) { box-shadow: none; }
+.wmux-bots-row-wrap { position: relative; min-width: 0; }
+.wmux-bots-tree-toggle {
+  position: absolute;
+  right: 6px;
+  bottom: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wmux-bots-tree-toggle:hover { background: var(--hover-fill); color: var(--text-main); }
+.wmux-bots-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 0 26px;
+  padding: 0 0 6px 8px;
+  border-left: 1px solid var(--stroke);
+}
+.wmux-bots-tree-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+.wmux-bots-tree-row:hover { background: var(--hover-fill); }
 
 .wmux-bots-badge {
   display: inline-flex;
@@ -108,6 +159,25 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A conversation's unread messages: a neutral count (needs you, orange,
+   wins over it). */
+.wmux-bots-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--selection-emphasis);
+  color: var(--text-main);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 .wmux-bots-chat {
   position: relative;
   display: flex;
@@ -116,24 +186,26 @@
   min-width: 0;
   min-height: 0;
 }
+/* The chat's 44px header row, level with the list's and the panel's (no
+   rule under it): the name pill centred, the narrow layout's back button
+   on the left. */
 .wmux-bots-chat-head {
-  position: absolute;
-  top: 10px;
-  left: 16px;
-  right: 16px;
-  z-index: 2;
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  pointer-events: none;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0 16px;
 }
-.wmux-bots-chat-head > * { pointer-events: auto; }
+.wmux-bots-chat-head > .wmux-bots-back { position: absolute; left: 16px; }
 .wmux-bots-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   max-width: min(420px, 100%);
-  height: 32px;
+  height: 30px;
   padding: 0 12px 0 6px;
   border: 1px solid var(--line);
   border-radius: 9999px;
@@ -159,7 +231,7 @@
 .wmux-bots-profile {
   position: absolute;
   top: 48px;
-  left: 16px;
+  left: max(16px, calc((100% - 44rem) / 2));
   z-index: 3;
   width: min(360px, calc(100% - 32px));
   max-height: calc(100% - 64px);
@@ -176,57 +248,333 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 64px 20px 12px;
+  padding: 8px 20px 12px;
+}
+/* The conversation's column: capped at 44rem and centred, so a wide window
+   does not spread the messages edge to edge. */
+.wmux-bots-column { width: 100%; max-width: 44rem; margin: 0 auto; }
+/* With a side panel open the chat is narrow already: the column fills it. */
+.wmux-bots-chat-area[data-worker-open] .wmux-bots-column { max-width: none; }
+/* A question or greeting card reads in the bubbles' type. */
+.wmux-bots-msg [data-card-body] { font-size: 14px; line-height: 1.45; }
+.wmux-bots-scroll-wrap { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.wmux-bots-foot { flex-shrink: 0; }
+
+/* Messages are bubbles in runs (owner decision 2026-10-14, the reference
+   messenger's look): a bot's on the left — its name above the run's first
+   bubble, its avatar once, beside the run's last — the owner's on the
+   right. A bubble is a soft fill with no border; runs sit 10px apart, a
+   run's bubbles 2px. */
+.wmux-bots-msg {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 12px;
+}
+.wmux-bots-msg.is-continuation { padding-top: 4px; }
+.wmux-bots-msg.is-owner { justify-content: flex-end; }
+.wmux-bots-msg-gutter { width: 28px; flex-shrink: 0; }
+.wmux-bots-msg-gutter:empty { height: 1px; }
+.wmux-bots-msg-main {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  /* Nothing shows beside or under the name pill's row (it ends at 42px):
-     the messages are hidden there and fade in just below it. */
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 46px, #000 64px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 46px, #000 64px);
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 78%;
 }
+.wmux-bots-msg.is-owner .wmux-bots-msg-main { align-items: flex-end; }
+.wmux-bots-msg-head {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 12px 2px;
+  font-size: 12px;
+  font-weight: var(--title-weight, 500);
+}
+.wmux-bots-bubble {
+  max-width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 18px;
+}
+.wmux-bots-bubble-bot { background: var(--selection-subtle); }
+.wmux-bots-bubble-owner { background: color-mix(in srgb, var(--text-main) 10%, transparent); }
+.wmux-bots-prose {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+.wmux-bots-prose > :first-child { margin-top: 0; }
+.wmux-bots-prose > :last-child { margin-bottom: 0; }
+/* A card that waits on the owner stays a distinct card inside the run: the
+   needs-you hairline, no fill (one boundary). */
+.wmux-bots-waiting {
+  width: min(28rem, 100%);
+  padding: 8px 12px;
+  border: 1px solid var(--attention-hairline);
+  border-radius: 14px;
+}
+/* A PR or issue link in a message: its mark, #N and its title. */
+.wmux-bots-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--chip-radius);
+  background: var(--selection);
+  font-size: 12px;
+  color: var(--text-main);
+  vertical-align: middle;
+}
+.wmux-bots-ref-chip:hover { background: var(--selection-hover); }
+.wmux-bots-thread-summary {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  margin-top: 4px;
+  padding: 0 8px;
+  border-radius: var(--chip-radius);
+  font-size: 12px;
+  color: var(--text-sub);
+}
+.wmux-bots-thread-summary:hover { background: var(--hover-fill); color: var(--text-main); }
+
 .wmux-bots-row { display: flex; min-width: 0; }
-.wmux-bots-row-bot { align-items: flex-start; gap: 8px; }
-.wmux-bots-row-bot > :last-child { max-width: min(640px, 80%); min-width: 0; }
-.wmux-bots-row-avatar { width: 24px; flex-shrink: 0; }
-.wmux-bots-row-owner { flex-direction: column; align-items: flex-end; }
 .wmux-bots-row-system {
   justify-content: center;
-  padding: 2px 24px;
+  padding: 6px 24px 2px;
   font-size: 11px;
   color: var(--text-muted);
 }
 .wmux-bots-system { min-width: 0; max-width: min(640px, 100%); text-align: center; }
+/* A line with evidence under it reads left, header, body and chip alike. */
+.wmux-bots-system.is-detailed { width: min(640px, 100%); text-align: left; }
 
-.wmux-bots-bubble {
-  padding: 8px 12px;
-  border-radius: 16px;
-  overflow-wrap: anywhere;
+/* The date and time between runs: centred and muted, the label alone. */
+.wmux-bots-day {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
-.wmux-bots-bubble-bot { background: var(--selection-subtle); border-radius: 16px; }
-/* A plan or proposal waiting on the owner: the needs-you hairline is the
-   bubble's boundary (as an open question's). */
-.wmux-bots-bubble-waits { border: 1px solid var(--attention-hairline); }
-.wmux-bots-bubble-owner {
-  max-width: min(560px, 75%);
-  background: color-mix(in srgb, var(--text-main) 10%, transparent);
-  color: var(--text-main);
-  font-size: 14px;
-  line-height: 1.5;
-  white-space: pre-wrap;
+/* What arrived since this conversation was last read (this session): a
+   muted label and one hairline. */
+.wmux-bots-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
-.wmux-bots-card { min-width: 0; }
-.wmux-bots-bubble-bot .wmux-bots-card,
-.wmux-bots-card.wmux-bots-bubble-bot { padding: 0; }
+.wmux-bots-new::after { content: ''; flex: 1; height: 1px; background: var(--stroke); }
+.wmux-bots-new-pill {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  background: var(--bg-base);
+  font-size: 12px;
+  color: var(--text-sub);
+}
+.wmux-bots-new-pill:hover { color: var(--text-main); }
+
+/* The working rail right above the composer: running turns, then workers. */
+.wmux-bots-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 28px 0;
+}
+.wmux-bots-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+}
+
+/* An empty 1:1's start. */
+.wmux-bots-intro { padding: 24px 8px 8px; }
+.wmux-bots-suggestion {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--chip-radius);
+  background: var(--selection);
+  font-size: 13px;
+  color: var(--text-sub);
+}
+.wmux-bots-suggestion:hover { background: var(--selection-hover); color: var(--text-main); }
 
 .wmux-bots-composer { flex-shrink: 0; padding: 4px 20px 16px; }
+/* The composer: one rounded pill — "+" on the left, the text, send on the
+   right — with its approve chip above and a room's @ chips under it. */
+.wmux-bots-composer-wrap { position: relative; display: flex; flex-direction: column; gap: 4px; }
+.wmux-bots-composer-pill {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 44px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--bg-base);
+}
+.wmux-bots-composer-pill:focus-within { border-color: var(--line-strong); }
+.wmux-bots-composer-plus,
+.wmux-bots-composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+}
+.wmux-bots-composer-plus { color: var(--text-sub); }
+.wmux-bots-composer-plus:hover:not(:disabled) { background: var(--hover-fill); color: var(--text-main); }
+.wmux-bots-composer-send { background: var(--primary-fill); color: var(--primary-ink); }
+.wmux-bots-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--primary-fill) 90%, transparent); }
+.wmux-bots-composer-send:disabled { background: var(--selection); color: var(--text-muted); }
+.wmux-bots-composer-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+  padding: 5px 4px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-main);
+  line-height: 1.4;
+  field-sizing: content;
+}
+.wmux-bots-composer-input::placeholder { color: var(--text-muted); }
+.wmux-bots-composer-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  width: min(320px, 100%);
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The chat and, when one is open, a side panel beside it — a worker's
+   terminal (BotsWorkerPanel) or a thread (BotsThreadPanel): one --stroke
+   seam on the panel's chat side, a 40px header, its body below. Under a
+   720px chat area the panel covers the chat instead; its Close returns to
+   it. */
+.wmux-bots-chat-area {
+  container-type: inline-size;
+  container-name: botschat;
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.wmux-bots-worker,
+.wmux-bots-side {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  /* The splitter sets the width (55% by default); the chat keeps 360px. */
+  width: 55%;
+  min-width: 320px;
+  max-width: calc(100% - 360px);
+  min-height: 0;
+  background: var(--bg-base);
+}
+/* The seam between the chat and its panel is the 6px drag handle's centre
+   line: one --stroke line, no other border on either side. */
+.wmux-bots-splitter {
+  position: relative;
+  flex-shrink: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.wmux-bots-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--stroke);
+}
+.wmux-bots-splitter:hover::after,
+.wmux-bots-splitter:focus-visible::after { background: var(--line-strong); }
+/* The worker panel only views the terminal: the pane's tab strip and its
+   split, browser and zoom controls stay on Workspaces. */
+.wmux-bots-worker-panes [data-pane-header] { display: none; }
+.wmux-bots-worker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0 8px 0 12px;
+}
+.wmux-bots-worker-body { position: relative; flex: 1; min-height: 0; }
+.wmux-bots-worker-panes { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.wmux-bots-side-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 8px 12px; }
+.wmux-bots-side-count { margin: 6px 0 0 46px; font-size: 11px; color: var(--text-muted); }
+@container botschat (max-width: 719px) {
+  .wmux-bots-worker,
+  .wmux-bots-side { position: absolute; inset: 0; z-index: 4; width: auto !important; min-width: 0; max-width: none; }
+  .wmux-bots-splitter { display: none; }
+}
 
 @container bots (max-width: 799px) {
   .wmux-bots-list { width: 100%; border-right: 0; }
   .wmux-bots[data-view='chat'] .wmux-bots-list { display: none; }
   .wmux-bots[data-view='list'] .wmux-bots-chat { display: none; }
+  .wmux-bots[data-view='list'] .wmux-bots-chat-area { display: none; }
   .wmux-bots-back { display: inline-flex; }
   .wmux-bots-messages { padding-left: 12px; padding-right: 12px; }
   .wmux-bots-composer { padding-left: 12px; padding-right: 12px; }
-  .wmux-bots-row-bot > :last-child { max-width: 88%; }
+  .wmux-bots-rail { padding-left: 20px; padding-right: 20px; }
 }
+
+/* A bot named in a message: its small mark and its name in its colour. */
+.wmux-bots-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 500;
+  vertical-align: -2px;
+}
+
+/* The splitter's drag guide: where the seam lands on release. */
+.wmux-bots-split-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 6;
+  width: 2px;
+  margin-right: -1px;
+  background: var(--line-strong);
+  pointer-events: none;
+}
+
+/* The worker panel draws no pane rings: no done blink, no notification ring
+   or flash, no glow. The worker's state is the panel header's words and its
+   row's mark in the list; Workspaces keeps its rings. */
+.wmux-bots-worker-panes .pane-complete-blink::after,
+.wmux-bots-worker-panes .notification-ring::before,
+.wmux-bots-worker-panes .pane-flash::after { display: none; }
+.wmux-bots-worker-panes .pane-ring-flash,
+.wmux-bots-worker-panes .pane-ring-glow { box-shadow: none; opacity: 1; border-color: transparent !important; border-style: none !important; }

@@ -1,5 +1,5 @@
 /**
- * Rooms — renderer state for the room dock (contract: shared/room.ts).
+ * Rooms — renderer state for the Bots page's rooms (contract: shared/room.ts).
  *
  *   main RoomWriter ──ROOM_EVENT──▶ useRoomSync ──▶ this slice ──▶ Room/*
  *                  ◀──room:read / room:threads (pages by seq)──┘
@@ -14,6 +14,7 @@ import type { StateCreator } from 'zustand';
 import type { StoreState } from '../index';
 import type { RoomCard, ThreadId, ThreadSummary } from '../../../shared/room';
 import type { BotRole } from '../../../shared/bot';
+import { isTerminalOnlyWorkspace } from './workspaceSlice';
 
 /** The timeline key for "every card of the room". */
 export const ALL_THREADS = '*' as const;
@@ -44,8 +45,6 @@ export interface RoomSlice {
   roomTimelines: Record<string, RoomTimeline>;
   /** The thread shown per workspace; absent = the whole room. */
   roomSelectedThread: Record<string, TimelineThread>;
-  /** Which room the dock shows while an HQ exists: the active workspace's or the HQ's. */
-  roomScope: 'workspace' | 'hq';
   /** The owner's read position per thread as main accepted it (key: timelineKey). */
   roomReadThrough: Record<string, number>;
   /** Pushes applied so far (a counter), and the count at which each card
@@ -64,9 +63,45 @@ export interface RoomSlice {
   /** A card main wrote or changed, with its thread's new summary. */
   applyRoomEvent: (payload: { workspaceId: string; card: RoomCard; threadSummary: ThreadSummary }) => void;
   selectRoomThread: (workspaceId: string, thread: TimelineThread) => void;
-  setRoomScope: (scope: 'workspace' | 'hq') => void;
   /** Record a read position; false when it would not move forward. */
   noteRoomRead: (workspaceId: string, threadId: ThreadId, seq: number) => boolean;
+  /** The bot worker whose terminal shows beside a Bots conversation, or
+   *  null. While the Bots page hosts it, the Workspaces viewport leaves that
+   *  workspace unmounted (selectWorkerPanelHost), so its terminal has one
+   *  mount; the active workspace never changes. */
+  botsWorkerPanel: BotsWorkerPanel | null;
+  setBotsWorkerPanel: (panel: BotsWorkerPanel | null) => void;
+  /** When each Bots conversation was last read to its newest card, this
+   *  session (memory only; absent: BOTS_SESSION_START). A list row counts
+   *  the bot messages after it as unread; a chat opened again marks the
+   *  first of them "New". */
+  botsSeenAt: Record<string, number>;
+  /** Move a conversation's read time forward (never back). */
+  markBotsSeen: (conversationId: string, at: number) => void;
+}
+
+/** Before this session nothing counts as unread on the Bots page: the read
+ *  position is not kept across restarts. */
+export const BOTS_SESSION_START = Date.now();
+
+export interface BotsWorkerPanel {
+  /** The worker's (task) workspace. */
+  workspaceId: string;
+  /** The Bots conversation it was opened from (Conversation.id). */
+  conversationId: string;
+}
+
+/** The workspace the Bots page hosts in its worker panel right now, else
+ *  null: only while Bots is the page, and only a terminal-only workspace.
+ *  Moving a workspace between the viewport and the panel remounts its panes
+ *  (terminals replay from the daemon), so one holding a browser or an editor
+ *  stays in the viewport, as cold-park leaves it (its state has no replay).
+ *  Pure. */
+export function selectWorkerPanelHost(s: Pick<StoreState, 'appRoute' | 'botsWorkerPanel' | 'workspaces'>): string | null {
+  const id = s.appRoute === 'bots' ? s.botsWorkerPanel?.workspaceId : undefined;
+  if (!id) return null;
+  const ws = s.workspaces.find((w) => w.id === id);
+  return ws && isTerminalOnlyWorkspace(ws) ? id : null;
 }
 
 export function timelineKey(workspaceId: string, thread: TimelineThread): string {
@@ -107,11 +142,12 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
   roomThreads: {},
   roomTimelines: {},
   roomSelectedThread: {},
-  roomScope: 'workspace',
   roomReadThrough: {},
   roomPushCount: 0,
   roomPushedAt: {},
   roomActors: {},
+  botsWorkerPanel: null,
+  botsSeenAt: {},
   setRoomActors: (actors) => set((s) => { s.roomActors = actors; }),
   setRoomStatus: (status) => set((s) => { s.roomStatus = status; }),
   setRoomThreads: (workspaceId, threads) => set((s) => { s.roomThreads[workspaceId] = threads; }),
@@ -144,11 +180,15 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
     }
   }),
   selectRoomThread: (workspaceId, thread) => set((s) => { s.roomSelectedThread[workspaceId] = thread; }),
-  setRoomScope: (scope) => set((s) => { s.roomScope = scope; }),
   noteRoomRead: (workspaceId, threadId, seq) => {
     const key = timelineKey(workspaceId, threadId);
     if ((get().roomReadThrough[key] ?? -1) >= seq) return false;
     set((s) => { s.roomReadThrough[key] = seq; });
     return true;
+  },
+  setBotsWorkerPanel: (panel) => set((s) => { s.botsWorkerPanel = panel; }),
+  markBotsSeen: (conversationId, at) => {
+    if (!Number.isFinite(at) || (get().botsSeenAt[conversationId] ?? -Infinity) >= at) return;
+    set((s) => { s.botsSeenAt[conversationId] = at; });
   },
 });

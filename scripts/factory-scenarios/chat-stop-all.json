@@ -3,7 +3,7 @@
   "layer": "regression",
   "runs": 1,
   "model": "stub",
-  "description": "Three bots in one room: two each start a long worker, and all three set an hourly routine. The owner says stop to the room: the one message reaches every bot, each calls stop_my_work (its workers are cancelled as stopped by the owner, its routines paused) and posts one line; no bot's turn is cut.",
+  "description": "Three bots in one room without a coordinator: two each start a long worker, and all three set an hourly routine. The owner says stop to the room: the one message reaches every bot, each calls stop_my_work (its workers are cancelled as stopped by the owner, its routines paused) and posts one line; no bot's turn is cut.",
   "setup": {
     "repo": true,
     "worker": {
@@ -155,8 +155,8 @@
         }
       },
       {
-        "key": "moa",
-        "role": "moa",
+        "key": "verifier",
+        "role": "verifier",
         "triggers": [],
         "script": {
           "turns": [
@@ -165,7 +165,7 @@
                 {
                   "tool": "routine_set",
                   "args": {
-                    "title": "moa hourly check",
+                    "title": "verifier hourly check",
                     "prompt": "Check your open work.",
                     "schedule": {
                       "kind": "interval",
@@ -303,7 +303,7 @@
     "bots": [
       "lead",
       "triage",
-      "moa"
+      "verifier"
     ],
     "workers": [
       "lead",

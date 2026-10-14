@@ -19,7 +19,7 @@ describe('pty.handler PTY_CREATE — account quota before wmux tools', () => {
   it('applies withAccountQuota first on both the daemon and the local path', () => {
     // The session pin wraps the result last (after the bot worker guard);
     // quota still runs before the tool splice.
-    expect(source.match(/options = withLaunchSessionPin\(withBotWorkerMergeGuard\(withWmuxTools\(await withAccountQuota\(options\)\), botWorker\)\);/g) ?? []).toHaveLength(2);
+    expect(source.match(/options = withLaunchSessionPin\(withBotWorkerMergeGuard\(await guardCodexBotWorker\(withWmuxTools\(await withAccountQuota\(options\)\), botWorker\), botWorker\)\);/g) ?? []).toHaveLength(2);
     expect(source).not.toMatch(/withAccountQuota\(withWmuxTools\(/);
   });
 });

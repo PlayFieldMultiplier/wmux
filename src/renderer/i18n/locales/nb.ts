@@ -6,6 +6,7 @@ export const nb = {
   'sidebar.workspaces': 'Arbeidsområder',
   'sidebar.newWorkspace': 'Nytt arbeidsområde',
   'sidebar.newWorkspaceTooltip': 'Nytt arbeidsområde (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Nytt arbeidsområde på {name}',
   'sidebar.hideTooltip': 'Skjul sidepanel (Ctrl+B)',
   'sidebar.expandTooltip': 'Vis sidepanel (Ctrl+B)',
   'sidebar.unreadCount': '{count} uleste',
@@ -656,5 +657,5 @@ export const nb = {
   'git.secret.scanFailed': "wmux kunne ikke lese endringen for å sjekke den for passord og nøkler, så den ble ikke lastet opp. Prøv igjen; hvis det fortsetter å feile, kan sjekken slås av under Innstillinger › Generelt.",
   'git.secret.more': "(og {count} til)",
   'settings.secretGuard': "Blokker passord og nøkler i commits, pusher og PR-er",
-  'settings.secretGuardDesc': "Commit, Push og Opprett PR på Git-siden, overtakelse av en oppgave og Moas levering avviser en endring som legger til en .env-fil, en privat nøkkel eller en API-nøkkel.",
+  'settings.secretGuardDesc': "Commit, Push og Opprett PR på Git-siden samt overtakelse av en oppgave avviser en endring som legger til en .env-fil, en privat nøkkel eller en API-nøkkel.",
 } as const;

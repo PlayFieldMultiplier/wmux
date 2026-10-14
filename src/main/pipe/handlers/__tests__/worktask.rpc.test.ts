@@ -408,7 +408,7 @@ describe('task.git.status', () => {
       }),
     });
     const res = await h.call('task.git.status', { taskId: TASK.id, senderPtyId: 'pty-1' });
-    expect(h.exec).toHaveBeenCalledWith('git', ['status', '--porcelain=v1', '--branch', '-z'], TASK.worktreePath);
+    expect(h.exec).toHaveBeenCalledWith('git', ['status', '--porcelain=v1', '--branch', '-z', '--ignore-submodules=all'], TASK.worktreePath);
     expect(res).toMatchObject({
       ok: true,
       branch: 'wtask/lane-one',
@@ -476,9 +476,22 @@ describe('task.git.status / task.git.log without a taskId', () => {
     // the whole repository.
     // path.resolve rewrites the POSIX fixture on win32 (D:\repo\...), so compare against it.
     expect(h.exec).toHaveBeenCalledWith('git', ['rev-parse', '--show-toplevel'], path.resolve(CALLER_CWD));
-    expect(h.exec).toHaveBeenCalledWith('git', ['status', '--porcelain=v1', '--branch', '-z'], CALLER_REPO);
+    expect(h.exec).toHaveBeenCalledWith('git', ['status', '--porcelain=v1', '--branch', '-z', '--ignore-submodules=all'], CALLER_REPO);
     expect(res).toMatchObject({ ok: true, target: 'caller-repo', repoRoot: CALLER_REPO });
     expect(res).not.toHaveProperty('taskId');
+  });
+
+  it('refuses a repository whose config names a content filter, the caller\'s own included', async () => {
+    const h = harness({
+      exec: async (_cmd: 'git' | 'gh', args: string[]) => {
+        if (args[0] === 'rev-parse' && args.includes('--show-toplevel')) return { stdout: `${CALLER_REPO}\n`, stderr: '', code: 0 };
+        if (args[0] === 'config') return { stdout: 'local\0filter.x.clean\n/tmp/x.sh\0', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    });
+    const res = await h.call('task.git.status', { senderPtyId: 'pty-1' });
+    expect(res).toMatchObject({ ok: false, target: 'caller-repo', reason: 'git-failed', error: expect.stringMatching(/filter\.x\.clean/) });
+    expect(h.exec).not.toHaveBeenCalledWith('git', expect.arrayContaining(['status']), expect.anything());
   });
 
   it('never asks the daemon for a task list it does not need', async () => {

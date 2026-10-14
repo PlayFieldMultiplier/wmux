@@ -25,6 +25,7 @@
  * in-flight 중복=거부.
  */
 
+import { botWorkerAgentPromptNote } from '../../shared/codexWorkerGuard';
 import { ensureSecretHook } from '../git/secretHookHost';
 import { beginBotWorkerSpawn } from '../agents/botWorkerMergeGuard';
 import { mintSecretGrant, revokeSecretGrant } from '../factory/secretGrants';
@@ -123,13 +124,12 @@ Your task has a row in the task ledger; the brain reads that row, not your prose
  * worker never has to look its task up; ledger_update also resolves the task
  * of the caller's own workspace when `task_id` is left out.
  */
-export function workerTaskIdentityNote(taskId: string, channelId: string, botBranch?: string): string {
-  // A bot's worker pushes only its own task branch, named: a push without a
-  // destination, to HEAD or to a default branch is refused by its deny list
-  // (shared/botWorkerGuard.ts), and a worker that guessed the form stalled.
+export function workerTaskIdentityNote(taskId: string, channelId: string, botBranch?: string, agent?: string): string {
+  // A bot's worker cannot run `git push` (its deny list refuses every form,
+  // shared/botWorkerGuard.ts): main pushes its task branch (task_push).
   const push = botBranch
-    ? `- Your branch: \`${botBranch}\`. Publish it with exactly \`git push -u origin ${botBranch}\` (name the branch). \`git push\` with no destination, \`git push origin HEAD\`, a force push and a push to the default branch are refused.
-`
+    ? `- Your branch: \`${botBranch}\`. Commit, then publish it with the \`task_push\` tool (wmux pushes this branch to origin, fast-forward only); \`git push\` itself is refused. Open the pull request with \`gh pr create --head ${botBranch}\`.
+${botWorkerAgentPromptNote(agent)}`
     : '';
   return `
 - Your task: \`task_id\` **${taskId}**, \`expected_rev\` **1** right now (or leave \`task_id\` out: wmux reports on the task of your own workspace). Your mission channel: \`${channelId}\`.
@@ -336,6 +336,10 @@ export interface FanOutRequest {
   /** A bot's fan-out: the room thread of the wake that asked (main's own wake
    *  state). Recorded on each task's ledger row; see LedgerDispatch.threadId. */
   threadId?: string;
+  /** A bot's fan-out: the handoff the asking wake delivered (main's own
+   *  wake state). Recorded on each task's ledger row; see
+   *  LedgerDispatch.handoffId. */
+  handoffId?: string;
   /** A bot's fan-out: the stored secrets each worker receives as env vars
    *  (checked by the caller). Each task spawn gets its own single-use grant
    *  (factory/secretGrants.ts); a name no longer stored at launch time leaves
@@ -765,6 +769,7 @@ export class FanOutService {
       ...(req.preset ? { preset: req.preset } : {}),
       ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
       ...(req.threadId ? { threadId: req.threadId } : {}),
+      ...(req.handoffId ? { handoffId: req.handoffId } : {}),
       ...(req.mayLaunch ? { mayLaunch: req.mayLaunch } : {}),
       ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
       ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
@@ -1172,6 +1177,8 @@ export class FanOutService {
     checkout?: { sha: string };
     /** See FanOutRequest.threadId. */
     threadId?: string;
+    /** See FanOutRequest.handoffId. */
+    handoffId?: string;
     /** See FanOutRequest.mayLaunch. */
     mayLaunch?: () => string | null;
     /** See FanOutRequest.awaitLaunchSlot. */
@@ -1298,7 +1305,10 @@ export class FanOutService {
           ? `\n\n---\n\nYour private scratch directory is ${tempDir}; TMPDIR, TMP and TEMP point there. Put temporary helpers and test output there, not anywhere else outside the project.`
           : '';
         const botBranch = ctx.requester?.kind === 'bot' && !ctx.checkout ? plan?.branch : undefined;
-        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch), 'utf8');
+        // The agent the note speaks to: the row's pick, else the launcher of
+        // the command line.
+        const noteAgent = ctx.agentChoice?.agent ?? launcherStem(splitModelEnvMarker(ctx.agentCmd).command.trim().split(/\s+/)[0] ?? '');
+        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch, noteAgent), 'utf8');
       }
       const stamp: WorkTaskMetaStamp = {
         taskId,
@@ -1551,6 +1561,7 @@ export class FanOutService {
                 ...(ctx.preset ? { preset: ctx.preset } : {}),
                 ...(ctx.checkout ? { checkout: { sha: ctx.checkout.sha, detached: true as const } } : {}),
                 ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+                ...(ctx.handoffId ? { handoffId: ctx.handoffId } : {}),
               },
             }
           : {}),

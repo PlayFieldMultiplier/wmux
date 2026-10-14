@@ -1,8 +1,8 @@
 // The Bots page's model, read from the stores the room dock and Fleet
 // already keep (botsModel.ts), and the reads that keep it filled.
 //
-// `useBotsSync` reads, for every room the page shows (the HQ's and each
-// bot's workspace), its thread list and its whole-room timeline once, and
+// `useBotsSync` reads, for every room the page shows (each bot's
+// workspace), its thread list and its whole-room timeline once, and
 // each thread holding an open question in full (from its first card), and
 // the room's newest plan thread, so a question or a plan older than any
 // newest page still counts. The page reads them while the bots are paused
@@ -11,7 +11,7 @@
 // from then on. With `focus` it also catches up when the window comes back;
 // the re-read thread summaries settle a question answered while away. The rail mounts it (with
 // focus), so the rail badge is live before the page is ever opened.
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore, type StoreState } from '../../stores';
 import { selectWorkspaceAttentionClasses, type FleetAttentionClass } from '../../stores/selectors/fleet';
@@ -19,17 +19,18 @@ import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjectio
 import { ALL_THREADS, timelineKey, type RoomStatusView } from '../../stores/slices/roomSlice';
 import { CATCH_UP_MAX_PAGES, catchUpRoomTimeline, loadRoomActors, loadRoomThreads, loadRoomTimeline, roomsApi } from '../../hooks/useRoomSync';
 import type { ThreadId, ThreadSummary } from '../../../shared/room';
-import type { FactoryBotPort, FactoryBotRow } from '../Room/factoryPorts';
+import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../Room/factoryPorts';
 import { useFactoryBots } from '../Room/useFactoryBots';
-import { latestThreadOf } from '../Room/HqRoom';
-import { buildBots, botsRooms, EMPTY_BOTS, roomCardsByWorkspace, type BotsModel } from './botsModel';
+import { buildBots, botsRooms, EMPTY_BOTS, latestThreadOf, roomCardsByWorkspace, type BotsModel } from './botsModel';
+import { selectBotTaskOwners } from '../Sidebar/botTasks';
+import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 
 const NO_CLASSES: Record<string, FleetAttentionClass> = {};
 
 /** Bot workers' attention classes (open workspaces only); the same object
  *  while no bot worker exists, so nothing else is computed. */
 export function selectBotWorkerClasses(state: StoreState): Record<string, FleetAttentionClass> {
-  const ids = Object.keys(state.fanoutOrigin).filter((id) => state.fanoutOrigin[id]?.kind === 'bot');
+  const ids = Object.keys(selectBotTaskOwners(state));
   if (ids.length === 0) return NO_CLASSES;
   const classes = selectWorkspaceAttentionClasses(state);
   const out: Record<string, FleetAttentionClass> = {};
@@ -43,32 +44,40 @@ export interface BotsState {
   model: BotsModel;
   /** The factory is on (the bots run; off, the page is read-only). */
   on: boolean;
+  /** The bot list has been read at least once (before that, an empty list
+   *  does not mean there is no bot). */
+  listed: boolean;
 }
 
 export function useBots(port?: FactoryBotPort): BotsState {
   const status = useStore((s) => s.roomStatus);
   const bots = useFactoryBots(null, port);
+  // useFactoryBots hands back its initial empty list until the first read
+  // answers (a fresh array, even when empty); a build without a bot runtime
+  // never reads, and there is nothing to wait for.
+  const initialBots = useRef(bots);
+  const listed = bots !== initialBots.current || bots.length > 0 || !(port ?? getFactoryBotPort()).available;
   const timelines = useStore((s) => s.roomTimelines);
   const threads = useStore((s) => s.roomThreads);
-  const fanoutOrigin = useStore((s) => s.fanoutOrigin);
+  const botTaskOf = useStore(selectBotTaskOwners);
   const workerClass = useStore(useShallow(selectBotWorkerClasses));
   const names = useStore(useShallow(selectWorkspaceIdName));
   const on = !!status?.enabled;
   const model = useMemo(() => {
     if (!status) return EMPTY_BOTS;
-    const byId = new Map(names.map((w) => [w.id, w.name]));
+    // A worker's task workspace reads without its `wtask: ` prefix.
+    const byId = new Map(names.map((w) => [w.id, displayWorkspaceName(w.name, true)]));
     return buildBots({
       bots,
-      hqWorkspaceId: status?.hqWorkspaceId ?? null,
       cards: roomCardsByWorkspace(timelines),
       threads,
-      fanoutOrigin,
+      botTaskOf,
       workerClass,
       workspaceName: (id) => byId.get(id) ?? null,
       readOnly: !on,
     });
-  }, [status, on, bots, timelines, threads, fanoutOrigin, workerClass, names]);
-  return { status, bots, model, on };
+  }, [status, on, bots, timelines, threads, botTaskOf, workerClass, names]);
+  return { status, bots, model, on, listed };
 }
 
 /** Read one thread from its first card, page by page (CATCH_UP_MAX_PAGES
@@ -121,8 +130,8 @@ export function threadsToRead(
 export function useBotsSync(state: Pick<BotsState, 'status' | 'bots' | 'on'>, opts: { focus: boolean; paused?: boolean }): void {
   const known = !!state.status && (state.on || !!opts.paused);
   const rooms = useMemo(
-    () => (known ? botsRooms(state.bots, state.status?.hqWorkspaceId ?? null) : []),
-    [known, state.bots, state.status?.hqWorkspaceId],
+    () => (known ? botsRooms(state.bots) : []),
+    [known, state.bots],
   );
   const roomsKey = rooms.join('\u0000');
   useEffect(() => {

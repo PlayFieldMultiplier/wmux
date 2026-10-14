@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The Bots rail page: empty states, the conversation list (HQ first,
-// needs-you on the bot rows), a 1:1 and a group chat, the thread chip,
+// The Bots rail page: the first screen, the conversation list (by latest
+// activity, no pinned HQ; needs-you on the bot rows), adding a bot, a 1:1 and a group chat, the thread chip,
 // sending to one bot, a worker's Open, the rail item's route and badge (the
 // sum of the page's own rows) and the Toggle Company View shortcut.
 import { act } from 'react';
@@ -14,9 +14,10 @@ import type { RoomCard } from '../../../../shared/room';
 import type { BotProfile, BotRole } from '../../../../shared/bot';
 import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
 import type { Pane, Workspace } from '../../../../shared/types';
-import BotsPage, { newBotIds } from '../BotsPage';
+import BotsPage, { isStillStarting } from '../BotsPage';
+import type { EnginePort } from '../botsEngine';
 import MiniSidebar from '../../Sidebar/MiniSidebar';
-import { chatCards, composerHint, oneToOneRefusal } from '../BotsChat';
+import { chatCards, composerHint, fitSideSplit, oneToOneRefusal } from '../BotsChat';
 import type { Conversation } from '../botsModel';
 import { refreshApprovals, setApprovalsApiForTests, type ApprovalsApi } from '../../Room/approvalsStore';
 
@@ -132,7 +133,7 @@ async function render(node: React.ReactNode) {
 }
 
 describe('Bots page', () => {
-  it('paused: the conversations and live workers stay, read-only, under a banner whose Run bots turns them on', async () => {
+  it('bots off: the conversations and live workers stay, read-only, under a banner whose Turn bots on turns them on', async () => {
     // Opening the page asks main for the factory's state again.
     const off = api();
     off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
@@ -148,53 +149,212 @@ describe('Bots page', () => {
     } as never));
     const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
     await render(<BotsPage settings={settings} />);
-    expect(q('[data-bots-paused]')?.textContent).toContain('Bots are paused');
+    expect(q('[data-bots-paused]')?.textContent).toContain('Bots are off');
+    expect(q('[data-bots-run]')?.textContent).toBe('Turn bots on');
     // The list is all there, "+" too, and nothing is counted.
-    expect(rowIds()).toEqual(['room:hq', 'room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`]);
+    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`, 'room:hq']);
     expect(q('[data-bots-add]')).not.toBeNull();
     expect(container.querySelectorAll('[data-bots-needs]')).toHaveLength(0);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     // The worker shows; the question shows without answers; nothing can be sent.
-    expect(q('[data-bots-worker="t1"]')?.textContent).toContain('wtask: fix login');
+    expect(q('[data-bots-worker="t1"]')?.textContent).toContain('fix login');
+    expect(q('[data-bots-worker="t1"]')?.textContent).not.toContain('wtask:');
     expect(container.querySelector('[data-testid="room-card"]')).toBeNull();
     expect(q('[data-room-card-id="c5"]')?.textContent).toContain('Merge #1 now?');
     expect(q<HTMLButtonElement>('[data-testid="bots-composer-send"]')!.disabled).toBe(true);
-    expect(q('[data-testid="bots-composer-status"]')?.textContent).toBe('Bots are paused. Run bots to message them.');
+    expect(q('[data-testid="bots-composer-status"]')?.textContent).toBe('Bots are off. Turn bots on to message them.');
     await act(async () => { q('[data-bots-run]')!.click(); });
     expect(settings.set).toHaveBeenCalledWith({ enabled: true });
   });
 
-  it('with no bot yet: "+" and one step, add a bot to the current workspace, then its chat', async () => {
+  it('with no bot yet: one centred panel, a name and Start, which turns the bots on, adds the bot here and opens its chat', async () => {
     bots = [];
-    seedRooms();
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
     act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
-    const create = vi.fn(async () => ({ ok: true }));
+    const created = botRow('bot-0000000e', 'lead', 'w1', 9, 'Ada').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: created }));
     const notify: Array<() => void> = [];
     setFactoryBotPort({ ...port, create, subscribe: (fn: () => void) => { notify.push(fn); return () => undefined; } } as unknown as FactoryBotPort);
-    await render(<BotsPage />);
-    expect(q('[data-bots-add]')).not.toBeNull();
-    expect(q('[data-bots-first-run]')?.textContent).toContain('Add a bot to api');
-    act(() => q('[data-bots-first-add]')!.click());
-    const dialog = document.querySelector('[data-testid="bots-add-bot"]')!;
-    expect(dialog).not.toBeNull();
-    // Preset: the current workspace; the bot gets its name (and, if wanted, a template and job) here.
-    const selects = [...dialog.querySelectorAll<HTMLSelectElement>('select')];
-    expect(selects.some((el) => el.value === 'w1')).toBe(true);
-    expect(dialog.querySelector('[data-testid="factory-add-bot-name"]')).not.toBeNull();
-    expect(dialog.querySelectorAll('[data-testid="factory-add-bot-template"]').length).toBeGreaterThan(0);
-    const cancel = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((el) => el.textContent === 'Cancel')!;
-    act(() => cancel.click());
-    bots = [botRow(LEAD, 'lead', 'w1', 9, 'Lead')];
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    const engine: EnginePort = { readiness: vi.fn(async () => ({ ready: true })) };
+    await render(<BotsPage settings={settings} engine={engine} />);
+    // No list, no banner: the one panel, for the current workspace.
+    expect(q('[data-bots-first-run]')?.textContent).toContain('Name your first bot');
+    expect(q('[data-bots-first-run]')?.textContent).toContain('api');
+    expect(q('[data-bots-paused]')).toBeNull();
+    expect(q('[data-bots-row]')).toBeNull();
+    const start = q<HTMLButtonElement>('[data-bots-first-start]')!;
+    expect(start.disabled).toBe(true);
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(start.disabled).toBe(false);
+    await act(async () => { start.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(create).toHaveBeenCalledWith({ workspaceId: 'w1', name: 'Ada' });
+    // Its chat opens at once, starting, before the list shows the bot.
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+    expect(q('[data-bots-starting]')?.textContent).toContain('Starting Ada');
+    // Listed but not greeted yet: still starting.
+    bots = [{ ...botRow('bot-0000000e', 'lead', 'w1', 9, 'Ada'), bot: created }];
     await act(async () => { for (const fn of notify) fn(); });
     await act(async () => { await Promise.resolve(); });
-    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe(`bot:${LEAD}`);
-    expect(q('[data-bots-first-run]')).toBeNull();
+    expect(q('[data-bots-starting]')).not.toBeNull();
+    // The greeting arrives: the bot's chat replaces the placeholder.
+    act(() => useStore.setState({
+      roomStatus: { running: true, enabled: true, hqWorkspaceId: 'hq' },
+      roomTimelines: {
+        [timelineKey('w1', ALL_THREADS)]: { cards: [card({ workspaceId: 'w1', actor: by('w1', 'bot-0000000e'), kind: 'question', title: 'Hi, what should I do?', greeting: true, state: 'open' })], nextSinceSeq: 0, hasMore: false },
+      },
+    } as never));
+    expect(q('[data-bots-starting]')).toBeNull();
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+  });
+
+  it('first screen: Add a team turns the bots on, adds the five here with no name typed, and opens the lead\'s chat', async () => {
+    bots = [];
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    const lead = { ...botRow('bot-0000000e', 'lead', 'w1', 9, 'Lead').bot, template: 'coordinator' as const };
+    const createTeam = vi.fn(async () => ({ ok: true as const, bots: [lead] }));
+    setFactoryBotPort({ ...port, create: vi.fn(), createTeam } as unknown as FactoryBotPort);
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    let answer: (r: { ready: boolean }) => void = () => undefined;
+    const engine: EnginePort = { readiness: () => new Promise((r) => { answer = r; }) };
+    await render(<BotsPage settings={settings} engine={engine} />);
+    const team = q<HTMLButtonElement>('[data-bots-first-team]')!;
+    expect(team.textContent).toBe('Add a team (lead + 4 roles)');
+    // The same readiness as Start: it waits for the engine's first answer.
+    expect(team.disabled).toBe(true);
+    await act(async () => { answer({ ready: true }); });
+    expect(team.disabled).toBe(false);
+    await act(async () => { team.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(createTeam).toHaveBeenCalledWith({ workspaceId: 'w1', names: { coordinator: 'Lead', researcher: 'Research', developer: 'Developer', issue: 'Issues', reviewer: 'Reviewer' } });
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+  });
+
+  it('"+" offers Add team while the chosen workspace has no coordinator', async () => {
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn(), createTeam: vi.fn() } as unknown as FactoryBotPort);
+    await render(<BotsPage />);
+    act(() => q('[data-bots-add]')!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).not.toBeNull();
+    // A workspace with a coordinator already: no Add team.
+    act(() => root.unmount());
+    root = createRoot(container);
+    bots = [...bots, { ...botRow('bot-0000000f', 'lead', 'w1', 4, 'Boss'), bot: { ...botRow('bot-0000000f', 'lead', 'w1', 4, 'Boss').bot, template: 'coordinator' } }];
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    await render(<BotsPage />);
+    act(() => q('[data-bots-add]')!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).toBeNull();
+  });
+
+  it('first screen: an engine that cannot sign in says why, offers Log in to Claude, and Start waits until it can', async () => {
+    bots = [];
+    seedRooms();
+    const create = vi.fn(async () => ({ ok: false as const, code: 'invalid_argument' as const, message: 'x' }));
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
+    let ready = false;
+    const engine: EnginePort = {
+      readiness: vi.fn(async () => (ready ? { ready: true } : { ready: false, reason: 'claude-not-logged-in' as const })),
+      login: vi.fn(async () => { ready = true; }),
+    };
+    await render(<BotsPage engine={engine} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-engine="claude-not-logged-in"]')?.textContent).toContain('Claude isn\'t signed in');
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(true);
+    // One primary: Log in while Start waits.
+    expect(q('[data-bots-engine-login]')?.className).toContain('ui-btn-primary');
+    expect(q('[data-bots-first-start]')?.className).not.toContain('ui-btn-primary');
+    await act(async () => { q('[data-bots-engine-login]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(engine.login).toHaveBeenCalledTimes(1);
+    expect(q('[data-bots-engine]')).toBeNull();
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
+  });
+
+  it('first screen: Start waits for the engine\'s first answer', async () => {
+    bots = [];
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    let answer: (r: { ready: boolean }) => void = () => undefined;
+    const engine: EnginePort = { readiness: () => new Promise((r) => { answer = r; }) };
+    await render(<BotsPage engine={engine} />);
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(true);
+    await act(async () => { answer({ ready: true }); });
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
+  });
+
+  it('"+" while off: a job made invalid after the confirm opened closes it, and nothing is turned on', async () => {
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
+    const create = vi.fn();
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    await render(<BotsPage settings={settings} />);
+    act(() => q('[data-bots-add]')!.click());
+    const dialog = document.querySelector('[data-testid="bots-add-bot"]')!;
+    const name = dialog.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Triage');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-submit"]')!.click());
+    expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm"]')).not.toBeNull();
+    const job = dialog.querySelector<HTMLTextAreaElement>('[data-testid="factory-add-bot-job"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(job, 'bad\u0007job');
+      job.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm"]')).toBeNull();
+    expect(dialog.querySelector('[data-testid="factory-add-bot-blocked"]')).not.toBeNull();
+    expect(settings.set).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('first screen: a build that cannot tell the engine\'s state never blocks Start', async () => {
+    bots = [];
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    await render(<BotsPage engine={{}} />);
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q('[data-bots-engine]')).toBeNull();
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
   });
 
   it('composerHint: a Lead\'s empty 1:1 asks for its first task; otherwise "Message <name>"', () => {
     const tt = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;
     const conv = (role: BotRole): Conversation => ({
-      kind: 'bot', id: 'bot:x', workspaceId: 'w1', row: botRow(LEAD, role, 'w1', 1, 'Lead'), last: null, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [],
+      kind: 'bot', id: 'bot:x', workspaceId: 'w1', row: botRow(LEAD, role, 'w1', 1, 'Lead'), last: null, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [],
     });
     expect(composerHint(conv('lead'), 0, 'Lead', tt)).toBe('botsPage.leadHint{"name":"Lead"}');
     expect(composerHint(conv('lead'), 2, 'Lead', tt)).toBe('botsPage.messageTo{"name":"Lead"}');
@@ -241,7 +401,11 @@ describe('Bots page', () => {
     seedRooms();
     await render(<BotsPage />);
     act(() => q('[data-bots-row="room:w1"]')!.click());
-    const line = q(`[data-room-card-id="${refusalId}"]`)!;
+    // It is a reply in the PR's thread: the thread's root says so, and the
+    // thread opens beside the chat.
+    expect(q(`[data-bots-messages] [data-room-card-id="${refusalId}"]`)).toBeNull();
+    act(() => q('[data-bots-thread-summary="pr:github.com/acme/api#1"]')!.click());
+    const line = q(`[data-bots-thread-panel] [data-room-card-id="${refusalId}"]`)!;
     expect(line.getAttribute('data-bots-bubble')).toBe('system');
     expect(line.textContent).toContain('Merge refused for #1');
     const body = line.querySelector('[data-card-body]')!;
@@ -252,7 +416,8 @@ describe('Bots page', () => {
     // Lead asked in that PR's thread: the refusal is in Lead's 1:1 too; the
     // room-wide CI fact is not.
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    expect(q(`[data-bots-messages] [data-room-card-id="${refusalId}"] [data-card-body]`)?.textContent).toContain('the author is not trusted');
+    act(() => q('[data-bots-thread-summary="pr:github.com/acme/api#1"]')!.click());
+    expect(q(`[data-bots-thread-panel] [data-room-card-id="${refusalId}"] [data-card-body]`)?.textContent).toContain('the author is not trusted');
     expect(q('[data-bots-messages] [data-room-card-id="c6"]')).toBeNull();
   });
 
@@ -299,17 +464,20 @@ describe('Bots page', () => {
     expect(q('[data-testid="bots-stop-bot"]')).toBeNull();
   });
 
-  it('lists the HQ room first, then rooms and bots by latest activity, with needs-you on the bot that asked', async () => {
+  it('lists rooms and bots by latest activity (the HQ room is not pinned), with needs-you on the bot that asked', async () => {
     seedRooms();
     await render(<BotsPage />);
-    expect(rowIds()).toEqual(['room:hq', 'room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`]);
+    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`, 'room:hq']);
+    expect(container.textContent).not.toContain('HQ');
     // Lead: one open question and its worker t1 (status not reported: not live).
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('1');
     expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-needs]`)).toBeNull();
     expect(q('[data-bots-row="room:w1"] [data-bots-needs]')).toBeNull();
-    // Previews: the newest message, the owner's as "You: …".
+    // Previews: the newest message, the owner's as "You: …" — never wmux's
+    // own line, though it still orders the list (room w1 is first).
     expect(q(`[data-bots-row="bot:${VERIFIER}"]`)?.textContent).toContain('PR #1 passes');
-    expect(q('[data-bots-row="room:w1"]')?.textContent).toContain('CI green on #1');
+    expect(q('[data-bots-row="room:w1"]')?.textContent).toContain('Lead: Merge #1 now?');
+    expect(q('[data-bots-row="room:w1"]')?.textContent).not.toContain('CI green on #1');
   });
 
   it('a 1:1 shows only that bot\'s cards and the owner\'s messages to it; a group shows the room', async () => {
@@ -329,16 +497,23 @@ describe('Bots page', () => {
     expect(q('[data-bots-page]')?.getAttribute('data-view')).toBe('list');
   });
 
-  it('a thread chip narrows the conversation to that thread and All messages brings the rest back', async () => {
+  it('a thread chip opens the thread beside the chat; the main timeline stays as it was', async () => {
     seedRooms();
     await render(<BotsPage />);
     act(() => q('[data-bots-row="room:w1"]')!.click());
-    act(() => q('[data-bots-thread-chip="pr:github.com/acme/api#1"]')!.click());
-    const shown = () => [...container.querySelectorAll('[data-bots-messages] [data-room-card-id]')].map((el) => el.getAttribute('data-room-card-id'));
-    expect(shown()).toEqual(['c4', 'c5']);
-    expect(q('[data-bots-thread-back]')?.textContent).toContain('acme/api#1');
-    act(() => q('[data-bots-thread-back]')!.click());
-    expect(shown()).toHaveLength(5);
+    const shown = (scope: string) => [...container.querySelectorAll(`${scope} [data-room-card-id]`)].map((el) => el.getAttribute('data-room-card-id'));
+    // The thread's root (the verdict) and its open question (it waits on the
+    // owner) both stay in the main timeline; the root says how many replies.
+    expect(shown('[data-bots-messages]')).toEqual(['c2', 'c3', 'c4', 'c5', 'c6']);
+    expect(q('[data-bots-thread-summary="pr:github.com/acme/api#1"]')?.textContent).toContain('1 reply');
+    act(() => q('[data-room-card-id="c4"] [data-bots-thread-chip="pr:github.com/acme/api#1"]')!.click());
+    expect(q('[data-bots-thread-panel]')?.getAttribute('data-bots-thread-panel')).toBe('pr:github.com/acme/api#1');
+    expect(shown('[data-bots-thread-panel]')).toEqual(['c4', 'c5']);
+    expect(shown('[data-bots-messages]')).toHaveLength(5);
+    // Its composer posts into the thread.
+    expect(q<HTMLTextAreaElement>('[data-bots-thread-panel] [data-testid="bots-composer-input"]')?.placeholder).toBe('Reply in thread');
+    act(() => q('[data-bots-thread-close]')!.click());
+    expect(q('[data-bots-thread-panel]')).toBeNull();
   });
 
   it('sends a 1:1 message to that bot (it is the one mention) and says who got it', async () => {
@@ -384,7 +559,7 @@ describe('Bots page', () => {
     expect(posted[1]).toMatchObject({ workspaceId: 'w1', mentions: [LEAD] });
   });
 
-  it('a live worker shows in its bot\'s conversation; Open jumps to its pane on Workspaces', async () => {
+  it('a live worker is a row under its bot in the list; a click shows its terminal beside the chat, never switching workspace', async () => {
     seedRooms();
     // t1 is running.
     act(() => useStore.setState({
@@ -397,16 +572,47 @@ describe('Bots page', () => {
     } as never));
     await render(<BotsPage />);
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('2');
+    // Folded under a bot whose chat is not open: the toggle says how many.
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    expect(q('[data-bots-worker="t1"]')).toBeNull();
+    expect(q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)?.getAttribute('aria-expanded')).toBe('false');
+    // Open under the bot whose chat is open, its row and tree one group.
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    const worker = q('[data-bots-worker="t1"]');
-    expect(worker?.textContent).toContain('wtask: fix login');
-    expect(worker?.getAttribute('data-worker-waiting')).toBe('true');
-    act(() => q('[data-bots-worker-open="t1"]')!.click());
-    expect(useStore.getState().activeWorkspaceId).toBe('t1');
-    expect(useStore.getState().appRoute).toBe('workspaces');
+    expect(q(`[data-bots-entry="bot:${LEAD}"]`)?.classList.contains('is-open')).toBe(true);
+    expect(q('[data-bots-entry="room:w1"]')?.classList.contains('is-open')).toBe(false);
+    // Under the bot's row in the list, not in the rail or the history.
+    const worker = q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree] [data-bots-worker="t1"]`);
+    expect(worker?.textContent).toContain('fix login');
+    expect(worker?.textContent).not.toContain('wtask:');
+    expect(worker?.getAttribute('data-worker-state')).toBe('needsYou');
+    expect(q('[data-bots-rail] [data-bots-worker]')).toBeNull();
+    expect(q('[data-bots-messages] [data-bots-worker]')).toBeNull();
+    // The panel never opens on its own.
+    expect(useStore.getState().botsWorkerPanel).toBeNull();
+    // The toggle folds and unfolds the rows.
+    const toggle = q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)!;
+    expect(toggle.textContent).toContain('1');
+    act(() => toggle.click());
+    expect(q('[data-bots-worker="t1"]')).toBeNull();
+    act(() => q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)!.click());
+    act(() => q('[data-bots-worker="t1"]')!.click());
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
+    expect(useStore.getState().appRoute).toBe('bots');
+    expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: `bot:${LEAD}` });
+    expect(q(`[data-bots-chat="bot:${LEAD}"]`)).not.toBeNull();
+    expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
+    expect(q('[data-bots-worker="t1"]')?.getAttribute('aria-current')).toBe('true');
+    expect(q('[data-bots-splitter]')).not.toBeNull();
+    // Close closes it; another conversation closes it too.
+    act(() => q('[data-bots-worker-panel-close]')!.click());
+    expect(q('[data-bots-worker-panel]')).toBeNull();
+    act(() => q('[data-bots-worker="t1"]')!.click());
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    expect(useStore.getState().botsWorkerPanel).toBeNull();
+    expect(q('[data-bots-worker-panel]')).toBeNull();
   });
 
-  it('a done task offers Open only while its pane is open; a cleared one offers Resume, which focuses the new pane', async () => {
+  it('a done task is a tree row while its pane is open (Resume in the panel\'s menu); a cleared one offers Resume in the rail, which shows the new pane', async () => {
     seedRooms();
     const now = Date.now();
     const task = (taskId: string, taskWorkspaceId: string, extra: Record<string, unknown> = {}) => ({
@@ -419,17 +625,27 @@ describe('Bots page', () => {
     await render(<BotsPage />);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     const bubble = (id: string) => q(`[data-bots-task="${id}"]`)!;
-    expect(bubble('wtask-kept-00000001').querySelector('[data-bots-worker-open="t1"]')).not.toBeNull();
+    // Its pane open: a done row in the list (the newest task on t1), none in the rail.
+    expect(q('[data-bots-tree] [data-bots-worker="t1"]')?.getAttribute('data-worker-state')).toBe('done');
+    expect(q('[data-bots-task="wtask-kept-00000001"]')).toBeNull();
+    expect(q('[data-bots-task="wtask-moved-0000003"]')).toBeNull();
+    act(() => q('[data-bots-worker="t1"]')!.click());
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    expect(q('[data-bots-worker-panel-resume]')).not.toBeNull();
+    expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
+    act(() => useStore.getState().setBotsWorkerPanel(null));
+    // Its pane cleared: the rail keeps it, with Resume.
     expect(bubble('wtask-gone-00000002').querySelector('[data-bots-worker-open]')).toBeNull();
     expect(bubble('wtask-gone-00000002').textContent).toContain('Done');
-    // A resume opened a new pane: Open goes there.
-    expect(bubble('wtask-moved-0000003').querySelector('[data-bots-worker-open="t1"]')).not.toBeNull();
     await act(async () => { (bubble('wtask-gone-00000002').querySelector('[data-bots-task-resume]') as HTMLButtonElement).click(); });
     expect(resumeWorker).toHaveBeenCalledWith('wtask-gone-00000002');
-    expect(useStore.getState().activeWorkspaceId).toBe('t1');
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
+    expect(useStore.getState().botsWorkerPanel?.workspaceId).toBe('t1');
+    expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
+    act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
-  it('a worker waiting on input shows in its bot\'s 1:1 and in the room, with Open, though its pane reads idle', async () => {
+  it('a worker waiting on input is a tree row with what it asks, though its pane reads idle', async () => {
     seedRooms();
     const now = Date.now();
     const task = (taskId: string, taskWorkspaceId: string, stage: 'working' | 'needs_input', title: string) => ({
@@ -443,15 +659,19 @@ describe('Bots page', () => {
     const worker = q('[data-bots-worker="t1"]')!;
     expect(worker.getAttribute('data-worker-needs-input')).toBe('true');
     expect(worker.textContent).toContain('README title');
-    expect(worker.textContent).toContain('Worker needs input');
+    expect(worker.getAttribute('aria-label')).toContain('Worker needs input');
     expect(worker.querySelector('[data-bots-worker-summary]')?.textContent).toBe('The push was denied; tell me the branch');
     expect(q('[data-bots-worker="t-gone"]')).toBeNull();
-    // The room shows it too, under the bot's face.
+    // From a room (the bot's tree unfolded by hand), the row opens its bot's
+    // 1:1 with the terminal beside it.
     act(() => q('[data-bots-row="room:w1"]')!.click());
-    expect(q('[data-bots-worker="t1"]')?.getAttribute('data-worker-needs-input')).toBe('true');
-    act(() => q('[data-bots-worker-open="t1"]')!.click());
-    expect(useStore.getState().activeWorkspaceId).toBe('t1');
-    expect(useStore.getState().appRoute).toBe('workspaces');
+    act(() => q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)!.click());
+    act(() => q('[data-bots-worker="t1"]')!.click());
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
+    expect(useStore.getState().appRoute).toBe('bots');
+    expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: `bot:${LEAD}` });
+    expect(q('[data-bots-worker-panel="t1"]')?.textContent).toContain('Worker needs input');
+    act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
   it('in a room a new bot\'s greeting is a "joined" line that opens its 1:1, where the greeting is', async () => {
@@ -497,13 +717,56 @@ describe('Bots page', () => {
     const taskChip = q('[data-bots-thread-chip="task:wtask-abc-00000001"]')!;
     expect(taskChip.textContent).toBe('README title');
     expect(taskChip.getAttribute('title')).toContain('wtask-abc-00000001');
-    expect(q('[data-bots-thread-chip="handoff:h-0000000002"]')?.textContent).toBe('Request');
+    // A thread's root names no bare "Request": the name leads nowhere.
+    expect(q('[data-bots-thread-chip="handoff:h-0000000002"]')).toBeNull();
     // A bot citing the task id shows the task's title instead.
     expect(container.textContent).toContain('Task README title is running.');
     expect(container.textContent).not.toContain('Task wtask-abc-00000001');
     // A system line drops the role tag after a bot's name.
     expect(container.textContent).toContain('Answered → Lead: Push?');
     expect(container.textContent).not.toContain('(lead)');
+  });
+
+  it('a request thread is named by the owner\'s words that opened it, in its chip and its panel', async () => {
+    const request = card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', title: 'Add a --version flag', refs: { botId: LEAD }, at: 600 });
+    cards.push(request);
+    cards.push(card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', title: 'dispatch → Verifier: Ship it', threadId: 'handoff:h-0000000003', refs: { handoffId: 'h-0000000003', requestCardId: request.id }, at: 610 }));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    const chip = q('[data-bots-thread-chip="handoff:h-0000000003"]')!;
+    expect(chip.textContent).toBe('Add a --version flag');
+    act(() => chip.click());
+    expect(q('[data-bots-thread-panel="handoff:h-0000000003"]')?.getAttribute('aria-label')).toContain('Add a --version flag');
+  });
+
+  it('an open thread is read whole from its first card: a reply older than the cached page is in the panel, the root first', async () => {
+    seedRooms();
+    // The room's cached page lost the thread's first two cards; main still has them.
+    const root = card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Thread root', threadId: 'pr:github.com/acme/api#9', at: 50 });
+    const early = card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Early reply', threadId: 'pr:github.com/acme/api#9', at: 60 });
+    const late = card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Late reply', threadId: 'pr:github.com/acme/api#9', at: 700 });
+    cards.push(late);
+    seedRooms();
+    const reads: unknown[] = [];
+    const a = api();
+    (a as { read: unknown }).read = vi.fn(async (p: { workspaceId: string; threadId?: string; sinceSeq?: number }) => {
+      reads.push(p);
+      if (p.threadId === 'pr:github.com/acme/api#9') {
+        const page = (p.sinceSeq ?? 0) === 0 ? [root, early] : [late];
+        return { ok: true as const, workspaceId: p.workspaceId, threadId: p.threadId, cards: page, nextSinceSeq: page.at(-1)!.seq, hasMore: (p.sinceSeq ?? 0) === 0 };
+      }
+      const mine = cards.filter((c) => c.workspaceId === p.workspaceId);
+      return { ok: true as const, workspaceId: p.workspaceId, threadId: null, cards: mine, nextSinceSeq: mine.at(-1)?.seq ?? 0, hasMore: false };
+    });
+    setRoomsApiForTests(a);
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    await act(async () => { q('[data-bots-thread-chip="pr:github.com/acme/api#9"]')!.click(); });
+    expect(reads).toEqual(expect.arrayContaining([{ workspaceId: 'w1', threadId: 'pr:github.com/acme/api#9', sinceSeq: 0 }]));
+    const panel = q('[data-bots-thread-panel="pr:github.com/acme/api#9"]')!;
+    const ids = [...panel.querySelectorAll('[data-room-card-id]')].map((el) => el.getAttribute('data-room-card-id'));
+    expect(ids).toEqual([root.id, early.id, late.id]);
   });
 
   it('the Approve N pending chip shows wherever the approval card is shown, not only in its PR thread', async () => {
@@ -531,8 +794,8 @@ describe('Bots page', () => {
       const prChip = q(`[data-room-card-id="${linked.id}"] [data-bots-thread-chip="pr:github.com/acme/api#2"]`)!;
       expect(prChip.textContent).toBe('acme/api#2');
       act(() => prChip.click());
-      expect(q(`[data-bots-messages] [data-room-card-id="${linked.id}"]`)).not.toBeNull();
-      expect(q('[data-testid="approve-pending-chip"]')?.getAttribute('data-approve-ids')).toBe('apr-0000000002');
+      expect(q(`[data-bots-thread-panel] [data-room-card-id="${linked.id}"]`)).not.toBeNull();
+      expect(q('[data-bots-thread-panel] [data-testid="approve-pending-chip"]')?.getAttribute('data-approve-ids')).toBe('apr-0000000002');
       // The asking bot's 1:1 too.
       act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
       expect(q('[data-testid="approve-pending-chip"]')?.getAttribute('data-approve-ids')).toBe('apr-0000000001 apr-0000000002');
@@ -629,33 +892,81 @@ describe('Bots page', () => {
     expect(update).toHaveBeenCalledWith(LEAD, { job: 'Ship features.' });
   });
 
-  it('"+" opens the add form in a dialog, and the bot it adds is then selected', async () => {
+  it('"+" opens the add form in a dialog, and the bot it adds is selected at once', async () => {
     seedRooms();
-    const create = vi.fn(async () => ({ ok: true }));
-    const notify: Array<() => void> = [];
-    setFactoryBotPort({ ...port, create, subscribe: (fn: () => void) => { notify.push(fn); return () => undefined; } } as unknown as FactoryBotPort);
+    const added = botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: added }));
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
     await render(<BotsPage />);
     act(() => q('[data-bots-add]')!.click());
-    expect(document.querySelector('[data-testid="bots-add-bot"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="bots-add-bot"]')?.textContent).toContain('Add bot');
+    const dialog = () => document.querySelector('[data-testid="bots-add-bot"]');
+    expect(dialog()).not.toBeNull();
+    expect(dialog()?.textContent).toContain('Add bot');
     // A bot belongs to one of the owner's workspaces, never a bot worker's.
     const options = [...document.querySelectorAll('[data-testid="bots-add-bot"] option')].map((o) => o.textContent);
     expect(options).toContain('api');
     expect(options).not.toContain('wtask: fix login');
-    // The form closes itself after adding (onDone); the list then shows the bot.
-    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="bots-add-bot"] button')].find((b) => b.textContent === 'Cancel')!;
-    act(() => cancel.click());
-    expect(document.querySelector('[data-testid="bots-add-bot"]')).toBeNull();
-    bots = [...bots, botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage')];
-    await act(async () => { for (const fn of notify) fn(); });
+    // A disabled Add says why.
+    const submit = dialog()!.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-submit"]')!;
+    expect(submit.disabled).toBe(true);
+    expect(dialog()!.querySelector('[data-testid="factory-add-bot-blocked"]')?.textContent).toBe('Give the bot a name to add it.');
+    const name = dialog()!.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Triage');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(dialog()!.querySelector('[data-testid="factory-add-bot-blocked"]')).toBeNull();
+    await act(async () => { submit.click(); });
     await act(async () => { await Promise.resolve(); });
+    // The form closes and the new bot's chat opens, starting, with no wait for the list.
+    expect(dialog()).toBeNull();
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+    expect(q('[data-bots-starting]')).not.toBeNull();
   });
 
-  it('newBotIds names the bots a list gained', () => {
-    const before = new Set([LEAD, VERIFIER]);
-    expect(newBotIds(before, [botRow(LEAD, 'lead', 'w1', 1, 'Lead'), botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage')])).toEqual(['bot-0000000e']);
-    expect(newBotIds(before, [])).toEqual([]);
+  it('"+" while the bots are off: Add asks once, in place, then turns them on and adds', async () => {
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
+    const added = botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: added }));
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    await render(<BotsPage settings={settings} />);
+    act(() => q('[data-bots-add]')!.click());
+    const dialog = document.querySelector('[data-testid="bots-add-bot"]')!;
+    const name = dialog.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Triage');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-submit"]')!.click());
+    expect(create).not.toHaveBeenCalled();
+    expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm-row"]')?.textContent).toContain('Adding Triage turns bots on');
+    await act(async () => { dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-on-confirm"]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('the splitter keeps the panel at 320px or more and the chat at 360px or more', () => {
+    expect(fitSideSplit(0.55, 1400)).toBe(0.55);
+    // 800px body: the panel can take at most 800 - 360 - 6 = 434px.
+    expect(fitSideSplit(0.75, 800)).toBeCloseTo(434 / 800);
+    expect(fitSideSplit(0.3, 800)).toBeCloseTo(320 / 800);
+    expect(fitSideSplit(0.9, 2000)).toBe(0.75);
+  });
+
+  it('isStillStarting: a new bot starts until its first message, unless its turn failed', () => {
+    const conv = (last: RoomCard | null, lastError?: { message: string; at: number }): Conversation => {
+      const row = botRow(LEAD, 'lead', 'w1', 1, 'Lead');
+      return { kind: 'bot', id: `bot:${LEAD}`, workspaceId: 'w1', row: { ...row, status: { ...row.status!, ...(lastError ? { lastError } : {}) } }, last, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [] };
+    };
+    expect(isStillStarting(undefined)).toBe(true);
+    expect(isStillStarting(conv(null))).toBe(true);
+    expect(isStillStarting(conv(card({ workspaceId: 'w1', actor: by('w1', LEAD) })))).toBe(false);
+    expect(isStillStarting(conv(null, { message: 'no login', at: 1 }))).toBe(false);
   });
 
   it('"+" without a create port opens the factory settings page', async () => {
@@ -702,6 +1013,113 @@ describe('Bots page', () => {
     expect(item.querySelector('.wmux-nav-badge')).toBeNull();
   });
 
+  it('messages are bubbles in runs: in a room the name tops the run, the avatar sits beside its last bubble', async () => {
+    // Right after c2 (seq 2), before the owner's reply.
+    cards.splice(2, 0, { ...card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'And the second part, @Verifier please check', at: 205 }), seq: 2.5 });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    const first = q('[data-room-card-id="c2"]')!;
+    const next = q(`[data-room-card-id="${cards[2].id}"]`)!;
+    expect(first.querySelector('[data-bots-msg-head]')?.textContent).toBe('Lead');
+    // The name is in the bot's identity colour; a mention is the bot's mark and name.
+    expect((first.querySelector('[data-bots-msg-head] span') as HTMLElement).style.color).toContain('color-mix');
+    expect(first.querySelector('.wmux-bots-bubble-bot')).not.toBeNull();
+    expect(first.getAttribute('data-run-end')).toBeNull();
+    expect(first.querySelector('[data-bot-avatar]')).toBeNull();
+    expect(next.getAttribute('data-continuation')).toBe('true');
+    expect(next.querySelector('[data-bots-msg-head]')).toBeNull();
+    expect(next.getAttribute('data-run-end')).toBe('true');
+    expect(next.querySelector('.wmux-bots-msg-gutter [data-bot-avatar]')).not.toBeNull();
+    const mention = next.querySelector(`[data-bots-mention="${VERIFIER}"]`)!;
+    expect(mention.textContent).toBe('Verifier');
+    expect(mention.querySelector('[data-bot-avatar]')).not.toBeNull();
+    // The owner's message is its own bubble on the right, read as markdown.
+    const mine = q('[data-bots-bubble="owner"]')!;
+    expect(mine.className).toContain('is-owner');
+    expect(mine.querySelector('.wmux-bots-bubble-owner')).not.toBeNull();
+    // A 1:1 needs no name above the run; the date and time divide.
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    expect(q('[data-room-card-id="c2"] [data-bots-msg-head]')).toBeNull();
+    expect(q('[data-bots-day]')?.textContent).toMatch(/\d/);
+  });
+
+  it('a PR link in a message is a chip; the composer is one pill with "+" offering first messages', async () => {
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Opened https://github.com/acme/api/pull/1 for review', at: 206 }));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const chip = q('[data-bots-ref-chip="pr:github.com/acme/api#1"]')!;
+    expect(chip.textContent).toContain('#1');
+    // This conversation holds the PR's thread: the chip opens it beside the chat.
+    act(() => chip.click());
+    expect(q('[data-bots-thread-panel]')?.getAttribute('data-bots-thread-panel')).toBe('pr:github.com/acme/api#1');
+    act(() => q('[data-bots-thread-close]')!.click());
+    const form = q('[data-bots-chat] [data-testid="bots-composer"]')!;
+    expect(form.className).toContain('wmux-bots-composer-pill');
+    act(() => q('[data-bots-chat] [data-bots-composer-plus]')!.click());
+    // The menu takes focus on its first item; arrows move through it.
+    expect(document.activeElement?.getAttribute('data-bots-composer-suggestion')).toBe('botsPage.chat.suggestDo');
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); });
+    expect(document.activeElement?.getAttribute('data-bots-composer-suggestion')).toBe('botsPage.chat.suggestStart');
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })); });
+    act(() => q('[data-bots-composer-suggestion="botsPage.chat.suggestDo"]')!.click());
+    expect(q<HTMLTextAreaElement>('[data-bots-chat] [data-testid="bots-composer-input"]')?.value).toBe('What can you do?');
+    expect(q('[data-bots-composer-menu]')).toBeNull();
+  });
+
+  it('the working rail says who is working and for how long, and its Stop interrupts the turn only', async () => {
+    const act$ = vi.fn(async () => ({ ok: true }));
+    bots[1] = { ...bots[1], status: { ...bots[1].status!, presence: 'running', currentTurn: { wakeId: 'w-1', startedAt: Date.now() - 14_000 }, queueDepth: 2 } };
+    setFactoryBotPort({ ...port, act: act$ });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const turn = q(`[data-bots-rail] [data-bots-turn="${LEAD}"]`)!;
+    expect(turn.textContent).toContain('Lead working');
+    expect(turn.textContent).toMatch(/0:1[45]/);
+    expect(turn.textContent).toContain('2 queued');
+    await act(async () => { q<HTMLButtonElement>(`[data-bots-turn-stop="${LEAD}"]`)!.click(); });
+    expect(act$).toHaveBeenCalledWith('interrupt', LEAD);
+    // With the bots off there is no turn line and no Stop.
+    act(() => useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: 'hq' } } as never));
+    expect(q('[data-bots-turn-stop]')).toBeNull();
+  });
+
+  it('a list row counts unread bot messages in neutral, and the orange needs-you count wins', async () => {
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', VERIFIER), title: 'Fresh news', at: Date.now() + 1000 }));
+    seedRooms();
+    await render(<BotsPage />);
+    expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)?.textContent).toBe('1');
+    // Lead has a question open: its needs-you badge shows, never an unread one.
+    expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)).not.toBeNull();
+    expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-unread]`)).toBeNull();
+    // A chat the narrow layout keeps hidden behind the list reads nothing.
+    const proto = HTMLElement.prototype as unknown as { checkVisibility?: () => boolean };
+    proto.checkVisibility = () => false;
+    try {
+      act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+      expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)?.textContent).toBe('1');
+    } finally {
+      delete proto.checkVisibility;
+    }
+    // Reading the 1:1 to its end clears it.
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)).toBeNull();
+  });
+
+  it('an empty 1:1 opens with the bot, its job and first messages that fill the composer', async () => {
+    const NEW = 'bot-0000000f';
+    bots.push(botRow(NEW, 'lead', 'w1', 600, 'Quiet'));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${NEW}"]`)!.click());
+    expect(q(`[data-bots-intro="${NEW}"]`)?.textContent).toContain('Quiet');
+    act(() => q('[data-bots-suggestion="botsPage.chat.suggestStatus"]')!.click());
+    expect(q<HTMLTextAreaElement>('[data-testid="bots-composer-input"]')?.value).toBe('Give me a status update.');
+  });
+
   it('Toggle Bots opens the Bots page and, pressed there, returns to Workspaces', () => {
     act(() => useStore.setState({ appRoute: 'workspaces' } as never));
     act(() => useStore.getState().toggleBotsView());
@@ -712,6 +1130,22 @@ describe('Bots page', () => {
 });
 
 describe('BotsChat helpers', () => {
+  it('mentionPattern: the longest name wins, a name ends at a word boundary, no names no pattern', async () => {
+    const { mentionPattern } = await import('../BotsChat');
+    const re = mentionPattern(['Ada', 'Ada Lovelace', 'Q.A'])!;
+    expect([...'hi @Ada Lovelace and @Ada, not @Adam or @Q.A!'.matchAll(re)].map((m) => m[1])).toEqual(['Ada Lovelace', 'Ada', 'Q.A']);
+    expect(mentionPattern([' '])).toBeNull();
+    // An email address is not a mention.
+    expect([...'write to user@Ada.com'.matchAll(re)]).toHaveLength(0);
+  });
+
+  it('githubRef: a PR or issue URL in any case is the canonical repo key', async () => {
+    const { githubRef } = await import('../BotsChat');
+    expect(githubRef('https://github.com/Acme/API/pull/12')).toEqual({ repoKey: 'github.com/acme/api', kind: 'pr', number: 12 });
+    expect(githubRef('https://github.com/acme/api/issues/3#issuecomment-1')).toEqual({ repoKey: 'github.com/acme/api', kind: 'issue', number: 3 });
+    expect(githubRef('https://example.com/acme/api/pull/12')).toBeNull();
+  });
+
   const t = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;
 
   it('oneToOneRefusal: only an off bot; a 1:1 mentions its bot, so a second bot of a role is reachable too', () => {
@@ -723,7 +1157,7 @@ describe('BotsChat helpers', () => {
   });
 
   it('chatCards narrows to a thread', () => {
-    const room: Conversation = { kind: 'room', id: 'room:w1', workspaceId: 'w1', isHq: false, bots: [], workers: [], last: null, lastAt: 0, needsYou: 0 };
+    const room: Conversation = { kind: 'room', id: 'room:w1', workspaceId: 'w1', bots: [], workers: [], last: null, lastAt: 0, needsYou: 0 };
     const a = card({ workspaceId: 'w1', actor: by('w1', LEAD) });
     const b = card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: 'task:t1' });
     expect(chatCards(room, [a, b], null)).toEqual([a, b]);
