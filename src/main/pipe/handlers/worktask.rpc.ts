@@ -62,6 +62,7 @@ import { HUMAN_WORKSPACE_ID } from '../../../shared/channels';
 import { sendToRenderer } from './_bridge';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
 import { git as runGit, type GitResult } from '../../git/git';
+import { workerGitPreflight } from '../../worktask/workerGit';
 import { hostCwdForPane } from '../../pty/wslCallerCwd';
 import { getExecEnv } from '../../../shared/execEnv';
 import { metaDirForWorktree } from '../../worktask/TaskWorktreeManager';
@@ -883,6 +884,12 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     if (blocked) return blocked;
     const target = await resolveReadCwd(params, ctx);
     if ('code' in target) return deny(target.code, target.message);
+    // A task's worktree is an agent's: a config naming a content filter is
+    // refused before a status read could run it (worktask/workerGit.ts).
+    if (target.taskId !== undefined) {
+      const pre = await workerGitPreflight((args) => exec('git', args, target.cwd), 'read');
+      if (!pre.ok) return { ok: false as const, target: 'task' as const, taskId: target.taskId, worktreePath: target.cwd, reason: 'git-failed' as const, error: pre.error };
+    }
     const res = await exec('git', ['status', '--porcelain=v1', '--branch', '-z'], target.cwd);
     // `target` says WHICH repository answered, in one field that is always
     // present — a caller mixing task reads and own-repo reads should not have

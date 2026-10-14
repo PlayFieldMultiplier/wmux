@@ -13,6 +13,8 @@
 // refspec, no URL rewrite may exist, and the URL must be a plain https or ssh
 // address of the repository main expects.
 
+import { git, type GitResult } from '../git/git';
+
 /** Runs git with `args` in the worktree; never throws. */
 export type WorkerGitRun = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
@@ -44,15 +46,27 @@ const PROGRAM_KEYS: readonly RegExp[] = [
   /^protocol\./,
   /^url\./,
   /^remote\..+\.(?:receivepack|uploadpack|vcs)$/,
-  /^push\.recursesubmodules$/,
+  /^push\.(?:recursesubmodules|gpgsign)$/,
+  // Where and how git's HTTP and ssh transports connect.
+  /^http\./,
+  /^ssh\./,
+  // Signing programs and content filters (clean/smudge/process).
+  /^gpg\./,
+  /^filter\./,
 ];
+
+/** What a read (status, rev-parse, hash-object, show) can run: a content
+ *  filter. The fsmonitor is off on every main git call (git/git.ts). */
+const READ_PROGRAM_KEYS: readonly RegExp[] = [/^filter\./];
 
 /** Why main will not run git with this repository and worktree config, or
  *  null. Only the repository's own scopes count (`local`, `worktree`): the
- *  system and the owner's global config are the owner's. Pure. */
-export function workerGitConfigRefusal(entries: readonly GitConfigEntry[]): string | null {
+ *  system and the owner's global config are the owner's. `read` checks only
+ *  what a read can run. Pure. */
+export function workerGitConfigRefusal(entries: readonly GitConfigEntry[], mode: 'all' | 'read' = 'all'): string | null {
   const own = entries.filter((e) => e.scope === 'local' || e.scope === 'worktree');
-  const hit = own.find((e) => PROGRAM_KEYS.some((re) => re.test(e.key)));
+  const keys = mode === 'read' ? READ_PROGRAM_KEYS : PROGRAM_KEYS;
+  const hit = own.find((e) => keys.some((re) => re.test(e.key)));
   return hit ? `the repository's git config sets ${hit.key}, which main does not run git with` : null;
 }
 
@@ -70,13 +84,13 @@ export function workerOriginRefusal(entries: readonly GitConfigEntry[]): { error
 }
 
 /** A plain https or ssh GitHub-style address → `host/owner/repo`
- *  (lowercased), or null for any other form (a path, file://, ext::, a
- *  port, a query). Pure. */
+ *  (lowercased; a port is allowed and not part of the key), or null for any
+ *  other form (a path, file://, ext::, a query, more path parts). Pure. */
 export function originUrlRepoKey(url: string): string | null {
   const seg = '[A-Za-z0-9_.-]+';
   const forms = [
-    new RegExp(`^https://(?:${seg}@)?(${seg})/(${seg})/(${seg})$`),
-    new RegExp(`^ssh://${seg}@(${seg})/(${seg})/(${seg})$`),
+    new RegExp(`^https://(?:${seg}@)?(${seg})(?::\\d{1,5})?/(${seg})/(${seg})$`),
+    new RegExp(`^ssh://${seg}@(${seg})(?::\\d{1,5})?/(${seg})/(${seg})$`),
     new RegExp(`^${seg}@(${seg}):(${seg})/(${seg})$`),
   ];
   const trimmed = url.trim().replace(/\/$/, '');
@@ -90,11 +104,21 @@ export function originUrlRepoKey(url: string): string | null {
   return null;
 }
 
+/** Main's git in a worker's worktree for a read (status, rev-parse,
+ *  hash-object): the config check first; a refusal comes back as a failed
+ *  call with the reason. */
+export async function runWorkerGitRead(args: string[], cwd: string): Promise<GitResult> {
+  const run = (a: string[]) => git(a, cwd);
+  const pre = await workerGitPreflight(run, 'read');
+  if (!pre.ok) return { stdout: '', stderr: pre.error, code: 1 };
+  return run(args);
+}
+
 /** Read the worktree's config and refuse what main does not run git with. */
-export async function workerGitPreflight(run: WorkerGitRun): Promise<{ ok: true; entries: GitConfigEntry[] } | { ok: false; error: string }> {
+export async function workerGitPreflight(run: WorkerGitRun, mode: 'all' | 'read' = 'all'): Promise<{ ok: true; entries: GitConfigEntry[] } | { ok: false; error: string }> {
   const r = await run(['config', '-z', '--list', '--show-scope']);
   if (r.code !== 0) return { ok: false, error: `git config --list failed: ${r.stderr.trim().slice(0, 300)}` };
   const entries = parseGitConfigList(r.stdout);
-  const refusal = workerGitConfigRefusal(entries);
+  const refusal = workerGitConfigRefusal(entries, mode);
   return refusal ? { ok: false, error: refusal } : { ok: true, entries };
 }

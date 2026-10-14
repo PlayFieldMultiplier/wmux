@@ -110,7 +110,13 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }
-  const own = key && input.repoDefaultBranch ? await input.repoDefaultBranch(key).catch(() => null) : null;
+  // The repository's own default branch: GitHub's by the key, else origin/HEAD.
+  let own = key && input.repoDefaultBranch ? await input.repoDefaultBranch(key).catch(() => null) : null;
+  if (!own) {
+    const ref = await run(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+    const name = ref.code === 0 ? ref.stdout.trim() : '';
+    own = name.startsWith('refs/remotes/origin/') ? name.slice('refs/remotes/origin/'.length) : null;
+  }
   if (own) {
     const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, own]);
     if (refusal) return { ok: false, reason: 'branch-refused', error: refusal };

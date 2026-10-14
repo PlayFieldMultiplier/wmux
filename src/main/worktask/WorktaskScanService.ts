@@ -31,6 +31,8 @@ import { getWmuxHomeDir } from '../../shared/constants';
 import { getExecEnv } from '../../shared/execEnv';
 import { normalizeWorktreePath, WORKTASK_META_FILENAME, type WorkTaskMetaStamp } from '../../shared/workTask';
 import { metaDirForWorktree } from './TaskWorktreeManager';
+import { git } from '../git/git';
+import { workerGitPreflight } from './workerGit';
 import { PHONE_WORKTREE_DIR_PREFIX } from '../../shared/phoneGitV1';
 
 const execFileAsync = promisify(execFile);
@@ -327,7 +329,11 @@ export class WorktaskScanService {
 
 /** 기본 dirty 판정: `git status --porcelain` 비어있지 않으면 dirty. */
 async function defaultIsDirty(worktreePath: string): Promise<boolean> {
-  const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+  // A config that names a content filter is refused (worktask/workerGit.ts):
+  // a status read could run it. No fsmonitor either.
+  const pre = await workerGitPreflight((args) => git(args, worktreePath), 'read');
+  if (!pre.ok) throw new Error(pre.error);
+  const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', 'status', '--porcelain'], {
     cwd: worktreePath,
     timeout: 30000,
     windowsHide: true,

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pushTaskBranch, taskPushArgs, taskPushBranchRefusal } from '../taskPush';
-import { originUrlRepoKey } from '../workerGit';
+import { originUrlRepoKey, runWorkerGitRead } from '../workerGit';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -80,6 +80,22 @@ describe('pushTaskBranch', () => {
     expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
   });
 
+  it('main\'s reads in a worker worktree refuse a content filter and never run an fsmonitor', async () => {
+    const marker = path.join(root, 'ran');
+    const prog = path.join(root, 'p.sh');
+    fs.writeFileSync(prog, `#!/bin/sh\ntouch '${marker}'\ncat\n`, { mode: 0o755 });
+    git(work, 'config', 'core.fsmonitor', prog);
+    expect((await runWorkerGitRead(['status', '--porcelain'], work)).code).toBe(0);
+    git(work, 'config', 'filter.x.clean', prog);
+    expect(await runWorkerGitRead(['status', '--porcelain'], work)).toMatchObject({ code: 1, stderr: expect.stringMatching(/filter\.x\.clean/) });
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('refuses origin\'s own default branch (origin/HEAD) for a task of the operator\'s', async () => {
+    git(work, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    expect(await pushTaskBranch(input('trunk'))).toMatchObject({ ok: false, reason: 'branch-refused' });
+  });
+
   it('refuses a repository with no origin', async () => {
     git(work, 'remote', 'remove', 'origin');
     expect(await pushTaskBranch(input())).toMatchObject({ ok: false, reason: 'no-origin' });
@@ -106,6 +122,9 @@ describe('pushTaskBranch', () => {
       ['core.sshCommand', prog, 'config-refused'],
       ['credential.helper', `!${prog}`, 'config-refused'],
       ['include.path', path.join(root, 'more.config'), 'config-refused'],
+      ['http.curloptResolve', 'github.com:443:127.0.0.1', 'config-refused'],
+      ['gpg.program', prog, 'config-refused'],
+      ['filter.x.clean', prog, 'config-refused'],
     ];
     for (const [key, value, reason] of cases) {
       git(work, 'config', key, value);
@@ -125,7 +144,8 @@ describe('pushTaskBranch', () => {
     expect(originUrlRepoKey('git@github.com:Acme/App.git')).toBe('github.com/acme/app');
     expect(originUrlRepoKey('https://github.com/acme/app')).toBe('github.com/acme/app');
     expect(originUrlRepoKey('ssh://git@github.com/acme/app.git')).toBe('github.com/acme/app');
-    for (const bad of ['/srv/app.git', 'file:///srv/app.git', 'ext::sh -c x', 'https://github.com/acme/app/extra', '--upload-pack=x', 'ssh://git@github.com:22/acme/app.git']) {
+    expect(originUrlRepoKey('ssh://git@github.com:22/acme/app.git')).toBe('github.com/acme/app');
+    for (const bad of ['/srv/app.git', 'file:///srv/app.git', 'ext::sh -c x', 'https://github.com/acme/app/extra', '--upload-pack=x', 'git@github.com:22:acme/app.git']) {
       expect(originUrlRepoKey(bad), bad).toBeNull();
     }
   });

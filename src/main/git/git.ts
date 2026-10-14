@@ -19,7 +19,9 @@ export async function git(args: string[], cwd: string): Promise<GitResult> {
   try {
     const env = getExecEnv();
     // Absolute path found on PATH, so a git.exe inside `cwd` is never started (Windows).
-    const { stdout, stderr } = await execFileAsync(resolveExecutable('git', { env }), args, {
+    // Main's git never runs a configured fsmonitor: a worktree's config can
+    // be written by the agent working in it.
+    const { stdout, stderr } = await execFileAsync(resolveExecutable('git', { env }), ['-c', 'core.fsmonitor=false', ...args], {
       cwd,
       timeout: 30000,
       windowsHide: true,
