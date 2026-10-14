@@ -76,8 +76,9 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   'Bash(git*push*--force*)', 'Bash(git*push* -f)', 'Bash(git*push* -f *)',
   ...['u', 'v', 'q', 'n'].flatMap((x) => [`Bash(git*push* -${x}f*)`, `Bash(git*push* -f${x}*)`, `Bash(git*push* -${x}${x === 'u' ? 'v' : 'u'}f*)`]),
   'Bash(git*push* +*)', 'Bash(git*push*:+*)',
-  // Every ref at once, or deleting one.
-  'Bash(git*push*--mirror*)', 'Bash(git*push*--all*)', 'Bash(git*push*--delete*)', 'Bash(git*push* -d *)', 'Bash(git*push* :*)',
+  // Every ref at once, or deleting one. `:**`, not `:*`: Claude Code reads a
+  // trailing `:*` as its prefix syntax and then matches the `*`s literally.
+  'Bash(git*push*--mirror*)', 'Bash(git*push*--all*)', 'Bash(git*push*--delete*)', 'Bash(git*push* -d *)', 'Bash(git*push* :**)',
   ...BOT_WORKER_FALLBACK_DEFAULT_BRANCHES.flatMap(pushDenyForBranch),
   // A push that names no destination goes wherever the branch's upstream or
   // the push config says: a worker names its own branch.

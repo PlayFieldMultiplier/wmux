@@ -27,6 +27,11 @@ describe('bot worker deny rules', () => {
     expect(BOT_WORKER_DENY).toEqual(expect.arrayContaining([...BOT_WORKER_PUSH_DENY, ...BOT_WORKER_PUBLIC_DENY]));
   });
 
+  it('no rule ends in `:*` after another `*`, which Claude Code would match literally', () => {
+    const { deny } = buildBotWorkerSettings(['develop']).permissions as { deny: string[] };
+    expect(deny.filter((r) => /\*.*:\*\)$/.test(r))).toEqual([]);
+  });
+
   it.each([
     'gh pr merge 3 --squash',
     'gh api -X PUT repos/o/r/pulls/3/merge',
