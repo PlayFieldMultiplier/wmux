@@ -55,3 +55,21 @@ export function connectorTaskLaneRefused(snap, expect) {
     ...taintLaneRefused(snap, expect),
   ];
 }
+
+/** connector-codex-worker-launch. */
+export function connectorCodexWorkerLaunch(snap, expect) {
+  const name = expect.connector ?? 'probe';
+  const rows = leadRows(snap, expect.lead);
+  const starts = arr(snap.workers).filter((e) => e.event === 'start');
+  const start = starts[0];
+  const m = start?.codexMcp;
+  return [
+    criterion('task_names_connection', rows.length === 1 && JSON.stringify(rows[0].dispatch?.connectors) === JSON.stringify([name]),
+      rows.map((e) => JSON.stringify(e.dispatch?.connectors)).join(', ') || 'no lead task'),
+    criterion('task_tainted', rows.length === 1 && rows[0].dispatch?.origin?.tainted === true, rows.map((e) => String(e.dispatch?.origin?.tainted)).join(', ') || 'no lead task'),
+    criterion('worker_ran_codex', starts.length === 1 && start.agent === 'codex', starts.map((s) => s.agent).join(', ') || 'no worker start'),
+    criterion('apps_and_plugins_off', arr(m?.featuresOff).includes('apps') && arr(m?.featuresOff).includes('plugins'), JSON.stringify(m?.featuresOff ?? null)),
+    criterion('wmux_kept', !arr(m?.serversOff).includes('wmux'), JSON.stringify(m?.serversOff ?? null)),
+    criterion('connection_listed_tools_only', JSON.stringify(m?.tables) === JSON.stringify([{ name, enabledTools: '"probe_read"' }]), JSON.stringify(m?.tables ?? null)),
+  ];
+}

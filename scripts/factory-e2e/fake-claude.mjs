@@ -23,7 +23,7 @@
 // The `start` line also records what the launch would load: whether it
 // carried `--strict-mcp-config`, the server names in its `--mcp-config` file
 // and the settings file's allow rules (never a key value: the files hold
-// none).
+// none); for codex, the MCP `-c` words.
 //
 // Every step is logged to FACTORY_E2E_WORKER_LOG as one JSON line.
 
@@ -120,10 +120,19 @@ function launchConfig(argv) {
   };
   const mcp = read(value('--mcp-config'));
   const settings = read(value('--settings'));
+  // A codex line's `-c` words: the features and owner servers it turns off,
+  // and each connection table's name with the tools it lists.
+  const words = argv.filter((_, i) => argv[i - 1] === '-c');
+  const tables = words.map((w) => /^mcp_servers\.([a-z0-9-]+)=(\{.*\})$/.exec(w)).filter(Boolean);
   return {
     strict: argv.includes('--strict-mcp-config'),
     mcpServers: mcp ? Object.keys(mcp.mcpServers ?? {}) : null,
     allow: settings?.permissions?.allow ?? [],
+    codexMcp: {
+      featuresOff: words.map((w) => /^features\.(\w+)=false$/.exec(w)?.[1]).filter(Boolean),
+      serversOff: words.map((w) => /^mcp_servers\.([A-Za-z0-9_-]+)\.enabled=false$/.exec(w)?.[1]).filter(Boolean),
+      tables: tables.map((m) => ({ name: m[1], enabledTools: /"enabled_tools"=\[([^\]]*)\]/.exec(m[2])?.[1] ?? null })),
+    },
   };
 }
 

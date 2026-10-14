@@ -64,6 +64,7 @@ export const GRADERS = {
   'connector-worker-launch': connectors.connectorWorkerLaunch,
   'connector-off-for-bot-refused': connectors.connectorOffForBotRefused,
   'connector-task-lane-refused': connectors.connectorTaskLaneRefused,
+  'connector-codex-worker-launch': connectors.connectorCodexWorkerLaunch,
 };
 
 /** `{status: 'pass'|'fail'|'error', criteria}` for one snapshot. */
