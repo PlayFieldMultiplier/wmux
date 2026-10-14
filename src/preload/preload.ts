@@ -114,7 +114,8 @@ import type {
   PcRailStreamEvent,
 } from '../shared/pcRail';
 import type { PcRailFeedEvent } from '../main/remote/pcRailWire';
-import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary } from '../shared/remoteHosts';
+import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshTunnelState } from '../shared/remoteHosts';
+import { REMOTE_SSH_IPC } from '../shared/remoteHosts';
 
 /** Mirrors {@link McpStatusPayload} in src/main/ipc/handlers/mcp.handler.ts. */
 export interface McpTargetStatusPayload {
@@ -2073,6 +2074,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const listener = () => callback();
     ipcRenderer.on(IPC.REMOTE_POLL_TICK, listener);
     return () => { ipcRenderer.removeListener(IPC.REMOTE_POLL_TICK, listener); };
+  },
+  // Add PC over SSH: main runs ssh; the renderer only names the destination.
+  sshCandidates: () => ipcRenderer.invoke(REMOTE_SSH_IPC.CANDIDATES) as Promise<string[]>,
+  sshAdd: (alias: string, requestId: string, label?: string) =>
+    ipcRenderer.invoke(REMOTE_SSH_IPC.ADD, alias, requestId, label) as Promise<SshAddResult>,
+  sshStates: () => ipcRenderer.invoke(REMOTE_SSH_IPC.STATES) as Promise<Record<string, SshTunnelState>>,
+  sshConfirm: (hostId: string, accept?: { resolvedHost: string; hostKeyFingerprint: string }) =>
+    ipcRenderer.invoke(REMOTE_SSH_IPC.CONFIRM, hostId, accept) as Promise<SshConfirmResult>,
+  sshRepair: (hostId: string) => ipcRenderer.invoke(REMOTE_SSH_IPC.REPAIR, hostId) as Promise<SshAddResult>,
+  sshCancel: (requestId: string) => ipcRenderer.invoke(REMOTE_SSH_IPC.CANCEL, requestId) as Promise<boolean>,
+  onSshProgress: (callback: (e: SshAddProgress) => void) => {
+    const listener = (_event: unknown, payload: SshAddProgress) => callback(payload);
+    ipcRenderer.on(REMOTE_SSH_IPC.PROGRESS, listener);
+    return () => { ipcRenderer.removeListener(REMOTE_SSH_IPC.PROGRESS, listener); };
   },
 };
 

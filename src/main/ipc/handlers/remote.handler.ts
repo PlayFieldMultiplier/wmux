@@ -27,12 +27,20 @@ import {
 } from '../../remote/RemoteHostClient';
 import type { RemoteHostsStore } from '../../remote/RemoteHostsStore';
 import type { RemoteAttachmentsStore } from '../../remote/RemoteAttachmentsStore';
+import type { SshTunnelRegistry } from '../../remote/SshTunnelSupervisor';
+import * as os from 'os';
+import * as path from 'path';
+import { addSshHost, observeSshHost, repairSshHost } from '../../remote/sshAddFlow';
+import { listSshConfigHosts } from '../../remote/sshConfigHosts';
+import { loadServerManifest, openVerifiedArtifact, type SshRun } from '../../remote/SshBootstrap';
+import { isValidSshAlias } from '../../remote/sshCommand';
+import type { ServerArtifactManifest } from '../../../shared/sshPcContract';
 import { RemoteAttentionSubscriber } from '../../remote/RemoteAttentionSubscriber';
 import type { RemoteAttentionNotification } from '../../remote/remoteAttention';
 import { isCategoryMuted } from '../../notification/mutedCategories';
 import { toastManager } from '../../notification/ToastManager';
 import { isPcRailHostMuted } from './pcRail.handler';
-import { parseRemoteAttachmentKey, parseWebUrl, remoteAttachmentKey, REMOTE_POLL_INTERVAL_MS } from '../../../shared/remoteHosts';
+import { parseRemoteAttachmentKey, parseWebUrl, remoteAttachmentKey, REMOTE_POLL_INTERVAL_MS, REMOTE_SSH_IPC } from '../../../shared/remoteHosts';
 import { normalizeWorkspaceColor } from '../../../shared/workspaceColors';
 import { DEVICE_KIND_HEADER } from '../../../shared/web';
 import { HostStatusProber, combineHostStatus } from '../../remote/hostStatus';
@@ -47,6 +55,9 @@ import type {
   RemoteHostPublic,
   RemoteHostStatus,
   RemoteWorkspaceSummary,
+  SshAddResult,
+  SshConfirmResult,
+  SshTunnelState,
 } from '../../../shared/remoteHosts';
 
 // Bearer-credentialed probe — never let a hung remote hang the add/refresh
@@ -93,6 +104,17 @@ export interface RegisterRemoteHandlersDeps {
   fetchImpl?: typeof fetch;
   /** Test seam: the hub's status prober (clock, TTL, concurrency). */
   statusProber?: HostStatusProber;
+  /** Tunnels of hosts added over SSH; `fetchImpl` routes through them. */
+  sshTunnels?: SshTunnelRegistry;
+  /** Test seam: how ssh is run for "Add PC over SSH". */
+  sshRun?: SshRun;
+  /** Test seam: the server manifest baked into this build. */
+  serverManifest?: ServerArtifactManifest | null;
+}
+
+/** resources/ of this build: the packaged app's, or the repo's in development. */
+function resourcesDir(): string {
+  return app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
 }
 
 interface AttachRecord {
@@ -207,6 +229,7 @@ async function exchangePairCode(
   origin: string,
   code: string,
   fetchImpl: typeof fetch,
+  cancel?: AbortSignal,
 ): Promise<PairExchangeResult> {
   let res: Response;
   try {
@@ -218,7 +241,7 @@ async function exchangePairCode(
       // Display only: the host's roster shows this device as a computer. The
       // host allowlists the value and never authorizes on it.
       headers: { [DEVICE_KIND_HEADER]: 'computer' },
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      signal: cancel ? AbortSignal.any([cancel, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
   } catch {
     return { ok: false, reason: 'unreachable' };
@@ -752,6 +775,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       for (const [attachId, record] of [...attachRecords.entries()]) {
         if (record.hostId === hostId) detachAttach(attachId);
       }
+      deps.sshTunnels?.stop(hostId);
       return true;
     }));
 
@@ -1030,7 +1054,136 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       return true;
     }));
 
+  // --- Add PC over SSH ----------------------------------------------------
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.CANDIDATES);
+  ipcMain.handle(REMOTE_SSH_IPC.CANDIDATES, wrapHandler(REMOTE_SSH_IPC.CANDIDATES, async (): Promise<string[]> => {
+    const taken = new Set(store.list().map((h) => h.ssh?.alias).filter(Boolean));
+    return listSshConfigHosts().filter((a) => !taken.has(a));
+  }));
+
+  // Adds in flight, by request id: Cancel and app quit abort them (and the ssh they run).
+  const sshAdds = new Map<string, AbortController>();
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.CANCEL);
+  ipcMain.handle(REMOTE_SSH_IPC.CANCEL, wrapHandler(REMOTE_SSH_IPC.CANCEL, async (_e: IpcMainInvokeEvent, rawRequestId: unknown): Promise<boolean> => {
+    const controller = typeof rawRequestId === 'string' ? sshAdds.get(rawRequestId) : undefined;
+    controller?.abort();
+    return controller !== undefined;
+  }));
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.ADD);
+  ipcMain.handle(REMOTE_SSH_IPC.ADD, wrapHandler(REMOTE_SSH_IPC.ADD,
+    async (e: IpcMainInvokeEvent, rawAlias: unknown, rawRequestId: unknown, label?: unknown): Promise<SshAddResult> => {
+      const alias = typeof rawAlias === 'string' ? rawAlias.trim() : '';
+      const requestId = typeof rawRequestId === 'string' ? rawRequestId.slice(0, 64) : '';
+      const safeLabel = typeof label === 'string' ? label.slice(0, 128) : undefined;
+      const registry = deps.sshTunnels;
+      if (!registry) return { ok: false, kind: 'failed', message: 'ssh is not available in this build' };
+      const sender = e.sender;
+      const controller = new AbortController();
+      if (requestId) sshAdds.set(requestId, controller);
+      const manifest = deps.serverManifest !== undefined ? deps.serverManifest : loadServerManifest(resourcesDir(), !app.isPackaged);
+      const result = await addSshHost(alias, safeLabel, {
+        registry,
+        manifest,
+        deviceName: os.hostname(),
+        run: deps.sshRun,
+        openArtifact: (version, arch, sha256, signal) =>
+          openVerifiedArtifact(version, arch, sha256, path.join(app.getPath('userData'), 'server-artifacts'), { allowDevOverride: !app.isPackaged, signal }),
+        exchange: (origin, code, signal) => exchangePairCode(origin, code, fetchImpl, signal),
+        probe: async (origin, token) => {
+          const probe = await probeConfig(origin, token, fetchImpl);
+          if (probe.kind !== 'ok') return false;
+          return true;
+        },
+        persist: (id, binding, token, hostLabel, allowInput) => {
+          // Fail-closed persistence (see hostsAdd): never let the throw escape
+          // with the minted token in scope.
+          try {
+            return store.addSsh(id, binding, token, hostLabel, allowInput);
+          } catch {
+            return { ok: false, error: 'could not save host' };
+          }
+        },
+        isRegistered: (a) => store.list().some((h) => h.ssh?.alias === a),
+        onPhase: (phase) => {
+          if (!sender.isDestroyed()) sender.send(REMOTE_SSH_IPC.PROGRESS, { requestId, phase });
+        },
+        signal: controller.signal,
+      }).finally(() => { if (sshAdds.get(requestId) === controller) sshAdds.delete(requestId); });
+      if (result.ok) statusProber.invalidate(result.host.id);
+      return result;
+    }));
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.STATES);
+  ipcMain.handle(REMOTE_SSH_IPC.STATES, wrapHandler(REMOTE_SSH_IPC.STATES,
+    async (): Promise<Record<string, SshTunnelState>> => {
+      const out: Record<string, SshTunnelState> = {};
+      for (const h of store.list()) if (h.ssh) out[h.id] = deps.sshTunnels?.state(h.id) ?? { state: 'idle' };
+      return out;
+    }));
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.CONFIRM);
+  ipcMain.handle(REMOTE_SSH_IPC.CONFIRM, wrapHandler(REMOTE_SSH_IPC.CONFIRM,
+    async (_e: IpcMainInvokeEvent, rawHostId: unknown, accept?: unknown): Promise<SshConfirmResult> => {
+      const host = store.get(assertString(rawHostId, 'hostId'));
+      if (!host?.ssh || !isValidSshAlias(host.ssh.alias)) return { ok: false, kind: 'failed', message: 'unknown host' };
+      const seen = await observeSshHost(host.ssh, deps.sshRun);
+      if (!seen.ok) return seen;
+      // ssh logs in and sees the confirmed computer: whatever the tunnel refused
+      // before (a login that failed until the key was set up) is retried now.
+      if (
+        seen.resolvedHost === host.ssh.resolvedHost && seen.hostKeyFingerprint === host.ssh.hostKeyFingerprint
+        // A healthy tunnel (live streams, input in flight) is left alone.
+        && deps.sshTunnels?.state(host.id).state === 'failed'
+      ) {
+        deps.sshTunnels?.reset(host.id, host.ssh);
+        statusProber.invalidate(host.id);
+      }
+      const want = accept as { resolvedHost?: unknown; hostKeyFingerprint?: unknown } | undefined;
+      // Applied only when the user accepted exactly what ssh shows now.
+      if (!want || want.resolvedHost !== seen.resolvedHost || want.hostKeyFingerprint !== seen.hostKeyFingerprint) return seen;
+      const binding = { ...host.ssh, resolvedHost: seen.resolvedHost, hostKeyFingerprint: seen.hostKeyFingerprint };
+      try {
+        if (!store.updateSshBinding(host.id, binding)) return { ok: false, kind: 'failed', message: 'unknown host' };
+      } catch {
+        return { ok: false, kind: 'failed', message: 'could not save host' };
+      }
+      // Clears any refusal, even when the stored values did not change.
+      deps.sshTunnels?.reset(host.id, binding);
+      statusProber.invalidate(host.id);
+      return { ...seen, applied: true };
+    }));
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.REPAIR);
+  ipcMain.handle(REMOTE_SSH_IPC.REPAIR, wrapHandler(REMOTE_SSH_IPC.REPAIR,
+    async (_e: IpcMainInvokeEvent, rawHostId: unknown): Promise<SshAddResult> => {
+      const host = store.get(assertString(rawHostId, 'hostId'));
+      if (!host?.ssh) return { ok: false, kind: 'failed', message: 'unknown host' };
+      const result = await repairSshHost(host.id, host.ssh, {
+        deviceName: os.hostname(),
+        run: deps.sshRun,
+        exchange: (origin, code) => exchangePairCode(origin, code, fetchImpl),
+        probe: async (origin, token) => (await probeConfig(origin, token, fetchImpl)).kind === 'ok',
+        replace: (token) => {
+          try {
+            return store.replaceCredential(host.id, host.origin, token);
+          } catch {
+            return { ok: false, error: 'could not save host' };
+          }
+        },
+      });
+      if (result.ok) {
+        // Every live connection was built on the refused credential.
+        dropHostConnections(host.id);
+        statusProber.invalidate(host.id);
+      }
+      return result;
+    }));
+
   const onWillQuit = (): void => {
+    for (const controller of sshAdds.values()) controller.abort();
     for (const client of clients.values()) client.detachAll();
     pollSubscribers.clear();
     syncPollTimer();
@@ -1067,6 +1220,12 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     ipcMain.removeHandler(IPC.REMOTE_PANE_RESIZE_REQUEST);
     ipcMain.removeHandler(IPC.REMOTE_POLL_SUBSCRIBE);
     ipcMain.removeHandler(IPC.REMOTE_POLL_UNSUBSCRIBE);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.CANDIDATES);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.ADD);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.STATES);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.CONFIRM);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.REPAIR);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.CANCEL);
     // #1391 — the timer is the one thing here that outlives `removeHandler`.
     // Every other resource above is reachable only through a route that has
     // just been unregistered; an interval keeps firing on its own, against
