@@ -224,11 +224,22 @@ async function build(opts) {
     }
     stageNodePty(path.join(resources, 'daemon-bundle', 'node_modules', 'node-pty'));
 
-    // Every native file in the artifact, so a future addon cannot slip past.
+    // Every ELF file in the artifact (addons, helpers it execs), so a future
+    // native file cannot slip past.
     let glibcMin = NODE_GLIBC_FLOOR;
+    const isElf = (file) => {
+      if (!fs.statSync(file).isFile()) return false;
+      const fd = fs.openSync(file, 'r');
+      try {
+        const head = Buffer.alloc(4);
+        return fs.readSync(fd, head, 0, 4, 0) === 4 && head.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+      } finally {
+        fs.closeSync(fd);
+      }
+    };
     const elves = [
       path.join(nodeDir, 'bin', 'node'),
-      ...fs.readdirSync(resources, { recursive: true }).filter((f) => f.endsWith('.node')).map((f) => path.join(resources, f)),
+      ...fs.readdirSync(resources, { recursive: true }).map((f) => path.join(resources, f)).filter(isElf),
     ];
     for (const file of elves) {
       const buf = fs.readFileSync(file);
