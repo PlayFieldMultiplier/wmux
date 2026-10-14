@@ -2002,8 +2002,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.REMOTE_WORKSPACES_LIST, hostId) as Promise<
       { ok: true; workspaces: RemoteWorkspaceSummary[] } | { ok: false; error: string; reason?: RemoteErrorReason }
     >,
-  workspaceCreate: (hostId: string, workspaceId: string, cwd?: string) =>
-    ipcRenderer.invoke(IPC.REMOTE_WORKSPACE_CREATE, hostId, workspaceId, cwd) as Promise<
+  workspaceCreate: (hostId: string, workspaceId: string, cwd?: string, name?: string) =>
+    ipcRenderer.invoke(IPC.REMOTE_WORKSPACE_CREATE, hostId, workspaceId, cwd, name) as Promise<
       { ok: true; sessionId: string } | { ok: false; error: string; reason?: RemoteErrorReason }
     >,
   sessionClose: (hostId: string, sessionId: string) =>

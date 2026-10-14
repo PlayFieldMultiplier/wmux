@@ -698,6 +698,8 @@ export interface WebSessionLifecycle {
     account?: ResolvedPaneAccount;
     /** Lineage to store on the new pane. */
     handoffFrom?: StoredHandoffFrom;
+    /** Name for a workspace this create starts. Ignored when a live pane already runs under `workspaceId`. */
+    workspaceName?: string;
   }): Promise<{ id: string }>;
   /** Close a pane and dispose its PTY. Called only for an id already resolved. */
   destroy(id: string): Promise<void>;
@@ -6784,8 +6786,15 @@ export class WebTerminalServer {
       if (!fresh.ok) return this.json(res,401,{error:'authorization-expired'});
       if (!this.mayInput(fresh.principal)) return this.refuseInput(res,fresh.principal,'Input permission changed');
       const caller = fresh.principal;
-      const b = (body ?? {}) as { workspaceId?: unknown; cwd?: unknown; agentLaunch?: unknown; accountId?: unknown; handoffFrom?: unknown };
+      const b = (body ?? {}) as { workspaceId?: unknown; cwd?: unknown; agentLaunch?: unknown; accountId?: unknown; handoffFrom?: unknown; workspaceName?: unknown };
       const workspaceId = typeof b.workspaceId === 'string' ? b.workspaceId.trim() : '';
+      // Additive: a name for a workspace this pane STARTS. A workspace any pane
+      // the daemon knows (live, suspended, dead or awaiting recovery) runs under
+      // keeps its name; the field never renames one.
+      const workspaceName = workspaceId && b.workspaceName !== undefined && !this.deps.sessionManager.listSessions()
+        .some((s) => s.env?.[ENV_KEYS.WORKSPACE_ID] === workspaceId)
+        ? newWorkspaceName(b.workspaceName)
+        : undefined;
       const cwd = typeof b.cwd === 'string' ? b.cwd.trim() : '';
       // Contract v-next item 4. The account list needs transcript access, so
       // naming one does too; checked before the shape so a caller without the
@@ -6852,6 +6861,7 @@ export class WebTerminalServer {
         .create({
           ...(workspaceId ? { workspaceId } : {}), ...(cwd ? { cwd } : {}), ...(agentLaunch ? {agentLaunch} : {}),
           ...(account ? { account } : {}), ...(handoffFrom ? { handoffFrom } : {}),
+          ...(workspaceName ? { workspaceName } : {}),
           authorized: stillAuthorized,
         })
         .then(({ id }) => {
@@ -10220,6 +10230,28 @@ function hqRole(sidebar: PhoneSidebarSnapshot | null, workspaceId: unknown): { r
 /** A pane's extracted scrollback is current while nothing was written and the geometry held. */
 function scrollbackKey(managed: ManagedSession): string {
   return `${managed.meta.incarnationId ?? ''}\0${managed.ringBuffer.totalBytesWritten}\0${managed.meta.cols}x${managed.meta.rows}`;
+}
+
+/** Longest workspace name a create may set: the remote rename's own cap (RemoteWorkspaceItem). */
+export const MAX_NEW_WORKSPACE_NAME_CHARS = 64;
+
+// C0/C1 controls, DEL, the Unicode line/paragraph separators, zero-width and
+// directional marks, and the bidi embedding/override/isolate characters: the
+// set cleanRemoteText strips from remote display text, plus U+200B–U+200F.
+// eslint-disable-next-line no-control-regex
+const WORKSPACE_NAME_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+
+/**
+ * POST /api/sessions `workspaceName`: control and invisible formatting
+ * characters removed (it becomes WMUX_WORKSPACE_NAME in the child's env and a
+ * sidebar label), trimmed, and cut to MAX_NEW_WORKSPACE_NAME_CHARS code
+ * points. Anything else is no name.
+ */
+export function newWorkspaceName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const clean = value.replace(WORKSPACE_NAME_CONTROLS, '').trim();
+  const name = Array.from(clean).slice(0, MAX_NEW_WORKSPACE_NAME_CHARS).join('').trim();
+  return name || undefined;
 }
 
 /** The pane's workspace id from its spawn env, bounded like every id on the wire. */

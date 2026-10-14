@@ -814,14 +814,16 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       hostId: unknown,
       workspaceId: unknown,
       cwd?: unknown,
+      name?: unknown,
     ): Promise<{ ok: true; sessionId: string } | { ok: false; error: string; reason?: RemoteErrorReason }> => {
       const id = assertString(hostId, 'hostId');
       const wsId = assertString(workspaceId, 'workspaceId');
-      const safeCwd = cwd === undefined ? undefined : assertString(cwd, 'cwd');
+      const safeCwd = cwd === undefined || cwd === null ? undefined : assertString(cwd, 'cwd');
+      const safeName = name === undefined ? undefined : assertString(name, 'name');
       const client = getOrCreateClient(id);
       if (!client) return { ok: false, error: 'unknown host' };
       try {
-        const { sessionId } = await client.createWorkspace(wsId, safeCwd);
+        const { sessionId } = await client.createWorkspace(wsId, safeCwd, safeName);
         return { ok: true, sessionId };
       } catch (err) {
         return failure(err);

@@ -201,7 +201,7 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
         className={`flex items-center justify-center h-10 text-[var(--text-subtle)] hover:text-[var(--accent-green)] transition-colors duration-150 border-b border-[var(--bg-surface)] font-mono text-lg leading-none ${FOCUS_RING}`}
         style={{ borderColor: 'var(--border-soft)' }}
         onClick={remoteCreate.create}
-        disabled={remoteCreate.creating}
+        disabled={remoteCreate.creating || !remoteCreate.online}
         data-mini-add-remote-workspace
         title={t('sidebar.newRemoteWorkspace', { name: railHostLabel })}
         aria-label={t('sidebar.newRemoteWorkspace', { name: railHostLabel })}

@@ -454,7 +454,7 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
             type="button"
             className={`ui-icon-btn ml-auto h-7 w-7 ${FOCUS_RING}`}
             onClick={remoteCreate.create}
-            disabled={remoteCreate.creating}
+            disabled={remoteCreate.creating || !remoteCreate.online}
             title={t('sidebar.newRemoteWorkspace', { name: scopedHostLabel })}
             aria-label={t('sidebar.newRemoteWorkspace', { name: scopedHostLabel })}
             data-sidebar-add-remote-workspace

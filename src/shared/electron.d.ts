@@ -376,7 +376,7 @@ declare global {
          *  Resolves `{ ok: false }` (never rejects) on any failure — an
          *  unreachable host, a rejected token, or the remote's own daemon
          *  refusing the create. */
-        workspaceCreate: (hostId: string, workspaceId: string, cwd?: string) => Promise<
+        workspaceCreate: (hostId: string, workspaceId: string, cwd?: string, name?: string) => Promise<
           { ok: true; sessionId: string } | { ok: false; error: string; reason?: RemoteErrorReason }
         >;
         /** Destroy a session on `hostId` — the teardown twin of

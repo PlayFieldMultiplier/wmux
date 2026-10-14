@@ -95,6 +95,17 @@ describe('RemoteHostClient', () => {
       expect(JSON.parse(init?.body as string)).toEqual({ workspaceId: 'ws-1', cwd: '/repo' });
     });
 
+    it('sends the name as the additive workspaceName, and an older host that ignores it still creates', async () => {
+      // An older host never reads workspaceName: it answers exactly as before.
+      const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 201, json: async () => ({ id: 'web-1' }) }) as unknown as Response);
+      const client = new RemoteHostClient(host, fetchImpl as unknown as typeof fetch);
+
+      expect(await client.createWorkspace('ws-1', undefined, 'Workspace 2')).toEqual({ sessionId: 'web-1' });
+
+      const [, init] = fetchImpl.mock.calls[0];
+      expect(JSON.parse(init?.body as string)).toEqual({ workspaceId: 'ws-1', workspaceName: 'Workspace 2' });
+    });
+
     it('rejects with the daemon-supplied detail on a non-OK response', async () => {
       const fetchImpl = vi.fn(async () => ({
         ok: false,

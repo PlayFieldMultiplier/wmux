@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
+import { selectPcRailFeedStale } from '../../stores/selectors/pcRail';
+import { isPcRailHostOnline } from '../../../shared/pcRail';
 import { t } from '../../i18n';
 import type { PcRailBridge } from '../../../preload/preload';
 
 /** How long to wait for the new workspace's row before leaving it to the list. */
 const ROW_WAIT_MS = 30_000;
+
+/** Names sent for workspaces the host has not listed yet, per host, so a quick
+ *  second `+` (from either sidebar) does not pick the same number. */
+const pendingNames = new Map<string, Set<string>>();
+
+/** "Workspace N" with the lowest N the host's list does not use, as the local `+` names one. */
+export function nextRemoteWorkspaceName(names: readonly string[]): string {
+  const used = new Set(names.map((name) => /^Workspace (\d+)$/.exec(name)?.[1]).filter(Boolean).map(Number));
+  let n = 1;
+  while (used.has(n)) n++;
+  return `Workspace ${n}`;
+}
 
 /**
  * The sidebar's `+` for a paired computer: creates a workspace ON that host
@@ -14,10 +28,13 @@ const ROW_WAIT_MS = 30_000;
  */
 export function useRemoteWorkspaceCreate(hostId: string | null): {
   canCreate: boolean;
+  /** The host is reachable and its list is fresh, as the list itself reads it. */
+  online: boolean;
   creating: boolean;
   create: () => void;
 } {
   const canCreate = useStore((s) => !!hostId && s.pcRailHosts.some((h) => h.id === hostId && h.canCreateWorkspace === true));
+  const online = useStore((s) => !!hostId && isPcRailHostOnline(s.pcRailHostStatus[hostId] ?? 'reachable') && !selectPcRailFeedStale(s, hostId));
   const [creating, setCreating] = useState(false);
   const stopWaiting = useRef<(() => void) | null>(null);
   // The host this sidebar shows now; null once unmounted. A create that
@@ -33,18 +50,30 @@ export function useRemoteWorkspaceCreate(hostId: string | null): {
 
   const create = useCallback(() => {
     const remote = window.electronAPI?.remote;
-    if (!hostId || creating || !remote?.workspaceCreate) return;
+    if (!hostId || creating || !online || !remote?.workspaceCreate) return;
     setCreating(true);
     const workspaceId = crypto.randomUUID();
+    const pending = pendingNames.get(hostId) ?? new Set<string>();
+    const name = nextRemoteWorkspaceName([...(useStore.getState().pcRailFeeds[hostId]?.workspaces ?? []).map((w) => w.name), ...pending]);
+    pending.add(name);
+    pendingNames.set(hostId, pending);
+    // Held for the row wait (or until the create fails); by then the host's list counts it.
+    const releaseName = () => {
+      pending.delete(name);
+      if (pending.size === 0 && pendingNames.get(hostId) === pending) pendingNames.delete(hostId);
+    };
+    setTimeout(releaseName, ROW_WAIT_MS);
     void (async () => {
       try {
-        const res = await remote.workspaceCreate(hostId, workspaceId);
+        const res = await remote.workspaceCreate(hostId, workspaceId, undefined, name);
         if (!res.ok) {
+          releaseName();
           if (res.reason === 'auth-rejected') useStore.getState().setRemoteHostAuthRejected(hostId, true);
           useStore.getState().pushToast({ message: t('remote.createWorkspaceFailed', { error: res.error }), level: 'error' });
           return;
         }
       } catch (err) {
+        releaseName();
         useStore.getState().pushToast({
           message: t('remote.createWorkspaceFailed', { error: err instanceof Error ? err.message : String(err) }),
           level: 'error',
@@ -58,9 +87,9 @@ export function useRemoteWorkspaceCreate(hostId: string | null): {
       const pcRail = (window.electronAPI as unknown as { pcRail?: PcRailBridge } | undefined)?.pcRail;
       void pcRail?.refresh?.({ hostId }).catch(() => undefined);
     })();
-  }, [hostId, creating]);
+  }, [hostId, creating, online]);
 
-  return { canCreate, creating, create };
+  return { canCreate, online, creating, create };
 }
 
 /** Open the shadow workspace as soon as the host lists it; give up after ROW_WAIT_MS. */

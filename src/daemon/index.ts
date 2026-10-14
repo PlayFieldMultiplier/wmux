@@ -2592,8 +2592,22 @@ function registerRpcHandlers(
    * than stamped into a child's environment on the caller's say-so. See
    * `rejectWorkspaceId` in WebTerminalServer for the trade-off that buys.
    */
-  sessionLifecycle = {
-    create: async ({ workspaceId, cwd, agentLaunch, authorized, account, handoffFrom }) => {
+  // A workspace's name is decided by the first create that starts it. Two
+  // creates racing for the same new id would otherwise each pass the "no pane
+  // there yet" check and stamp different names into the same workspace.
+  const startingWorkspaceNames = new Map<string, { name: string; holders: number }>();
+  const claimWorkspaceName = (workspaceId: string | undefined, requested: string | undefined) => {
+    if (!workspaceId || !requested) return { name: requested, release: () => undefined };
+    let entry = startingWorkspaceNames.get(workspaceId);
+    if (entry) entry.holders += 1;
+    else startingWorkspaceNames.set(workspaceId, entry = { name: requested, holders: 1 });
+    const held = entry;
+    return {
+      name: held.name,
+      release: () => { if (--held.holders === 0) startingWorkspaceNames.delete(workspaceId); },
+    };
+  };
+  const createWebPane: WebSessionLifecycle['create'] = async ({ workspaceId, cwd, agentLaunch, authorized, account, handoffFrom, workspaceName }) => {
       const id = `web-${randomUUID()}`;
       // The human-readable workspace NAME is copied from a live sibling pane;
       // the daemon has no workspace registry of its own to look one up in.
@@ -2602,13 +2616,18 @@ function registerRpcHandlers(
             .listLiveSessions()
             .find((s) => s.env?.[ENV_KEYS.WORKSPACE_ID] === workspaceId)
         : undefined;
+      // Any pane the daemon knows (suspended, dead, awaiting recovery too) makes
+      // the workspace an existing one: the caller's name only labels a new one.
+      const existing = !!workspaceId && (sibling !== undefined || sessionManager
+        .listSessions()
+        .some((s) => s.env?.[ENV_KEYS.WORKSPACE_ID] === workspaceId));
       let env = buildWebPaneEnv({
         id,
         parentEnv: process.env,
         ...(workspaceId ? { workspaceId } : {}),
         ...(sibling?.env?.[ENV_KEYS.WORKSPACE_NAME]
           ? { workspaceName: sibling.env[ENV_KEYS.WORKSPACE_NAME] }
-          : {}),
+          : !existing && workspaceName ? { workspaceName } : {}),
       });
       if (account && !workspaceId) throw new Error('A pane account needs a workspace');
       // A chosen account's vendor binding is not asked for: the account
@@ -2681,6 +2700,16 @@ function registerRpcHandlers(
         }
         return { id };
       } catch (error) { await relay?.close(); throw error; }
+  };
+
+  sessionLifecycle = {
+    create: async (params) => {
+      const claim = claimWorkspaceName(params.workspaceId, params.workspaceName);
+      try {
+        return await createWebPane({ ...params, ...(claim.name ? { workspaceName: claim.name } : {}) });
+      } finally {
+        claim.release();
+      }
     },
     destroy: async (id) => {
       await destroySessionRpc({ id });
