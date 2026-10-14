@@ -46,7 +46,8 @@ describe('copied native terminal resource integrity', () => {
 });
 
 describe('official desktop release packaging', () => {
-  const release = fs.readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const release = fs.readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
   it.each(['build', 'macos', 'linux'])('builds and includes the Rust module in %s', job => {
     const body = release.split(`\n  ${job}:\n`)[1]?.split(/\n  \w+:\n/)[0];
     expect(body).toBeDefined();

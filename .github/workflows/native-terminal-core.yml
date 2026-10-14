@@ -38,8 +38,8 @@ jobs:
             out/windows-input-control.json
             out/node-input-progress.json
           if-no-files-found: ignore
-      - name: Generated Unicode table across checkout line endings
-        run: npx vitest run scripts/__tests__/generateRustUnicode11.test.mjs
+      - name: Unicode generation and packaging contracts across checkout line endings
+        run: npx vitest run scripts/__tests__/generateRustUnicode11.test.mjs scripts/__tests__/nativeTerminalPackage.test.mjs
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
       - name: Rust interpreter and grid unit tests
