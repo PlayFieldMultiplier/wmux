@@ -658,4 +658,12 @@ export const bs = {
   'git.secret.more': "(i još {count})",
   'settings.secretGuard': "Blokiraj lozinke i ključeve u commitima, pushevima i PR-ovima",
   'settings.secretGuardDesc': "Commit, Push i Create PR na Git stranici te preuzimanje zadatka odbijaju izmjenu koja dodaje .env datoteku, privatni ključ ili API ključ.",
+  'botsPage.consent.title': "Botovi rade na vašem Claude planu",
+  'botsPage.consent.engine': "Svaki bot razmišlja pomoću Claude Agent SDK-a, prijavljen Claude Code prijavom na ovom računaru. Njegovi radnici pokreću vaš vlastiti Claude Code.",
+  'botsPage.consent.usage': "Njihova potrošnja se računa u limite vašeg Claude plana.",
+  'botsPage.consent.terms': "Vrijede Anthropicovi uslovi za vaš plan. wmux nikad ne čita, ne čuva niti šalje vašu Claude prijavu.",
+  'botsPage.consent.turnOn': "Uključi botove",
+  'botsPage.consent.cancel': "Otkaži",
+  'botsPage.consent.keepOn': "Ostavi botove uključene",
+  'botsPage.consent.turnOff': "Isključi botove",
 } as const;

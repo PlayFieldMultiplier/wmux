@@ -653,4 +653,12 @@ export const th = {
   'git.secret.more': "(และอีก {count} รายการ)",
   'settings.secretGuard': "บล็อกรหัสผ่านและคีย์ในคอมมิต พุช และ PR",
   'settings.secretGuardDesc': "คอมมิต พุช และสร้าง PR ในหน้า Git รวมถึงการรับงานเข้ามา จะปฏิเสธการเปลี่ยนแปลงที่เพิ่มไฟล์ .env คีย์ส่วนตัว หรือ API key",
+  'botsPage.consent.title': "บอตทำงานด้วยแพ็กเกจ Claude ของคุณ",
+  'botsPage.consent.engine': "บอตแต่ละตัวคิดด้วย Claude Agent SDK โดยลงชื่อเข้าใช้ด้วยการล็อกอิน Claude Code บนคอมพิวเตอร์เครื่องนี้ ผู้ช่วยงานของบอตจะรัน Claude Code ของคุณเอง",
+  'botsPage.consent.usage': "การใช้งานของบอตจะนับรวมในขีดจำกัดของแพ็กเกจ Claude ของคุณ",
+  'botsPage.consent.terms': "ข้อกำหนดของ Anthropic สำหรับแพ็กเกจของคุณมีผลบังคับใช้ wmux จะไม่อ่าน จัดเก็บ หรือส่งข้อมูลการลงชื่อเข้าใช้ Claude ของคุณ",
+  'botsPage.consent.turnOn': "เปิดบอต",
+  'botsPage.consent.cancel': "ยกเลิก",
+  'botsPage.consent.keepOn': "เปิดบอตต่อไป",
+  'botsPage.consent.turnOff': "ปิดบอต",
 } as const;

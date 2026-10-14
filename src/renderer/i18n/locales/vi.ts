@@ -653,4 +653,12 @@ export const vi = {
   'git.secret.more': "(và {count} chỗ khác)",
   'settings.secretGuard': "Chặn mật khẩu và khóa trong commit, push và PR",
   'settings.secretGuardDesc': "Commit, Push và Tạo PR trên trang Git, cùng việc nhận việc từ tác vụ, sẽ từ chối thay đổi có thêm tệp .env, khóa riêng tư hoặc khóa API.",
+  'botsPage.consent.title': "Bot chạy bằng gói Claude của bạn",
+  'botsPage.consent.engine': "Mỗi bot suy nghĩ bằng Claude Agent SDK, đăng nhập bằng tài khoản Claude Code trên máy tính này. Các worker của bot chạy Claude Code của chính bạn.",
+  'botsPage.consent.usage': "Mức sử dụng của chúng được tính vào giới hạn gói Claude của bạn.",
+  'botsPage.consent.terms': "Điều khoản của Anthropic cho gói của bạn được áp dụng. wmux không bao giờ đọc, lưu hay gửi thông tin đăng nhập Claude của bạn.",
+  'botsPage.consent.turnOn': "Bật bot",
+  'botsPage.consent.cancel': "Hủy",
+  'botsPage.consent.keepOn': "Giữ bot bật",
+  'botsPage.consent.turnOff': "Tắt bot",
 } as const;

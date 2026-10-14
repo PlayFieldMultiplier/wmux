@@ -44,6 +44,7 @@
 
 import type { BotEngine, BotProfile, BotStatus } from '../../../shared/bot';
 import type { BotTaskView } from '../../../shared/botTask';
+import type { BotsPlanConsent } from '../../../shared/factorySettings';
 import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
@@ -133,6 +134,9 @@ export interface FactorySettingsView {
   laneDailyCap: number;
   /** The bot the phone talks to (absent: automatic); null in a patch clears it. */
   phoneBotId?: string | null;
+  /** The owner's consent that bots run on their own Claude plan
+   *  (Bots/BotsPlanConsent.tsx); turning bots on needs it. */
+  planConsent?: BotsPlanConsent;
 }
 
 export interface FactorySettingsPort {

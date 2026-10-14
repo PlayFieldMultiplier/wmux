@@ -657,4 +657,12 @@ export const da = {
   'git.secret.more': "(og {count} mere)",
   'settings.secretGuard': "Bloker adgangskoder og nøgler i commits, pushes og PR'er",
   'settings.secretGuardDesc': "Commit, Push og Opret PR på Git-siden samt overtagelse af en opgave afviser en ændring, der tilføjer en .env-fil, en privat nøgle eller en API-nøgle.",
+  'botsPage.consent.title': "Bots kører på dit Claude-abonnement",
+  'botsPage.consent.engine': "Hver bot tænker med Claude Agent SDK, logget ind med Claude Code-login'et på denne computer. Dens workers kører din egen Claude Code.",
+  'botsPage.consent.usage': "Deres forbrug tæller med i grænserne for dit Claude-abonnement.",
+  'botsPage.consent.terms': "Anthropics vilkår for dit abonnement gælder. wmux læser, gemmer eller sender aldrig dit Claude-login.",
+  'botsPage.consent.turnOn': "Slå bots til",
+  'botsPage.consent.cancel': "Annuller",
+  'botsPage.consent.keepOn': "Behold bots slået til",
+  'botsPage.consent.turnOff': "Slå bots fra",
 } as const;

@@ -659,4 +659,12 @@ export const tr = {
   'git.secret.more': "(ve {count} tane daha)",
   'settings.secretGuard': "Commit, push ve PR'larda parolaları ve anahtarları engelle",
   'settings.secretGuardDesc': "Git sayfasındaki Commit, Push ve PR oluştur ile bir görevi devralma; .env dosyası, özel anahtar veya API anahtarı ekleyen bir değişikliği reddeder.",
+  'botsPage.consent.title': "Botlar Claude planınızla çalışır",
+  'botsPage.consent.engine': "Her bot, bu bilgisayardaki Claude Code oturumuyla Claude Agent SDK kullanarak düşünür. Çalışanları kendi Claude Code'unuzu çalıştırır.",
+  'botsPage.consent.usage': "Kullanımları Claude planınızın limitlerine sayılır.",
+  'botsPage.consent.terms': "Planınız için Anthropic koşulları geçerlidir. wmux, Claude oturum bilgilerinizi asla okumaz, saklamaz veya göndermez.",
+  'botsPage.consent.turnOn': "Botları aç",
+  'botsPage.consent.cancel': "İptal",
+  'botsPage.consent.keepOn': "Botları açık tut",
+  'botsPage.consent.turnOff': "Botları kapat",
 } as const;

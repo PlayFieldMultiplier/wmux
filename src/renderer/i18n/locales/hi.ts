@@ -654,4 +654,12 @@ export const hi = {
   'git.secret.more': "(और {count})",
   'settings.secretGuard': "कमिट, पुश और PR में पासवर्ड और कुंजियाँ रोकें",
   'settings.secretGuardDesc': "Git पेज पर कमिट, पुश और PR बनाना तथा टास्क अपनाना ऐसे बदलाव को नहीं भेजते जिसमें .env फ़ाइल, प्राइवेट कुंजी या API कुंजी जोड़ी गई हो।",
+  'botsPage.consent.title': "बॉट आपके Claude प्लान पर चलते हैं",
+  'botsPage.consent.engine': "हर बॉट इस कंप्यूटर के Claude Code लॉगिन से साइन इन किए गए Claude Agent SDK से सोचता है। इसके वर्कर आपका अपना Claude Code चलाते हैं।",
+  'botsPage.consent.usage': "इनका उपयोग आपके Claude प्लान की सीमाओं में गिना जाता है।",
+  'botsPage.consent.terms': "आपके प्लान के लिए Anthropic की शर्तें लागू होती हैं। wmux आपका Claude साइन-इन कभी नहीं पढ़ता, सहेजता या भेजता।",
+  'botsPage.consent.turnOn': "बॉट चालू करें",
+  'botsPage.consent.cancel': "रद्द करें",
+  'botsPage.consent.keepOn': "बॉट चालू रखें",
+  'botsPage.consent.turnOff': "बॉट बंद करें",
 } as const;

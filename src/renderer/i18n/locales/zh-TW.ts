@@ -694,4 +694,12 @@ export const zhTW = {
   'git.secret.more': "(另有 {count} 處)",
   'settings.secretGuard': "在提交、推送和 PR 中攔截密碼與金鑰",
   'settings.secretGuardDesc': "Git 頁面的提交、推送和建立 PR,以及採用任務時,拒絕包含 .env 檔案、私密金鑰或 API 金鑰的變更。",
+  'botsPage.consent.title': "機器人使用你的 Claude 方案執行",
+  'botsPage.consent.engine': "每個機器人透過 Claude Agent SDK 思考，使用這台電腦上的 Claude Code 登入。它的工作者執行你自己的 Claude Code。",
+  'botsPage.consent.usage': "它們的用量會計入你的 Claude 方案限制。",
+  'botsPage.consent.terms': "適用 Anthropic 針對你的方案的條款。wmux 絕不讀取、儲存或傳送你的 Claude 登入資訊。",
+  'botsPage.consent.turnOn': "開啟機器人",
+  'botsPage.consent.cancel': "取消",
+  'botsPage.consent.keepOn': "保持機器人開啟",
+  'botsPage.consent.turnOff': "關閉機器人",
 } as const;

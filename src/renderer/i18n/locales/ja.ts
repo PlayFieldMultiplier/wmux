@@ -707,4 +707,12 @@ export const ja = {
   'git.secret.more': "(ほか {count} 件)",
   'settings.secretGuard': "コミット・プッシュ・PR でパスワードとキーをブロック",
   'settings.secretGuardDesc': "Git ページのコミット・プッシュ・PR 作成とタスクの取り込みで、.env ファイル、秘密鍵、API キーを含む変更を送信しません。",
+  'botsPage.consent.title': "ボットはあなたの Claude プランで動きます",
+  'botsPage.consent.engine': "各ボットは、このコンピューターの Claude Code ログインでサインインした Claude Agent SDK で考えます。ボットのワーカーはあなた自身の Claude Code を実行します。",
+  'botsPage.consent.usage': "その使用量はあなたの Claude プランの上限に含まれます。",
+  'botsPage.consent.terms': "あなたのプランに対する Anthropic の規約が適用されます。wmux があなたの Claude のサインイン情報を読み取ったり、保存したり、送信したりすることはありません。",
+  'botsPage.consent.turnOn': "ボットをオンにする",
+  'botsPage.consent.cancel': "キャンセル",
+  'botsPage.consent.keepOn': "ボットをオンのままにする",
+  'botsPage.consent.turnOff': "ボットをオフにする",
 } as const;

@@ -659,4 +659,12 @@ export const ru = {
   'git.secret.more': "(и ещё {count})",
   'settings.secretGuard': "Блокировать пароли и ключи в коммитах, push и PR",
   'settings.secretGuardDesc': "Коммит, Push и Создать PR на странице Git, а также принятие задачи отклоняют изменение, которое добавляет файл .env, закрытый ключ или API-ключ.",
+  'botsPage.consent.title': "Боты работают на вашем тарифе Claude",
+  'botsPage.consent.engine': "Каждый бот думает с помощью Claude Agent SDK, используя вход в Claude Code на этом компьютере. Его исполнители запускают ваш собственный Claude Code.",
+  'botsPage.consent.usage': "Их использование учитывается в лимитах вашего тарифа Claude.",
+  'botsPage.consent.terms': "Действуют условия Anthropic для вашего тарифа. wmux никогда не читает, не хранит и не отправляет ваши данные входа в Claude.",
+  'botsPage.consent.turnOn': "Включить ботов",
+  'botsPage.consent.cancel': "Отмена",
+  'botsPage.consent.keepOn': "Оставить ботов включёнными",
+  'botsPage.consent.turnOff': "Выключить ботов",
 } as const;

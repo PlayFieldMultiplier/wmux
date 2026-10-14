@@ -659,4 +659,12 @@ export const ms = {
   'git.secret.more': "(dan {count} lagi)",
   'settings.secretGuard': "Sekat kata laluan dan kunci dalam commit, push dan PR",
   'settings.secretGuardDesc': "Commit, Push dan Cipta PR di halaman Git, serta mengambil alih tugasan, menolak perubahan yang menambah fail .env, kunci peribadi atau kunci API.",
+  'botsPage.consent.title': "Bot berjalan pada pelan Claude anda",
+  'botsPage.consent.engine': "Setiap bot berfikir dengan Claude Agent SDK, dilog masuk dengan log masuk Claude Code pada komputer ini. Pekerjanya menjalankan Claude Code anda sendiri.",
+  'botsPage.consent.usage': "Penggunaannya dikira dalam had pelan Claude anda.",
+  'botsPage.consent.terms': "Terma Anthropic untuk pelan anda terpakai. wmux tidak pernah membaca, menyimpan atau menghantar log masuk Claude anda.",
+  'botsPage.consent.turnOn': "Hidupkan bot",
+  'botsPage.consent.cancel': "Batal",
+  'botsPage.consent.keepOn': "Kekalkan bot hidup",
+  'botsPage.consent.turnOff': "Matikan bot",
 } as const;

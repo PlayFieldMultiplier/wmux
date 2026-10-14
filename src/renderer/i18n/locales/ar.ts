@@ -655,4 +655,12 @@ export const ar = {
   'git.secret.more': "(و{count} أخرى)",
   'settings.secretGuard': "حظر كلمات المرور والمفاتيح في الإيداعات والدفع وطلبات السحب",
   'settings.secretGuardDesc': "يرفض الإيداع والدفع وإنشاء طلب سحب في صفحة Git، واعتماد مهمة، أي تغيير يضيف ملف .env أو مفتاحًا خاصًا أو مفتاح API.",
+  'botsPage.consent.title': "تعمل الروبوتات على خطة Claude الخاصة بك",
+  'botsPage.consent.engine': "يفكّر كل روبوت باستخدام Claude Agent SDK، مسجّلًا الدخول بحساب Claude Code على هذا الكمبيوتر. ويشغّل العاملون التابعون له Claude Code الخاص بك.",
+  'botsPage.consent.usage': "يُحتسب استخدامها ضمن حدود خطة Claude الخاصة بك.",
+  'botsPage.consent.terms': "تنطبق شروط Anthropic الخاصة بخطتك. لا يقرأ wmux بيانات تسجيل دخولك إلى Claude أو يخزّنها أو يرسلها أبدًا.",
+  'botsPage.consent.turnOn': "تشغيل الروبوتات",
+  'botsPage.consent.cancel': "إلغاء",
+  'botsPage.consent.keepOn': "إبقاء الروبوتات قيد التشغيل",
+  'botsPage.consent.turnOff': "إيقاف الروبوتات",
 } as const;

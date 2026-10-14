@@ -127,6 +127,15 @@ afterEach(() => {
 
 const q = <E extends Element = HTMLElement>(sel: string) => container.querySelector<E & HTMLElement>(sel);
 const rowIds = () => [...container.querySelectorAll('[data-bots-row]')].map((el) => el.getAttribute('data-bots-row'));
+/** Answers the plan consent dialog that turning the bots on asks first. */
+async function acceptPlanConsent() {
+  for (let i = 0; i < 5 && !document.querySelector('[data-testid="bots-plan-consent"]'); i++) await act(async () => { await Promise.resolve(); });
+  const ok = document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-confirm"]');
+  expect(ok?.textContent).toBe('Turn on bots');
+  await act(async () => { ok!.click(); });
+}
+const ON_WITH_CONSENT = { enabled: true, planConsent: expect.objectContaining({ version: 1 }) };
+
 async function render(node: React.ReactNode) {
   await act(async () => { root.render(node); });
   await act(async () => { await Promise.resolve(); });
@@ -164,7 +173,8 @@ describe('Bots page', () => {
     expect(q<HTMLButtonElement>('[data-testid="bots-composer-send"]')!.disabled).toBe(true);
     expect(q('[data-testid="bots-composer-status"]')?.textContent).toBe('Bots are off. Turn bots on to message them.');
     await act(async () => { q('[data-bots-run]')!.click(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    await acceptPlanConsent();
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
   });
 
   it('with no bot yet: one centred panel, a name and Start, which turns the bots on, adds the bot here and opens its chat', async () => {
@@ -195,8 +205,9 @@ describe('Bots page', () => {
     });
     expect(start.disabled).toBe(false);
     await act(async () => { start.click(); });
+    await acceptPlanConsent();
     await act(async () => { await Promise.resolve(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(create).toHaveBeenCalledWith({ workspaceId: 'w1', name: 'Ada' });
     // Its chat opens at once, starting, before the list shows the bot.
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
@@ -238,8 +249,9 @@ describe('Bots page', () => {
     await act(async () => { answer({ ready: true }); });
     expect(team.disabled).toBe(false);
     await act(async () => { team.click(); });
+    await acceptPlanConsent();
     await act(async () => { await Promise.resolve(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(createTeam).toHaveBeenCalledWith({ workspaceId: 'w1', names: { coordinator: 'Lead', researcher: 'Research', developer: 'Developer', issue: 'Issues', reviewer: 'Reviewer' } });
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
   });
@@ -924,6 +936,44 @@ describe('Bots page', () => {
     expect(q('[data-bots-starting]')).not.toBeNull();
   });
 
+  it('bots on from before the plan consent: the page asks once; Keep bots on records it, Turn bots off turns them off, Cancel on a turn-on changes nothing', async () => {
+    seedRooms(true);
+    const legacy = { enabled: true } as never;
+    const settings = { available: true, get: vi.fn(async () => legacy), set: vi.fn(async (p: object) => ({ enabled: true, ...p }) as never) };
+    await render(<BotsPage settings={settings} />);
+    const dialog = () => document.querySelector('[data-testid="bots-plan-consent"]');
+    expect(dialog()?.textContent).toContain('Bots run on your Claude plan');
+    expect(dialog()?.textContent).toContain('Their usage counts toward your Claude plan\'s limits.');
+    expect(document.querySelector('[data-testid="bots-plan-consent-cancel"]')?.textContent).toBe('Turn bots off');
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-confirm"]')!.click(); });
+    expect(settings.set).toHaveBeenCalledWith({ planConsent: expect.objectContaining({ version: 1 }) });
+    expect(dialog()).toBeNull();
+    // Opened again without consent: Turn bots off turns them off.
+    act(() => root.unmount());
+    root = createRoot(container);
+    settings.set.mockClear();
+    await render(<BotsPage settings={settings} />);
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-cancel"]')!.click(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: false });
+    // Bots off: Turn bots on asks; Cancel leaves them off and writes nothing.
+    act(() => root.unmount());
+    root = createRoot(container);
+    settings.set.mockClear();
+    settings.get.mockImplementation(async () => null);
+    seedRooms(false);
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    await render(<BotsPage settings={settings} />);
+    expect(dialog()).toBeNull();
+    await act(async () => { q('[data-bots-run]')!.click(); });
+    for (let i = 0; i < 5 && !dialog(); i++) await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[data-testid="bots-plan-consent-cancel"]')?.textContent).toBe('Cancel');
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-cancel"]')!.click(); });
+    expect(settings.set).not.toHaveBeenCalled();
+    expect(dialog()).toBeNull();
+  });
+
   it('"+" while the bots are off: Add asks once, in place, then turns them on and adds', async () => {
     const off = api();
     off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
@@ -945,8 +995,9 @@ describe('Bots page', () => {
     expect(create).not.toHaveBeenCalled();
     expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm-row"]')?.textContent).toContain('Adding Triage turns bots on');
     await act(async () => { dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-on-confirm"]')!.click(); });
+    await acceptPlanConsent();
     await act(async () => { await Promise.resolve(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(create).toHaveBeenCalledTimes(1);
   });
 

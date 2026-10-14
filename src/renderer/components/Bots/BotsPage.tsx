@@ -45,6 +45,7 @@ import { RoomAvatar } from './BotsAvatar';
 import BotsWorkerTree, { TreeToggle } from './BotsWorkerTree';
 import { BotsChat } from './BotsChat';
 import { createBot, openFactorySettings, turnBotsOn } from './botsAddBot';
+import { confirmBotsAlreadyOn, useBotsPlanConsent } from './BotsPlanConsent';
 import { showWorkspaces } from '../../utils/showWorkspaces';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine';
@@ -149,16 +150,14 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now, unread
 
 /** The bots-off banner: the page is read-only until Turn bots on turns the
  *  bots back on (the factory setting, as Settings writes it). */
-function PausedBanner({ t, settings }: { t: T; settings: FactorySettingsPort }) {
+function PausedBanner({ t, settings, confirmOn }: { t: T; settings: FactorySettingsPort; confirmOn: () => Promise<boolean> }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = async () => {
     setBusy(true);
     setError(null);
     try {
-      const next = await settings.set({ enabled: true });
-      if (!next) setError(t('settings.factory.notStarted'));
-      await refreshRoomStatus();
+      if ((await turnBotsOn(settings, confirmOn)) === 'failed') setError(t('settings.factory.notStarted'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -190,11 +189,13 @@ function engineLine(r: ReturnType<typeof useEngineReadiness>['readiness'], t: T)
 /** The first screen, with no bot yet: name a bot and Start (DESIGN.md ›
  *  Bots › First run). Start turns the bots on when they are off, then adds
  *  the bot to the current workspace. */
-function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted }: {
+function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine, onStarted }: {
   t: T;
   workspace: { id: string; name: string } | null;
   botPort: FactoryBotPort;
   settings: FactorySettingsPort;
+  /** The plan consent, asked when turning the bots on needs it. */
+  confirmOn: () => Promise<boolean>;
   on: boolean;
   engine: EnginePort;
   onStarted: (bot: BotProfile) => void;
@@ -221,7 +222,11 @@ function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted 
     setBusy(true);
     setError(null);
     try {
-      if (!on && !(await turnBotsOn(settings))) { setError(t('settings.factory.notStarted')); return; }
+      if (!on) {
+        const r = await turnBotsOn(settings, confirmOn);
+        if (r === 'declined') return;
+        if (r !== 'on') { setError(t('settings.factory.notStarted')); return; }
+      }
       const r = await createBot(botPort, { workspaceId: workspace.id, name: typed, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
       if (r.ok) onStarted(r.bot);
       else setError(r.message || t('settings.factory.addBotFailed'));
@@ -236,7 +241,11 @@ function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted 
     setBusy(true);
     setError(null);
     try {
-      if (!on && !(await turnBotsOn(settings))) { setError(t('settings.factory.notStarted')); return; }
+      if (!on) {
+        const r = await turnBotsOn(settings, confirmOn);
+        if (r === 'declined') return;
+        if (r !== 'on') { setError(t('settings.factory.notStarted')); return; }
+      }
       const r = await botPort.createTeam({ workspaceId: workspace.id, names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
       if (r.ok) onStarted(r.bots[0]);
       else setError(r.message || t('settings.factory.addTeamFailed'));
@@ -506,6 +515,13 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   // Stop all: the header menu, then an inline confirm under the header.
   const stopPort = useMemo(() => stop ?? botsStopPort(port), [stop, port]);
   const settingsPort = settings ?? getFactorySettingsPort();
+  // Turning the bots on asks the plan consent; bots already on from before
+  // it are asked once as the page opens (Keep bots on / Turn bots off).
+  const consent = useBotsPlanConsent(t);
+  const { ask: askConsent, confirmOn } = consent;
+  useEffect(() => {
+    void confirmBotsAlreadyOn(settingsPort, askConsent).catch(() => undefined);
+  }, [settingsPort, askConsent]);
   const enginePort = useMemo(() => engine ?? bridgeEnginePort(), [engine]);
   const [confirmStopAll, setConfirmStopAll] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -538,6 +554,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
         workspace={currentWorkspace}
         botPort={botPort}
         settings={settingsPort}
+        confirmOn={confirmOn}
         on={on}
         engine={enginePort}
         onStarted={started}
@@ -548,7 +565,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
     const paused = !on;
     body = (
       <>
-        {paused && <PausedBanner t={t} settings={settingsPort} />}
+        {paused && <PausedBanner t={t} settings={settingsPort} confirmOn={confirmOn} />}
         <div className="wmux-bots-body">
         <nav className="wmux-bots-list" aria-label={t('botsPage.conversations')}>
           <div className="wmux-bots-list-head">
@@ -705,13 +722,14 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
               onDone={finishAdd}
               workspaces={addWorkspaces}
               botsOff={!on}
-              turnOn={() => turnBotsOn(settingsPort)}
+              turnOn={() => turnBotsOn(settingsPort, confirmOn)}
               {...(addTo ? { defaultWorkspaceId: addTo } : {})}
               {...(port ? { port } : {})}
             />
           </DialogBody>
         </Dialog>
       )}
+      {consent.dialog}
     </div>
   );
 }

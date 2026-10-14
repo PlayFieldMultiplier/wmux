@@ -658,4 +658,12 @@ export const it = {
   'git.secret.more': "(e altri {count})",
   'settings.secretGuard': "Blocca password e chiavi in commit, push e PR",
   'settings.secretGuardDesc': "Commit, Push e Crea PR nella pagina Git, e l'adozione di un task, rifiutano una modifica che aggiunge un file .env, una chiave privata o una chiave API.",
+  'botsPage.consent.title': "I bot usano il tuo piano Claude",
+  'botsPage.consent.engine': "Ogni bot ragiona con il Claude Agent SDK, con l'accesso di Claude Code di questo computer. I suoi worker eseguono il tuo Claude Code.",
+  'botsPage.consent.usage': "Il loro utilizzo conta nei limiti del tuo piano Claude.",
+  'botsPage.consent.terms': "Si applicano i termini di Anthropic per il tuo piano. wmux non legge, non salva e non invia mai il tuo accesso a Claude.",
+  'botsPage.consent.turnOn': "Attiva i bot",
+  'botsPage.consent.cancel': "Annulla",
+  'botsPage.consent.keepOn': "Mantieni attivi i bot",
+  'botsPage.consent.turnOff': "Disattiva i bot",
 } as const;

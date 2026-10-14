@@ -27,6 +27,7 @@ import { FactorySettingsStore, factorySettingsPath, mergeFactorySettings, DEFAUL
 import { __resetBotHooksForTesting, onBotHook, type BotHookEvent } from '../botHooks';
 import { DEFAULT_BOT_BUDGETS } from '../../../shared/bot';
 import { WAKE_LIMITS } from '../../../shared/wake';
+import { BOTS_PLAN_CONSENT_VERSION } from '../../../shared/factorySettings';
 
 let dir = '';
 let clock = 1_000_000;
@@ -553,11 +554,29 @@ describe('factory settings', () => {
   it('defaults to off and keeps only well-formed fields', async () => {
     const s = new FactorySettingsStore(factorySettingsPath(dir));
     expect(s.load()).toMatchObject({ enabled: false, verifierOnOwnerPrs: true, globalConcurrentBots: 3 });
-    const next = await s.update({ enabled: true, globalConcurrentBots: 9, trustedAuthors: ['owner', 'bad login'], morning: { hour: 7, weekdays: [5, 1, 9] } });
+    const next = await s.update({ enabled: true, planConsent: { version: 1, at: '2026-10-15T00:00:00.000Z' }, globalConcurrentBots: 9, trustedAuthors: ['owner', 'bad login'], morning: { hour: 7, weekdays: [5, 1, 9] } });
     expect(next).toMatchObject({ enabled: true, globalConcurrentBots: 3, trustedAuthors: ['owner'], morning: { hour: 7, weekdays: [1, 5] } });
     const t = new FactorySettingsStore(factorySettingsPath(dir));
     expect(t.load().enabled).toBe(true);
     expect(mergeFactorySettings({ ...DEFAULT_FACTORY_SETTINGS, trustedAuthors: [], morning: { hour: 9, weekdays: [] } }, { defaultEngine: { kind: 'acp', command: 'hermes', args: ['acp'] } }).defaultEngine)
       .toEqual({ kind: 'acp', command: 'hermes', args: ['acp'] });
+  });
+
+  it('turning bots on needs the plan consent: refused without it, taken with it (main\'s time), and bots on from before it stay on', async () => {
+    const s = new FactorySettingsStore(factorySettingsPath(dir));
+    s.load();
+    await expect(s.update({ enabled: true })).rejects.toThrow('turn bots on in the wmux app first');
+    expect(s.get()).toMatchObject({ enabled: false });
+    expect(s.get().planConsent).toBeUndefined();
+    const before = Date.now();
+    const on = await s.update({ enabled: true, planConsent: { version: BOTS_PLAN_CONSENT_VERSION, at: '2000-01-01T00:00:00.000Z' } });
+    expect(on).toMatchObject({ enabled: true, planConsent: { version: BOTS_PLAN_CONSENT_VERSION } });
+    expect(Date.parse(on.planConsent!.at)).toBeGreaterThanOrEqual(before);
+    // A settings file from before the consent: the bots stay on and other changes still apply.
+    fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: true }));
+    const legacy = new FactorySettingsStore(factorySettingsPath(dir));
+    expect(legacy.load()).toMatchObject({ enabled: true });
+    expect(legacy.get().planConsent).toBeUndefined();
+    await expect(legacy.update({ laneDailyCap: 3 })).resolves.toMatchObject({ enabled: true, laneDailyCap: 3 });
   });
 });
