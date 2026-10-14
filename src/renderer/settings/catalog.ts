@@ -153,7 +153,6 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   { id: 'claudeacct', tab: 'accounts', labelKey: 'accounts.title', synonyms: 'claude account login subscription max usage quota 계정' },
 
   { id: 'factoryswitch', tab: 'factory', labelKey: 'settings.factory.enabled', descKey: 'settings.factory.enabledDesc', synonyms: 'bots run bots factory agent on off enable rooms 봇 실행 공장' },
-  { id: 'factoryhq', tab: 'factory', labelKey: 'settings.factory.hq', descKey: 'settings.factory.hqDesc', synonyms: 'hq headquarters moa room workspace' },
   { id: 'factorytrustedauthors', tab: 'factory', labelKey: 'settings.factory.trustedAuthors', descKey: 'settings.factory.trustedAuthorsDesc', synonyms: 'trusted author login github verifier pr' },
   { id: 'factorymorning', tab: 'factory', labelKey: 'settings.factory.morning', descKey: 'settings.factory.morningDesc', synonyms: 'morning report time schedule weekday wake 아침 보고' },
   { id: 'factoryverifierownprs', tab: 'factory', labelKey: 'settings.factory.verifierOwnPrs', descKey: 'settings.factory.verifierOwnPrsDesc', synonyms: 'verifier own pull request owner verify' },
