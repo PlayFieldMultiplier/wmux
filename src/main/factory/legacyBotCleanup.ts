@@ -10,19 +10,31 @@
 // `migratedAt` the same run wrote into factory/migration.json (both were that
 // run's clock), it has the role and default name the migration gave it
 // (Moa / Lead), and, for a Lead, it is still not enabled (the owner turning
-// one on keeps it). It counts as talked to when any `human` card in any room
-// (factory/rooms/*.jsonl) is addressed to it (refs.botIds / refs.botId).
+// one on keeps it). The owner counts as having dealt with it — and it stays —
+// when any of these names it:
+//   - a `human` card in any room (factory/rooms/*.jsonl) addressed to it
+//     (refs.botIds / refs.botId);
+//   - a question, plan or proposal card it wrote that was resolved;
+//   - the owner's resolution of a card (a human `fact` card with
+//     refs.handoffId) whose handoff the bot sent;
+//   - a handoff from the owner to it (an answer picked from a question's
+//     options, a message) in factory/handoffs.jsonl;
+//   - a fact the owner made about it (actor human, ref.botId) in
+//     factory/facts*.jsonl;
+//   - the phone pin (settings.phoneBotId).
 // Rooms and that migration shipped together (4.4.0), and room retention only
 // drops cards older than ROOM_LIMITS.RETAIN_DAYS (90), so a card the owner
 // wrote cannot have aged out before this step's first run; the card cap
 // (ROOM_STORE_LIMITS.MAX_CARDS) can drop old cards sooner, so a room at the
-// cap counts as unreadable. When the rooms cannot be read, nothing is
-// removed.
+// cap counts as unreadable. When any of these sources cannot be read, nothing
+// is removed.
 //
 // Removing a bot is what the bot store does on remove: the profile and its
-// usage go; a phone pin (settings.phoneBotId) naming it is cleared. bots.json
-// is copied to bots.json.premigrate first. Idempotent: a re-run finds nothing
-// left to remove.
+// usage go. Before anything is removed, the bots document as read (the copy
+// the atomic read recovered when the primary was damaged) is written to
+// bots.json.premigrate, unless a readable one is there already. Idempotent:
+// a re-run finds nothing left to remove. Any error removes nothing and leaves
+// a note; it never stops the factory (migrate.ts).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,14 +43,44 @@ import { BOT_ID_RE } from '../../shared/bot';
 import { BOTS_FILE_VERSION, botsFilePath } from './botStore';
 import { ROOM_STORE_LIMITS } from './roomWriter';
 import { factorySettingsPath } from './factorySettings';
+import { HANDOFFS_FILENAME } from './handoffRouter';
 import type { FactoryMigrationContext } from './migrate';
 
 const LEGACY_NAMES: Readonly<Record<string, string>> = { moa: 'Moa', lead: 'Lead' };
+/** A bot's cards the owner answers: resolved, the owner dealt with the bot. */
+const ANSWERED_KINDS: ReadonlySet<string> = new Set(['question', 'plan', 'proposal']);
 
-/** The bot ids an owner message in the rooms was addressed to, or null when
- *  the rooms folder exists but cannot be read, or a room is at the card cap
- *  (its oldest cards may be gone). */
-export function botsTalkedTo(roomsDir: string, maxCards: number = ROOM_STORE_LIMITS.MAX_CARDS): Set<string> | null {
+const isBotId = (id: unknown): id is string => typeof id === 'string' && BOT_ID_RE.test(id);
+
+/** The JSON objects of a JSONL file, torn lines skipped; null when it exists
+ *  but cannot be read. A missing file is empty. */
+function readJsonl(file: string): unknown[] | null {
+  let text: string;
+  try {
+    if (!fs.existsSync(file)) return [];
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  const out: unknown[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const v: unknown = JSON.parse(line);
+      if (v && typeof v === 'object') out.push(v);
+    } catch {
+      // A torn line names nobody.
+    }
+  }
+  return out;
+}
+
+/** The bot ids an owner message in the rooms was addressed to, and the bots
+ *  whose question, plan or proposal card was resolved; `handoffIds` collects
+ *  the handoffs the owner's resolutions name (resolved to their bots by
+ *  botsDealtWith). Null when the rooms folder exists but cannot be read, or
+ *  a room is at the card cap (its oldest cards may be gone). */
+export function botsTalkedTo(roomsDir: string, maxCards: number = ROOM_STORE_LIMITS.MAX_CARDS, handoffIds: Set<string> = new Set()): Set<string> | null {
   const out = new Set<string>();
   let names: string[];
   try {
@@ -57,7 +99,7 @@ export function botsTalkedTo(roomsDir: string, maxCards: number = ROOM_STORE_LIM
     for (const line of text.split('\n')) {
       const id = /"id":"([^"]{1,200})"/.exec(line)?.[1];
       if (id) cardIds.add(id);
-      if (!line.includes('"human"')) continue;
+      if (!line.includes('"human"') && !line.includes('"resolved"')) continue;
       let card: unknown;
       try {
         card = JSON.parse(line);
@@ -65,12 +107,56 @@ export function botsTalkedTo(roomsDir: string, maxCards: number = ROOM_STORE_LIM
         continue;
       }
       if (!card || typeof card !== 'object') continue;
-      const c = card as { kind?: unknown; actor?: { kind?: unknown }; refs?: { botIds?: unknown; botId?: unknown } };
+      const c = card as { kind?: unknown; state?: unknown; actor?: { kind?: unknown; botId?: unknown }; refs?: { botIds?: unknown; botId?: unknown; handoffId?: unknown } };
+      if (c.actor?.kind === 'bot' && c.state === 'resolved' && typeof c.kind === 'string' && ANSWERED_KINDS.has(c.kind)) {
+        if (isBotId(c.actor.botId)) out.add(c.actor.botId);
+        continue;
+      }
       if (c.kind !== 'human' && c.actor?.kind !== 'human') continue;
+      if (typeof c.refs?.handoffId === 'string') handoffIds.add(c.refs.handoffId);
       const ids = [...(Array.isArray(c.refs?.botIds) ? c.refs.botIds : []), c.refs?.botId];
-      for (const id of ids) if (typeof id === 'string' && BOT_ID_RE.test(id)) out.add(id);
+      for (const id of ids) if (isBotId(id)) out.add(id);
     }
     if (cardIds.size >= maxCards) return null;
+  }
+  return out;
+}
+
+/** Every bot the owner dealt with (see the header), or null when a source
+ *  cannot be read. */
+export function botsDealtWith(wmuxDir: string, factoryDir: string): Set<string> | null {
+  const handoffIds = new Set<string>();
+  const out = botsTalkedTo(path.join(factoryDir, 'rooms'), ROOM_STORE_LIMITS.MAX_CARDS, handoffIds);
+  if (!out) return null;
+  // Handoffs: the owner's to a bot, and the bots whose handoffs the owner's
+  // resolutions name. The last line of an id is its record; any line counts.
+  const handoffs = readJsonl(path.join(factoryDir, HANDOFFS_FILENAME));
+  if (!handoffs) return null;
+  for (const h of handoffs as { id?: unknown; from?: { kind?: unknown; botId?: unknown }; to?: { kind?: unknown; botId?: unknown } }[]) {
+    if (h.from?.kind === 'human' && h.to?.kind === 'bot' && isBotId(h.to.botId)) out.add(h.to.botId);
+    if (typeof h.id === 'string' && handoffIds.has(h.id) && h.from?.kind === 'bot' && isBotId(h.from.botId)) out.add(h.from.botId);
+  }
+  // The owner's facts about a bot (its messages, corrections, answers).
+  let factFiles: string[];
+  try {
+    factFiles = fs.existsSync(factoryDir) ? fs.readdirSync(factoryDir).filter((n) => /^facts(\.\d+)?\.jsonl$/.test(n)) : [];
+  } catch {
+    return null;
+  }
+  for (const name of factFiles) {
+    const facts = readJsonl(path.join(factoryDir, name));
+    if (!facts) return null;
+    for (const f of facts as { actor?: { kind?: unknown }; ref?: { botId?: unknown } }[]) {
+      if (f.actor?.kind === 'human' && isBotId(f.ref?.botId)) out.add(f.ref.botId);
+    }
+  }
+  // The phone pin.
+  const settingsFile = factorySettingsPath(wmuxDir);
+  if (fs.existsSync(settingsFile)) {
+    const s = atomicReadJSONSync<unknown>(settingsFile);
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+    const pin = (s as { phoneBotId?: unknown }).phoneBotId;
+    if (isBotId(pin)) out.add(pin);
   }
   return out;
 }
@@ -104,9 +190,9 @@ export function removeUntouchedLegacyBots(ctx: FactoryMigrationContext): void {
   }
   const candidates = current.bots.filter((b) => isLegacyMigrationBot(b, migratedAt));
   if (candidates.length === 0) return;
-  const talked = botsTalkedTo(path.join(ctx.factoryDir, 'rooms'));
+  const talked = botsDealtWith(ctx.wmuxDir, ctx.factoryDir);
   if (!talked) {
-    ctx.notes.push('the rooms could not be read; no Moa-era bots were removed');
+    ctx.notes.push('the rooms, handoffs, facts or settings could not be read; no Moa-era bots were removed');
     return;
   }
   const removed = new Set(
@@ -114,8 +200,18 @@ export function removeUntouchedLegacyBots(ctx: FactoryMigrationContext): void {
   );
   if (removed.size === 0) return;
 
+  // The backup is the document as read — a damaged primary is never copied
+  // over it — and is written before anything is removed.
   const backup = `${botsFile}.premigrate`;
-  if (!fs.existsSync(backup)) fs.copyFileSync(botsFile, backup);
+  let kept: unknown = null;
+  try {
+    kept = fs.existsSync(backup) ? JSON.parse(fs.readFileSync(backup, 'utf8')) : null;
+  } catch {
+    kept = null;
+  }
+  if (!kept || typeof kept !== 'object' || !Array.isArray((kept as { bots?: unknown }).bots)) {
+    atomicWriteJSONSync(backup, current, { durable: true });
+  }
   const usage = current.usage && typeof current.usage === 'object' && !Array.isArray(current.usage)
     ? { ...(current.usage as Record<string, unknown>) }
     : current.usage;
@@ -126,18 +222,6 @@ export function removeUntouchedLegacyBots(ctx: FactoryMigrationContext): void {
     ...(usage !== undefined ? { usage } : {}),
   });
 
-  const settingsFile = factorySettingsPath(ctx.wmuxDir);
-  try {
-    if (fs.existsSync(settingsFile)) {
-      const s = atomicReadJSONSync<unknown>(settingsFile);
-      if (s && typeof s === 'object' && !Array.isArray(s) && removed.has((s as { phoneBotId?: unknown }).phoneBotId as string)) {
-        const next = { ...(s as Record<string, unknown>) };
-        delete next.phoneBotId;
-        atomicWriteJSONSync(settingsFile, next);
-      }
-    }
-  } catch {
-    // A pin naming no bot is ignored anyway (phoneBot.ts).
-  }
+  // The phone pin is never one of them: a pinned bot counts as dealt with.
   ctx.notes.push(`removed ${removed.size} Moa-era bot(s) the owner never talked to (backup: bots.json.premigrate)`);
 }

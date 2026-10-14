@@ -161,6 +161,13 @@ describe('botWorkers from the bot\'s tasks', () => {
     expect(botWorkerTree(LEAD, live, tasks, names).map((r) => [r.workspaceId, r.state])).toEqual([['t1', 'done']]);
   });
 
+  it('every open workspace the bot\'s fan-out made is listed, even one whose task is older than the task list', () => {
+    // t3's task is not in the bot's (newest-first, capped) task list; its worker failed and waits to be seen.
+    const tree = botWorkerTree(LEAD, [], [], names, { t3: LEAD, t4: VERIFIER, gone: LEAD }, { t3: 'idle' });
+    expect(tree.map((r) => [r.workspaceId, r.state])).toEqual([['t3', 'done']]);
+    expect(botWorkerTree(LEAD, [], [], names, { t3: LEAD }, { t3: 'error' })[0].state).toBe('error');
+  });
+
   it('a resumed worker of an ended task is live while its pane\'s agent runs, done once it stops', () => {
     const tasks = [view('a', 't1', 'coded', { worker: 'resumed', workerWorkspaceId: 't2' })];
     expect(botWorkers(LEAD, {}, { t2: 'needsYou' }, names, tasks).map((w) => [w.workspaceId, w.waiting])).toEqual([['t2', true]]);

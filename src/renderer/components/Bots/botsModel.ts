@@ -333,13 +333,18 @@ const ENDED_STAGE: ReadonlySet<BotTaskView['stage']> = new Set<BotTaskView['stag
 
 /** The worker rows nested under a bot in the list (owner decision
  *  2026-10-14, the Sidebar's task tree): its live workers, then its ended
- *  tasks whose workspace is still open, newest first. A row drops off when
- *  its workspace is cleared. Pure. */
+ *  tasks whose workspace is still open, newest first, then every other open
+ *  workspace the bot's fan-out made — one whose task is older than the task
+ *  list the bot reports. The Workspaces sidebar and Fleet hide every bot
+ *  worker, so each open one is listed here. A row drops off when its
+ *  workspace is cleared. Pure. */
 export function botWorkerTree(
   botId: string,
   workers: readonly BotWorker[],
   tasks: readonly BotTaskView[] = [],
   workspaceName: BotsInput['workspaceName'],
+  owners: BotsInput['botTaskOf'] = {},
+  workerClass: BotsInput['workerClass'] = {},
 ): BotTreeRow[] {
   const out: BotTreeRow[] = workers.map((w) => ({
     workspaceId: w.workspaceId,
@@ -367,7 +372,21 @@ export function botWorkerTree(
       resumable: task.worker === 'resumable',
     });
   }
-  return out;
+  const others: BotTreeRow[] = [];
+  for (const [workspaceId, owner] of Object.entries(owners)) {
+    if (owner !== botId || seen.has(workspaceId)) continue;
+    const name = workspaceName(workspaceId);
+    if (name === null) continue;
+    seen.add(workspaceId);
+    const cls = workerClass[workspaceId];
+    others.push({
+      workspaceId,
+      title: name,
+      state: cls === 'error' ? 'error' : cls === 'needsYou' ? 'needsYou' : cls === 'running' ? 'running' : 'done',
+      resumable: false,
+    });
+  }
+  return [...out, ...others.sort((a, b) => a.title.localeCompare(b.title) || a.workspaceId.localeCompare(b.workspaceId))];
 }
 
 function lastOf(cards: readonly RoomCard[]): RoomCard | null {
@@ -410,7 +429,7 @@ export function buildBots(input: BotsInput): BotsModel {
       openQuestions,
       openApprovals,
       workers,
-      tree: botWorkerTree(row.bot.id, workers, row.tasks, input.workspaceName),
+      tree: botWorkerTree(row.bot.id, workers, row.tasks, input.workspaceName, input.botTaskOf, input.workerClass),
       // A waiting worker whose question the bot already asked counts once.
       needsYou: input.readOnly ? 0 : openQuestions + openApprovals + waitingWorkers(workers, openQuestionTasks(own, row.bot.id, input.threads)),
     };

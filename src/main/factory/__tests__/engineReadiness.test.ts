@@ -1,7 +1,7 @@
 // The default engine's readiness (no model turn) and the Claude sign-in tab.
 
 import { describe, expect, it, vi } from 'vitest';
-import { claudeLoginLine, engineReadiness, startEngineLogin, type EngineLoginDeps } from '../engineReadiness';
+import { botClaudeConfigDir, claudeLoginLine, engineReadiness, startEngineLogin, type EngineLoginDeps } from '../engineReadiness';
 
 describe('engineReadiness', () => {
   it('no claude executable: not installed, and the credential is never read', async () => {
@@ -56,6 +56,22 @@ describe('startEngineLogin', () => {
     expect(claudeLoginLine('win32', 'powershell.exe')).toBe('$env:CLAUDE_CONFIG_DIR=$null; claude auth login');
     expect(claudeLoginLine('win32', 'C:\\Windows\\System32\\cmd.exe')).toBe('set "CLAUDE_CONFIG_DIR=" & claude auth login');
     expect(claudeLoginLine('win32', 'C:\\Program Files\\Git\\bin\\bash.exe')).toBe('env -u CLAUDE_CONFIG_DIR claude auth login');
+  });
+
+  it('with a Claude config folder, the sign-in goes to that exact folder (the one readiness reads and the bots run on), quoted for the shell', () => {
+    const dir = "/Users/o'brien/claude cfg";
+    expect(claudeLoginLine('darwin', undefined, dir)).toBe(`CLAUDE_CONFIG_DIR='/Users/o'\\''brien/claude cfg' claude auth login`);
+    expect(claudeLoginLine('win32', 'pwsh.exe', "C:\\o'b\\cfg")).toBe("$env:CLAUDE_CONFIG_DIR='C:\\o''b\\cfg'; claude auth login");
+    expect(claudeLoginLine('win32', 'cmd.exe', 'C:\\cfg')).toBe('set "CLAUDE_CONFIG_DIR=C:\\cfg" & claude auth login');
+    expect(botClaudeConfigDir({ CLAUDE_CONFIG_DIR: '/x/cfg' })).toBe('/x/cfg');
+    expect(botClaudeConfigDir({ CLAUDE_CONFIG_DIR: '  ' })).toBeUndefined();
+    expect(botClaudeConfigDir({})).toBeUndefined();
+  });
+
+  it('startEngineLogin types the folder it was given', async () => {
+    const d = deps({ platform: 'darwin' });
+    await startEngineLogin({ ...d, configDir: '/x/cfg' });
+    expect(d.openTab).toHaveBeenCalledWith(undefined, "CLAUDE_CONFIG_DIR='/x/cfg' claude auth login");
   });
 
   it('no tab: rejects with the command to run by hand', async () => {

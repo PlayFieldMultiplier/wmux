@@ -999,20 +999,37 @@ export class HandoffRouter {
   /** A bot finished a turn on the owner's words: its questions asked before
    *  those words in the thread they were said in, and — when the words were
    *  for this bot alone (its 1:1), not the whole room — those in a thread of
-   *  their own, were answered in chat. A question with options stays open:
-   *  words like "Hi" do not pick one, and the bot that judges its question
-   *  answered closes it itself (question_close). Returns the handoff ids
-   *  closed. */
+   *  their own, were answered in chat. A question with options closes only
+   *  when the words are one of its options (isSameAnswer): that option
+   *  becomes its answer, as if picked on the card. Other words ("Hi") leave
+   *  it open, and the bot that judges it answered closes it itself
+   *  (question_close). Returns the handoff ids closed or answered. */
   closeAnsweredInChat(botId: string, item: Pick<WakeItem, 'reason' | 'threadId' | 'workspaceId' | 'enqueuedAt'>): Promise<string[]> {
     const r = item.reason;
     if (r.kind !== 'human') return Promise.resolve([]);
     const said = item.threadId ?? 'general';
     const toMe = r.room !== true;
-    return this.serial(() => this.closeWhere((h) => h.from.kind === 'bot' && h.from.botId === botId
+    const text = typeof r.text === 'string' ? r.text : '';
+    const asked = (h: Handoff) => h.from.kind === 'bot' && h.from.botId === botId
       && partyWorkspace(h.from) === item.workspaceId
       && h.createdAt < item.enqueuedAt
-      && !h.payload.options?.length
-      && (h.threadId === said || (toMe && h.threadId === `handoff:${h.id}`))));
+      && (h.threadId === said || (toMe && h.threadId === `handoff:${h.id}`));
+    return this.serial(async () => {
+      const answered: string[] = [];
+      for (const h of [...this.records.values()]) {
+        const options = h.payload.options ?? [];
+        if (!isOpenAsk(h) || options.length === 0 || !asked(h) || h.status !== 'delivered') continue;
+        const option = options.find((o) => isSameAnswer(text, o));
+        const ws = partyWorkspace(h.from);
+        const d = this.decisionOf(h);
+        if (!option || !ws || !d || (d.status ?? 'pending') !== 'pending') continue;
+        // The store's change notice settles it (reconcile): the answer
+        // handoff, the card closed as answered.
+        if (await this.opts.decisions.resolve(ws, d.id, option).catch(() => null)) answered.push(h.id);
+      }
+      const closed = await this.closeWhere((h) => asked(h) && !h.payload.options?.length);
+      return [...answered, ...closed];
+    });
   }
 
   /** A task stopped waiting for input (its worker went on, reported or

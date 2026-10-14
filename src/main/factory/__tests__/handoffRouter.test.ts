@@ -961,6 +961,21 @@ describe('closing questions nobody needs to answer (A5)', () => {
     expect(open(h)).toEqual(['Where should I start?']);
   });
 
+  it('chat words that are one of the options answer the question with that option', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const pick = await h.router.askPerson(binding(lead), { title: 'Where should I start?', body: '', options: ['Repo', 'Issues'] });
+    if (!pick.ok) throw new Error('ask failed');
+    now += 5;
+    const said = { ...ownerWake('general', now), reason: { kind: 'human' as const, text: '  issues ', source: 'desktop' as const } };
+    expect(await h.router.closeAnsweredInChat(lead.id, said)).toEqual([pick.handoffId]);
+    await h.router.reconcile();
+    expect(h.router.get(pick.handoffId)!.status).toBe('answered');
+    const answer = h.router.list({ workspaceId: 'ws1' }).find((x) => x.kind === 'answer')!;
+    expect(answer).toMatchObject({ from: { kind: 'human' }, to: { kind: 'bot', botId: lead.id }, replyTo: pick.handoffId, payload: { body: 'Issues' } });
+    expect(open(h)).toEqual([]);
+  });
+
   it('a greeting question is marked, and closes once the bot has a job', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);

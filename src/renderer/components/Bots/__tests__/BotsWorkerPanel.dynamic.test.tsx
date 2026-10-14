@@ -66,6 +66,9 @@ describe('BotsWorkerPanel', () => {
     act(() => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); });
     act(() => (document.activeElement as HTMLButtonElement).click());
     expect(onResume).toHaveBeenCalledTimes(1);
+    // The menu closed and focus went back to its ⋯.
+    expect(el.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement?.hasAttribute('data-bots-worker-panel-menu')).toBe(true);
   });
 
   it('renders nothing once the workspace is gone', () => {

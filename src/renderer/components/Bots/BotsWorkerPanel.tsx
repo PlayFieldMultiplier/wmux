@@ -83,7 +83,7 @@ function PanelMenu({ workspaceId, t, onResume }: { workspaceId: string; t: T; on
               type="button"
               role="menuitem"
               data-bots-worker-panel-resume
-              onClick={() => { setOpen(false); onResume(); }}
+              onClick={() => { close(); onResume(); }}
               className={`ui-section-row w-full text-left text-[13px] ${FOCUS_RING}`}
             >
               {t('botsPage.worker.resume')}
@@ -93,7 +93,7 @@ function PanelMenu({ workspaceId, t, onResume }: { workspaceId: string; t: T; on
             type="button"
             role="menuitem"
             data-bots-worker-panel-workspaces
-            onClick={() => { setOpen(false); openInWorkspaces(workspaceId); }}
+            onClick={() => { close(); openInWorkspaces(workspaceId); }}
             className={`ui-section-row w-full text-left text-[13px] ${FOCUS_RING}`}
           >
             {t('botsPage.chat.openInWorkspaces')}

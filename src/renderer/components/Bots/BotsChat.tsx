@@ -65,6 +65,7 @@ import BotAvatar, { botIdentityColor } from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
 import { awaitsApproval, conversationCards, greetingCardIds, livePlanIds, roomEntries, taskBubbles, type BotTreeRow, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
 import { treeRowState } from './BotsWorkerTree';
+import { loadWholeThread } from './useBots';
 import { useShallow } from 'zustand/react/shallow';
 import type { BotTaskView } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
@@ -1576,7 +1577,13 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     },
   }), [cards, roomThreads, onThread, pattern, bots]);
   const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, started, onThread, onOpenBot, markdown };
-  const threadShown = openThread ? threadCards(cards, openThread.workspaceId, openThread.threadId) : null;
+  // The open thread is read whole, from its first card (the cached room
+  // timeline holds only its newest page), and shown from every card read
+  // for the room — not only this conversation's.
+  useEffect(() => {
+    if (openThread) void loadWholeThread(openThread.workspaceId, openThread.threadId);
+  }, [openThread]);
+  const threadShown = openThread ? threadCards(roomCards, openThread.workspaceId, openThread.threadId) : null;
   const empty = items.length === 0;
 
   return (

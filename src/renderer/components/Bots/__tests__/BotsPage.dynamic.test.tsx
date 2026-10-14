@@ -680,6 +680,35 @@ describe('Bots page', () => {
     expect(container.textContent).not.toContain('(lead)');
   });
 
+  it('an open thread is read whole from its first card: a reply older than the cached page is in the panel, the root first', async () => {
+    seedRooms();
+    // The room's cached page lost the thread's first two cards; main still has them.
+    const root = card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Thread root', threadId: 'pr:github.com/acme/api#9', at: 50 });
+    const early = card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Early reply', threadId: 'pr:github.com/acme/api#9', at: 60 });
+    const late = card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Late reply', threadId: 'pr:github.com/acme/api#9', at: 700 });
+    cards.push(late);
+    seedRooms();
+    const reads: unknown[] = [];
+    const a = api();
+    (a as { read: unknown }).read = vi.fn(async (p: { workspaceId: string; threadId?: string; sinceSeq?: number }) => {
+      reads.push(p);
+      if (p.threadId === 'pr:github.com/acme/api#9') {
+        const page = (p.sinceSeq ?? 0) === 0 ? [root, early] : [late];
+        return { ok: true as const, workspaceId: p.workspaceId, threadId: p.threadId, cards: page, nextSinceSeq: page.at(-1)!.seq, hasMore: (p.sinceSeq ?? 0) === 0 };
+      }
+      const mine = cards.filter((c) => c.workspaceId === p.workspaceId);
+      return { ok: true as const, workspaceId: p.workspaceId, threadId: null, cards: mine, nextSinceSeq: mine.at(-1)?.seq ?? 0, hasMore: false };
+    });
+    setRoomsApiForTests(a);
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    await act(async () => { q('[data-bots-thread-chip="pr:github.com/acme/api#9"]')!.click(); });
+    expect(reads).toEqual(expect.arrayContaining([{ workspaceId: 'w1', threadId: 'pr:github.com/acme/api#9', sinceSeq: 0 }]));
+    const panel = q('[data-bots-thread-panel="pr:github.com/acme/api#9"]')!;
+    const ids = [...panel.querySelectorAll('[data-room-card-id]')].map((el) => el.getAttribute('data-room-card-id'));
+    expect(ids).toEqual([root.id, early.id, late.id]);
+  });
+
   it('the Approve N pending chip shows wherever the approval card is shown, not only in its PR thread', async () => {
     const approval = card({ workspaceId: 'w1', actor: by('w1', LEAD), kind: 'approval', state: 'open', title: 'Merge PR #1 at abc1234?', threadId: 'pr:github.com/acme/api#1', refs: { approvalId: 'apr-0000000001', pr: 1 }, at: 700 });
     // The same request asked where the bot talks with the owner, linking the PR's thread.

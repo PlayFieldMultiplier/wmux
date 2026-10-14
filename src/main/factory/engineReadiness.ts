@@ -10,9 +10,12 @@
 // FACTORY_ENGINE_LOGIN starts the sign-in the app already uses for accounts:
 // `claude auth login` in a new terminal tab of the active workspace, as the
 // tab's startup command (the renderer's `surface.new` with `initialCommand`,
-// which replaces a workspace profile's own startup command). The line clears
-// CLAUDE_CONFIG_DIR first, so a workspace profile or account binding cannot
-// send the sign-in to another config folder than the one readiness reads.
+// which replaces a workspace profile's own startup command). One Claude
+// config folder serves all three — the sign-in, readiness and the bots' own
+// runs (the bot engine inherits main's environment, ClaudeSdkAdapter): main's
+// CLAUDE_CONFIG_DIR when it has one, else Claude's default. The line sets
+// that folder (or clears the variable for the default), so a workspace
+// profile or account binding cannot send the sign-in elsewhere.
 // The CLI opens the browser itself; the tab stays for the owner to read or
 // close. One at a time. The renderer polls readiness to see the sign-in land.
 
@@ -49,16 +52,32 @@ export async function engineReadiness(deps: EngineReadinessDeps): Promise<Factor
 
 export const CLAUDE_LOGIN_COMMAND = 'claude auth login';
 
-/** The sign-in line for the tab's shell, with CLAUDE_CONFIG_DIR cleared.
- *  `shell` is the shell the tab runs (Windows: the native one main picked;
- *  elsewhere undefined = the user's POSIX shell). Pure. */
-export function claudeLoginLine(platform: NodeJS.Platform, shell: string | undefined): string {
+/** The Claude config folder the bots run on, readiness reads and the
+ *  sign-in writes: main's CLAUDE_CONFIG_DIR, or undefined for Claude's
+ *  default. */
+export function botClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const v = env.CLAUDE_CONFIG_DIR;
+  return v && v.trim() ? v : undefined;
+}
+
+/** The sign-in line for the tab's shell: CLAUDE_CONFIG_DIR set to
+ *  `configDir` (quoted for that shell, as account.handler.ts quotes an
+ *  account's), or cleared when there is none. `shell` is the shell the tab
+ *  runs (Windows: the native one main picked; elsewhere undefined = the
+ *  user's POSIX shell). Pure. */
+export function claudeLoginLine(platform: NodeJS.Platform, shell: string | undefined, configDir?: string): string {
   if (platform === 'win32') {
     const base = (shell ?? '').split(/[\\/]/).pop()?.toLowerCase() ?? '';
-    if (base.startsWith('cmd')) return `set "CLAUDE_CONFIG_DIR=" & ${CLAUDE_LOGIN_COMMAND}`;
-    if (base.startsWith('pwsh') || base.startsWith('powershell') || base === '') return `$env:CLAUDE_CONFIG_DIR=$null; ${CLAUDE_LOGIN_COMMAND}`;
+    if (base.startsWith('cmd')) return `set "CLAUDE_CONFIG_DIR=${configDir ?? ''}" & ${CLAUDE_LOGIN_COMMAND}`;
+    if (base.startsWith('pwsh') || base.startsWith('powershell') || base === '') {
+      return configDir
+        ? `$env:CLAUDE_CONFIG_DIR='${configDir.replace(/'/g, "''")}'; ${CLAUDE_LOGIN_COMMAND}`
+        : `$env:CLAUDE_CONFIG_DIR=$null; ${CLAUDE_LOGIN_COMMAND}`;
+    }
   }
-  return `env -u CLAUDE_CONFIG_DIR ${CLAUDE_LOGIN_COMMAND}`;
+  return configDir
+    ? `CLAUDE_CONFIG_DIR='${configDir.replace(/'/g, `'\\''`)}' ${CLAUDE_LOGIN_COMMAND}`
+    : `env -u CLAUDE_CONFIG_DIR ${CLAUDE_LOGIN_COMMAND}`;
 }
 
 export interface EngineLoginDeps {
@@ -70,6 +89,8 @@ export interface EngineLoginDeps {
    *  Linux claude whose sign-in this app does not read. */
   windowsShell: () => string;
   platform: NodeJS.Platform;
+  /** The folder to sign in to (botClaudeConfigDir); undefined = default. */
+  configDir?: string;
 }
 
 let inFlight: Promise<void> | null = null;
@@ -85,7 +106,7 @@ async function open(deps: EngineLoginDeps): Promise<void> {
   const shell = deps.platform === 'win32' ? deps.windowsShell() : undefined;
   let r: Awaited<ReturnType<EngineLoginDeps['openTab']>>;
   try {
-    r = await deps.openTab(shell, claudeLoginLine(deps.platform, shell));
+    r = await deps.openTab(shell, claudeLoginLine(deps.platform, shell, deps.configDir));
   } catch {
     throw new Error('wmux could not open a terminal for the Claude sign-in. Run `claude auth login` in a terminal.');
   }

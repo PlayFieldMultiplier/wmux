@@ -34,7 +34,7 @@ import type { BotTaskView } from '../../../shared/botTask';
 import { botTaskViews, getBotTaskSources, type BotTaskSources } from '../../factory/botTasks';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
 import { getWorkerResumePorts, resumeWorker, type WorkerResumePorts, type WorkerResumeResult } from '../../factory/workerReclaim';
-import { engineReadiness, startEngineLogin, type EngineLoginDeps, type EngineReadinessDeps } from '../../factory/engineReadiness';
+import { botClaudeConfigDir, engineReadiness, startEngineLogin, type EngineLoginDeps, type EngineReadinessDeps } from '../../factory/engineReadiness';
 import type { FactoryEngineReadiness } from '../../../shared/factoryEngine';
 import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { loadClaudeCredential } from '../../claude/claudeCredential';
@@ -123,7 +123,7 @@ const DEFAULT_READINESS_DEPS: EngineReadinessDeps = {
   claudeExecutable: resolveClaudeExecutable,
   credential: async () => {
     // The folder the bot engine's claude reads (it inherits main's env).
-    const r = await loadClaudeCredential(process.env.CLAUDE_CONFIG_DIR || undefined);
+    const r = await loadClaudeCredential(botClaudeConfigDir());
     return r.ok ? { ok: true } : { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) };
   },
 };
@@ -147,7 +147,8 @@ export function factoryEngineLoginHandler(
 ): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<void> {
   return async (e) => {
     if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may start the Claude sign-in');
-    await startEngineLogin({ ...deps, platform: deps.platform ?? process.platform });
+    // The sign-in goes to the folder readiness reads and the bots run on.
+    await startEngineLogin({ configDir: botClaudeConfigDir(), ...deps, platform: deps.platform ?? process.platform });
   };
 }
 

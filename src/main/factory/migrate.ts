@@ -66,12 +66,19 @@ export const FACTORY_MIGRATION_STEPS: readonly FactoryMigrationStep[] = [
     },
   },
   // The Moa and Lead bots an earlier build of step 1 → 2 made are removed
-  // when the owner never talked to them (legacyBotCleanup.ts).
+  // when the owner never dealt with them (legacyBotCleanup.ts). A failure
+  // removes nothing more, leaves a note and still reaches version 3: a
+  // cleanup that cannot run must not keep the factory from starting, and
+  // what it would remove is optional.
   {
     fromVersion: 2,
     toVersion: 3,
     migrate: (ctx) => {
-      removeUntouchedLegacyBots(ctx);
+      try {
+        removeUntouchedLegacyBots(ctx);
+      } catch (err) {
+        ctx.notes.push(`the Moa-era bot cleanup failed; no bots were removed (${err instanceof Error ? err.message : String(err)})`);
+      }
       return ctx;
     },
   },
