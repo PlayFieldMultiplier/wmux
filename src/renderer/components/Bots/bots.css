@@ -569,3 +569,12 @@
   background: var(--line-strong);
   pointer-events: none;
 }
+
+/* The worker panel draws no pane rings: no done blink, no notification ring
+   or flash, no glow. The worker's state is the panel header's words and its
+   row's mark in the list; Workspaces keeps its rings. */
+.wmux-bots-worker-panes .pane-complete-blink::after,
+.wmux-bots-worker-panes .notification-ring::before,
+.wmux-bots-worker-panes .pane-flash::after { display: none; }
+.wmux-bots-worker-panes .pane-ring-flash,
+.wmux-bots-worker-panes .pane-ring-glow { box-shadow: none; opacity: 1; border-color: transparent !important; }

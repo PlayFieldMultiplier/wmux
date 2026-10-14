@@ -76,8 +76,13 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   'Bash(git*push*--force*)', 'Bash(git*push* -f)', 'Bash(git*push* -f *)',
   ...['u', 'v', 'q', 'n'].flatMap((x) => [`Bash(git*push* -${x}f*)`, `Bash(git*push* -f${x}*)`, `Bash(git*push* -${x}${x === 'u' ? 'v' : 'u'}f*)`]),
   'Bash(git*push* +*)', 'Bash(git*push*:+*)',
-  // Every ref at once, or deleting one. `:**`, not `:*`: Claude Code reads a
-  // trailing `:*` as its prefix syntax and then matches the `*`s literally.
+  // Every ref at once, or deleting one. ` :**` is a wildcard rule with a
+  // literal colon: it refuses any push with a ` :<ref>` (delete) refspec.
+  // Claude Code reads a trailing `:*` as its prefix syntax instead, so the
+  // colon must not end the rule. Claude Code 2.1.299 shows a notice for a
+  // non-trailing `:*` and still matches it this way; no spelling without
+  // `:*` matches the same commands (its rules have `*` and literals only),
+  // so the rule stays as it is.
   'Bash(git*push*--mirror*)', 'Bash(git*push*--all*)', 'Bash(git*push*--delete*)', 'Bash(git*push* -d *)', 'Bash(git*push* :**)',
   ...BOT_WORKER_FALLBACK_DEFAULT_BRANCHES.flatMap(pushDenyForBranch),
   // A push that names no destination goes wherever the branch's upstream or

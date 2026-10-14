@@ -3,6 +3,7 @@
 // for any run of characters. (The rules' behaviour inside claude itself was
 // measured for the merge rules; see main/agents/botWorkerMergeGuard.ts.)
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +26,20 @@ describe('bot worker deny rules', () => {
     expect(buildBotWorkerSettings()).toEqual({ permissions: { deny: [...BOT_WORKER_DENY] } });
     expect(BOT_WORKER_DENY.slice(0, BOT_WORKER_MERGE_DENY.length)).toEqual([...BOT_WORKER_MERGE_DENY]);
     expect(BOT_WORKER_DENY).toEqual(expect.arrayContaining([...BOT_WORKER_PUSH_DENY, ...BOT_WORKER_PUBLIC_DENY]));
+  });
+
+  it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
+    expect(BOT_WORKER_DENY.length).toBe(310);
+    expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
+      .toBe('e30b71f7e4df3c237e1803685459a8cbc85f395df1b0d0b9494aa869fc347f36');
+  });
+
+  it('a `:*` that does not end a rule appears only in the delete-refspec rule, a wildcard with a literal colon', () => {
+    const { deny } = buildBotWorkerSettings(['develop']).permissions as { deny: string[] };
+    expect(deny.filter((r) => r.includes(':*') && !r.endsWith(':*)'))).toEqual(['Bash(git*push* :**)']);
+    expect(denied('git push origin :feature')).toBe(true);
+    expect(denied('git push -q origin :wtask/x')).toBe(true);
+    expect(denied('git push origin wtask/x')).toBe(false);
   });
 
   it('no rule ends in `:*` after another `*`, which Claude Code would match literally', () => {
