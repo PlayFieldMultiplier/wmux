@@ -8,6 +8,8 @@ import { destroyRemoteSessions, destroySurfaceRemoteSession } from '../../utils/
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { MAX_PANES_PER_WORKSPACE } from '../../stores/slices/paneSlice';
 import { useIpc } from '../../hooks/useIpc';
+import { driveFocusToTerminal } from '../../hooks/useActivePaneFocus';
+import { onTerminalRegistered, terminalRegistry } from '../../hooks/useTerminal';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import TerminalComponent from '../Terminal/Terminal';
@@ -708,6 +710,31 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     [pane.surfaces],
   );
   const splitMode = splitTerminals.length > 0 && splitWorks.length > 0;
+  // Entering or leaving the split moves the terminals to a new parent, which
+  // remounts them and drops the keyboard focus to <body>: an agent opening a
+  // browser tab while you type would swallow your next keystrokes. Note here,
+  // before the commit, which of this pane's terminals holds the focus, and
+  // hand it back once the new layout is drawn.
+  const prevSplitModeRef = useRef(splitMode);
+  const refocusPtyRef = useRef<string | null>(null);
+  if (prevSplitModeRef.current !== splitMode) {
+    prevSplitModeRef.current = splitMode;
+    const active = typeof document === 'undefined' ? null : document.activeElement;
+    refocusPtyRef.current = active
+      ? pane.surfaces.find((s) => s.ptyId && terminalRegistry.get(s.ptyId)?.element?.contains(active))?.ptyId ?? null
+      : null;
+  }
+  useEffect(() => {
+    const ptyId = refocusPtyRef.current;
+    refocusPtyRef.current = null;
+    if (!ptyId) return;
+    return driveFocusToTerminal(ptyId, {
+      getTerminal: (id) => terminalRegistry.get(id),
+      onRegistered: onTerminalRegistered,
+      raf: (cb) => requestAnimationFrame(cb),
+      caf: (handle) => cancelAnimationFrame(handle),
+    });
+  }, [splitMode]);
   const lastWorkIdRef = useRef<string | undefined>(undefined);
   const { shownTerminalId, shownWorkId } = pickSplitShownSurfaces(
     splitTerminals, splitWorks, pane.activeSurfaceId, lastWorkIdRef.current,
