@@ -69,6 +69,7 @@ import { loadWholeThread } from './useBots';
 import { useShallow } from 'zustand/react/shallow';
 import type { BotTaskView } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
+import { BotConnections } from './BotConnections';
 import { stopBotSummary, type BotsStopPort } from './botsStop';
 import { InlineConfirm } from './InlineConfirm';
 import BotsWorkerPanel from './BotsWorkerPanel';
@@ -1283,7 +1284,7 @@ function JobLine({ row, t, jobPort }: { row: FactoryBotRow; t: T; jobPort?: Pick
 
 /** The bot's profile under its name pill: template, job (editable),
  *  workspace, repo, on/off, turns used and left today, its routines
- *  (read-only), then what it can do (the shared powers,
+ *  (read-only), its connections, then what it can do (the shared powers,
  *  read-only), whom it reports to, its workers now, and Stop. */
 function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update'> }) {
   const left = row.status?.budgetLeft?.turnsDay;
@@ -1316,6 +1317,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort }: { row
           </ul>
         </div>
       )}
+      <BotConnections row={row} t={t} />
       <div className="mt-1 border-t border-[var(--stroke)] pt-1">
         <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-can-do>
           <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.canDo')}</span>

@@ -26,6 +26,8 @@ import { DEFAULT_BOT_BUDGETS, type BotProfile, type BotRole } from '../../../../
 import { emptyUsage } from '../../../factory/budget';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotWorkerStartOutcome } from '../../../factory/botNotices';
+import { SecretStore, setSecretStore } from '../../../factory/secretStore';
+import { setSecretGrantSource } from '../../../factory/secretGrants';
 
 const REPO = nodePath.resolve('/repo');
 const SHA = 'a'.repeat(40);
@@ -194,6 +196,29 @@ describe('task.fanout.start — bot origin', () => {
     expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await r.flush();
     expect((r.start.mock.calls[1][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
+  });
+
+  it('a connection\'s key is refused as a plain secretNames entry, before anything starts', async () => {
+    const secrets = new SecretStore({
+      file: nodePath.join(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-fanout-conn-')), 'secrets.json'),
+      crypto: { state: () => 'ok', encrypt: (p) => Buffer.from(p), decrypt: (c) => c.toString() },
+    });
+    secrets.load();
+    expect(secrets.set('GH_MCP_TOKEN', 'ghp_connection_value_123', { connectorId: 'con-00000001' }).ok).toBe(true);
+    expect(secrets.set('NPM_TOKEN', 'npm_plain_value_123456').ok).toBe(true);
+    setSecretStore(secrets);
+    setSecretGrantSource(() => secrets);
+    try {
+      const r = rig('lead');
+      const refused = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], prompt: 'x', preset: 'repro', secretNames: ['NPM_TOKEN', 'GH_MCP_TOKEN'] }, botCtx('lead')));
+      expect(refused.code).toBe('INVALID_ARGUMENT');
+      expect(refused.message).toContain('GH_MCP_TOKEN');
+      expect(r.start).not.toHaveBeenCalled();
+      expect(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], prompt: 'x', preset: 'repro', secretNames: ['NPM_TOKEN'] }, botCtx('lead'))).toMatchObject({ ok: true });
+    } finally {
+      setSecretGrantSource(null);
+      setSecretStore(null);
+    }
   });
 
   it('records the handoff the asking wake delivers on its tasks', async () => {

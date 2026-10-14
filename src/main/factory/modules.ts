@@ -8,6 +8,7 @@
 // instances, and every register runs before any start. The secret store
 // starts first, so its values are redacted from everything the others write.
 import '../pipe/handlers/botSecret.rpc';
+import '../pipe/handlers/connector.rpc';
 import '../pipe/handlers/fact.rpc';
 import '../pipe/handlers/bot.rpc';
 import './factoryWiring';

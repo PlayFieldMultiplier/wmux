@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { safeStorage } from 'electron';
 import { BOT_SECRET_LIMITS, isBotSecretName, type BotSecretEntry } from '../../shared/botSecret';
+import { CONNECTOR_ID_RE } from '../../shared/botConnector';
 import { isRedactableSecretValue, secretForms, setRedactedSecrets } from './secretRedaction';
 
 export const SECRETS_FILE_VERSION = 1 as const;
@@ -52,6 +53,9 @@ interface StoredSecret {
   cipher: string;
   label?: string;
   requestedBy?: string;
+  /** The connection the key was entered for (shared/botConnector.ts): a
+   *  connection's key, never handed to a worker as a plain secret. */
+  connectorId?: string;
   createdAt: number;
   updatedAt: number;
   lastUsed?: { botId: string; at: number };
@@ -110,6 +114,7 @@ function cleanRecord(r: StoredSecret): StoredSecret {
     cipher: r.cipher,
     ...(typeof r.label === 'string' && r.label ? { label: r.label.slice(0, LABEL_MAX) } : {}),
     ...(typeof r.requestedBy === 'string' && r.requestedBy ? { requestedBy: r.requestedBy.slice(0, BOT_ID_MAX) } : {}),
+    ...(typeof r.connectorId === 'string' && CONNECTOR_ID_RE.test(r.connectorId) ? { connectorId: r.connectorId } : {}),
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     ...(lastUsed ? { lastUsed } : {}),
@@ -121,6 +126,7 @@ function entryOf(r: StoredSecret): BotSecretEntry {
     name: r.name,
     ...(r.label ? { label: r.label } : {}),
     ...(r.requestedBy ? { requestedBy: r.requestedBy } : {}),
+    ...(r.connectorId ? { connectorId: r.connectorId } : {}),
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     ...(r.lastUsed ? { lastUsed: { ...r.lastUsed } } : {}),
@@ -228,13 +234,18 @@ export class SecretStore {
     return [...this.held.values()].map((h) => entryOf(h.record)).sort((a, b) => a.createdAt - b.createdAt);
   }
 
+  /** Entered for a connection (its record names one). */
+  isConnectorKey(name: string): boolean {
+    return !!this.held.get(name)?.record.connectorId;
+  }
+
   /** Stored and usable (decrypted) here. */
   has(name: string): boolean {
     return this.held.get(name)?.value != null;
   }
 
   /** Store (or replace) one value. */
-  set(name: unknown, value: unknown, meta: { label?: string; requestedBy?: string } = {}): SecretSetResult {
+  set(name: unknown, value: unknown, meta: { label?: string; requestedBy?: string; connectorId?: string } = {}): SecretSetResult {
     if (!this.loaded) return { ok: false, code: 'not_loaded', message: 'The key store is not running yet.' };
     if (!isBotSecretName(name)) {
       return { ok: false, code: 'invalid_name', message: 'The name must be an upper-case env name that reads as a credential (for example NPM_TOKEN or OPENAI_API_KEY).' };
@@ -265,6 +276,7 @@ export class SecretStore {
       cipher,
       ...(label ? { label } : {}),
       ...(meta.requestedBy ? { requestedBy: meta.requestedBy } : prior?.record.requestedBy ? { requestedBy: prior.record.requestedBy } : {}),
+      ...(meta.connectorId ? { connectorId: meta.connectorId } : prior?.record.connectorId ? { connectorId: prior.record.connectorId } : {}),
       createdAt: prior?.record.createdAt ?? at,
       updatedAt: at,
       ...(prior?.record.lastUsed ? { lastUsed: prior.record.lastUsed } : {}),

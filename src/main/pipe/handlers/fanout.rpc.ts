@@ -118,6 +118,7 @@ import { SHARED_SURFACE } from '../../../shared/botSurface';
 import { WAKE_LIMITS, botFanoutIdempotencyKey, type WakeItem } from '../../../shared/wake';
 import { getBotStore } from '../../factory/botStore';
 import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
+import { isConnectionKey } from '../../factory/connectorStore';
 import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
 import { getBotRuntime } from '../../factory/BotRuntime';
 import { GENERAL_THREAD, parseThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
@@ -1187,6 +1188,9 @@ export function registerFanOutRpc(
       if (!bot) return deny('INVALID_ARGUMENT', 'task.fanout.start accepts secretNames only from a factory bot');
       const names = parseSecretNames(params['secretNames']);
       if (!names) return deny('INVALID_ARGUMENT', `secretNames must be 1-${BOT_SECRET_LIMITS.NAMES_PER_FANOUT} distinct credential-shaped env names (for example NPM_TOKEN)`);
+      // A connection's key reaches a worker only through its connection.
+      const owned = names.filter((n) => isConnectionKey(n));
+      if (owned.length > 0) return deny('INVALID_ARGUMENT', `not a key you can hand to a worker: ${owned.join(', ')}`);
       const missing = secretNamesRefusal(names);
       if (missing) return deny('INVALID_ARGUMENT', missing);
       secretNames = names;

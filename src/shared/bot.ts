@@ -279,13 +279,16 @@ export interface BotSetJobParams {
  *    remembered rules changed (shared/botApproval.ts);
  *  - `routines-changed`: a bot's routines changed (shared/botRoutine.ts);
  *  - `secrets-changed`: the stored secret names or their use changed
- *    (shared/botSecret.ts). */
+ *    (shared/botSecret.ts);
+ *  - `connectors-changed`: the connection library changed
+ *    (shared/botConnector.ts). */
 export type BotEventPayload =
   | { type: 'bot.status'; status: BotStatus }
   | { type: 'bots-changed' }
   | { type: 'approvals-changed'; workspaceId?: string }
   | { type: 'routines-changed'; botId?: string }
-  | { type: 'secrets-changed' };
+  | { type: 'secrets-changed' }
+  | { type: 'connectors-changed' };
 
 export const BOT_EVENT = 'bot.event';
 

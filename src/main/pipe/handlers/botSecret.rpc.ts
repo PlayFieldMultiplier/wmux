@@ -47,6 +47,7 @@ import {
 import { SecretStore, electronSecretCrypto, getSecretStore, setSecretStore, type SecretCrypto } from '../../factory/secretStore';
 import { setSecretGrantSource } from '../../factory/secretGrants';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
+import { getConnectorStore, isConnectionKey } from '../../factory/connectorStore';
 
 export const SECRETS_FILENAME = 'secrets.json';
 const URL_MAX = 500;
@@ -78,6 +79,8 @@ export interface SecretHandlerDeps {
   store: () => SecretStore | null;
   writer: () => RoomWriter | null;
   ports: () => Partial<FactoryRoomPorts>;
+  /** Is this key a connection's (default: the running library and store)? */
+  isConnectionKey?: (name: string) => boolean;
 }
 
 function notStarted(): FactoryRefusal<'not_started'> {
@@ -147,7 +150,11 @@ export function handleSecretList(_raw: unknown, ctx: RpcContext | undefined, dep
   if (caller.kind === 'bot' && !botHasTool(caller.bot, 'secret_list')) return refusal('surface', 'this bot has no secret_list');
   const store = deps.store();
   if (!store) return notStarted();
-  const secrets = store.list().map((e) => ({ ...e, usable: store.has(e.name) }));
+  // A connection's keys are not a bot's to hand out: a bot's list leaves them out.
+  const owned = deps.isConnectionKey ?? ((n: string) => isConnectionKey(n));
+  const secrets = store.list()
+    .filter((e) => caller.kind !== 'bot' || !owned(e.name))
+    .map((e) => ({ ...e, usable: store.has(e.name) }));
   return { ok: true, secrets };
 }
 
@@ -276,6 +283,10 @@ export function ownerSetSecret(raw: unknown, deps: OwnerSecretDeps): OwnerSecret
     if (found.refs?.secretName !== p.name) return { ok: false, code: 'invalid_card', message: 'the card asks for another name' };
     card = found;
   }
+  // A connection's key is replaced in its connection, never from a bot's card.
+  if (typeof p.name === 'string' && (deps.isConnectionKey ?? ((n: string) => isConnectionKey(n)))(p.name)) {
+    return { ok: false, code: 'connection_key', message: `${p.name} is a connection's key. Replace it in Settings › Bots › Connections.` };
+  }
   const r = store.set(p.name, p.value, {
     ...(card ? { label: card.title } : {}),
     ...(card && card.actor.kind === 'bot' ? { requestedBy: card.actor.botId } : {}),
@@ -364,9 +375,13 @@ export function registerSecretIpc(getWindow: () => BrowserWindow | null, deps: O
     const store = deps.store();
     if (!store) return { ok: false as const, code: 'not_started', message: 'The key store is not running yet.' };
     const refusalNow = store.storeRefusal();
+    const lib = getConnectorStore()?.list() ?? [];
     return {
       ok: true as const,
-      secrets: store.list().map((e) => ({ ...e, usable: store.has(e.name) })),
+      secrets: store.list().map((e) => {
+        const connections = lib.filter((c) => c.secrets.some((s) => s.secret === e.name)).map((c) => c.name);
+        return { ...e, usable: store.has(e.name), ...(connections.length > 0 ? { connections } : {}) };
+      }),
       ...(refusalNow ? { cannotStore: { code: refusalNow.code, message: refusalNow.message } } : {}),
     };
   }));

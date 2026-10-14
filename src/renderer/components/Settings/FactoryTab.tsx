@@ -48,6 +48,7 @@ import Select from '../ui/Select';
 import Input from '../ui/Input';
 import { FOCUS_RING } from '../focusRing';
 import { BotSecretsSection, PhoneBotSelect } from './BotSecretsSection';
+import { BotConnectionsSection } from './BotConnectionsSection';
 import { InlineConfirm } from '../Bots/InlineConfirm';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
@@ -896,6 +897,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
           turnOn={turnOn}
         />
       </SettingsSection>
+      <BotConnectionsSection t={t} />
       <ApprovalRules t={t} botName={botName} workspaceName={workspaceName} />
       <BotSecretsSection t={t} />
     </div>

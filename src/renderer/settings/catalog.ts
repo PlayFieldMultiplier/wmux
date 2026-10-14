@@ -163,6 +163,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   { id: 'factorylanedailycap', tab: 'factory', labelKey: 'settings.factory.laneDailyCap', descKey: 'settings.factory.laneDailyCapDesc', synonyms: 'merge lane daily cap limit per day' },
   { id: 'factoryphonebot', tab: 'factory', labelKey: 'settings.factory.phoneBot', descKey: 'settings.factory.phoneBotDesc', synonyms: 'phone mobile ios bot addressee moa coordinator 폰 휴대폰' },
   { id: 'factorybots', tab: 'factory', labelKey: 'settings.factory.bots', descKey: 'settings.factory.botsDesc', synonyms: 'bots add bot profile lead triage verifier maintainer budget workspace repository 봇 추가' },
+  { id: 'factoryconnections', tab: 'factory', labelKey: 'settings.factory.connections.section', descKey: 'settings.factory.connections.sectionDesc', synonyms: 'connections connectors mcp server tools github filesystem 연결 커넥터 서버 도구' },
   { id: 'factorykeys', tab: 'factory', labelKey: 'settings.factory.keys', descKey: 'settings.factory.keysDesc', synonyms: 'keys secrets api key token env environment variable credential 키 비밀 토큰' },
 
   { id: 'roles', tab: 'roles', labelKey: 'settings.roleBindings', descKey: 'settings.roleBindingsDesc', synonyms: 'role reviewer tester planner model bind' },

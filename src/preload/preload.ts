@@ -8,6 +8,7 @@ import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
 import { BOT_APPROVAL_IPC } from '../shared/botApproval';
 import { BOT_SECRET_IPC } from '../shared/botSecret';
+import { CONNECTOR_IPC } from '../shared/botConnector';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
 import {
@@ -1225,6 +1226,19 @@ const electronAPI = {
       delete: (name: string) => ipcRenderer.invoke(BOT_SECRET_IPC.delete, { name }) as Promise<{ ok: boolean }>,
       login: (req: { workspaceId: string; cardId: string; done?: boolean }) =>
         ipcRenderer.invoke(BOT_SECRET_IPC.login, req) as Promise<import('../renderer/components/Room/botSecrets').LoginResult>,
+    },
+    // The connection library (renderer/components/Room/botConnectors.ts):
+    // a key's value goes out once, in save; nothing reads one back.
+    connectors: {
+      list: () => ipcRenderer.invoke(CONNECTOR_IPC.list) as Promise<import('../shared/botConnector').ConnectorListResult>,
+      save: (req: import('../shared/botConnector').ConnectorSaveRequest) =>
+        ipcRenderer.invoke(CONNECTOR_IPC.save, req) as Promise<import('../shared/botConnector').ConnectorSaveResult>,
+      remove: (req: import('../shared/botConnector').ConnectorRemoveRequest) =>
+        ipcRenderer.invoke(CONNECTOR_IPC.remove, req) as Promise<import('../shared/botConnector').ConnectorRemoveResult>,
+      setOffForBot: (req: { id: string; botId: string; off: boolean }) =>
+        ipcRenderer.invoke(CONNECTOR_IPC.setOffForBot, req) as Promise<import('../shared/botConnector').ConnectorSimpleResult>,
+      setEnabled: (req: { id: string; enabled: boolean }) =>
+        ipcRenderer.invoke(CONNECTOR_IPC.setEnabled, req) as Promise<import('../shared/botConnector').ConnectorSimpleResult>,
     },
   },
   // Owner approvals of what bots ask for (main/ipc/handlers/approval.handler.ts:
