@@ -61,9 +61,10 @@ interface ConversationBase {
   /** `bot:<botId>` or `room:<workspaceId>`. */
   id: string;
   workspaceId: string;
-  /** The newest message's time (a bot without any: its creation). */
+  /** The newest card's time, wmux's own lines too (a bot without any: its
+   *  creation): the list's order. */
   lastAt: number;
-  /** The newest message, for the row's preview. */
+  /** The newest message, a bot's or the owner's, for the row's preview. */
   last: RoomCard | null;
   needsYou: number;
 }
@@ -389,8 +390,11 @@ export function botWorkerTree(
   return [...out, ...others.sort((a, b) => a.title.localeCompare(b.title) || a.workspaceId.localeCompare(b.workspaceId))];
 }
 
+/** The newest message, a bot's or the owner's: wmux's own lines (a relay
+ *  hop, a task's start) are never a conversation's preview. */
 function lastOf(cards: readonly RoomCard[]): RoomCard | null {
-  return cards.length > 0 ? cards[cards.length - 1] : null;
+  for (let i = cards.length - 1; i >= 0; i--) if (cards[i].actor.kind !== 'system') return cards[i];
+  return null;
 }
 
 /** The conversations, newest first. */
@@ -407,7 +411,7 @@ export function buildBots(input: BotsInput): BotsModel {
       bots: bots.filter((r) => r.bot.workspaceId === workspaceId),
       workers: [],
       last,
-      lastAt: Math.max(last?.at ?? 0, threadLast),
+      lastAt: Math.max(cards.at(-1)?.at ?? 0, threadLast),
       needsYou: 0,
     };
   });
@@ -425,7 +429,7 @@ export function buildBots(input: BotsInput): BotsModel {
       workspaceId: row.bot.workspaceId,
       row,
       last,
-      lastAt: last?.at ?? row.bot.createdAt,
+      lastAt: own.at(-1)?.at ?? row.bot.createdAt,
       openQuestions,
       openApprovals,
       workers,

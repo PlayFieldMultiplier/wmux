@@ -473,9 +473,11 @@ describe('Bots page', () => {
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('1');
     expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-needs]`)).toBeNull();
     expect(q('[data-bots-row="room:w1"] [data-bots-needs]')).toBeNull();
-    // Previews: the newest message, the owner's as "You: …".
+    // Previews: the newest message, the owner's as "You: …" — never wmux's
+    // own line, though it still orders the list (room w1 is first).
     expect(q(`[data-bots-row="bot:${VERIFIER}"]`)?.textContent).toContain('PR #1 passes');
-    expect(q('[data-bots-row="room:w1"]')?.textContent).toContain('CI green on #1');
+    expect(q('[data-bots-row="room:w1"]')?.textContent).toContain('Lead: Merge #1 now?');
+    expect(q('[data-bots-row="room:w1"]')?.textContent).not.toContain('CI green on #1');
   });
 
   it('a 1:1 shows only that bot\'s cards and the owner\'s messages to it; a group shows the room', async () => {

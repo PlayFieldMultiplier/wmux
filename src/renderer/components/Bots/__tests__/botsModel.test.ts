@@ -181,6 +181,17 @@ describe('botWorkers from the bot\'s tasks', () => {
     expect(ws.map((w) => [w.workspaceId, w.taskId ?? null])).toEqual([['t1', 'a'], ['t2', null]]);
   });
 
+  it('a bot\'s row previews its newest message, never a system line about it, which still orders the list', () => {
+    const said = card({ workspaceId: 'w1', actor: bot('w1', LEAD), title: 'Built it', at: 2000 });
+    const relay = card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', title: 'result → Lead: Built it', refs: { botId: LEAD }, at: 2100 });
+    const row = buildBots(input({ cards: new Map([['w1', [said, relay]]]) })).conversations.find((c) => c.id === `bot:${LEAD}`)!;
+    expect(row.last?.id).toBe(said.id);
+    expect(row.lastAt).toBe(2100);
+    // Only system lines: no preview yet.
+    const quiet = buildBots(input({ cards: new Map([['w1', [relay]]]) })).conversations.find((c) => c.id === `bot:${LEAD}`)!;
+    expect(quiet.last).toBeNull();
+  });
+
   it('a waiting task counts on its bot\'s row, and its room lists the room\'s bots\' workers', () => {
     const lead = { ...BOTS[1], tasks: [view('a', 't1', 'needs_input')] };
     const m = buildBots(input({ bots: [BOTS[0], lead, BOTS[2]] }));
