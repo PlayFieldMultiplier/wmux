@@ -67,7 +67,7 @@ beforeEach(() => {
   secrets = new SecretStore({ file: path.join(dir, 'factory', 'secrets.json'), crypto });
   secrets.load();
   store = newStore();
-  deps = { store: () => store, secrets: () => secrets, resolveCommand: async (c) => (c.startsWith('/') ? c : `/usr/bin/${c}`) };
+  deps = { store: () => store, secrets: () => secrets, platform: 'darwin', resolveCommand: async (c) => (c.startsWith('/') ? c : `/usr/bin/${c}`) };
 });
 afterEach(async () => {
   __resetRedactedSecretsForTesting();
