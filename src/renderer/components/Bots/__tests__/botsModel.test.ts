@@ -154,6 +154,13 @@ describe('botWorkers from the bot\'s tasks', () => {
     ]);
   });
 
+  it('a done task\'s pane whose agent still reads running is done, not a live worker (one state for row, panel and chat)', () => {
+    const tasks = [view('a', 't1', 'coded', { status: 'review_requested' })];
+    const live = botWorkers(LEAD, { t1: LEAD }, { t1: 'running' }, names, tasks);
+    expect(live).toEqual([]);
+    expect(botWorkerTree(LEAD, live, tasks, names).map((r) => [r.workspaceId, r.state])).toEqual([['t1', 'done']]);
+  });
+
   it('a task workspace already listed from its task is not listed again from its origin', () => {
     const ws = botWorkers(LEAD, { t1: LEAD, t2: LEAD }, { t1: 'running', t2: 'needsYou' }, names, [view('a', 't1', 'working')]);
     expect(ws.map((w) => [w.workspaceId, w.taskId ?? null])).toEqual([['t1', 'a'], ['t2', null]]);

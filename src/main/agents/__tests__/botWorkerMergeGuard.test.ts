@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import {
+import { clearedLaunchLine,
   BOT_WORKER_DENY,
   beginBotWorkerSpawn,
   botWorkerForCreate,
@@ -324,5 +324,19 @@ describe('pty:create applies the guard (source-level lock)', () => {
     const fanout = read('src/main/worktask/FanOutService.ts');
     expect(fanout).toMatch(/ctx\.requester\?\.kind === 'bot'\s*\?\s*beginBotWorkerSpawn\(ctx\.verifiedWorkspaceId, cwd,/);
     expect(fanout).toMatch(/releaseAgyTrust\(\);\s*releaseBotSpawn\(\);/);
+  });
+});
+
+describe('clearedLaunchLine', () => {
+  it('clears the screen before a bot worker\'s line in a POSIX shell, and leaves the line itself as it is', () => {
+    const line = 'ANTHROPIC_BASE_URL=x claude --session-id 1 --dangerously-skip-permissions';
+    expect(clearedLaunchLine(line, '/bin/zsh', 'darwin')).toBe(`clear; ${line}`);
+    expect(clearedLaunchLine(line, '/usr/bin/bash', 'linux')).toBe(`clear; ${line}`);
+    expect(clearedLaunchLine(line, 'fish', 'linux')).toBe(`clear; ${line}`);
+    // Windows shells, unknown shells and no line: unchanged.
+    expect(clearedLaunchLine(line, 'pwsh.exe', 'win32')).toBe(line);
+    expect(clearedLaunchLine(line, '/usr/bin/nu', 'linux')).toBe(line);
+    expect(clearedLaunchLine(undefined, '/bin/zsh', 'darwin')).toBeUndefined();
+    expect(clearedLaunchLine('  ', '/bin/zsh', 'darwin')).toBe('  ');
   });
 });

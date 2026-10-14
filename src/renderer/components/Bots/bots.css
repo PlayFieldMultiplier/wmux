@@ -546,3 +546,15 @@
   font-weight: 500;
   vertical-align: -2px;
 }
+
+/* The splitter's drag guide: where the seam lands on release. */
+.wmux-bots-split-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 6;
+  width: 2px;
+  margin-right: -1px;
+  background: var(--line-strong);
+  pointer-events: none;
+}

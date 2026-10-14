@@ -308,8 +308,16 @@ export function botWorkers(
       waiting: needsInput || WAITING_WORKER.has(cls), needsInput, taskId: task.taskId, ...(summary ? { summary } : {}),
     });
   }
+  // A workspace one of the bot's tasks names follows that task's stage: a
+  // done task's pane whose agent still reads running is not a live worker.
+  const tasked = new Set<string>();
+  for (const task of tasks) {
+    if (task.botId !== botId) continue;
+    if (task.taskWorkspaceId) tasked.add(task.taskWorkspaceId);
+    if (task.workerWorkspaceId) tasked.add(task.workerWorkspaceId);
+  }
   for (const [workspaceId, owner] of Object.entries(owners)) {
-    if (owner !== botId || seen.has(workspaceId)) continue;
+    if (owner !== botId || seen.has(workspaceId) || tasked.has(workspaceId)) continue;
     const cls = workerClass[workspaceId];
     if (!cls || !LIVE_WORKER.has(cls)) continue;
     out.push({ workspaceId, botId, name: workspaceName(workspaceId) ?? workspaceId, cls, waiting: WAITING_WORKER.has(cls) });

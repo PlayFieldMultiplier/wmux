@@ -3,19 +3,19 @@
 // Owner decision 2026-10-14: the Bots list shows each bot's workers the way
 // the Sidebar shows a workspace's fan-out tasks — an indented row per worker
 // on a hairline guide, its status mark, the fan-out mark and the task's
-// title, and under it the branch with its diff counts. Live workers come
+// title, and under it the branch with its +/− diff counts (not the git
+// line's clean dot: one dot per row, the state mark). Live workers come
 // first, then ended tasks whose workspace is still open (botWorkerTree); a
 // row drops off when its workspace is cleared. A click shows the worker's
 // terminal in the panel beside the chat (BotsWorkerPanel); the row it shows
 // is selected. The rows reuse the Sidebar's marks (StatusMarkView,
-// GitSyncBadge, IconFanOut, IconGitBranch), not its task group, whose menu
-// closes worktrees.
+// IconFanOut, IconGitBranch), not its task group, whose menu closes
+// worktrees.
 import { useStore } from '../../stores';
 import type { AgentStatus } from '../../../shared/types';
 import { FOCUS_RING } from '../focusRing';
 import { IconChevron, IconFanOut, IconGitBranch } from '../icons';
 import { StatusMarkView } from '../Sidebar/AgentMarks';
-import { GitSyncBadge } from '../Sidebar/WorkspaceItem';
 import type { BotTreeRow } from './botsModel';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -74,7 +74,10 @@ function TreeRow({ row, selected, t, onOpen }: { row: BotTreeRow; selected: bool
               <span className="mr-1 inline-flex align-[-2px]" aria-hidden="true"><IconGitBranch size={12} /></span>
               {meta.gitBranch}
             </span>
-            {meta.gitSync && <GitSyncBadge sync={meta.gitSync} />}
+            {/* The diff counts only: the git line's own clean dot would be a
+                second dot on a row whose state mark leads it. */}
+            {(meta.gitSync?.added ?? 0) > 0 && <span data-git-diff="added" className="shrink-0 font-mono" style={{ color: 'var(--accent-green)' }}>+{meta.gitSync!.added}</span>}
+            {(meta.gitSync?.removed ?? 0) > 0 && <span data-git-diff="removed" className="shrink-0 font-mono" style={{ color: 'var(--accent-red)' }}>−{meta.gitSync!.removed}</span>}
           </span>
         )}
       </span>

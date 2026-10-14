@@ -711,19 +711,25 @@ function writeSideSplit(v: number): void {
 }
 
 /** The seam between the chat and its side panel: drag it, or focus it and
- *  use the arrow keys, to share the width. */
+ *  use the arrow keys, to share the width. A drag moves a guide line and
+ *  applies the width once, on release, so the worker's terminal is resized
+ *  once at its final size instead of on every pointer move (each resize
+ *  makes the agent redraw). */
 function SideSplitter({ areaRef, split, t, onChange }: {
   areaRef: React.RefObject<HTMLDivElement | null>;
   split: number;
   t: T;
   onChange: (next: number, done: boolean) => void;
 }) {
+  const [drag, setDrag] = useState<number | null>(null);
   const at = (clientX: number) => {
     const box = areaRef.current?.getBoundingClientRect();
     if (!box || box.width <= 0) return split;
     return clampSideSplit((box.right - clientX) / box.width);
   };
   return (
+    <>
+    {drag !== null && <div aria-hidden="true" data-bots-split-guide className="wmux-bots-split-guide" style={{ right: `${(drag * 100).toFixed(2)}%` }} />}
     <div
       role="separator"
       aria-orientation="vertical"
@@ -737,15 +743,18 @@ function SideSplitter({ areaRef, split, t, onChange }: {
       onPointerDown={(e) => {
         e.preventDefault();
         e.currentTarget.setPointerCapture?.(e.pointerId);
+        setDrag(split);
       }}
       onPointerMove={(e) => {
-        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) onChange(at(e.clientX), false);
+        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) setDrag(at(e.clientX));
       }}
       onPointerUp={(e) => {
         if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
         e.currentTarget.releasePointerCapture?.(e.pointerId);
+        setDrag(null);
         onChange(at(e.clientX), true);
       }}
+      onPointerCancel={() => setDrag(null)}
       onKeyDown={(e) => {
         // The panel is on the right: the left arrow widens it.
         const step = e.key === 'ArrowLeft' ? 0.02 : e.key === 'ArrowRight' ? -0.02 : 0;
@@ -754,6 +763,7 @@ function SideSplitter({ areaRef, split, t, onChange }: {
         onChange(clampSideSplit(split + step), true);
       }}
     />
+    </>
   );
 }
 

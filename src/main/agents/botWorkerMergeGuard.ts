@@ -156,6 +156,22 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   return initialCommand === options.initialCommand ? options : { ...options, initialCommand };
 }
 
+/** The POSIX shells whose `clear; <line>` clears the screen first. */
+const CLEARING_SHELL = /(^|[\\/])(sh|bash|zsh|dash|ksh|fish)$/;
+
+/**
+ * A bot worker's typed launch line, cleared from the screen before it runs:
+ * `clear; <line>`, so the pane (shown on the Bots page) starts at the agent's
+ * own screen instead of the shell's echo of a long command line. Only for a
+ * POSIX shell the line is typed into (a WSL or Windows shell keeps the line
+ * as it is). Typed at write time, after every stage that reads the line, so
+ * the flags, the guard and the session pin are untouched. Pure.
+ */
+export function clearedLaunchLine(line: string | undefined, shell: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (!line || line.trim().length === 0 || platform === 'win32') return line;
+  return CLEARING_SHELL.test(shell.trim()) ? `clear; ${line}` : line;
+}
+
 function guardError(where: string, why: string): Error {
   return new Error(`${where}: a bot's fan-out worker starts only with the merge-lane guard (${why})`);
 }

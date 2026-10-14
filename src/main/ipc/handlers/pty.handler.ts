@@ -19,7 +19,7 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, forgetBotWorkerSession, guardSessionLaunch, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardSessionLaunch, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -638,7 +638,9 @@ export function registerPTYHandlers(
       // X8: for an exec-style unit the command IS the pane's root process, so
       // there is nothing to type — pass `undefined` so scheduleInitialCommand
       // is a no-op (its onFirstData stays a harmless call below).
-      const initialCmd = scheduleInitialCommand(execCommand !== undefined ? undefined : options?.initialCommand, {
+      // A bot worker's line clears the screen first (clearedLaunchLine).
+      const typedLine = execCommand !== undefined ? undefined : options?.initialCommand;
+      const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(typedLine, shell) : typedLine, {
         write: (cmd) => daemonClient.writeToSession(sessionId, sanitizePtyText(cmd) + '\r'),
         onExhausted: () => {
           console.warn(
@@ -758,7 +760,7 @@ export function registerPTYHandlers(
       // so it lands at a ready prompt, mirroring the daemon path. ptyManager
       // writes are always delivered locally, so the writer returns void.
       if (initialCommand && initialCommand.trim().length > 0) {
-        const initialCmd = scheduleInitialCommand(initialCommand, {
+        const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(initialCommand, shell) : initialCommand, {
           write: (cmd) => { ptyManager.write(instance.id, sanitizePtyText(cmd) + '\r'); },
         });
         const disposable = instance.process.onData(() => {
