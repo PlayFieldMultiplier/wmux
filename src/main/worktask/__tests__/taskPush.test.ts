@@ -252,7 +252,9 @@ describe('task.push: a repository inside WSL', () => {
     expect(wslGitArgv('D', '/g', ['x'])).toEqual(['-d', 'D', '--cd', '/', '--exec', 'git', '--git-dir=/g', 'x']);
   });
 
-  describe('end to end, with a stand-in wsl.exe that runs this machine\'s git', () => {
+  // The stand-in hands the Linux gitdir straight to this machine's git, which
+  // holds only where host paths are POSIX paths.
+  describe.skipIf(process.platform === 'win32')('end to end, with a stand-in wsl.exe that runs this machine\'s git', () => {
     let root: string;
     let work: string;
     let wt: string;
