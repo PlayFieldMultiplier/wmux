@@ -102,6 +102,8 @@ describe('guardCodexBotWorker', () => {
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, { strict: true }, deps)).rejects.toThrow(/first launch/);
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, { ...deps, claimLaunch: () => false })).rejects.toThrow(/first launch/);
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, { ...deps, platform: 'win32' })).rejects.toThrow(/Windows/);
+    // A re-fire or a resume is refused on Windows too, before the line is read.
+    await expect(guardCodexSessionLine({ agent: 'codex', cwd: wt }, line(), { ...deps, platform: 'win32' })).rejects.toThrow(/Windows/);
     await expect(guardCodexBotWorker({ initialCommand: line().replace('-a never', '--yolo'), cwd: wt }, strict, deps)).rejects.toThrow(/allows/);
   });
 

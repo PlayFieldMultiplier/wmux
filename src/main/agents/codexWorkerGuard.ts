@@ -199,6 +199,7 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
     || !(deps.claimLaunch ?? claimInflightCodexLaunch)(owner, options.cwd)) {
     throw refuse('codex runs in a bot\'s worker pane only as the fan-out\'s own first launch');
   }
+  if ((deps.platform ?? process.platform) === 'win32') throw refuse('the codex worker guard is not available on Windows yet');
   const cwd = path.resolve(options.cwd);
   const parsed = parseCodexWorkerLine(options.initialCommand ?? '', cwd);
   if (!parsed) throw refuse('the launch line is not one the guard allows');
@@ -228,6 +229,7 @@ export async function guardCodexSessionLine(
   if (!record || record.agent !== 'codex' || !record.cwd) {
     throw refuse('this pane has no guarded codex launch on record', where);
   }
+  if ((deps.platform ?? process.platform) === 'win32') throw refuse('the codex worker guard is not available on Windows yet', where);
   const parsed = parseCodexWorkerLine(line, record.cwd, { resume: true });
   if (!parsed) throw refuse('the launch line is not one the guard allows', where);
   try {
