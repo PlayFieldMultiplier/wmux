@@ -12,7 +12,6 @@ import { IconGear, IconCornerUpLeft } from '../icons';
 import { selectFleetPanes, sortFleetPanes, selectFleetSectionCounts, type FleetPane } from '../../stores/selectors/fleet';
 import PluginStatusBarWidgets from '../../plugins/PluginStatusBarWidgets';
 import { COMPANY_MODE_ENABLED } from '../../../shared/featureFlags';
-import RoomDockToggle from '../Room/RoomDockToggle';
 import FileTreeToggle from '../Titlebar/FileTreeToggle';
 import { FOCUS_RING } from '../focusRing';
 import type { StoreState } from '../../stores';
@@ -330,12 +329,12 @@ export default function StatusBar() {
         <NotificationBellBadgeView unreadCount={unreadCount} onActivate={toggleNotificationPanel} />
         {/* A5: 메모리 + 시각(시계 커서 의존) — 분리된 소형 컴포넌트. */}
         <StatusClockTime />
-        {/* The titlebar's right end: the file tree toggle, then the room
-            dock's toggle, left of the Windows window controls (the titlebar
-            reserves their strip). Settings lives in the rail's More menu. */}
+        {/* The titlebar's right end: the file tree toggle, left of the
+            Windows window controls (the titlebar reserves their strip).
+            Settings lives in the rail's More menu; bot conversations live on
+            the Bots page only (owner decision 2026-10-14). */}
         <span className="flex items-center gap-1">
           <FileTreeToggle />
-          <RoomDockToggle />
         </span>
       </div>
     </div>
