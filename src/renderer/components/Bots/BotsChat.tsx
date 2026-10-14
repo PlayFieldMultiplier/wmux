@@ -48,6 +48,7 @@ import Popover from '../ui/Popover';
 import { IconPlus } from '../icons';
 import { renderBrainMarkdown, type MarkdownOptions } from '../shared/BrainMarkdown';
 import { getLocale } from '../../i18n';
+import { normalizeRepoKey } from '../../../shared/repoKey';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
 import { useStore } from '../../stores';
 import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../Room/factoryPorts';
@@ -132,8 +133,9 @@ function RefIcon({ kind }: { kind: 'pr' | 'issue' }) {
 /** A GitHub pull request or issue URL as its parts, or null. Pure. */
 export function githubRef(url: string): { repoKey: string; kind: 'pr' | 'issue'; number: number } | null {
   const m = /^https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(pull|issues)\/(\d+)(?:[/#?].*)?$/i.exec(url.trim());
-  if (!m) return null;
-  return { repoKey: `github.com/${m[1]}/${m[2]}`, kind: m[3].toLowerCase() === 'pull' ? 'pr' : 'issue', number: Number(m[4]) };
+  const repoKey = m ? normalizeRepoKey(`github.com/${m[1]}/${m[2]}`) : null;
+  if (!m || !repoKey) return null;
+  return { repoKey, kind: m[3].toLowerCase() === 'pull' ? 'pr' : 'issue', number: Number(m[4]) };
 }
 
 /** A PR or issue link in a message, as a compact chip: its mark, `#N` and
@@ -169,7 +171,7 @@ export function mentionPattern(names: readonly string[]): RegExp | null {
   const list = [...new Set(names.map((n) => n.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
   if (list.length === 0) return null;
   const escaped = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return new RegExp(`@(${escaped.join('|')})(?![\\p{L}\\p{N}_])`, 'gu');
+  return new RegExp(`(?<![\\p{L}\\p{N}_.@])@(${escaped.join('|')})(?![\\p{L}\\p{N}_])`, 'gu');
 }
 
 /** The thread chip under a bubble (General has none): a PR or issue
@@ -345,6 +347,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
       >
         <div className="wmux-bots-msg-main">
           <div className="wmux-bots-bubble wmux-bots-bubble-owner wmux-bots-prose" title={fullTime(card.at)}>
+            <span className="sr-only">{`${name}: `}</span>
             {renderBrainMarkdown((card.body?.trim() ? card.body : card.title).trim(), ctx.markdown)}
           </div>
           {chips}
@@ -374,6 +377,8 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
           <RoomCard card={card} workspaceId={card.workspaceId} t={t} bots={ctx.bots} roomsBridge={ctx.api} now={ctx.now} />
         ) : (
           <div className={waiting ? 'wmux-bots-waiting' : 'wmux-bots-bubble wmux-bots-bubble-bot'} title={fullTime(card.at)}>
+            {/* The author for assistive tech where no name is shown. */}
+            {(continuation || !group) && <span className="sr-only">{`${name}: `}</span>}
             <BotProse card={card} answers={answers} waiting={waiting} ctx={ctx} />
           </div>
         )}
@@ -935,11 +940,31 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
       const target = e.target as Node;
       if (!menuRef.current?.contains(target) && !plusRef.current?.contains(target)) setMenuOpen(false);
     };
+    const items = () => [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]') ?? [])];
+    // Opening moves focus to the first item; arrows, Home and End move
+    // between them; Escape and Tab close it.
+    items()[0]?.focus();
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setMenuOpen(false);
+        plusRef.current?.focus();
+        return;
+      }
+      if (e.key === 'Tab') {
+        setMenuOpen(false);
+        return;
+      }
+      const list = items();
+      const at = list.indexOf(document.activeElement as HTMLButtonElement);
+      const next = e.key === 'ArrowDown' ? (at + 1) % list.length
+        : e.key === 'ArrowUp' ? (at - 1 + list.length) % list.length
+          : e.key === 'Home' ? 0
+            : e.key === 'End' ? list.length - 1 : -1;
+      if (next < 0 || list.length === 0) return;
+      e.preventDefault();
       e.stopPropagation();
-      setMenuOpen(false);
-      plusRef.current?.focus();
+      list[next].focus();
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey, true);
@@ -995,6 +1020,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           aria-expanded={menuOpen}
           disabled={!!refusal}
           onClick={() => setMenuOpen((v) => !v)}
+          onKeyDown={(e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setMenuOpen(true); } }}
           className={`wmux-bots-composer-plus ${FOCUS_RING}`}
         >
           <IconPlus size={16} />

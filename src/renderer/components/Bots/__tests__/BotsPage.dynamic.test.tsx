@@ -933,6 +933,11 @@ describe('Bots page', () => {
     const form = q('[data-bots-chat] [data-testid="bots-composer"]')!;
     expect(form.className).toContain('wmux-bots-composer-pill');
     act(() => q('[data-bots-chat] [data-bots-composer-plus]')!.click());
+    // The menu takes focus on its first item; arrows move through it.
+    expect(document.activeElement?.getAttribute('data-bots-composer-suggestion')).toBe('botsPage.chat.suggestDo');
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); });
+    expect(document.activeElement?.getAttribute('data-bots-composer-suggestion')).toBe('botsPage.chat.suggestStart');
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })); });
     act(() => q('[data-bots-composer-suggestion="botsPage.chat.suggestDo"]')!.click());
     expect(q<HTMLTextAreaElement>('[data-bots-chat] [data-testid="bots-composer-input"]')?.value).toBe('What can you do?');
     expect(q('[data-bots-composer-menu]')).toBeNull();
@@ -1005,6 +1010,15 @@ describe('BotsChat helpers', () => {
     const re = mentionPattern(['Ada', 'Ada Lovelace', 'Q.A'])!;
     expect([...'hi @Ada Lovelace and @Ada, not @Adam or @Q.A!'.matchAll(re)].map((m) => m[1])).toEqual(['Ada Lovelace', 'Ada', 'Q.A']);
     expect(mentionPattern([' '])).toBeNull();
+    // An email address is not a mention.
+    expect([...'write to user@Ada.com'.matchAll(re)]).toHaveLength(0);
+  });
+
+  it('githubRef: a PR or issue URL in any case is the canonical repo key', async () => {
+    const { githubRef } = await import('../BotsChat');
+    expect(githubRef('https://github.com/Acme/API/pull/12')).toEqual({ repoKey: 'github.com/acme/api', kind: 'pr', number: 12 });
+    expect(githubRef('https://github.com/acme/api/issues/3#issuecomment-1')).toEqual({ repoKey: 'github.com/acme/api', kind: 'issue', number: 3 });
+    expect(githubRef('https://example.com/acme/api/pull/12')).toBeNull();
   });
 
   const t = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;

@@ -415,6 +415,9 @@
   left: 0;
   z-index: 5;
   width: min(320px, 100%);
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* The chat and, when one is open, a side panel beside it — a worker's
