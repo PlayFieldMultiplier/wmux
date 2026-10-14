@@ -32,7 +32,20 @@ describe('the codex worker launch line: an allowlist', () => {
     expect(parseCodexWorkerLine(FANOUT_LINE, CWD)).toEqual({ model: 'gpt-6.1-sol', effort: 'low', promptArgument: PROMPT });
     expect(parseCodexWorkerLine(`codex ${TRUST} ${PROMPT}`, CWD)).toEqual({ promptArgument: PROMPT });
     const tools = `codex ${TRUST} -c "mcp_servers.wmux.args=['/a/index.js','--core']" ${PROMPT}`;
-    expect(parseCodexWorkerLine(tools, CWD)).toEqual({ wmuxTools: "mcp_servers.wmux.args=['/a/index.js','--core']", promptArgument: PROMPT });
+    expect(parseCodexWorkerLine(tools, CWD)).toEqual({ wmuxTools: { tools: 'core' }, promptArgument: PROMPT });
+  });
+
+  it('keeps only the wmux tool level from the line, and writes the server with main\'s own entry', () => {
+    const level = (args: string) => parseCodexWorkerLine(`codex ${TRUST} -c "mcp_servers.wmux.args=[${args}]" ${PROMPT}`, CWD)?.wmuxTools;
+    expect(level("'/evil.js'")).toEqual({ tools: 'full' });
+    expect(level("'/evil.js','--role=Builder'")).toEqual({ tools: 'role', role: 'Builder' });
+    expect(level("'/evil.js','--role=Nobody'")).toBeUndefined();
+    expect(level("'/evil.js','--core','--x'")).toBeUndefined();
+    const parsed = parseCodexWorkerLine(`codex ${TRUST} -c "mcp_servers.wmux.args=['/evil.js','--core']" ${PROMPT}`, CWD)!;
+    const built = buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'], { mcpEntry: '/app/mcp/index.js' })!;
+    expect(built).toContain(`-c "mcp_servers.wmux.args=['/app/mcp/index.js','--core']"`);
+    expect(built).not.toContain('/evil.js');
+    expect(buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'])).toBeNull();
   });
 
   it.each([

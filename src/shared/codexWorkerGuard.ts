@@ -40,7 +40,8 @@ import path from 'node:path';
 import { launcherStem, tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE } from './agentLaunchOptions';
 import { FANOUT_MODEL_RE, codexTrustOverride } from './fanoutPreset';
-import { ROLE_BINDING_MODEL_MAX } from './orchestratorRole';
+import { ORCH_ROLES, ROLE_BINDING_MODEL_MAX, type OrchRole, type WmuxTools } from './orchestratorRole';
+import { ROLE_MODE_ARG_PREFIX, toolSurfaceShellFlags } from './roleSurfaces';
 import { stripPromptFileArgument } from './promptFileArgument';
 import { BROWSER_TOOL_SURFACE, CORE_TOOL_SURFACE } from './coreSurface';
 import { UNLISTED_TOOLS } from './unlistedTools';
@@ -156,15 +157,39 @@ export function launchesCodex(line: string | undefined): boolean {
 export interface CodexWorkerLine {
   model?: string;
   effort?: string;
-  /** The operator's wmux tool level (`-c mcp_servers.wmux…`), as main wrote it. */
-  wmuxTools?: string;
+  /** The wmux tool level the line asked for (`-c mcp_servers.wmux…`): only
+   *  the level is kept; main writes the server's arguments itself. */
+  wmuxTools?: CodexWorkerToolLevel;
   /** The prompt-file argument, verbatim. */
   promptArgument: string;
 }
 
-/** `mcp_servers.wmux.enabled=false` or `mcp_servers.wmux.args=['…',…]`, the two
- *  shapes roleSurfaces.toolSurfaceShellFlags writes. */
-const WMUX_TOOLS_VALUE = /^mcp_servers\.wmux\.(?:enabled=false|args=\[(?:'[^'\s"`$\\]*',)*'[^'\s"`$\\]*'\])$/;
+/** A wmux tool level: off, or the server at a level roleSurfaces names. */
+export type CodexWorkerToolLevel = { off: true } | { tools: WmuxTools; role?: OrchRole };
+
+/** `mcp_servers.wmux.enabled=false` or `mcp_servers.wmux.args=['<entry>'…]`,
+ *  the two shapes roleSurfaces.toolSurfaceShellFlags writes, read as a level:
+ *  the entry is never kept (main names its own). Null for any other
+ *  argument list. Pure. */
+export function parseCodexToolLevel(value: string): CodexWorkerToolLevel | null {
+  if (value === 'mcp_servers.wmux.enabled=false') return { off: true };
+  const m = /^mcp_servers\.wmux\.args=\[((?:'[^'\s"`$\\]*',)*'[^'\s"`$\\]*')\]$/.exec(value);
+  if (!m) return null;
+  const rest = m[1].split(',').map((a) => a.slice(1, -1)).slice(1);
+  if (rest.length === 0) return { tools: 'full' };
+  if (rest.length > 1) return null;
+  if (rest[0] === '--core') return { tools: 'core' };
+  const role = rest[0].startsWith(ROLE_MODE_ARG_PREFIX) ? rest[0].slice(ROLE_MODE_ARG_PREFIX.length) : '';
+  return (ORCH_ROLES as readonly string[]).includes(role) ? { tools: 'role', role: role as OrchRole } : null;
+}
+
+/** The `-c` word for a level, with main's own MCP entry; null when it cannot
+ *  be written. Pure. */
+function codexToolLevelWord(level: CodexWorkerToolLevel, entry: string | undefined): string | null {
+  if ('off' in level) return '-c mcp_servers.wmux.enabled=false';
+  if (!entry) return null;
+  return toolSurfaceShellFlags('codex', level.tools, entry, level.role, '');
+}
 
 /** Is `tool` (a wmux tool name) one a Claude bot worker's --disallowedTools
  *  names, as `mcp__wmux__<tool>` or a `*` family? Pure. */
@@ -263,9 +288,9 @@ export function parseCodexWorkerLine(fullLine: string, cwd: string): CodexWorker
     } else if (flag === '-c' && value.startsWith('model_reasoning_effort=') && EFFORT_TOKEN_RE.test(value.slice('model_reasoning_effort='.length))) {
       if (!once('effort')) return null;
       out.effort = value.slice('model_reasoning_effort='.length);
-    } else if (flag === '-c' && WMUX_TOOLS_VALUE.test(value)) {
+    } else if (flag === '-c' && value.startsWith('mcp_servers.wmux.') && parseCodexToolLevel(value)) {
       if (!once('wmux')) return null;
-      out.wmuxTools = value;
+      out.wmuxTools = parseCodexToolLevel(value)!;
     } else {
       return null;
     }
@@ -295,11 +320,13 @@ export function buildCodexWorkerLaunchLine(
   parsed: CodexWorkerLine,
   cwd: string,
   writableRoots: readonly string[],
-  opts: { toolApprovals?: { ownerApproved: readonly string[] } } = {},
+  opts: { toolApprovals?: { ownerApproved: readonly string[] }; mcpEntry?: string } = {},
 ): string | null {
   const trust = codexTrustOverride(cwd, 'darwin');
   if (!trust || writableRoots.length === 0 || ![cwd, ...writableRoots].every(isGuardablePath)) return null;
   const roots = `sandbox_workspace_write.writable_roots=[${writableRoots.map(tomlString).join(',')}]`;
+  const toolLevel = parsed.wmuxTools ? codexToolLevelWord(parsed.wmuxTools, opts.mcpEntry) : undefined;
+  if (toolLevel === null) return null;
   return [
     'codex',
     trust,
@@ -309,7 +336,7 @@ export function buildCodexWorkerLaunchLine(
     '-c sandbox_workspace_write.network_access=true',
     ...(parsed.model ? [`--model ${parsed.model}`] : []),
     ...(parsed.effort ? [`-c model_reasoning_effort=${parsed.effort}`] : []),
-    ...(parsed.wmuxTools ? [`-c ${shellWord(parsed.wmuxTools)}`] : []),
+    ...(toolLevel ? [toolLevel] : []),
     // Only with a wmux server in the codex config: an override of a server
     // the config does not define stops codex at startup.
     ...(opts.toolApprovals ? codexWorkerToolApprovals(opts.toolApprovals.ownerApproved) : []),

@@ -34,6 +34,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { app } from 'electron';
 import { agentExecEnv } from '../../shared/execEnv';
 import {
   CODEX_WORKER_EXCLUDE_LINE,
@@ -51,6 +52,7 @@ import {
 } from '../../shared/codexWorkerGuard';
 import { codexDefinesWmuxServer, codexWmuxApprovedTools } from '../../shared/mcpRegistration';
 import { resolveOnPath } from '../factory/botEngines';
+import { locateWmuxMcpEntry } from './toolSurfaceLaunch';
 import { getBotStore } from '../factory/botStore';
 import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
 import { getWmuxDir } from '../../daemon/config';
@@ -77,6 +79,18 @@ export interface CodexWorkerGuardDeps {
   /** An empty folder for `core.hooksPath` on main's git calls (outside every
    *  worker's writable roots). */
   noHooksDir?: string;
+  /** The wmux MCP bundle main registers (a line's wmux tool level is
+   *  rewritten with it, never taken from the line). */
+  mcpEntry?: () => string | null;
+}
+
+/** The MCP bundle this app registers (packaged stable copy or dev dist). */
+function currentMcpEntry(): string | null {
+  try {
+    return locateWmuxMcpEntry({ home: app.getPath('home'), isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+  } catch {
+    return null;
+  }
 }
 
 /** What pty:create knows about this create (botWorkerMergeGuard's record). */
@@ -270,6 +284,7 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   if (!roots) throw refuse('the worker\'s folder is not a linked git worktree');
   const line = buildCodexWorkerLaunchLine(parsed, cwd, roots, {
     ...(codexDefinesWmuxServer(configPath) ? { toolApprovals: { ownerApproved } } : {}),
+    ...(parsed.wmuxTools ? { mcpEntry: (deps.mcpEntry ?? currentMcpEntry)() ?? undefined } : {}),
   });
   if (!line) throw refuse('a worktree path cannot be written into the launch line');
   // The session reads the rules and the config main checked: the codex home
