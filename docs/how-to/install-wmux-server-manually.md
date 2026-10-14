@@ -11,8 +11,8 @@ install produces the same layout, so the app picks it up afterwards.
 ## Prerequisites
 
 - **Linux on x64 or arm64 with glibc.** The artifact's minimum glibc is listed
-  as `glibcMin` in the release's `server-manifest.json` (2.34 at the time of
-  writing: Ubuntu 22.04, Debian 12, RHEL 9 or newer). musl distributions such
+  as `glibcMin` in the release's `server-manifest.json` (2.28 at the time of
+  writing: Ubuntu 20.04, Debian 11, RHEL 8 or newer). musl distributions such
   as Alpine are not supported.
 - **The wmux desktop app is not installed on that host.** The runtime and the
   desktop app share `~/.wmux` and would replace each other's daemon. On a
