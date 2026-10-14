@@ -248,9 +248,17 @@ export function spliceSettingsFlag(fullCommand: string, settingsPath: string): s
   return `${marker}${command.slice(0, at)} --settings="${settingsPath}"${command.slice(at)}`;
 }
 
-/** Does any word of the line start claude? */
+/** A claude launcher as a word of its own, a path's last part, or right
+ *  next to a shell operator, quote or parenthesis. */
+const CLAUDE_LAUNCHER_ANYWHERE = /(?:^|[\s;&|()`'"/=])claude(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s;&|()`'"<>])/i;
+
+/** Does the line start claude anywhere? Every claude launcher in a line is
+ *  seen, including one written next to a shell operator, so the line is
+ *  guarded (and refused when it is not one plain command). Over-matching is
+ *  the safe side. */
 export function namesClaude(line: string): boolean {
-  return tokenize(splitModelEnvMarker(line).command).some((t) => isClaudeLauncher(t.value));
+  return tokenize(splitModelEnvMarker(line).command).some((t) => isClaudeLauncher(t.value))
+    || CLAUDE_LAUNCHER_ANYWHERE.test(line);
 }
 
 // ── factory/bot-worker-sessions.json ─────────────────────────────────────────

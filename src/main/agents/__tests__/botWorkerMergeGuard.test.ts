@@ -252,6 +252,11 @@ describe('bot worker sessions survive a restart', () => {
     expect(guardSessionLaunch('daemon-bot2', ' --resume 11111111-2222-3333-4444-555555555555', { dir })).toBe(' --resume 11111111-2222-3333-4444-555555555555');
     expect(() => guardSessionLaunch('daemon-bot2', `cd '/w' && ${resume}`, { dir })).toThrow(/pty:write-launch.*merge-lane guard/);
     expect(() => guardSessionLaunch('daemon-bot2', `claude "$(claude x)"`, { dir })).toThrow(/cannot carry/);
+    // Every claude launcher in the line is guarded, wherever it is written:
+    // next to an operator the line is not one plain command, so it is refused.
+    for (const glued of ['true;claude --resume x', 'true&&claude', 'x|claude', '(claude)', 'echo hi;claude.exe']) {
+      expect(() => guardSessionLaunch('daemon-bot2', glued, { dir }), glued).toThrow(/pty:write-launch/);
+    }
     expect(guardSessionLaunch('daemon-human', resume, { dir })).toBe(resume);
   });
 

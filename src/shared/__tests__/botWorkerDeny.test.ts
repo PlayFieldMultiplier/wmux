@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   BOT_WORKER_DENY, BOT_WORKER_MERGE_DENY, BOT_WORKER_PUBLIC_DENY, BOT_WORKER_PUSH_DENY, buildBotWorkerSettings, botWorkerDefaultBranchesPath,
-  isDenyableBranchName, readBotWorkerDefaultBranches, recordBotWorkerDefaultBranch, writeBotWorkerSettings,
+  isDenyableBranchName, namesClaude, readBotWorkerDefaultBranches, recordBotWorkerDefaultBranch, writeBotWorkerSettings,
 } from '../botWorkerGuard';
 
 function denied(command: string, rules: readonly string[] = BOT_WORKER_DENY): boolean {
@@ -154,6 +154,13 @@ describe('bot worker deny rules', () => {
     'gh alias list',
   ])('lets %s through', (cmd) => {
     expect(denied(cmd)).toBe(false);
+  });
+});
+
+describe('which lines start claude', () => {
+  it('sees every claude launcher, a glued one included, and not a longer word', () => {
+    for (const yes of ['claude', '/opt/bin/claude --resume x', 'true;claude', 'a&&claude -p x', '(claude)', 'x|claude.exe']) expect(namesClaude(yes), yes).toBe(true);
+    for (const no of ['codex', 'git log --grep claudex', 'echo claudeish']) expect(namesClaude(no), no).toBe(false);
   });
 });
 
