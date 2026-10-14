@@ -47,6 +47,7 @@ import {
   parseCodexWorkerLine,
   CODEX_WORKER_MIN_VERSION,
 } from '../../shared/codexWorkerGuard';
+import { codexHasWmuxServer } from '../../shared/mcpRegistration';
 import { resolveOnPath } from '../factory/botEngines';
 import { getBotStore } from '../factory/botStore';
 import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
@@ -245,7 +246,9 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   }
 
   // 1. The line main launches.
-  const line = buildCodexWorkerLaunchLine(parsed, cwd, [...new Set([gitDir, commonDir])]);
+  const line = buildCodexWorkerLaunchLine(parsed, cwd, [...new Set([gitDir, commonDir])], {
+    approveWorkerTools: codexHasWmuxServer(path.join(codexHome, 'config.toml')),
+  });
   if (!line) throw refuse('a worktree path cannot be written into the launch line');
   const out = { ...options, initialCommand: line };
   markGuardedCodexCreate(out, line, cwd);

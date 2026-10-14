@@ -145,6 +145,17 @@ describe('guardCodexBotWorker', () => {
     await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, '.codex') } }, strict, deps);
     expect(calls.find((c) => c[1] === 'execpolicy')).toContain(path.join(root, '.codex', 'rules', 'default.rules'));
   });
+
+  it('approves the worker\'s wmux tools only when the codex config defines the wmux server', async () => {
+    const without = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps);
+    expect(without!.initialCommand).not.toContain('approval_mode');
+    fs.mkdirSync(path.join(root, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.codex', 'config.toml'), '[mcp_servers.wmux]\ncommand = "node"\nargs = ["/x/index.js"]\n');
+    const withServer = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, '.codex') } }, strict, deps);
+    expect(withServer!.initialCommand).toContain('-c mcp_servers.wmux.tools.ledger_update.approval_mode=approve');
+    expect(withServer!.initialCommand).toContain('-c mcp_servers.wmux.tools.task_push.approval_mode=approve');
+    expect(withServer!.initialCommand).not.toMatch(/tools\.(?:terminal_send|channel_post|fanout_start|browser_[a-z_]+)\./);
+  });
 });
 
 describe('the in-flight spawn launches codex once', () => {

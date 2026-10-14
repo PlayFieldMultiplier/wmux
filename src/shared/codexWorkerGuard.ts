@@ -17,6 +17,10 @@
 //
 // The launch: `-a never -s workspace-write`, network on, and the worktree's
 // git folders as the only extra writable roots (so the worker can commit).
+// Under `-a never` codex refuses every MCP tool call it would ask about, so
+// the line pre-approves the wmux tools a worker reports through, the same list
+// a Claude worker gets (FANOUT_WORKER_ALLOWED_TOOLS), one tool at a time; any
+// other wmux tool stays refused (measured on codex-cli 0.162.1).
 // The project `.codex/` folder stays read-only to the worker in that sandbox,
 // so it cannot change the rules its session loaded, and Codex reads them once,
 // when the session starts (both measured on codex-cli 0.162.1).
@@ -30,7 +34,7 @@ import { EFFORT_TOKEN_RE } from './agentLaunchOptions';
 import { FANOUT_MODEL_RE, codexTrustOverride } from './fanoutPreset';
 import { ROLE_BINDING_MODEL_MAX } from './orchestratorRole';
 import { stripPromptFileArgument } from './promptFileArgument';
-import { splitModelEnvMarker } from './workerLaunch';
+import { FANOUT_WORKER_ALLOWED_TOOLS, splitModelEnvMarker } from './workerLaunch';
 
 /** The rules file, relative to the worktree. */
 export const CODEX_WORKER_RULES_PATH = '.codex/rules/wmux-bot-worker.rules';
@@ -150,6 +154,9 @@ export interface CodexWorkerLine {
 /** `mcp_servers.wmux.enabled=false` or `mcp_servers.wmux.args=['…',…]`, the two
  *  shapes roleSurfaces.toolSurfaceShellFlags writes. */
 const WMUX_TOOLS_VALUE = /^mcp_servers\.wmux\.(?:enabled=false|args=\[(?:'[^'\s"`$\\]*',)*'[^'\s"`$\\]*'\])$/;
+/** The wmux tools a codex worker runs without a prompt: a Claude worker's
+ *  allowed list, by the server's own tool names. */
+export const CODEX_WORKER_APPROVED_TOOLS: readonly string[] = FANOUT_WORKER_ALLOWED_TOOLS.map((t) => t.replace(/^mcp__wmux__/, ''));
 const POSIX_PROMPT_ARGUMENT = /^"\$\(cat '(?:[^']|'\\'')*'\)"$/;
 
 /**
@@ -222,12 +229,17 @@ function tomlString(value: string): string {
 
 /**
  * The line main launches: its own sandbox, approval, writable roots and
- * working root, the caller's model, effort and tool level, then `--` and the
- * prompt. `writableRoots` are
+ * working root, the caller's model, effort and tool level, the worker's wmux
+ * tool approvals when `opts.approveWorkerTools`, then `--` and the prompt. `writableRoots` are
  * the worktree's git folders. Returns null when a path cannot be written as
  * one shell word. Pure.
  */
-export function buildCodexWorkerLaunchLine(parsed: CodexWorkerLine, cwd: string, writableRoots: readonly string[]): string | null {
+export function buildCodexWorkerLaunchLine(
+  parsed: CodexWorkerLine,
+  cwd: string,
+  writableRoots: readonly string[],
+  opts: { approveWorkerTools?: boolean } = {},
+): string | null {
   const trust = codexTrustOverride(cwd, 'darwin');
   if (!trust || writableRoots.length === 0 || ![cwd, ...writableRoots].every(isGuardablePath)) return null;
   const roots = `sandbox_workspace_write.writable_roots=[${writableRoots.map(tomlString).join(',')}]`;
@@ -241,6 +253,9 @@ export function buildCodexWorkerLaunchLine(parsed: CodexWorkerLine, cwd: string,
     ...(parsed.model ? [`--model ${parsed.model}`] : []),
     ...(parsed.effort ? [`-c model_reasoning_effort=${parsed.effort}`] : []),
     ...(parsed.wmuxTools ? [`-c ${shellWord(parsed.wmuxTools)}`] : []),
+    // Only with a wmux server in the codex config: an override of a server
+    // the config does not define stops codex at startup.
+    ...(opts.approveWorkerTools ? CODEX_WORKER_APPROVED_TOOLS.map((t) => `-c mcp_servers.wmux.tools.${t}.approval_mode=approve`) : []),
     // Codex's working root, pinned to the folder the rules were written into.
     `-C ${shellWord(cwd)}`,
     // The prompt is never read as an option, whatever its text starts with.
