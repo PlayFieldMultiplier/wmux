@@ -1,5 +1,98 @@
 ## [Unreleased]
 
+## [4.4.0] — 2026-10-14
+
+### Added
+
+- **A log line when a remote pane cell stays blank.** If a mirror cell in a
+  remote workspace is still not attached 5 seconds after it asked, with no
+  error shown, wmux now writes the cell's recent attach steps to the log
+  (`[wmux:remote-attach]`): when each run started, whether it was still
+  waiting for the previous run to close, whether the attach was sent, and
+  when (or whether) it was answered. It changes nothing the cell does; it is
+  there so the next blank cell says why (#2101). (#2156)
+
+- **Hand a page element to the agent from the browser.** The browser
+  inspector used to copy an element's selector and ask you to paste it into
+  the agent yourself. Now picking an element opens a bar with a note field;
+  Send types your note and the element into the input line of the agent
+  running in the same pane and focuses it, and nothing runs until you press
+  Enter. A pane with no agent running gets Copy instead. (#2158)
+
+- **Experimental Rust terminal engine.** Builds that include the native module can select Rust in Settings → Terminal → Performance for ordinary and team sessions. Node remains the default; changing the engine requires restarting the app and daemon as applicable. (#2163)
+
+- **Bots.** A new Bots page, right under Workspaces, where you keep agents on
+  a team and talk to them like a messenger. Each workspace is a group room
+  and each bot has its own chat. Create a bot with just a name and a job, or
+  start from a template. A message in a room reaches every bot there, or only
+  the ones you mention, and bots answer each other within fixed limits. A bot
+  can schedule its own check-ins, start workers in their own worktrees, and
+  ask you for an approval, a key or a login in a separate window. Merges
+  happen only after you approve them, and the app performs them itself. You
+  can approve by typing "merge it", with a 10 second Undo. Finished workers
+  are stopped and their panes closed. A paired phone whose input permission
+  you turned on can approve a bot's request too. Bots are off until you turn
+  them on in Settings › Bots. (#2164)
+
+- **Images and PDFs open in a preview tab that follows the file.** Clicking
+  an image or a PDF in the file tree now opens a read-only preview beside the
+  terminal, instead of the text editor, which showed an image as garbage and
+  anything over 1 MB as nothing. When an agent rewrites the file, the view
+  updates in place and keeps its zoom and the page you were on; a
+  half-written or deleted file leaves the last good version up until a
+  complete one arrives. Zoom with Cmd/Ctrl + scroll or the toolbar, and open
+  the file in its default app, open its folder or copy its path from the tab.
+  (#2150)
+
+- **HTML files open rendered, offline and sandboxed.** Clicking an `.html`
+  file in the file tree now shows the page in the preview tab beside the
+  terminal, for coverage reports, charts and built docs an agent produces.
+  It reloads in place when a file it uses changes. The page runs in its own
+  sandbox and is offline until you press **Network on** for that tab;
+  nothing it links to opens without a click, and **View source** still
+  opens the file as text. (#2150)
+
+### Changed
+
+- **Browser, editor and diff tabs open beside the terminal.** A pane is now a
+  terminal column plus a work area: browser, editor and diff tabs draw on the
+  right under their own tab strip, on the same header line as the terminal
+  tabs and split where the pane is. Before, a browser sat beside the terminal
+  but an editor or diff tab covered the whole pane. The expand toggle moves
+  from the browser toolbar to that strip and works for any of these tabs;
+  picking a terminal tab brings the split back. (#2155)
+
+- Internal: saving the Token usage surfaces store (`surfaces.json`) and editing JSON config keys are split into short steps (read what is on disk, replay this window's changes, write; one edit at a time, then format like the original file). Cognitive complexity 125 and 47 down to 3 and 4. Golden-file tests pin the full outcome first; what is written is unchanged. (#2157)
+
+- The experimental Rust terminal engine now scans daemon terminal modes and OSC output natively, preserving session replay and notification ordering. Older native modules retain JavaScript interpretation.
+
+### Removed
+
+- **Moa and the Deck commander.** Bots replace them. (#2164)
+
+### Fixed
+
+- **Phone chat sends to a Codex pane that is scrolled back.** Codex 0.162 replaces its shortcut hint with `New activity · enter/esc latest` while its transcript is scrolled up. wmux read that row as something it could not account for and refused every send with `input-not-provably-empty`, even though the composer was empty. A Codex whose window title still shows its working spinner now answers busy, instead of having the message typed into the turn it is running. (#2153)
+
+- **`wmux send` can name the pane it types into.** `send`, `send-key` and `read-screen` take `--to <#pane|ptyId>`, for example `--to '#w1-2'` (`--pane` still works). Without a target they type into your own pane, as before, but if an agent is running in that pane they now print a warning, because an agent that runs `wmux send` from its own shell types into its own input. A `--to` that lost its value (an unquoted `#name` is a shell comment) now stops instead of falling back to your own pane. (#2153)
+
+- **Clearer message when a Codex in a pane has no pane identity.** A Codex attached straight to Codex's shared background server was told to "start it from a wmux pane", even though it was already in one. The message now says to restart `codex` from the pane's shell. (#2153)
+
+- **You can type in the browser's address bar again.** A click on the
+  address bar was handed on to the web page, so the bar lost its focus and
+  nothing you typed reached it. It now keeps the focus, and the first click
+  selects the whole URL as browsers do. (#2159)
+
+- **Opening or closing the first work tab no longer takes your typing away
+  from the terminal.** When an editor, preview or diff tab opened beside a
+  terminal you were typing in (for example, an agent opening one), the
+  terminal lost the keyboard and the next keystrokes went nowhere until you
+  clicked. It now keeps the focus; closing the last work tab does too.
+
+- **Switching to a workspace you have not opened for a while no longer
+  freezes the window.** Before, each of its terminals rebuilt its GPU renderer
+  before the workspace could paint, about half a second per terminal. (#2169)
+
 ## [4.3.1] — 2026-10-13
 
 ### Added
