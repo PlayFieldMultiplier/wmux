@@ -503,7 +503,8 @@ export default function RemotePage() {
           {identityChanged && <span style={{ color: 'var(--attention-text)' }} data-ssh-identity-changed>{t(sshNeedsIdentityCheck(sshState) ? 'remoteSsh.identityChanged' : 'remoteSsh.needsCheck')} · </span>}
           {meta}
         </span>
-        {statusCell(word, h.live, word === 'disconnected' ? h.lastSeenAt : null)}
+        {/* "Disconnected 3h ago" only when it stopped answering; a refusal says why on its own. */}
+        {statusCell(word, h.live, h.status === 'unreachable' ? h.lastSeenAt : null)}
         <span className="wmux-remote-acts">
           {identityChanged ? (
             <Button size="sm" variant="secondary" onClick={() => setCheckSsh({ id: h.id, label: h.name })} data-ssh-check={h.id}>

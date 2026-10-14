@@ -113,8 +113,8 @@ export function buildRemoteEntries(src: RemoteSources): RemoteEntry[] {
       kind: 'host',
       name: h.label,
       shortId: shortId(h.id),
-      // Answering, with a remote workspace of it open here.
-      live: state === 'online' && (src.openByHost[h.id]?.length ?? 0) > 0,
+      // Answering right now (through its tunnel, for an SSH host): the dot matches the word.
+      live: state === 'online',
       status,
       lastSeenAt,
       viewing: src.openByHost[h.id] ?? [],

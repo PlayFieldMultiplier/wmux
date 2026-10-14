@@ -75,7 +75,7 @@ describe('Remote page entries', () => {
       hostSeenAt: { a: 900, c: 400 },
     });
     expect(entries.map((e) => [e.id, e.status, e.live, e.lastSeenAt])).toEqual([
-      ['a', 'reachable', false, 900],
+      ['a', 'reachable', true, 900],
       ['c', 'unreachable', false, 400],
       ['b', 'unknown', false, null],
     ]);
