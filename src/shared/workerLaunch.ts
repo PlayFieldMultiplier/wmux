@@ -185,6 +185,8 @@ export const FANOUT_WORKER_DISALLOWED_TOOLS: readonly string[] = [
   'mcp__wmux__terminal_send',
   'mcp__wmux__terminal_send_key',
   'mcp__wmux__send_message',
+  // send_message under its older name (same handler).
+  'mcp__wmux__a2a_task_send',
   'mcp__wmux__surface_new',
   'mcp__wmux__pane_split',
   'mcp__wmux__browser_*',

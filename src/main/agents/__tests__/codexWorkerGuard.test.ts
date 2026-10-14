@@ -139,6 +139,19 @@ describe('guardCodexBotWorker', () => {
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, { ...deps, resolveCodex: async () => null })).rejects.toThrow(/not on the pane/);
   });
 
+  it('runs no git with a config key that names a program, and pins the codex home it checked into the pane', async () => {
+    const marker = path.join(root, 'fsmonitor-ran');
+    const prog = path.join(root, 'fsm.sh');
+    fs.writeFileSync(prog, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    sh(wt, 'config', 'core.fsmonitor', prog);
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps)).rejects.toThrow(/core\.fsmonitor/);
+    expect(fs.existsSync(marker)).toBe(false);
+    sh(wt, 'config', '--unset', 'core.fsmonitor');
+    const out = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps);
+    expect(out!.env).toMatchObject({ CODEX_HOME: path.join(root, 'none') });
+    expect(calls.filter((c) => c[0] === 'git').every((c) => c.slice(1, 3).join('=') === '-c=core.fsmonitor=false')).toBe(true);
+  });
+
   it('checks every rules file the session reads, the user\'s included', async () => {
     fs.mkdirSync(path.join(root, '.codex', 'rules'), { recursive: true });
     fs.writeFileSync(path.join(root, '.codex', 'rules', 'default.rules'), '');

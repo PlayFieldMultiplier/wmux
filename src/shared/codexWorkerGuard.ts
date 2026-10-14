@@ -15,8 +15,11 @@
 // per word, no wildcards), so the rules forbid whole option families before a
 // verb rather than spellings of one value, and `gh api` entirely.
 //
-// The launch: `-a never -s workspace-write`, network on, and the worktree's
-// git folders as the only extra writable roots (so the worker can commit).
+// The launch: `-a never -s workspace-write`, network on, and as the only
+// extra writable roots what a commit writes (codexWorkerWritableRoots): the
+// worktree's own git folder and the repository's objects, refs and logs —
+// never the repository's config, hooks or info, which the owner's checkout
+// and main's git read.
 // Under `-a never` codex refuses every MCP tool call it would ask about. The
 // line sets the wmux server's default to ask (so: refused), approves exactly
 // the wmux tools a Claude bot worker may call (every tool its
@@ -33,6 +36,7 @@
 // isolation. A worker runs as the owner's user; a script, an interpreter or a
 // command the rules do not match can still reach the same effects.
 
+import path from 'node:path';
 import { launcherStem, tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE } from './agentLaunchOptions';
 import { FANOUT_MODEL_RE, codexTrustOverride } from './fanoutPreset';
@@ -106,6 +110,7 @@ export function buildCodexWorkerRules(input: CodexWorkerRulesInput): string {
   forbid(['gh', [...GH_VALUE_OPTIONS, ...repoWords]], 'name the gh command first, options after it');
   forbid(['gh', 'api'], 'gh api is not available; read with gh pr view / gh issue view');
   forbid(['git', 'push'], 'wmux pushes your task branch: use the task_push tool');
+  forbid(['git', ['send-pack', 'http-push']], 'wmux pushes your task branch: use the task_push tool');
   forbid(['git', 'remote', ['set-url', 'add', 'rename', 'remove', 'rm']], 'the remotes are not yours to change');
   forbid(['git', 'config'], 'git config is not available to a bot worker');
   const pathWords = [`--work-tree=${input.cwd}`, ...input.gitDirs.map((d) => `--git-dir=${d}`)];
@@ -170,12 +175,21 @@ function claudeWorkerDisallows(tool: string): boolean {
   });
 }
 
+/** The wmux tools that run code in the wmux MCP server (the `repl_` family).
+ *  That server is codex's child outside codex's sandbox, so a codex worker is
+ *  refused them; a Claude worker keeps them, since its own shell runs outside
+ *  any sandbox already and they give it nothing it does not have. */
+function runsCodeInServer(tool: string): boolean {
+  return tool.startsWith('repl_');
+}
+
 /** Every wmux tool the server registers: listed and unlisted, browser included. */
 const WMUX_TOOLS: readonly string[] = [...new Set([...CORE_TOOL_SURFACE, ...BROWSER_TOOL_SURFACE, ...UNLISTED_TOOLS])];
-/** The wmux tools a codex bot worker runs without a prompt: those a Claude bot worker may call. */
-export const CODEX_WORKER_APPROVED_TOOLS: readonly string[] = WMUX_TOOLS.filter((t) => !claudeWorkerDisallows(t));
-/** The wmux tools a codex bot worker is refused: those a Claude bot worker may not call. */
-export const CODEX_WORKER_REFUSED_TOOLS: readonly string[] = WMUX_TOOLS.filter(claudeWorkerDisallows);
+/** The wmux tools a codex bot worker runs without a prompt: those a Claude
+ *  bot worker may call, less those that run code outside codex's sandbox. */
+export const CODEX_WORKER_APPROVED_TOOLS: readonly string[] = WMUX_TOOLS.filter((t) => !claudeWorkerDisallows(t) && !runsCodeInServer(t));
+/** The wmux tools a codex bot worker is refused: every other one. */
+export const CODEX_WORKER_REFUSED_TOOLS: readonly string[] = WMUX_TOOLS.filter((t) => claudeWorkerDisallows(t) || runsCodeInServer(t));
 /** A tool name a `-c` table can name as a bare TOML key. */
 const TOOL_KEY = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -274,7 +288,7 @@ function tomlString(value: string): string {
  * The line main launches: its own sandbox, approval, writable roots and
  * working root, the caller's model, effort and tool level, the worker's wmux
  * tool approvals when `opts.toolApprovals`, then `--` and the prompt. `writableRoots` are
- * the worktree's git folders. Returns null when a path cannot be written as
+ * codexWorkerWritableRoots. Returns null when a path cannot be written as
  * one shell word. Pure.
  */
 export function buildCodexWorkerLaunchLine(
@@ -305,6 +319,16 @@ export function buildCodexWorkerLaunchLine(
     '--',
     parsed.promptArgument,
   ].join(' ');
+}
+
+/** The folders and files a worker's commit writes, and nothing else of the
+ *  repository's: the worktree's git folder, and the common folder's objects,
+ *  refs, logs and packed refs (measured on codex-cli 0.162.1: commit, fetch,
+ *  branch create and delete work; config writes are refused). Null when the
+ *  folder is not a linked worktree. Pure. */
+export function codexWorkerWritableRoots(gitDir: string, commonDir: string): string[] | null {
+  if (path.posix.resolve(gitDir) === path.posix.resolve(commonDir)) return null;
+  return [gitDir, ...['objects', 'refs', 'logs', 'packed-refs', 'packed-refs.lock'].map((p) => path.posix.join(commonDir, p))];
 }
 
 /** `codex-cli 0.162.1` → [0, 162, 1], or null. Pure. */

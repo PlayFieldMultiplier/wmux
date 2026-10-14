@@ -13,6 +13,7 @@ import {
   buildCodexWorkerLaunchLine,
   buildCodexWorkerRules,
   codexWorkerToolApprovals,
+  codexWorkerWritableRoots,
   codexVersionAtLeastFloor,
   namesCodex,
   parseCodexVersion,
@@ -78,15 +79,23 @@ describe('the codex worker launch line: an allowlist', () => {
   it('approves exactly the wmux tools a Claude bot worker may call, and asks for every other', () => {
     const claudeDenied = (t: string) => FANOUT_WORKER_DISALLOWED_TOOLS.some((r) => (r.endsWith('*') ? `mcp__wmux__${t}`.startsWith(r.slice(0, -1)) : r === `mcp__wmux__${t}`));
     expect(CODEX_WORKER_APPROVED_TOOLS.some(claudeDenied)).toBe(false);
-    expect(CODEX_WORKER_REFUSED_TOOLS.every(claudeDenied)).toBe(true);
+    expect(CODEX_WORKER_REFUSED_TOOLS.every((t) => claudeDenied(t) || t.startsWith('repl_'))).toBe(true);
     for (const t of ['channel_post', 'ledger_update', 'task_push', 'a2a_whoami']) expect(CODEX_WORKER_APPROVED_TOOLS).toContain(t);
-    for (const t of ['browser_open', 'browser_hover', 'terminal_send', 'send_message', 'fanout_start', 'pane_split']) expect(CODEX_WORKER_REFUSED_TOOLS).toContain(t);
+    for (const t of ['browser_open', 'browser_hover', 'terminal_send', 'send_message', 'a2a_task_send', 'fanout_start', 'pane_split', 'repl_run', 'repl_reset', 'repl_sessions']) expect(CODEX_WORKER_REFUSED_TOOLS).toContain(t);
+    expect(CODEX_WORKER_APPROVED_TOOLS.filter((t) => t.startsWith('repl_'))).toEqual([]);
     const [ask, table] = codexWorkerToolApprovals(['browser_open', 'computer', 'ledger_update', 'bad name']);
     expect(ask).toBe('-c mcp_servers.wmux.default_tools_approval_mode=prompt');
     expect(table).toContain('computer={approval_mode="prompt"}');
     expect(table).toContain('ledger_update={approval_mode="approve"}');
     expect(table).not.toContain('bad name');
     expect(table.match(/browser_open=/g)).toHaveLength(1);
+  });
+
+  it('lets a worker write what a commit writes, never the repository config, hooks or info', () => {
+    const roots = codexWorkerWritableRoots('/r/.git/worktrees/x', '/r/.git')!;
+    expect(roots).toEqual(['/r/.git/worktrees/x', '/r/.git/objects', '/r/.git/refs', '/r/.git/logs', '/r/.git/packed-refs', '/r/.git/packed-refs.lock']);
+    expect(roots).not.toContain('/r/.git');
+    expect(codexWorkerWritableRoots('/r/.git', '/r/.git/')).toBeNull();
   });
 
   it('names codex anywhere on a line', () => {
@@ -142,6 +151,7 @@ describe('the codex worker rules', () => {
         ['gh', 'api', 'repos/o/r/pulls/3/merge', '-X', 'PUT'], ['gh', 'issue', 'comment', '4'], ['git', 'push', 'origin', 'wtask/a'],
         ['git', '-C', '/w', 'push'], ['git', '-c', 'x=y', 'push'], ['git', 'config', 'remote.origin.pushurl', 'x'], ['git', 'remote', 'set-url', 'origin', 'x'],
         ['git', '--git-dir=/repo/.git', 'push'], ['git', '--no-pager', 'push'], ['git', '-p', 'push'],
+        ['git', 'send-pack', 'x', 'HEAD'], ['git', 'http-push', 'x'], ['git', 'remote', 'add', 'o2', 'x'], ['git', 'config', 'alias.p', 'push'],
       ]) expect(decide(cmd), cmd.join(' ')).toBe('forbidden');
       for (const cmd of [['gh', 'pr', 'view', '3'], ['gh', 'pr', 'create', '--fill'], ['git', 'commit', '-m', 'push it'], ['git', 'status'], ['git', 'remote', '-v']]) {
         expect(decide(cmd), cmd.join(' ')).toBe('none');

@@ -42,6 +42,7 @@ import {
   buildCodexWorkerLaunchLine,
   buildCodexWorkerRules,
   codexVersionAtLeastFloor,
+  codexWorkerWritableRoots,
   isCodexToolKey,
   parseCodexVersion,
   launchesCodex,
@@ -52,6 +53,8 @@ import { codexDefinesWmuxServer, codexWmuxApprovedTools } from '../../shared/mcp
 import { resolveOnPath } from '../factory/botEngines';
 import { getBotStore } from '../factory/botStore';
 import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
+import { getWmuxDir } from '../../daemon/config';
+import { workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 
 const execFileP = promisify(execFile);
 const RUN_TIMEOUT_MS = 15_000;
@@ -71,6 +74,9 @@ export interface CodexWorkerGuardDeps {
   claimLaunch?: (ownerWorkspaceId: string, cwd: string) => boolean;
   platform?: NodeJS.Platform;
   home?: string;
+  /** An empty folder for `core.hooksPath` on main's git calls (outside every
+   *  worker's writable roots). */
+  noHooksDir?: string;
 }
 
 /** What pty:create knows about this create (botWorkerMergeGuard's record). */
@@ -183,8 +189,14 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   // The pane's environment as far as main knows it: the login shell's PATH,
   // then the create's own env (a profile's, an account's CODEX_HOME).
   const env = { ...(await (deps.paneEnv ?? (() => agentExecEnv(process.env)))()), ...(options.env ?? {}) };
+  // Main's git in the worktree: never with a config key that runs a program
+  // (worktask/workerGit.ts), no fsmonitor, no hooks.
+  const safe = workerGitSafeArgs(deps.noHooksDir ?? path.join(getWmuxDir(), 'factory', 'no-hooks'));
+  const gitRun = (args: string[]) => run('git', [...safe, ...args], { cwd, env });
+  const pre = await workerGitPreflight(gitRun);
+  if (!pre.ok) throw refuse(pre.error);
   const git = async (args: string[]): Promise<string> => {
-    const r = await run('git', args, { cwd, env });
+    const r = await gitRun(args);
     if (r.code !== 0) throw refuse(`git ${args[0]} failed: ${r.stderr.trim().slice(0, 300)}`);
     return r.stdout.trim();
   };
@@ -254,11 +266,15 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   const ownerApproved = codexWmuxApprovedTools(configPath);
   const unwritable = ownerApproved.filter((t) => !isCodexToolKey(t));
   if (unwritable.length > 0) throw refuse(`the codex config approves wmux tools a launch cannot set back to ask (${unwritable.slice(0, 3).join(', ')})`);
-  const line = buildCodexWorkerLaunchLine(parsed, cwd, [...new Set([gitDir, commonDir])], {
+  const roots = codexWorkerWritableRoots(gitDir, commonDir);
+  if (!roots) throw refuse('the worker\'s folder is not a linked git worktree');
+  const line = buildCodexWorkerLaunchLine(parsed, cwd, roots, {
     ...(codexDefinesWmuxServer(configPath) ? { toolApprovals: { ownerApproved } } : {}),
   });
   if (!line) throw refuse('a worktree path cannot be written into the launch line');
-  const out = { ...options, initialCommand: line };
+  // The session reads the rules and the config main checked: the codex home
+  // goes into the pane's env.
+  const out = { ...options, initialCommand: line, env: { ...(options.env ?? {}), CODEX_HOME: codexHome } };
   markGuardedCodexCreate(out, line, cwd);
   return out;
 }
