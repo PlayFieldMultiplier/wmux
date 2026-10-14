@@ -62,7 +62,9 @@ function TreeRow({ row, selected, t, onOpen }: { row: BotTreeRow; selected: bool
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1">
           <span className="flex-none text-[var(--text-muted)]" aria-hidden="true"><IconFanOut size={10} /></span>
-          <span className={`min-w-0 truncate text-[12px] ${row.state === 'done' || row.state === 'failed' ? 'text-[var(--text-sub)]' : 'text-[var(--text-main)]'}`}>{row.title}</span>
+          {/* The worker shown in the panel reads in the title weight, as the
+              Sidebar marks its focused task: no second fill inside the group. */}
+          <span className={`min-w-0 truncate text-[12px] ${selected ? 'font-[var(--title-weight,500)] text-[var(--text-main)]' : row.state === 'done' || row.state === 'failed' ? 'text-[var(--text-sub)]' : 'text-[var(--text-main)]'}`}>{row.title}</span>
         </span>
         {/* What a worker waiting on input asks, in the needs-you text. */}
         {row.summary && (

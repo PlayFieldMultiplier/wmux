@@ -525,6 +525,14 @@ describe('Bots page', () => {
     } as never));
     await render(<BotsPage />);
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('2');
+    // Folded under a bot whose chat is not open: the toggle says how many.
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    expect(q('[data-bots-worker="t1"]')).toBeNull();
+    expect(q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)?.getAttribute('aria-expanded')).toBe('false');
+    // Open under the bot whose chat is open, its row and tree one group.
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    expect(q(`[data-bots-entry="bot:${LEAD}"]`)?.classList.contains('is-open')).toBe(true);
+    expect(q('[data-bots-entry="room:w1"]')?.classList.contains('is-open')).toBe(false);
     // Under the bot's row in the list, not in the rail or the history.
     const worker = q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree] [data-bots-worker="t1"]`);
     expect(worker?.textContent).toContain('fix login');
@@ -600,14 +608,17 @@ describe('Bots page', () => {
     bots[1] = { ...bots[1], tasks: [{ ...task('wtask-ask-00000001', 't1', 'needs_input', 'README title'), summary: 'The push was denied; tell me the branch' }, task('wtask-gone-0000002', 't-gone', 'working', 'Gone')] };
     await render(<BotsPage />);
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('2');
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     const worker = q('[data-bots-worker="t1"]')!;
     expect(worker.getAttribute('data-worker-needs-input')).toBe('true');
     expect(worker.textContent).toContain('README title');
     expect(worker.getAttribute('aria-label')).toContain('Worker needs input');
     expect(worker.querySelector('[data-bots-worker-summary]')?.textContent).toBe('The push was denied; tell me the branch');
     expect(q('[data-bots-worker="t-gone"]')).toBeNull();
-    // From a room, the row opens its bot's 1:1 with the terminal beside it.
+    // From a room (the bot's tree unfolded by hand), the row opens its bot's
+    // 1:1 with the terminal beside it.
     act(() => q('[data-bots-row="room:w1"]')!.click());
+    act(() => q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)!.click());
     act(() => q('[data-bots-worker="t1"]')!.click());
     expect(useStore.getState().activeWorkspaceId).toBe('hq');
     expect(useStore.getState().appRoute).toBe('bots');

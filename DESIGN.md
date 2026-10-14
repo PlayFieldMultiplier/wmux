@@ -116,7 +116,9 @@ in the terminal whatever the chrome accent.
   step darker than the sheet in the dark looks, a soft grey in Paper.
 - **Sheet:** one rounded panel (`--sheet-radius` 12px) flush under the
   titlebar, holding the sidebar and the panes (and the file tree column
-  when it is shown). Nothing docks opposite the sidebar. It is set
+  when it is shown). Nothing docks opposite the sidebar (the Bots page's
+  right split — a worker's terminal or a thread beside the chat — is part of
+  that page's body, not a dock). It is set
   off by a 1px `--sheet-edge` hairline and a faint `--sheet-shadow`, nothing
   else. Inside, the sidebar keeps its mantle tone and meets the body at a
   single seam.
@@ -298,15 +300,21 @@ else (owner decision 2026-10-14): not the sidebar (the active workspace
 included), not Fleet's board, review queue or counts, not the rail and
 status bar badges, `fleet_triage` or the phone's sidebar.
 
-- **Layout:** a 320px conversation list on `--bg-mantle` beside the chat on
-  `--bg-base`, split by one `--stroke` seam. Under an 800px-wide page (an
+- **Layout (owner decision 2026-10-14, layout A):** the conversation list
+  is the Workspaces sidebar's column — 264px on `--bg-mantle`, the
+  sidebar's row metrics — and meets the body at one `--stroke` seam (the
+  one-boundary rule). The body is the chat on `--bg-base`, then, when one is
+  open, a 6px drag handle whose centre line is the one seam, then the
+  worker's terminal or a thread (45% / 55% by default). The three column
+  headers — the list's, the chat's name-pill row and the panel's — are one
+  44px band ending on the same line, with no rule under the chat's. Under an 800px-wide page (an
   ~860px window) it is one column: the list first; choosing a conversation opens the chat over
   it, with a round back button left of the name pill.
 - **List:** the 16px title with Search, `⋯` (the page menu: Stop all
   bots, when main offers it) and `+` (Add bot: the Settings add form in a
   dialog; the bot it adds is selected) as 28px icon buttons, in every state
   of the page; Search opens a filter field under the header (Escape closes
-  and clears it). One row per conversation: a 36px avatar, the 13px/500 name
+  and clears it). One row per conversation (8px 10px padding, inset 8px): a 32px avatar, the 13px/500 name
   with the newest message's time, and one 12px muted preview line (the
   owner's own as "You: …", a room's prefixed with who spoke). Every
   workspace room is a group conversation and every bot a 1:1. Rooms and
@@ -324,12 +332,18 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   title in 12px, what a worker waiting on input asks in the needs-you text,
   and under it the branch with its `+N −N` diff counts. Live workers come
   first, then ended tasks (done or failed) while their workspace is still
-  open; a row drops off when its workspace is cleared. The bot's row ends
-  in a fold toggle — the count and a chevron — that hides or shows them.
-  A click shows the worker's terminal in the panel beside that bot's chat
-  (selecting the bot) and marks the row with the `--selection` pill; the
-  panel never opens by itself — a new row with its running dot is the
-  signal. A room row lists none (each worker sits under its bot once).
+  open; a row drops off when its workspace is cleared. A fold toggle — the
+  count and a chevron — sits inside the bot row's right edge, under its
+  time. **The open conversation is one group** (the Sidebar's selected
+  workspace and its tasks): its row and its workers in a single rounded
+  `--selection` fill, no border and nothing boxed inside it; its workers are
+  unfolded, other bots' folded until toggled. A click shows the worker's
+  terminal in the panel beside that bot's chat (selecting the bot); the
+  worker shown there reads in the title weight beside its state mark — no
+  second fill. The panel never opens by itself — a new row with its running
+  dot is the signal. A worker row carries one dot, its state mark: the git
+  line shows the diff counts, not its clean dot. A room row lists none
+  (each worker sits under its bot once).
 - **Avatars (owner decision 2026-10-14, replaces the initials tiles):** a
   bot's avatar is the picture the owner set for it, else the bot's own
   mark: its **identity colour** and one of four shapes (circle, rounded
@@ -349,9 +363,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   rail badge is the sum of the bot rows — one count, read from one model.
   While the bots are paused nothing on the page can be answered, so
   nothing is counted (rows and rail alike).
-- **Chat:** a floating name pill (avatar, name, presence; a room's bot
-  count) over the top of the messages, which fade in just below its row
-  (nothing shows beside or under the pill). The pill opens
+- **Chat:** a centred name pill (avatar, name, presence; a room's bot
+  count) in the chat's 44px header row, the messages under it with no rule
+  between. The pill opens
   the bot's profile (template, job — the owner's words, with Edit —
   workspace, repository, on/off and presence, turns used and left today,
   its routines; then, read-only, what it can do in the owner's words — one phrase per power of
@@ -456,16 +470,18 @@ status bar badges, `fleet_triage` or the phone's sidebar.
 - **Worker panel:** a worker row in the list (and a Resume that started)
   shows the worker's terminal in a panel beside the chat, on the Bots page,
   and never switches the active workspace (owner decision 2026-10-14): a
-  40px header on one line — the worker's name in 13px/500, "· its state" in
+  44px header on one line — the worker's name in 13px/500, "· its state" in
   11px (the needs-you text while it waits), a `⋯` menu (Open in Workspaces,
   and Resume for an ended task that can resume) and Close as 28px icon
   buttons — and the terminal right under it, live and typed into in place.
   The panel only views the worker: the pane's tab strip and its split,
   browser and zoom controls stay on Workspaces. A side panel and the chat
-  share the area right of the list across a draggable `--stroke` seam
+  share the area right of the list across the 6px drag handle on their seam
   (also arrow keys when focused): the panel takes 55% by default, 30–75%,
   never under 320px, the chat never under 360px; the share is kept per
-  window. Under a 720px chat area the panel covers the chat until Close.
+  window. A drag moves a guide and applies the width on release, so the
+  terminal is resized once. A bot worker's launch line clears the screen
+  before it runs, so the panel starts at the agent's own screen. Under a 720px chat area the panel covers the chat until Close.
   One side panel at a time: a worker's or a thread's.
   Another conversation closes it. The worker's terminal has one mount:
   while the panel shows it, Workspaces does not. A worker that also holds a
@@ -929,7 +945,9 @@ leaves the page.
 Nothing docks opposite the sidebar (owner decision 2026-10-14): the bots'
 rooms and 1:1s are read and answered on the Bots page only, task status and
 fan-out work in Fleet (the sidebar's Tasks line opens Fleet), and Git is a
-page on the rail.
+page on the rail. The one exception is not a dock: on the Bots page, a
+worker's terminal or a thread opens in the page's own body, right of the
+chat (owner decision 2026-10-14, layout A).
 
 **File tree column.** The one opt-in column on that edge, beside the
 panes. Its titlebar
@@ -1353,6 +1371,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
 | 2026-10-14 | Owner decision: the room dock goes — the dock opposite the sidebar, its titlebar Room toggle and the HQ room in it. The right side returns to what it held before the room dock replaced Moa's panel: nothing (Moa's panel existed only while Moa was on, 2026-10-05, and Moa is gone), with the file tree as the only opt-in column on that edge and its toggle the titlebar's last icon. Every rail page, Bots included, fills the whole sheet. Bot rooms and 1:1s are read and answered on the Bots page only. Amends the frame, Titlebar › Right, Rail and pages, the Tools panel (now File tree column) and the 2026-10-12/2026-10-13 rows | The dock showed the same rooms as the Bots page, so the owner met every conversation twice and the Bots page had to cover the dock to avoid a second copy. One place for bot conversations, and the panes keep the dock's 248–320px |
 | 2026-10-14 | Owner decision: a bot worker's terminal opens in a worker panel beside its bot's chat on the Bots page — Open and Resume no longer jump to Workspaces or change the active workspace (its "N working" header line of the same day went to the working rail, below) | Bot workers are hidden from the Workspaces sidebar, so a jump landed on a workspace the owner could not find again; reading or answering a worker belongs next to the bot that started it. |
+| 2026-10-14 | Owner decision (layout A of the mock, plus grouping): the Bots list is the Workspaces sidebar's column (264px, `--bg-mantle`, its row metrics) at one seam; the body is chat · 6px drag handle on the one seam · worker terminal or thread, 45/55 by default; the list header, the chat's pill row and the panel header are one 44px band with no rule under the chat's; the open bot is one group — its row and its worker tree in a single rounded `--selection` fill, nothing boxed inside, the shown worker in the title weight — while other bots' trees fold until toggled, the toggle inside the row's right edge. The right split is part of the Bots page body, an explicit exception to "nothing docks opposite the sidebar" | A list wider than the sidebar and headers at three heights read as three different apps; the Sidebar already says "this workspace and its tasks" with one fill, and the same grammar here says "this bot and its workers" |
 | 2026-10-14 | Owner decision: bot workers are listed like Sidebar tasks inside the Bots list (under their bot: status mark, fan-out mark and title, branch and diff counts, a fold toggle with the count), and a click opens the terminal in the right-side panel; the panel never opens by itself. The working rail keeps the turn lines (and only the tasks the list cannot show); the worker panel's header is one line with a `⋯` menu and no pane chrome under it; a draggable seam shares the width (panel 55% by default); bubbles 4px apart in a run and 12px between runs, 78% wide, 14px/1.45 text; the 44rem column cap only applies without a side panel. Replaces the same day's Open buttons in the rail and the two-line panel header | The rail's Open buttons and the panel's tab strip and split icons spent the space the terminal needed; the Sidebar's task tree already answers "which workers, in what state" at a glance, next to the bot that started them |
 | 2026-10-14 | Owner decision (Bots chat redesign; the reference messenger's bubbles and per-bot identity colours): messages are the reference messenger's bubbles in runs (this replaces the same day's flat-rows decision, made before the owner saw the reference's own window) — bots on the left in soft fills with the name above a run and the avatar once beside its last bubble, the owner on the right, runs of one author within ten minutes — with date and time separators, PR and issue links as chips, a centred room pill with its bots' avatars, a one-pill composer with "+", and per-bot identity colours — each bot's own colour (never a state colour) and shape on its avatar mark with a small face, its name above its runs and its `@name` mentions, the one exception to "colour carries state only" — merged system lines, a session "New" label and "N new" pill, a 44rem column, markdown for the owner's text and code blocks with one boundary, a language label, Copy and a 320px cap; a card that waits on the owner stays a distinct card inside its run (the needs-you hairline). Live work moves to a working rail above the composer ("<bot> working · 0:14", its queue, a neutral turn-only Stop, then worker and task rows with Open and Resume), replacing the worker bubbles at the end of the history and the header's "N working" line. A thread shows as its root with "N replies · last 14:02" and opens in a side panel with its own composer instead of narrowing the whole conversation. List rows gain a neutral unread count (this session); needs you still wins | The earlier bubbles spent lines on meta (a kind line, a footer time on every bubble) and split one reply into two colours; the reference messenger keeps bubbles but puts the name and the face once per run and the time between runs. Live work at the foot of the scroll pushed the latest reply away and said nothing about the bot's own turn. Narrowing the view to a thread hid everything else while answering it. The reference messenger's flat rows, rail and threads read faster, and DESIGN's tokens, colour grammar and one-boundary rule still apply |
 | 2026-10-14 | Owner decision (Bots onboarding and registration): the empty Bots page is one centred "Name your first bot" panel whose Start turns the bots on, adds the bot to the current workspace and opens its 1:1 (Log in to Claude when the engine cannot sign in); `+` and Add work while the bots are off, after one inline confirm; the add form always shows its repository line with Change and None, a disabled Add says why, and a new bot's chat opens at once with "Starting <name>…"; one wording, Bots on / Bots are off / Turn bots on; no HQ pinning anywhere; a bot's worker is listed only on the Bots page (sidebar, active one included, Fleet, review queue, counts, `fleet_triage`, the phone). Supersedes the 2026-10-13 first-run card and pinned HQ room, and the note that Fleet lists bot workers | Registration was hard: Add hid while the bots were off, the repository attached silently, and a new bot vanished for seconds. A pre-made HQ and Moa bot appeared that the owner never made. Bot workers in the sidebar and Fleet read as the owner's own work and duplicated the Bots page |

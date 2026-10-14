@@ -105,8 +105,10 @@ function UnreadBadge({ count }: { count: number }) {
   return <span data-bots-unread={count} aria-hidden="true" className="wmux-bots-unread">{count > 99 ? '99+' : count}</span>;
 }
 
-function ConversationRow({ c, title, preview, selected, t, onSelect, now, unread = 0 }: {
+function ConversationRow({ c, title, preview, selected, t, onSelect, now, unread = 0, toggleRoom = false }: {
   c: Conversation; title: string; preview: string; selected: boolean; t: T; onSelect: () => void; now?: number;
+  /** The workers' fold toggle sits at the end of the preview line. */
+  toggleRoom?: boolean;
   /** Bot messages after the conversation was last read (this session). */
   unread?: number;
 }) {
@@ -124,7 +126,7 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now, unread
       className={`wmux-bots-row-button ${selected ? 'is-selected' : ''} ${FOCUS_RING}`}
     >
       <span className="relative shrink-0">
-        {c.kind === 'bot' ? <BotAvatar bot={c.row.bot} size={36} /> : <RoomAvatar bots={c.bots} size={36} />}
+        {c.kind === 'bot' ? <BotAvatar bot={c.row.bot} size={32} /> : <RoomAvatar bots={c.bots} size={32} />}
         {c.kind === 'bot' && (
           <span className="absolute -right-0.5 -bottom-0.5 inline-flex rounded-full bg-[var(--bg-mantle)] p-[2px]"><PresenceDot presence={botPresence(c.row)} /></span>
         )}
@@ -134,7 +136,7 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now, unread
           <span className="min-w-0 truncate text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]">{title}</span>
           {c.last && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]">{formatCardTime(c.last.at, now)}</span>}
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className={`flex items-center gap-1.5 ${toggleRoom ? 'pr-[34px]' : ''}`}>
           <span className={`min-w-0 flex-1 truncate text-[12px] ${unread > 0 ? 'text-[var(--text-sub)]' : 'text-[var(--text-muted)]'}`}>{preview}</span>
           <NeedsBadge count={c.needsYou} />
           {c.needsYou <= 0 && <UnreadBadge count={unread} />}
@@ -410,10 +412,11 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
     setView('chat');
   };
 
-  // Each bot's workers nest under its row (BotsWorkerTree), unfolded until
-  // the owner folds them. A click shows the worker's terminal beside that
-  // bot's chat; the panel never opens on its own.
-  const [folded, setFolded] = useState<Readonly<Record<string, boolean>>>({});
+  // Each bot's workers nest under its row (BotsWorkerTree): open under the
+  // bot whose chat is open, folded under the others, until the owner toggles
+  // them. A click shows the worker's terminal beside that bot's chat; the
+  // panel never opens on its own.
+  const [unfolded, setUnfolded] = useState<Readonly<Record<string, boolean>>>({});
   const panel = useStore((s) => s.botsWorkerPanel);
   const openWorker = (botId: string, workspaceId: string) => {
     const conversationId = botConversationId(botId);
@@ -584,12 +587,15 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
             {shown.map((r) => {
               const tree = r.c.kind === 'bot' ? r.c.tree : [];
               const botId = r.c.kind === 'bot' ? r.c.row.bot.id : '';
-              const open = tree.length > 0 && !folded[r.c.id];
-              const treeId = `bots-tree-${r.c.id}`;
               const isSelected = selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId);
+              const open = tree.length > 0 && (unfolded[r.c.id] ?? isSelected);
+              const treeId = `bots-tree-${r.c.id}`;
+              // The open conversation is one group: its row and its workers in
+              // one rounded fill, as the Sidebar draws the selected workspace
+              // and its tasks.
               return (
-                <div key={r.c.id} data-bots-entry={r.c.id}>
-                  <div className="wmux-bots-row-wrap">
+                <div key={r.c.id} data-bots-entry={r.c.id} className={`wmux-bots-entry ${isSelected ? 'is-open' : ''}`}>
+                  <div className={`wmux-bots-row-wrap ${tree.length > 0 ? 'has-toggle' : ''}`}>
                     <ConversationRow
                       c={r.c}
                       title={r.title}
@@ -599,6 +605,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
                       now={now}
                       unread={r.unread}
                       onSelect={() => select(r.c.id)}
+                      toggleRoom={tree.length > 0}
                     />
                     {tree.length > 0 && (
                       <TreeToggle
@@ -607,7 +614,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
                         controls={treeId}
                         name={r.title}
                         t={t}
-                        onToggle={() => setFolded((cur) => ({ ...cur, [r.c.id]: open }))}
+                        onToggle={() => setUnfolded((cur) => ({ ...cur, [r.c.id]: !open }))}
                       />
                     )}
                   </div>

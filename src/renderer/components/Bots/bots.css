@@ -41,10 +41,13 @@
   border-radius: 10px;
 }
 
+/* The list is the Workspaces sidebar's column (owner decision 2026-10-14,
+   layout A): 264px on --bg-mantle, meeting the body at one --stroke seam;
+   its rows inset 8px with the sidebar's padding and 10px radius. */
 .wmux-bots-list {
   display: flex;
   flex-direction: column;
-  width: 320px;
+  width: 264px;
   flex-shrink: 0;
   min-height: 0;
   background: var(--bg-mantle);
@@ -54,7 +57,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 52px;
+  height: 44px;
   flex-shrink: 0;
   padding: 0 10px 0 16px;
 }
@@ -83,8 +86,7 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 56px;
-  padding: 8px;
+  padding: 8px 10px;
   border-radius: 10px;
   text-align: left;
 }
@@ -92,20 +94,28 @@
 .wmux-bots-row-button.is-selected { background: var(--selection); box-shadow: var(--select-ring, none); }
 
 /* A bot's workers nest under its row as the Sidebar nests a workspace's
-   tasks (owner decision 2026-10-14): the fold toggle ("N" and a chevron) at
-   the row's right edge, the rows indented on a hairline guide under the
-   avatar, each a status mark, the fan-out mark and the title, and the branch
-   with its diff counts under it. */
-.wmux-bots-row-wrap { display: flex; align-items: center; min-width: 0; }
-.wmux-bots-row-wrap > .wmux-bots-row-button { flex: 1; min-width: 0; }
+   tasks (owner decision 2026-10-14): the fold toggle ("N" and a chevron)
+   inside the row's right edge, under its time; the rows indented on a
+   hairline guide under the avatar, each a status mark, the fan-out mark and
+   the title, and the branch with its diff counts under it. The open
+   conversation is one group — its row and its workers in one rounded
+   --selection fill, nothing boxed inside it (the Sidebar's selected
+   workspace); the worker shown in the panel reads in the title weight. */
+.wmux-bots-entry { border-radius: 10px; }
+.wmux-bots-entry + .wmux-bots-entry { margin-top: 2px; }
+.wmux-bots-entry.is-open { background: var(--selection); box-shadow: var(--select-ring, none); }
+.wmux-bots-entry.is-open .wmux-bots-row-button,
+.wmux-bots-entry.is-open .wmux-bots-row-button:hover { background: transparent; box-shadow: none; }
+.wmux-bots-row-wrap { position: relative; min-width: 0; }
 .wmux-bots-tree-toggle {
+  position: absolute;
+  right: 6px;
+  bottom: 7px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex-shrink: 0;
-  height: 24px;
-  margin-left: 2px;
-  padding: 0 6px;
+  height: 20px;
+  padding: 0 4px;
   border-radius: 6px;
   font-size: 11px;
   color: var(--text-muted);
@@ -115,8 +125,8 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  margin: 0 0 4px 25px;
-  padding-left: 8px;
+  margin: 0 0 0 26px;
+  padding: 0 0 6px 8px;
   border-left: 1px solid var(--stroke);
 }
 .wmux-bots-tree-row {
@@ -130,7 +140,6 @@
   text-align: left;
 }
 .wmux-bots-tree-row:hover { background: var(--hover-fill); }
-.wmux-bots-tree-row.is-selected { background: var(--selection); box-shadow: var(--select-ring, none); }
 
 .wmux-bots-badge {
   display: inline-flex;
@@ -176,29 +185,26 @@
   min-width: 0;
   min-height: 0;
 }
+/* The chat's 44px header row, level with the list's and the panel's (no
+   rule under it): the name pill centred, the narrow layout's back button
+   on the left. */
 .wmux-bots-chat-head {
-  position: absolute;
-  top: 10px;
-  left: 16px;
-  right: 16px;
-  max-width: 44rem;
-  margin: 0 auto;
-  z-index: 2;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  pointer-events: none;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0 16px;
 }
-/* The pill floats centred; the narrow layout's back button stays left. */
-.wmux-bots-chat-head > .wmux-bots-back { position: absolute; left: 0; }
-.wmux-bots-chat-head > * { pointer-events: auto; }
+.wmux-bots-chat-head > .wmux-bots-back { position: absolute; left: 16px; }
 .wmux-bots-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   max-width: min(420px, 100%);
-  height: 32px;
+  height: 30px;
   padding: 0 12px 0 6px;
   border: 1px solid var(--line);
   border-radius: 9999px;
@@ -241,11 +247,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 64px 20px 12px;
-  /* Nothing shows beside or under the name pill's row (it ends at 42px):
-     the messages are hidden there and fade in just below it. */
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 46px, #000 64px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 46px, #000 64px);
+  padding: 8px 20px 12px;
 }
 /* The conversation's column: capped at 44rem and centred, so a wide window
    does not spread the messages edge to edge. */
@@ -493,19 +495,27 @@
   min-height: 0;
   background: var(--bg-base);
 }
-/* The seam between the chat and its panel: one --stroke line, a wider grab
-   area around it. */
+/* The seam between the chat and its panel is the 6px drag handle's centre
+   line: one --stroke line, no other border on either side. */
 .wmux-bots-splitter {
   position: relative;
   flex-shrink: 0;
-  width: 1px;
-  background: var(--stroke);
+  width: 6px;
   cursor: col-resize;
   touch-action: none;
 }
-.wmux-bots-splitter::before { content: ''; position: absolute; inset: 0 -4px; }
-.wmux-bots-splitter:hover,
-.wmux-bots-splitter:focus-visible { background: var(--line-strong); }
+.wmux-bots-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--stroke);
+}
+.wmux-bots-splitter:hover::after,
+.wmux-bots-splitter:focus-visible::after { background: var(--line-strong); }
 /* The worker panel only views the terminal: the pane's tab strip and its
    split, browser and zoom controls stay on Workspaces. */
 .wmux-bots-worker-panes [data-pane-header] { display: none; }
@@ -513,7 +523,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  height: 44px;
   flex-shrink: 0;
   padding: 0 8px 0 12px;
 }
