@@ -3663,4 +3663,9 @@ export const zh = {
   'botsPage.teamName.issue': "问题处理",
   'botsPage.teamName.reviewer': "审查",
   'room.composer.toLead': "发给 {name}",
+  'botsPage.profile.workersRunOn': "工作者运行于",
+  'botsPage.profile.workersDefault': "默认（{name}）",
+  'botsPage.profile.workersNotInstalled': "{name}（未安装）",
+  'botsPage.profile.workersFailed': "无法更改工作者的运行引擎。",
+  'botsPage.profile.workersUnavailable': "{name}（此系统不可用）",
 } as const;

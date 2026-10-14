@@ -11,7 +11,13 @@ vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir(), isPackaged: fals
 import { guardBotWorkerSessionText, guardCodexBotWorker, guardCodexSessionLine, type CodexGuardRun } from '../codexWorkerGuard';
 import { beginBotWorkerSpawn, claimInflightCodexLaunch, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, isGuardedCodexCreate, noteBotWorkerSession, reloadBotWorkerSessionsForTests, withBotWorkerMergeGuard } from '../botWorkerMergeGuard';
 import { CODEX_WORKER_EXCLUDE_LINE, CODEX_WORKER_RULES_PATH } from '../../../shared/codexWorkerGuard';
-import { codexTrustOverride } from '../../../shared/fanoutPreset';
+import { FANOUT_EXTRA_AGENT_STEMS, applyFanoutAgentFlags, codexTrustOverride, fanoutChoiceBinding } from '../../../shared/fanoutPreset';
+import { parseCodexWorkerLine } from '../../../shared/codexWorkerGuard';
+import { applyWorkerPermissionFlags, reattachModelEnvMarker, splitModelEnvMarker } from '../../../shared/workerLaunch';
+import { applyRoleAgent } from '../../../shared/orchestratorRole';
+import { withRoleBinding } from '../../../renderer/utils/ptyCreateOptions';
+import { workerLaunchCommand } from '../../worktask/FanOutService';
+import { withBotWorkerAgent } from '../../../shared/botWorkerAgent';
 
 const sh = (cwd: string, ...args: string[]): string =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -245,6 +251,27 @@ describe('a re-fire or a resume of a guarded codex pane', () => {
       forgetBotWorkerSession('pty-codex', dir);
       forgetBotWorkerSession('pty-plain', dir);
       reloadBotWorkerSessionsForTests();
+    }
+  });
+});
+
+describe('the line the renderer really sends for a bot\'s codex worker', () => {
+  it('passes the allowlist, with and without a model and effort', () => {
+    for (const pick of [{ agent: 'codex' }, { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' }]) {
+      // Main's rows for a bot preset with the owner's pick applied.
+      const [choice] = withBotWorkerAgent([{ agent: 'claude' }], pick);
+      // The renderer's chain (useRpcBridge, as in botWorkerMergeGuard.test.ts).
+      const main = workerLaunchCommand('claude', '/w/.wtask/prompt.md', { platform: 'darwin' }).command;
+      const binding = fanoutChoiceBinding(choice);
+      const { marker, command: bare } = splitModelEnvMarker(main);
+      const swap = applyRoleAgent(bare, binding, { extraAgents: FANOUT_EXTRA_AGENT_STEMS });
+      const bound = withRoleBinding({ initialCommand: swap.command }, binding, undefined, FANOUT_EXTRA_AGENT_STEMS);
+      const flagged = applyFanoutAgentFlags(bound.initialCommand as string, choice, '/w', 'darwin');
+      const line = reattachModelEnvMarker(marker, applyWorkerPermissionFlags(flagged, 'bypassPermissions'), '/bin/zsh').command;
+      const parsed = parseCodexWorkerLine(line, '/w');
+      expect(parsed, line).not.toBeNull();
+      expect(parsed!.model).toBe(pick.model);
+      expect(parsed!.effort).toBe(pick.effort);
     }
   });
 });

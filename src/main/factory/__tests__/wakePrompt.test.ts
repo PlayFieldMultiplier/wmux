@@ -28,6 +28,15 @@ describe('defaultBotSystemPrompt (before the roles module starts)', () => {
   });
 });
 
+describe('buildWakePrompt — the workers\' engine', () => {
+  const item: WakeItem = { id: 'w-1', botId: profile.id, workspaceId: 'ws1', reason: { kind: 'human', text: 'Hi', source: 'desktop', runId: 'run-c-1' }, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running' } as WakeItem;
+  it('says in one line what the workers run on, default or the owner\'s pick', () => {
+    expect(buildWakePrompt({ item, profile })).toContain('Your fan-out workers run on Claude Code (the default; the owner can change it in your profile); you do not choose it.');
+    const picked = buildWakePrompt({ item, profile: { ...profile, workerAgent: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' } } });
+    expect(picked).toContain('Your fan-out workers run on Codex (gpt-6.1-sol, low effort), as the owner set in your profile; you do not choose it.');
+  });
+});
+
 describe('buildWakePrompt — group rooms and routines', () => {
   const item = (reason: WakeItem['reason']): WakeItem => ({ id: 'w-1', botId: profile.id, workspaceId: 'ws1', reason, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running' });
   const roster = [{ botId: 'bot-00000002', name: 'Wmux Dev' }, { botId: 'bot-00000003', name: 'Wmux; Issue=x' }];

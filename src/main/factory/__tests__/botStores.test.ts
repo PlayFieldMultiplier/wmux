@@ -54,6 +54,27 @@ function newStore(): BotStore {
 }
 
 describe('BotStore', () => {
+  it('keeps the owner\'s worker engine: set, cleared, validated on update and on read', async () => {
+    const s = newStore();
+    const r = s.create({ workspaceId: 'ws-1', name: 'Dev' });
+    if (!r.ok) throw new Error('create');
+    expect(r.bot.workerAgent).toBeUndefined();
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' } })).toMatchObject({ ok: true, bot: { workerAgent: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' } } });
+    // Only an agent with a bot-worker guard; only a verified one; no unknown field.
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'grok' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'gemini' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'codex', unattended: true } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'codex', model: '--yolo' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.get(r.bot.id)?.workerAgent).toEqual({ agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' });
+    expect(s.update(r.bot.id, { workerAgent: null })).toMatchObject({ ok: true });
+    expect(s.get(r.bot.id)?.workerAgent).toBeUndefined();
+    // On read: a stored pick that no longer validates is dropped, the bot kept.
+    const stored = { ...s.get(r.bot.id)!, workerAgent: { agent: 'grok' } };
+    expect(parseBotProfile(stored)).toMatchObject({ id: r.bot.id });
+    expect(parseBotProfile(stored)?.workerAgent).toBeUndefined();
+    expect(parseBotProfile({ ...stored, workerAgent: { agent: 'codex' } })?.workerAgent).toEqual({ agent: 'codex' });
+  });
+
   it('creates with role defaults; any number of bots of one role share a workspace', () => {
     const s = newStore();
     const r = s.create({ workspaceId: 'ws-1', role: 'verifier' });

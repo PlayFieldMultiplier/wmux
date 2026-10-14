@@ -1210,6 +1210,9 @@ const electronAPI = {
     // active workspace); rejects when no tab could be opened. Poll
     // factoryEngineReadiness to see it land.
     factoryEngineLogin: () => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN) as Promise<void>,
+    // The engines a bot's workers may run on, and which are installed here.
+    workerAgents: () =>
+      ipcRenderer.invoke(IPC.FACTORY_WORKER_AGENTS) as Promise<import('../shared/botWorkerAgent').BotWorkerAgentOption[]>,
     // Every bot's routines, read-only (routine.list as the operator).
     listRoutines: async (): Promise<import('../shared/botRoutine').BotRoutine[]> => {
       const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, 'routine.list', {})) as { ok?: unknown; result?: { ok?: unknown; routines?: unknown } } | null;

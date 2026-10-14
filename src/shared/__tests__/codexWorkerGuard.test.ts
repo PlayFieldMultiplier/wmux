@@ -20,7 +20,7 @@ import {
   parseCodexWorkerLine,
 } from '../codexWorkerGuard';
 import { codexTrustOverride } from '../fanoutPreset';
-import { FANOUT_WORKER_DISALLOWED_TOOLS } from '../workerLaunch';
+import { FANOUT_WORKER_DISALLOWED_TOOLS, MODEL_ENV_MARKER } from '../workerLaunch';
 
 const CWD = '/data/worktrees/abc/feat-x-1234';
 const PROMPT = `"$(cat '/data/worktrees/.meta/feat-x-1234/prompt.md')"`;
@@ -72,6 +72,12 @@ describe('the codex worker launch line: an allowlist', () => {
     ['a launcher path', `/usr/local/bin/codex ${TRUST} ${PROMPT}`],
   ])('refuses %s', (_why, line) => {
     expect(parseCodexWorkerLine(line, CWD)).toBeNull();
+  });
+
+  it('reads past wmux\'s own model-env marker, and leaves it out of the rebuilt line', () => {
+    const parsed = parseCodexWorkerLine(MODEL_ENV_MARKER + FANOUT_LINE, CWD)!;
+    expect(parsed).toEqual(parseCodexWorkerLine(FANOUT_LINE, CWD));
+    expect(buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'])!.startsWith('codex ')).toBe(true);
   });
 
   it('refuses a worktree path it cannot write as one word', () => {

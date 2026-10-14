@@ -877,6 +877,52 @@ describe('Bots page', () => {
     expect(update).toHaveBeenCalledWith(LEAD, { job: 'Review PRs.' });
   });
 
+  it('the profile picks what the workers run on: default or an installed engine, saved through the bot port', async () => {
+    const update = vi.fn(async () => ({ ok: true }));
+    const workerAgents = vi.fn(async () => [
+      { agent: 'claude', label: 'Claude Code', installed: true, supported: true },
+      { agent: 'codex', label: 'Codex', installed: true, supported: true },
+    ]);
+    setFactoryBotPort({ ...port, update, workerAgents } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => q('[data-bots-pill]')!.click());
+    const profile = q(`[data-bots-profile="${LEAD}"]`)!;
+    const select = profile.querySelector<HTMLSelectElement>('[data-testid="bots-profile-workers-engine"]')!;
+    expect([...select.options].map((o) => [o.value, o.textContent, o.disabled])).toEqual([['', 'Default (Claude Code)', false], ['codex', 'Codex', false]]);
+    expect(select.value).toBe('');
+    await act(async () => {
+      select.value = 'codex';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(update).toHaveBeenCalledWith(LEAD, { workerAgent: { agent: 'codex' } });
+    // The pick shows at once, before the profile is read again.
+    expect(select.value).toBe('codex');
+  });
+
+  it('keeps a stored pick visible when the engines cannot be listed, and an explicit Claude pick', async () => {
+    bots = bots.map((r) => (r.bot.id === LEAD ? { ...r, bot: { ...r.bot, workerAgent: { agent: 'claude', model: 'opus' } } } : r));
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })), workerAgents: async () => { throw new Error('no'); } } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => q('[data-bots-pill]')!.click());
+    const select = q(`[data-bots-profile="${LEAD}"] [data-testid="bots-profile-workers-engine"]`) as HTMLSelectElement;
+    expect(select.value).toBe('claude');
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'claude']);
+  });
+
+  it('an engine that is not installed is listed but cannot be picked', async () => {
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })), workerAgents: async () => [{ agent: 'codex', label: 'Codex', installed: false, supported: true }] } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => q('[data-bots-pill]')!.click());
+    const select = q(`[data-bots-profile="${LEAD}"] [data-testid="bots-profile-workers-engine"]`) as HTMLSelectElement;
+    expect([...select.options].map((o) => [o.value, o.textContent, o.disabled])).toEqual([['', 'Default (Claude Code)', false], ['codex', 'Codex (not installed)', true]]);
+  });
+
   it('a bot without a job of its own shows its template\'s starting job, in the UI language', async () => {
     bots = bots.map((r) => (r.bot.id === MOA ? { ...r, bot: { ...r.bot, template: 'coordinator', job: undefined } } : r));
     seedRooms();

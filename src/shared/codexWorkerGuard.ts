@@ -272,8 +272,10 @@ const WRITABLE_ROOTS_VALUE = /^sandbox_workspace_write\.writable_roots=\[(?:"\/[
  */
 export function parseCodexWorkerLine(fullLine: string, cwd: string, opts: { resume?: boolean } = {}): CodexWorkerLine | null {
   if (!isGuardablePath(cwd)) return null;
-  const { marker, command } = splitModelEnvMarker(fullLine);
-  if (marker) return null;
+  // A leading model-env marker is wmux's own prefix (workerLaunch.ts), about a
+  // Claude variable codex never reads: read past it, and the rebuilt line
+  // leaves it out.
+  const { command } = splitModelEnvMarker(fullLine);
   const trimmed = command.trim();
   const lastSpace = trimmed.lastIndexOf(' "$(cat ');
   const promptArgument = lastSpace < 0 ? '' : trimmed.slice(lastSpace + 1);

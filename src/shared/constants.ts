@@ -458,6 +458,9 @@ export const IPC = {
   // model turn, and the Claude sign-in (shared/factoryEngine.ts); main window only.
   FACTORY_ENGINE_READINESS: 'factory:engine:readiness',
   FACTORY_ENGINE_LOGIN: 'factory:engine:login',
+  // The engines a bot's workers may run on that are installed here
+  // (shared/botWorkerAgent.ts); main window only.
+  FACTORY_WORKER_AGENTS: 'factory:worker:agents',
   TRACK_RECORD_CHANGED: 'trackRecord:changed',
   // Git page ship button: the branch's status, commit / push / create PR
   GIT_SHIP_STATUS: 'gitShip:status',
