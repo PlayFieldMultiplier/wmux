@@ -239,3 +239,29 @@ export function teamRelayLimit(snap, expect) {
     criterion('five_next_refused', !!tooLong && /<=4|next is 1 to 4/.test(String(tooLong.text)), tooLong?.text?.slice(0, 160) ?? 'not refused'),
   ];
 }
+
+/** team-relay-owner-tags-researcher: the owner's mention mid-relay wakes the
+ *  researcher once, in the relay's thread and the owner card's run; its
+ *  result goes to the coordinator; the relay still completes. */
+export function teamRelayOwnerTagsResearcher(snap, expect) {
+  const tag = injected(snap, expect.tag);
+  const lead = botId(snap, expect.lead);
+  const res = botId(snap, expect.researcher);
+  const dev = botId(snap, expect.developer);
+  const iss = botId(snap, expect.issue);
+  const hs = arr(snap.handoffs);
+  const root = hs.find((h) => h.kind === 'dispatch' && h.from?.botId === lead && !h.relay) ?? null;
+  const tagWakes = wakesOf(snap, expect.researcher).filter((w) => w.reason?.kind === 'human');
+  const aside = hs.find((h) => h.kind === 'result' && h.from?.botId === res && h.runId === `run-${tag?.id}`) ?? null;
+  const last = hs.find((h) => h.kind === 'result' && h.from?.botId === iss) ?? null;
+  return [
+    criterion('researcher_woken_once_in_thread', tagWakes.length === 1 && tagWakes[0].threadId === root?.threadId && tagWakes[0].reason.runId === `run-${tag?.id}`,
+      tagWakes.map((w) => `${w.threadId} ${w.reason?.runId}`).join(', ') || 'no wake'),
+    criterion('its_result_goes_to_lead', !!aside && aside.to?.botId === lead && aside.to?.botId !== dev && !aside.replyTo && aside.status === 'delivered',
+      aside ? `${aside.to?.botId} re ${aside.replyTo ?? '-'} ${aside.status}` : 'no result'),
+    criterion('relay_completes', !!last && last.to?.botId === lead && last.status === 'delivered' && last.runId === root?.runId
+      && wakesOf(snap, expect.lead).some((w) => w.reason?.kind === 'handoff' && w.reason.handoffId === last.id && w.state === 'done'),
+      last ? `${last.status} ${last.runId}` : 'no last result'),
+    criterion('no_refusals', hs.every((h) => h.status !== 'refused'), hs.filter((h) => h.status === 'refused').map((h) => `${h.kind}:${h.refusal?.code}`).join(', ') || 'none'),
+  ];
+}
