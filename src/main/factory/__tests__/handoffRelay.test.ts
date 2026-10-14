@@ -227,6 +227,7 @@ describe('a coordinator\'s relay', () => {
     await r.router.idle();
     expect(r.router.list({ limit: 200 }).some((h) => h.relay)).toBe(false);
     expect(r.wakes.filter((w) => w.botId === t.lead.id)).toHaveLength(1);
+    expect(r.rooms.read('ws1', { threadId: 'general' }).cards.filter((c) => c.refs?.threadId === root.threadId).map((c) => c.title)).toEqual(['Stopped: Ship the widget']);
   });
 
   it('a next bot no longer enabled stops the relay: the coordinator gets the result and the reason', async () => {
@@ -559,5 +560,65 @@ describe('the General card that points at a coordinator\'s thread', () => {
     expect(pointers(again, root.threadId).map((c) => c.refs?.handoffId)).toEqual(['h-last']);
     await again.router.idle();
     expect(again.router.get('h-last')).toMatchObject({ status: 'delivered', pointed: true });
+  });
+});
+
+describe('the General pointer across a stop between its writes', () => {
+  const pointers = (r: Rig, thread: string) => r.rooms.read('ws1', { threadId: 'general' }).cards.filter((c) => c.refs?.threadId === thread);
+  const file = () => path.join(dir, 'factory', HANDOFFS_FILENAME);
+
+  it('a card written before its mark: the next start repairs the mark and writes no second card', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t, [t.dev.id]);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    const res2 = answer(r, t.dev, forwardOf(r, res1.handoffId)!, 'Built');
+    if (!res2.ok) throw new Error('refused');
+    await r.router.idle();
+    // As if the stop came after the card and before the mark.
+    fs.appendFileSync(file(), `${JSON.stringify({ ...r.router.get(res2.handoffId)!, pointed: undefined })}\n`);
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(pointers(again, root.threadId)).toHaveLength(1);
+    expect(again.router.get(res2.handoffId)?.pointed).toBe(true);
+  });
+
+  it('a stopped relay whose card never got written gets it on the next start', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t);
+    t.dev.enabled = false;
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    await r.router.idle();
+    // Remove the card and the mark: a stop right after the stop note.
+    const rooms = path.join(dir, 'factory', 'rooms', 'ws1.jsonl');
+    fs.writeFileSync(rooms, fs.readFileSync(rooms, 'utf8').split('\n').filter((l) => !l.includes('Stopped: ')).join('\n'));
+    fs.appendFileSync(file(), `${JSON.stringify({ ...r.router.get(res1.handoffId)!, pointed: undefined })}\n`);
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(pointers(again, root.threadId).map((c) => c.title)).toEqual(['Stopped: Ship the widget']);
+  });
+
+  it('a plain dispatch\'s last result still settling at start is pointed to', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    r.run(t.lead, owner(), { runId: 'run-c-owner' }, 'general');
+    const d = r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.dev.id, title: 'Fix it', body: '' });
+    if (!d.ok) throw new Error('refused');
+    r.running.delete(t.lead.id);
+    await r.router.idle();
+    const root = r.router.get(d.handoffId)!;
+    const last: Handoff = {
+      ...root, id: 'h-plain-r', kind: 'result', from: { kind: 'bot', workspaceId: 'ws1', botId: t.dev.id }, to: { kind: 'bot', workspaceId: 'ws1', botId: t.lead.id },
+      replyTo: root.id, depth: 1, hopsInRun: 2, attribution: { originator: { kind: 'human' }, chain: [root.id] }, payload: { title: 'Fixed', body: '' }, status: 'queued',
+    };
+    delete (last as Partial<Handoff>).opensThread;
+    delete (last as Partial<Handoff>).clientHandoffId;
+    fs.appendFileSync(file(), `${JSON.stringify(last)}\n`);
+    const again = await rig(t.all, { slowFlush: true });
+    expect(pointers(again, root.threadId).map((c) => c.title)).toEqual(['Finished: Fix it']);
+    await again.router.idle();
   });
 });

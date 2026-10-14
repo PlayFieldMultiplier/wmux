@@ -537,13 +537,21 @@ export class HandoffRouter {
   private resumeRelays(): void {
     const recent = this.now() - RELAY_STOP_RETRY_MS;
     for (const r of [...this.records.values()]) {
-      if (r.kind !== 'result' || !r.replyTo) continue;
+      if ((r.kind !== 'result' && r.kind !== 'refusal') || !r.replyTo) continue;
       const parent = this.records.get(r.replyTo);
-      if (!parent || !isRelayHop(parent) && r.status !== 'delivered') continue;
+      if (!parent) continue;
+      const taken = r.status === 'delivered' || r.status === 'queued';
+      // A refusal taken by the coordinator ended its work: pointed to as stopped.
+      if (r.kind === 'refusal') {
+        if (taken) this.pointToThread(r.id, parent, 'stopped');
+        continue;
+      }
+      if (!isRelayHop(parent) && !taken) continue;
       const lead = parent.from.kind === 'bot' ? safeGet(this.opts.ports().bots, parent.from.botId) : null;
       if (r.relayStopped) {
         // Not told yet (its wake not taken, or not on disk): ask again.
         if (lead && !r.relayStopTold && r.updatedAt >= recent) this.wakeForStop(r.id, lead);
+        this.pointToThread(r.id, parent, 'stopped');
         continue;
       }
       if (r.status === 'refused') {
@@ -822,6 +830,8 @@ export class HandoffRouter {
       ? this.relayOn(draft, parent, target.bot)
       : this.deliver(draft, target.bot);
     if (result.ok && kind === 'result' && parent) this.pointToThread(draft.id, parent, 'finished');
+    // A refusal the coordinator took ended its work there.
+    if (result.ok && kind === 'refusal' && parent) this.pointToThread(draft.id, parent, 'stopped');
     // The coordinator's queue did not take a relay's last result: it is
     // brought to it as a stopped relay (retried on the next start).
     if (!result.ok && inRelay && result.code === 'budget') this.stopRelay(draft.id, target.bot, 'your queue did not take its last result');
@@ -1029,9 +1039,12 @@ export class HandoffRouter {
     const rooms = this.opts.rooms();
     const ws = root.from.workspaceId;
     if (!rooms) return;
+    // A card written before its mark was (a stop between the two): only the
+    // mark is repaired.
+    const written = rooms.find(ws, (c) => c.threadId === GENERAL_THREAD && c.actor.kind === 'system' && c.refs?.handoffId === result.id && c.refs?.threadId === root.threadId);
     const ownerCardId = humanCardIdOfRun(root.runId);
     const ownerCard = ownerCardId ? rooms.get(ws, ownerCardId) : null;
-    const card = rooms.append({
+    const card = written ?? rooms.append({
       workspaceId: ws,
       threadId: GENERAL_THREAD,
       kind: 'fact',
