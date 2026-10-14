@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { pcIconState } from '../../PcRail/pcRailModel';
 import { buildRemoteEntries, paneNamesByPty, serverReach, shortId, type RemoteSources } from '../remoteEntries';
 
-const base: RemoteSources = { devices: null, info: null, hosts: null, hostStatus: {}, peers: null, openByHost: {} };
+const base: RemoteSources = { devices: null, info: null, hosts: null, hostStatus: {}, hostSeenAt: {}, peers: null, openByHost: {} };
 
 describe('Remote page entries', () => {
   it('lists devices, hosts and peers with only what is known, live ones first', () => {
@@ -14,7 +15,8 @@ describe('Remote page entries', () => {
         { deviceId: 'dev-cccccccc-3333', name: 'Gone', createdAt: 1, lastSeenAt: 300, allowInput: true, revokedAt: 400 },
       ],
       hosts: [{ id: 'host-1', label: 'office', origin: 'https://office.example:9600', addedAt: 1, allowInput: true }],
-      hostStatus: { 'host-1': 'connected' },
+      hostStatus: { 'host-1': 'reachable' },
+      hostSeenAt: { 'host-1': 500 },
       peers: [{ peerUuid: 'peer-1', peerName: 'lab', pairedAt: 1, lastSeenAt: 0, burned: false }],
       openByHost: { 'host-1': ['api'] },
     });
@@ -22,7 +24,7 @@ describe('Remote page entries', () => {
     const [phone, tablet, host, peer] = entries;
     expect(phone).toMatchObject({ kind: 'phone', live: true, status: 'online', access: 'input-when-on', viewing: null });
     expect(tablet).toMatchObject({ kind: 'device', live: false, status: 'offline', access: 'view' });
-    expect(host).toMatchObject({ kind: 'host', live: true, address: 'office.example:9600', viewing: ['api'], access: 'input', lastSeenAt: null });
+    expect(host).toMatchObject({ kind: 'host', live: true, address: 'office.example:9600', viewing: ['api'], access: 'input', lastSeenAt: 500 });
     expect(peer).toMatchObject({ kind: 'peer', live: false, status: 'unknown', lastSeenAt: null, access: 'messages' });
   });
 
@@ -60,16 +62,26 @@ describe('Remote page entries', () => {
     expect(entry.lastSeenAt).toBeNull();
   });
 
-  it('a reachable host is online but not live; an unanswered status is unknown', () => {
+  it('reads host state from the PC rail feed, as the PC switcher does (SSH hosts included)', () => {
     const entries = buildRemoteEntries({
       ...base,
       hosts: [
-        { id: 'a', label: 'a', origin: 'https://a', addedAt: 1 },
+        { id: 'a', label: 'a', origin: 'wmux-ssh://a', addedAt: 1, ssh: { alias: 'box', resolvedHost: 'box.lan', hostKeyFingerprint: 'SHA256:x', remotePort: 7681, localEndpoint: { socketPath: '/tmp/a.sock' } } },
         { id: 'b', label: 'b', origin: 'https://b', addedAt: 1 },
+        { id: 'c', label: 'c', origin: 'https://c', addedAt: 1 },
       ],
-      hostStatus: { a: 'reachable' },
+      // a answered the feed; b has not been asked yet; c stopped answering.
+      hostStatus: { a: 'reachable', c: 'unreachable' },
+      hostSeenAt: { a: 900, c: 400 },
     });
-    expect(entries.map((e) => [e.status, e.live, e.access])).toEqual([['reachable', false, null], ['unknown', false, null]]);
+    expect(entries.map((e) => [e.id, e.status, e.live, e.lastSeenAt])).toEqual([
+      ['a', 'reachable', false, 900],
+      ['c', 'unreachable', false, 400],
+      ['b', 'unknown', false, null],
+    ]);
+    // The same inputs the switcher reads give the same answer.
+    expect(pcIconState({ status: 'reachable', lastSeenAt: 900 })).toBe('online');
+    expect(pcIconState({ status: 'reachable', lastSeenAt: null })).toBe('unchecked');
   });
 
   it('says how the web server is reachable', () => {

@@ -28,6 +28,7 @@ import RemoteConnectDialog, { type ConnectTab } from './RemoteConnectDialog';
 import AddSshPcDialog from './AddSshPcDialog';
 import SshHostCheckDialog from './SshHostCheckDialog';
 import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../../../shared/remoteHosts';
+import { pcRailHostState } from '../../../shared/pcRail';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
 
 /** How often the page re-reads the roster, the hosts and the server state. */
@@ -52,10 +53,10 @@ const A2A_STATUS: Record<A2aRemoteHostStatus['state'], StatusWord> = {
   'identity-changed': 'disconnected',
 };
 
+/** A host's word, from the PC switcher's own reading of the same state. */
 function hostWord(status: RemoteHostStatus | 'unknown'): StatusWord {
-  if (status === 'connected') return 'connected';
-  if (status === 'reachable' || status === 'unknown') return 'waiting';
-  return 'disconnected';
+  if (status === 'unknown') return 'waiting';
+  return pcRailHostState(status) === 'online' ? 'connected' : 'disconnected';
 }
 
 /** One line of the recent-activity list. */
@@ -111,7 +112,6 @@ export default function RemotePage() {
   const [devices, setDevices] = useState<WebDeviceSummary[] | null>(null);
   const [devicesError, setDevicesError] = useState(false);
   const [hosts, setHosts] = useState<RemoteHostPublic[] | null>(null);
-  const [hostStatus, setHostStatus] = useState<Record<string, RemoteHostStatus>>({});
   const [peers, setPeers] = useState<LanLinkPeerSummary[] | null>(null);
   const [connect, setConnect] = useState<{ tab?: ConnectTab } | null>(null);
   const [addSsh, setAddSsh] = useState(false);
@@ -153,7 +153,6 @@ export default function RemotePage() {
     }, () => { if (mounted.current) setDevicesError(true); }));
     if (api?.remote?.hostsList) reads.push(api.remote.hostsList().then((v) => { if (mounted.current) setHosts(v); }, () => undefined));
     if (api?.remote?.sshStates) reads.push(api.remote.sshStates().then((v) => { if (mounted.current) setSshStates(v); }, () => undefined));
-    if (api?.remote?.hostsStatus) reads.push(api.remote.hostsStatus().then((v) => { if (mounted.current) setHostStatus(v); }, () => undefined));
     if (api?.lanlink?.peersList) reads.push(api.lanlink.peersList().then((v) => { if (mounted.current) setPeers(v.peers); }, () => undefined));
     await Promise.all(reads);
     if (mounted.current) setNow(Date.now());
@@ -174,6 +173,14 @@ export default function RemotePage() {
   const names: LocalNames = useMemo(() => ({ workspaces, paneLabel, surfaceAgent }), [workspaces, paneLabel, surfaceAgent]);
 
   const remoteWorkspaces = useStore(useShallow((s) => s.remoteWorkspaces));
+  // Host state comes from the PC rail feed, the source the PC switcher reads.
+  const hostStatus = useStore((s) => s.pcRailHostStatus);
+  const pcRailFeeds = useStore((s) => s.pcRailFeeds);
+  const hostSeenAt = useMemo(() => {
+    const out: Record<string, number | null> = {};
+    for (const [id, f] of Object.entries(pcRailFeeds)) out[id] = f.fetchedAt;
+    return out;
+  }, [pcRailFeeds]);
   const openByHost = useMemo(() => {
     const out: Record<string, string[]> = {};
     for (const w of remoteWorkspaces) (out[w.hostId] ??= []).push(w.label || w.name || w.workspaceId.slice(0, 8));
@@ -181,8 +188,8 @@ export default function RemotePage() {
   }, [remoteWorkspaces]);
   const paneNameByPty = useMemo(() => paneNamesByPty(workspaces, paneLabel, surfaceAgent), [workspaces, paneLabel, surfaceAgent]);
   const entries = useMemo(
-    () => buildRemoteEntries({ devices, info, hosts, hostStatus, peers, openByHost, paneNameByPty }),
-    [devices, info, hosts, hostStatus, peers, openByHost, paneNameByPty],
+    () => buildRemoteEntries({ devices, info, hosts, hostStatus, hostSeenAt, peers, openByHost, paneNameByPty }),
+    [devices, info, hosts, hostStatus, hostSeenAt, peers, openByHost, paneNameByPty],
   );
   const deviceEntries = entries.filter((e) => e.kind !== 'host' && e.kind !== 'peer');
   const hostEntries = entries.filter((e) => e.kind === 'host');
@@ -385,7 +392,7 @@ export default function RemotePage() {
   const serverOn = reach !== 'off' && reach !== 'unknown';
   const address = info ? webPairUrl(info).replace(/\/pair$/, '') : '';
   const livePhones = deviceEntries.filter((e) => e.live).length;
-  const livePcs = pcs.filter((p) => p.word === 'connected').length + hostEntries.filter((e) => e.status === 'connected').length;
+  const livePcs = pcs.filter((p) => p.word === 'connected').length + hostEntries.filter((e) => hostWord(e.status as RemoteHostStatus | 'unknown') === 'connected').length;
   const pcTotal = pcs.length + hostEntries.length;
   const nothing = loaded && pcTotal === 0 && deviceEntries.length === 0 && peerEntries.length === 0;
   const summary = [
@@ -496,7 +503,7 @@ export default function RemotePage() {
           {identityChanged && <span style={{ color: 'var(--attention-text)' }} data-ssh-identity-changed>{t(sshNeedsIdentityCheck(sshState) ? 'remoteSsh.identityChanged' : 'remoteSsh.needsCheck')} · </span>}
           {meta}
         </span>
-        {statusCell(word, h.live, null)}
+        {statusCell(word, h.live, word === 'disconnected' ? h.lastSeenAt : null)}
         <span className="wmux-remote-acts">
           {identityChanged ? (
             <Button size="sm" variant="secondary" onClick={() => setCheckSsh({ id: h.id, label: h.name })} data-ssh-check={h.id}>
