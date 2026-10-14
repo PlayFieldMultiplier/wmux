@@ -301,7 +301,8 @@ export default function BrowserToolbar({
           ? `${btnBase} text-[var(--accent-blue)] bg-[var(--bg-surface)] cursor-pointer`
           : btnEnabled}
         onClick={onToggleInspect}
-        title={inspecting ? 'Inspector OFF' : 'Inspector ON — click an element to copy its selector'}
+        title={inspecting ? t('browser.inspector.stop') : t('browser.inspector.start')}
+        aria-label={inspecting ? t('browser.inspector.stop') : t('browser.inspector.start')}
         tabIndex={-1}
       >
         <IconInspect />

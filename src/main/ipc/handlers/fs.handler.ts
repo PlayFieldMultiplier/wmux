@@ -36,21 +36,39 @@ const BLOCKED_FILES = [
   '.wmux/daemon-auth-token',
 ];
 
-export function isSensitivePath(resolvedPath: string): boolean {
+/**
+ * The home folder as given and as its real path. A canonical (realpath'd)
+ * path must be compared with the real home: when home is reached through a
+ * symlink, or on Windows through an 8.3 short name, the two spellings differ
+ * and a symlink into ~/.ssh would otherwise pass the check on its target.
+ */
+function homeRoots(): string[] {
   const home = os.homedir();
-  const normalized = resolvedPath.replace(/\\/g, '/').toLowerCase();
-  const homeNorm = home.replace(/\\/g, '/').toLowerCase();
-
-  // Block directories under home
-  for (const dir of BLOCKED_DIRS) {
-    const blocked = (homeNorm + '/' + dir).toLowerCase();
-    if (normalized.startsWith(blocked)) return true;
+  let real = home;
+  try {
+    real = fs.realpathSync.native(home);
+  } catch {
+    // An unreadable home keeps the given spelling only.
   }
+  const roots = [home, real].map((h) => h.replace(/\\/g, '/').toLowerCase());
+  return roots[0] === roots[1] ? [roots[0]] : roots;
+}
 
-  // Block specific files in home
-  for (const file of BLOCKED_FILES) {
-    const blocked = (homeNorm + '/' + file).toLowerCase();
-    if (normalized === blocked) return true;
+export function isSensitivePath(resolvedPath: string): boolean {
+  const normalized = resolvedPath.replace(/\\/g, '/').toLowerCase();
+
+  for (const homeNorm of homeRoots()) {
+    // Block directories under home
+    for (const dir of BLOCKED_DIRS) {
+      const blocked = (homeNorm + '/' + dir).toLowerCase();
+      if (normalized.startsWith(blocked)) return true;
+    }
+
+    // Block specific files in home
+    for (const file of BLOCKED_FILES) {
+      const blocked = (homeNorm + '/' + file).toLowerCase();
+      if (normalized === blocked) return true;
+    }
   }
 
   // Block Windows credential stores

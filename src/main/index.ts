@@ -94,7 +94,10 @@ import { registerA2aChannelRpc } from './pipe/handlers/a2a.channel.rpc';
 import { registerCompanyRpc } from './pipe/handlers/company.rpc';
 import { registerEventsRpc } from './pipe/handlers/events.rpc';
 import { PluginHostLoader } from './plugins/PluginHostLoader';
-import { registerPluginSchemePrivileges, registerPluginProtocolHandler } from './plugins/pluginProtocol';
+import { registerPluginProtocolHandler } from './plugins/pluginProtocol';
+import { registerPrivilegedSchemes } from './privilegedSchemes';
+import { registerPreviewProtocol } from './preview/previewProtocol';
+import { isHtmlPreviewContents, registerHtmlPreview } from './preview/previewHtml';
 import { registerPluginHostHandlers } from './ipc/handlers/pluginHost.handler';
 import { registerProjectConfigHandlers } from './ipc/handlers/projectConfig.handler';
 import { registerChannelLocalHandlers } from './ipc/handlers/channelLocal.handler';
@@ -629,10 +632,11 @@ const pipeServer = new PipeServer(rpcRouter);
 // reHardenTokenFileAcl) — a prime cold-start suspect.
 markBoot('pipe-server-ctor-done');
 
-// Plugin host (B-1). Scheme privileges MUST be registered before app
-// 'ready'; the loader itself is constructed inside the ready handler (it
-// reads ~/.wmux) and the protocol/IPC layers read it through this binding.
-registerPluginSchemePrivileges();
+// Plugin host (B-1) and file preview (#2150). Scheme privileges MUST be
+// registered before app 'ready'; the plugin loader itself is constructed
+// inside the ready handler (it reads ~/.wmux) and the protocol/IPC layers
+// read it through this binding.
+registerPrivilegedSchemes();
 let pluginHostLoader: PluginHostLoader | null = null;
 const mcpRegistrar = new McpRegistrar();
 // Shared MCP broker (Option A, WMUX_MCP_BROKER=1; default OFF). Started on
@@ -1935,6 +1939,9 @@ app.on('ready', async () => {
     logLine('warn', 'main', `plugin host load failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   registerPluginProtocolHandler(() => pluginHostLoader);
+  // Before the renderer loads: a restored session opens its preview tabs at once.
+  registerPreviewProtocol();
+  registerHtmlPreview();
   markBoot('plugins-loaded');
 
   mainWindow = createWindow({ deferLoad: true });
@@ -2600,11 +2607,12 @@ app.on('ready', async () => {
 // runs), and this handler is the actual gate: never create a new window;
 // load http(s) popups (target=_blank links) in the SAME webview instead so
 // in-pane browsing keeps working. Applies to every <webview> guest — the
-// only one in the app is BrowserPanel. Known limitation: window.open-based
-// OAuth flows that postMessage back to their opener cannot work with the
-// same-view replacement.
+// only browser webview in the app is BrowserPanel. Known limitation:
+// window.open-based OAuth flows that postMessage back to their opener cannot
+// work with the same-view replacement. The HTML preview's guests are not
+// browser panes and keep their own policy (main/preview/previewHtml.ts).
 app.on('web-contents-created', (_event, contents) => {
-  if (contents.getType() !== 'webview') return;
+  if (contents.getType() !== 'webview' || isHtmlPreviewContents(contents)) return;
   contents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
       void contents.loadURL(url);

@@ -852,14 +852,14 @@ A pane is a terminal column plus, when it needs one, a work area.
 ┌ pane tab strip ───────────────┬ work strip ───────────────────── [◫]┐
 │ ⠿ w1-1  Zsh  claude  [cluster]│ Example Domain   app.tsx   diff     │
 ├───────────────────────────────┼─────────────────────────────────────┤
-│ terminal (the hero)           │ browser / editor / diff             │
+│ terminal (the hero)           │ browser / editor / preview / diff   │
 └───────────────────────────────┴─────────────────────────────────────┘
 ```
 
 - **Two kinds of surface.** Terminals (local and remote, and the
   placeholders a mirror shows for a slot it cannot draw) keep the pane tab
-  strip and draw in the left column. Browser, editor and diff tabs are work
-  surfaces and draw in the work area on the right. A pane holding only one
+  strip and draw in the left column. Browser, editor, preview and diff tabs
+  are work surfaces and draw in the work area on the right. A pane holding only one
   kind draws it across the whole pane under one strip, as before.
 - **One header line.** The work strip sits on the pane header's line, split
   where the body is split: the body's separator continues up through the
@@ -882,6 +882,26 @@ A pane is a terminal column plus, when it needs one, a work area.
 - **One accent per pane.** The accent bar marks the active tab on whichever
   strip holds the pane's focus; the other strip's active tab keeps the quiet
   bar.
+- **Preview tab.** An image or PDF opened from the file tree is a read-only
+  preview tab, not an editor tab. Its header is the file name, its path and
+  three actions (open in the default app, open the folder, copy the path); its
+  footer is the file's facts on the left and one zoom toolbar on the right
+  (− / zoom % / + / Fit, plus the page field for a PDF). The wheel scrolls;
+  Cmd/Ctrl + wheel zooms around the cursor; there is no click-to-zoom. It
+  opens fitted, never above 100% for an image. When the file changes on disk
+  the view updates in place, keeps its zoom and position, and never takes the
+  focus. A half-written, damaged or deleted file leaves the last good version
+  up with one line of `--attention-text` in the footer; that line is state, so
+  it is the only colour on the tab. Transparency shows on a checkerboard drawn
+  from the theme.
+- **HTML preview.** An `.html` file opens rendered in the same preview tab,
+  in a sandboxed page that never runs in the app. The footer carries the
+  page's one network control, `Offline` until pressed (`Network on`,
+  pressed state as above), and a held link: a page never navigates away or
+  opens anything on its own; a link it tries to open shows in the footer
+  with an Open button. The header adds View source, which opens the file
+  as text. A change in the page's folder reloads it in place, keeping the
+  scroll and the focus.
 
 ## The one-boundary rule
 
@@ -1212,6 +1232,8 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-12 | Owner decision (5.0, agent factory): Moa's panel, its titlebar button, Settings › Moa and the Turn on Moa menu item are gone; the dock opposite the sidebar is always the room dock, with its Room toggle in the titlebar, and says so when the factory is off. The workspace an earlier version made Moa's HQ is an ordinary workspace again: listed, numbered and closable. Amends the rail's More menu, Tools panel, sidebar rows and Settings rows above | The factory's bots replace Moa's brain, so a dock that only existed while Moa ran would leave the dock slot empty for everyone. A hidden workspace nobody can close is a trap once nothing manages it |
 | 2026-10-13 | Owner decision (approved layout change): the bots get their own rail page, **Bots** (봇; first named Company the same day), right below Workspaces — Workspaces · Bots · Fleet · Schedules · Remote · Git — laid out like a messenger: a conversation list (each workspace room a group, each bot a 1:1; HQ pinned first, the rest by latest activity) beside the selected conversation as a chat, with a needs-you number badge on the rail item that is the sum of the page's bot rows. Bot fan-out workers leave the Workspaces sidebar (task groups, header count, collapsed rail, Ctrl+N) for their bot's conversation; Fleet still lists them. Bots covers the whole sheet, room dock included (amends "every rail page leaves the dock in view"). Bot avatars are the owner's picture for the bot, else an initials tile on a token colour picked by the bot's id (owner, same day: mascot-style faces read as a copy of the reference app). One grammar exception, owner-approved: the owner's messages are right-aligned bubbles in the user bubble's neutral content-10% fill rather than the reference's accent fill (the accent is never an area fill) | A live dogfood showed bot workers landing in the owner's sidebar under the HQ workspace as "From closed pane" rows: they read as the owner's own work, duplicated what the room shows, and the hidden task workspaces inflated the Workspaces count. The owner reads and answers bots in a messenger every day, so the page takes that structure and interaction; DESIGN.md's tokens, type and one-boundary rule still apply. With the conversation as the page, the dock beside it would show the same room twice |
 | 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
+| 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
+| 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
 
 ### Desktop conversation view
 

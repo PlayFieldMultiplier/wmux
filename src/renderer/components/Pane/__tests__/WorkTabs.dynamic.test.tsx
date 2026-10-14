@@ -109,5 +109,6 @@ describe('WorkTabs', () => {
   it('workTabTitle falls back to the browser label', () => {
     expect(workTabTitle({ title: '', surfaceType: 'browser' }, 'Browser')).toBe('Browser');
     expect(workTabTitle({ title: '', surfaceType: 'editor', editorFilePath: 'C:\\repo\\a.ts' }, 'Browser')).toBe('a.ts');
+    expect(workTabTitle({ title: '', surfaceType: 'preview', previewFilePath: '/repo/out/plot.png' }, 'Browser')).toBe('plot.png');
   });
 });

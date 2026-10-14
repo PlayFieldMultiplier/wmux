@@ -11,6 +11,7 @@ import { insertPathsIntoPty } from '../AgentToolbar/inject';
 import { tokenAttrs } from '../../themes';
 import FileTreeResizeHandle from './FileTreeResizeHandle';
 import { filterTree, FILTER_SCAN_LIMIT, type FilterResult } from './fileTreeFilter';
+import { isPreviewablePath } from '../../../shared/filePreview';
 
 interface FileTreePanelProps {
   /** The window edge the column sits on: the one opposite the sidebar. */
@@ -403,14 +404,17 @@ export default function FileTreePanel({ position }: FileTreePanelProps) {
   }, []);
 
   const addEditorSurface = useStore((s) => s.addEditorSurface);
+  const addPreviewSurface = useStore((s) => s.addPreviewSurface);
 
   const openFile = useCallback(
     (node: TreeNode) => {
       setSelectedPath(node.path);
       if (!activeWorkspace) return;
-      addEditorSurface(activeWorkspace.activePaneId, node.path);
+      // Images and PDFs open in a preview tab (#2150); everything else as text.
+      if (isPreviewablePath(node.path)) addPreviewSurface(activeWorkspace.activePaneId, node.path);
+      else addEditorSurface(activeWorkspace.activePaneId, node.path);
     },
-    [activeWorkspace, addEditorSurface],
+    [activeWorkspace, addEditorSurface, addPreviewSurface],
   );
 
   // Main returns canonical paths (realpath), so the base for relative paths

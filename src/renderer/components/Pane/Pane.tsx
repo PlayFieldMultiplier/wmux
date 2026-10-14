@@ -15,6 +15,7 @@ import { ChatV2Overlay, useChatSurfaceView } from '../ChatV2/ChatSurface';
 import { forgetChatV2Pane, usePaneChatV2Binding } from '../ChatV2/useChatV2';
 import BrowserPanel from '../Browser/BrowserPanel';
 import EditorPanel from '../Editor/EditorPanel';
+import PreviewPanel from '../Preview/PreviewPanel';
 import DiffPanel from '../Diff/DiffPanel';
 import RemotePaneSurface from '../Remote/RemotePaneSurface';
 import AddRemotePaneModal from '../Remote/AddRemotePaneModal';
@@ -125,7 +126,7 @@ export function isTerminalKindSurfaceType(surfaceType: string | undefined): bool
 }
 
 export function isWorkSurfaceType(surfaceType: string | undefined): boolean {
-  return surfaceType === 'browser' || surfaceType === 'editor' || surfaceType === 'diff';
+  return surfaceType === 'browser' || surfaceType === 'editor' || surfaceType === 'preview' || surfaceType === 'diff';
 }
 
 /**
@@ -1543,6 +1544,16 @@ function SplitSurfaceView({
           filePath={surface.editorFilePath || ''}
           isActive={drawn}
           surfaceId={surface.id}
+        />
+      );
+    }
+    if (surface.surfaceType === 'preview') {
+      return (
+        <PreviewPanel
+          key={surface.id}
+          filePath={surface.previewFilePath || ''}
+          isActive={drawn}
+          paneId={pane.id}
         />
       );
     }
