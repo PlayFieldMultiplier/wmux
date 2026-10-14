@@ -7,7 +7,7 @@ export const SPRING_LOAD_MS = 500;
 import WebToggle from '../StatusBar/WebToggle';
 import { useStore } from '../../stores';
 import { selectFleetSectionCounts } from '../../stores/selectors/fleet';
-import { selectOwnerWorkspaces } from './botTasks';
+import { ownerFleetState } from './botTasks';
 import { selectScheduleNavSummary } from '../../stores/selectors/schedules';
 import { formatNextShort } from '../Schedules/format';
 import { useT } from '../../hooks/useT';
@@ -32,7 +32,7 @@ export default function SidebarNavigation({ compact = false, home = false }: {
   const fleetOpen = route === 'fleet';
   // The Fleet board's own Needs you / Running sections, counted (bot
   // workers are the Bots page's).
-  const fleetCounts = useStore(useShallow((s) => selectFleetSectionCounts({ ...s, workspaces: selectOwnerWorkspaces(s) })));
+  const fleetCounts = useStore(useShallow((s) => selectFleetSectionCounts(ownerFleetState(s))));
   const needsText = fleetCounts.needsYou > 0 ? t('sidebar.fleetNeedsYou', { count: fleetCounts.needsYou }) : '';
   const runningText = fleetCounts.running > 0 ? t('sidebar.fleetRunning', { count: fleetCounts.running }) : '';
   // Built from the visible strings, so the spoken name contains what is shown.

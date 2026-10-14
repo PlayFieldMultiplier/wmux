@@ -367,6 +367,14 @@ export function botsNeedsYou(conversations: readonly Conversation[]): number {
   return n;
 }
 
+/** A room's newest thread of a kind (its newest plan or report), by its
+ *  last card. Pure. */
+export function latestThreadOf(threads: readonly ThreadSummary[], prefix: 'plan:' | 'report:'): ThreadSummary | null {
+  let best: ThreadSummary | null = null;
+  for (const th of threads) if (th.threadId.startsWith(prefix) && (!best || th.lastSeq > best.lastSeq)) best = th;
+  return best;
+}
+
 /** The rooms the page reads: every bot's workspace. */
 export function botsRooms(bots: readonly FactoryBotRow[]): string[] {
   const out: string[] = [];

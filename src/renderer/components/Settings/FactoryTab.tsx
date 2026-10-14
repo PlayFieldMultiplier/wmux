@@ -462,8 +462,11 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
     }
   };
 
+  // An edit that makes the form invalid closes the turn-on confirm.
+  useEffect(() => { if (blocked) setConfirmOn(false); }, [blocked]);
+
   const add = async (turnOnFirst: boolean) => {
-    if (!port.create || !typedName) return;
+    if (!port.create || !typedName || blocked) return;
     setBusy(true);
     setError(null);
     try {

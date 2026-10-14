@@ -10,7 +10,7 @@ import { tokenAttrs } from '../../themes';
 import { HIT_TARGET_24 } from '../hitArea';
 import { IconGear, IconCornerUpLeft } from '../icons';
 import { selectFleetPanes, sortFleetPanes, selectFleetSectionCounts, type FleetPane } from '../../stores/selectors/fleet';
-import { selectOwnerWorkspaces } from '../Sidebar/botTasks';
+import { ownerFleetState, selectOwnerWorkspaces } from '../Sidebar/botTasks';
 import PluginStatusBarWidgets from '../../plugins/PluginStatusBarWidgets';
 import { COMPANY_MODE_ENABLED } from '../../../shared/featureFlags';
 import FileTreeToggle from '../Titlebar/FileTreeToggle';
@@ -175,7 +175,7 @@ export default function StatusBar() {
   // chip count (selectFleetSectionCounts) — questions, errors, stopped
   // supervision and unconfirmed panes — so the three numbers never differ.
   // Bot workers are the Bots page's, never counted here (botTasks.ts).
-  const needsYouCount = useStore((s) => selectFleetSectionCounts({ ...s, workspaces: selectOwnerWorkspaces(s) }).needsYou);
+  const needsYouCount = useStore((s) => selectFleetSectionCounts(ownerFleetState(s)).needsYou);
   // Jump to the most urgent pane — computed at click time (no subscription).
   const jumpToUrgent = () => {
     const s = useStore.getState();

@@ -10,7 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import Sidebar from '../Sidebar';
 import { useStore } from '../../../stores';
 import { selectShortcutWorkspaces } from '../workspaceFilter';
-import { botTaskOwners, isBotTask, selectOwnerWorkspaces, withoutBotTasks } from '../botTasks';
+import { botTaskOwners, isBotTask, ownerFleetState, selectOwnerWorkspaces, withoutBotTasks } from '../botTasks';
 import type { Pane, Surface, Workspace } from '../../../../shared/types';
 import type { FanoutOrigin } from '../../../../shared/fanoutOrigin';
 
@@ -128,5 +128,9 @@ describe('botTasks helpers', () => {
     const first = selectOwnerWorkspaces({ workspaces: all, fanoutOrigin: o });
     expect(first.map((w) => w.id)).toEqual(['hq', 'bee']);
     expect(selectOwnerWorkspaces({ workspaces: all, fanoutOrigin: o })).toBe(first);
+    // Fleet's counts read the store itself while there is no bot worker.
+    const plainState = { workspaces: plain, fanoutOrigin: {}, other: 1 };
+    expect(ownerFleetState(plainState)).toBe(plainState);
+    expect(ownerFleetState({ workspaces: all, fanoutOrigin: o, other: 1 })).toEqual({ workspaces: first, fanoutOrigin: o, other: 1 });
   });
 });

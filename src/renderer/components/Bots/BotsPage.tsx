@@ -191,7 +191,9 @@ function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted 
   const blocked = addBotBlockedReason({ canCreate: !!botPort.create, workspaceId: workspace?.id ?? '', name, jobOk: true });
   const engineText = engineLine(readiness, t);
   const canLogin = !!engineText && readiness?.reason === 'claude-not-logged-in' && !!engine.login;
-  const startable = !busy && !blocked && !engineText;
+  // Start waits for the engine's first answer (a build that cannot ask never waits).
+  const engineUnanswered = !!engine.readiness && readiness === null;
+  const startable = !busy && !blocked && !engineText && !engineUnanswered;
 
   const start = async () => {
     if (!startable || !typed || !workspace) return;

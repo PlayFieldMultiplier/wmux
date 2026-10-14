@@ -94,3 +94,10 @@ export function selectOwnerWorkspaces<W extends Identified>(state: { workspaces:
   ownerListMemo = { workspaces: state.workspaces, owners, out };
   return out;
 }
+
+/** The store as Fleet's counts read it: its workspaces without bot workers.
+ *  The store itself while there is no bot worker (no copy on that path). */
+export function ownerFleetState<S extends { workspaces: readonly Identified[]; fanoutOrigin?: Origins }>(state: S): S {
+  const workspaces = selectOwnerWorkspaces(state);
+  return workspaces === state.workspaces ? state : { ...state, workspaces };
+}

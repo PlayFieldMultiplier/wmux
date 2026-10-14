@@ -245,6 +245,52 @@ describe('Bots page', () => {
     expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
   });
 
+  it('first screen: Start waits for the engine\'s first answer', async () => {
+    bots = [];
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    let answer: (r: { ready: boolean }) => void = () => undefined;
+    const engine: EnginePort = { readiness: () => new Promise((r) => { answer = r; }) };
+    await render(<BotsPage engine={engine} />);
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(true);
+    await act(async () => { answer({ ready: true }); });
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
+  });
+
+  it('"+" while off: a job made invalid after the confirm opened closes it, and nothing is turned on', async () => {
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
+    const create = vi.fn();
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    await render(<BotsPage settings={settings} />);
+    act(() => q('[data-bots-add]')!.click());
+    const dialog = document.querySelector('[data-testid="bots-add-bot"]')!;
+    const name = dialog.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Triage');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-submit"]')!.click());
+    expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm"]')).not.toBeNull();
+    const job = dialog.querySelector<HTMLTextAreaElement>('[data-testid="factory-add-bot-job"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(job, 'bad\u0007job');
+      job.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm"]')).toBeNull();
+    expect(dialog.querySelector('[data-testid="factory-add-bot-blocked"]')).not.toBeNull();
+    expect(settings.set).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('first screen: a build that cannot tell the engine\'s state never blocks Start', async () => {
     bots = [];
     seedRooms();

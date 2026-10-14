@@ -21,8 +21,7 @@ import { CATCH_UP_MAX_PAGES, catchUpRoomTimeline, loadRoomActors, loadRoomThread
 import type { ThreadId, ThreadSummary } from '../../../shared/room';
 import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../Room/factoryPorts';
 import { useFactoryBots } from '../Room/useFactoryBots';
-import { latestThreadOf } from '../Room/HqRoom';
-import { buildBots, botsRooms, EMPTY_BOTS, roomCardsByWorkspace, type BotsModel } from './botsModel';
+import { buildBots, botsRooms, EMPTY_BOTS, latestThreadOf, roomCardsByWorkspace, type BotsModel } from './botsModel';
 import { selectBotTaskOwners } from '../Sidebar/botTasks';
 
 const NO_CLASSES: Record<string, FleetAttentionClass> = {};
