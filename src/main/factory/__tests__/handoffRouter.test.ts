@@ -1010,6 +1010,27 @@ describe('closing questions nobody needs to answer (A5)', () => {
     expect(open(h)).toEqual(['Which repo?']);
   });
 
+  it('the greeting closes on the owner\'s next words to the bot, in any thread and through the room, choices or not', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    h.wake.id = { wakeId: 'w-intro', attempt: 1, reasonKind: 'intro' } as never;
+    const greet = await h.router.askPerson(binding(lead), { title: 'What should I do?', body: '', options: ['Look at the repo', 'Triage issues'] });
+    h.wake.id = { wakeId: 'w-2', attempt: 1, reasonKind: 'human' } as never;
+    const pick = await h.router.askPerson(binding(lead), { title: 'Ship it?', body: '', options: ['Yes', 'No'] });
+    if (!greet.ok || !pick.ok) throw new Error('asks failed');
+    const said = now;
+    now += 5;
+    // Another bot's words, or the owner's words from before it, leave it open.
+    expect(await h.router.closeAnsweredInChat(other.id, { ...ownerWake('general', now), reason: { kind: 'human', text: 'Fix the login bug', source: 'desktop', lead: true } })).toEqual([]);
+    expect(await h.router.closeAnsweredInChat(lead.id, { ...ownerWake('general', said - 1), reason: { kind: 'human', text: 'Fix the login bug', source: 'desktop', lead: true } })).toEqual([]);
+    // The owner just gives the lead work in the room, in a thread of its own.
+    const work = { ...ownerWake('handoff:h-xyz', now), reason: { kind: 'human' as const, text: 'Fix the login bug', source: 'desktop' as const, lead: true as const } };
+    expect(await h.router.closeAnsweredInChat(lead.id, work)).toEqual([greet.handoffId]);
+    // Other questions with choices keep the usual rule.
+    expect(open(h)).toEqual(['Ship it?']);
+  });
+
   it('a thread whose subject ended closes its open questions', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);

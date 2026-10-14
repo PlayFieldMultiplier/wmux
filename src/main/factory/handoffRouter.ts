@@ -1455,8 +1455,10 @@ export class HandoffRouter {
    *  (the bot read the words in the turn that just ended, so no second wake),
    *  and the card reads answered. Other words ("Hi"), or words that match
    *  several questions ("Yes"), leave them open; the bot that judges a
-   *  question answered closes it itself (question_close). Returns the
-   *  handoff ids closed or answered. */
+   *  question answered closes it itself (question_close). The greeting is
+   *  the exception: any words of the owner's that reach the bot after it
+   *  (its 1:1, the room, or the room through its coordinator) close it.
+   *  Returns the handoff ids closed or answered. */
   closeAnsweredInChat(botId: string, item: Pick<WakeItem, 'reason' | 'threadId' | 'workspaceId' | 'enqueuedAt'>): Promise<string[]> {
     const r = item.reason;
     if (r.kind !== 'human') return Promise.resolve([]);
@@ -1465,9 +1467,10 @@ export class HandoffRouter {
     // not a 1:1 answer.
     const toMe = r.room !== true && r.lead !== true;
     const text = typeof r.text === 'string' ? r.text : '';
-    const asked = (h: Handoff) => h.from.kind === 'bot' && h.from.botId === botId
+    const before = (h: Handoff) => h.from.kind === 'bot' && h.from.botId === botId
       && partyWorkspace(h.from) === item.workspaceId
-      && h.createdAt < item.enqueuedAt
+      && h.createdAt < item.enqueuedAt;
+    const asked = (h: Handoff) => before(h)
       && (h.threadId === said || (toMe && h.threadId === `handoff:${h.id}`));
     return this.serial(async () => {
       const answered: string[] = [];
@@ -1480,7 +1483,10 @@ export class HandoffRouter {
         if (option && d && (d.status ?? 'pending') === 'pending') picks.push({ h, option });
       }
       if (picks.length === 1 && (await this.answerFromChat(picks[0].h, picks[0].option))) answered.push(picks[0].h.id);
-      const closed = await this.closeWhere((h) => asked(h) && !h.payload.options?.length);
+      // The greeting ("what should I do?") is moot once the owner says
+      // anything to the bot, wherever and however addressed: words that are
+      // one of its choices answered it above; any other words are the job.
+      const closed = await this.closeWhere((h) => (asked(h) && !h.payload.options?.length) || (h.intro === true && before(h)));
       return [...answered, ...closed];
     });
   }
