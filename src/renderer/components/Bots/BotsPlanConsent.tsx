@@ -58,18 +58,20 @@ export function BotsPlanConsentDialog({ t, mode, onAnswer }: {
   onAnswer: (a: BotsPlanConsentAnswer) => void;
 }): ReactElement {
   const keep = mode === 'keep';
+  // Focus lands on the text, not a button: a stray Enter answers nothing,
+  // while Escape (focus is inside) still closes it.
+  const textRef = useRef<HTMLDivElement>(null);
   return (
     <Dialog
       role="alertdialog"
       width={440}
       onClose={() => onAnswer('dismiss')}
-      // Opened by the page itself: focus stays put so a stray Enter cannot answer it.
-      focusOnOpen={keep ? 'none' : 'first'}
+      initialFocusRef={textRef}
       data-testid="bots-plan-consent"
     >
       <DialogHeader title={t('botsPage.consent.title')} />
       <DialogBody>
-        <div className="flex flex-col gap-2 text-[13px] leading-snug text-[var(--text-sub)]">
+        <div ref={textRef} tabIndex={-1} className="flex flex-col gap-2 text-[13px] leading-snug text-[var(--text-sub)] outline-none">
           <p className="m-0">{t('botsPage.consent.engine')}</p>
           <p className="m-0">{t('botsPage.consent.usage')}</p>
           <p className="m-0">{t('botsPage.consent.terms')}</p>

@@ -938,8 +938,8 @@ describe('Bots page', () => {
 
   it('bots on from before the plan consent: the page asks once; Keep bots on records it, Turn bots off turns them off, Cancel on a turn-on changes nothing', async () => {
     seedRooms(true);
-    const legacy = { enabled: true } as never;
-    const settings = { available: true, get: vi.fn(async () => legacy), set: vi.fn(async (p: object) => ({ enabled: true, ...p }) as never) };
+    let stored: unknown = { enabled: true };
+    const settings = { available: true, get: vi.fn(async () => stored as never), set: vi.fn(async (p: object) => ({ enabled: true, ...p }) as never) };
     await render(<BotsPage settings={settings} />);
     const dialog = () => document.querySelector('[data-testid="bots-plan-consent"]');
     expect(dialog()?.textContent).toContain('Bots run on your Claude plan');
@@ -959,7 +959,7 @@ describe('Bots page', () => {
     act(() => root.unmount());
     root = createRoot(container);
     settings.set.mockClear();
-    settings.get.mockImplementation(async () => null);
+    stored = null;
     seedRooms(false);
     const off = api();
     off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
