@@ -30,9 +30,10 @@
 //     and the upstream writes — runs in that one git. A gitdir under a WSL
 //     host whose distro or path cannot be read is refused, never guessed.
 //     Any other task is pushed by main's own git.
-//   - The repository's own default branch is GitHub's (read by key) only for
-//     a GitHub host; otherwise, and when GitHub cannot tell, origin/HEAD,
-//     then the remote's own HEAD (`ls-remote --symref`) at the pushed URL.
+//   - The repository's own default branch is refused under every name it is
+//     read by: GitHub's (by key), origin/HEAD, and the remote's own HEAD
+//     (`ls-remote --symref` at the pushed URL), which needs no GitHub and no
+//     ref the worker can write.
 //
 // Any fan-out worker may call it; for a bot's worker it is the only way to
 // publish. Afterwards main sets the branch's upstream to origin, so
@@ -46,7 +47,6 @@ import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
 import { mergeWslEnv } from '../../shared/wsl';
 import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
-import { isGithubHost } from '../github/PrProvider';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import { originUrlRepoKey, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal } from './workerGit';
@@ -143,15 +143,17 @@ export function taskPushGitTarget(dotGit: string | null, platform: NodeJS.Platfo
 export type TaskPushExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 async function defaultWslExec(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
-  // The Linux child's bytes are UTF-8 (a NUL in `config -z` is data); only
-  // wsl.exe's own failure text may be UTF-16, and only stderr carries it.
+  // The Linux child's bytes are UTF-8 (a NUL in `config -z` is data). wsl.exe's
+  // own failure text may be UTF-16 and lands on stdout or stderr; it is read
+  // from stdout only when the run failed with nothing on stderr.
   const opts = { cwd: os.homedir(), env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024, encoding: 'buffer' as const };
   try {
     const { stdout, stderr } = await execFileP(file, args, opts);
     return { code: 0, stdout: stdout.toString('utf8'), stderr: decodeWslOutput(stderr) };
   } catch (err) {
     const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: string };
-    const stderr = Buffer.isBuffer(e.stderr) && e.stderr.length > 0 ? decodeWslOutput(e.stderr) : '';
+    let stderr = Buffer.isBuffer(e.stderr) && e.stderr.length > 0 ? decodeWslOutput(e.stderr).trim() : '';
+    if (!stderr && Buffer.isBuffer(e.stdout) && e.stdout.length > 0) stderr = decodeWslOutput(e.stdout).trim();
     return {
       code: typeof e.code === 'number' ? e.code : 1,
       stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString('utf8') : '',
@@ -225,22 +227,20 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }
-  // The repository's own default branch: GitHub's by the key (a GitHub host
-  // only), else origin/HEAD, else the remote's HEAD at the pushed URL.
-  let own = key && isGithubHost(key.split('/')[0]) && input.repoDefaultBranch
-    ? await input.repoDefaultBranch(key).catch(() => null)
-    : null;
-  if (!own) {
-    const ref = await run(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
-    const name = ref.code === 0 ? ref.stdout.trim() : '';
-    own = name.startsWith('refs/remotes/origin/') ? name.slice('refs/remotes/origin/'.length) : null;
-  }
-  if (!own) {
-    const remote = await run(['ls-remote', '--symref', '--', origin.url, 'HEAD']);
-    own = remote.code === 0 ? parseLsRemoteHead(remote.stdout) : null;
-  }
-  if (own) {
-    const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, own]);
+  // The repository's own default branch, under every name it is read by:
+  // GitHub's by the key, origin/HEAD, and the remote's HEAD at the pushed URL
+  // (the one answer no worker-written ref can change, and no GitHub needed).
+  const own: string[] = [];
+  const byKey = key && input.repoDefaultBranch ? await input.repoDefaultBranch(key).catch(() => null) : null;
+  if (byKey) own.push(byKey);
+  const ref = await run(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+  const name = ref.code === 0 ? ref.stdout.trim() : '';
+  if (name.startsWith('refs/remotes/origin/')) own.push(name.slice('refs/remotes/origin/'.length));
+  const remote = await run(['ls-remote', '--symref', '--', origin.url, 'HEAD']);
+  const remoteHead = remote.code === 0 ? parseLsRemoteHead(remote.stdout) : null;
+  if (remoteHead) own.push(remoteHead);
+  if (own.length > 0) {
+    const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, ...own]);
     if (refusal) return { ok: false, reason: 'branch-refused', error: refusal };
   }
   const head = await run(['rev-parse', 'HEAD']);

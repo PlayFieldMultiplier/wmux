@@ -10,6 +10,7 @@ import { originUrlRepoKey, runWorkerGitRead } from '../workerGit';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
 import { parseRemoteKey } from '../../github/PrProvider';
 import { normalizeRepoKey } from '../../../shared/repoKey';
+import { readRepoDefaultBranchByKey } from '../../agents/botWorkerDefaultBranch';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -191,15 +192,21 @@ describe('task.push: GitLab remotes', () => {
       if (sub === 'config') return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@gitlab.corp.example:2222/group/sub/proj.git\0', stderr: '' };
       if (sub === 'rev-parse') return { code: 0, stdout: 'abc\n', stderr: '' };
       if (sub === 'ls-remote') return { code: 0, stdout: 'ref: refs/heads/develop\tHEAD\nabc\tHEAD\n', stderr: '' };
-      return { code: sub === 'symbolic-ref' ? 1 : 0, stdout: '', stderr: '' };
+      // A worker-written origin/HEAD naming some other branch.
+      if (sub === 'symbolic-ref') return { code: 0, stdout: 'refs/remotes/origin/elsewhere\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
-    const repoDefaultBranch = vi.fn(async () => 'main');
+    // GitHub knows nothing of a GitLab project.
+    const repoDefaultBranch = vi.fn(async () => null);
     const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', repoDefaultBranch };
     expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
-    // GitHub is never asked about a GitLab project; the remote's HEAD is.
-    expect(repoDefaultBranch).not.toHaveBeenCalled();
+    // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
+    // refused; so is origin/HEAD's branch.
     expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);
     expect(await pushTaskBranch({ ...base, branch: 'develop', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await pushTaskBranch({ ...base, branch: 'elsewhere', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await pushTaskBranch({ ...base, branch: 'develop', expectedRepoKey: key, repoDefaultBranch: async () => 'main' }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await readRepoDefaultBranchByKey(key, { run: async () => { throw new Error('gh asked'); } })).toBeNull();
     expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/other' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
     expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/proj' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
     expect(parseLsRemoteHead('ref: refs/heads/main\tHEAD\r\n0123\tHEAD\n')).toBe('main');
