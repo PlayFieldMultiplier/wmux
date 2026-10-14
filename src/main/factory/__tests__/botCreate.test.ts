@@ -360,7 +360,7 @@ describe('"Add team"', () => {
     expect(r.bots.map((b) => [b.template, b.name])).toEqual([
       ['coordinator', '대장'], ['researcher', '시장조사'], ['developer', '구현'], ['issue', '이슈처리'], ['reviewer', '리뷰어'],
     ]);
-    expect(r.bots.every((b) => b.repo?.repoKey === 'github.com/acme/app' && b.repo.repoPath === '/src/app')).toBe(true);
+    expect(r.bots.every((b) => b.repo?.repoKey === 'github.com/acme/app' && b.repo.repoPath === path.normalize('/src/app'))).toBe(true);
     expect(git).toHaveBeenCalledTimes(2);
     // The coordinator is the oldest of them: the room's lead.
     expect(r.bots[0].createdAt).toBeLessThanOrEqual(Math.min(...r.bots.map((b) => b.createdAt)));
