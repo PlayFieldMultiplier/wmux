@@ -490,6 +490,30 @@ describe('a relay across a restart', () => {
 describe('the General card that points at a coordinator\'s thread', () => {
   const pointers = (r: Rig, thread: string) => r.rooms.read('ws1', { threadId: 'general' }).cards.filter((c) => c.refs?.threadId === thread);
 
+  it('the hop that opens the thread links the owner\'s request card (it names the thread); a bot\'s own work links none', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const request = r.rooms.append({ workspaceId: 'ws1', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'Add a --version flag' })!;
+    r.run(t.lead, owner(), { runId: `run-${request.id}` }, 'general');
+    const d = r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.res.id, title: 'Ship the widget', body: 'b' });
+    if (!d.ok) throw new Error('refused');
+    r.running.delete(t.lead.id);
+    await r.router.idle();
+    const root = r.router.get(d.handoffId)!;
+    expect(root.opensThread).toBe(true);
+    const opening = r.rooms.read('ws1', { threadId: root.threadId }).cards[0];
+    expect(opening.refs?.requestCardId).toBe(request.id);
+    // The coordinator's own work (no owner message behind it): no link.
+    r.run(t.lead, { kind: 'manual', by: 'human' }, {}, 'general');
+    const own = r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.res.id, title: 'Tidy up', body: 'b' });
+    if (!own.ok) throw new Error('refused');
+    r.running.delete(t.lead.id);
+    await r.router.idle();
+    const ownThread = r.router.get(own.handoffId)!.threadId;
+    expect(ownThread).toBe(`handoff:${own.handoffId}`);
+    expect(r.rooms.read('ws1', { threadId: ownThread }).cards[0].refs?.requestCardId).toBeUndefined();
+  });
+
   it('a stopped relay points there too, once: "Stopped: <title>"', async () => {
     const t = team();
     const r = await rig(t.all);

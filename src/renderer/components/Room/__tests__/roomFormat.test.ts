@@ -2,7 +2,7 @@
 // role tags or machine codes.
 import { describe, expect, it } from 'vitest';
 import type { RoomCard } from '../../../../shared/room';
-import { ownerCardText, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
+import { ownerCardText, requestTitles, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
 
 const t = (key: string) => key;
 const system = { kind: 'system' as const };
@@ -20,6 +20,22 @@ describe('threadLabel', () => {
     expect(threadLabel('handoff:h-mv6si', t)).toBe('room.thread.handoff');
     expect(threadLabel('plan:p-1', t)).toBe('room.thread.plan');
     expect(threadLabel('report:r-1', t)).toBe('room.thread.report');
+  });
+
+  it('names a request thread by the owner\'s words that opened it, else "Request"', () => {
+    const card = (over: Partial<RoomCard>): RoomCard => ({ version: 1, id: 'x', seq: 1, workspaceId: 'w1', threadId: 'general', kind: 'fact', at: 1, actor: system, title: '', ...over });
+    const cards = [
+      card({ id: 'c-owner', kind: 'human', actor: { kind: 'human' }, title: '  Add a --version flag to calc.py ' }),
+      card({ id: 'c-hop', threadId: 'handoff:h-1', title: 'dispatch → Research: Ship it', refs: { handoffId: 'h-1', requestCardId: 'c-owner' } }),
+      // A link to a card that is not the owner's names nothing.
+      card({ id: 'c-bot', actor: bot, title: 'I did it' }),
+      card({ id: 'c-hop2', threadId: 'handoff:h-2', title: 'dispatch → Research: Other', refs: { requestCardId: 'c-bot' } }),
+    ];
+    const titles = requestTitles(cards);
+    expect([...titles]).toEqual([['handoff:h-1', 'Add a --version flag to calc.py']]);
+    const of = (id: string) => titles.get(id as never) ?? null;
+    expect(threadLabel('handoff:h-1', t, undefined, of)).toBe('Add a --version flag to calc.py');
+    expect(threadLabel('handoff:h-2', t, undefined, of)).toBe('room.thread.handoff');
   });
 });
 

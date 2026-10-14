@@ -340,7 +340,7 @@ export function sanitizeParty(value: unknown): Party | null {
 
 const REF_STRING_KEYS = [
   'taskId', 'botId', 'handoffId', 'check', 'ptyId', 'label', 'scheduleId', 'method', 'messageId', 'factId', 'decisionId',
-  'approvalId', 'routineId',
+  'approvalId', 'routineId', 'requestCardId',
 ] as const;
 
 /** The refs a card may carry: known keys with the right types only. */
@@ -953,7 +953,7 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
           : p.relay === true ? `${kind || 'handoff'} → ${to}: ${title} (forwarded by wmux)`
           : `${kind || 'handoff'} → ${to}: ${title}`,
         ...(kind === 'answer' ? { body: capBody(p.answer, 1000) } : {}),
-        refs: baseRefs,
+        refs: { ...baseRefs, ...(str(p.requestCardId) ? { requestCardId: str(p.requestCardId) } : {}) },
       };
     }
     case 'task.done':

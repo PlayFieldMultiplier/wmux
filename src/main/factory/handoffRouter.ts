@@ -1259,6 +1259,8 @@ export class HandoffRouter {
         ...(h.clientHandoffId?.startsWith('mention:') ? { mention: true } : {}),
         // wmux sent it on for a coordinator's relay, in its name.
         ...(h.relay ? { relay: true } : {}),
+        // The hop that opens a thread for the owner's request: that request's card names it.
+        ...(kind === 'handoff.received' ? this.requestCardOf(h) : {}),
       },
     };
     const ports = this.opts.ports();
@@ -1271,6 +1273,15 @@ export class HandoffRouter {
     if (fact) return;
     const rooms = this.opts.rooms();
     if (rooms) writeFactCards(rooms, { ...draft, id: `local-${kind}-${h.id}`, seq: 0, dedupeKey: '' }, ports.bots);
+  }
+
+  /** The owner's General card a thread-opening dispatch answers, as
+   *  `{ requestCardId }`, or nothing (a bot's own work, or no such card). */
+  private requestCardOf(h: Handoff): { requestCardId?: string } {
+    if (h.opensThread !== true || h.from.kind !== 'bot' || h.attribution.originator.kind !== 'human') return {};
+    const cardId = humanCardIdOfRun(h.runId);
+    const card = cardId ? this.opts.rooms()?.get(h.from.workspaceId, cardId) : null;
+    return card && card.kind === 'human' && card.threadId === GENERAL_THREAD ? { requestCardId: card.id } : {};
   }
 
   /** A party as the owner reads it: a bot by its name alone (its internal

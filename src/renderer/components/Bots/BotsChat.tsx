@@ -58,7 +58,7 @@ import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botPresence } from '../Room/BotChips';
 import { MentionChips, deliveryLine, deliveryTaken, roomBots, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
-import { actorLabel, botKindLabel, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, threadLabel, threadRef, type IdLabels } from '../Room/roomFormat';
+import { actorLabel, botKindLabel, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, normalizeBotJob } from '../../../shared/bot';
 import { templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botIdentityColor } from '../Room/BotAvatar';
@@ -120,6 +120,7 @@ function newClientPostId(): string {
 
 /** A task's title by its id, from the bots' task lists (null: unknown). */
 type TaskTitleOf = (taskId: string) => string | null;
+type RequestTitleOf = (threadId: ThreadId) => string | null;
 
 /** A pull request's or an issue's mark (12px line icon). */
 function RefIcon({ kind }: { kind: 'pr' | 'issue' }) {
@@ -182,9 +183,9 @@ export function mentionPattern(names: readonly string[]): RegExp | null {
 /** The thread chip under a bubble (General has none): a PR or issue
  *  reference (with its mark), else the thread's name in words; its id only
  *  in the tooltip. */
-function ThreadChip({ threadId, t, onPick, taskTitle }: { threadId: ThreadId; t: T; onPick: (id: ThreadId) => void; taskTitle?: TaskTitleOf }) {
+function ThreadChip({ threadId, t, onPick, taskTitle, requestTitle }: { threadId: ThreadId; t: T; onPick: (id: ThreadId) => void; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf }) {
   if (threadId === 'general') return null;
-  const label = threadLabel(threadId, t, taskTitle);
+  const label = threadLabel(threadId, t, taskTitle, requestTitle);
   const ref = isRefThread(threadId);
   return (
     <button
@@ -242,6 +243,8 @@ interface RowCtx {
   nameOf: (id: string) => string | null;
   botNames: readonly string[];
   taskTitle: TaskTitleOf;
+  /** A request thread's name: the owner's words that opened it. */
+  requestTitle: RequestTitleOf;
   idLabels: IdLabels;
   /** The delivery line of each message sent from here. */
   sent: Readonly<Record<string, SentTo[] | null>>;
@@ -339,11 +342,12 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
   const answers = !human && ((!ctx.readOnly && waiting) || card.kind === 'approval');
   const line = human && card.id in ctx.sent ? deliveryLine(ctx.sent[card.id], ctx.bots, t, ctx.started.has(card.id)) : null;
   const linked = linkedThread(card);
-  const chip = (id: ThreadId) => <ThreadChip threadId={id} t={t} onPick={(th) => ctx.onThread(card.workspaceId, th)} taskTitle={ctx.taskTitle} />;
+  const chip = (id: ThreadId) => <ThreadChip threadId={id} t={t} onPick={(th) => ctx.onThread(card.workspaceId, th)} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} />;
   // A thread's root names its thread only when the name says something (a
   // PR, an issue, a task's title): a bare "Request" under a question card
   // leads nowhere its summary line does not.
-  const named = isRefThread(card.threadId) || (/^task:/.test(card.threadId) && !!ctx.taskTitle(card.threadId.slice(5)));
+  const named = isRefThread(card.threadId) || (/^task:/.test(card.threadId) && !!ctx.taskTitle(card.threadId.slice(5)))
+    || (/^handoff:/.test(card.threadId) && !!ctx.requestTitle(card.threadId));
   const own = card.threadId !== 'general' && card.threadId !== ctx.hideThread && !(thread && !named);
   const link = linked && linked !== ctx.hideThread ? linked : null;
   const chips = (own || link || line) && (
@@ -424,7 +428,7 @@ function SystemGroup({ cards, thread, ctx }: { cards: RoomCardData[]; thread?: T
   if (cards.length === 1 || open) {
     return (
       <div data-bots-system-group={cards.length > 1 ? cards.length : undefined}>
-        {cards.map((c) => <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} hideThread={hide} />)}
+        {cards.map((c) => <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} hideThread={hide} />)}
         {summary}
         {open && (
           <div className="wmux-bots-row wmux-bots-row-system">
@@ -802,7 +806,7 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: pare
 }) {
   const ctx = { ...parentCtx, hideThread: threadId };
   const { t } = ctx;
-  const label = threadLabel(threadId, t, ctx.taskTitle);
+  const label = threadLabel(threadId, t, ctx.taskTitle, ctx.requestTitle);
   const [root, ...replies] = cards;
   const rootItems = root ? buildTimeline([{ kind: 'card', card: root }], { waits }) : [];
   const replyItems = buildTimeline(replies.map((card): RoomEntry => ({ kind: 'card', card })), { waits });
@@ -856,7 +860,7 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: pare
  *  result, a task's end, an error), as a centred line with its body folded
  *  to two lines under Show more (by height: a markdown list does not
  *  line-clamp). */
-function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, hideThread }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; hideThread?: ThreadId }) {
+function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestTitle, hideThread }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf; hideThread?: ThreadId }) {
   const [expanded, setExpanded] = useState(false);
   const { title, body } = ownerCardText(card, botNames);
   const foldable = body.length > SYSTEM_FOLD_CHARS || body.includes('\n');
@@ -885,7 +889,7 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, hideThre
                 {expanded ? t('room.showLess') : t('room.showMore')}
               </button>
             )}
-            {chip && <ThreadChip threadId={card.threadId} t={t} onPick={onThread} taskTitle={taskTitle} />}
+            {chip && <ThreadChip threadId={card.threadId} t={t} onPick={onThread} taskTitle={taskTitle} requestTitle={requestTitle} />}
           </div>
         )}
       </div>
@@ -1419,6 +1423,10 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     for (const r of bots) for (const task of r.tasks ?? []) byId.set(task.taskId, task.title);
     return (id: string) => byId.get(id) ?? null;
   }, [bots]);
+  const requestTitle = useMemo(() => {
+    const byThread = requestTitles(roomCards);
+    return (threadId: ThreadId) => byThread.get(threadId) ?? null;
+  }, [roomCards]);
   const idLabels = useIdLabels(bots, t);
 
   // Read to the end: the list row's unread count clears. Only while the
@@ -1576,7 +1584,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       return <RefChip url={url} label={label} title={summary?.title ?? null} onOpen={holder ? () => onThread(holder.workspaceId, threadId) : null} />;
     },
   }), [cards, roomThreads, onThread, pattern, bots]);
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, started, onThread, onOpenBot, markdown };
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown };
   // The open thread is read whole, from its first card (the cached room
   // timeline holds only its newest page), and shown from every card read
   // for the room — not only this conversation's.

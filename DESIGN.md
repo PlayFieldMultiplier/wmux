@@ -444,7 +444,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   in the timeline as its first card (its root) — a system line (a task's
   start) as much as a message — carrying the thread's chip when its name
   says something (a PR's or an issue's reference in mono, `acme/api#12`, or
-  a task's title; a bare kind such as "Request" is left off a root) and,
+  a task's title, or for a coordinator's request thread the first line of
+  the owner's message that opened it; a bare kind such as "Request" is left
+  off a root) and,
   when it has replies, "N replies · last 14:02" under it. The bot's newest
   reply in a thread also shows in the timeline, marked "in thread" with the
   thread's chip, so a finished task's answer is read without opening it. The chip or that line opens the thread in

@@ -725,6 +725,19 @@ describe('Bots page', () => {
     expect(container.textContent).not.toContain('(lead)');
   });
 
+  it('a request thread is named by the owner\'s words that opened it, in its chip and its panel', async () => {
+    const request = card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', title: 'Add a --version flag', refs: { botId: LEAD }, at: 600 });
+    cards.push(request);
+    cards.push(card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', title: 'dispatch → Verifier: Ship it', threadId: 'handoff:h-0000000003', refs: { handoffId: 'h-0000000003', requestCardId: request.id }, at: 610 }));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    const chip = q('[data-bots-thread-chip="handoff:h-0000000003"]')!;
+    expect(chip.textContent).toBe('Add a --version flag');
+    act(() => chip.click());
+    expect(q('[data-bots-thread-panel="handoff:h-0000000003"]')?.getAttribute('aria-label')).toContain('Add a --version flag');
+  });
+
   it('an open thread is read whole from its first card: a reply older than the cached page is in the panel, the root first', async () => {
     seedRooms();
     // The room's cached page lost the thread's first two cards; main still has them.

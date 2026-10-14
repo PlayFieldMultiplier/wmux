@@ -21,18 +21,40 @@ export function threadRef(threadId: ThreadId, t: T): string {
 }
 
 /** A thread's name as the owner reads it, never an internal id: a PR or an
- *  issue keeps its reference, a task its title (`taskTitle`, when known),
+ *  issue keeps its reference, a task its title (`taskTitle`, when known), a
+ *  request the owner's words that opened it (`requestTitle`, when known),
  *  and a task, request, plan or report otherwise its kind word. Pure. */
-export function threadLabel(threadId: ThreadId, t: T, taskTitle?: (taskId: string) => string | null | undefined): string {
+export function threadLabel(
+  threadId: ThreadId,
+  t: T,
+  taskTitle?: (taskId: string) => string | null | undefined,
+  requestTitle?: (threadId: ThreadId) => string | null | undefined,
+): string {
   if (threadId === 'general') return t('room.thread.general');
   if (/^(pr|issue):(.+)#(\d+)$/.test(threadId)) return threadRef(threadId, t);
   const opaque = /^(task|handoff|plan|report):(.+)$/.exec(threadId);
   if (!opaque) return threadRef(threadId, t);
-  if (opaque[1] === 'task') {
-    const title = taskTitle?.(opaque[2])?.trim();
-    if (title) return title;
-  }
+  const title = opaque[1] === 'task' ? taskTitle?.(opaque[2])?.trim()
+    : opaque[1] === 'handoff' ? requestTitle?.(threadId)?.trim()
+    : undefined;
+  if (title) return title;
   return t(`room.thread.${opaque[1]}`);
+}
+
+/** Each request thread's name: the first line of the owner's message that
+ *  opened it (the card main links from the thread's opening hop,
+ *  refs.requestCardId). Pure. */
+export function requestTitles(cards: readonly RoomCard[]): Map<ThreadId, string> {
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const out = new Map<ThreadId, string>();
+  for (const c of cards) {
+    const id = c.refs?.requestCardId;
+    if (!id || out.has(c.threadId) || !c.threadId.startsWith('handoff:')) continue;
+    const request = byId.get(id);
+    const line = request?.kind === 'human' ? request.title.split('\n')[0].trim() : '';
+    if (line) out.set(c.threadId, line);
+  }
+  return out;
 }
 
 /** Whether a thread is named by its PR or issue reference (shown in mono). */
