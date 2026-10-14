@@ -8,16 +8,23 @@
 // again, replaying from the daemon, when the panel closes or the page goes.
 // Keys typed here reach the worker's PTY only; the Workspaces shortcuts stay
 // off on this page (useKeyboard), and a click never activates the workspace
-// (setActivePane is scoped to the active one).
+// (setActivePane is scoped to the active one). A worker that also holds a
+// browser or an editor is not moved here (selectWorkerPanelHost: their state
+// would not survive the remount); the panel says so and offers Workspaces.
 import { useStore } from '../../stores';
+import { focusNotificationTarget } from '../../hooks/useNotificationListener';
 import PaneContainer from '../Pane/PaneContainer';
+import Button from '../ui/Button';
 import { FOCUS_RING } from '../focusRing';
 import { IconX } from '../icons';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
-export default function BotsWorkerPanel({ workspaceId, name, state, attention, t, onClose }: {
+export default function BotsWorkerPanel({ workspaceId, hosted, name, state, attention, t, onClose }: {
   workspaceId: string;
+  /** The panel hosts the workspace's panes (selectWorkerPanelHost); false:
+   *  it stays on Workspaces and the panel offers the way there. */
+  hosted: boolean;
   /** The worker's name as its bubble shows it (its task's title). */
   name: string;
   /** Its state in words (its bubble's line), or null. */
@@ -51,9 +58,18 @@ export default function BotsWorkerPanel({ workspaceId, name, state, attention, t
       </div>
       {/* The panes fill the body as they fill a workspace slot. */}
       <div className="wmux-bots-worker-body">
-        <div className="wmux-bots-worker-panes">
-          <PaneContainer pane={workspace.rootPane} workspace={workspace} isWorkspaceVisible />
-        </div>
+        {hosted ? (
+          <div className="wmux-bots-worker-panes">
+            <PaneContainer pane={workspace.rootPane} workspace={workspace} isWorkspaceVisible />
+          </div>
+        ) : (
+          <div data-bots-worker-panel-elsewhere className="flex flex-col items-start gap-3 px-3 py-4">
+            <p className="text-[12px] text-[var(--text-muted)]">{t('botsPage.chat.workerElsewhere')}</p>
+            <Button size="sm" variant="secondary" onClick={() => { focusNotificationTarget(() => useStore.getState(), { workspaceId }); }}>
+              {t('botsPage.chat.openInWorkspaces')}
+            </Button>
+          </div>
+        )}
       </div>
     </aside>
   );

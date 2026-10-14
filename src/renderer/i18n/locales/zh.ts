@@ -3513,4 +3513,6 @@ export const zh = {
   'botsPage.chat.working': "{count} 个工作中",
   'botsPage.chat.workerPanel': "{name} 终端",
   'botsPage.chat.closeWorker': "关闭工作者终端",
+  'botsPage.chat.workerElsewhere': "此工作者还打开了浏览器或编辑器,移到这里会重新加载。它保留在工作区中。",
+  'botsPage.chat.openInWorkspaces': "在工作区中打开",
 } as const;

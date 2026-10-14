@@ -1116,7 +1116,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         paneActive={isActive}
         actionsMode={actionsMode}
         usageLimitCompact={usageLimitCompact}
-        onSelect={(surfaceId) => setActiveSurface(pane.id, surfaceId)}
+        onSelect={(surfaceId) => setActiveSurface(pane.id, surfaceId, workspace.id)}
         onClose={handleCloseSurfaceFromTab}
         onSplitHorizontal={handleSplitHorizontal}
         onSplitVertical={handleSplitVertical}

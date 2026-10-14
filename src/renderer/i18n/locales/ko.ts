@@ -3767,4 +3767,6 @@ export const ko = {
   'botsPage.chat.working': "{count}개 작업 중",
   'botsPage.chat.workerPanel': "{name} 터미널",
   'botsPage.chat.closeWorker': "워커 터미널 닫기",
+  'botsPage.chat.workerElsewhere': "이 워커는 브라우저나 편집기도 열고 있어서 여기로 옮기면 다시 로드돼요. 워크스페이스에 그대로 둬요.",
+  'botsPage.chat.openInWorkspaces': "워크스페이스에서 열기",
 } as const;

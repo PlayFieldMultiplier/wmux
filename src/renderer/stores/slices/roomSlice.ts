@@ -14,6 +14,7 @@ import type { StateCreator } from 'zustand';
 import type { StoreState } from '../index';
 import type { RoomCard, ThreadId, ThreadSummary } from '../../../shared/room';
 import type { BotRole } from '../../../shared/bot';
+import { isTerminalOnlyWorkspace } from './workspaceSlice';
 
 /** The timeline key for "every card of the room". */
 export const ALL_THREADS = '*' as const;
@@ -65,7 +66,7 @@ export interface RoomSlice {
   /** Record a read position; false when it would not move forward. */
   noteRoomRead: (workspaceId: string, threadId: ThreadId, seq: number) => boolean;
   /** The bot worker whose terminal shows beside a Bots conversation, or
-   *  null. While the Bots page shows it, the Workspaces viewport leaves that
+   *  null. While the Bots page hosts it, the Workspaces viewport leaves that
    *  workspace unmounted (selectWorkerPanelHost), so its terminal has one
    *  mount; the active workspace never changes. */
   botsWorkerPanel: BotsWorkerPanel | null;
@@ -79,10 +80,17 @@ export interface BotsWorkerPanel {
   conversationId: string;
 }
 
-/** The workspace the Bots page hosts in its worker panel right now (only
- *  while Bots is the page), else null. Pure. */
-export function selectWorkerPanelHost(s: Pick<StoreState, 'appRoute' | 'botsWorkerPanel'>): string | null {
-  return s.appRoute === 'bots' ? s.botsWorkerPanel?.workspaceId ?? null : null;
+/** The workspace the Bots page hosts in its worker panel right now, else
+ *  null: only while Bots is the page, and only a terminal-only workspace.
+ *  Moving a workspace between the viewport and the panel remounts its panes
+ *  (terminals replay from the daemon), so one holding a browser or an editor
+ *  stays in the viewport, as cold-park leaves it (its state has no replay).
+ *  Pure. */
+export function selectWorkerPanelHost(s: Pick<StoreState, 'appRoute' | 'botsWorkerPanel' | 'workspaces'>): string | null {
+  const id = s.appRoute === 'bots' ? s.botsWorkerPanel?.workspaceId : undefined;
+  if (!id) return null;
+  const ws = s.workspaces.find((w) => w.id === id);
+  return ws && isTerminalOnlyWorkspace(ws) ? id : null;
 }
 
 export function timelineKey(workspaceId: string, thread: TimelineThread): string {

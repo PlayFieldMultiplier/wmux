@@ -384,7 +384,10 @@ group of bot tasks is "Started by bots", never "From closed pane".
   then the worker's panes, live and typed into in place. It takes half the
   chat area (360–760px); under a 720px chat area it covers the chat until
   Close. Another conversation closes it. The worker's terminal has one
-  mount: while the panel shows it, Workspaces does not. While a
+  mount: while the panel shows it, Workspaces does not. A worker that also
+  holds a browser or an editor stays on Workspaces (their state would not
+  survive the move): the panel says so in one muted line, with Open in
+  Workspaces (secondary). While a
   conversation has live workers, its header carries a **"N working"** line
   right of the name pill: the count in 12px muted, then up to three
   workers as 24px chips (the thread chip's `--selection` fill; pressed =

@@ -67,4 +67,23 @@ describe('WorkspaceViewport and the Bots worker panel', () => {
     act(() => useStore.getState().setBotsWorkerPanel(null));
     expect([...mounted].sort()).toEqual(['t1', 'w1']);
   });
+
+  it('keeps a worker holding a browser mounted here: its state would not survive the move', () => {
+    const browserWs = { ...ws('t2'), rootPane: { type: 'leaf', id: 't2-root', surfaces: [{ id: 'b', surfaceType: 'browser' }], activeSurfaceId: 'b' } } as unknown as Workspace;
+    act(() => useStore.setState({
+      workspaces: [ws('w1'), browserWs],
+      activeWorkspaceId: 'w1',
+      multiviewIds: [],
+      parkedWorkspaceIds: {},
+      paneGate: 'ready',
+      appRoute: 'bots',
+      botsWorkerPanel: { workspaceId: 't2', conversationId: 'bot:b1' },
+    } as never));
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    act(() => root.render(<WorkspaceViewport />));
+    cleanups.push(() => { act(() => root.unmount()); el.remove(); });
+    expect([...mounted].sort()).toEqual(['t2', 'w1']);
+  });
 });

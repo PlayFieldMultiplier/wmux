@@ -62,6 +62,7 @@ import { stopBotSummary, type BotsStopPort } from './botsStop';
 import { InlineConfirm } from './InlineConfirm';
 import BotsWorkerPanel from './BotsWorkerPanel';
 import { displayWorkspaceName } from '../../utils/fanoutProvenance';
+import { selectWorkerPanelHost } from '../../stores/slices/roomSlice';
 import { routineScheduleText, routineStateText, useBotRoutines } from '../Schedules/BotRoutines';
 import '../Chat/chatMono.css';
 
@@ -382,6 +383,14 @@ function TaskBubble({ task, t, resumePort, readOnly, shownId, onOpen }: { task: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resumeWorker = resumePort?.resumeWorker;
+  // A Resume answered after this bubble left (another conversation) opens
+  // nothing; one still shown opens in the conversation shown now.
+  const live = useRef({ mounted: true, onOpen });
+  live.current.onOpen = onOpen;
+  useEffect(() => {
+    live.current.mounted = true;
+    return () => { live.current.mounted = false; };
+  }, []);
   const waiting = task.stage === 'waiting_slot';
   const paneWorkspaceId = task.workerWorkspaceId ?? task.taskWorkspaceId;
   const paneOpen = useStore((s) => !!paneWorkspaceId && s.workspaces.some((w) => w.id === paneWorkspaceId));
@@ -416,14 +425,15 @@ function TaskBubble({ task, t, resumePort, readOnly, shownId, onOpen }: { task: 
             setError(null);
             void resumeWorker(task.taskId)
               .then((r) => {
+                if (!live.current.mounted) return;
                 if (!r.ok) setError(r.message ?? null);
                 else {
                   const opened = r.workspaceId ?? paneWorkspaceId;
-                  if (opened) onOpen(opened);
+                  if (opened) live.current.onOpen(opened);
                 }
               })
-              .catch((err: unknown) => setError(String(err)))
-              .finally(() => setBusy(false));
+              .catch((err: unknown) => { if (live.current.mounted) setError(String(err)); })
+              .finally(() => { if (live.current.mounted) setBusy(false); });
           }}
         >
           {t('botsPage.worker.resume')}
@@ -832,6 +842,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   // conversation closes it.
   const panel = useStore((s) => s.botsWorkerPanel);
   const shownId = panel && panel.conversationId === conversation.id ? panel.workspaceId : null;
+  const hostedId = useStore(selectWorkerPanelHost);
   useEffect(() => {
     const st = useStore.getState();
     if (st.botsWorkerPanel && st.botsWorkerPanel.conversationId !== conversation.id) st.setBotsWorkerPanel(null);
@@ -985,6 +996,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     {shownId && shown && (
       <BotsWorkerPanel
         workspaceId={shownId}
+        hosted={hostedId === shownId}
         name={shown.name}
         state={shown.state}
         attention={shown.attention}

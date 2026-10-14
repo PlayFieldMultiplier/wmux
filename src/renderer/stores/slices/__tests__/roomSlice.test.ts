@@ -92,10 +92,21 @@ describe('room slice', () => {
 });
 
 describe('bot worker panel host', () => {
-  it('hosts the panel\'s workspace only while Bots is the page', () => {
+  const leaf = (surfaceType?: string) => ({ id: 'p', type: 'leaf', surfaces: [{ id: 's', ...(surfaceType ? { surfaceType } : {}) }], activeSurfaceId: 's' });
+  const workspaces = [
+    { id: 't1', rootPane: leaf('terminal') },
+    { id: 't2', rootPane: leaf('browser') },
+  ] as never;
+
+  it('hosts a terminal-only workspace only while Bots is the page', () => {
     const panel = { workspaceId: 't1', conversationId: 'bot:b1' };
-    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: panel })).toBe('t1');
-    expect(selectWorkerPanelHost({ appRoute: 'workspaces', botsWorkerPanel: panel })).toBeNull();
-    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: null })).toBeNull();
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: panel, workspaces })).toBe('t1');
+    expect(selectWorkerPanelHost({ appRoute: 'workspaces', botsWorkerPanel: panel, workspaces })).toBeNull();
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: null, workspaces })).toBeNull();
+  });
+
+  it('leaves a workspace holding a browser (or gone) in the viewport', () => {
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: { workspaceId: 't2', conversationId: 'bot:b1' }, workspaces })).toBeNull();
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: { workspaceId: 'gone', conversationId: 'bot:b1' }, workspaces })).toBeNull();
   });
 });
