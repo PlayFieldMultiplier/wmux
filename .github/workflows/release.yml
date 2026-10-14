@@ -242,6 +242,14 @@ jobs:
           foreach ($f in $found) {
             if ((Get-FileHash $f.FullName -Algorithm SHA256).Hash -ne $expected) { Write-Error "$($f.FullName) differs from dist/server-manifest.json"; exit 1 }
           }
+          # The release step does not fail on an unmatched glob, so prove the
+          # tarballs it uploads are still here and are the ones the app pins.
+          $manifest = Get-Content dist/server-manifest.json -Raw | ConvertFrom-Json
+          foreach ($a in $manifest.artifacts.PSObject.Properties) {
+            $file = "out/server/$($a.Value.name)"
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Write-Error "$file is missing"; exit 1 }
+            if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower() -ne $a.Value.sha256) { Write-Error "$file does not match the manifest"; exit 1 }
+          }
           Write-Host "Packaged server manifest: $(Get-Content dist/server-manifest.json -Raw)"
 
       # ── Authenticode code signing (SignPath Foundation, OSS) ─────────────
