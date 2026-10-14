@@ -6,6 +6,7 @@ export const ja = {
   'sidebar.workspaces': 'ワークスペース',
   'sidebar.newWorkspace': '新しいワークスペース',
   'sidebar.newWorkspaceTooltip': '新しいワークスペース (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '{name} に新しいワークスペース',
   'sidebar.hideTooltip': 'サイドバーを隠す (Ctrl+B)',
   'sidebar.expandTooltip': 'サイドバーを展開する (Ctrl+B)',
   'sidebar.unreadCount': '未読 {count}件',

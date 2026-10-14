@@ -227,6 +227,8 @@ export const PC_RAIL_IPC = {
   STREAM_EVENT: 'pcRail:stream-event',
   /** renderer → main (invoke). The full muted set, so main can hold back that host's toasts: PcRailMutesRequest → void. */
   MUTES_SET: 'pcRail:mutes:set',
+  /** renderer → main (invoke). Poll one host soon (rate-limited, coalesced with the regular poll): { hostId } → boolean. */
+  REFRESH: 'pcRail:refresh',
   /** main → renderer (push). The host roster, and each host's poll tick result. Payload: PcRailFeedEvent (main/remote/pcRailWire). */
   FEED_EVENT: 'pcRail:feed-event',
 } as const;

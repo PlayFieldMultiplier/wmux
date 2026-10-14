@@ -6,6 +6,7 @@ import { selectWorkspaceRailSummary } from '../../stores/selectors/workspaceProj
 import { formatStaleMinutes, selectAllWorkspaceAgentStatus, selectAllWorkspaceUnverifiableMinutes, selectWorkspaceAttentionClasses } from '../../stores/selectors/fleet';
 import { StatusMarkView } from './AgentMarks';
 import { useT } from '../../hooks/useT';
+import { useRemoteWorkspaceCreate } from './useRemoteWorkspaceCreate';
 import { AGENT_STATUS_ICON } from './agentStatusIcon';
 import { useGlanceBoardOrder } from './useGlanceBoardOrder';
 import { partitionWorkspaceSettle, workspaceSettleGroupOf } from './workspaceSettleGroups';
@@ -116,6 +117,8 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
     const id = s.pcRail.activePcId;
     return id !== LOCAL_PC_ID && s.pcRailHosts.some((h) => h.id === id) ? id : null;
   });
+  const remoteCreate = useRemoteWorkspaceCreate(railHostId);
+  const railHostLabel = useStore((s) => (railHostId ? s.pcRailHosts.find((h) => h.id === railHostId)?.label ?? '' : ''));
   // Arrow keys move between the rail's buttons; Tab still walks them in order.
   const onRailKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
@@ -187,6 +190,21 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
         title={t('sidebar.newWorkspaceTooltip')}
         aria-label={t('sidebar.newWorkspaceTooltip')}
         data-onboarding-target="add-workspace"
+        {...tokenAttrs('textSub', 'text')}
+        {...tokenAttrs('success', 'accent')}
+        data-derived="textSubtle"
+      >
+        <IconPlus size={14} />
+      </button>}
+      {/* A paired computer that granted this desktop workspace creation: + opens one there. */}
+      {railHostId && remoteCreate.canCreate && <button
+        className={`flex items-center justify-center h-10 text-[var(--text-subtle)] hover:text-[var(--accent-green)] transition-colors duration-150 border-b border-[var(--bg-surface)] font-mono text-lg leading-none ${FOCUS_RING}`}
+        style={{ borderColor: 'var(--border-soft)' }}
+        onClick={remoteCreate.create}
+        disabled={remoteCreate.creating}
+        data-mini-add-remote-workspace
+        title={t('sidebar.newRemoteWorkspace', { name: railHostLabel })}
+        aria-label={t('sidebar.newRemoteWorkspace', { name: railHostLabel })}
         {...tokenAttrs('textSub', 'text')}
         {...tokenAttrs('success', 'accent')}
         data-derived="textSubtle"

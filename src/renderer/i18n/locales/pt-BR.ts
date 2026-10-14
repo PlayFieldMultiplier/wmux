@@ -6,6 +6,7 @@ export const ptBR = {
   'sidebar.workspaces': 'Espaços de trabalho',
   'sidebar.newWorkspace': 'Novo espaço de trabalho',
   'sidebar.newWorkspaceTooltip': 'Novo espaço de trabalho (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Novo workspace em {name}',
   'sidebar.hideTooltip': 'Ocultar barra lateral (Ctrl+B)',
   'sidebar.expandTooltip': 'Expandir barra lateral (Ctrl+B)',
   'sidebar.unreadCount': '{count} não lido(s)',

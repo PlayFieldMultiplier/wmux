@@ -6,6 +6,7 @@ export const th = {
   'sidebar.workspaces': 'พื้นที่ทำงาน',
   'sidebar.newWorkspace': 'พื้นที่ทำงานใหม่',
   'sidebar.newWorkspaceTooltip': 'พื้นที่ทำงานใหม่ (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'เวิร์กสเปซใหม่บน {name}',
   'sidebar.hideTooltip': 'ซ่อนแถบด้านข้าง (Ctrl+B)',
   'sidebar.expandTooltip': 'ขยายแถบด้านข้าง (Ctrl+B)',
   'sidebar.unreadCount': 'ยังไม่ได้อ่าน {count}',

@@ -6,6 +6,7 @@ export const vi = {
   'sidebar.workspaces': 'Không gian làm việc',
   'sidebar.newWorkspace': 'Không gian làm việc mới',
   'sidebar.newWorkspaceTooltip': 'Không gian làm việc mới (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Không gian làm việc mới trên {name}',
   'sidebar.hideTooltip': 'Ẩn thanh bên (Ctrl+B)',
   'sidebar.expandTooltip': 'Mở thanh bên (Ctrl+B)',
   'sidebar.unreadCount': '{count} chưa đọc',

@@ -6,6 +6,7 @@ export const uk = {
   'sidebar.workspaces': 'Робочі простори',
   'sidebar.newWorkspace': 'Новий робочий простір',
   'sidebar.newWorkspaceTooltip': 'Новий робочий простір (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Новий робочий простір на {name}',
   'sidebar.hideTooltip': 'Сховати бічну панель (Ctrl+B)',
   'sidebar.expandTooltip': 'Розгорнути бічну панель (Ctrl+B)',
   'sidebar.unreadCount': '{count} непрочитаних',

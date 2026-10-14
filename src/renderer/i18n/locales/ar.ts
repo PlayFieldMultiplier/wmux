@@ -6,6 +6,7 @@ export const ar = {
   'sidebar.workspaces': 'مساحات العمل',
   'sidebar.newWorkspace': 'مساحة عمل جديدة',
   'sidebar.newWorkspaceTooltip': 'مساحة عمل جديدة (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'مساحة عمل جديدة على {name}',
   'sidebar.hideTooltip': 'إخفاء الشريط الجانبي (Ctrl+B)',
   'sidebar.expandTooltip': 'إظهار الشريط الجانبي (Ctrl+B)',
   'sidebar.unreadCount': '{count} غير مقروء',

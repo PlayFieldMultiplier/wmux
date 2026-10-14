@@ -29,6 +29,7 @@ export const zh = {
   'sidebar.filterWorkspaces': '筛选工作区',
   'sidebar.newWorkspace': '新建工作区',
   'sidebar.newWorkspaceTooltip': '新建工作区 (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '在 {name} 上新建工作区',
   'sidebar.toggleShow': '显示侧边栏',
   'sidebar.toggleHide': '隐藏侧边栏',
   'rail.commandPalette': '命令面板',

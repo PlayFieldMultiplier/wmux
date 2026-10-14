@@ -6,6 +6,7 @@ export const da = {
   'sidebar.workspaces': 'Arbejdsområder',
   'sidebar.newWorkspace': 'Nyt arbejdsområde',
   'sidebar.newWorkspaceTooltip': 'Nyt arbejdsområde (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Nyt arbejdsområde på {name}',
   'sidebar.hideTooltip': 'Skjul sidepanel (Ctrl+B)',
   'sidebar.expandTooltip': 'Udvid sidepanel (Ctrl+B)',
   'sidebar.unreadCount': '{count} ulæste',

@@ -6,6 +6,7 @@ export const de = {
   'sidebar.workspaces': 'Arbeitsbereiche',
   'sidebar.newWorkspace': 'Neuer Arbeitsbereich',
   'sidebar.newWorkspaceTooltip': 'Neuer Arbeitsbereich (Strg+N)',
+  'sidebar.newRemoteWorkspace': 'Neuer Arbeitsbereich auf {name}',
   'sidebar.hideTooltip': 'Seitenleiste ausblenden (Strg+B)',
   'sidebar.expandTooltip': 'Seitenleiste einblenden (Strg+B)',
   'sidebar.unreadCount': '{count} ungelesen',

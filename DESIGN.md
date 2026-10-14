@@ -285,8 +285,11 @@ no difference). A2A-only peers stay on the Remote page.
   rail's workspace list — the computer glyph for this one, the monogram for
   a host — carrying the same badge and opening the same dropdown beside the
   rail. The rail's workspace avatars follow the selection: a paired
-  computer's own workspaces (same avatar look, no new-workspace button),
-  this computer's again when it is selected.
+  computer's own workspaces (same avatar look), this computer's again when
+  it is selected. A paired computer gets a new-workspace `+`, here and in the
+  expanded sidebar's header, only when it granted this desktop workspace
+  creation (an SSH-added host that advertises it); the workspace and its
+  shell are created on that computer, never as a local stand-in.
 - **Keys:** rebindable `Alt+Shift+↑/↓` cycles computers (as `Alt+↑/↓`
   cycles workspaces), `Alt+Shift+Home` returns to this computer; they are
   Settings › Shortcuts rows like any built-in, claimed only while a computer
@@ -1241,6 +1244,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
 | 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
 | 2026-10-14 | Add PC over SSH has two entry points: a last "+ Add PC over SSH…" row in the PC switcher dropdown and a ghost "No invite? Add a PC over SSH…" link under Connect a PC's Paste tab. An SSH host that needs a person shows "SSH needs you" / "Identity changed" in its switcher row, which opens the host check (owner decision) | A server or VPS has no desktop to send an invite from; the entry belongs where computers are already chosen and where pairing starts, without a new page or rail item |
+| 2026-10-14 | Owner decision: + creates a workspace on a granted remote PC. With a paired computer selected, the sidebar header and the collapsed rail show `+` only when that host advertises workspace-create-grant and this desktop holds the grant (added over SSH); it opens a shell there and the new workspace in its list. Hosts without the grant keep no `+`. Amends the collapsed sidebar's "no new-workspace button" | The smoke showed a server added over SSH could only get a first workspace through a local pane's right-click "— remote". The grant already lets this desktop create there, and a `+` that made a local workspace instead would misstate which computer the work runs on |
 
 ### Desktop conversation view
 

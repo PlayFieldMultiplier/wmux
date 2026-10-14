@@ -207,6 +207,7 @@ export const pl = {
   'sidebar.filterWorkspaces': 'Filtruj obszary robocze',
   'sidebar.newWorkspace': 'Nowy obszar roboczy',
   'sidebar.newWorkspaceTooltip': 'Nowy obszar roboczy (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Nowy obszar roboczy na {name}',
   'sidebar.toggleShow': 'Pokaż pasek boczny',
   'sidebar.toggleHide': 'Ukryj pasek boczny',
   'rail.commandPalette': 'Paleta poleceń',

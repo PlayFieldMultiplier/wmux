@@ -6,6 +6,7 @@ export const id = {
   'sidebar.workspaces': 'Ruang kerja',
   'sidebar.newWorkspace': 'Ruang kerja baru',
   'sidebar.newWorkspaceTooltip': 'Ruang kerja baru (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Workspace baru di {name}',
   'sidebar.hideTooltip': 'Sembunyikan bilah sisi (Ctrl+B)',
   'sidebar.expandTooltip': 'Buka bilah sisi (Ctrl+B)',
   'sidebar.unreadCount': '{count} belum dibaca',

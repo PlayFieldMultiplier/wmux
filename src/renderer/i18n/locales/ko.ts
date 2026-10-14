@@ -198,6 +198,7 @@ export const ko = {
   'sidebar.filterWorkspaces': '워크스페이스 필터',
   'sidebar.newWorkspace': '새 워크스페이스',
   'sidebar.newWorkspaceTooltip': '새 워크스페이스 (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '{name}에 새 워크스페이스',
   'sidebar.toggleShow': '사이드바 표시',
   'sidebar.toggleHide': '사이드바 숨기기',
   'rail.commandPalette': '명령 팔레트',

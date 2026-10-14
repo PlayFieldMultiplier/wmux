@@ -3,7 +3,7 @@
 // computer's workspaces with this computer's own row (WorkspaceItem and its
 // pane rows), in the host's order and numbering, and opening one builds its
 // shadow workspace. With This computer selected, nothing changes.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import Sidebar from '../Sidebar';
@@ -64,6 +64,27 @@ describe('Sidebar scoped to a paired computer', () => {
     // None of this computer's rows, and no new-workspace button for the host.
     expect(container.textContent).not.toContain('two');
     expect(container.querySelector('[aria-label="New workspace"]')).toBeNull();
+  });
+
+  it('a granted host gets a + that creates the workspace there and opens it once listed', async () => {
+    const workspaceCreate = vi.fn(() => Promise.resolve({ ok: true, sessionId: 's-new' }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.remote = { workspaceCreate };
+    act(() => useStore.setState({ pcRailHosts: [{ id: 'h1', label: 'office-mac', canCreateWorkspace: true }] }));
+    act(() => root.render(<Sidebar />));
+    const plus = container.querySelector<HTMLButtonElement>('[data-sidebar-add-remote-workspace]');
+    expect(plus?.getAttribute('aria-label')).toBe('New workspace on office-mac');
+    await act(async () => { plus!.click(); });
+    expect(workspaceCreate).toHaveBeenCalledTimes(1);
+    const [hostId, workspaceId] = workspaceCreate.mock.calls[0] as unknown as [string, string];
+    expect(hostId).toBe('h1');
+    // Nothing local is made while the host has not listed it yet.
+    expect(useStore.getState().workspaces.some((w) => w.id === `shadow:h1:${workspaceId}`)).toBe(false);
+    act(() => useStore.setState({ pcRailFeeds: { h1: { workspaces: [...rows, { id: workspaceId, name: '', order: 3, panes: [{ sessionId: 's-new' }] }], fetchedAt: Date.now(), failedTicks: 0 } } }));
+    expect(useStore.getState().activeWorkspaceId).toBe(`shadow:h1:${workspaceId}`);
+
+    // Without the grant there is no + at all.
+    act(() => useStore.setState({ pcRailHosts: [{ id: 'h1', label: 'office-mac' }] }));
+    expect(container.querySelector('[data-sidebar-add-remote-workspace]')).toBeNull();
   });
 
   it("draws the host's pane rows (agent and pane name) under an expanded row", () => {

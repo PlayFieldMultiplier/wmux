@@ -22,6 +22,7 @@ import { getWorkspacePtyIds } from '../../../shared/paneUtils';
 import { destroyWorkspaceRemoteSessions } from '../../utils/remoteSessionTeardown';
 import { LOCAL_PC_ID, isShadowWorkspaceId } from '../../../shared/pcRail';
 import { useT } from '../../hooks/useT';
+import { useRemoteWorkspaceCreate } from './useRemoteWorkspaceCreate';
 import { buildWorkspaceMarkdown } from '../../utils/sessionInfoMarkdown';
 import { tokenAttrs } from '../../themes';
 import { collapseDirection } from './sidebarGlyphs';
@@ -92,6 +93,8 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
     return id !== LOCAL_PC_ID && s.pcRailHosts.some((h) => h.id === id) ? id : null;
   });
   const scopedRowCount = useStore((s) => (scopedHostId ? s.pcRailFeeds[scopedHostId]?.workspaces.length ?? 0 : 0));
+  const scopedHostLabel = useStore((s) => (scopedHostId ? s.pcRailHosts.find((h) => h.id === scopedHostId)?.label ?? '' : ''));
+  const remoteCreate = useRemoteWorkspaceCreate(useStore((s) => s.readOnly) ? null : scopedHostId);
   const wsSearch = useStore((s) => s.sidebarSearch);
   const setWsSearch = useStore((s) => s.setSidebarSearch);
   const wsSearchRef = useRef<HTMLInputElement>(null);
@@ -445,6 +448,17 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
         <div className="wmux-sidebar-section" data-sidebar-scope={scopedHostId}>
           <PcSwitcherTitle title={t('sidebar.workspaces')} />
           <span className="wmux-sidebar-total" data-sidebar-total>{scopedRowCount}</span>
+          {/* Only a computer that granted this desktop workspace creation; the
+              workspace is made on that computer, never here. */}
+          {remoteCreate.canCreate && <button
+            type="button"
+            className={`ui-icon-btn ml-auto h-7 w-7 ${FOCUS_RING}`}
+            onClick={remoteCreate.create}
+            disabled={remoteCreate.creating}
+            title={t('sidebar.newRemoteWorkspace', { name: scopedHostLabel })}
+            aria-label={t('sidebar.newRemoteWorkspace', { name: scopedHostLabel })}
+            data-sidebar-add-remote-workspace
+          ><IconPlus size={15} /></button>}
         </div>
       ) : (
       <div className="wmux-sidebar-section">

@@ -6,6 +6,7 @@ export const tr = {
   'sidebar.workspaces': 'Çalışma alanları',
   'sidebar.newWorkspace': 'Yeni çalışma alanı',
   'sidebar.newWorkspaceTooltip': 'Yeni çalışma alanı (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '{name} üzerinde yeni çalışma alanı',
   'sidebar.hideTooltip': 'Kenar çubuğunu gizle (Ctrl+B)',
   'sidebar.expandTooltip': 'Kenar çubuğunu genişlet (Ctrl+B)',
   'sidebar.unreadCount': '{count} okunmamış',

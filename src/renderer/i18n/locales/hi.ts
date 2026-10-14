@@ -6,6 +6,7 @@ export const hi = {
   'sidebar.workspaces': 'कार्यक्षेत्र',
   'sidebar.newWorkspace': 'नया कार्यक्षेत्र',
   'sidebar.newWorkspaceTooltip': 'नया कार्यक्षेत्र (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '{name} पर नया वर्कस्पेस',
   'sidebar.hideTooltip': 'साइडबार छिपाएँ (Ctrl+B)',
   'sidebar.expandTooltip': 'साइडबार दिखाएँ (Ctrl+B)',
   'sidebar.unreadCount': '{count} अपठित',

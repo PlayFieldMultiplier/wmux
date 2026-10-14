@@ -6,6 +6,7 @@ export const bs = {
   'sidebar.workspaces': 'Radni prostori',
   'sidebar.newWorkspace': 'Novi radni prostor',
   'sidebar.newWorkspaceTooltip': 'Novi radni prostor (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Novi radni prostor na {name}',
   'sidebar.hideTooltip': 'Sakrij bočnu traku (Ctrl+B)',
   'sidebar.expandTooltip': 'Proširi bočnu traku (Ctrl+B)',
   'sidebar.unreadCount': '{count} nepročitanih',

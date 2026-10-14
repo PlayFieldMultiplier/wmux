@@ -202,6 +202,7 @@ export const en = {
   'sidebar.filterWorkspaces': 'Filter workspaces',
   'sidebar.newWorkspace': 'New workspace',
   'sidebar.newWorkspaceTooltip': 'New workspace (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'New workspace on {name}',
   'sidebar.hideTooltip': 'Hide sidebar (Ctrl+B)',
   'sidebar.showCompany': 'Show company',
   'sidebar.showWorkspaces': 'Show workspaces',

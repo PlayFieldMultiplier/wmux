@@ -6,6 +6,7 @@ export const ms = {
   'sidebar.workspaces': 'Ruang kerja',
   'sidebar.newWorkspace': 'Ruang kerja baharu',
   'sidebar.newWorkspaceTooltip': 'Ruang kerja baharu (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Ruang kerja baharu di {name}',
   'sidebar.hideTooltip': 'Sembunyikan bar sisi (Ctrl+B)',
   'sidebar.expandTooltip': 'Kembangkan bar sisi (Ctrl+B)',
   'sidebar.unreadCount': '{count} belum dibaca',

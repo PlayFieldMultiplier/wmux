@@ -6,6 +6,7 @@ export const es = {
   'sidebar.workspaces': 'Espacios de trabajo',
   'sidebar.newWorkspace': 'Nuevo espacio de trabajo',
   'sidebar.newWorkspaceTooltip': 'Nuevo espacio de trabajo (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Nuevo espacio de trabajo en {name}',
   'sidebar.hideTooltip': 'Ocultar barra lateral (Ctrl+B)',
   'sidebar.expandTooltip': 'Expandir barra lateral (Ctrl+B)',
   'sidebar.unreadCount': '{count} sin leer',

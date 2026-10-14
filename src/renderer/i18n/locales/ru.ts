@@ -6,6 +6,7 @@ export const ru = {
   'sidebar.workspaces': 'Рабочие пространства',
   'sidebar.newWorkspace': 'Новое рабочее пространство',
   'sidebar.newWorkspaceTooltip': 'Новое рабочее пространство (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': 'Новое рабочее пространство на {name}',
   'sidebar.hideTooltip': 'Скрыть боковую панель (Ctrl+B)',
   'sidebar.expandTooltip': 'Развернуть боковую панель (Ctrl+B)',
   'sidebar.unreadCount': '{count} непрочитанных',

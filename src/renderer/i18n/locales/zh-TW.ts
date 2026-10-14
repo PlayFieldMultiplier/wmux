@@ -6,6 +6,7 @@ export const zhTW = {
   'sidebar.workspaces': '工作區',
   'sidebar.newWorkspace': '新增工作區',
   'sidebar.newWorkspaceTooltip': '新增工作區 (Ctrl+N)',
+  'sidebar.newRemoteWorkspace': '在 {name} 上新增工作區',
   'sidebar.hideTooltip': '隱藏側邊欄 (Ctrl+B)',
   'sidebar.expandTooltip': '展開側邊欄 (Ctrl+B)',
   'sidebar.unreadCount': '{count} 則未讀',
