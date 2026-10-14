@@ -1,0 +1,208 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "node": "v24.15.0",
+  "scope": "Parser microbenchmark; same process, one warm-up, five alternating-order repeats. No application-memory or interactive-latency claim.",
+  "results": [
+    {
+      "workload": "plain-log",
+      "bytes": 4198400,
+      "samples": [
+        {
+          "backend": "node",
+          "elapsedMs": 6.062958000000002,
+          "cpuMs": 6.214,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.9018329999999963,
+          "cpuMs": 1.968,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.622166,
+          "cpuMs": 1.622,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.635750000000002,
+          "cpuMs": 5.658,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.487500000000004,
+          "cpuMs": 5.493,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.6206669999999974,
+          "cpuMs": 1.616,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.5776249999999976,
+          "cpuMs": 1.677,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.715499999999999,
+          "cpuMs": 5.69,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 5.921999999999997,
+          "cpuMs": 5.751,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 1.6444580000000002,
+          "cpuMs": 1.643,
+          "events": 0
+        }
+      ]
+    },
+    {
+      "workload": "colored-log",
+      "bytes": 4198912,
+      "samples": [
+        {
+          "backend": "node",
+          "elapsedMs": 8.212625000000003,
+          "cpuMs": 8.137,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 4.324124999999995,
+          "cpuMs": 4.318,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 4.6001660000000015,
+          "cpuMs": 4.538,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 8.82483400000001,
+          "cpuMs": 8.733,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 8.837583999999993,
+          "cpuMs": 8.863,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 5.107249999999993,
+          "cpuMs": 5.055,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 5.0335839999999905,
+          "cpuMs": 5.005,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 8.435999999999979,
+          "cpuMs": 8.403,
+          "events": 0
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 8.99558300000001,
+          "cpuMs": 9.753,
+          "events": 0
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 5.0190000000000055,
+          "cpuMs": 4.987,
+          "events": 0
+        }
+      ]
+    },
+    {
+      "workload": "mode-osc",
+      "bytes": 4202496,
+      "samples": [
+        {
+          "backend": "node",
+          "elapsedMs": 60.03120899999999,
+          "cpuMs": 67.035,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 60.184124999999995,
+          "cpuMs": 60.126,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 53.637541,
+          "cpuMs": 52.132,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 66.41216600000001,
+          "cpuMs": 64.856,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 65.66220799999996,
+          "cpuMs": 65.033,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 64.62629099999992,
+          "cpuMs": 63.013,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 77.76454199999989,
+          "cpuMs": 69.708,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 87.52750000000003,
+          "cpuMs": 82.131,
+          "events": 165888
+        },
+        {
+          "backend": "node",
+          "elapsedMs": 96.42754200000002,
+          "cpuMs": 90.679,
+          "events": 165888
+        },
+        {
+          "backend": "rust",
+          "elapsedMs": 92.14108299999998,
+          "cpuMs": 86.585,
+          "events": 165888
+        }
+      ]
+    }
+  ],
+  "sourceCommit": "480ba5c89e998a710f62e4f564cb4969ee1eab4d",
+  "sourceNote": "Built and measured the review-fix source tree immediately before committing it; only documentation and evidence commits follow."
+}

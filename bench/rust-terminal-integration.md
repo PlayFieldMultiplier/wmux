@@ -459,3 +459,19 @@ comparison without mismatches; that external result is separate from the
 reproducible corpus committed here. Callback exceptions and disposal during an
 OSC batch retain the existing native adapter behavior: parser state is already
 updated before callbacks, and disposal suppresses remaining native callbacks.
+
+Review-fix evidence at `480ba5c89` is recorded in
+`bench/results/rust-output-interpreter-review-conformance-20261014.json`:
+8,846 differential feeds across both entry points, 14 native verification groups,
+7 → 7 threads and zero remaining native workers. Local validation also passed
+296 JS tests, 11 Rust tests, daemon/verifier TypeScript checks and the Electron
+41.10.6 native smoke. Clippy passed with the pre-existing transport constructor's
+`too_many_arguments` lint allowed.
+
+The refreshed parser sample is
+`bench/results/rust-output-interpreter-review-macos-20261014.json`.
+Median JS → Rust times were 5.72 → 1.62 ms (plain), 8.82 → 5.02 ms (colored),
+and 66.41 → 64.63 ms (dense mode/OSC). Event counts still matched. This run
+shared the machine with Electron/Clippy validation and other work: the dense
+case showed only a small difference and the results do not establish a stable
+speedup. The original pre-review sample is retained as historical evidence.

@@ -1,0 +1,28 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "checks": [
+    "output interpreter: 8846 differential feeds (both feed and feedChunk; OSC/modes/preamble, seeded splits, Unicode and >4 GiB offsets)",
+    "output interpreter: native chunks, recovered mode seeding, mute/discard/replay, prompt/event order and mode references surviving cleanup",
+    "ring: 6,000 seeded operations + geometry churn match JS oracle",
+    "output: native UTF-8 + direct ring writes match StringDecoder for every fixture split and 5,000 malformed streams",
+    "snapshot: immutable native ring, geometry and undimmed text match xterm",
+    "output: real PTY feeds DaemonPTYBridge and native ring without a JS byte delivery subscriber",
+    "PTY: explicit environment, arguments, cwd and dimensions",
+    "PTY: child observes resize; owned descendant is gone after root exit",
+    "PTY: paused bulk output, UTF-8, final output before one exit",
+    "PTY: disposal with paused bulk output reclaims every worker",
+    "PTY: 4 MiB async input hash matches without blocking Node",
+    "PTY: bounded input queue, explicit backpressure and blocked-writer termination",
+    "PTY: exec failure propagates without closing the spawn-error pipe or replaying the command",
+    "PTY: 1/6/32 concurrent sessions and 100 lifecycle cycles"
+  ],
+  "passed": 14,
+  "inputElapsedMs": 387,
+  "threadsBefore": 7,
+  "threadsAfter": 7,
+  "nativeWorkersAfter": 0,
+  "soakMemory": [],
+  "sourceCommit": "480ba5c89e998a710f62e4f564cb4969ee1eab4d",
+  "sourceNote": "Built and measured the review-fix source tree immediately before committing it; only documentation and evidence commits follow."
+}
