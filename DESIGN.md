@@ -354,11 +354,13 @@ status bar badges, `fleet_triage` or the phone's sidebar.
 - **Avatars (owner decision 2026-10-14, replaces the initials tiles):** a
   bot's avatar is the picture the owner set for it, else the bot's own
   mark: its **identity colour** and one of four shapes (circle, rounded
-  square, hexagon, rounded diamond), both picked from the bot's id (two
-  bots never share a colour while the eight last: the older keeps its id's,
-  a later one takes the next free), with a
-  small friendly face (two dot eyes and a smile in `--bg-base`) — the
-  shared `BotAvatar`, the same mark everywhere. A room stacks two of its
+  square, hexagon, rounded diamond). The shape comes from the bot's id; the
+  colour is per room, oldest bot first, in a fixed spread order (teal,
+  violet, magenta, blue, slate, then the rest) so a room's bots never share
+  one while the eight last and its first five read apart; a bot keeps its
+  colour while it exists. The mark carries a small friendly face (two dot
+  eyes and a smile in `--bg-base`) — the shared `BotAvatar`, the same mark
+  everywhere. A room stacks two of its
   bots' avatars and "+N" for the rest (the chat's centred pill shows up to
   three overlapping in a row). A bot's presence dot (the room's presence
   grammar; not reported is a hollow ring) sits on its avatar's corner.

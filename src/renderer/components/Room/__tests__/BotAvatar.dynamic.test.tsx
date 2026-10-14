@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../../stores';
 import { BOT_NAME_MAX, DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../../shared/bot';
 import type { FactoryBotAvatarPickResult, FactoryBotCreateRequest } from '../../../../shared/botCreate';
-import BotAvatar, { BOT_AVATAR_SHAPES, BOT_IDENTITY_HUES, botAvatarShape, botIdentityColor, botInitials, identityHueIndexes, noteBotIdentities } from '../BotAvatar';
+import BotAvatar, { BOT_AVATAR_SHAPES, BOT_IDENTITY_HUES, botAvatarShape, botIdentityColor, botInitials, IDENTITY_SPREAD, identityHueIndexes, noteBotIdentities } from '../BotAvatar';
 import { BotChips } from '../BotChips';
 import { RoomCard } from '../RoomCard';
 import type { RoomCard as RoomCardData } from '../../../../shared/room';
@@ -111,27 +111,31 @@ describe('bot identity', () => {
     expect(botIdentityColor(ids[0])).toContain('var(--text-main)');
   });
 
-  it('two listed bots whose ids share a colour are told apart: the older keeps it', () => {
-    const ids = Array.from({ length: 40 }, (_, i) => `bot-clash-${i}`);
-    const first = ids[0];
-    const twin = ids.slice(1).find((id) => botIdentityColor(id) === botIdentityColor(first))!;
-    expect(twin).toBeDefined();
-    const own = botIdentityColor(first);
-    const at = identityHueIndexes([{ id: twin, createdAt: 2 }, { id: first, createdAt: 1 }]);
-    expect(at.get(first)).not.toBe(at.get(twin));
-    noteBotIdentities([{ id: twin, createdAt: 2 }, { id: first, createdAt: 1 }]);
-    expect(botIdentityColor(first)).toBe(own);
-    expect(botIdentityColor(twin)).not.toBe(own);
-    // Eight bots, eight colours.
-    const eight = ids.slice(0, 8).map((id, i) => ({ id, createdAt: i }));
-    expect(new Set(identityHueIndexes(eight).values()).size).toBe(8);
-    // A removed bot frees its colour; the others keep theirs.
-    noteBotIdentities(eight, true);
-    const before = eight.map((b) => botIdentityColor(b.id));
-    const added = { id: 'bot-clash-new', createdAt: 99 };
-    noteBotIdentities([...eight.slice(1), added], true);
-    expect(eight.slice(1).map((b) => botIdentityColor(b.id))).toEqual(before.slice(1));
-    expect(new Set([...eight.slice(1), added].map((b) => botIdentityColor(b.id))).size).toBe(8);
+  it('a room\'s bots take colours in the spread order: five team bots read apart, never palette neighbours', () => {
+    const team = ['lead', 'research', 'dev', 'issues', 'review'].map((n, i) => ({ id: `bot-team-${n}`, createdAt: i, workspaceId: 'ws-team' }));
+    const at = identityHueIndexes(team);
+    const picked = team.map((b) => at.get(b.id)!);
+    expect(picked).toEqual(IDENTITY_SPREAD.slice(0, 5));
+    expect(new Set(picked).size).toBe(5);
+    // Every two saturated colours of the five are at least 30° of hue apart.
+    const hues = picked.map((i) => hueOf(BOT_IDENTITY_HUES[i])).filter((c) => c.s > 0.25).map((c) => c.h);
+    for (const a of hues) for (const b of hues) if (a !== b) expect(Math.abs(a - b)).toBeGreaterThanOrEqual(30);
+    expect(IDENTITY_SPREAD.slice().sort()).toEqual(BOT_IDENTITY_HUES.map((_, i) => i));
+  });
+
+  it('colours are per room, a bot keeps its own while it exists, and a removed bot frees its colour', () => {
+    const roomA = Array.from({ length: 8 }, (_, i) => ({ id: `bot-room-a-${i}`, createdAt: i, workspaceId: 'ws-a' }));
+    const roomB = [{ id: 'bot-room-b-0', createdAt: 0, workspaceId: 'ws-b' }];
+    // Eight bots of a room, eight colours; another room starts over.
+    expect(new Set(identityHueIndexes(roomA).values()).size).toBe(8);
+    noteBotIdentities([...roomA, ...roomB], true);
+    expect(botIdentityColor(roomB[0].id)).toBe(botIdentityColor(roomA[0].id));
+    const before = roomA.map((b) => botIdentityColor(b.id));
+    // A bot added to room A after one left takes the freed colour; the others keep theirs.
+    const added = { id: 'bot-room-a-new', createdAt: 99, workspaceId: 'ws-a' };
+    noteBotIdentities([...roomA.slice(1), added, ...roomB], true);
+    expect(roomA.slice(1).map((b) => botIdentityColor(b.id))).toEqual(before.slice(1));
+    expect(botIdentityColor(added.id)).toBe(before[0]);
   });
 });
 
