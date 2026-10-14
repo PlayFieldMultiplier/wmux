@@ -345,7 +345,8 @@ export function createFactLog(dir: string, opts: FactLogOptions = {}): FactLog {
   }
 
   /** Write one whole line; on a failed or short write, cut the file back to
-   *  where it was so no partial line stays behind. */
+   *  where it was so no partial line stays behind (through the path when the
+   *  append handle cannot truncate, as on Windows). */
   function writeLine(handle: number, line: string): boolean {
     const buf = Buffer.from(line, 'utf8');
     const before = size;
@@ -362,7 +363,11 @@ export function createFactLog(dir: string, opts: FactLogOptions = {}): FactLog {
       log(`[facts] append failed: ${String(err)}`);
       try {
         fs.ftruncateSync(handle, before);
-      } catch { /* the torn line is skipped and counted on the next start */ }
+      } catch {
+        try {
+          fs.truncateSync(file, before);
+        } catch { /* the torn line is skipped and counted on the next start */ }
+      }
       return false;
     }
   }

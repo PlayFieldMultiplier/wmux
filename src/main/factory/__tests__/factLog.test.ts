@@ -180,6 +180,29 @@ describe('createFactLog', () => {
     expect(lines().map((l) => (JSON.parse(l) as Fact).ref?.taskId)).toEqual(['t1', 't2']);
   });
 
+  it('cuts a failed partial write back through the path when the append handle cannot truncate (Windows)', () => {
+    const log = make();
+    log.append(taskDone('t1'));
+    const real = fsModule.writeSync;
+    const write = vi.spyOn(fsModule, 'writeSync').mockImplementationOnce(((fd: number, buf: Buffer) => {
+      real(fd, buf, 0, 10);
+      throw new Error('ENOSPC');
+    }) as unknown as typeof fsModule.writeSync);
+    const cut = vi.spyOn(fsModule, 'ftruncateSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    });
+    try {
+      expect(log.appendResult(taskDone('t2'))).toEqual({ ok: false, code: 'write_failed' });
+      expect(cut).toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+      cut.mockRestore();
+    }
+    expect(lines().map((l) => (JSON.parse(l) as Fact).seq)).toEqual([1]);
+    expect(log.append(taskDone('t2'))?.seq).toBe(2);
+    expect(lines().map((l) => (JSON.parse(l) as Fact).ref?.taskId)).toEqual(['t1', 't2']);
+  });
+
   it('recovers seq from expired lines too, so a stale checkpoint never reuses one', () => {
     const expired = { id: 'f-7', seq: 7, kind: 'task.done', at: NOW - 40 * DAY, dedupeKey: 'task.done:x', ref: { taskId: 'x' }, payload: {} };
     fs.writeFileSync(path.join(dir, FACTS_FILENAME), `${JSON.stringify(expired)}\n`);
