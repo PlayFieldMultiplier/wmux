@@ -3533,6 +3533,7 @@ export const zh = {
   'botsPage.onboarding.detail': "它在 {workspace} 中工作，会先打招呼并问你要做什么。",
   'botsPage.onboarding.detailAny': "它会先打招呼并问你要做什么。",
   'botsPage.onboarding.start': "开始",
+  'botsPage.onboarding.addTeam': "添加团队（负责人 + 4 个角色）",
   'botsPage.onboarding.notInstalled': "机器人通过 Claude Code 对话，但这台电脑没有安装它。安装后再检查一次。",
   'botsPage.onboarding.notLoggedIn': "机器人通过 Claude 对话，但这台电脑上还没有登录 Claude。",
   'botsPage.onboarding.login': "登录 Claude",

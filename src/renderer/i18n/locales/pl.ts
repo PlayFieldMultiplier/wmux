@@ -4251,6 +4251,7 @@ export const pl = {
   'botsPage.onboarding.detail': "Pracuje w {workspace}, wita się i pyta, co robić.",
   'botsPage.onboarding.detailAny': "Wita się i pyta, co robić.",
   'botsPage.onboarding.start': "Start",
+  'botsPage.onboarding.addTeam': "Dodaj zespół (lider + 4 role)",
   'botsPage.onboarding.notInstalled': "Boty rozmawiają przez Claude Code, a nie jest on zainstalowany na tym komputerze. Zainstaluj go i sprawdź ponownie.",
   'botsPage.onboarding.notLoggedIn': "Boty rozmawiają przez Claude, a na tym komputerze Claude nie jest zalogowany.",
   'botsPage.onboarding.login': "Zaloguj się do Claude",

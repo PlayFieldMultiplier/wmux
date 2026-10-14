@@ -555,7 +555,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   the bot to the current workspace and opens its 1:1, where its greeting
   arrives. When the Claude engine cannot sign in the panel says why in
   one line and offers Log in to Claude (and Check again); Start waits until
-  it can. A build that cannot tell never blocks Start.
+  it can. A build that cannot tell never blocks Start. Beside Start, a
+  secondary **Add a team (lead + 4 roles)** does the same for the five-bot
+  team (no name to type) and opens the lead's chat.
 
 ### Fleet
 

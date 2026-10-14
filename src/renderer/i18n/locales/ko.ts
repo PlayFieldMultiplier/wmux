@@ -3787,6 +3787,7 @@ export const ko = {
   'botsPage.onboarding.detail': "{workspace}에서 일해요. 인사한 뒤 무엇을 할지 물어봐요.",
   'botsPage.onboarding.detailAny': "인사한 뒤 무엇을 할지 물어봐요.",
   'botsPage.onboarding.start': "시작",
+  'botsPage.onboarding.addTeam': "팀 추가 (대장 + 역할 4개)",
   'botsPage.onboarding.notInstalled': "봇은 Claude Code로 대화하는데, 이 컴퓨터에 설치되어 있지 않아요. 설치한 뒤 다시 확인하세요.",
   'botsPage.onboarding.notLoggedIn': "봇은 Claude로 대화하는데, 이 컴퓨터에서 Claude에 로그인되어 있지 않아요.",
   'botsPage.onboarding.login': "Claude에 로그인",

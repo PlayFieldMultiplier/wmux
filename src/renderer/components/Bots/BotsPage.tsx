@@ -36,7 +36,8 @@ import Popover from '../ui/Popover';
 import { getFactoryBotPort, getFactorySettingsPort, type FactoryBotPort, type FactoryBotRow, type FactorySettingsPort } from '../Room/factoryPorts';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 import Input from '../ui/Input';
-import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, useAddBotRepo } from '../Settings/FactoryTab';
+import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, teamNames, useAddBotRepo } from '../Settings/FactoryTab';
+import { TEAM_TEMPLATES } from '../../../shared/botCreate';
 import { PresenceDot, botPresence } from '../Room/BotChips';
 import { actorLabel, formatCardTime } from '../Room/roomFormat';
 import BotAvatar from '../Room/BotAvatar';
@@ -210,6 +211,10 @@ function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted 
   // Start waits for the engine's first answer (a build that cannot ask never waits).
   const engineUnanswered = !!engine.readiness && readiness === null;
   const startable = !busy && !blocked && !engineText && !engineUnanswered;
+  // Add a team: the five team bots here at once, with no name to type; the
+  // same readiness as Start, and its lead's chat opens.
+  const teamable = !busy && !!workspace && !!botPort.createTeam && !engineText && !engineUnanswered;
+  const names = teamNames(t);
 
   const start = async () => {
     if (!startable || !typed || !workspace) return;
@@ -220,6 +225,21 @@ function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted 
       const r = await createBot(botPort, { workspaceId: workspace.id, name: typed, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
       if (r.ok) onStarted(r.bot);
       else setError(r.message || t('settings.factory.addBotFailed'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const startTeam = async () => {
+    if (!teamable || !workspace || !botPort.createTeam) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!on && !(await turnBotsOn(settings))) { setError(t('settings.factory.notStarted')); return; }
+      const r = await botPort.createTeam({ workspaceId: workspace.id, names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      if (r.ok) onStarted(r.bots[0]);
+      else setError(r.message || t('settings.factory.addTeamFailed'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -267,6 +287,19 @@ function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted 
           <Button type="submit" size="sm" variant={startable ? 'primary' : 'secondary'} data-bots-first-start disabled={!startable}>
             {t('botsPage.onboarding.start')}
           </Button>
+          {botPort.createTeam && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              data-bots-first-team
+              disabled={!teamable}
+              title={t('settings.factory.addTeamHint', { names: TEAM_TEMPLATES.map((tpl) => names[tpl]).join(', '), lead: names.coordinator })}
+              onClick={() => void startTeam()}
+            >
+              {t('botsPage.onboarding.addTeam')}
+            </Button>
+          )}
         </form>
         {workspace && (
           <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} />

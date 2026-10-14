@@ -217,6 +217,51 @@ describe('Bots page', () => {
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
   });
 
+  it('first screen: Add a team turns the bots on, adds the five here with no name typed, and opens the lead\'s chat', async () => {
+    bots = [];
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    const lead = { ...botRow('bot-0000000e', 'lead', 'w1', 9, 'Lead').bot, template: 'coordinator' as const };
+    const createTeam = vi.fn(async () => ({ ok: true as const, bots: [lead] }));
+    setFactoryBotPort({ ...port, create: vi.fn(), createTeam } as unknown as FactoryBotPort);
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    let answer: (r: { ready: boolean }) => void = () => undefined;
+    const engine: EnginePort = { readiness: () => new Promise((r) => { answer = r; }) };
+    await render(<BotsPage settings={settings} engine={engine} />);
+    const team = q<HTMLButtonElement>('[data-bots-first-team]')!;
+    expect(team.textContent).toBe('Add a team (lead + 4 roles)');
+    // The same readiness as Start: it waits for the engine's first answer.
+    expect(team.disabled).toBe(true);
+    await act(async () => { answer({ ready: true }); });
+    expect(team.disabled).toBe(false);
+    await act(async () => { team.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(createTeam).toHaveBeenCalledWith({ workspaceId: 'w1', names: { coordinator: 'Lead', researcher: 'Research', developer: 'Developer', issue: 'Issues', reviewer: 'Reviewer' } });
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+  });
+
+  it('"+" offers Add team while the chosen workspace has no coordinator', async () => {
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn(), createTeam: vi.fn() } as unknown as FactoryBotPort);
+    await render(<BotsPage />);
+    act(() => q('[data-bots-add]')!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).not.toBeNull();
+    // A workspace with a coordinator already: no Add team.
+    act(() => root.unmount());
+    root = createRoot(container);
+    bots = [...bots, { ...botRow('bot-0000000f', 'lead', 'w1', 4, 'Boss'), bot: { ...botRow('bot-0000000f', 'lead', 'w1', 4, 'Boss').bot, template: 'coordinator' } }];
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    await render(<BotsPage />);
+    act(() => q('[data-bots-add]')!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).toBeNull();
+  });
+
   it('first screen: an engine that cannot sign in says why, offers Log in to Claude, and Start waits until it can', async () => {
     bots = [];
     seedRooms();

@@ -4290,6 +4290,7 @@ export const en = {
   'botsPage.onboarding.detail': "It works in {workspace}, greets you and asks what to do.",
   'botsPage.onboarding.detailAny': "It greets you and asks what to do.",
   'botsPage.onboarding.start': "Start",
+  'botsPage.onboarding.addTeam': "Add a team (lead + 4 roles)",
   'botsPage.onboarding.notInstalled': "Bots talk through Claude Code, and it isn't installed on this computer. Install it, then check again.",
   'botsPage.onboarding.notLoggedIn': "Bots talk through Claude, and Claude isn't signed in on this computer.",
   'botsPage.onboarding.login': "Log in to Claude",
