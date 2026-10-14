@@ -139,8 +139,7 @@
     "requires": [
       "facts",
       "cards",
-      "bots",
-      "ledger"
+      "bots"
     ],
     "lead": "lead",
     "connector": "probe"
