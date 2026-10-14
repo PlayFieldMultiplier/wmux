@@ -53,5 +53,10 @@ export class OutputInterpreter {
       this.osc?.process(text);
     }
   }
-  dispose(): void { this.native?.dispose(); this.callbacks.length = 0; }
+  dispose(): void {
+    this.callbacks.length = 0;
+    // An async screen render can hold `modes` across bridge cleanup. Preserve
+    // its last state, just as the JS tracker does; the N-API finalizer reclaims
+    // the interpreter when the final mode reference becomes unreachable.
+  }
 }

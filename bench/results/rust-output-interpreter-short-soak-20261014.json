@@ -451,5 +451,6 @@
       "heapUsed": 33286800,
       "external": 6667314
     }
-  ]
+  ],
+  "sourceNote": "Historical pre-review development run on parent 9f5f3e0ef25c6e4112096bb83249089c03f0f9de, using an earlier 4,420-feed verifier. The exact uncommitted source revision was not recorded. This does not qualify the review fixes."
 }

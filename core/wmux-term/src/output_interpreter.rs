@@ -21,6 +21,7 @@ const MODES: [(u32, bool); 14] = [
 ];
 const ESC: u16 = 27;
 const MAX_OSC: usize = 64 * 1024;
+const RETAIN_OSC: usize = 2048;
 
 #[derive(Debug, PartialEq)]
 pub struct OscEvent {
@@ -78,9 +79,14 @@ impl OutputInterpreter {
         if !chunk.contains('\x1b') && !previous.contains(&ESC) {
             return;
         }
-        let mut combined = String::from_utf16_lossy(&previous);
-        combined.push_str(chunk);
-        let text = combined.as_bytes();
+        let mut combined;
+        let text = if previous.is_empty() {
+            chunk.as_bytes()
+        } else {
+            combined = String::from_utf16_lossy(&previous);
+            combined.push_str(chunk);
+            combined.as_bytes()
+        };
         let mut changed_at = [None; 14];
         let mut alt_at = None;
         let mut i = 0;
@@ -175,13 +181,13 @@ impl OutputInterpreter {
                             });
                         }
                     }
-                    self.osc.clear();
+                    self.clear_osc();
                     self.in_osc = false;
                     i += if st { 2 } else { 1 };
                 } else {
                     // Match the reference's UTF-16-unit cap and resumption point.
                     if self.osc.len() == MAX_OSC {
-                        self.osc.clear();
+                        self.clear_osc();
                         self.in_osc = false;
                     } else {
                         self.osc.push(c);
@@ -189,7 +195,7 @@ impl OutputInterpreter {
                     i += 1;
                 }
             } else if c == ESC && chunk.get(i + 1) == Some(&(b']' as u16)) {
-                self.osc.clear();
+                self.clear_osc();
                 self.in_osc = true;
                 i += 2;
             } else {
@@ -197,6 +203,16 @@ impl OutputInterpreter {
             }
         }
         events
+    }
+
+    fn clear_osc(&mut self) {
+        if self.osc.capacity() > RETAIN_OSC {
+            // Do not pin a large clipboard/title payload for the session's
+            // remaining lifetime. Keep small allocations for frequent OSCs.
+            self.osc = Vec::new();
+        } else {
+            self.osc.clear();
+        }
     }
 
     pub fn reset_modes(&mut self) {
@@ -319,5 +335,19 @@ mod tests {
         assert!(p.feed("\x1b[?1049h\x1b]133;C\x07", 30.0, false).is_empty());
         assert!(p.alt_screen());
         assert!(p.feed("\x07", 31.0, true).is_empty());
+    }
+    #[test]
+    fn large_osc_storage_is_released_on_termination_and_overflow() {
+        for terminator in ["\x07", "\x1b\\", "x"] {
+            let mut p = OutputInterpreter::default();
+            p.feed(&format!("\x1b]52;{}", "a".repeat(MAX_OSC - 3)), 0.0, true);
+            assert!(p.in_osc);
+            assert!(p.osc.capacity() >= MAX_OSC);
+            let events = p.feed(terminator, 0.0, true);
+            assert_eq!(events.len(), usize::from(terminator != "x"));
+            assert!(!p.in_osc);
+            assert!(p.osc.capacity() <= RETAIN_OSC);
+            assert_eq!(p.feed("\x1b]2;next\x07", 0.0, true)[0].data, "next");
+        }
     }
 }

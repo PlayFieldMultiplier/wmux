@@ -15,6 +15,10 @@ export function verifyOutputInterpreter(): string[] {
   assert(native.NativeOutputInterpreter && native.NativeOutputDecoder);
   let feeds = 0;
   function compare(chunks: string[], prefill = '', offset = 0): void {
+    for (const input of ['text', 'chunk'] as const) compareVia(input, chunks, prefill, offset);
+  }
+  function compareVia(input: 'text' | 'chunk', chunks: string[], prefill: string, offset: number): void {
+    const decoder = new native.NativeOutputDecoder!();
     const referenceModes = new OutputModeTracker(), referenceOsc = new OscParser();
     const interpreter = new OutputInterpreter('rust');
     assert.equal(interpreter.backend, 'rust');
@@ -29,7 +33,8 @@ export function verifyOutputInterpreter(): string[] {
       for (const text of chunks) {
         offset += Buffer.byteLength(text);
         referenceModes.feed(text, offset); referenceOsc.process(text);
-        interpreter.feed(text, offset);
+        const chunk = input === 'chunk' ? decoder.feed(Buffer.from(text), false) : undefined;
+        try { interpreter.feed(text, offset, chunk); } finally { chunk?.dispose(); }
         assert.deepEqual(actual, expected, `OSC parity at feed ${feeds}`);
         actual.length = expected.length = 0;
         assert.equal(interpreter.modes.altScreen, referenceModes.altScreen);
@@ -110,6 +115,16 @@ export function verifyOutputInterpreter(): string[] {
     assert.deepEqual(actual.ring.readAll(), reference.ring.readAll());
     assert.equal(actual.promptLog.size, 4);
     assert.equal(actual.instance.outputModes?.preamble(Number.MAX_SAFE_INTEGER), reference.instance.outputModes?.preamble(Number.MAX_SAFE_INTEGER));
+    // An async render can capture modes before the PTY exits, then resume
+    // after bridge cleanup. Preserve the final modes and replay preamble.
+    const expectedModes = reference.instance.outputModes!;
+    const heldModes = actual.instance.outputModes!;
+    actual.instance.cleanup(); reference.instance.cleanup();
+    assert.equal(heldModes.altScreen, expectedModes.altScreen);
+    for (const mode of modes) assert.equal(heldModes.isSet(mode), expectedModes.isSet(mode));
+    for (const start of [0, 1, 32, Number.MAX_SAFE_INTEGER]) {
+      assert.equal(heldModes.preamble(start), expectedModes.preamble(start));
+    }
   } finally {actual.close();reference.close();}
   const disposed = new native.NativeOutputInterpreter(); disposed.dispose();
   assert.throws(() => disposed.feed('late', 4, true), /disposed/);
@@ -120,6 +135,6 @@ export function verifyOutputInterpreter(): string[] {
     assert.equal(invalid.altScreen, false);
   }
   invalid.dispose();
-  return [`output interpreter: ${feeds} differential feeds (OSC/modes/preamble, seeded splits, Unicode and >4 GiB offsets)`,
-    'output interpreter: native chunks, recovered mode seeding, mute/discard/replay, prompt/event order and disposal'];
+  return [`output interpreter: ${feeds} differential feeds (both feed and feedChunk; OSC/modes/preamble, seeded splits, Unicode and >4 GiB offsets)`,
+    'output interpreter: native chunks, recovered mode seeding, mute/discard/replay, prompt/event order and mode references surviving cleanup'];
 }

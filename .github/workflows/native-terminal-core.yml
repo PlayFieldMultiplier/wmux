@@ -42,6 +42,8 @@ jobs:
         run: npx vitest run scripts/__tests__/generateRustUnicode11.test.mjs
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
+      - name: Rust interpreter and grid unit tests
+        run: cargo test --manifest-path core/wmux-term/Cargo.toml --no-default-features --locked
       - run: npm run test:terminal-core -- --report=native-terminal-report.json
       - name: Electron main load and PTY
         if: runner.os != 'Linux'
