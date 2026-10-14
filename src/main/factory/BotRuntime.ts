@@ -218,6 +218,9 @@ export interface BotRuntimePorts {
   readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number) => { cards: RoomCard[]; truncated: boolean } | null;
   /** A routine as its wake shows it (the routines module). */
   resolveRoutine?: (routineId: string) => WakeRoutineSummary | null;
+  /** The handoff a task wake answers (the one its tasks were started
+   *  for), or null. */
+  taskHandoff?: (item: WakeItem) => string | null;
   /** Told when a bot is parked or resumed by hand, switched off or on, or
    *  removed (the routines module pauses and resumes its routines). */
   onBotLifecycle?: (botId: string, event: BotLifecycleEvent) => void;
@@ -736,6 +739,7 @@ export class BotRuntime {
     let facts: Fact[] = [];
     let tasks: WakeTaskSummary[] = [];
     let handoff: WakeHandoffSummary | null = null;
+    let taskParent: WakeHandoffSummary | null = null;
     let routine: WakeRoutineSummary | null = null;
     let thread: WakePromptThread | null = null;
     try {
@@ -747,6 +751,8 @@ export class BotRuntime {
         facts = (this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? [];
         const taskIds = r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null);
         if (taskIds.length > 0) tasks = this.deps.resolveTasks?.(taskIds) ?? [];
+        const parentId = ports.taskHandoff?.(item);
+        if (parentId) taskParent = (this.deps.resolveHandoff ?? ports.resolveHandoff)?.(parentId) ?? null;
       } else if (r.kind === 'handoff' || r.kind === 'mention') {
         handoff = (this.deps.resolveHandoff ?? ports.resolveHandoff)?.(r.handoffId) ?? null;
       } else if (r.kind === 'routine') {
@@ -769,7 +775,7 @@ export class BotRuntime {
     } catch (err) {
       console.warn(`[factory] wake context for ${item.id} could not be read: ${String(err)}`);
     }
-    return buildWakePrompt({ ...extras, item, profile, facts, tasks, handoff, thread, routine, roster });
+    return buildWakePrompt({ ...extras, item, profile, facts, tasks, handoff, taskParent, thread, routine, roster });
   }
 
   private async runTurn(profile: BotProfile, item: WakeItem): Promise<void> {

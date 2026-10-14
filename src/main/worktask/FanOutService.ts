@@ -336,6 +336,10 @@ export interface FanOutRequest {
   /** A bot's fan-out: the room thread of the wake that asked (main's own wake
    *  state). Recorded on each task's ledger row; see LedgerDispatch.threadId. */
   threadId?: string;
+  /** A bot's fan-out: the handoff the asking wake delivered (main's own
+   *  wake state). Recorded on each task's ledger row; see
+   *  LedgerDispatch.handoffId. */
+  handoffId?: string;
   /** A bot's fan-out: the stored secrets each worker receives as env vars
    *  (checked by the caller). Each task spawn gets its own single-use grant
    *  (factory/secretGrants.ts); a name no longer stored at launch time leaves
@@ -765,6 +769,7 @@ export class FanOutService {
       ...(req.preset ? { preset: req.preset } : {}),
       ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
       ...(req.threadId ? { threadId: req.threadId } : {}),
+      ...(req.handoffId ? { handoffId: req.handoffId } : {}),
       ...(req.mayLaunch ? { mayLaunch: req.mayLaunch } : {}),
       ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
       ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
@@ -1172,6 +1177,8 @@ export class FanOutService {
     checkout?: { sha: string };
     /** See FanOutRequest.threadId. */
     threadId?: string;
+    /** See FanOutRequest.handoffId. */
+    handoffId?: string;
     /** See FanOutRequest.mayLaunch. */
     mayLaunch?: () => string | null;
     /** See FanOutRequest.awaitLaunchSlot. */
@@ -1551,6 +1558,7 @@ export class FanOutService {
                 ...(ctx.preset ? { preset: ctx.preset } : {}),
                 ...(ctx.checkout ? { checkout: { sha: ctx.checkout.sha, detached: true as const } } : {}),
                 ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+                ...(ctx.handoffId ? { handoffId: ctx.handoffId } : {}),
               },
             }
           : {}),

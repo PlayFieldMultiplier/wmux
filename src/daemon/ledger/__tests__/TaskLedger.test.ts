@@ -498,3 +498,15 @@ describe('rebindTaskWorkspace', () => {
     expect(a.get('wtask-1')).toMatchObject({ taskWorkspaceId: 'ws-task', rev: e.rev });
   });
 });
+
+describe('TaskLedger — dispatch', () => {
+  it('keeps a bot task\'s thread and handoff, and drops a malformed handoff id', async () => {
+    const ledger = open();
+    await ledger.register({ id: 'wtask-h', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot', botId: 'bot-00000001', tainted: false }, threadId: 'handoff:h-1', handoffId: 'h-1' } });
+    await ledger.register({ id: 'wtask-x', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot' }, handoffId: 'not a handoff id' } });
+    expect(ledger.get('wtask-h')?.dispatch).toEqual({ origin: { kind: 'bot', botId: 'bot-00000001', tainted: false }, threadId: 'handoff:h-1', handoffId: 'h-1' });
+    expect(ledger.get('wtask-x')?.dispatch).toEqual({ origin: { kind: 'bot' } });
+    // It survives a reload.
+    expect(open().get('wtask-h')?.dispatch?.handoffId).toBe('h-1');
+  });
+});

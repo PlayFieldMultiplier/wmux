@@ -8,13 +8,18 @@
 //              enabled lead of the target workspace; result / refusal → the
 //              sender of the handoff it replies to, else its own workspace's
 //              lead; ask_person → the owner; answer → the bot that asked. A
+//              workspace's lead is its oldest enabled coordinator (other
+//              than the sender), else its oldest enabled bot stored with the
+//              `lead` role. A
 //              room card's `mentions` are messages (mention()), woken as
 //              `mention` wakes.
 //   thread     the param's thread, else the parent's, else the thread of the
 //              wake the sender is running, else `handoff:<id>` (main pins
 //              where an answer lands, not the model).
 //   chain      runId and attribution come from the parent: the replyTo, else
-//              the handoff the sender's running wake delivers, else the run of
+//              the handoff the sender's running wake delivers (for a task
+//              wake, the one its tasks were started for; for the answer to a
+//              question asked mid-hop, that hop), else the run of
 //              the owner's message the running wake carries (every bot that
 //              message woke shares it); a send with none of these starts a
 //              run. depth is 1 for a hop with no parent and +1 per bot→bot
@@ -176,6 +181,8 @@ export interface HandoffWakeSummary {
   dismissed?: true;
   /** The sender's workspace, when the sender is a bot. */
   fromWorkspaceId?: string;
+  /** It already has its result. */
+  answered?: true;
 }
 
 // ── Decision store port (the real store, bound to one data dir) ────────────
@@ -274,6 +281,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(isClientId(h.clientHandoffId) ? { clientHandoffId: h.clientHandoffId } : {}),
     ...(h.intro === true && h.kind === 'ask_person' ? { intro: true as const } : {}),
     ...(h.kind === 'ask_person' && typeof h.ownerCardId === 'string' && ID_RE.test(h.ownerCardId) ? { ownerCardId: h.ownerCardId } : {}),
+    ...(h.kind === 'ask_person' && typeof h.forHop === 'string' && ID_RE.test(h.forHop) ? { forHop: h.forHop } : {}),
     createdAt: h.createdAt,
     updatedAt: h.updatedAt,
   };
@@ -484,6 +492,7 @@ export class HandoffRouter {
       ...(h.kind === 'answer' ? { ownerWords: true } : {}),
       ...(h.kind === 'answer' && h.from.kind === 'human' && h.payload.body === DISMISSED_ANSWER ? { dismissed: true as const } : {}),
       ...(h.from.kind === 'bot' ? { fromWorkspaceId: h.from.workspaceId } : {}),
+      ...(this.answered(h.id) ? { answered: true as const } : {}),
     };
   }
 
@@ -558,8 +567,7 @@ export class HandoffRouter {
     // the running wake carries, so leaving replyTo out never resets depth or
     // the hop count; a result or refusal without a replyTo answers that
     // handoff.
-    const woken = !spec.replyTo && wake?.handoffId ? this.records.get(wake.handoffId) ?? null : null;
-    const ownWoken = woken && woken.to.kind === 'bot' && woken.to.botId === sender.botId ? woken : null;
+    const ownWoken = spec.replyTo ? null : this.wokenHop(sender.botId, wake?.handoffId);
     const parent = spec.replyTo ? this.records.get(spec.replyTo) ?? null : kind === 'result' || kind === 'refusal' ? ownWoken : null;
     const chainParent = parent ?? ownWoken;
     // A bot woken by the owner's message speaks for that message: its
@@ -655,7 +663,7 @@ export class HandoffRouter {
     if (kind === 'dispatch') {
       // Messaging another workspace is every bot's power.
       const ws = toWorkspaceId ?? sender.workspaceId;
-      const lead = this.leadOf(bots, ws);
+      const lead = this.leadOf(bots, ws, sender.botId);
       if (!lead) return { refusal: 'no_addressee', detail: `workspace ${ws} has no enabled lead` };
       if (lead.id === sender.botId) return { refusal: 'no_addressee', detail: 'the sender is that workspace\'s lead' };
       return { bot: lead };
@@ -666,21 +674,37 @@ export class HandoffRouter {
       if (!bot || !bot.enabled) return { refusal: 'no_addressee', detail: `bot ${parent.from.botId} is not enabled` };
       return { bot };
     }
-    const lead = this.leadOf(bots, sender.workspaceId);
+    const lead = this.leadOf(bots, sender.workspaceId, sender.botId);
     if (!lead || lead.id === sender.botId) return { refusal: 'no_addressee', detail: 'a result without replyTo goes to the workspace lead, and there is none to send it to' };
     return { bot: lead };
   }
 
-  private leadOf(bots: NonNullable<ReturnType<HandoffRouterOptions['ports']>['bots']>, workspaceId: string): BotProfile | null {
+  /** A workspace's lead: its oldest enabled coordinator (the team's lead
+   *  routes) other than the sender, else its oldest enabled bot stored with
+   *  the `lead` role (a coordinator's own work goes there, as before). */
+  private leadOf(bots: NonNullable<ReturnType<HandoffRouterOptions['ports']>['bots']>, workspaceId: string, senderId: string): BotProfile | null {
     let enabled: BotProfile[] = [];
     try {
       enabled = bots.listEnabled();
     } catch {
       return null;
     }
-    return enabled
-      .filter((b) => b.enabled && b.role === 'lead' && b.workspaceId === workspaceId)
-      .sort((a, b) => a.createdAt - b.createdAt)[0] ?? null;
+    const here = enabled.filter((b) => b.enabled && b.workspaceId === workspaceId).sort((a, b) => a.createdAt - b.createdAt);
+    return here.find((b) => isCoordinatorBot(b) && b.id !== senderId) ?? here.find((b) => b.role === 'lead') ?? null;
+  }
+
+  /** The hop a running wake hands the bot (addressed to it), or null: the
+   *  handoff the wake delivers, or — for the answer to a question the bot
+   *  asked while it held a hop — that hop. */
+  private wokenHop(botId: string, handoffId: string | undefined): Handoff | null {
+    const woken = handoffId ? this.records.get(handoffId) ?? null : null;
+    if (!woken || woken.to.kind !== 'bot' || woken.to.botId !== botId) return null;
+    if (woken.kind === 'answer' && woken.replyTo) {
+      const ask = this.records.get(woken.replyTo);
+      const hop = ask?.forHop ? this.records.get(ask.forHop) : undefined;
+      if (hop && hop.to.kind === 'bot' && hop.to.botId === botId) return hop;
+    }
+    return woken;
   }
 
   /** Whether a delivered result / refusal already answers this handoff. */
@@ -863,6 +887,10 @@ export class HandoffRouter {
       // owner's view counts it once with the task's own needs-input).
       const named = sanitizeRefs(params.refs);
       const refs = asking?.taskId && !named?.taskId ? { ...(named ?? {}), taskId: asking.taskId } : named;
+      // Asked while the bot holds a hop it has not answered: the answer's
+      // wake answers that hop.
+      const held = this.wokenHop(sender.botId, asking?.handoffId);
+      const forHop = held && (held.kind === 'dispatch' || held.kind === 'message') && !this.answered(held.id) ? held.id : undefined;
       const h: Handoff = {
         version: 1,
         id,
@@ -885,6 +913,7 @@ export class HandoffRouter {
         ...(clientHandoffId ? { clientHandoffId } : {}),
         ...(asking?.reasonKind === 'intro' ? { intro: true as const } : {}),
         ...(asking?.ownerCardId ? { ownerCardId: asking.ownerCardId } : {}),
+        ...(forHop ? { forHop } : {}),
         createdAt: this.now(),
         updatedAt: this.now(),
       };

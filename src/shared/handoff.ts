@@ -56,6 +56,10 @@ export interface Handoff {
    *  (RunningWake.ownerCardId); the question card replies to it when it is
    *  raised in that card's thread. Main-written. */
   ownerCardId?: string;
+  /** ask_person: the handoff the asking bot was working on (a dispatch it
+   *  had not answered yet). The answer's wake answers that hop: a result sent
+   *  from it, with no replyTo, is that hop's result. Main-written. */
+  forHop?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -75,7 +79,8 @@ export const ASK_PERSON_RPC = 'ask.person' as const;
 /** `handoff.send` — a bot sends a dispatch / result / refusal / message. The
  *  sender is the caller's binding; the addressee is decided by the router:
  *  `toBotId` names one bot in any workspace (messaging is every bot's);
- *  else dispatch → `toWorkspaceId`'s enabled lead, result / refusal → the
+ *  else dispatch → `toWorkspaceId`'s enabled lead (its coordinator, else its
+ *  `lead`-role bot), result / refusal → the
  *  `replyTo` handoff's sender (at most one per `replyTo`). `message` needs
  *  `toBotId`. Without a threadId the handoff stays in the parent's thread,
  *  else the running wake's. */

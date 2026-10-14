@@ -232,6 +232,7 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     ...(d.preset ? { preset: d.preset } : {}),
     ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
     ...(d.threadId ? { threadId: d.threadId } : {}),
+    ...(typeof d.handoffId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(d.handoffId) ? { handoffId: d.handoffId } : {}),
   };
 }
 

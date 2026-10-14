@@ -120,6 +120,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     currentWakeId: () => wake,
     currentWakeThread: () => thread as ThreadId | null,
     currentWakeTainted: () => tainted,
+    currentWakeHandoff: () => (wake ? 'h-dispatch' : null),
     openWorkers: () => open,
     usage: () => emptyUsage(),
     workersStarted: (_b, ids) => {
@@ -193,6 +194,13 @@ describe('task.fanout.start — bot origin', () => {
     expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await r.flush();
     expect((r.start.mock.calls[1][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
+  });
+
+  it('records the handoff the asking wake delivers on its tasks', async () => {
+    const r = rig('lead');
+    expect(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
+    await r.flush();
+    expect((r.start.mock.calls[0][0] as FanOutRequest).handoffId).toBe('h-dispatch');
   });
 
   it('a researcher\'s tasks are tainted even from a clean wake; a developer\'s are not', async () => {

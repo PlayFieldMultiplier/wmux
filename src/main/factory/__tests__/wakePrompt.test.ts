@@ -128,6 +128,17 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(done).not.toContain('waiting for input');
   });
 
+  it('a task wake names the handoff its tasks answer, until that handoff has its result', () => {
+    const reason = { kind: 'facts' as const, factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' as const } };
+    const tasks = [{ taskId: 'wtask-1', title: 'README', status: 'review_requested' as const }];
+    const parent = { handoffId: 'h-1', kind: 'dispatch', from: 'Lead (moa)', title: 'Build the widget', body: '' };
+    const text = buildWakePrompt({ item: item(reason), profile, tasks, taskParent: parent });
+    expect(text).toContain('These tasks were started for Lead (moa)\'s dispatch "Build the widget" (handoff h-1).');
+    expect(text).toContain('no reply_to needed');
+    expect(buildWakePrompt({ item: item(reason), profile, tasks, taskParent: { ...parent, answered: true } })).not.toContain('These tasks were started');
+    expect(buildWakePrompt({ item: item(reason), profile, tasks })).not.toContain('These tasks were started');
+  });
+
   it('lists the approvals as they stand, the other bots\' replies to a room message, the language and the owner\'s clock', () => {
     const text = buildWakePrompt({
       item: item({ kind: 'human', text: '머지할거 머지해', source: 'desktop', runId: 'run-c', room: true }, 'general'),

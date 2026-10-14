@@ -36,6 +36,8 @@ export interface WakeHandoffSummary {
   ownerWords?: boolean;
   /** The sender's workspace, when the sender is a bot. */
   fromWorkspaceId?: string;
+  /** It already has its result. */
+  answered?: true;
 }
 
 /** The tail of the wake's room thread. */
@@ -55,6 +57,8 @@ export interface WakePromptInput {
   /** Fan-out tasks named by task facts (`task.<status>:<taskId>` ids). */
   tasks?: readonly WakeTaskSummary[];
   handoff?: WakeHandoffSummary | null;
+  /** A task wake: the handoff its tasks were started for. */
+  taskParent?: WakeHandoffSummary | null;
   thread?: WakePromptThread | null;
   /** A routine wake's routine (routines.ts), when it could be read. */
   routine?: WakeRoutineSummary | null;
@@ -270,6 +274,14 @@ export function buildWakePrompt(input: WakePromptInput): string {
         else if (task) lines.push(`- ${id}`, taskBlock(task));
         else lines.push(`- ${id} (not readable now)`);
         if (task?.status === 'input_required' || id.startsWith('task.input_required:')) waiting = true;
+      }
+      const parent = input.taskParent;
+      if (parent && !parent.answered) {
+        lines.push(
+          '',
+          `These tasks were started for ${parent.from}'s ${parent.kind} "${oneLineName(parent.title)}" (handoff ${parent.handoffId}). `
+            + 'When that work is done, send one `result` with handoff_send (no reply_to needed): it answers that handoff.',
+        );
       }
       if (waiting) {
         lines.push(

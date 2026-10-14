@@ -100,8 +100,9 @@ export interface FactoryRoomPorts {
   currentWake?: (botId: string) => RunningWake | null;
 }
 
-/** `handoffId`: the handoff the wake delivers (a handoff or a mention);
- *  `runId`: the owner message's run (a human wake), so the handoffs the bot
+/** `handoffId`: the handoff the wake delivers (a handoff or a mention), or
+ *  for a task wake the one its tasks were started for (every task of the
+ *  wake, LedgerDispatch.handoffId); `runId`: the owner message's run (a human wake), so the handoffs the bot
  *  sends in that turn join it. */
 export interface RunningWake {
   wakeId: string; attempt: number; handoffId?: string; runId?: string;

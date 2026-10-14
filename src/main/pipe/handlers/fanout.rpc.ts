@@ -125,6 +125,7 @@ import { getFactorySettings } from '../../factory/factorySettings';
 import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
 import { runningWakeTainted } from '../../factory/wakeTaint';
+import { resolveRoomPorts, runningWake } from '../../factory/roomWriter';
 import { emitBotHook } from '../../factory/botHooks';
 import { checkWorkers, recordWorkerStart, type BotUsage, type BudgetRefusalReason } from '../../factory/budget';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
@@ -651,6 +652,10 @@ export interface FanOutBotPort {
   /** The room thread of that running wake, or null (main's wake state, read
    *  with the wake id: the tasks the wake starts report in this thread). */
   currentWakeThread(botId: string): ThreadId | null;
+  /** The handoff that running wake delivers (a dispatch the bot was given,
+   *  or the one its task wake answers), or null. Its tasks record it, so
+   *  their wakes still answer it. */
+  currentWakeHandoff?(botId: string): string | null;
   /** Whether that running wake carried outside text (factory/wakeTaint.ts);
    *  true when it cannot be told. Its tasks' dispatch carries the mark. */
   currentWakeTainted(botId: string): boolean;
@@ -769,6 +774,11 @@ function defaultBotPort(): FanOutBotPort | null {
     currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
     currentWakeThread: (botId) => runtime.currentTurn(botId)?.threadId ?? null,
     currentWakeTainted: (botId) => runningWakeTainted(botId),
+    // The same wake as the turn's: a wake that ended between the two reads has no handoff.
+    currentWakeHandoff: (botId) => {
+      const wake = runningWake(resolveRoomPorts(), botId);
+      return wake && wake.wakeId === runtime.currentTurn(botId)?.wakeId ? wake.handoffId ?? null : null;
+    },
     // Open bot tasks, plus resumed workers whose task row has ended.
     openWorkers: (botId) => {
       const open = countOpenBotWorkers(getTaskLedger().list({ openOnly: true }), botId, (ids) => {
@@ -1117,6 +1127,8 @@ export function registerFanOutRpc(
     let botWakeThread: ThreadId | undefined;
     // Whether that wake carried outside text: its tasks are marked tainted.
     let botWakeTainted = false;
+    // The handoff that wake delivers: its tasks' wakes answer it.
+    let botWakeHandoff: string | undefined;
     // Where the bot was talking when it asked (general included): how its
     // workers' start went is told there.
     let botNoticeThread: ThreadId = GENERAL_THREAD;
@@ -1152,6 +1164,7 @@ export function registerFanOutRpc(
       botNoticeThread = parseThreadId(wakeThread) ?? GENERAL_THREAD;
       // A researcher's tasks read outside text whatever woke it.
       botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false || botTemplate(botProfile) === 'researcher';
+      botWakeHandoff = botPort.currentWakeHandoff?.(bot.botId) ?? undefined;
       const ordinal = /^wake:.+:([1-9][0-9]*)$/.exec(callerKey)?.[1];
       if (!ordinal || Number(ordinal) > BOT_FANOUTS_PER_WAKE_MAX || callerKey !== botFanoutIdempotencyKey(wakeId, Number(ordinal))) {
         return deny(
@@ -1441,6 +1454,7 @@ export function registerFanOutRpc(
         : selection.kind === 'preset' ? { preset: selection.preset.name } : {}),
       ...(checkout ? { checkout } : {}),
       ...(bot && botWakeThread ? { threadId: botWakeThread } : {}),
+      ...(bot && botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
       ...(bot && secretNames ? { secretNames } : {}),
     };
     const presetName = selection.kind === 'preset' ? selection.preset.name : undefined;

@@ -116,6 +116,11 @@ export interface LedgerDispatch {
    *  task's wakes and cards go there; absent (no thread, `general`, or a row
    *  written before it existed) = the task's own `task:<id>` thread. */
   threadId?: string;
+  /** A bot's task: the handoff the wake that started it delivered (a
+   *  dispatch it was given), read from main's own wake state at dispatch.
+   *  The task's wakes answer that handoff: a `result` sent from them, with no
+   *  replyTo, is that handoff's result. Absent = none. */
+  handoffId?: string;
 }
 
 // Lifecycle rules the writer enforces (stated here so the three consumers
