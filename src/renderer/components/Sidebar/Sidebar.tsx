@@ -5,7 +5,7 @@ import { useStore } from '../../stores';
 import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjections';
 import { useGlanceBoardOrder } from './useGlanceBoardOrder';
 import { buildSidebarTree, ORPHAN_GROUP_KEY, type SidebarTreeNode } from './sidebarTree';
-import { countWithoutBotTasks, withoutBotTasks } from './botTasks';
+import { selectBotTaskOwners, withoutBotTasks } from './botTasks';
 import { partitionWorkspaceSettle, workspaceSettleGroupOf } from './workspaceSettleGroups';
 import WorkspaceSettleGroup from './WorkspaceSettleGroup';
 import SidebarTaskGroup, { ClosedPaneTaskGroup } from './SidebarTaskGroup';
@@ -77,13 +77,12 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
   const workspaces = useStore(useShallow(selectWorkspaceIdName));
   // PC rail: shadow workspaces (another computer's, opened from the PC
   // switcher) are never this computer's rows, count or Ctrl+N numbers.
-  // Bot workers are listed on the Bots page instead (botTasks.ts); the
-  // one the owner is in stays while it is active.
-  const fanoutOrigin = useStore((s) => s.fanoutOrigin);
-  const activeIdForList = useStore((s) => s.activeWorkspaceId);
+  // Bot workers are listed on the Bots page instead (botTasks.ts), the
+  // active one too.
+  const botOwners = useStore(selectBotTaskOwners);
   const listed = useMemo(
-    () => withoutBotTasks(listedWorkspaces(workspaces), fanoutOrigin, activeIdForList),
-    [workspaces, fanoutOrigin, activeIdForList],
+    () => withoutBotTasks(listedWorkspaces(workspaces), botOwners),
+    [workspaces, botOwners],
   );
   // PC rail: with a paired computer selected, the page lists that computer's
   // workspaces instead (HostWorkspaceList). Unknown ids read as this computer.
@@ -236,7 +235,7 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
   // Ctrl+F terminal-search shortcut (useKeyboard), so this is scoped to the
   // sidebar root via onKeyDown and stops propagation so the global handler
   // does not also fire.
-  const listedCount = countWithoutBotTasks(listed, fanoutOrigin);
+  const listedCount = listed.length;
   const handleSidebarKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'f' && (e.ctrlKey || e.metaKey) && listedCount >= 3) {
       e.preventDefault();
@@ -297,12 +296,11 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
   }, [archiveWorkspace]);
 
   const workspaceById = useMemo(() => new Map(workspaces.map((w) => [w.id, w])), [workspaces]);
-  // The Ctrl+N digits skip bot workers, the active one the list keeps too
-  // (selectShortcutWorkspaces).
-  const numbered = useMemo(() => withoutBotTasks(filteredWorkspaces, fanoutOrigin), [filteredWorkspaces, fanoutOrigin]);
+  // The Ctrl+N digits number the rows shown (selectShortcutWorkspaces).
+  const numbered = filteredWorkspaces;
   // Filtering only changes what the list shows; the header counts what is left.
   const narrowed = filterOn || wsSearch.trim() !== '';
-  const shownCount = countWithoutBotTasks(filteredWorkspaces, fanoutOrigin);
+  const shownCount = filteredWorkspaces.length;
   // Bookmarked only, with nothing bookmarked: the empty list says how to
   // bookmark instead of "No workspaces match".
   const noBookmarks = useStore((s) => wsFilter.bookmarked

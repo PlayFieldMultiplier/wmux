@@ -599,8 +599,6 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
   const snoozedUntil = useRowStore((s) => s.workspaceSettle.states[workspaceId]?.snoozedUntil ?? 0);
   // Main refuses to settle these (rules (b)/(c)); the item says so up front.
   const settleBlocked = pinned || needsYou || agentStatus === 'running' || agentStatus === 'awaiting_input';
-  // The HQ workspace never settles or snoozes (rule (d)).
-  const isHq = useRowStore((s) => s.workspaceSettle.hqWorkspaceId === workspaceId);
   // Name first. At rest the row shows the workspace name and the signals that
   // change on their own (status dot, unread, idle, "needs you"); the project
   // badge, the agent count and the shortcut hint are chrome you only look for
@@ -1645,8 +1643,8 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
             <button
               className="w-full text-left px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)] disabled:opacity-40 disabled:hover:bg-transparent"
               style={{ color: 'var(--text-main)' }}
-              disabled={isHq || settleBlocked}
-              title={isHq ? t('workspaceSettle.settleHq') : settleBlocked ? t('workspaceSettle.settleBlocked') : undefined}
+              disabled={settleBlocked}
+              title={settleBlocked ? t('workspaceSettle.settleBlocked') : undefined}
               onClick={() => { setMenuPos(null); void sendWorkspaceSettleCommand({ op: 'settle', workspaceId }); }}
               data-workspace-action="settle"
             >
@@ -1662,7 +1660,7 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
             >
               {t('workspaceSettle.unsnooze')}
             </button>
-          ) : !pinned && !isHq && (
+          ) : !pinned && (
             <div
               className="relative"
               onMouseEnter={() => setSnoozeOpen(true)}

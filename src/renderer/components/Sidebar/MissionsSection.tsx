@@ -36,7 +36,7 @@ import { useT } from '../../hooks/useT';
 import type { WorkTask } from '../../../shared/workTask';
 import { summarizeMissions } from '../../stores/selectors/missions';
 import { FOCUS_RING } from '../focusRing';
-import { isBotTask } from './botTasks';
+import { isBotTask, selectBotTaskOwners } from './botTasks';
 
 /**
  * 모든 부모 캐시를 평탄화·정렬한 미션 목록(순수 함수 — 테스트 가능). open을 먼저,
@@ -82,11 +82,11 @@ function useLiveMissions(): WorkTask[] {
   // and any id containing a comma would be split apart.
   const workspaceIds = useStore(useShallow((s) => s.workspaces.map((w) => w.id)));
   // A bot's workers are counted on the Bots page, not here (botTasks.ts).
-  const fanoutOrigin = useStore((s) => s.fanoutOrigin);
+  const botOwners = useStore(selectBotTaskOwners);
   return useMemo(
     () => selectLiveMissions(byWorkspace, new Set(workspaceIds))
-      .filter((task) => !task.paneGroupId || !isBotTask(fanoutOrigin[task.paneGroupId])),
-    [byWorkspace, workspaceIds, fanoutOrigin],
+      .filter((task) => !isBotTask(task.paneGroupId, botOwners)),
+    [byWorkspace, workspaceIds, botOwners],
   );
 }
 

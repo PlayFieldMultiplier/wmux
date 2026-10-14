@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The Bots rail page: empty states, the conversation list (HQ first,
-// needs-you on the bot rows), a 1:1 and a group chat, the thread chip,
+// The Bots rail page: the first screen, the conversation list (by latest
+// activity, no pinned HQ; needs-you on the bot rows), adding a bot, a 1:1 and a group chat, the thread chip,
 // sending to one bot, a worker's Open, the rail item's route and badge (the
 // sum of the page's own rows) and the Toggle Company View shortcut.
 import { act } from 'react';
@@ -14,7 +14,8 @@ import type { RoomCard } from '../../../../shared/room';
 import type { BotProfile, BotRole } from '../../../../shared/bot';
 import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
 import type { Pane, Workspace } from '../../../../shared/types';
-import BotsPage, { newBotIds } from '../BotsPage';
+import BotsPage, { isStillStarting } from '../BotsPage';
+import type { EnginePort } from '../botsEngine';
 import MiniSidebar from '../../Sidebar/MiniSidebar';
 import { chatCards, composerHint, oneToOneRefusal } from '../BotsChat';
 import type { Conversation } from '../botsModel';
@@ -132,7 +133,7 @@ async function render(node: React.ReactNode) {
 }
 
 describe('Bots page', () => {
-  it('paused: the conversations and live workers stay, read-only, under a banner whose Run bots turns them on', async () => {
+  it('bots off: the conversations and live workers stay, read-only, under a banner whose Turn bots on turns them on', async () => {
     // Opening the page asks main for the factory's state again.
     const off = api();
     off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
@@ -148,9 +149,10 @@ describe('Bots page', () => {
     } as never));
     const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
     await render(<BotsPage settings={settings} />);
-    expect(q('[data-bots-paused]')?.textContent).toContain('Bots are paused');
+    expect(q('[data-bots-paused]')?.textContent).toContain('Bots are off');
+    expect(q('[data-bots-run]')?.textContent).toBe('Turn bots on');
     // The list is all there, "+" too, and nothing is counted.
-    expect(rowIds()).toEqual(['room:hq', 'room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`]);
+    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`, 'room:hq']);
     expect(q('[data-bots-add]')).not.toBeNull();
     expect(container.querySelectorAll('[data-bots-needs]')).toHaveLength(0);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
@@ -159,36 +161,102 @@ describe('Bots page', () => {
     expect(container.querySelector('[data-testid="room-card"]')).toBeNull();
     expect(q('[data-room-card-id="c5"]')?.textContent).toContain('Merge #1 now?');
     expect(q<HTMLButtonElement>('[data-testid="bots-composer-send"]')!.disabled).toBe(true);
-    expect(q('[data-testid="bots-composer-status"]')?.textContent).toBe('Bots are paused. Run bots to message them.');
+    expect(q('[data-testid="bots-composer-status"]')?.textContent).toBe('Bots are off. Turn bots on to message them.');
     await act(async () => { q('[data-bots-run]')!.click(); });
     expect(settings.set).toHaveBeenCalledWith({ enabled: true });
   });
 
-  it('with no bot yet: "+" and one step, add a bot to the current workspace, then its chat', async () => {
+  it('with no bot yet: one centred panel, a name and Start, which turns the bots on, adds the bot here and opens its chat', async () => {
     bots = [];
-    seedRooms();
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
     act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
-    const create = vi.fn(async () => ({ ok: true }));
+    const created = botRow('bot-0000000e', 'lead', 'w1', 9, 'Ada').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: created }));
     const notify: Array<() => void> = [];
     setFactoryBotPort({ ...port, create, subscribe: (fn: () => void) => { notify.push(fn); return () => undefined; } } as unknown as FactoryBotPort);
-    await render(<BotsPage />);
-    expect(q('[data-bots-add]')).not.toBeNull();
-    expect(q('[data-bots-first-run]')?.textContent).toContain('Add a bot to api');
-    act(() => q('[data-bots-first-add]')!.click());
-    const dialog = document.querySelector('[data-testid="bots-add-bot"]')!;
-    expect(dialog).not.toBeNull();
-    // Preset: the current workspace; the bot gets its name (and, if wanted, a template and job) here.
-    const selects = [...dialog.querySelectorAll<HTMLSelectElement>('select')];
-    expect(selects.some((el) => el.value === 'w1')).toBe(true);
-    expect(dialog.querySelector('[data-testid="factory-add-bot-name"]')).not.toBeNull();
-    expect(dialog.querySelectorAll('[data-testid="factory-add-bot-template"]').length).toBeGreaterThan(0);
-    const cancel = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((el) => el.textContent === 'Cancel')!;
-    act(() => cancel.click());
-    bots = [botRow(LEAD, 'lead', 'w1', 9, 'Lead')];
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    const engine: EnginePort = { readiness: vi.fn(async () => ({ ready: true })) };
+    await render(<BotsPage settings={settings} engine={engine} />);
+    // No list, no banner: the one panel, for the current workspace.
+    expect(q('[data-bots-first-run]')?.textContent).toContain('Name your first bot');
+    expect(q('[data-bots-first-run]')?.textContent).toContain('api');
+    expect(q('[data-bots-paused]')).toBeNull();
+    expect(q('[data-bots-row]')).toBeNull();
+    const start = q<HTMLButtonElement>('[data-bots-first-start]')!;
+    expect(start.disabled).toBe(true);
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(start.disabled).toBe(false);
+    await act(async () => { start.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(create).toHaveBeenCalledWith({ workspaceId: 'w1', name: 'Ada' });
+    // Its chat opens at once, starting, before the list shows the bot.
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+    expect(q('[data-bots-starting]')?.textContent).toContain('Starting Ada');
+    // Listed but not greeted yet: still starting.
+    bots = [{ ...botRow('bot-0000000e', 'lead', 'w1', 9, 'Ada'), bot: created }];
     await act(async () => { for (const fn of notify) fn(); });
     await act(async () => { await Promise.resolve(); });
-    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe(`bot:${LEAD}`);
-    expect(q('[data-bots-first-run]')).toBeNull();
+    expect(q('[data-bots-starting]')).not.toBeNull();
+    // The greeting arrives: the bot's chat replaces the placeholder.
+    act(() => useStore.setState({
+      roomStatus: { running: true, enabled: true, hqWorkspaceId: 'hq' },
+      roomTimelines: {
+        [timelineKey('w1', ALL_THREADS)]: { cards: [card({ workspaceId: 'w1', actor: by('w1', 'bot-0000000e'), kind: 'question', title: 'Hi, what should I do?', greeting: true, state: 'open' })], nextSinceSeq: 0, hasMore: false },
+      },
+    } as never));
+    expect(q('[data-bots-starting]')).toBeNull();
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+  });
+
+  it('first screen: an engine that cannot sign in says why, offers Log in to Claude, and Start waits until it can', async () => {
+    bots = [];
+    seedRooms();
+    const create = vi.fn(async () => ({ ok: false as const, code: 'invalid_argument' as const, message: 'x' }));
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
+    let ready = false;
+    const engine: EnginePort = {
+      readiness: vi.fn(async () => (ready ? { ready: true } : { ready: false, reason: 'claude-not-logged-in' as const })),
+      login: vi.fn(async () => { ready = true; }),
+    };
+    await render(<BotsPage engine={engine} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-engine="claude-not-logged-in"]')?.textContent).toContain('Claude isn\'t signed in');
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(true);
+    // One primary: Log in while Start waits.
+    expect(q('[data-bots-engine-login]')?.className).toContain('ui-btn-primary');
+    expect(q('[data-bots-first-start]')?.className).not.toContain('ui-btn-primary');
+    await act(async () => { q('[data-bots-engine-login]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(engine.login).toHaveBeenCalledTimes(1);
+    expect(q('[data-bots-engine]')).toBeNull();
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
+  });
+
+  it('first screen: a build that cannot tell the engine\'s state never blocks Start', async () => {
+    bots = [];
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    await render(<BotsPage engine={{}} />);
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q('[data-bots-engine]')).toBeNull();
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
   });
 
   it('composerHint: a Lead\'s empty 1:1 asks for its first task; otherwise "Message <name>"', () => {
@@ -299,10 +367,11 @@ describe('Bots page', () => {
     expect(q('[data-testid="bots-stop-bot"]')).toBeNull();
   });
 
-  it('lists the HQ room first, then rooms and bots by latest activity, with needs-you on the bot that asked', async () => {
+  it('lists rooms and bots by latest activity (the HQ room is not pinned), with needs-you on the bot that asked', async () => {
     seedRooms();
     await render(<BotsPage />);
-    expect(rowIds()).toEqual(['room:hq', 'room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`]);
+    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`, 'room:hq']);
+    expect(container.textContent).not.toContain('HQ');
     // Lead: one open question and its worker t1 (status not reported: not live).
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('1');
     expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-needs]`)).toBeNull();
@@ -629,33 +698,73 @@ describe('Bots page', () => {
     expect(update).toHaveBeenCalledWith(LEAD, { job: 'Ship features.' });
   });
 
-  it('"+" opens the add form in a dialog, and the bot it adds is then selected', async () => {
+  it('"+" opens the add form in a dialog, and the bot it adds is selected at once', async () => {
     seedRooms();
-    const create = vi.fn(async () => ({ ok: true }));
-    const notify: Array<() => void> = [];
-    setFactoryBotPort({ ...port, create, subscribe: (fn: () => void) => { notify.push(fn); return () => undefined; } } as unknown as FactoryBotPort);
+    const added = botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: added }));
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
     await render(<BotsPage />);
     act(() => q('[data-bots-add]')!.click());
-    expect(document.querySelector('[data-testid="bots-add-bot"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="bots-add-bot"]')?.textContent).toContain('Add bot');
+    const dialog = () => document.querySelector('[data-testid="bots-add-bot"]');
+    expect(dialog()).not.toBeNull();
+    expect(dialog()?.textContent).toContain('Add bot');
     // A bot belongs to one of the owner's workspaces, never a bot worker's.
     const options = [...document.querySelectorAll('[data-testid="bots-add-bot"] option')].map((o) => o.textContent);
     expect(options).toContain('api');
     expect(options).not.toContain('wtask: fix login');
-    // The form closes itself after adding (onDone); the list then shows the bot.
-    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="bots-add-bot"] button')].find((b) => b.textContent === 'Cancel')!;
-    act(() => cancel.click());
-    expect(document.querySelector('[data-testid="bots-add-bot"]')).toBeNull();
-    bots = [...bots, botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage')];
-    await act(async () => { for (const fn of notify) fn(); });
+    // A disabled Add says why.
+    const submit = dialog()!.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-submit"]')!;
+    expect(submit.disabled).toBe(true);
+    expect(dialog()!.querySelector('[data-testid="factory-add-bot-blocked"]')?.textContent).toBe('Give the bot a name to add it.');
+    const name = dialog()!.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Triage');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(dialog()!.querySelector('[data-testid="factory-add-bot-blocked"]')).toBeNull();
+    await act(async () => { submit.click(); });
     await act(async () => { await Promise.resolve(); });
+    // The form closes and the new bot's chat opens, starting, with no wait for the list.
+    expect(dialog()).toBeNull();
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+    expect(q('[data-bots-starting]')).not.toBeNull();
   });
 
-  it('newBotIds names the bots a list gained', () => {
-    const before = new Set([LEAD, VERIFIER]);
-    expect(newBotIds(before, [botRow(LEAD, 'lead', 'w1', 1, 'Lead'), botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage')])).toEqual(['bot-0000000e']);
-    expect(newBotIds(before, [])).toEqual([]);
+  it('"+" while the bots are off: Add asks once, in place, then turns them on and adds', async () => {
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    seedRooms(false);
+    const added = botRow('bot-0000000e', 'triage', 'w1', 9, 'Triage').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: added }));
+    setFactoryBotPort({ ...port, create } as unknown as FactoryBotPort);
+    const settings = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => ({ enabled: true }) as never) };
+    await render(<BotsPage settings={settings} />);
+    act(() => q('[data-bots-add]')!.click());
+    const dialog = document.querySelector('[data-testid="bots-add-bot"]')!;
+    const name = dialog.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Triage');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-submit"]')!.click());
+    expect(create).not.toHaveBeenCalled();
+    expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm-row"]')?.textContent).toContain('Adding Triage turns bots on');
+    await act(async () => { dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-on-confirm"]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('isStillStarting: a new bot starts until its first message, unless its turn failed', () => {
+    const conv = (last: RoomCard | null, lastError?: { message: string; at: number }): Conversation => {
+      const row = botRow(LEAD, 'lead', 'w1', 1, 'Lead');
+      return { kind: 'bot', id: `bot:${LEAD}`, workspaceId: 'w1', row: { ...row, status: { ...row.status!, ...(lastError ? { lastError } : {}) } }, last, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [] };
+    };
+    expect(isStillStarting(undefined)).toBe(true);
+    expect(isStillStarting(conv(null))).toBe(true);
+    expect(isStillStarting(conv(card({ workspaceId: 'w1', actor: by('w1', LEAD) })))).toBe(false);
+    expect(isStillStarting(conv(null, { message: 'no login', at: 1 }))).toBe(false);
   });
 
   it('"+" without a create port opens the factory settings page', async () => {
@@ -723,7 +832,7 @@ describe('BotsChat helpers', () => {
   });
 
   it('chatCards narrows to a thread', () => {
-    const room: Conversation = { kind: 'room', id: 'room:w1', workspaceId: 'w1', isHq: false, bots: [], workers: [], last: null, lastAt: 0, needsYou: 0 };
+    const room: Conversation = { kind: 'room', id: 'room:w1', workspaceId: 'w1', bots: [], workers: [], last: null, lastAt: 0, needsYou: 0 };
     const a = card({ workspaceId: 'w1', actor: by('w1', LEAD) });
     const b = card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: 'task:t1' });
     expect(chatCards(room, [a, b], null)).toEqual([a, b]);

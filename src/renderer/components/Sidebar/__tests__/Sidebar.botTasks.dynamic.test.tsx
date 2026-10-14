@@ -2,14 +2,15 @@
 // 2026-10-13 — a bot's fan-out workers live on the Bots page: the
 // Workspaces sidebar leaves them out of the task groups and the header count,
 // the collapsed rail and the Ctrl+N digits too. Human / GUI / orchestrator
-// tasks are unchanged. The worker the owner is in stays listed while active.
+// tasks are unchanged. The worker the owner is in is not listed either
+// (2026-10-14: a bot's worker opens inside the Bots page).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import Sidebar from '../Sidebar';
 import { useStore } from '../../../stores';
 import { selectShortcutWorkspaces } from '../workspaceFilter';
-import { countWithoutBotTasks, isBotTask, withoutBotTasks } from '../botTasks';
+import { botTaskOwners, isBotTask, selectOwnerWorkspaces, withoutBotTasks } from '../botTasks';
 import type { Pane, Surface, Workspace } from '../../../../shared/types';
 import type { FanoutOrigin } from '../../../../shared/fanoutOrigin';
 
@@ -82,43 +83,50 @@ describe('bot workers leave the Workspaces sidebar', () => {
     expect(total()).toBe('4');
   });
 
-  it('a bot worker the owner is in stays listed while active, still uncounted', () => {
+  it('a bot worker the owner is in is not listed either', () => {
     seed('t3');
     act(() => root.render(<Sidebar />));
-    expect(text()).toContain('beta');
+    expect(text()).not.toContain('beta');
     expect(total()).toBe('4');
   });
 
   it('the Ctrl+N digits skip bot workers, the active one too', () => {
     seed();
     expect(selectShortcutWorkspaces(useStore.getState()).map((w) => w.id)).toEqual(['hq', 'bee', 't1', 't2']);
-    // Listed while active, but numbering it would move every later digit
-    // the moment the owner leaves it.
     seed('t3');
     expect(selectShortcutWorkspaces(useStore.getState()).map((w) => w.id)).toEqual(['hq', 'bee', 't1', 't2']);
   });
 });
 
 describe('botTasks helpers', () => {
-  it('isBotTask is true only for a bot origin', () => {
-    expect(isBotTask({ kind: 'bot', botId: BOT })).toBe(true);
-    expect(isBotTask({ kind: 'gui' })).toBe(false);
-    expect(isBotTask({ kind: 'orchestrator' })).toBe(false);
-    expect(isBotTask({ kind: 'pane', paneId: 'p' })).toBe(false);
-    expect(isBotTask(undefined)).toBe(false);
+  const list = [{ id: 'hq' }, { id: 't3' }, { id: 't1' }, { id: 't2' }];
+
+  it('a task is a bot\'s by its bot origin, open workspaces only', () => {
+    const owners = botTaskOwners(list, { ...origins(), gone: { kind: 'bot', botId: BOT } });
+    expect(owners).toEqual({ t3: BOT });
+    expect(isBotTask('t3', owners)).toBe(true);
+    expect(isBotTask('t2', owners)).toBe(false);
+    expect(isBotTask('t1', owners)).toBe(false);
+    expect(isBotTask(undefined, owners)).toBe(false);
+    // The same answer is the same object (a subscriber does not re-render).
+    expect(botTaskOwners([...list], { ...origins() })).toBe(owners);
   });
 
-  it('withoutBotTasks keeps every other row, the kept one in place, and the same array when nothing leaves', () => {
-    const list = [{ id: 'hq' }, { id: 't3' }, { id: 't1' }];
-    expect(withoutBotTasks(list, origins()).map((w) => w.id)).toEqual(['hq', 't1']);
-    expect(withoutBotTasks(list, origins(), 't3').map((w) => w.id)).toEqual(['hq', 't3', 't1']);
+  it('withoutBotTasks keeps every other row in place, and the same array when nothing leaves', () => {
+    const owners = botTaskOwners(list, origins());
+    expect(withoutBotTasks(list, owners).map((w) => w.id)).toEqual(['hq', 't1', 't2']);
     const plain = [{ id: 'hq' }, { id: 't1' }];
-    expect(withoutBotTasks(plain, origins())).toBe(plain);
-    expect(withoutBotTasks(list, undefined)).toBe(list);
+    expect(withoutBotTasks(plain, owners)).toBe(plain);
+    expect(withoutBotTasks(list, botTaskOwners([{ id: 'hq' }], {}))).toBe(list);
   });
 
-  it('countWithoutBotTasks never counts a bot worker', () => {
-    expect(countWithoutBotTasks([{ id: 'hq' }, { id: 't3' }, { id: 't2' }], origins())).toBe(2);
-    expect(countWithoutBotTasks([{ id: 'hq' }], undefined)).toBe(1);
+  it('selectOwnerWorkspaces is the store\'s own array with no bot worker, and a stable filtered one with', () => {
+    const plain = [HQ, OTHER];
+    expect(selectOwnerWorkspaces({ workspaces: plain, fanoutOrigin: {} })).toBe(plain);
+    const all = [HQ, OTHER, BOTW];
+    const o = origins();
+    const first = selectOwnerWorkspaces({ workspaces: all, fanoutOrigin: o });
+    expect(first.map((w) => w.id)).toEqual(['hq', 'bee']);
+    expect(selectOwnerWorkspaces({ workspaces: all, fanoutOrigin: o })).toBe(first);
   });
 });

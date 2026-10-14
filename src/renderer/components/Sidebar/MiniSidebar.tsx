@@ -22,7 +22,7 @@ import { PcSwitcherRailItem } from './PcSwitcher';
 import { HostRailAvatars } from './HostWorkspaceList';
 import { LOCAL_PC_ID } from '../../../shared/pcRail';
 import { listedWorkspaces } from '../Moa/moaHqGuard';
-import { withoutBotTasks } from './botTasks';
+import { selectBotTaskOwners, withoutBotTasks } from './botTasks';
 import { workspaceShortcutNumber } from '../../../shared/keymap';
 
 /** PresetPicker width (w-52), used to keep the flyout on-screen. */
@@ -46,14 +46,12 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
   // port 변경에는 리렌더되지 않게 한다.
   const allWorkspaces = useStore(useShallow(selectWorkspaceRailSummary));
   // PC rail: another computer's shadow workspaces are never rail avatars.
-  // Bot workers are the Bots page's (botTasks.ts), the active one aside.
-  const fanoutOrigin = useStore((s) => s.fanoutOrigin);
-  const activeIdForList = useStore((s) => s.activeWorkspaceId);
+  // Bot workers are the Bots page's (botTasks.ts), the active one too.
+  const botOwners = useStore(selectBotTaskOwners);
   const workspaces = useMemo(
-    () => withoutBotTasks(listedWorkspaces(allWorkspaces), fanoutOrigin, activeIdForList),
-    [allWorkspaces, fanoutOrigin, activeIdForList],
+    () => withoutBotTasks(listedWorkspaces(allWorkspaces), botOwners),
+    [allWorkspaces, botOwners],
   );
-  const numbered = useMemo(() => withoutBotTasks(workspaces, fanoutOrigin), [workspaces, fanoutOrigin]);
   // Dot source (agent-status-dot fix): whole-workspace roll-up, same derivation
   // as WorkspaceItem — not the active-pane-only `ws.agentStatus` projection.
   const agentStatusById = useStore(useShallow(selectAllWorkspaceAgentStatus));
@@ -204,8 +202,7 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
           // the tooltip, the reorder payload — uses the unfiltered position, so
           // a pinned row keeps its real number and drops land where it lives.
           const railIndex = workspaces.indexOf(ws);
-          // A bot worker the rail keeps while active takes no digit.
-          const shortcutNumber = workspaceShortcutNumber(numbered.findIndex((w) => w.id === ws.id), numbered.length);
+          const shortcutNumber = workspaceShortcutNumber(railIndex, workspaces.length);
           const isActive = ws.id === activeWorkspaceId;
           const isMultiview = multiviewIds.includes(ws.id);
           const isDragging = draggingIndex === i;

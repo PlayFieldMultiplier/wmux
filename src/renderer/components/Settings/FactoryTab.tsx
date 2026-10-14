@@ -1,8 +1,8 @@
 // ─── Settings › Factory ──────────────────────────────────────────────────────
 //
 // The agent factory's few switches (factory/settings.json, owned by the bot
-// runtime), read and written through the factory settings port: on/off, the
-// HQ workspace, trusted PR authors, the morning report time, whether the
+// runtime), read and written through the factory settings port: on/off,
+// trusted PR authors, the morning report time, whether the
 // Verifier runs on the owner's own PRs, the engine new bots run on, the
 // factory-wide cap on bots in a turn and the merge lane's auto-merge switch
 // and daily cap — then each workspace's bots (named as the bot port lists
@@ -12,9 +12,10 @@
 // "Add bot" (workspace and name; optionally a picture, a template chip that
 // prefills the job, the job and a repository) when the bot port can create
 // them. A workspace works on one repository: once a bot there has one, a new
-// bot takes it; before that, main suggests the workspace's own folder, and
-// the owner picks a folder only to change it or when there is no
-// suggestion. A picture is
+// bot takes it; before that, main suggests the workspace's own folder, shown
+// as "Works on <repo>" with Change and None (nothing is attached unseen).
+// Adding a bot while the bots are off turns them on, after one inline
+// confirm. A disabled Add says why in one line. A picture is
 // picked in main's image dialog and comes back as a preview; it is saved
 // with the new bot, or on the editor's Save. Without the
 // factory in this build the rows are shown switched off, and one note says
@@ -22,9 +23,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { isMoaHqWorkspace } from '../../stores/slices/moaSlice';
 import { BOT_JOB_MAX, BOT_NAME_MAX, TEMPLATE_LEGACY_ROLE, normalizeBotJob, normalizeBotName, type BotRole, type BotTemplate } from '../../../shared/bot';
 import type { FactoryBotAvatarPickResult, FactoryBotRepoSuggestion } from '../../../shared/botCreate';
+import type { BotProfile } from '../../../shared/bot';
 import { FACTORY_LANE_DAILY_CAP_MAX } from '../../../shared/factorySettings';
 import { refreshRoomStatus } from '../../hooks/useRoomSync';
 import {
@@ -48,6 +49,10 @@ import Select from '../ui/Select';
 import Input from '../ui/Input';
 import { FOCUS_RING } from '../focusRing';
 import { BotSecretsSection, PhoneBotSelect } from './BotSecretsSection';
+import { InlineConfirm } from '../Bots/InlineConfirm';
+import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
+import { listedWorkspaces } from '../../stores/slices/moaSlice';
+import { createBot, turnBotsOn } from '../Bots/botsAddBot';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -283,6 +288,9 @@ export function addBotRepoView(
   workspaceId: string,
   suggestion: FactoryBotRepoSuggestion | null,
   folder: string | null,
+  /** The owner pressed None: no repository (an inherited one still holds:
+   *  main gives every bot of the workspace its repository). */
+  none = false,
 ): AddBotRepoView {
   const s = suggestion?.ok ? suggestion : null;
   const own = workspaceRepoOf(rows, workspaceId);
@@ -291,13 +299,14 @@ export function addBotRepoView(
     return { kind: 'inherited', repoKey: own.repoKey, root: own.repoPath, displayRoot };
   }
   if (s?.inherited) return { kind: 'inherited', repoKey: s.repoKey, root: s.root, displayRoot: s.displayRoot };
+  if (none) return { kind: 'none' };
   if (folder) return { kind: 'picked', folder };
   if (s) return { kind: 'suggested', repoKey: s.repoKey, root: s.root, displayRoot: s.displayRoot };
   return { kind: 'none' };
 }
 
 /** The folder picker: the app's own dialog, the first folder or null. */
-async function pickFolderDialog(): Promise<string | null> {
+export async function pickFolderDialog(): Promise<string | null> {
   const api = (globalThis as { electronAPI?: { dialog?: { pickFolder?: () => Promise<string[]> } } }).electronAPI;
   const picked = await api?.dialog?.pickFolder?.();
   return picked && picked.length > 0 ? picked[0] : null;
@@ -309,8 +318,8 @@ type Workspaces = readonly { id: string; name: string }[];
 const NO_LIST_PORT: FactoryBotPort = { available: false, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: false }) };
 
 export interface AddBotFormProps {
-  /** Called after a bot was added, and on Cancel. */
-  onDone: () => void;
+  /** Called with the new bot after it was added, and with nothing on Cancel. */
+  onDone: (bot?: BotProfile) => void;
   /** The rest default to the app's own: the bot port, its bots, the store's
    *  workspaces (the active one first picked) and the folder dialog. */
   t?: T;
@@ -319,13 +328,98 @@ export interface AddBotFormProps {
   workspaces?: Workspaces;
   defaultWorkspaceId?: string;
   pickFolder?: () => Promise<string | null>;
+  /** The bots are off: Add asks once, in place, then turns them on. */
+  botsOff?: boolean;
+  /** Turns the bots on (default: the factory settings port). False: main
+   *  did not take it. */
+  turnOn?: () => Promise<boolean>;
+}
+
+/** Why Add cannot be pressed, as one line's key, or null. Pure. */
+export function addBotBlockedReason(p: { canCreate: boolean; workspaceId: string; name: string; jobOk: boolean }): string | null {
+  if (!p.canCreate) return 'settings.factory.notStarted';
+  if (!p.workspaceId) return 'settings.factory.addBotNeedWorkspace';
+  if (p.name.trim() === '') return 'settings.factory.addBotNeedName';
+  if (!normalizeBotName(p.name)) return 'settings.factory.addBotBadName';
+  if (!p.jobOk) return 'settings.factory.addBotBadJob';
+  return null;
+}
+
+/** "Works on acme/app · ~/code/app" with Change and None, or "No
+ *  repository" with Choose folder…: what a new bot will work on, always in
+ *  view (addBotRepoView). Shared with the Bots page's first screen. */
+export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
+  view: AddBotRepoView;
+  t: T;
+  busy: boolean;
+  onChoose: () => void;
+  onNone: () => void;
+}): React.ReactElement {
+  const works = view.kind !== 'none';
+  return (
+    <div data-testid="factory-add-bot-repo-row" data-repo-kind={view.kind} className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+      {works && <span className="shrink-0 text-[12px] text-[var(--text-sub)]">{t('settings.factory.addBotWorksOn')}</span>}
+      {(view.kind === 'inherited' || view.kind === 'suggested') && (
+        <RepoLine repoKey={view.repoKey} folder={view.displayRoot} testId="factory-add-bot-repo" />
+      )}
+      {view.kind === 'picked' && <span data-testid="factory-add-bot-path" className="min-w-0 truncate font-mono text-[11px] text-[var(--text-main)]" title={view.folder}>{view.folder}</span>}
+      {view.kind === 'none' && <span data-testid="factory-add-bot-no-repo" className="shrink-0 text-[13px] text-[var(--text-main)]">{t('settings.factory.addBotNoRepo')}</span>}
+      {view.kind !== 'inherited' && (
+        <span className="flex shrink-0 items-center gap-1">
+          <Button size="sm" variant="secondary" data-testid="factory-add-bot-folder" onClick={onChoose} disabled={busy}>
+            {t(works ? 'settings.factory.addBotChangeFolder' : 'settings.factory.addBotChooseFolder')}
+          </Button>
+          {works && (
+            <Button size="sm" variant="ghost" data-testid="factory-add-bot-repo-none" onClick={onNone} disabled={busy}>
+              {t('settings.factory.addBotRepoNone')}
+            </Button>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** What "Add bot" shows for a workspace's repository and what it sends:
+ *  main's suggestion (asked again when the workspace's bots' repo or its
+ *  folder changes), a picked folder, or None. Shared with the first screen. */
+export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow[], workspaceId: string, pickFolder: () => Promise<string | null>) {
+  const [folder, setFolder] = useState<string | null>(null);
+  const [none, setNone] = useState(false);
+  const [suggestion, setSuggestion] = useState<FactoryBotRepoSuggestion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const own = workspaceRepoOf(rows, workspaceId);
+  const ownKey = own ? `${own.repoKey}\n${own.repoPath}` : '';
+  // A folder picked (or None pressed) for one workspace is not another's.
+  useEffect(() => { setFolder(null); setNone(false); }, [workspaceId]);
+  // Main's suggestion for the workspace, asked again when its bots' repo or
+  // its folder changes (the folder only triggers the ask; main reads its own).
+  const shownCwd = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.metadata?.cwd ?? '');
+  useEffect(() => {
+    setSuggestion(null);
+    if (!port.suggestRepo || !workspaceId) return;
+    let live = true;
+    port.suggestRepo(workspaceId).then((s) => { if (live) setSuggestion(s); }, () => undefined);
+    return () => { live = false; };
+  }, [port, workspaceId, ownKey, shownCwd]);
+  const view = addBotRepoView(rows, workspaceId, suggestion, folder, none);
+  const repoFolder = view.kind === 'picked' ? view.folder : view.kind === 'suggested' ? view.root : undefined;
+  const choose = async () => {
+    try {
+      const picked = await pickFolder();
+      if (picked) { setFolder(picked); setNone(false); setError(null); }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return { view, repoFolder, choose, chooseNone: () => { setNone(true); setFolder(null); }, error };
 }
 
 /** "Add bot": a workspace and a name, optionally a picture, a template
  *  chip that prefills the job, the job itself and the repository
- *  (addBotRepoView; optional). Main derives the repo from the folder sent
- *  (none for an inherited one), creates the bot and wakes it once to greet
- *  the owner. Self-contained, so any page can host it. */
+ *  (addBotRepoView; optional, always shown). Main derives the repo from the
+ *  folder sent (none for an inherited one), creates the bot and wakes it
+ *  once to greet the owner. Self-contained, so any page can host it. */
 export function AddBotForm(props: AddBotFormProps): React.ReactElement {
   const ownT = useT();
   const t = props.t ?? ownT;
@@ -345,32 +439,18 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
   // The text the last chip put in the job field: a chip replaces the job
   // only while the owner has not written their own.
   const prefilled = useRef('');
-  const [folder, setFolder] = useState<string | null>(null);
-  const [suggestion, setSuggestion] = useState<FactoryBotRepoSuggestion | null>(null);
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const own = workspaceRepoOf(rows, workspaceId);
-  const ownKey = own ? `${own.repoKey}\n${own.repoPath}` : '';
-  // A folder picked for one workspace is not another's.
-  useEffect(() => { setFolder(null); }, [workspaceId]);
-  // Main's suggestion for the workspace, asked again when its bots' repo or
-  // its folder changes (the folder only triggers the ask; main reads its own).
-  const shownCwd = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.metadata?.cwd ?? '');
-  useEffect(() => {
-    setSuggestion(null);
-    if (!port.suggestRepo || !workspaceId) return;
-    let live = true;
-    port.suggestRepo(workspaceId).then((s) => { if (live) setSuggestion(s); }, () => undefined);
-    return () => { live = false; };
-  }, [port, workspaceId, ownKey, shownCwd]);
-  const repoView = addBotRepoView(rows, workspaceId, suggestion, folder);
-  const repoFolder = repoView.kind === 'picked' ? repoView.folder : repoView.kind === 'suggested' ? repoView.root : undefined;
+  // The bots are off: Add first asks, in place, to turn them on.
+  const [confirmOn, setConfirmOn] = useState(false);
+  const repo = useAddBotRepo(port, rows, workspaceId, pickFolder);
   // A name is required; a job is optional but, when written, one the store keeps.
   const typedName = normalizeBotName(name);
   const typedJob = normalizeBotJob(job);
   const jobOk = job.trim() === '' || typedJob !== undefined;
+  const blocked = addBotBlockedReason({ canCreate: !!port.create, workspaceId, name, jobOk });
 
   const pickTemplate = (next: BotTemplate) => {
     const picked = template === next ? null : next;
@@ -382,36 +462,33 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
     }
   };
 
-  const choose = async () => {
-    try {
-      const picked = await pickFolder();
-      if (picked) { setFolder(picked); setError(null); }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const add = async () => {
+  const add = async (turnOnFirst: boolean) => {
     if (!port.create || !typedName) return;
     setBusy(true);
     setError(null);
     try {
-      const r = await port.create({
+      if (turnOnFirst) {
+        const turnOn = props.turnOn ?? (() => turnBotsOn(getFactorySettingsPort()));
+        if (!(await turnOn())) { setError(t('settings.factory.notStarted')); return; }
+      }
+      const r = await createBot(port, {
         workspaceId,
         name: typedName,
         ...(template ? { template } : {}),
         ...(typedJob ? { job: typedJob } : {}),
-        ...(repoFolder ? { repoFolder } : {}),
+        ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}),
         ...(avatar ? { avatar } : {}),
       });
-      if (r.ok) onDone();
+      if (r.ok) onDone(r.bot);
       else setError(r.message || t('settings.factory.addBotFailed'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+      setConfirmOn(false);
     }
   };
+  const shownError = error ?? repo.error;
 
   return (
     <div data-testid="factory-add-bot" className="flex flex-col gap-2 px-3 py-2">
@@ -483,43 +560,51 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
       <div className="pl-[128px] text-[11px] text-[var(--text-muted)]">{t('settings.factory.addBotJobHint')}</div>
       <div className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
         <span className="w-[120px] shrink-0">{t('settings.factory.addBotRepo')}</span>
-        {(repoView.kind === 'inherited' || repoView.kind === 'suggested') && (
-          <RepoLine repoKey={repoView.repoKey} folder={repoView.displayRoot} testId="factory-add-bot-repo" />
-        )}
-        {repoView.kind !== 'inherited' && (
-          <Button size="sm" variant="secondary" data-testid="factory-add-bot-folder" onClick={() => void choose()} disabled={busy} className="shrink-0">
-            {t(repoView.kind === 'none' ? 'settings.factory.addBotChooseFolder' : 'settings.factory.addBotChangeFolder')}
-          </Button>
-        )}
-        {repoView.kind === 'picked' && <span data-testid="factory-add-bot-path" className="min-w-0 truncate font-mono text-[11px] text-[var(--text-main)]" title={repoView.folder}>{repoView.folder}</span>}
+        <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} />
       </div>
       <div className="text-[11px] text-[var(--text-muted)]">
-        {t(repoView.kind === 'inherited' ? 'settings.factory.addBotRepoInherited' : 'settings.factory.addBotRepoHint')}
+        {t(repo.view.kind === 'inherited' ? 'settings.factory.addBotRepoInherited' : 'settings.factory.addBotRepoHint')}
       </div>
-      {error && <SettingNote tone="danger" role="alert" data-testid="factory-add-bot-error">{error}</SettingNote>}
-      <div className="flex justify-end gap-1.5">
-        <Button size="sm" variant="ghost" onClick={onDone} disabled={busy}>{t('settings.factory.cancel')}</Button>
-        <Button
-          size="sm"
-          variant="primary"
-          data-testid="factory-add-bot-submit"
-          onClick={() => void add()}
-          disabled={busy || !port.create || !workspaceId || !typedName || !jobOk}
-        >
-          {t('settings.factory.addBotSubmit')}
-        </Button>
-      </div>
+      {shownError && <SettingNote tone="danger" role="alert" data-testid="factory-add-bot-error">{shownError}</SettingNote>}
+      {confirmOn ? (
+        <InlineConfirm
+          text={t('settings.factory.addBotTurnsOn', { name: typedName ?? '' })}
+          confirmLabel={t('settings.factory.addBotTurnOnAndAdd')}
+          cancelLabel={t('settings.factory.cancel')}
+          busy={busy}
+          tone="primary"
+          onConfirm={() => void add(true)}
+          onCancel={() => setConfirmOn(false)}
+          testId="factory-add-bot-on"
+        />
+      ) : (
+        <div className="flex items-center justify-end gap-1.5">
+          {blocked && <span data-testid="factory-add-bot-blocked" className="mr-auto min-w-0 truncate text-[11px] text-[var(--text-muted)]">{t(blocked, { max: BOT_NAME_MAX })}</span>}
+          <Button size="sm" variant="ghost" onClick={() => onDone()} disabled={busy}>{t('settings.factory.cancel')}</Button>
+          <Button
+            size="sm"
+            variant="primary"
+            data-testid="factory-add-bot-submit"
+            onClick={() => (props.botsOff ? setConfirmOn(true) : void add(false))}
+            disabled={busy || blocked !== null}
+          >
+            {t('settings.factory.addBotSubmit')}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
 
-function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pickFolder }: {
+function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pickFolder, botsOff, turnOn }: {
   t: T;
   port: FactoryBotPort;
   workspaceName: (id: string) => string;
   workspaces: Workspaces;
   defaultWorkspaceId: string;
   pickFolder: () => Promise<string | null>;
+  botsOff: boolean;
+  turnOn: () => Promise<boolean>;
 }) {
   const rows = useFactoryBots(null, port);
   const [editing, setEditing] = useState<string | null>(null);
@@ -530,7 +615,7 @@ function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pick
     return [...by.entries()];
   }, [rows]);
   if (!port.available) return <SettingNote>{t('settings.factory.botsUnavailable')}</SettingNote>;
-  const canAdd = !!port.create && workspaces.length > 0;
+  const canAdd = !!port.create;
   const addRow = adding && canAdd ? (
     <AddBotForm
       t={t}
@@ -539,6 +624,8 @@ function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pick
       workspaces={workspaces}
       defaultWorkspaceId={defaultWorkspaceId}
       pickFolder={pickFolder}
+      botsOff={botsOff}
+      turnOn={turnOn}
       onDone={() => setAdding(false)}
     />
   ) : canAdd ? (
@@ -604,9 +691,12 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
   const [error, setError] = useState<string | null>(null);
   const [authorsDraft, setAuthorsDraft] = useState<string | null>(null);
   const [capDraft, setCapDraft] = useState<string | null>(null);
-  const workspaces = useStore((s) => s.workspaces);
+  // A bot belongs to one of the owner's workspaces: never another
+  // computer's, never a bot worker's (Sidebar/botTasks.ts).
+  const storeWorkspaces = useStore((s) => s.workspaces);
+  const botOwners = useStore(selectBotTaskOwners);
+  const workspaces = useMemo(() => withoutBotTasks(listedWorkspaces(storeWorkspaces), botOwners), [storeWorkspaces, botOwners]);
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
-  const hqHidden = (id: string) => isMoaHqWorkspace(useStore.getState(), id);
   const workspaceName = useCallback((id: string) => useStore.getState().workspaces.find((w) => w.id === id)?.name ?? id, []);
   // Names for the always-allow rules' scopes.
   const ruleBots = useFactoryBots(null, bPort);
@@ -628,7 +718,14 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-    if ('enabled' in p || 'hqWorkspaceId' in p) void refreshRoomStatus();
+    if ('enabled' in p) void refreshRoomStatus();
+  };
+  // "Add bot" while the bots are off turns them on (after its confirm).
+  const turnOn = async (): Promise<boolean> => {
+    const next = await sPort.set({ enabled: true });
+    if (next) setSettings(next);
+    void refreshRoomStatus();
+    return !!next?.enabled;
   };
 
   const off = !sPort.available || !settings;
@@ -643,18 +740,6 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
       <SettingsSection title={t('settings.factory.section')}>
         <SettingRow id="factoryswitch" label={t('settings.factory.enabled')} description={t('settings.factory.enabledDesc')}>
           <Switch checked={settings?.enabled === true} disabled={off} onCheckedChange={(v) => void patch({ enabled: v })} data-testid="factory-enabled" />
-        </SettingRow>
-        <SettingRow id="factoryhq" label={t('settings.factory.hq')} description={t('settings.factory.hqDesc')}>
-          <Select
-            disabled={off}
-            value={settings?.hqWorkspaceId ?? ''}
-            onChange={(e) => void patch({ hqWorkspaceId: e.target.value || null })}
-          >
-            <option value="">{t('settings.factory.hqNone')}</option>
-            {workspaces.filter((w) => !hqHidden(w.id) || w.id === settings?.hqWorkspaceId).map((w) => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
-          </Select>
         </SettingRow>
         <SettingRow id="factorytrustedauthors" label={t('settings.factory.trustedAuthors')} description={t('settings.factory.trustedAuthorsDesc')}>
           <Input
@@ -760,6 +845,8 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
           workspaces={workspaces}
           defaultWorkspaceId={activeWorkspaceId}
           pickFolder={pickFolder ?? pickFolderDialog}
+          botsOff={settings?.enabled === false}
+          turnOn={turnOn}
         />
       </SettingsSection>
       <ApprovalRules t={t} botName={botName} workspaceName={workspaceName} />

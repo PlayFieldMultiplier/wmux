@@ -3,20 +3,25 @@
 // The factory's bots, as a messenger: a conversation list on the left (search
 // and "+" in its header; each row an avatar, the name and a one-line preview
 // of the newest message, a needs-you badge on a bot that waits on the owner)
-// and the selected conversation as a chat on the right (BotsChat). The
-// HQ room is pinned first; the other rooms and every bot follow by latest
-// activity. On a narrow sheet the list comes first and a conversation opens
-// over it with a back button.
+// and the selected conversation as a chat on the right (BotsChat). Rooms
+// and bots follow by latest activity; no workspace is special (2026-10-14:
+// the HQ is a workspace like any other). On a narrow sheet the list comes
+// first and a conversation opens over it with a back button.
 //
 // The page covers the whole sheet, the room dock included: the conversation
 // is the page here. Everything shown is derived from the room, bot and
 // fan-out stores (botsModel.ts); the page owns no data.
 //
-// With no bot yet, the list offers one step: add a Lead to the current
-// workspace (the add form, preset), whose conversation then opens with a
-// hint for the first task. With the bots paused the page stays: the
-// conversations and live workers read-only under a "Bots are paused" banner
-// with Run bots. The header's menu holds Stop all bots (an inline confirm).
+// With no bot yet the page is one centred panel (2026-10-14, like a
+// messenger's first run): "Name your first bot", a name and Start, which
+// turns the bots on if they are off and adds the bot to the current
+// workspace; its 1:1 opens at once, "Starting…" until its greeting arrives.
+// When the Claude engine cannot sign in, the panel says why and offers
+// Log in to Claude, and Start waits. "+" is always there; adding a bot while
+// the bots are off turns them on after one inline confirm. With the bots off
+// and some added, the page stays: the conversations and live workers
+// read-only under a "Bots are off" banner with Turn bots on. The header's
+// menu holds Stop all bots (an inline confirm).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
@@ -30,14 +35,18 @@ import { IconMoreHorizontal, IconPlus, IconSearch } from '../icons';
 import Popover from '../ui/Popover';
 import { getFactoryBotPort, getFactorySettingsPort, type FactoryBotPort, type FactoryBotRow, type FactorySettingsPort } from '../Room/factoryPorts';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
-import { AddBotForm } from '../Settings/FactoryTab';
+import Input from '../ui/Input';
+import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, useAddBotRepo } from '../Settings/FactoryTab';
 import { PresenceDot, botPresence } from '../Room/BotChips';
 import { actorLabel, formatCardTime } from '../Room/roomFormat';
 import BotAvatar from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
 import { BotsChat } from './BotsChat';
-import { openFactorySettings } from './botsAddBot';
-import { withoutBotTasks } from '../Sidebar/botTasks';
+import { createBot, openFactorySettings, turnBotsOn } from './botsAddBot';
+import { showWorkspaces } from '../../utils/showWorkspaces';
+import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
+import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine';
+import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
 import { allRoomCards, botConversationId, roomCardsByWorkspace, type Conversation } from './botsModel';
 import { useBots, useBotsSync } from './useBots';
@@ -71,14 +80,15 @@ export function conversationPreview(
   return last.title;
 }
 
-/** The bots in `rows` that were not in `before`, by id. Pure. */
-export function newBotIds(before: ReadonlySet<string>, rows: readonly FactoryBotRow[]): string[] {
-  return rows.filter((r) => !before.has(r.bot.id)).map((r) => r.bot.id);
+/** A bot just added is "starting" until its first message arrives (its
+ *  greeting), unless its turn failed. Pure. */
+export function isStillStarting(c: Conversation | undefined): boolean {
+  if (!c) return true;
+  return c.kind === 'bot' && c.last === null && !c.row.status?.lastError;
 }
 
-/** How long after the add form closes a new bot is still taken as the one
- *  it added (the list is re-read on the runtime's change push). */
-const NEW_BOT_SELECT_MS = 10_000;
+/** After this long a new bot's chat opens even without its greeting. */
+const STARTING_MAX_MS = 120_000;
 
 function NeedsBadge({ count }: { count: number }) {
   if (count <= 0) return null;
@@ -89,7 +99,7 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now }: {
   c: Conversation; title: string; preview: string; selected: boolean; t: T; onSelect: () => void; now?: number;
 }) {
   const needsText = c.needsYou > 0 ? t('sidebar.fleetNeedsYou', { count: c.needsYou }) : '';
-  const name = [title, c.kind === 'room' && c.isHq ? t('botsPage.hq') : '', needsText, preview].filter(Boolean).join(', ');
+  const name = [title, needsText, preview].filter(Boolean).join(', ');
   return (
     <button
       type="button"
@@ -109,7 +119,6 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now }: {
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
           <span className="min-w-0 truncate text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]">{title}</span>
-          {c.kind === 'room' && c.isHq && <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{t('botsPage.hq')}</span>}
           {c.last && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]">{formatCardTime(c.last.at, now)}</span>}
         </span>
         <span className="flex items-center gap-1.5">
@@ -121,8 +130,8 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now }: {
   );
 }
 
-/** The paused banner: the page is read-only until Run bots turns the bots
- *  back on (the factory setting, as Settings and the room dock write it). */
+/** The bots-off banner: the page is read-only until Turn bots on turns the
+ *  bots back on (the factory setting, as Settings writes it). */
 function PausedBanner({ t, settings }: { t: T; settings: FactorySettingsPort }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,16 +163,128 @@ function PausedBanner({ t, settings }: { t: T; settings: FactorySettingsPort }) 
   );
 }
 
-/** The first step with no bot yet: add a Lead to the current workspace. */
-function FirstLeadCard({ workspaceName, t, onAdd }: { workspaceName: string | null; t: T; onAdd: () => void }) {
+/** The engine's state as the first screen's one line, or null when it does
+ *  not hold Start back. */
+function engineLine(r: ReturnType<typeof useEngineReadiness>['readiness'], t: T): string | null {
+  if (!blocksStart(r)) return null;
+  return t(r?.reason === 'claude-not-installed' ? 'botsPage.onboarding.notInstalled' : 'botsPage.onboarding.notLoggedIn');
+}
+
+/** The first screen, with no bot yet: name a bot and Start (DESIGN.md ›
+ *  Bots › First run). Start turns the bots on when they are off, then adds
+ *  the bot to the current workspace. */
+function FirstBotPanel({ t, workspace, botPort, settings, on, engine, onStarted }: {
+  t: T;
+  workspace: { id: string; name: string } | null;
+  botPort: FactoryBotPort;
+  settings: FactorySettingsPort;
+  on: boolean;
+  engine: EnginePort;
+  onStarted: (bot: BotProfile) => void;
+}) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { readiness, checking, recheck, login } = useEngineReadiness(engine);
+  const repo = useAddBotRepo(botPort, [], workspace?.id ?? '', pickFolderDialog);
+  const typed = normalizeBotName(name);
+  const blocked = addBotBlockedReason({ canCreate: !!botPort.create, workspaceId: workspace?.id ?? '', name, jobOk: true });
+  const engineText = engineLine(readiness, t);
+  const canLogin = !!engineText && readiness?.reason === 'claude-not-logged-in' && !!engine.login;
+  const startable = !busy && !blocked && !engineText;
+
+  const start = async () => {
+    if (!startable || !typed || !workspace) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!on && !(await turnBotsOn(settings))) { setError(t('settings.factory.notStarted')); return; }
+      const r = await createBot(botPort, { workspaceId: workspace.id, name: typed, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      if (r.ok) onStarted(r.bot);
+      else setError(r.message || t('settings.factory.addBotFailed'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // main opens the sign-in in a terminal tab of the current workspace: the
+  // page steps aside to it and asks again when the owner comes back.
+  const loginNow = async () => {
+    setError(null);
+    try {
+      await login();
+      const st = useStore.getState();
+      st.pushToast({ message: t('botsPage.onboarding.loginOpened'), level: 'info' });
+      showWorkspaces(st);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const shownError = error ?? repo.error;
+
   return (
-    <div className="wmux-bots-first" data-bots-first-run>
-      <div className="text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]">
-        {workspaceName ? t('botsPage.firstLead', { workspace: workspaceName }) : t('botsPage.firstLeadAny')}
+    <div className="flex flex-1 items-center justify-center overflow-y-auto px-4 py-8" data-bots-first-run>
+      <div className="flex w-full max-w-[440px] flex-col gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--bg-base)] p-6">
+        <div>
+          <h1 className="text-[16px] font-[var(--title-weight,500)] text-[var(--text-main)]">{t('botsPage.onboarding.title')}</h1>
+          <p className="mt-1 text-[12px] leading-snug text-[var(--text-muted)]">
+            {workspace ? t('botsPage.onboarding.detail', { workspace: workspace.name }) : t('botsPage.onboarding.detailAny')}
+          </p>
+        </div>
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => { e.preventDefault(); void start(); }}
+        >
+          <Input
+            data-bots-first-name
+            autoFocus
+            value={name}
+            maxLength={BOT_NAME_MAX}
+            aria-label={t('botsPage.onboarding.title')}
+            placeholder={t('settings.factory.addBotNamePlaceholder')}
+            onChange={(e) => setName(e.target.value)}
+            className="min-w-0 flex-1 text-[13px]"
+          />
+          <Button type="submit" size="sm" variant={startable ? 'primary' : 'secondary'} data-bots-first-start disabled={!startable}>
+            {t('botsPage.onboarding.start')}
+          </Button>
+        </form>
+        {workspace && (
+          <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} />
+        )}
+        {blocked && name.trim() !== '' && <p data-bots-first-blocked className="text-[11px] text-[var(--text-muted)]">{t(blocked, { max: BOT_NAME_MAX })}</p>}
+        {!workspace && <p data-bots-first-blocked className="text-[11px] text-[var(--text-muted)]">{t('settings.factory.addBotNeedWorkspace')}</p>}
+        {engineText && (
+          <div data-bots-engine={readiness?.reason} role="status" className="flex flex-wrap items-center gap-2 rounded-[10px] bg-[var(--selection-subtle)] px-3 py-2">
+            <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--text-sub)]">{engineText}</p>
+            {canLogin && (
+              <Button size="sm" variant="primary" data-bots-engine-login onClick={() => void loginNow()}>{t('botsPage.onboarding.login')}</Button>
+            )}
+            <Button size="sm" variant="ghost" data-bots-engine-recheck disabled={checking} onClick={recheck}>{t('botsPage.onboarding.checkAgain')}</Button>
+          </div>
+        )}
+        {shownError && <p role="alert" data-bots-first-error className="text-[12px] text-[var(--accent-red)]">{shownError}</p>}
       </div>
-      <p className="mt-0.5 text-[12px] leading-snug text-[var(--text-muted)]">{t('botsPage.firstLeadDetail')}</p>
-      <Button size="sm" variant="primary" className="mt-2" data-bots-first-add onClick={onAdd}>{t('botsPage.firstLeadAction')}</Button>
     </div>
+  );
+}
+
+/** A bot just added, before its greeting: its chat's place, saying so. */
+function StartingChat({ bot, t, onBack }: { bot: BotProfile; t: T; onBack: () => void }) {
+  return (
+    <section className="wmux-bots-chat" data-bots-chat={botConversationId(bot.id)} data-bots-starting aria-label={bot.name}>
+      <div className="wmux-bots-chat-head">
+        <button type="button" data-bots-back onClick={onBack} aria-label={t('botsPage.back')} title={t('botsPage.back')} className={`wmux-bots-back ${FOCUS_RING}`}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="9,2.5 4.5,7 9,11.5" /></svg>
+        </button>
+      </div>
+      <div role="status" className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+        <BotAvatar bot={bot} size={48} />
+        <div className="text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]">{t('botsPage.add.starting', { name: bot.name })}</div>
+        <p className="text-[12px] text-[var(--text-muted)]">{t('botsPage.add.startingDetail')}</p>
+      </div>
+    </section>
   );
 }
 
@@ -217,16 +338,18 @@ function HeaderMenu({ t, onStopAll }: { t: T; onStopAll: () => void }) {
   );
 }
 
-export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
+export default function BotsPage({ onAddBot, port, api, now, settings, stop, engine }: {
   /** What "+" does instead of the in-page add form (tests). */
   onAddBot?: () => void;
   /** Tests: the bot port and the rooms bridge. */
   port?: FactoryBotPort;
   api?: RoomsApi | null;
   now?: number;
-  /** Tests: the factory settings port (Run bots) and the stop verbs. */
+  /** Tests: the factory settings port (Turn bots on) and the stop verbs. */
   settings?: FactorySettingsPort;
   stop?: BotsStopPort;
+  /** Tests: the engine's readiness and login (default: the preload's). */
+  engine?: EnginePort;
 } = {}): React.ReactElement {
   const t = useT();
   const botsState = useBots(port);
@@ -234,12 +357,12 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
   // The factory may have been switched on since the status was read (in
   // Settings): opening the page asks again.
   useEffect(() => { void refreshRoomStatus(); }, []);
-  const { model, status, bots, on } = botsState;
+  const { model, status, bots, on, listed } = botsState;
   const names = useStore(useShallow(selectWorkspaceIdName));
   const actors = useStore((s) => s.roomActors);
   const timelines = useStore((s) => s.roomTimelines);
   const cardsByWs = useMemo(() => roomCardsByWorkspace(timelines), [timelines]);
-  // A 1:1 reads every room (a message to Moa may be posted in any of them).
+  // A 1:1 reads every room (a message to a bot may be posted in any of them).
   const everyCard = useMemo(() => allRoomCards(cardsByWs), [cardsByWs]);
   const nameOf = useMemo(() => {
     const byId = new Map(names.map((w) => [w.id, w.name]));
@@ -259,46 +382,62 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
   })), [model.conversations, nameOf, t, bots, actors]);
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter((r) => r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)) : rows;
-  const selected = rows.find((r) => r.c.id === selectedId) ?? rows[0] ?? null;
-
-  const selectedKey = selected?.c.id ?? null;
-  useEffect(() => {
-    if (selectedKey) lastSelected = selectedKey;
-  }, [selectedKey]);
 
   const select = (id: string) => {
     setSelectedId(id);
     setView('chat');
   };
 
+  // A bot just added (here or by the first screen) is selected at once; its
+  // chat says "Starting…" until its greeting arrives (isStillStarting).
+  const [pending, setPending] = useState<{ bot: BotProfile; at: number } | null>(null);
+  const pendingId = pending ? botConversationId(pending.bot.id) : null;
+  const pendingRow = pendingId ? rows.find((r) => r.c.id === pendingId) : undefined;
+  const pendingStarting = !!pending && isStillStarting(pendingRow?.c);
+  useEffect(() => {
+    if (pending && !pendingStarting) setPending(null);
+  }, [pending, pendingStarting]);
+  useEffect(() => {
+    if (!pending) return undefined;
+    const timer = window.setTimeout(() => setPending(null), Math.max(0, pending.at + STARTING_MAX_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [pending]);
+  const started = (bot: BotProfile) => {
+    setPending({ bot, at: Date.now() });
+    select(botConversationId(bot.id));
+  };
+  const starting = pending && pendingStarting && selectedId === pendingId ? pending.bot : null;
+  const selected = starting ? null : rows.find((r) => r.c.id === selectedId) ?? rows[0] ?? null;
+
+  const selectedKey = starting ? pendingId : selected?.c.id ?? null;
+  useEffect(() => {
+    if (selectedKey) lastSelected = selectedKey;
+  }, [selectedKey]);
+
   // "+": the Settings add form in a dialog here (a build without the create
-  // port opens the settings page instead). The bot it adds is selected once
-  // the list shows it.
+  // port opens the settings page instead). The bot it adds is selected.
   const [adding, setAdding] = useState(false);
   // A bot belongs to one of the owner's workspaces: never a bot worker's or
   // another computer's (the sidebar's own list).
-  const fanoutOrigin = useStore((s) => s.fanoutOrigin);
-  const addWorkspaces = useMemo(() => withoutBotTasks(listedWorkspaces(names), fanoutOrigin), [names, fanoutOrigin]);
-  const beforeAdd = useRef<Set<string>>(new Set());
-  const awaitingNew = useRef<{ before: Set<string>; until: number } | null>(null);
-  const canCreate = !!(port ?? getFactoryBotPort()).create;
+  const botOwners = useStore(selectBotTaskOwners);
+  const addWorkspaces = useMemo(() => withoutBotTasks(listedWorkspaces(names), botOwners), [names, botOwners]);
+  const botPort = port ?? getFactoryBotPort();
+  const canCreate = !!botPort.create;
   // The workspace a new bot goes to by default: the selected conversation's,
-  // else (the first Lead) the current workspace when it is one of the
-  // owner's, else none (the form picks its first).
+  // else (the first bot) the current workspace when it is one of the
+  // owner's, else the first of them.
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const currentWorkspace = addWorkspaces.find((w) => w.id === activeWorkspaceId) ?? addWorkspaces[0] ?? null;
   const [addTo, setAddTo] = useState<string | null>(null);
   const openAdd = (workspaceId: string | null) => {
-    beforeAdd.current = new Set(bots.map((r) => r.bot.id));
-    awaitingNew.current = null;
     setAddTo(workspaceId);
     setAdding(true);
   };
   const startAdd = onAddBot ?? (canCreate ? () => openAdd(selected?.c.workspaceId ?? null) : openFactorySettings);
-  const startFirstLead = onAddBot ?? (canCreate ? () => openAdd(currentWorkspace?.id ?? null) : openFactorySettings);
   // Stop all: the header menu, then an inline confirm under the header.
   const stopPort = useMemo(() => stop ?? botsStopPort(port), [stop, port]);
   const settingsPort = settings ?? getFactorySettingsPort();
+  const enginePort = useMemo(() => engine ?? bridgeEnginePort(), [engine]);
   const [confirmStopAll, setConfirmStopAll] = useState(false);
   const [stopping, setStopping] = useState(false);
   const stopAll = async () => {
@@ -314,23 +453,29 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
       setStopping(false);
     }
   };
-  const finishAdd = () => {
+  const finishAdd = (bot?: BotProfile) => {
     setAdding(false);
-    awaitingNew.current = { before: beforeAdd.current, until: Date.now() + NEW_BOT_SELECT_MS };
+    if (bot) started(bot);
   };
-  useEffect(() => {
-    const wait = awaitingNew.current;
-    if (!wait) return;
-    if (Date.now() > wait.until) { awaitingNew.current = null; return; }
-    const [id] = newBotIds(wait.before, bots);
-    if (!id) return;
-    awaitingNew.current = null;
-    setSelectedId(`bot:${id}`);
-    setView('chat');
-  }, [bots]);
 
   let body: React.ReactNode = null;
-  if (status) {
+  // No bot yet (the list read): the first screen, whether or not the bots
+  // are on — Start turns them on.
+  const firstRun = !!status && listed && bots.length === 0 && !pending && canCreate && !onAddBot;
+  if (firstRun) {
+    body = (
+      <FirstBotPanel
+        t={t}
+        workspace={currentWorkspace}
+        botPort={botPort}
+        settings={settingsPort}
+        on={on}
+        engine={enginePort}
+        onStarted={started}
+      />
+    );
+  } else if (status && (listed || bots.length > 0 || !!pending)) {
+    // (Before the bot list is read, nothing: an empty list is not "no bot".)
     const paused = !on;
     body = (
       <>
@@ -401,18 +546,15 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
             </div>
           )}
           <div className="wmux-bots-rows">
-            {on && bots.length === 0 && (
-              <FirstLeadCard workspaceName={currentWorkspace?.name ?? null} t={t} onAdd={startFirstLead} />
-            )}
             {shown.length === 0 && rows.length > 0 && <p className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noMatch')}</p>}
-            {rows.length === 0 && !(on && bots.length === 0) && <p data-bots-empty className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noConversations')}</p>}
+            {rows.length === 0 && !starting && <p data-bots-empty className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noConversations')}</p>}
             {shown.map((r) => (
               <ConversationRow
                 key={r.c.id}
                 c={r.c}
                 title={r.title}
                 preview={r.preview}
-                selected={selected?.c.id === r.c.id}
+                selected={selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId)}
                 t={t}
                 now={now}
                 onSelect={() => select(r.c.id)}
@@ -420,7 +562,9 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
             ))}
           </div>
         </nav>
-        {selected ? (
+        {starting ? (
+          <StartingChat bot={starting} t={t} onBack={() => setView('list')} />
+        ) : selected ? (
           <BotsChat
             key={selected.c.id}
             conversation={selected.c}
@@ -434,12 +578,12 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
             onBack={() => setView('list')}
             readOnly={paused}
             stopPort={stopPort}
-            jobPort={port ?? getFactoryBotPort()}
-            resumePort={port ?? getFactoryBotPort()}
+            jobPort={botPort}
+            resumePort={botPort}
             onOpenBot={(botId) => select(botConversationId(botId))}
           />
         ) : (
-          <p className="wmux-bots-chat flex items-center justify-center text-[12px] text-[var(--text-muted)]">{t(on && bots.length === 0 ? 'botsPage.firstRunChat' : 'botsPage.choose')}</p>
+          <p className="wmux-bots-chat flex items-center justify-center text-[12px] text-[var(--text-muted)]">{t('botsPage.choose')}</p>
         )}
         </div>
       </>
@@ -456,6 +600,8 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop }: {
             <AddBotForm
               onDone={finishAdd}
               workspaces={addWorkspaces}
+              botsOff={!on}
+              turnOn={() => turnBotsOn(settingsPort)}
               {...(addTo ? { defaultWorkspaceId: addTo } : {})}
               {...(port ? { port } : {})}
             />
