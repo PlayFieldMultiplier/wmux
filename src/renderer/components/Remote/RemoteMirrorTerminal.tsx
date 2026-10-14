@@ -512,13 +512,22 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
           ceilingCell: cell,
         });
         if (ideal) {
+          // A box narrower than the route's floor asks for the floor, not for
+          // nothing: skipping left an 80-col grid squeezed into the box at a
+          // ~6px font, where the floor costs only a slight shrink. A grid
+          // already below the floor is never grown to it: that would crop a
+          // pane the font fit still shows whole.
+          const target = {
+            cols: Math.max(ideal.cols, MIN_REMOTE_RESIZE_COLS),
+            rows: Math.max(ideal.rows, MIN_REMOTE_RESIZE_ROWS),
+          };
+          const growsPastBox =
+            (ideal.cols < MIN_REMOTE_RESIZE_COLS && term.cols < MIN_REMOTE_RESIZE_COLS) ||
+            (ideal.rows < MIN_REMOTE_RESIZE_ROWS && term.rows < MIN_REMOTE_RESIZE_ROWS);
           // Only worth a round trip (and a SIGWINCH on the remote) when the grid
           // is off by more than the font fit can absorb.
-          if (
-            shouldRequestRemoteResize(ideal, term.cols, term.rows) &&
-            ideal.cols >= MIN_REMOTE_RESIZE_COLS && ideal.rows >= MIN_REMOTE_RESIZE_ROWS
-          ) {
-            sendResizeRequest(requestKey, ideal.cols, ideal.rows, 0);
+          if (!growsPastBox && shouldRequestRemoteResize(target, term.cols, term.rows)) {
+            sendResizeRequest(requestKey, target.cols, target.rows, 0);
           } else {
             consumedRequestKeyRef.current = requestKey;
             inflightRef.current = null;

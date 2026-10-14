@@ -23,7 +23,55 @@ on:
     tags: ['v*']
 
 jobs:
+  # ── wmux-server (headless Linux runtime for "Add PC over SSH") ───────────
+  # Built FIRST: every packaging job below bakes these artifacts' sha256 into
+  # the app as resources/server-manifest.json, and the desktop app hands that
+  # hash to the host it installs on. node-pty is native, so each arch builds on
+  # its own runner — never cross-built — inside a glibc 2.28 image, so the
+  # artifact also runs on Ubuntu 20.04, Debian 11 and RHEL 8. The tarballs reach the release through
+  # the one release-creating step in `build`, so prerelease/latest gating is
+  # the same as for every other asset.
+  server:
+    name: Build wmux-server (linux-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      # A failed leg blocks the release either way; keeping the other one
+      # means "Re-run failed jobs" only redoes that leg.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Only fetches and checks the pinned Node on the runner; everything else
+      # runs in the container on that Node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      # In a manylinux_2_28 image pinned by digest: `npm ci` (compiling
+      # node-pty against glibc 2.28), the bundles, staging, a real PTY with the
+      # staged Node, then the tarball. Fails if anything needs glibc > 2.28.
+      - name: Build the server artifact
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: bash scripts/build-server-artifact-container.sh "$ARCH" out/server
+
+      - name: Upload the server artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wmux-server-${{ matrix.arch }}
+          path: out/server/
+          if-no-files-found: error
+
   build:
+    needs: server
     runs-on: windows-latest
     permissions:
       contents: write
@@ -63,6 +111,18 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Download the server artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wmux-server-*
+          path: out/server
+          merge-multiple: true
+
+      # Before `make`: forge ships dist/server-manifest.json as
+      # resources/server-manifest.json only if it exists.
+      - name: Write the server manifest
+        run: node scripts/build-server-artifact.mjs manifest --in out/server --out dist/server-manifest.json
 
       # ── Windows computer-use helper ──────────────────────────────────────
       # Order is load-bearing (scripts/__tests__/computerHelperRelease.test.mjs
@@ -161,6 +221,27 @@ jobs:
             Write-Error "the main bundle does not carry the helper's SHA-256 pin"; exit 1
           }
           Write-Host "Packaged helper matches the pin ($env:WMUX_WIN_HELPER_SHA256)"
+
+      # The packaged app must carry the manifest written above, byte for byte:
+      # without it "Add PC over SSH" has no hash to verify the download with.
+      - name: Check the packaged server manifest
+        shell: pwsh
+        run: |
+          $expected = (Get-FileHash "dist/server-manifest.json" -Algorithm SHA256).Hash
+          $found = @(Get-ChildItem out -Recurse -Filter "server-manifest.json" | Where-Object { $_.FullName -match '\\resources\\server-manifest\.json$' -and $_.FullName -notmatch '\\make\\' })
+          if ($found.Count -eq 0) { Write-Error "no server-manifest.json in the packaged app"; exit 1 }
+          foreach ($f in $found) {
+            if ((Get-FileHash $f.FullName -Algorithm SHA256).Hash -ne $expected) { Write-Error "$($f.FullName) differs from dist/server-manifest.json"; exit 1 }
+          }
+          # The release step does not fail on an unmatched glob, so prove the
+          # tarballs it uploads are still here and are the ones the app pins.
+          $manifest = Get-Content dist/server-manifest.json -Raw | ConvertFrom-Json
+          foreach ($a in $manifest.artifacts.PSObject.Properties) {
+            $file = "out/server/$($a.Value.name)"
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Write-Error "$file is missing"; exit 1 }
+            if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower() -ne $a.Value.sha256) { Write-Error "$file does not match the manifest"; exit 1 }
+          }
+          Write-Host "Packaged server manifest: $(Get-Content dist/server-manifest.json -Raw)"
 
       # ── Authenticode code signing (SignPath Foundation, OSS) ─────────────
       # No-op until SIGNPATH_ENABLED is true (see job env). Signs the prebuilt
@@ -346,6 +427,9 @@ jobs:
             out/make/squirrel.windows/x64/RELEASES
             out/make/squirrel.windows/x64/update-manifest.json
             out/symbols/wmux-symbols-*.zip
+            out/server/wmux-server-*.tar.gz
+            out/server/wmux-server-*.tar.gz.sha256
+            dist/server-manifest.json
           body_path: out/release-notes.md
           generate_release_notes: true
           draft: false
@@ -412,7 +496,7 @@ jobs:
   # uploads, so the pipeline structure can be validated before certs exist.
   macos:
     name: Build macOS (${{ matrix.os }})
-    needs: build
+    needs: [server, build]
     if: vars.ENABLE_CROSS_PLATFORM_RELEASE == 'true'
     runs-on: ${{ matrix.os }}
     permissions:
@@ -449,6 +533,18 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Download the server artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wmux-server-*
+          path: out/server
+          merge-multiple: true
+
+      # Before `make`: forge ships dist/server-manifest.json as
+      # resources/server-manifest.json only if it exists.
+      - name: Write the server manifest
+        run: node scripts/build-server-artifact.mjs manifest --in out/server --out dist/server-manifest.json
 
       # Import the Developer ID Application cert into a throwaway keychain so
       # Forge's osxSign can discover it. No-op when the cert secret is empty.
@@ -507,6 +603,17 @@ jobs:
       - name: Build & Make
         run: npm run make
         timeout-minutes: 60
+
+      # The packaged app must carry the manifest written above, byte for byte:
+      # without it "Add PC over SSH" has no hash to verify the download with.
+      - name: Check the packaged server manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          FOUND=$(find out -type f -ipath '*/resources/server-manifest.json' -not -path 'out/make/*')
+          [ -n "$FOUND" ] || { echo "::error::no server-manifest.json in the packaged app"; exit 1; }
+          while IFS= read -r f; do cmp "$f" dist/server-manifest.json || { echo "::error::$f differs from dist/server-manifest.json"; exit 1; }; done <<<"$FOUND"
+          echo "Packaged server manifest: $(cat dist/server-manifest.json)"
 
       # The packaged helper must still carry its own signature: a forge change
       # that re-signed it would hand it wmux's entitlements, and a missing one
@@ -633,7 +740,7 @@ jobs:
   # AppImage), so no manifest is published here.
   linux:
     name: Build Linux
-    needs: build
+    needs: [server, build]
     if: vars.ENABLE_CROSS_PLATFORM_RELEASE == 'true'
     runs-on: ubuntu-22.04
     permissions:
@@ -692,9 +799,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Download the server artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wmux-server-*
+          path: out/server
+          merge-multiple: true
+
+      # Before `make`: forge ships dist/server-manifest.json as
+      # resources/server-manifest.json only if it exists.
+      - name: Write the server manifest
+        run: node scripts/build-server-artifact.mjs manifest --in out/server --out dist/server-manifest.json
+
       - name: Build & Make
         run: npm run make
         timeout-minutes: 30
+
+      # The packaged app must carry the manifest written above, byte for byte:
+      # without it "Add PC over SSH" has no hash to verify the download with.
+      - name: Check the packaged server manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          FOUND=$(find out -type f -ipath '*/resources/server-manifest.json' -not -path 'out/make/*')
+          [ -n "$FOUND" ] || { echo "::error::no server-manifest.json in the packaged app"; exit 1; }
+          while IFS= read -r f; do cmp "$f" dist/server-manifest.json || { echo "::error::$f differs from dist/server-manifest.json"; exit 1; }; done <<<"$FOUND"
+          echo "Packaged server manifest: $(cat dist/server-manifest.json)"
 
       # Same reasoning as the macOS upload: deb/rpm/AppImage are made in
       # sequence, so one failing maker must not discard the ones that succeeded.

@@ -1,8 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
-import { IconBell, IconChevron, IconComputer, IconServer } from '../icons';
+import { IconBell, IconChevron, IconComputer, IconPlus, IconServer } from '../icons';
+import AddSshPcDialog from '../Remote/AddSshPcDialog';
+import SshHostCheckDialog from '../Remote/SshHostCheckDialog';
+import SshServiceDialog from '../Remote/SshServiceDialog';
+import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../../../shared/remoteHosts';
 import PaneActionsMenu, { PANE_ACTIONS_MENU_WIDTH, type PaneActionItem } from '../Pane/PaneActionsMenu';
 import { selectFleetSectionCounts } from '../../stores/selectors/fleet';
 import { selectOwnerWorkspaces } from './botTasks';
@@ -55,10 +59,29 @@ function usePcSwitcher() {
  * and needs-you count; under a divider, one "<name> settings ›" per host for
  * Mute, Remote page, Pair again and the access lines.
  */
-function PcSwitcherMenu({ anchor, triggerRef, onDone }: { anchor: Anchor; triggerRef: React.RefObject<HTMLElement | null>; onDone: () => void }) {
+type SshServiceTarget = { id: string; label: string; on: boolean };
+
+function PcSwitcherMenu({ anchor, triggerRef, onDone, onAddSsh, onCheckSsh, onServiceSsh }: { anchor: Anchor; triggerRef: React.RefObject<HTMLElement | null>; onDone: () => void; onAddSsh: () => void; onCheckSsh: (host: { id: string; label: string }) => void; onServiceSsh: (target: SshServiceTarget) => void }) {
   const t = useT();
   const { hosts, active, localNeeds } = usePcSwitcher();
   const feeds = useStore((s) => s.pcRailFeeds);
+  // Hosts added over SSH: their repair is a host-identity check, not a code.
+  const [sshStates, setSshStates] = useState<Record<string, SshTunnelState>>({});
+  // SSH hosts whose daemon is installed as a login service ("Start after reboot").
+  const [serviceOn, setServiceOn] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let live = true;
+    void window.electronAPI?.remote?.sshStates?.().then(
+      (states) => { if (live) setSshStates(states); },
+      () => undefined,
+    );
+    void window.electronAPI?.remote?.hostsList?.().then(
+      (list) => { if (live) setServiceOn(new Set(list.filter((h) => h.startAfterReboot === true).map((h) => h.id))); },
+      () => undefined,
+    );
+    return () => { live = false; };
+  }, []);
+  const sshHosts = new Set(Object.keys(sshStates));
   const [menu, setMenuState] = useState<MenuState>({ kind: 'main' });
   // Selecting an item closes the menu right after onSelect; a submenu opener
   // must survive that close, so the close reads the kind set a moment ago.
@@ -91,7 +114,10 @@ function PcSwitcherMenu({ anchor, triggerRef, onDone }: { anchor: Anchor; trigge
     ...hosts.map((host): PaneActionItem => ({
       key: `pc-${host.id}`,
       label: host.label,
-      detail: hostLine(host),
+      // A changed SSH identity is not "offline": the row opens the check instead.
+      ...(sshNeedsPerson(sshStates[host.id])
+        ? { detail: t(sshNeedsIdentityCheck(sshStates[host.id]) ? 'remoteSsh.identityChanged' : 'remoteSsh.needsCheck'), onSelect: () => onCheckSsh({ id: host.id, label: host.label }) }
+        : { detail: hostLine(host), onSelect: () => select(host.id) }),
       title: hostSummary(host, feeds[host.id], t).join('\n'),
       icon: (
         <span
@@ -102,7 +128,6 @@ function PcSwitcherMenu({ anchor, triggerRef, onDone }: { anchor: Anchor; trigge
         </span>
       ),
       active: active === host.id,
-      onSelect: () => select(host.id),
     })),
     ...hosts.map((host, i): PaneActionItem => ({
       key: `pc-manage-${host.id}`,
@@ -111,6 +136,13 @@ function PcSwitcherMenu({ anchor, triggerRef, onDone }: { anchor: Anchor; trigge
       separatorBefore: i === 0,
       onSelect: () => setMenu({ kind: 'host', hostId: host.id }),
     })),
+    {
+      key: 'pc-add-ssh',
+      label: t('pcSwitcher.addSsh'),
+      icon: <IconPlus size={13} />,
+      separatorBefore: hosts.length === 0,
+      onSelect: onAddSsh,
+    },
   ];
 
   // A host removed while its submenu is open falls back to the main list.
@@ -129,12 +161,26 @@ function PcSwitcherMenu({ anchor, triggerRef, onDone }: { anchor: Anchor; trigge
       icon: <IconServer size={13} />,
       onSelect: () => useStore.getState().setAppRoute('remote'),
     },
-    {
-      key: 'pair-again',
-      label: t('pcRail.pairAgain'),
-      icon: <IconComputer size={13} />,
-      onSelect: () => useStore.getState().requestRemoteRepair(menuHost.id),
-    },
+    sshHosts.has(menuHost.id)
+      ? {
+        key: 'check-ssh',
+        label: t('pcSwitcher.checkSsh'),
+        icon: <IconComputer size={13} />,
+        onSelect: () => onCheckSsh({ id: menuHost.id, label: menuHost.label }),
+      }
+      : {
+        key: 'pair-again',
+        label: t('pcRail.pairAgain'),
+        icon: <IconComputer size={13} />,
+        onSelect: () => useStore.getState().requestRemoteRepair(menuHost.id),
+      },
+    ...(sshHosts.has(menuHost.id) ? [{
+      key: 'start-after-reboot',
+      label: t('pcSwitcher.startAfterReboot'),
+      icon: <IconServer size={13} />,
+      active: serviceOn.has(menuHost.id),
+      onSelect: () => onServiceSsh({ id: menuHost.id, label: menuHost.label, on: !serviceOn.has(menuHost.id) }),
+    }] : []),
   ] : [];
 
   return (
@@ -175,6 +221,9 @@ export function PcSwitcherTitle({ title }: { title: string }) {
   const { visible, hosts, active, othersNeedYou } = usePcSwitcher();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [addSsh, setAddSsh] = useState(false);
+  const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
+  const [serviceSsh, setServiceSsh] = useState<SshServiceTarget | null>(null);
   const close = useCallback(() => setAnchor(null), []);
   if (!visible) return <span className="min-w-0 truncate">{title}</span>;
   const name = active === LOCAL_PC_ID ? null : hosts.find((h) => h.id === active)?.label ?? null;
@@ -202,7 +251,10 @@ export function PcSwitcherTitle({ title }: { title: string }) {
         <span className="shrink-0 rotate-90 opacity-70" aria-hidden="true"><IconChevron size={12} /></span>
       </button>
       <OthersBadge count={othersNeedYou} label={t('pcSwitcher.othersNeedYou', { count: othersNeedYou })} />
-      {anchor && <PcSwitcherMenu anchor={anchor} triggerRef={buttonRef} onDone={close} />}
+      {anchor && <PcSwitcherMenu anchor={anchor} triggerRef={buttonRef} onDone={close} onAddSsh={() => setAddSsh(true)} onCheckSsh={setCheckSsh} onServiceSsh={setServiceSsh} />}
+      {addSsh && <AddSshPcDialog onClose={() => setAddSsh(false)} />}
+      {checkSsh && <SshHostCheckDialog hostId={checkSsh.id} label={checkSsh.label} onClose={() => setCheckSsh(null)} />}
+      {serviceSsh && <SshServiceDialog hostId={serviceSsh.id} label={serviceSsh.label} on={serviceSsh.on} onClose={() => setServiceSsh(null)} />}
     </span>
   );
 }
@@ -219,6 +271,9 @@ export function PcSwitcherRailItem() {
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [addSsh, setAddSsh] = useState(false);
+  const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
+  const [serviceSsh, setServiceSsh] = useState<SshServiceTarget | null>(null);
   const close = useCallback(() => setAnchor(null), []);
   if (!visible) return null;
   const host = hosts.find((h) => h.id === active);
@@ -249,7 +304,10 @@ export function PcSwitcherRailItem() {
           : <IconComputer size={18} />}
         {othersNeedYou > 0 && <span className="wmux-nav-count wmux-nav-badge" aria-hidden="true">{badgeText(othersNeedYou)}</span>}
       </button>
-      {anchor && <PcSwitcherMenu anchor={anchor} triggerRef={buttonRef} onDone={close} />}
+      {anchor && <PcSwitcherMenu anchor={anchor} triggerRef={buttonRef} onDone={close} onAddSsh={() => setAddSsh(true)} onCheckSsh={setCheckSsh} onServiceSsh={setServiceSsh} />}
+      {addSsh && <AddSshPcDialog onClose={() => setAddSsh(false)} />}
+      {checkSsh && <SshHostCheckDialog hostId={checkSsh.id} label={checkSsh.label} onClose={() => setCheckSsh(null)} />}
+      {serviceSsh && <SshServiceDialog hostId={serviceSsh.id} label={serviceSsh.label} on={serviceSsh.on} onClose={() => setServiceSsh(null)} />}
     </div>
   );
 }

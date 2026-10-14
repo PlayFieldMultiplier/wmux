@@ -103,9 +103,9 @@ export default function AddRemotePaneModal({ onClose, onCreated, title }: AddRem
               >
                 <span className="ui-row-icon" aria-hidden="true"><IconRemoteDevices size={14} /></span>
                 <span className="ui-row-text">
-                  <span className="ui-row-title truncate">{h.label || h.origin}</span>
-                  {h.label && h.label !== h.origin && (
-                    <span className="ui-row-detail font-mono truncate">{h.origin}</span>
+                  <span className="ui-row-title truncate">{h.label || (h.ssh?.alias ?? h.origin)}</span>
+                  {h.label && h.label !== (h.ssh?.alias ?? h.origin) && (
+                    <span className="ui-row-detail font-mono truncate">{h.ssh?.alias ?? h.origin}</span>
                   )}
                 </span>
                 {creatingHostId === h.id && <span className="text-[13px] text-[var(--text-sub)]">…</span>}
