@@ -10,7 +10,7 @@ describe('factoryWorkerAgentsHandler', () => {
   const mainFrame = { id: 'top' };
   const webContents = { mainFrame };
   const win = { isDestroyed: () => false, webContents } as unknown as Electron.BrowserWindow;
-  const deps = { env: async () => ({ PATH: '/bin' }), resolve: (cmd: string) => (cmd === 'claude' ? '/bin/claude' : null) };
+  const deps = { env: async () => ({ PATH: '/bin' }), resolve: (cmd: string) => (cmd === 'claude' ? '/bin/claude' : null), platform: 'darwin' as NodeJS.Platform };
 
   it('lists the guarded engines with their install state, for the main window only', async () => {
     const h = factoryWorkerAgentsHandler(() => win, deps);
