@@ -1,0 +1,68 @@
+{
+  "error": null,
+  "file": "{\n  \"keepMe\": {\n    \"a\": 1\n  },\n  \"zFirst\": \"unknown keys come first in the file\",\n  \"later\": [\n    1,\n    2\n  ],\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"other\": false,\n      \"x\": false\n    },\n    \"agy\": {\n      \"k\": true\n    },\n    \"codex\": {\n      \"y\": true\n    }\n  },\n  \"removedHooks\": {\n    \"claude\": [\n      {\n        \"id\": \"h1\",\n        \"definition\": {\n          \"event\": \"Stop\"\n        },\n        \"originPath\": \"/p\"\n      },\n      {\n        \"id\": \"gone\",\n        \"definition\": {}\n      }\n    ]\n  },\n  \"profiles\": [\n    {\n      \"id\": \"p0\",\n      \"name\": \"Disk profile\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"p1\",\n      \"name\": \"Focus\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+  "memory": {
+    "intents": {
+      "claude": {
+        "other": false,
+        "x": false
+      },
+      "codex": {
+        "y": true
+      },
+      "agy": {
+        "k": true
+      }
+    },
+    "hooks": {
+      "claude": [
+        {
+          "id": "h1",
+          "definition": {
+            "event": "Stop"
+          },
+          "originPath": "/p"
+        },
+        {
+          "id": "gone",
+          "definition": {}
+        }
+      ]
+    },
+    "profiles": [
+      {
+        "id": "p0",
+        "name": "Disk profile",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "p1",
+        "name": "Focus",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      }
+    ],
+    "warnings": []
+  }
+}

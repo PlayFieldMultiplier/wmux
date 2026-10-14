@@ -215,6 +215,9 @@ describe('shared Codex app-server, owner index available (pane relay, non-Window
     const whoami = await call(client, 'a2a_whoami', {}, T3);
     expect(whoami.isError).toBe(true);
     expect(whoami.content[0].text).toMatch(/no wmux pane owns Codex thread .*setup-hooks/s);
+    // A Codex attached to the shared server from a pane: the way out, not "start it from a pane".
+    expect(whoami.content[0].text).toMatch(/start `codex` again from the pane's shell/);
+    expect(whoami.content[0].text).not.toMatch(/start or resume it from a wmux pane/);
 
     const read = await call(client, 'terminal_read', {}, T3);
     expect(read.isError).toBe(true);

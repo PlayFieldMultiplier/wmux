@@ -1,0 +1,89 @@
+{
+  "noKey": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"a\": true\n    }\n  },\n  \"removedHooks\": {}\n}\n",
+    "memory": {
+      "intents": {
+        "claude": {
+          "a": true
+        }
+      },
+      "hooks": {},
+      "profiles": [],
+      "warnings": []
+    }
+  },
+  "emptyKept": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"a\": true\n    }\n  },\n  \"removedHooks\": {},\n  \"profiles\": []\n}\n",
+    "memory": {
+      "intents": {
+        "claude": {
+          "a": true
+        }
+      },
+      "hooks": {},
+      "profiles": [],
+      "warnings": []
+    }
+  },
+  "notArray": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"a\": true\n    }\n  },\n  \"removedHooks\": {},\n  \"profiles\": []\n}\n",
+    "memory": {
+      "intents": {
+        "claude": {
+          "a": true
+        }
+      },
+      "hooks": {},
+      "profiles": [],
+      "warnings": [
+        "Corrupt surfaces store: profiles is not an array"
+      ]
+    }
+  },
+  "setAll": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {},\n  \"removedHooks\": {},\n  \"profiles\": [\n    {\n      \"id\": \"b\",\n      \"name\": \"B\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"c\",\n      \"name\": \"C\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+    "memory": {
+      "intents": {},
+      "hooks": {},
+      "profiles": [
+        {
+          "id": "b",
+          "name": "B",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": []
+    }
+  }
+}

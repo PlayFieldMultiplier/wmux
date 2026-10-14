@@ -593,7 +593,9 @@ function codexIdentityError(scope: CodexCallScope): Error {
   const miss = scope.miss ?? { reason: 'the thread could not be resolved' };
   const next =
     miss.hint === 'hooks'
-      ? ' Run `wmux setup-hooks` for Codex if its hooks are not installed, then start or resume the conversation from a wmux pane.'
+      ? ' A Codex that runs in a wmux pane but is attached to the shared server directly (not through wmux) cannot be' +
+        ' told apart from any other client: quit it and start `codex` again from the pane\'s shell, where wmux runs it' +
+        ' in-process with the pane\'s identity. Run `wmux setup-hooks` for Codex first if its hooks are not installed.'
       : miss.hint === 'retry'
         ? ' Retry the call in a few seconds.'
         : '';

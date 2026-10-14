@@ -1,0 +1,23 @@
+{
+  "tabs": {
+    "text": "{\n\t\"a\": 1,\n\t\"b\": [\n\t\t1\n\t]\n}\n"
+  },
+  "four": {
+    "text": "{\n    \"a\": 1,\n    \"b\": {\n        \"c\": 1\n    }\n}"
+  },
+  "crlf": {
+    "text": "{\r\n  \"a\": 2\r\n}\r\n"
+  },
+  "oneLine": {
+    "text": "{\n  \"a\": 2\n}"
+  },
+  "threeSpaces": {
+    "text": "{\n  \"a\": 2\n}\n"
+  },
+  "scalarRoot": {
+    "text": "5"
+  },
+  "arrayRoot": {
+    "text": "[\n  2\n]"
+  }
+}

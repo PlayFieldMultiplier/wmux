@@ -1,0 +1,901 @@
+{
+  "nameTaken": {
+    "error": "A profile with this name already exists",
+    "file": "{\n  \"version\": 1,\n  \"profiles\": [\n    {\n      \"id\": \"theirs\",\n      \"name\": \" shared NAME \",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}",
+    "memory": {
+      "intents": {},
+      "hooks": {},
+      "profiles": [
+        {
+          "id": "mine",
+          "name": "Shared name",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "A profile with this name already exists"
+      ]
+    }
+  },
+  "full": {
+    "error": "Maximum number of profiles (50) reached",
+    "file": "{\n  \"version\": 1,\n  \"profiles\": [\n    {\n      \"id\": \"d0\",\n      \"name\": \"Disk 0\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d1\",\n      \"name\": \"Disk 1\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d2\",\n      \"name\": \"Disk 2\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d3\",\n      \"name\": \"Disk 3\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d4\",\n      \"name\": \"Disk 4\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d5\",\n      \"name\": \"Disk 5\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d6\",\n      \"name\": \"Disk 6\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d7\",\n      \"name\": \"Disk 7\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d8\",\n      \"name\": \"Disk 8\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d9\",\n      \"name\": \"Disk 9\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d10\",\n      \"name\": \"Disk 10\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d11\",\n      \"name\": \"Disk 11\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d12\",\n      \"name\": \"Disk 12\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d13\",\n      \"name\": \"Disk 13\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d14\",\n      \"name\": \"Disk 14\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d15\",\n      \"name\": \"Disk 15\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d16\",\n      \"name\": \"Disk 16\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d17\",\n      \"name\": \"Disk 17\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d18\",\n      \"name\": \"Disk 18\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d19\",\n      \"name\": \"Disk 19\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d20\",\n      \"name\": \"Disk 20\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d21\",\n      \"name\": \"Disk 21\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d22\",\n      \"name\": \"Disk 22\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d23\",\n      \"name\": \"Disk 23\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d24\",\n      \"name\": \"Disk 24\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d25\",\n      \"name\": \"Disk 25\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d26\",\n      \"name\": \"Disk 26\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d27\",\n      \"name\": \"Disk 27\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d28\",\n      \"name\": \"Disk 28\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d29\",\n      \"name\": \"Disk 29\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d30\",\n      \"name\": \"Disk 30\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d31\",\n      \"name\": \"Disk 31\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d32\",\n      \"name\": \"Disk 32\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d33\",\n      \"name\": \"Disk 33\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d34\",\n      \"name\": \"Disk 34\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d35\",\n      \"name\": \"Disk 35\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d36\",\n      \"name\": \"Disk 36\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d37\",\n      \"name\": \"Disk 37\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d38\",\n      \"name\": \"Disk 38\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d39\",\n      \"name\": \"Disk 39\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d40\",\n      \"name\": \"Disk 40\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d41\",\n      \"name\": \"Disk 41\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d42\",\n      \"name\": \"Disk 42\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d43\",\n      \"name\": \"Disk 43\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d44\",\n      \"name\": \"Disk 44\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d45\",\n      \"name\": \"Disk 45\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d46\",\n      \"name\": \"Disk 46\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d47\",\n      \"name\": \"Disk 47\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d48\",\n      \"name\": \"Disk 48\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"d49\",\n      \"name\": \"Disk 49\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}",
+    "memory": {
+      "intents": {},
+      "hooks": {},
+      "profiles": [
+        {
+          "id": "new",
+          "name": "One more",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Maximum number of profiles (50) reached"
+      ]
+    }
+  },
+  "rename": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {},\n  \"removedHooks\": {},\n  \"profiles\": [\n    {\n      \"id\": \"same\",\n      \"name\": \"New name\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+    "memory": {
+      "intents": {},
+      "hooks": {},
+      "profiles": [
+        {
+          "id": "same",
+          "name": "New name",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": []
+    }
+  },
+  "tooManyOnDisk": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {},\n  \"removedHooks\": {},\n  \"profiles\": [\n    {\n      \"id\": \"x0\",\n      \"name\": \"X 0\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x1\",\n      \"name\": \"X 1\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x2\",\n      \"name\": \"X 2\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x3\",\n      \"name\": \"X 3\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x4\",\n      \"name\": \"X 4\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x5\",\n      \"name\": \"X 5\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x6\",\n      \"name\": \"X 6\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x7\",\n      \"name\": \"X 7\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x8\",\n      \"name\": \"X 8\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x9\",\n      \"name\": \"X 9\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x10\",\n      \"name\": \"X 10\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x11\",\n      \"name\": \"X 11\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x12\",\n      \"name\": \"X 12\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x13\",\n      \"name\": \"X 13\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x14\",\n      \"name\": \"X 14\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x15\",\n      \"name\": \"X 15\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x16\",\n      \"name\": \"X 16\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x17\",\n      \"name\": \"X 17\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x18\",\n      \"name\": \"X 18\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x19\",\n      \"name\": \"X 19\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x20\",\n      \"name\": \"X 20\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x21\",\n      \"name\": \"X 21\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x22\",\n      \"name\": \"X 22\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x23\",\n      \"name\": \"X 23\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x24\",\n      \"name\": \"X 24\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x25\",\n      \"name\": \"X 25\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x26\",\n      \"name\": \"X 26\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x27\",\n      \"name\": \"X 27\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x28\",\n      \"name\": \"X 28\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x29\",\n      \"name\": \"X 29\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x30\",\n      \"name\": \"X 30\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x31\",\n      \"name\": \"X 31\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x32\",\n      \"name\": \"X 32\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x33\",\n      \"name\": \"X 33\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x34\",\n      \"name\": \"X 34\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x35\",\n      \"name\": \"X 35\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x36\",\n      \"name\": \"X 36\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x37\",\n      \"name\": \"X 37\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x38\",\n      \"name\": \"X 38\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x39\",\n      \"name\": \"X 39\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x40\",\n      \"name\": \"X 40\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x41\",\n      \"name\": \"X 41\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x42\",\n      \"name\": \"X 42\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x43\",\n      \"name\": \"X 43\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x44\",\n      \"name\": \"X 44\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x45\",\n      \"name\": \"X 45\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x46\",\n      \"name\": \"X 46\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x47\",\n      \"name\": \"X 47\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x48\",\n      \"name\": \"X 48\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    },\n    {\n      \"id\": \"x49\",\n      \"name\": \"X 49\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+    "memory": {
+      "intents": {},
+      "hooks": {},
+      "profiles": [
+        {
+          "id": "x0",
+          "name": "X 0",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x1",
+          "name": "X 1",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x2",
+          "name": "X 2",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x3",
+          "name": "X 3",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x4",
+          "name": "X 4",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x5",
+          "name": "X 5",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x6",
+          "name": "X 6",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x7",
+          "name": "X 7",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x8",
+          "name": "X 8",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x9",
+          "name": "X 9",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x10",
+          "name": "X 10",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x11",
+          "name": "X 11",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x12",
+          "name": "X 12",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x13",
+          "name": "X 13",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x14",
+          "name": "X 14",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x15",
+          "name": "X 15",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x16",
+          "name": "X 16",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x17",
+          "name": "X 17",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x18",
+          "name": "X 18",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x19",
+          "name": "X 19",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x20",
+          "name": "X 20",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x21",
+          "name": "X 21",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x22",
+          "name": "X 22",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x23",
+          "name": "X 23",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x24",
+          "name": "X 24",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x25",
+          "name": "X 25",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x26",
+          "name": "X 26",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x27",
+          "name": "X 27",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x28",
+          "name": "X 28",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x29",
+          "name": "X 29",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x30",
+          "name": "X 30",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x31",
+          "name": "X 31",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x32",
+          "name": "X 32",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x33",
+          "name": "X 33",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x34",
+          "name": "X 34",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x35",
+          "name": "X 35",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x36",
+          "name": "X 36",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x37",
+          "name": "X 37",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x38",
+          "name": "X 38",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x39",
+          "name": "X 39",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x40",
+          "name": "X 40",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x41",
+          "name": "X 41",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x42",
+          "name": "X 42",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x43",
+          "name": "X 43",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x44",
+          "name": "X 44",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x45",
+          "name": "X 45",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x46",
+          "name": "X 46",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x47",
+          "name": "X 47",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x48",
+          "name": "X 48",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "id": "x49",
+          "name": "X 49",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Profile limit exceeded: maximum 50 profiles stored",
+        "Profile limit exceeded: maximum 50 profiles stored"
+      ]
+    }
+  }
+}

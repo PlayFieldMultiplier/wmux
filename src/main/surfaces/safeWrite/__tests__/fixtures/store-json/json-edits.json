@@ -1,0 +1,59 @@
+{
+  "setTop": {
+    "text": "{\n  \"a\": 2,\n  \"b\": {\n    \"c\": [\n      1,\n      2,\n      3\n    ]\n  },\n  \"z\": true\n}\n"
+  },
+  "setNewNested": {
+    "text": "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": [\n      1,\n      2,\n      3\n    ]\n  },\n  \"z\": true,\n  \"n\": {\n    \"m\": [\n      \"x\"\n    ],\n    \"arr\": [\n      {\n        \"k\": 1\n      }\n    ]\n  }\n}\n"
+  },
+  "setThroughScalar": {
+    "text": "{\n  \"a\": {\n    \"deep\": 1\n  },\n  \"b\": {\n    \"c\": [\n      1,\n      2,\n      3\n    ]\n  },\n  \"z\": true\n}\n"
+  },
+  "setThroughNull": {
+    "text": "{\n  \"a\": {\n    \"b\": 1\n  }\n}"
+  },
+  "deleteTop": {
+    "text": "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": [\n      1,\n      2,\n      3\n    ]\n  }\n}\n"
+  },
+  "deleteNested": {
+    "text": "{\n  \"a\": 1,\n  \"b\": {},\n  \"z\": true\n}\n"
+  },
+  "deleteArrayItem": {
+    "text": "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": [\n      1,\n      3\n    ]\n  },\n  \"z\": true\n}\n"
+  },
+  "deleteArrayItemByStringKey": {
+    "text": "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": [\n      1,\n      null,\n      3\n    ]\n  },\n  \"z\": true\n}\n"
+  },
+  "deleteMissingParent": {
+    "text": "{\n  \"a\": 1,\n  \"b\": { \"c\": [1, 2, 3] },\n  \"z\": true\n}\n"
+  },
+  "deleteThroughScalar": {
+    "text": "{\n  \"a\": 1,\n  \"b\": { \"c\": [1, 2, 3] },\n  \"z\": true\n}\n"
+  },
+  "deleteThroughNull": {
+    "text": "{\n  \"a\": null\n}"
+  },
+  "replaceRoot": {
+    "text": "{\n  \"only\": true\n}\n"
+  },
+  "clearRoot": {
+    "text": "{}\n"
+  },
+  "noEdits": {
+    "text": "{\"a\":1}"
+  },
+  "noChange": {
+    "text": "{\"a\":  1}"
+  },
+  "deleteAbsent": {
+    "text": "{\"a\":  1}"
+  },
+  "unsafeKeys": {
+    "text": "{\n  \"a\": \"kept\",\n  \"b\": {\n    \"c\": [\n      1,\n      2,\n      3\n    ]\n  },\n  \"z\": true\n}\n"
+  },
+  "invalidJson": {
+    "error": "JsonEditError: Invalid JSON: <parse error>"
+  },
+  "invalidJsonNoEdits": {
+    "error": "JsonEditError: Invalid JSON: <parse error>"
+  }
+}

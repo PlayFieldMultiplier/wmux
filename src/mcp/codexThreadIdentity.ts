@@ -358,7 +358,7 @@ export function matchOwnerToLiveAnchor(
   ownDataSuffix: string,
 ): CodexThreadResolution {
   if (!owner) {
-    return { status: 'miss', reason: `no wmux pane owns Codex thread ${threadId} (start or resume it from a wmux pane)` };
+    return { status: 'miss', reason: `no wmux pane owns Codex thread ${threadId} (it was not started or resumed through wmux's pane link)` };
   }
   if ((owner.dataSuffix || '') !== (ownDataSuffix || '')) {
     return { status: 'miss', reason: `Codex thread ${threadId} belongs to another wmux instance` };

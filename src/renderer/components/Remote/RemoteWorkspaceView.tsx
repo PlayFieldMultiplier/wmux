@@ -7,6 +7,7 @@ import type { AttachedRemoteWorkspace } from '../../stores/slices/remoteWorkspac
 import type { RemotePaneSummary } from '../../../shared/remoteHosts';
 import type { Workspace } from '../../../shared/types';
 import RemoteMirrorTerminal from './RemoteMirrorTerminal';
+import { ATTACH_STUCK_MS, AttachTimeline } from './attachTimeline';
 import Button from '../ui/Button';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 import { FOCUS_RING } from '../focusRing';
@@ -124,6 +125,8 @@ function PaneCell({ hostId, hostLabel, remoteWorkspaceId, pane, readOnly, attach
    *  attachId, and the detach behind it would then kill the stream we had just
    *  asked for. Waiting on this makes the order teardown-then-attach. */
   const teardown = useRef<Promise<void>>(Promise.resolve());
+  /** #2101: this cell's recent attach runs, logged when one is stuck. */
+  const timeline = useRef(new AttachTimeline());
 
   useEffect(() => {
     let cancelled = false;
@@ -133,10 +136,33 @@ function PaneCell({ hostId, hostLabel, remoteWorkspaceId, pane, readOnly, attach
     setError(undefined);
     setInsecure(false);
     let openedId: string | null = null;
+    const log = timeline.current;
+    const run = log.start(`epoch=${attachEpoch ?? '-'} session=${pane.sessionId.slice(0, 8)}`);
+    let settled = false;
+    let reportedStuck = false;
+    const settle = (step: string) => {
+      settled = true;
+      log.note(run, step);
+      if (reportedStuck) {
+        console.warn(`[wmux:remote-attach] host=${hostId} run #${run} answered after ${log.age(run)}ms: ${log.describe()}`);
+      }
+    };
+    // Diagnostics only: the cell's behaviour does not depend on this timer.
+    const stuckTimer = setTimeout(() => {
+      if (cancelled || settled) return;
+      reportedStuck = true;
+      console.warn(
+        `[wmux:remote-attach] host=${hostId} cell still unattached after ${ATTACH_STUCK_MS}ms with no error: ${log.describe()}`,
+      );
+    }, ATTACH_STUCK_MS);
 
     const attaching = teardown.current
-      .then(() => remote.paneAttach(hostId, pane.sessionId))
+      .then(() => {
+        log.note(run, 'attach-sent');
+        return remote.paneAttach(hostId, pane.sessionId);
+      })
       .then((res) => {
+        settle(res.ok ? 'ok' : `error:${res.reason ?? 'failed'}`);
         if (res.ok) {
           openedId = res.attachId;
           if (!cancelled) setAttachId(res.attachId);
@@ -154,11 +180,14 @@ function PaneCell({ hostId, hostLabel, remoteWorkspaceId, pane, readOnly, attach
         // Unexpected IPC rejection (not the {ok:false} result path) — surface
         // it the same way a rejected attach result does, rather than leaving
         // this cell silently stuck with attachId: null forever.
+        settle('rejected');
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       });
 
     return () => {
       cancelled = true;
+      clearTimeout(stuckTimer);
+      log.note(run, 'cancelled');
       // Panes now come and go with the poll, so a cell can unmount while its
       // attach is still in flight. Chaining the detach onto the attach is what
       // stops that from leaving a live SSE stream behind in main.

@@ -61,79 +61,81 @@ export function editJsonKeys(text: string, edits: JsonEdit[]): string {
 
   const originalCopy = JSON.parse(JSON.stringify(root));
   let modifiedRoot: unknown = root;
-
   for (const edit of edits) {
-    if (edit.path.length === 0) {
-      if (edit.op === 'set') {
-        modifiedRoot = edit.value;
-      } else if (edit.op === 'delete') {
-        modifiedRoot = {};
-      }
-      continue;
-    }
-
-    let current: any = modifiedRoot;
-    let valid = true;
-
-    for (let i = 0; i < edit.path.length - 1; i++) {
-      const seg = edit.path[i];
-      const nextSeg = edit.path[i + 1];
-
-      if (seg === '__proto__' || seg === 'constructor' || seg === 'prototype') {
-        valid = false;
-        break;
-      }
-
-      if (edit.op === 'set') {
-        if (current[seg] === undefined || current[seg] === null || typeof current[seg] !== 'object') {
-          current[seg] = typeof nextSeg === 'number' ? [] : {};
-        }
-        current = current[seg];
-      } else {
-        if (current === null || typeof current !== 'object' || !(seg in current)) {
-          valid = false;
-          break;
-        }
-        current = current[seg];
-      }
-    }
-
-    if (!valid || current === null || typeof current !== 'object') {
-      continue;
-    }
-
-    const lastSeg = edit.path[edit.path.length - 1];
-    if (lastSeg === '__proto__' || lastSeg === 'constructor' || lastSeg === 'prototype') {
-      continue;
-    }
-
-    if (edit.op === 'set') {
-      current[lastSeg] = edit.value;
-    } else if (edit.op === 'delete') {
-      if (Array.isArray(current) && typeof lastSeg === 'number') {
-        current.splice(lastSeg, 1);
-      } else {
-        delete current[lastSeg];
-      }
-    }
+    modifiedRoot = applyJsonEdit(modifiedRoot, edit);
   }
 
   if (deepEqual(originalCopy, modifiedRoot)) {
     return text;
   }
+  return formatLike(text, modifiedRoot);
+}
 
+function isUnsafeKey(seg: string | number): boolean {
+  return seg === '__proto__' || seg === 'constructor' || seg === 'prototype';
+}
+
+/** Applies one edit and returns the root, which is a new value when the edit targets the root itself. */
+function applyJsonEdit(root: unknown, edit: JsonEdit): unknown {
+  if (edit.path.length === 0) {
+    if (edit.op === 'set') return edit.value;
+    if (edit.op === 'delete') return {};
+    return root;
+  }
+
+  const parent = parentOf(root, edit);
+  const lastSeg = edit.path[edit.path.length - 1];
+  if (parent === null || isUnsafeKey(lastSeg)) {
+    return root;
+  }
+
+  if (edit.op === 'set') {
+    parent[lastSeg] = edit.value;
+  } else if (edit.op === 'delete') {
+    if (Array.isArray(parent) && typeof lastSeg === 'number') {
+      parent.splice(lastSeg, 1);
+    } else {
+      delete parent[lastSeg];
+    }
+  }
+  return root;
+}
+
+/**
+ * The object or array that holds the edit's last segment. A set creates the missing levels (an array when the
+ * next segment is a number); a delete through a missing level, or any path through an unsafe key, gives null.
+ */
+function parentOf(root: unknown, edit: JsonEdit): Record<string | number, unknown> | null {
+  let current: any = root;
+  for (let i = 0; i < edit.path.length - 1; i++) {
+    const seg = edit.path[i];
+    if (isUnsafeKey(seg)) {
+      return null;
+    }
+    if (edit.op === 'set') {
+      if (current[seg] === undefined || current[seg] === null || typeof current[seg] !== 'object') {
+        current[seg] = typeof edit.path[i + 1] === 'number' ? [] : {};
+      }
+    } else if (current === null || typeof current !== 'object' || !(seg in current)) {
+      return null;
+    }
+    current = current[seg];
+  }
+  return current !== null && typeof current === 'object' ? current : null;
+}
+
+/** `value` as JSON in the original text's indent, line endings and final newline. */
+function formatLike(text: string, value: unknown): string {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const hasTrailingNewline = text.endsWith('\n') || text.endsWith('\r\n');
-  const lines = text.split(/\r?\n/);
-  const indent = detectJsonIndent(lines);
+  const indent = detectJsonIndent(text.split(/\r?\n/));
 
-  let formatted = JSON.stringify(modifiedRoot, null, indent);
+  let formatted = JSON.stringify(value, null, indent);
   if (eol === '\r\n') {
     formatted = formatted.replace(/\n/g, '\r\n');
   }
   if (hasTrailingNewline) {
     formatted += eol;
   }
-
   return formatted;
 }

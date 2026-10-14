@@ -1,0 +1,887 @@
+{
+  "corrupt": {
+    "intents": {},
+    "hooks": {},
+    "profiles": [],
+    "warnings": [
+      "Corrupt surfaces store file: <parse error>"
+    ]
+  },
+  "notObject": {
+    "intents": {},
+    "hooks": {},
+    "profiles": [],
+    "warnings": [
+      "Corrupt surfaces store: content is not a JSON object"
+    ]
+  },
+  "newer": {
+    "intents": {},
+    "hooks": {},
+    "profiles": [],
+    "warnings": [
+      "Unknown or unsupported surfaces store version: 9"
+    ]
+  },
+  "profilesNotArray": {
+    "intents": {},
+    "hooks": {},
+    "profiles": [],
+    "warnings": [
+      "Corrupt surfaces store: profiles is not an array"
+    ]
+  },
+  "badProfiles": {
+    "intents": {},
+    "hooks": {},
+    "profiles": [
+      {
+        "id": "ok",
+        "name": "Trim me",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      }
+    ],
+    "warnings": [
+      "Dropping corrupt or invalid profile entry",
+      "Dropping corrupt or invalid profile entry",
+      "Dropping corrupt or invalid profile entry"
+    ]
+  },
+  "tooMany": {
+    "intents": {},
+    "hooks": {},
+    "profiles": [
+      {
+        "id": "m0",
+        "name": "M 0",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m1",
+        "name": "M 1",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m2",
+        "name": "M 2",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m3",
+        "name": "M 3",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m4",
+        "name": "M 4",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m5",
+        "name": "M 5",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m6",
+        "name": "M 6",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m7",
+        "name": "M 7",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m8",
+        "name": "M 8",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m9",
+        "name": "M 9",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m10",
+        "name": "M 10",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m11",
+        "name": "M 11",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m12",
+        "name": "M 12",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m13",
+        "name": "M 13",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m14",
+        "name": "M 14",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m15",
+        "name": "M 15",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m16",
+        "name": "M 16",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m17",
+        "name": "M 17",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m18",
+        "name": "M 18",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m19",
+        "name": "M 19",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m20",
+        "name": "M 20",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m21",
+        "name": "M 21",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m22",
+        "name": "M 22",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m23",
+        "name": "M 23",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m24",
+        "name": "M 24",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m25",
+        "name": "M 25",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m26",
+        "name": "M 26",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m27",
+        "name": "M 27",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m28",
+        "name": "M 28",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m29",
+        "name": "M 29",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m30",
+        "name": "M 30",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m31",
+        "name": "M 31",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m32",
+        "name": "M 32",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m33",
+        "name": "M 33",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m34",
+        "name": "M 34",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m35",
+        "name": "M 35",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m36",
+        "name": "M 36",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m37",
+        "name": "M 37",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m38",
+        "name": "M 38",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m39",
+        "name": "M 39",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m40",
+        "name": "M 40",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m41",
+        "name": "M 41",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m42",
+        "name": "M 42",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m43",
+        "name": "M 43",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m44",
+        "name": "M 44",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m45",
+        "name": "M 45",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m46",
+        "name": "M 46",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m47",
+        "name": "M 47",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m48",
+        "name": "M 48",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      },
+      {
+        "id": "m49",
+        "name": "M 49",
+        "createdAt": 1700000000000,
+        "providers": {
+          "claude": {
+            "knownItemIds": [
+              "a",
+              "b"
+            ],
+            "disabledItemIds": [
+              "b"
+            ]
+          }
+        }
+      }
+    ],
+    "warnings": [
+      "Profile limit exceeded: maximum 50 profiles stored"
+    ]
+  },
+  "intentsAndHooks": {
+    "intents": {
+      "claude": {
+        "a": true
+      }
+    },
+    "hooks": {
+      "claude": [
+        {
+          "id": "h",
+          "definition": {}
+        }
+      ]
+    },
+    "profiles": [],
+    "warnings": []
+  }
+}

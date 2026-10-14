@@ -1,0 +1,422 @@
+{
+  "invalidJson": {
+    "error": "Refusing to save: corrupt surfaces store file on disk: <parse error>",
+    "file": "{ not json",
+    "memory": {
+      "intents": {
+        "claude": {
+          "kept": true,
+          "x": false
+        },
+        "codex": {
+          "y": true
+        }
+      },
+      "hooks": {
+        "claude": [
+          {
+            "id": "h1",
+            "definition": {
+              "event": "Stop"
+            },
+            "originPath": "/p"
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "id": "p1",
+          "name": "Focus",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Refusing to save: corrupt surfaces store file on disk: <parse error>"
+      ]
+    }
+  },
+  "invalidJsonReplace": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"kept\": true,\n      \"x\": false\n    },\n    \"codex\": {\n      \"y\": true\n    }\n  },\n  \"removedHooks\": {\n    \"claude\": [\n      {\n        \"id\": \"h1\",\n        \"definition\": {\n          \"event\": \"Stop\"\n        },\n        \"originPath\": \"/p\"\n      }\n    ]\n  },\n  \"profiles\": [\n    {\n      \"id\": \"p1\",\n      \"name\": \"Focus\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+    "memory": {
+      "intents": {
+        "claude": {
+          "kept": true,
+          "x": false
+        },
+        "codex": {
+          "y": true
+        }
+      },
+      "hooks": {
+        "claude": [
+          {
+            "id": "h1",
+            "definition": {
+              "event": "Stop"
+            },
+            "originPath": "/p"
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "id": "p1",
+          "name": "Focus",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Refusing to save: corrupt surfaces store file on disk: <parse error>"
+      ]
+    }
+  },
+  "array": {
+    "error": "Refusing to save: corrupt surfaces store file on disk: content is not a JSON object",
+    "file": "[1, 2]",
+    "memory": {
+      "intents": {
+        "claude": {
+          "kept": true,
+          "x": false
+        },
+        "codex": {
+          "y": true
+        }
+      },
+      "hooks": {
+        "claude": [
+          {
+            "id": "h1",
+            "definition": {
+              "event": "Stop"
+            },
+            "originPath": "/p"
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "id": "p1",
+          "name": "Focus",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Refusing to save: corrupt surfaces store file on disk: content is not a JSON object"
+      ]
+    }
+  },
+  "arrayReplace": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"kept\": true,\n      \"x\": false\n    },\n    \"codex\": {\n      \"y\": true\n    }\n  },\n  \"removedHooks\": {\n    \"claude\": [\n      {\n        \"id\": \"h1\",\n        \"definition\": {\n          \"event\": \"Stop\"\n        },\n        \"originPath\": \"/p\"\n      }\n    ]\n  },\n  \"profiles\": [\n    {\n      \"id\": \"p1\",\n      \"name\": \"Focus\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+    "memory": {
+      "intents": {
+        "claude": {
+          "kept": true,
+          "x": false
+        },
+        "codex": {
+          "y": true
+        }
+      },
+      "hooks": {
+        "claude": [
+          {
+            "id": "h1",
+            "definition": {
+              "event": "Stop"
+            },
+            "originPath": "/p"
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "id": "p1",
+          "name": "Focus",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Refusing to save: corrupt surfaces store file on disk: content is not a JSON object"
+      ]
+    }
+  },
+  "nullJson": {
+    "error": "Refusing to save: corrupt surfaces store file on disk: content is not a JSON object",
+    "file": "null",
+    "memory": {
+      "intents": {
+        "claude": {
+          "kept": true,
+          "x": false
+        },
+        "codex": {
+          "y": true
+        }
+      },
+      "hooks": {
+        "claude": [
+          {
+            "id": "h1",
+            "definition": {
+              "event": "Stop"
+            },
+            "originPath": "/p"
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "id": "p1",
+          "name": "Focus",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Refusing to save: corrupt surfaces store file on disk: content is not a JSON object"
+      ]
+    }
+  },
+  "nullJsonReplace": {
+    "error": null,
+    "file": "{\n  \"version\": 1,\n  \"intents\": {\n    \"claude\": {\n      \"kept\": true,\n      \"x\": false\n    },\n    \"codex\": {\n      \"y\": true\n    }\n  },\n  \"removedHooks\": {\n    \"claude\": [\n      {\n        \"id\": \"h1\",\n        \"definition\": {\n          \"event\": \"Stop\"\n        },\n        \"originPath\": \"/p\"\n      }\n    ]\n  },\n  \"profiles\": [\n    {\n      \"id\": \"p1\",\n      \"name\": \"Focus\",\n      \"createdAt\": 1700000000000,\n      \"providers\": {\n        \"claude\": {\n          \"knownItemIds\": [\n            \"a\",\n            \"b\"\n          ],\n          \"disabledItemIds\": [\n            \"b\"\n          ]\n        }\n      }\n    }\n  ]\n}\n",
+    "memory": {
+      "intents": {
+        "claude": {
+          "kept": true,
+          "x": false
+        },
+        "codex": {
+          "y": true
+        }
+      },
+      "hooks": {
+        "claude": [
+          {
+            "id": "h1",
+            "definition": {
+              "event": "Stop"
+            },
+            "originPath": "/p"
+          }
+        ]
+      },
+      "profiles": [
+        {
+          "id": "p1",
+          "name": "Focus",
+          "createdAt": 1700000000000,
+          "providers": {
+            "claude": {
+              "knownItemIds": [
+                "a",
+                "b"
+              ],
+              "disabledItemIds": [
+                "b"
+              ]
+            }
+          }
+        }
+      ],
+      "warnings": [
+        "Refusing to save: corrupt surfaces store file on disk: content is not a JSON object"
+      ]
+    }
+  },
+  "newerOnDisk": {
+    "first": {
+      "error": "Refusing to save: newer version 2 detected on disk",
+      "file": "{\n  \"version\": 2\n}",
+      "memory": {
+        "intents": {
+          "claude": {
+            "a": true
+          }
+        },
+        "hooks": {},
+        "profiles": [],
+        "warnings": [
+          "Refusing to save: newer version 2 detected on disk"
+        ]
+      }
+    },
+    "again": {
+      "error": "Refusing to save: newer version file exists on disk",
+      "file": "{\n  \"version\": 1\n}",
+      "memory": {
+        "intents": {
+          "claude": {
+            "a": true
+          }
+        },
+        "hooks": {},
+        "profiles": [],
+        "warnings": [
+          "Refusing to save: newer version 2 detected on disk",
+          "Refusing to save: newer version file exists on disk"
+        ]
+      }
+    }
+  },
+  "stringVersion": {
+    "first": {
+      "error": "Refusing to save: unsupported surfaces store version: 1",
+      "file": "{\n  \"version\": \"1\"\n}",
+      "memory": {
+        "intents": {
+          "claude": {
+            "a": true
+          }
+        },
+        "hooks": {},
+        "profiles": [],
+        "warnings": [
+          "Refusing to save: unsupported surfaces store version: 1"
+        ]
+      }
+    },
+    "again": {
+      "error": "Refusing to save: newer version file exists on disk",
+      "file": "{\n  \"version\": 1\n}",
+      "memory": {
+        "intents": {
+          "claude": {
+            "a": true
+          }
+        },
+        "hooks": {},
+        "profiles": [],
+        "warnings": [
+          "Refusing to save: unsupported surfaces store version: 1",
+          "Refusing to save: newer version file exists on disk"
+        ]
+      }
+    }
+  },
+  "noVersion": {
+    "first": {
+      "error": "Refusing to save: unsupported surfaces store version: undefined",
+      "file": "{\n  \"intents\": {}\n}",
+      "memory": {
+        "intents": {
+          "claude": {
+            "a": true
+          }
+        },
+        "hooks": {},
+        "profiles": [],
+        "warnings": [
+          "Refusing to save: unsupported surfaces store version: undefined"
+        ]
+      }
+    },
+    "again": {
+      "error": "Refusing to save: newer version file exists on disk",
+      "file": "{\n  \"version\": 1\n}",
+      "memory": {
+        "intents": {
+          "claude": {
+            "a": true
+          }
+        },
+        "hooks": {},
+        "profiles": [],
+        "warnings": [
+          "Refusing to save: unsupported surfaces store version: undefined",
+          "Refusing to save: newer version file exists on disk"
+        ]
+      }
+    }
+  },
+  "refusedAtLoad": {
+    "error": "Refusing to save: newer version file exists on disk",
+    "file": "{\n  \"version\": 3,\n  \"intents\": {}\n}",
+    "memory": {
+      "intents": {
+        "claude": {
+          "a": true
+        }
+      },
+      "hooks": {},
+      "profiles": [],
+      "warnings": [
+        "Unknown or unsupported surfaces store version: 3",
+        "Refusing to save: newer version file exists on disk"
+      ]
+    }
+  },
+  "unreadable": {
+    "error": "Refusing to save: cannot read existing store file: EACCES: permission denied",
+    "file": "{\n  \"version\": 1\n}",
+    "memory": {
+      "intents": {
+        "claude": {
+          "a": true
+        }
+      },
+      "hooks": {},
+      "profiles": [],
+      "warnings": [
+        "Refusing to save: cannot read existing store file: EACCES: permission denied"
+      ]
+    }
+  }
+}

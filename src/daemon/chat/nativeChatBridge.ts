@@ -697,6 +697,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
         getTranscriptSessionId: () => deps.projector.status(id).agentSessionId,
         hasOpenApproval: () => hasOpenApproval(id),
         readScreen: () => deps.readScreen(id),
+        readTitle: () => deps.pane(id)?.bridge.getTitle() ?? null,
         getAgentState: () => {
           const current = deps.chatAgentState(id);
           const slug = slugOf(current);
