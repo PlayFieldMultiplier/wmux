@@ -193,8 +193,7 @@ export function factoryBotCreateTeamHandler(
   return async (e, req) => {
     if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may add bots' };
     const r = await createTeamFromFolder((deps.store ?? getBotStore)(), req, deps);
-    const lead = r.ok ? r.bots[0] : r.bots?.[0];
-    if (lead) (deps.greet ?? greetAddedBot)(lead);
+    if (r.ok) (deps.greet ?? greetAddedBot)(r.bots[0]);
     return r;
   };
 }

@@ -63,7 +63,8 @@ export const TEAM_TEMPLATES: readonly BotTemplate[] = ['coordinator', 'researche
  *  the owner's language). Refused, before any bot is made, when a name is
  *  not one the store keeps or is taken (twice in the team, or by a bot of
  *  the workspace), or when the workspace already has an enabled
- *  coordinator. Only the coordinator greets the owner. */
+ *  coordinator. All five are made or none. Only the coordinator greets the
+ *  owner. */
 export interface FactoryBotCreateTeamRequest {
   workspaceId: string;
   /** One name per team template. */
@@ -74,7 +75,7 @@ export interface FactoryBotCreateTeamRequest {
 
 export type FactoryBotCreateTeamResult =
   | { ok: true; bots: BotProfile[] }
-  | { ok: false; code: FactoryBotCreateCode | 'has_lead' | 'name_taken'; message: string; bots?: BotProfile[] };
+  | { ok: false; code: FactoryBotCreateCode | 'has_lead' | 'name_taken'; message: string };
 
 /** @deprecated legacy Add-bot rule (the HQ Moa took no repository); the
  *  repository is optional for every bot. */

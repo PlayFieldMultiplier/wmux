@@ -381,6 +381,17 @@ describe('"Add team"', () => {
     expect(inherited.ok && inherited.bots.every((b) => b.repo?.repoKey === 'github.com/acme/old')).toBe(true);
   });
 
+  it('all five or none: a create refused midway takes back the ones made', async () => {
+    const real = store.create.bind(store);
+    let n = 0;
+    const spy = vi.spyOn(store, 'create').mockImplementation((input) => (++n === 3 ? { ok: false, code: 'invalid_argument', message: 'no' } : real(input)));
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-9', names })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(store.list({ workspaceId: 'ws-9' })).toEqual([]);
+    spy.mockRestore();
+    // So the same team can be added again.
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-9', names })).toMatchObject({ ok: true });
+  });
+
   it('answers only the main window, and only the coordinator greets the owner', async () => {
     const greet = vi.fn();
     const handler = factoryBotCreateTeamHandler(() => win, { store: () => store, greet });

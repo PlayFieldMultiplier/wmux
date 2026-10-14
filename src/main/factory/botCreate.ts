@@ -175,7 +175,11 @@ export async function createTeamFromFolder(
   const bots: BotProfile[] = [];
   for (const [i, template] of TEAM_TEMPLATES.entries()) {
     const made = store.create({ workspaceId, template, name: names[i], ...(repo ? { repo } : {}) });
-    if (!made.ok) return { ok: false, code: made.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: made.message, ...(bots.length > 0 ? { bots } : {}) };
+    if (!made.ok) {
+      // All five or none: the ones made in this call go again.
+      for (const b of bots) store.remove(b.id);
+      return { ok: false, code: made.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: made.message };
+    }
     bots.push(made.bot);
   }
   return { ok: true, bots };
