@@ -296,8 +296,11 @@ export function botWorkers(
   const out: BotWorker[] = [];
   const seen = new Set<string>();
   for (const task of tasks) {
-    if (task.botId !== botId || !WORKING_STAGE.has(task.stage)) continue;
+    if (task.botId !== botId) continue;
     const workspaceId = task.workerWorkspaceId || task.taskWorkspaceId;
+    // A resumed worker of an ended task is live while its pane's agent is.
+    const resumedLive = task.worker === 'resumed' && !!workspaceId && LIVE_WORKER.has(workerClass[workspaceId] ?? 'idle');
+    if (!WORKING_STAGE.has(task.stage) && !resumedLive) continue;
     if (!workspaceId || seen.has(workspaceId) || workspaceName(workspaceId) === null) continue;
     seen.add(workspaceId);
     const cls = workerClass[workspaceId] ?? 'running';
@@ -312,7 +315,7 @@ export function botWorkers(
   // done task's pane whose agent still reads running is not a live worker.
   const tasked = new Set<string>();
   for (const task of tasks) {
-    if (task.botId !== botId) continue;
+    if (task.botId !== botId || task.worker === 'resumed') continue;
     if (task.taskWorkspaceId) tasked.add(task.taskWorkspaceId);
     if (task.workerWorkspaceId) tasked.add(task.workerWorkspaceId);
   }

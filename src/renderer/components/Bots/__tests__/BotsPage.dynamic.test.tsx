@@ -17,7 +17,7 @@ import type { Pane, Workspace } from '../../../../shared/types';
 import BotsPage, { isStillStarting } from '../BotsPage';
 import type { EnginePort } from '../botsEngine';
 import MiniSidebar from '../../Sidebar/MiniSidebar';
-import { chatCards, composerHint, oneToOneRefusal } from '../BotsChat';
+import { chatCards, composerHint, fitSideSplit, oneToOneRefusal } from '../BotsChat';
 import type { Conversation } from '../botsModel';
 import { refreshApprovals, setApprovalsApiForTests, type ApprovalsApi } from '../../Room/approvalsStore';
 
@@ -859,6 +859,14 @@ describe('Bots page', () => {
     await act(async () => { await Promise.resolve(); });
     expect(settings.set).toHaveBeenCalledWith({ enabled: true });
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('the splitter keeps the panel at 320px or more and the chat at 360px or more', () => {
+    expect(fitSideSplit(0.55, 1400)).toBe(0.55);
+    // 800px body: the panel can take at most 800 - 360 - 6 = 434px.
+    expect(fitSideSplit(0.75, 800)).toBeCloseTo(434 / 800);
+    expect(fitSideSplit(0.3, 800)).toBeCloseTo(320 / 800);
+    expect(fitSideSplit(0.9, 2000)).toBe(0.75);
   });
 
   it('isStillStarting: a new bot starts until its first message, unless its turn failed', () => {

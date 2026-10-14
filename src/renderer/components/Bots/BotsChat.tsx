@@ -697,6 +697,17 @@ export function clampSideSplit(v: number): number {
   return Number.isFinite(v) ? Math.min(SIDE_SPLIT_MAX, Math.max(SIDE_SPLIT_MIN, v)) : SIDE_SPLIT_DEFAULT;
 }
 
+/** The panel never under 320px, the chat never under 360px (beside the 6px
+ *  handle): the share a body `width` px wide can take, as bots.css draws
+ *  it. Pure. */
+export const SIDE_PANEL_MIN_PX = 320;
+export const SIDE_CHAT_MIN_PX = 360;
+export function fitSideSplit(v: number, width: number): number {
+  const share = clampSideSplit(v);
+  if (!(width > SIDE_PANEL_MIN_PX + SIDE_CHAT_MIN_PX + 6)) return share;
+  return Math.min((width - SIDE_CHAT_MIN_PX - 6) / width, Math.max(SIDE_PANEL_MIN_PX / width, share));
+}
+
 function readSideSplit(): number {
   try {
     const raw = window.localStorage.getItem(SIDE_SPLIT_KEY);
@@ -725,8 +736,9 @@ function SideSplitter({ areaRef, split, t, onChange }: {
   const at = (clientX: number) => {
     const box = areaRef.current?.getBoundingClientRect();
     if (!box || box.width <= 0) return split;
-    return clampSideSplit((box.right - clientX) / box.width);
+    return fitSideSplit((box.right - clientX) / box.width, box.width);
   };
+  const width = () => areaRef.current?.getBoundingClientRect().width ?? 0;
   return (
     <>
     {drag !== null && <div aria-hidden="true" data-bots-split-guide className="wmux-bots-split-guide" style={{ right: `${(drag * 100).toFixed(2)}%` }} />}
@@ -743,7 +755,7 @@ function SideSplitter({ areaRef, split, t, onChange }: {
       onPointerDown={(e) => {
         e.preventDefault();
         e.currentTarget.setPointerCapture?.(e.pointerId);
-        setDrag(split);
+        setDrag(fitSideSplit(split, width()));
       }}
       onPointerMove={(e) => {
         if (e.currentTarget.hasPointerCapture?.(e.pointerId)) setDrag(at(e.clientX));
@@ -760,7 +772,7 @@ function SideSplitter({ areaRef, split, t, onChange }: {
         const step = e.key === 'ArrowLeft' ? 0.02 : e.key === 'ArrowRight' ? -0.02 : 0;
         if (!step) return;
         e.preventDefault();
-        onChange(clampSideSplit(split + step), true);
+        onChange(fitSideSplit(split + step, width()), true);
       }}
     />
     </>

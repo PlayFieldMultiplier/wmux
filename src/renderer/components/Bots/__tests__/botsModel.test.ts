@@ -161,6 +161,14 @@ describe('botWorkers from the bot\'s tasks', () => {
     expect(botWorkerTree(LEAD, live, tasks, names).map((r) => [r.workspaceId, r.state])).toEqual([['t1', 'done']]);
   });
 
+  it('a resumed worker of an ended task is live while its pane\'s agent runs, done once it stops', () => {
+    const tasks = [view('a', 't1', 'coded', { worker: 'resumed', workerWorkspaceId: 't2' })];
+    expect(botWorkers(LEAD, {}, { t2: 'needsYou' }, names, tasks).map((w) => [w.workspaceId, w.waiting])).toEqual([['t2', true]]);
+    const stopped = botWorkers(LEAD, {}, { t2: 'idle' }, names, tasks);
+    expect(stopped).toEqual([]);
+    expect(botWorkerTree(LEAD, stopped, tasks, names).map((r) => [r.workspaceId, r.state])).toEqual([['t2', 'done']]);
+  });
+
   it('a task workspace already listed from its task is not listed again from its origin', () => {
     const ws = botWorkers(LEAD, { t1: LEAD, t2: LEAD }, { t1: 'running', t2: 'needsYou' }, names, [view('a', 't1', 'working')]);
     expect(ws.map((w) => [w.workspaceId, w.taskId ?? null])).toEqual([['t1', 'a'], ['t2', null]]);

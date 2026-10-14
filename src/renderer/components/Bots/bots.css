@@ -105,7 +105,8 @@
 .wmux-bots-entry + .wmux-bots-entry { margin-top: 2px; }
 .wmux-bots-entry.is-open { background: var(--selection); box-shadow: var(--select-ring, none); }
 .wmux-bots-entry.is-open .wmux-bots-row-button,
-.wmux-bots-entry.is-open .wmux-bots-row-button:hover { background: transparent; box-shadow: none; }
+.wmux-bots-entry.is-open .wmux-bots-row-button:hover { background: transparent; }
+.wmux-bots-entry.is-open .wmux-bots-row-button:not(:focus-visible) { box-shadow: none; }
 .wmux-bots-row-wrap { position: relative; min-width: 0; }
 .wmux-bots-tree-toggle {
   position: absolute;
