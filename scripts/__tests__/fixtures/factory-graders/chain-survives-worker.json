@@ -1,0 +1,875 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "chain-survives-worker",
+  "run": 1,
+  "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-393f60ef",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Coordinator",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791989874564,
+    "updatedAt": 1791989874564
+   },
+   {
+    "version": 1,
+    "id": "bot-b437e91e",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "role": "lead",
+    "template": "developer",
+    "name": "Developer",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux-team/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-A6JOJ2/app"
+    },
+    "enabled": true,
+    "createdAt": 1791989874567,
+    "updatedAt": 1791989874567
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-393f60ef",
+   "developer": "bot-b437e91e"
+  },
+  "injected": [
+   {
+    "label": "ask",
+    "kind": "card",
+    "id": "c-mv88i4jw1ba12181a0",
+    "threadId": "general",
+    "at": 1791989874570
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791989874570,
+    "do": "post",
+    "label": "ask",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv88i4jw1ba12181a0",
+      "seq": 1,
+      "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791989874572,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Change A",
+      "body": "Please get change A done.",
+      "refs": {
+       "botId": "bot-393f60ef",
+       "botIds": [
+        "bot-393f60ef"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-393f60ef",
+      "role": "moa"
+     },
+     "wakeId": "w-mv88i4jy-b0b202a7",
+     "addressees": [
+      {
+       "botId": "bot-393f60ef",
+       "role": "moa",
+       "wakeId": "w-mv88i4jy-b0b202a7"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791989874580,
+    "do": "waitFor",
+    "label": "report",
+    "ok": true,
+    "doneAt": 1791989890152
+   },
+   {
+    "at": 1791989890152,
+    "do": "waitFor",
+    "label": "lead woken by the result",
+    "ok": true,
+    "doneAt": 1791989890654
+   },
+   {
+    "at": 1791989890654,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791989898689
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv88i4jw-a9b0c9cf1d8d",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791989874572,
+    "dedupeKey": "human.message:c-mv88i4jw1ba12181a0:bot-393f60ef",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "ref": {
+     "botId": "bot-393f60ef",
+     "messageId": "c-mv88i4jw1ba12181a0:bot-393f60ef"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Please get change A done.",
+     "cardId": "c-mv88i4jw1ba12181a0",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv88i8jz-c1f45a62c783",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791989879759,
+    "dedupeKey": "handoff.received:h-mv88i8jw9f7a7cc61a52",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "ref": {
+     "handoffId": "h-mv88i8jw9f7a7cc61a52",
+     "botId": "bot-b437e91e"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-393f60ef"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Change A",
+     "threadId": "general",
+     "runId": "run-c-mv88i4jw1ba12181a0",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Coordinator (moa)",
+     "toLabel": "Developer (lead)",
+     "fromWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "toWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871"
+    }
+   },
+   {
+    "id": "f-0mv88igcb-59bc09906247",
+    "seq": 3,
+    "kind": "task.done",
+    "at": 1791989889851,
+    "dedupeKey": "task.done:wtask-mv88icos-23nrbl5a",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "ref": {
+     "taskId": "wtask-mv88icos-23nrbl5a",
+     "botId": "bot-b437e91e"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-1f6e8f9e-8783-4067-be58-515a14033442",
+     "title": "change A",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mv88icos-23nrbl5a"
+    }
+   },
+   {
+    "id": "f-0mv88igkt-3cc55529f751",
+    "seq": 4,
+    "kind": "handoff.received",
+    "at": 1791989890157,
+    "dedupeKey": "handoff.received:h-mv88igkqc1a4c136ae8d",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "ref": {
+     "handoffId": "h-mv88igkqc1a4c136ae8d",
+     "botId": "bot-393f60ef"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-b437e91e"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Change A done",
+     "threadId": "general",
+     "runId": "run-c-mv88i4jw1ba12181a0",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Developer (lead)",
+     "toLabel": "Coordinator (moa)",
+     "fromWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "toWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv88i4jy-b0b202a7",
+    "botId": "bot-393f60ef",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "reason": {
+     "kind": "human",
+     "text": "Please get change A done.",
+     "source": "desktop",
+     "clientMessageId": "c-mv88i4jw1ba12181a0",
+     "runId": "run-c-mv88i4jw1ba12181a0",
+     "lead": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791989874574,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv88i8jw-663da017",
+    "botId": "bot-b437e91e",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv88i8jw9f7a7cc61a52"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791989879756,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv88igkk-8848c29d",
+    "botId": "bot-b437e91e",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-mv88icos-23nrbl5a@4"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "priority": 1,
+    "enqueuedAt": 1791989890148,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv88igkq-98c355da",
+    "botId": "bot-393f60ef",
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv88igkqc1a4c136ae8d"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791989890154,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv88i8jw9f7a7cc61a52",
+    "runId": "run-c-mv88i4jw1ba12181a0",
+    "threadId": "general",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "botId": "bot-393f60ef"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "botId": "bot-b437e91e"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Change A",
+     "body": "Make change A in a.txt."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv88i4jy-b0b202a7:h1",
+    "createdAt": 1791989879756,
+    "updatedAt": 1791989879758
+   },
+   {
+    "version": 1,
+    "id": "h-mv88igkqc1a4c136ae8d",
+    "runId": "run-c-mv88i4jw1ba12181a0",
+    "threadId": "general",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "botId": "bot-b437e91e"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "botId": "bot-393f60ef"
+    },
+    "kind": "result",
+    "replyTo": "h-mv88i8jw9f7a7cc61a52",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv88i8jw9f7a7cc61a52"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Change A done",
+     "body": "a.txt is changed."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv88igkk-8848c29d:h1",
+    "createdAt": 1791989890154,
+    "updatedAt": 1791989890157
+   }
+  ],
+  "repoWatch": null,
+  "ledger": [
+   {
+    "schemaVersion": 1,
+    "id": "wtask-mv88icos-23nrbl5a",
+    "taskWorkspaceId": "ws-1f6e8f9e-8783-4067-be58-515a14033442",
+    "ownerWorkspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "title": "change A",
+    "status": "completed",
+    "rev": 4,
+    "updatedAt": 1791989890142,
+    "updatedBy": {
+     "kind": "brain",
+     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871"
+    },
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-b437e91e",
+      "tainted": true
+     },
+     "preset": "default",
+     "handoffId": "h-mv88i8jw9f7a7cc61a52"
+    },
+    "summary": "fake worker: review_requested for wtask-mv88icos-23nrbl5a",
+    "gate": {
+     "exitCode": 0,
+     "tail": "\n> factory-smoke-app@1.0.0 lint\n> node -e \"process.exit(0)\"\n\n\n> factory-smoke-app@1.0.0 test\n> node -e \"process.exit(0)\"\n\n",
+     "at": 1791989890142,
+     "command": "npm test",
+     "recordedBy": "system",
+     "headSha": "e613b89e04e5d30d46b9e94cfa9e061eedfa9e0e"
+    }
+   }
+  ],
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv88i4jw1ba12181a0",
+    "seq": 1,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791989874572,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Change A",
+    "body": "Please get change A done.",
+    "refs": {
+     "botId": "bot-393f60ef",
+     "botIds": [
+      "bot-393f60ef"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv88i8jzdfcf495d09",
+    "seq": 2,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "general",
+    "kind": "fact",
+    "at": 1791989879759,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Developer (lead): Change A",
+    "refs": {
+     "botId": "bot-b437e91e",
+     "handoffId": "h-mv88i8jw9f7a7cc61a52",
+     "factId": "f-0mv88i8jz-c1f45a62c783"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv88igcbe875a7442e",
+    "seq": 3,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "kind": "fact",
+    "at": 1791989889851,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task done: change A",
+    "body": "fake worker: review_requested for wtask-mv88icos-23nrbl5a",
+    "refs": {
+     "taskId": "wtask-mv88icos-23nrbl5a",
+     "botId": "bot-b437e91e",
+     "factId": "f-0mv88igcb-59bc09906247"
+    },
+    "closes": true
+   },
+   {
+    "version": 1,
+    "id": "c-mv88igkfd429179012",
+    "seq": 4,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "kind": "fact",
+    "at": 1791989890143,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task checked: gate passed, task completed",
+    "body": "`npm test` at e613b89e04e5d30d46b9e94cfa9e061eedfa9e0e."
+   },
+   {
+    "version": 1,
+    "id": "c-mv88igks6c0e83092b",
+    "seq": 5,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "task:wtask-mv88icos-23nrbl5a",
+    "kind": "fact",
+    "at": 1791989890156,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Worker done",
+    "body": "Task completed: its Claude stopped to free memory. Its pane closes. The worktree is kept; no conversation was recorded to resume."
+   },
+   {
+    "version": 1,
+    "id": "c-mv88igku0d0474eedd",
+    "seq": 6,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "general",
+    "kind": "fact",
+    "at": 1791989890157,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Coordinator (moa): Change A done",
+    "refs": {
+     "botId": "bot-393f60ef",
+     "handoffId": "h-mv88igkqc1a4c136ae8d",
+     "factId": "f-0mv88igkt-3cc55529f751"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv88igkuf9516cf3bd",
+    "seq": 7,
+    "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+    "threadId": "general",
+    "kind": "report",
+    "at": 1791989890158,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-238cdc8e-f600-484c-b8c7-edecf83ac871",
+     "botId": "bot-393f60ef"
+    },
+    "title": "Change A is done",
+    "body": "The developer finished change A.",
+    "clientPostId": "wake:w-mv88igkq-98c355da:1"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791989874611,
+     "event": "initialize"
+    },
+    {
+     "at": 1791989874612,
+     "event": "session/new",
+     "sessionId": "stub-7093353519de",
+     "cwd": "/home/owner/.wmux-verify-f95b7362/factory/bots/bot-393f60ef"
+    },
+    {
+     "at": 1791989879615,
+     "event": "prompt",
+     "sessionId": "stub-7093353519de",
+     "text": "You are Coordinator, a bot of wmux workspace ws-238cdc8e-f600-484c-b8c7-edecf83ac871."
+    },
+    {
+     "at": 1791989879757,
+     "event": "tool",
+     "sessionId": "stub-7093353519de",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv88i8jw9f7a7cc61a52\",\n  \"status\": \"delivered\",\n  \"threadId\": \"general\",\n  \"to\": {\n    \"botId\": \"bot-b437e91e\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\"\n  },\n  \"wakeId\": \"w-mv88i8jw-663da017\"\n}"
+    },
+    {
+     "at": 1791989890155,
+     "event": "prompt",
+     "sessionId": "stub-7093353519de",
+     "text": "[wake w-mv88igkq-98c355da] Coordinator (coordinator) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791989890159,
+     "event": "tool",
+     "sessionId": "stub-7093353519de",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv88igkuf9516cf3bd\",\n    \"seq\": 7,\n    \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n    \"threadId\": \"general\",\n    \"kind\": \"report\",\n    \"at\": 1791989890158,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n      \"botId\": \"bot-393f60ef\"\n    },\n    \"title\": \"Change A is done\",\n"
+    }
+   ],
+   "developer": [
+    {
+     "at": 1791989879783,
+     "event": "initialize"
+    },
+    {
+     "at": 1791989879784,
+     "event": "session/new",
+     "sessionId": "stub-d1cf9eb18e33",
+     "cwd": "/home/owner/.wmux-verify-f95b7362/factory/bots/bot-b437e91e"
+    },
+    {
+     "at": 1791989884786,
+     "event": "prompt",
+     "sessionId": "stub-d1cf9eb18e33",
+     "text": "You are Developer, a bot of wmux workspace ws-238cdc8e-f600-484c-b8c7-edecf83ac871. Your repository is github.com/acme/app."
+    },
+    {
+     "at": 1791989885014,
+     "event": "tool",
+     "sessionId": "stub-d1cf9eb18e33",
+     "name": "fanout_start",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"idempotencyKey\": \"wake:w-mv88i8jw-663da017:1\",\n  \"taskCount\": 1,\n  \"repoPath\": \"/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-A6JOJ2/app\",\n  \"ownerWorkspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n  \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n  \"starting\": true,\n  \"note\": \"Accepted: the workers are"
+    },
+    {
+     "at": 1791989890148,
+     "event": "prompt",
+     "sessionId": "stub-d1cf9eb18e33",
+     "text": "[wake w-mv88igkk-8848c29d] Developer (developer) · reason: facts · priority 1"
+    },
+    {
+     "at": 1791989890155,
+     "event": "tool",
+     "sessionId": "stub-d1cf9eb18e33",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv88igkqc1a4c136ae8d\",\n  \"status\": \"delivered\",\n  \"threadId\": \"general\",\n  \"to\": {\n    \"botId\": \"bot-393f60ef\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\"\n  },\n  \"wakeId\": \"w-mv88igkq-98c355da\"\n}"
+    }
+   ]
+  },
+  "workers": [
+   {
+    "at": 1791989888697,
+    "pid": 73525,
+    "cwd": "/home/owner/.wmux-verify-f95b7362/worktrees/d54cf298eed5/change-a-23nrbl5a",
+    "event": "start",
+    "taskId": "wtask-mv88icos-23nrbl5a",
+    "args": [
+     "--session-id",
+     "82d9514e-033c-404f-a9a2-3a4240e1d104",
+     "--settings=/home/owner/.wmux-verify-f95b7362/factory/worker-settings.json",
+     "# Task worker\n\nYou are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin's default branch.\n\nWhat you can do here: implement the task below within the files it name",
+     "--dangerously-skip-permissions",
+     "--allowedTools",
+     "mcp__wmux__ledger_update,mcp__wmux__channel_read,mcp__wmux__channel_unread,mcp__wmux__channel_ack,mcp__wmux__a2a_task_query,mcp__wmux__a2a_whoami",
+     "--disallowedTools",
+     "mcp__wmux__fanout_start,mcp__wmux__terminal_send,mcp__wmux__terminal_send_key,mcp__wmux__send_message,mcp__wmux__surface_new,mcp__wmux__pane_split,mcp__wmux__browser_*"
+    ]
+   },
+   {
+    "at": 1791989889854,
+    "pid": 73525,
+    "cwd": "/home/owner/.wmux-verify-f95b7362/worktrees/d54cf298eed5/change-a-23nrbl5a",
+    "event": "ledger_update",
+    "ok": true,
+    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mv88icos-23nrbl5a\",\n    \"taskWorkspaceId\": \"ws-1f6e8f9e-8783-4067-be58-515a14033442\",\n    \"ownerWorkspaceId\": \"ws-238cdc8e-f600-484c-b8c7-edecf83ac871\",\n    \"title\": \"change A\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1791989889851,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-1f6e8f9e-8783-4067-be58-515a14033442\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-b437e91e\",\n        \"tainted\": true\n      },\n      \"preset\": \"default\",\n      \"handoffId\": \"h-mv88i8jw9f7a7cc61a52\"\n    },\n    \"summary\": \"fake worker: review_requested for wtask-mv88icos-23nrbl5a\"\n  }\n}"
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791989874609,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791989885003,
+     "argv": [
+      "repo",
+      "view",
+      "--json",
+      "defaultBranchRef",
+      "--jq",
+      ".defaultBranchRef.name"
+     ],
+     "cwd": "/private/tmp/mp/_2n8b2_x28ldyspmqm_mbm7r0000gn/T/wmux-fsmoke-chain-survives-worker-A6JOJ2/app",
+     "handled": false,
+     "exit": 1,
+     "error": "fake-gh: unsupported repo"
+    },
+    {
+     "at": 1791989885239,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ],
+     "cwd": "/home/owner/.wmux-verify-f95b7362/worktrees/d54cf298eed5/change-a-23nrbl5a",
+     "handled": true,
+     "exit": 1,
+     "error": "no pull requests found for branch \"wtask/change-a-23nrbl5a\""
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-14T14-57-52-verify-f95b7362",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux-team/.claude/skills/verify-wmux/evidence/2026-10-14T14-57-52-verify-f95b7362"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the task did not record its dispatch",
+   "failing": [
+    "task_records_the_dispatch"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "ledger.0.dispatch.handoffId"
+    }
+   ]
+  },
+  {
+   "why": "the result started a new run",
+   "failing": [
+    "result_answers_dispatch"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.1.runId",
+     "value": "run-new"
+    },
+    {
+     "op": "set",
+     "path": "handoffs.1.depth",
+     "value": 1
+    }
+   ]
+  },
+  {
+   "why": "the result went to another bot",
+   "failing": [
+    "result_answers_dispatch",
+    "lead_woken_once_by_it"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.1.to.botId",
+     "value": "bot-0000beef"
+    },
+    {
+     "op": "set",
+     "path": "wakes.3.reason.handoffId",
+     "value": "h-other"
+    }
+   ]
+  },
+  {
+   "why": "the result was refused",
+   "failing": [
+    "result_answers_dispatch",
+    "no_refusals"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.1.status",
+     "value": "refused"
+    }
+   ]
+  }
+ ]
+}

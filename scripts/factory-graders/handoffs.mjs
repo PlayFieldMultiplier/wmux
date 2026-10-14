@@ -1,7 +1,7 @@
 // Handoff graders: dispatch / result callbacks, chain limits, questions to
 // the owner, the owner's corrections, and the HQ bot's morning output.
 
-import { arr, botCards, botId, cardsOfKind, criterion, factsOfKind, handoffsOfKind, stubTools, parseToolText, wakesOf } from './common.mjs';
+import { arr, botCards, botId, cardsOfKind, criterion, factsOfKind, handoffsOfKind, injected, stubTools, parseToolText, wakesOf } from './common.mjs';
 
 /** 8. callback-exactly-once. */
 export function callbackExactlyOnce(snap, expect) {
@@ -148,5 +148,31 @@ export function leadTaskSystemGate(snap, expect) {
       taskWakes.map((w) => `${arr(w.reason.factIds).join('+')}:${w.state}`).join(', ') || 'no task wake'),
     criterion('lead_did_not_settle', settles.length === 0, `${settles.length} ledger_update call(s) by the lead`),
     criterion('checked_card', checked.length === 1, `${checked.length} checked card(s)`),
+  ];
+}
+
+/** chain-survives-worker: a result sent from a task wake answers the
+ *  dispatch the task was started for, in the owner's run. */
+export function chainSurvivesWorker(snap, expect) {
+  const msg = injected(snap, expect.message);
+  const lead = botId(snap, expect.lead);
+  const dev = botId(snap, expect.worker);
+  const hs = arr(snap.handoffs);
+  const dispatch = hs.find((h) => h.kind === 'dispatch' && h.from?.botId === lead) ?? null;
+  const result = hs.find((h) => h.kind === 'result' && h.from?.botId === dev) ?? null;
+  const rows = arr(snap.ledger).filter((e) => e.dispatch?.origin?.botId === dev);
+  const leadWakes = wakesOf(snap, expect.lead);
+  const devFactsWakes = wakesOf(snap, expect.worker).filter((w) => w.reason?.kind === 'facts');
+  return [
+    criterion('dispatch_in_owner_run', !!dispatch && dispatch.runId === `run-${msg?.id}` && dispatch.depth === 0 && dispatch.to?.botId === dev,
+      dispatch ? `${dispatch.runId} d${dispatch.depth} → ${dispatch.to?.botId}` : 'no dispatch'),
+    criterion('task_records_the_dispatch', rows.length === 1 && rows[0].dispatch?.handoffId === dispatch?.id, rows.map((e) => e.dispatch?.handoffId ?? '-').join(', ') || 'no task'),
+    criterion('result_from_task_wake', devFactsWakes.length >= 1 && !!result && result.createdAt >= Math.min(...devFactsWakes.map((w) => w.enqueuedAt)),
+      `${devFactsWakes.length} task wake(s)`),
+    criterion('result_answers_dispatch', !!result && result.replyTo === dispatch?.id && result.to?.botId === lead && result.runId === dispatch?.runId && result.depth === 1
+      && result.status !== 'refused', result ? `${result.replyTo} → ${result.to?.botId} ${result.runId} d${result.depth} ${result.status}` : 'no result'),
+    criterion('lead_woken_once_by_it', leadWakes.filter((w) => w.reason?.kind === 'handoff').length === 1 && leadWakes.some((w) => w.reason?.kind === 'handoff' && w.reason.handoffId === result?.id && w.state === 'done'),
+      leadWakes.map((w) => `${w.reason?.kind}:${w.state}`).join(', ')),
+    criterion('no_refusals', hs.every((h) => h.status !== 'refused'), hs.filter((h) => h.status === 'refused').map((h) => h.refusal?.code).join(', ') || 'none'),
   ];
 }

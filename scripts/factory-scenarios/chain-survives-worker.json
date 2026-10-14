@@ -1,0 +1,158 @@
+{
+  "name": "chain-survives-worker",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner asks the room's coordinator; it dispatches the developer by id. The developer does the work through a fan-out worker and, from the task's wake, sends one result with no reply_to. The router answers the dispatch with it: same run, depth +1, back to the coordinator, which is woken once and reports.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "delayMs": 1000
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "template": "coordinator",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.developer}}",
+                    "title": "Change A",
+                    "body": "Make change A in a.txt."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "report",
+                    "title": "Change A is done",
+                    "body": "The developer finished change A."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "developer",
+        "template": "developer",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "change A"
+                    ],
+                    "prompt": "Make the small change named in the title.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "a.txt"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "parent": "(These tasks were started for)"
+                  }
+                },
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "Change A done",
+                    "body": "a.txt is changed."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "ask",
+      "post": {
+        "title": "Change A",
+        "body": "Please get change A done."
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "report",
+      "cond": {
+        "workers": {
+          "event": "ledger_update",
+          "min": 1
+        }
+      },
+      "timeoutMs": 240000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "lead woken by the result",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "reason": "handoff",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 8000
+      },
+      "timeoutMs": 90000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs",
+      "ledger"
+    ],
+    "message": "ask",
+    "lead": "lead",
+    "worker": "developer"
+  }
+}
