@@ -73,6 +73,18 @@ export function deliveryQueued(sent: readonly SentTo[] | null | undefined, bots:
   return !!turn && turn.wakeId !== sent[0].wakeId;
 }
 
+/** Whether a lone addressee has been seen taking a message up: running the
+ *  turn it woke, or — on a status read after the send (`fresh`) — idle with
+ *  nothing queued, so that turn has run. A message without a wake id is
+ *  never known taken. Pure. */
+export function deliveryTaken(sent: readonly SentTo[] | null | undefined, bots: readonly FactoryBotRow[], fresh: boolean): boolean {
+  if (!sent || sent.length !== 1 || !sent[0].wakeId) return false;
+  const status = bots.find((b) => b.bot.id === sent[0].botId)?.status;
+  if (!status) return false;
+  if (status.currentTurn) return status.currentTurn.wakeId === sent[0].wakeId;
+  return fresh && status.queueDepth === 0;
+}
+
 /** The line under the box after a send: a lone addressee queued behind a
  *  turn it is running for something else, or who the message went to (also
  *  once the bot is running the turn this message woke). `started`: the bot
@@ -228,8 +240,9 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
   const [sent, setSent] = useState<SentTo[] | null | undefined>(undefined);
   // Once taken up, the last message stays sent (see deliveryLine).
   const [started, setStarted] = useState(false);
+  const botsAtSend = useRef(bots);
   useEffect(() => {
-    if (sent !== undefined && !started && !deliveryQueued(sent, bots)) setStarted(true);
+    if (sent !== undefined && !started && deliveryTaken(sent, bots, bots !== botsAtSend.current)) setStarted(true);
   }, [sent, bots, started]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const textNow = useRef(text);
@@ -267,6 +280,7 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
         }
         setSent(sentFrom(r));
         setStarted(false);
+        botsAtSend.current = bots;
         inputRef.current?.focus();
       } else {
         setError(r.message || t('room.composer.failed'));

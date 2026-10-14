@@ -57,10 +57,11 @@ function idHash(botId: string): number {
  *  its id's colour unless an older bot holds it, then takes the next one
  *  fewest bots hold — two bots of a room never share one while the palette
  *  lasts. Pure. */
-export function identityHueIndexes(bots: readonly Pick<BotProfile, 'id' | 'createdAt'>[]): Map<string, number> {
+export function identityHueIndexes(bots: readonly Pick<BotProfile, 'id' | 'createdAt'>[], taken: readonly number[] = []): Map<string, number> {
   const n = BOT_IDENTITY_HUES.length;
   const order = [...bots].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const used = new Array<number>(n).fill(0);
+  for (const i of taken) used[i] += 1;
   const out = new Map<string, number>();
   for (const b of order) {
     if (out.has(b.id)) continue;
@@ -77,24 +78,24 @@ export function identityHueIndexes(bots: readonly Pick<BotProfile, 'id' | 'creat
   return out;
 }
 
-// Every bot this window has listed, kept after a bot is removed so no other
-// bot's colour moves.
-const roster = new Map<string, number>();
-let assigned: Map<string, number> | null = null;
+// Each listed bot's colour in this window. A bot keeps its colour while it
+// exists; a removed bot's colour is free again for the next one added.
+const assigned = new Map<string, number>();
 
-/** Records listed bots, so their colours are told apart (useFactoryBots). */
-export function noteBotIdentities(bots: readonly Pick<BotProfile, 'id' | 'createdAt'>[]): void {
-  for (const b of bots) {
-    if (roster.has(b.id)) continue;
-    roster.set(b.id, b.createdAt);
-    assigned = null;
+/** Records listed bots, so their colours are told apart (useFactoryBots).
+ *  `complete`: the list is every bot, so one missing from it was removed. */
+export function noteBotIdentities(bots: readonly Pick<BotProfile, 'id' | 'createdAt'>[], complete = false): void {
+  if (complete) {
+    const listed = new Set(bots.map((b) => b.id));
+    for (const id of [...assigned.keys()]) if (!listed.has(id)) assigned.delete(id);
   }
+  const fresh = bots.filter((b) => !assigned.has(b.id));
+  if (fresh.length === 0) return;
+  for (const [id, i] of identityHueIndexes(fresh, [...assigned.values()])) assigned.set(id, i);
 }
 
 function hueIndex(botId: string): number {
-  if (!roster.has(botId)) return idHash(botId) % BOT_IDENTITY_HUES.length;
-  assigned ??= identityHueIndexes([...roster].map(([id, createdAt]) => ({ id, createdAt })));
-  return assigned.get(botId)!;
+  return assigned.get(botId) ?? idHash(botId) % BOT_IDENTITY_HUES.length;
 }
 
 /** A bot's identity colour, as CSS (the same bot, the same colour). */

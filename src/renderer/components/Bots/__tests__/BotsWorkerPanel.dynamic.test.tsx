@@ -55,6 +55,19 @@ describe('BotsWorkerPanel', () => {
     expect(el.querySelector('[data-bots-worker-panel-elsewhere]')?.textContent).toContain('botsPage.chat.openInWorkspaces');
   });
 
+  it('its menu opens on the first item and the arrows move between Resume and Open in Workspaces', () => {
+    act(() => useStore.setState({ workspaces: [ws] } as never));
+    const onResume = vi.fn();
+    const el = mount(<BotsWorkerPanel workspaceId="t1" hosted name="fix login" state="Done" attention={false} t={t} onClose={() => undefined} onResume={onResume} />);
+    act(() => (el.querySelector('[data-bots-worker-panel-menu]') as HTMLButtonElement).click());
+    expect(document.activeElement?.hasAttribute('data-bots-worker-panel-resume')).toBe(true);
+    act(() => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); });
+    expect(document.activeElement?.hasAttribute('data-bots-worker-panel-workspaces')).toBe(true);
+    act(() => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); });
+    act(() => (document.activeElement as HTMLButtonElement).click());
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
   it('renders nothing once the workspace is gone', () => {
     act(() => useStore.setState({ workspaces: [] } as never));
     const el = mount(<BotsWorkerPanel workspaceId="t1" hosted name="x" state={null} attention={false} t={t} onClose={() => undefined} />);

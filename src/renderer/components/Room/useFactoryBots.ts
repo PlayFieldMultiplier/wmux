@@ -22,7 +22,7 @@ export function useFactoryBots(workspaceId: string | null, port?: FactoryBotPort
       p.list(workspaceId ?? undefined).then(
         (next) => {
           if (!live || mine !== seq) return;
-          noteBotIdentities(next.map((r) => r.bot));
+          noteBotIdentities(next.map((r) => r.bot), workspaceId === null);
           setRows(next);
         },
         () => undefined,

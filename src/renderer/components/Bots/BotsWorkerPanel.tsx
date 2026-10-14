@@ -37,6 +37,24 @@ function PanelMenu({ workspaceId, t, onResume }: { workspaceId: string; t: T; on
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
   const close = () => { setOpen(false); buttonRef.current?.focus(); };
+  // The menu's keys: arrows, Home and End move between the items; the
+  // first is focused when it opens.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }, [open]);
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    const items = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === 'ArrowDown' ? (at + 1) % items.length
+      : e.key === 'ArrowUp' ? (at - 1 + items.length) % items.length
+        : e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    items[next].focus();
+  };
   return (
     <span ref={wrapRef} className="relative inline-flex">
       <button
@@ -54,10 +72,11 @@ function PanelMenu({ workspaceId, t, onResume }: { workspaceId: string; t: T; on
       </button>
       {open && (
         <Popover
+          ref={menuRef}
           role="menu"
           aria-label={t('botsPage.worker.menu')}
           className="absolute right-0 top-full z-40 mt-1 min-w-[180px]"
-          onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } }}
+          onKeyDown={onMenuKey}
         >
           {onResume && (
             <button
@@ -74,7 +93,6 @@ function PanelMenu({ workspaceId, t, onResume }: { workspaceId: string; t: T; on
             type="button"
             role="menuitem"
             data-bots-worker-panel-workspaces
-            autoFocus
             onClick={() => { setOpen(false); openInWorkspaces(workspaceId); }}
             className={`ui-section-row w-full text-left text-[13px] ${FOCUS_RING}`}
           >

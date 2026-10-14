@@ -123,7 +123,15 @@ describe('bot identity', () => {
     expect(botIdentityColor(first)).toBe(own);
     expect(botIdentityColor(twin)).not.toBe(own);
     // Eight bots, eight colours.
-    expect(new Set(identityHueIndexes(ids.slice(0, 8).map((id, i) => ({ id, createdAt: i }))).values()).size).toBe(8);
+    const eight = ids.slice(0, 8).map((id, i) => ({ id, createdAt: i }));
+    expect(new Set(identityHueIndexes(eight).values()).size).toBe(8);
+    // A removed bot frees its colour; the others keep theirs.
+    noteBotIdentities(eight, true);
+    const before = eight.map((b) => botIdentityColor(b.id));
+    const added = { id: 'bot-clash-new', createdAt: 99 };
+    noteBotIdentities([...eight.slice(1), added], true);
+    expect(eight.slice(1).map((b) => botIdentityColor(b.id))).toEqual(before.slice(1));
+    expect(new Set([...eight.slice(1), added].map((b) => botIdentityColor(b.id))).size).toBe(8);
   });
 });
 

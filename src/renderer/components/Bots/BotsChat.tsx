@@ -57,7 +57,7 @@ import { CardAnswers, useWorkspaceNames } from '../Room/CardAnswers';
 import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botPresence } from '../Room/BotChips';
-import { MentionChips, deliveryLine, deliveryQueued, roomBots, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
+import { MentionChips, deliveryLine, deliveryTaken, roomBots, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, threadLabel, threadRef, type IdLabels } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, normalizeBotJob } from '../../../shared/bot';
 import { templateJob } from '../Settings/FactoryTab';
@@ -1345,8 +1345,13 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   const [profileOpen, setProfileOpen] = useState(false);
   const [sent, setSent] = useState<Record<string, SentTo[] | null>>({});
   const [started, setStarted] = useState<ReadonlySet<string>>(() => new Set());
+  // The bot list each message was sent against: an idle bot counts as having
+  // taken it only on a later read (deliveryTaken).
+  const botsRef = useRef(bots);
+  botsRef.current = bots;
+  const botsAtSend = useRef(new Map<string, readonly FactoryBotRow[]>());
   useEffect(() => {
-    const taken = Object.keys(sent).filter((id) => !started.has(id) && !deliveryQueued(sent[id], bots));
+    const taken = Object.keys(sent).filter((id) => !started.has(id) && deliveryTaken(sent[id], bots, bots !== botsAtSend.current.get(id)));
     if (taken.length > 0) setStarted((cur) => new Set([...cur, ...taken]));
   }, [sent, bots, started]);
   const [openThread, setOpenThread] = useState<{ workspaceId: string; threadId: ThreadId } | null>(null);
@@ -1438,6 +1443,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
 
   const onSent = useCallback((cardId: string, to: SentTo[] | null) => {
     atBottom.current = true;
+    botsAtSend.current.set(cardId, botsRef.current);
     setSent((cur) => ({ ...cur, [cardId]: to }));
   }, []);
   // The profile closes on Escape or a press outside it (the pill toggles it).
@@ -1492,12 +1498,15 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   const sideStyle = useMemo((): React.CSSProperties => ({ width: `${(split * 100).toFixed(2)}%` }), [split]);
   // Resume from the panel's menu: the resumed worker's pane (a new one when
   // the old was cleared) takes the panel; a failure is a toast.
+  // An answer that comes after the owner moved on (another worker, Close,
+  // another conversation) leaves the panel as it is now.
   const resumeShown = useCallback((taskId: string) => {
     const resume = resumePort?.resumeWorker;
     if (!resume) return;
+    const asked = useStore.getState().botsWorkerPanel;
     void resume(taskId).then((r) => {
       if (!r.ok) useStore.getState().pushToast({ message: r.message || t('botsPage.worker.resume'), level: 'error' });
-      else if (r.workspaceId) useStore.getState().setBotsWorkerPanel({ workspaceId: r.workspaceId, conversationId });
+      else if (r.workspaceId && useStore.getState().botsWorkerPanel === asked) useStore.getState().setBotsWorkerPanel({ workspaceId: r.workspaceId, conversationId });
     }).catch((err: unknown) => useStore.getState().pushToast({ message: String(err), level: 'error' }));
   }, [resumePort, conversationId, t]);
   // A worker picked in the list while a thread is open takes the side.

@@ -12,7 +12,7 @@ import type { BotProfile, BotStatus } from '../../../../shared/bot';
 import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
 import { setRoomsApiForTests, type RoomsApi } from '../../../hooks/useRoomSync';
 import { RoomCard, PROPOSAL_RESOLUTION } from '../RoomCard';
-import { RoomComposer, deliveryLine, predictedAddressees, sentFrom } from '../RoomComposer';
+import { RoomComposer, deliveryLine, deliveryTaken, predictedAddressees, sentFrom } from '../RoomComposer';
 import { FactoryTab, parseDailyCap } from '../../Settings/FactoryTab';
 import {
   setFactoryBotPort,
@@ -132,6 +132,15 @@ describe('composer: the real bot it queued for', () => {
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [runningMine], t)).toBe('room.composer.sentTo(name=Ada)');
     // Taken up once, a later turn of the bot does not re-queue the message.
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [lead], t, true)).toBe('room.composer.sentTo(name=Ada)');
+    // Taken up: running the turn it woke, or idle with nothing queued on a
+    // read after the send (a read from before it proves nothing).
+    const mine = [{ botId: 'bot-lead', role: 'lead' as const, wakeId: 'w-mine' }];
+    expect(deliveryTaken(mine, [runningMine], false)).toBe(true);
+    expect(deliveryTaken(mine, [lead], true)).toBe(false);
+    const idle = { ...lead, status: { ...lead.status!, currentTurn: undefined, queueDepth: 0 } };
+    expect(deliveryTaken(mine, [idle], false)).toBe(false);
+    expect(deliveryTaken(mine, [idle], true)).toBe(true);
+    expect(deliveryTaken([{ botId: 'bot-lead', role: 'lead' }], [idle], true)).toBe(false);
     expect(deliveryLine([{ botId: 'bot-moa', role: 'moa' }], [lead, moa], t)).toBe('room.composer.sentTo(name=Moa HQ)');
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead' }, { botId: 'bot-moa', role: 'moa' }], [lead, moa], t)).toBe('room.composer.sentTo(name=Ada, Moa HQ)');
     const four = ['a', 'b', 'c', 'd'].map((x) => ({ botId: `bot-${x}`, role: 'lead' as const }));
