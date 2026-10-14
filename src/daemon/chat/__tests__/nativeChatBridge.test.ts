@@ -465,7 +465,9 @@ describe('launch', () => {
       fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
       fs.writeFileSync(botWorkerSessionsPath(dir), typeof body === 'string' ? body : JSON.stringify(body));
     };
-    const botWorker = (dir: string) => record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1 } } });
+    // A WSL pane's record: its launches carry the worker settings file alone
+    // (a record with launch files is covered in botWorkerConnectors.test.ts).
+    const botWorker = (dir: string) => record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true } } });
 
     it('a fresh claude launch carries the worker settings right after the launcher, first message kept', async () => {
       const f = fixture();
@@ -494,11 +496,13 @@ describe('launch', () => {
       ]);
     });
 
-    it('an unreadable record guards every pane', async () => {
+    it('an unreadable record, or one without launch files outside WSL, types nothing', async () => {
       const f = fixture();
       record(f.dir, '{not json');
-      expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toMatchObject({ ok: true });
-      expect(f.typed[0]).toContain(`claude --settings="${botWorkerSettingsPath(f.dir)}"`);
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      record(f.dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1 } } });
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      expect(f.typed).toEqual([]);
     });
 
     it('fails closed: settings that cannot be written, or a path that cannot be quoted, type nothing', async () => {

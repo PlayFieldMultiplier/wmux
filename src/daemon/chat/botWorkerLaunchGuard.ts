@@ -13,8 +13,9 @@
 //
 // A session main recorded with its launch files (the worker's MCP config and
 // rules, shared/botWorkerMcp.ts) gets those, with `--strict-mcp-config`. A
-// session recorded without them (written before them, or a WSL shell) gets
-// the worker settings file alone, as before.
+// WSL session gets the worker settings file alone, as before. Any other
+// session (recorded without its files, or a record that cannot be read) gets
+// nothing typed.
 
 import fs from 'node:fs';
 import { getWmuxDir } from '../config';
@@ -48,6 +49,10 @@ export function guardBotWorkerLaunch(sessionId: string, line: string, head: stri
     const strict = spliceWorkerLaunch(head, rec.launch.settingsFile, rec.launch.mcpConfigFile);
     return strict === null ? null : strict + tail;
   }
+  // Only a WSL pane launches with the settings file alone. Any other record
+  // without its files (an older main's, or one that cannot be read) types
+  // nothing: the daemon cannot write the worker's MCP config.
+  if (!rec?.wsl) return null;
   let settingsPath: string;
   try {
     settingsPath = writeBotWorkerSettings(dir);

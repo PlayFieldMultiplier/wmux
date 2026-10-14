@@ -224,6 +224,35 @@ export function isSingleCommand(command: string): boolean {
 /** Command or process substitution, quoted or not. */
 const SUBSTITUTION = /\$\(|`|<\(|>\(/;
 
+/**
+ * Could the shell turn an argument after the launcher into a word the line
+ * does not show? An escape, a variable, a brace list, a tilde or a glob can
+ * each spell a flag the guard looks for (`--set\tings`, `--set${X}tings`,
+ * `--{settings,x}`) without the word reading as one. Outside quotes each of
+ * them counts; inside double quotes a `\` or `$` (the shell still reads
+ * them there); inside single quotes nothing. Pass the line without its
+ * prompt-file argument. Pure.
+ */
+export function argumentsMayExpand(command: string): boolean {
+  const tokens = tokenize(command);
+  if (tokens.length === 0) return false;
+  const args = command.slice(tokens[0].end);
+  let quote: '"' | "'" | null = null;
+  for (const c of args) {
+    if (quote === "'") {
+      if (c === "'") quote = null;
+    } else if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === '\\' || c === '$') return true;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (/[\\${}~*?[\]]/.test(c)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isClaudeLauncher(word: string): boolean {
   return launcherStem(word) === 'claude';
 }
@@ -233,8 +262,8 @@ export function isClaudeLauncher(word: string): boolean {
  * leading model-env marker. Returns the line unchanged when this file is
  * already the launcher's first argument and no other settings flag follows,
  * and null when it cannot carry it: another launcher, an empty line, more than
- * one command, an end-of-options `--`, another `--settings`, or a path that
- * cannot be quoted.
+ * one command, an argument the shell could expand (argumentsMayExpand), an
+ * end-of-options `--`, another `--settings`, or a path that cannot be quoted.
  */
 export function spliceSettingsFlag(fullCommand: string, settingsPath: string): string | null {
   const { marker, command } = splitModelEnvMarker(fullCommand);
@@ -242,7 +271,9 @@ export function spliceSettingsFlag(fullCommand: string, settingsPath: string): s
   // The prompt-file argument fan-out builds (FanOutService.buildInitialCommand)
   // is the one substitution a launch line may hold, by its exact shape.
   const rest = stripPromptFileArgument(command);
-  if (SUBSTITUTION.test(rest) || !isSingleCommand(rest)) return null;
+  const spliced = ` --settings="${settingsPath}"`;
+  // Our own flag, already spliced, holds a path (a Windows one has `\`).
+  if (SUBSTITUTION.test(rest) || !isSingleCommand(rest) || argumentsMayExpand(rest.split(spliced).join(''))) return null;
   const tokens = tokenize(command);
   if (tokens.length === 0 || !isClaudeLauncher(tokens[0].value)) return null;
   if (tokens.some((t) => t.value === '--')) return null;
@@ -252,7 +283,7 @@ export function spliceSettingsFlag(fullCommand: string, settingsPath: string): s
   if (passed.length > 0) return passed.length === 1 && tokens[1] === passed[0] && passed[0].value === ours ? fullCommand : null;
   // The `=` form, like --mcp-config in toolSurfaceLaunch: one word on both shells.
   const at = tokens[0].end;
-  return `${marker}${command.slice(0, at)} --settings="${settingsPath}"${command.slice(at)}`;
+  return `${marker}${command.slice(0, at)}${spliced}${command.slice(at)}`;
 }
 
 /** A claude launcher as a word of its own, a path's last part, or right

@@ -248,8 +248,10 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
     if (options.exec !== undefined) throw guardError('PTY_CREATE', 'an exec unit has no launch line to guard');
     if (!options.initialCommand) throw guardError('PTY_CREATE', 'no launch line');
     // A codex worker's line is rebuilt by its own guard (codexWorkerGuard.ts),
-    // which ran first; any other codex line is refused.
+    // which ran first; any other codex line is refused. A codex worker takes
+    // no connections yet.
     if (launchesCodex(options.initialCommand)) {
+      if (connectors.length > 0) throw guardError('PTY_CREATE', 'a codex worker takes no connections');
       if (isGuardedCodexCreate(options)) return options;
       throw guardError('PTY_CREATE', 'a codex launch line the codex worker guard did not build');
     }

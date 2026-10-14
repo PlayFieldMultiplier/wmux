@@ -31,7 +31,7 @@ import type { Connector } from './botConnector';
 import { tokenize } from './agentResume';
 import { splitModelEnvMarker } from './workerLaunch';
 import { stripPromptFileArgument } from './promptFileArgument';
-import { isClaudeLauncher, isQuotable, isSingleCommand } from './botWorkerGuard';
+import { argumentsMayExpand, isClaudeLauncher, isQuotable, isSingleCommand } from './botWorkerGuard';
 
 /** The wmux level a worker's server runs at. */
 export type WorkerWmuxLevel = 'core' | 'full';
@@ -128,14 +128,17 @@ const SUBSTITUTION = /\$\(|`|<\(|>\(/;
  * after a `claude` launcher (keeping a leading model-env marker). Returns the
  * line unchanged when exactly these words already follow the launcher, and
  * null when it cannot carry them: another launcher, more than one command, an
- * end-of-options `--`, any other settings, MCP config or strict flag, or a
- * path that cannot be quoted. Pure.
+ * argument the shell could expand (argumentsMayExpand), an end-of-options
+ * `--`, any other settings, MCP config or strict flag, or a path that cannot
+ * be quoted. Pure.
  */
 export function spliceWorkerLaunch(fullCommand: string, settingsPath: string, mcpPath: string): string | null {
   const { marker, command } = splitModelEnvMarker(fullCommand);
   if (!isQuotable(settingsPath) || !isQuotable(mcpPath)) return null;
   const rest = stripPromptFileArgument(command);
-  if (SUBSTITUTION.test(rest) || !isSingleCommand(rest)) return null;
+  const spliced = ` --settings="${settingsPath}" --mcp-config="${mcpPath}" --strict-mcp-config`;
+  // Our own flags, already spliced, hold paths (a Windows one has `\`).
+  if (SUBSTITUTION.test(rest) || !isSingleCommand(rest) || argumentsMayExpand(rest.split(spliced).join(''))) return null;
   const tokens = tokenize(command);
   if (tokens.length === 0 || !isClaudeLauncher(tokens[0].value)) return null;
   if (tokens.some((t) => t.value === '--')) return null;
@@ -146,5 +149,5 @@ export function spliceWorkerLaunch(fullCommand: string, settingsPath: string, mc
     return same ? fullCommand : null;
   }
   const at = tokens[0].end;
-  return `${marker}${command.slice(0, at)} --settings="${settingsPath}" --mcp-config="${mcpPath}" --strict-mcp-config${command.slice(at)}`;
+  return `${marker}${command.slice(0, at)}${spliced}${command.slice(at)}`;
 }

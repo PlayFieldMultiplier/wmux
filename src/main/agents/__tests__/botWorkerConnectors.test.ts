@@ -19,7 +19,7 @@ import {
   reloadBotWorkerSessionsForTests,
   withBotWorkerMergeGuard,
 } from '../botWorkerMergeGuard';
-import { BOT_WORKER_DENY, botWorkerSessionsPath, botWorkerSettingsPath, readBotWorkerSessions } from '../../../shared/botWorkerGuard';
+import { BOT_WORKER_DENY, botWorkerSessionsPath, botWorkerSettingsPath, readBotWorkerSessions, spliceSettingsFlag } from '../../../shared/botWorkerGuard';
 import { buildWorkerMcpConfig, buildWorkerSettings, spliceWorkerLaunch, workerWmuxLevel } from '../../../shared/botWorkerMcp';
 import { guardBotWorkerLaunch } from '../../../daemon/chat/botWorkerLaunchGuard';
 import type { Connector } from '../../../shared/botConnector';
@@ -109,6 +109,17 @@ describe('the per-launch documents (pure)', () => {
       expect(spliceWorkerLaunch(foreign, S, M), foreign).toBeNull();
     }
     expect(spliceWorkerLaunch(LINE, '/a$b/s.json', M)).toBeNull();
+    // The shell could spell a flag the line does not show.
+    for (const hidden of ['claude --set\\tings=/tmp/x', 'claude "--mcp-con\\fig=/x"', "claude $'--set\\x74ings=/x'", 'claude --set${X}tings=/x',
+      'claude --{settings,x}=/x', 'claude --setting?=/x', 'claude --settings[=]/x', 'claude ~/x']) {
+      expect(spliceWorkerLaunch(hidden, S, M), hidden).toBeNull();
+      expect(spliceSettingsFlag(hidden, S), hidden).toBeNull();
+    }
+    // Our own words, already spliced, may hold a Windows path.
+    const win = 'C:\\Users\\o\\.wmux\\factory\\worker-settings\\aaaaaaaaaaaa.json';
+    const winOnce = spliceWorkerLaunch(LINE, win, M)!;
+    expect(spliceWorkerLaunch(winOnce, win, M)).toBe(winOnce);
+    expect(spliceSettingsFlag(spliceSettingsFlag(LINE, win)!, win)).toBe(spliceSettingsFlag(LINE, win));
   });
 
   it('wmux level: a role surface is raised to core, commander is never a worker\'s, default full', () => {
@@ -140,7 +151,7 @@ describe('the guard with connections', () => {
     }
   });
 
-  it('refuses a create whose in-flight spawns disagree on connections, and a task with connections in a WSL shell', () => {
+  it('refuses a create whose in-flight spawns disagree on connections, and a task with connections in a WSL shell or for codex', () => {
     const a = beginBotWorkerSpawn('ws-owner', '/w/task', { botId: 'bot-0000000a', taskId: 't-1', connectors: [con()] });
     const b = beginBotWorkerSpawn('ws-owner', '/w/task', { botId: 'bot-0000000a', taskId: 't-2' });
     try {
@@ -155,6 +166,9 @@ describe('the guard with connections', () => {
     try {
       const opts = { initialCommand: LINE, fanoutTaskOf: 'ws-owner', cwd: '/w/task', workspaceId: 'ws-task' };
       expect(() => withBotWorkerMergeGuard(opts, botWorkerForCreate(opts, { dir, isBotTaskWorkspace: () => false }), deps(), { wsl: true })).toThrow(/WSL/);
+      // A codex worker takes no connections, whatever built its line.
+      const codex = { ...opts, initialCommand: `codex --dangerously-bypass-approvals-and-sandbox "$(cat '/w/.wtask/prompt.md')"` };
+      expect(() => withBotWorkerMergeGuard(codex, botWorkerForCreate(codex, { dir, isBotTaskWorkspace: () => false }), deps())).toThrow(/codex worker takes no connections/);
     } finally {
       c();
     }
@@ -194,13 +208,15 @@ describe('the session record carries the launch', () => {
 });
 
 describe('the daemon\'s phone launch', () => {
-  it('splices a session\'s recorded files with strict; a record without them gets the settings file alone', () => {
+  it('splices a session\'s recorded files with strict; a WSL record gets the settings file alone; any other record nothing', () => {
     const guarded = withBotWorkerMergeGuard({ initialCommand: LINE }, { workspaceId: 'ws-task', strict: false }, deps())!;
     noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(guarded));
     noteBotWorkerSession('pty-old', 'ws-task', dir);
+    noteBotWorkerSession('pty-wsl', 'ws-task', dir, { wsl: true });
     const w = wordsOf(guarded.initialCommand!);
     expect(guardBotWorkerLaunch('pty-1', "claude -- 'hi'", 'claude', dir)).toBe(`claude --settings="${w.settings}" --mcp-config="${w.mcp}" --strict-mcp-config -- 'hi'`);
-    expect(guardBotWorkerLaunch('pty-old', 'claude', 'claude', dir)).toBe(`claude --settings="${botWorkerSettingsPath(dir)}"`);
+    expect(guardBotWorkerLaunch('pty-old', 'claude', 'claude', dir)).toBeNull();
+    expect(guardBotWorkerLaunch('pty-wsl', 'claude', 'claude', dir)).toBe(`claude --settings="${botWorkerSettingsPath(dir)}"`);
     fs.unlinkSync(w.mcp);
     expect(guardBotWorkerLaunch('pty-1', 'claude', 'claude', dir)).toBeNull();
   });
