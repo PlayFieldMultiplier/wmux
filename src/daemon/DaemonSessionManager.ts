@@ -1,4 +1,4 @@
-import { isWslShell, resolveWslCwd, type WslTarget, type ResolvedWslCwd } from '../shared/wsl';
+import { isWslShell, mergeWslEnv, resolveWslCwd, type WslTarget, type ResolvedWslCwd } from '../shared/wsl';
 import { buildWslInjection } from '../shared/wslIntegration';
 import { getWmuxDir } from './config';
 import { EventEmitter } from 'node:events';
@@ -68,6 +68,19 @@ const RESERVED_PREFIX = /^WMUX_/i;
  * None of these can be an intentional user/profile key, so this cannot strip
  * one; CLAUDE_CONFIG_DIR and other CLAUDE_* config are untouched.
  */
+/**
+ * The spawn env of a worker that carries secrets: `env` plus the secrets, and
+ * for a WSL spawn each secret NAME appended to WSLENV with no path flag, so
+ * the distro sees the values verbatim. The user's own WSLENV entries stay.
+ * Only names go into WSLENV; values are never written anywhere but the
+ * process env. Exported for tests.
+ */
+export function withSecretEnv(env: Record<string, string>, secretEnv: Record<string, string>, wsl: boolean): Record<string, string> {
+  const out = { ...env, ...secretEnv };
+  if (wsl) out.WSLENV = mergeWslEnv(env.WSLENV, Object.keys(secretEnv));
+  return out;
+}
+
 function stripReservedSuppliedEnv(env: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
@@ -392,7 +405,9 @@ export class DaemonSessionManager extends EventEmitter {
      * environment ONLY — never to `meta.env`, so they are not persisted by
      * buildState, not returned by a session read and not replayed by a
      * recovery or a supervised restart (which never pass this). Validated
-     * again here (sanitizeSecretEnv); a WSL shell is refused.
+     * again here (sanitizeSecretEnv). For a WSL shell each NAME is added to
+     * that spawn's WSLENV (no path flag, so values cross verbatim), again in
+     * the spawn env only.
      */
     secretEnv?: Record<string, string>;
     cols?: number;
@@ -505,13 +520,13 @@ export class DaemonSessionManager extends EventEmitter {
     let cmd = this.resolveShellPath(params.cmd) || this.getDefaultShell();
     const cwd = wsl?.cwd ?? (params.cwd ? expandTilde(params.cwd) : os.homedir());
     const hostCwd = wsl ? os.homedir() : cwd;
-    // A bot worker's secrets: validated again here, and never for WSL (the
-    // spawn env does not cross into the distro without WSLENV).
+    // A bot worker's secrets: validated again here. A WSL spawn also names
+    // them in WSLENV (below), since the Windows env reaches the distro only
+    // through it.
     let secretEnv: Record<string, string> | null = null;
     if (params.secretEnv !== undefined) {
       secretEnv = sanitizeSecretEnv(params.secretEnv);
       if (!secretEnv) throw new Error('Invalid session secretEnv');
-      if (wsl || isWslShell(cmd)) throw new Error('secretEnv is not supported for a WSL shell');
     }
 
     // Resolve the child environment. A caller-supplied env is AUTHORITATIVE —
@@ -680,8 +695,8 @@ export class DaemonSessionManager extends EventEmitter {
           rows,
           cwd: hostCwd,
           // A worker's secrets reach the process only; meta.env below is
-          // `env` itself, without them.
-          env: secretEnv ? { ...env, ...secretEnv } : env,
+          // `env` itself, without them (and without their WSLENV names).
+          env: secretEnv ? withSecretEnv(env, secretEnv, !!wsl || isWslShell(cmd)) : env,
           useConpty: true,
           ...(useBundled ? { useConptyDll: true } : {}),
         }, pty.spawn),
