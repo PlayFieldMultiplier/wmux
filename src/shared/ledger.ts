@@ -121,6 +121,8 @@ export interface LedgerDispatch {
    *  The task's wakes answer that handoff: a `result` sent from them, with no
    *  replyTo, is that handoff's result. Absent = none. */
   handoffId?: string;
+  /** A bot's task: the connections its worker was started with (names). */
+  connectors?: string[];
 }
 
 // Lifecycle rules the writer enforces (stated here so the three consumers

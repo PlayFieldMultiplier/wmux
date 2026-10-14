@@ -20,6 +20,11 @@
 //   5. stays alive (an agent that exits leaves a bare shell, which the
 //      fan-out launch check reads as "no agent started").
 //
+// The `start` line also records what the launch would load: whether it
+// carried `--strict-mcp-config`, the server names in its `--mcp-config` file
+// and the settings file's allow rules (never a key value: the files hold
+// none).
+//
 // Every step is logged to FACTORY_E2E_WORKER_LOG as one JSON line.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -103,13 +108,32 @@ async function mcpCall(name, args) {
   }
 }
 
+/** What the launch line's MCP and settings flags load. */
+function launchConfig(argv) {
+  const value = (flag) => argv.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1);
+  const read = (file) => {
+    try {
+      return file ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+    } catch {
+      return null;
+    }
+  };
+  const mcp = read(value('--mcp-config'));
+  const settings = read(value('--settings'));
+  return {
+    strict: argv.includes('--strict-mcp-config'),
+    mcpServers: mcp ? Object.keys(mcp.mcpServers ?? {}) : null,
+    allow: settings?.permissions?.allow ?? [],
+  };
+}
+
 async function main() {
   const id = taskId();
   // Which CLI ran this worker (fake-codex.mjs sets codex), and whether the
   // codex rules file main writes was in place.
   const agent = process.env.FACTORY_E2E_WORKER_AGENT || 'claude';
   const rulesPresent = fs.existsSync(path.join(process.cwd(), '.codex', 'rules', 'wmux-bot-worker.rules'));
-  log('start', { taskId: id, agent, rulesPresent, args: process.argv.slice(2).map((a) => a.slice(0, 200)) });
+  log('start', { taskId: id, agent, rulesPresent, ...launchConfig(process.argv.slice(2)), args: process.argv.slice(2).map((a) => a.slice(0, 200)) });
   if (!id) {
     log('no-task-id');
   } else {

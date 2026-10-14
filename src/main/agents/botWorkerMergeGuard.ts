@@ -38,8 +38,18 @@ import {
   readBotWorkerSessions,
   spliceSettingsFlag,
   writeBotWorkerSettings,
+  type BotWorkerLaunchFiles,
   type BotWorkerSessionRecord,
 } from '../../shared/botWorkerGuard';
+import {
+  buildWorkerMcpConfig,
+  buildWorkerSettings,
+  contentFileName,
+  spliceWorkerLaunch,
+  workerWmuxLevel,
+  type WorkerWmuxLevel,
+} from '../../shared/botWorkerMcp';
+import type { Connector } from '../../shared/botConnector';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { launchesCodex, namesCodex } from '../../shared/codexWorkerGuard';
 
@@ -62,6 +72,20 @@ export interface BotWorkerGuardDeps {
   writeSettings?: (dir: string) => string;
   /** Main's ledger: is this workspace a bot's fan-out task? */
   isBotTaskWorkspace?: (workspaceId: string) => boolean;
+  /** The wmux MCP bundle a worker's server runs (default: the resolver
+   *  pty.handler registers). */
+  mcpEntry?: () => string | null;
+  /** The level of the owner's registered claude wmux server, if any. */
+  registeredLevel?: () => string | null;
+}
+
+/** pty.handler points the guard at the app's MCP bundle and the owner's
+ *  registered claude profile. */
+let defaultMcpEntry: () => string | null = () => null;
+let defaultRegisteredLevel: () => string | null = () => null;
+export function setWorkerMcpResolvers(r: { entry: () => string | null; registeredLevel: () => string | null }): void {
+  defaultMcpEntry = r.entry;
+  defaultRegisteredLevel = r.registeredLevel;
 }
 
 // ── Which panes are a bot's workers: main's own records, never the renderer's
@@ -77,7 +101,13 @@ export interface BotWorkerGuardDeps {
 const inflightBotSpawns = new Map<string, number>();
 /** Who each in-flight bot spawn is for (bot and task), main's own record:
  *  a secret grant resolves only for a spawn whose identity matches it. */
-export interface BotSpawnIdentity { botId: string; taskId: string }
+export interface BotSpawnIdentity {
+  botId: string;
+  taskId: string;
+  /** The task's connections as main resolved them when the fan-out was
+   *  accepted (a later edit of the library does not change this launch). */
+  connectors?: Connector[];
+}
 const inflightSpawnIdentities = new Map<string, BotSpawnIdentity[]>();
 const spawnKey = (ownerWorkspaceId: string, cwd: string): string => `${ownerWorkspaceId}\u0000${path.resolve(cwd)}`;
 
@@ -86,7 +116,9 @@ const spawnKey = (ownerWorkspaceId: string, cwd: string): string => `${ownerWork
 export function beginBotWorkerSpawn(ownerWorkspaceId: string, cwd: string, identity?: BotSpawnIdentity): () => void {
   const key = spawnKey(ownerWorkspaceId, cwd);
   inflightBotSpawns.set(key, (inflightBotSpawns.get(key) ?? 0) + 1);
-  const mark = identity ? { botId: identity.botId, taskId: identity.taskId } : null;
+  const mark = identity
+    ? { botId: identity.botId, taskId: identity.taskId, ...(identity.connectors && identity.connectors.length > 0 ? { connectors: identity.connectors } : {}) }
+    : null;
   if (mark) inflightSpawnIdentities.set(key, [...(inflightSpawnIdentities.get(key) ?? []), mark]);
   let released = false;
   return () => {
@@ -180,7 +212,7 @@ export function botWorkerForCreate(
   const owner = typeof options.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
   if (owner && typeof options.cwd === 'string' && options.cwd && inflightBotSpawns.has(spawnKey(owner, options.cwd))) {
     const spawns = inflightSpawnIdentities.get(spawnKey(owner, options.cwd));
-    return { workspaceId, strict: true, ...(spawns ? { spawns: spawns.map((s) => ({ ...s })) } : {}) };
+    return { workspaceId, strict: true, ...(spawns ? { spawns: spawns.map((s) => ({ ...s, ...(s.connectors ? { connectors: s.connectors } : {}) })) } : {}) };
   }
   if (!workspaceId) return null;
   let bot = false;
@@ -205,8 +237,13 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   options: T | undefined,
   worker: BotWorkerCreate | null,
   deps: BotWorkerGuardDeps = {},
+  /** `wsl`: the pane's shell is WSL (its launches keep the worker settings
+   *  file alone, and take no connections). `level`: the wmux level a role
+   *  binding asked for. */
+  launch: { wsl?: boolean; level?: string } = {},
 ): T | undefined {
   if (!options || !worker) return options;
+  const connectors = taskConnectors(worker);
   if (worker.strict) {
     if (options.exec !== undefined) throw guardError('PTY_CREATE', 'an exec unit has no launch line to guard');
     if (!options.initialCommand) throw guardError('PTY_CREATE', 'no launch line');
@@ -221,8 +258,33 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   } else if (!options.initialCommand || !namesClaude(options.initialCommand)) {
     return options;
   }
-  const initialCommand = guardLaunchLine('PTY_CREATE', options.initialCommand, deps);
-  return initialCommand === options.initialCommand ? options : { ...options, initialCommand };
+  if (launch.wsl && connectors.length > 0) throw guardError('PTY_CREATE', 'a task with connections does not run in a WSL shell');
+  const plan: LaunchPlan = launch.wsl
+    ? { kind: 'legacy' }
+    : { kind: 'strict', connectors, level: workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)()) };
+  const guarded = guardLaunchLine('PTY_CREATE', options.initialCommand, deps, plan);
+  const next = guarded.line === options.initialCommand ? { ...options } : { ...options, initialCommand: guarded.line };
+  launchOfCreate.set(next, { ...(guarded.files ? { launch: guarded.files } : {}), ...(launch.wsl ? { wsl: true } : {}) });
+  return next;
+}
+
+/** What a guarded create's launch carried (per options object), for its
+ *  session record. */
+const launchOfCreate = new WeakMap<object, { launch?: BotWorkerLaunchFiles; wsl?: boolean }>();
+
+/** pty:create, when it records the session: the guarded launch's files. */
+export function guardedLaunchOf(options: object | undefined): { launch?: BotWorkerLaunchFiles; wsl?: boolean } {
+  return (options && launchOfCreate.get(options)) || {};
+}
+
+/** The connections the in-flight fan-out spawn of this create carries: one
+ *  set, or the create is refused when its in-flight spawns disagree. */
+function taskConnectors(worker: BotWorkerCreate): Connector[] {
+  if (!worker.strict || !worker.spawns || worker.spawns.length === 0) return [];
+  const sets = worker.spawns.map((s) => s.connectors ?? []);
+  const key = (cs: Connector[]) => JSON.stringify(cs);
+  if (sets.some((cs) => key(cs) !== key(sets[0]))) throw guardError('PTY_CREATE', 'two task spawns in one folder name different connections');
+  return sets[0];
 }
 
 /** The POSIX shells whose `clear; <line>` clears the screen first. */
@@ -245,16 +307,88 @@ function guardError(where: string, why: string): Error {
   return new Error(`${where}: a bot's fan-out worker starts only with the merge-lane guard (${why})`);
 }
 
-function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps): string {
-  let settingsPath: string;
-  try {
-    settingsPath = (deps.writeSettings ?? writeBotWorkerSettings)(deps.dir ?? getWmuxDir());
-  } catch (err) {
-    throw guardError(where, `the worker settings could not be written: ${String(err)}`);
+/** How a launch is guarded: the worker settings file alone (a WSL shell, as
+ *  before connections), new per-launch files, or the files a session's
+ *  record names. */
+type LaunchPlan =
+  | { kind: 'legacy' }
+  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel }
+  | { kind: 'recorded'; files: BotWorkerLaunchFiles };
+
+function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): { line: string; files?: BotWorkerLaunchFiles } {
+  const dir = deps.dir ?? getWmuxDir();
+  if (plan.kind === 'legacy') {
+    let settingsPath: string;
+    try {
+      settingsPath = (deps.writeSettings ?? writeBotWorkerSettings)(dir);
+    } catch (err) {
+      throw guardError(where, `the worker settings could not be written: ${String(err)}`);
+    }
+    const guarded = spliceSettingsFlag(line, settingsPath);
+    if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker settings');
+    return { line: guarded };
   }
-  const guarded = spliceSettingsFlag(line, settingsPath);
-  if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker settings');
-  return guarded;
+  let files: BotWorkerLaunchFiles;
+  if (plan.kind === 'recorded' && fs.existsSync(plan.files.settingsFile) && fs.existsSync(plan.files.mcpConfigFile)) {
+    files = plan.files;
+  } else {
+    const entry = (deps.mcpEntry ?? defaultMcpEntry)();
+    if (!entry) throw guardError(where, 'the wmux MCP bundle was not found, so the worker could not report');
+    const connectors = plan.kind === 'strict' ? plan.connectors : [];
+    const level = plan.kind === 'strict' ? plan.level : plan.files.level;
+    try {
+      files = writeWorkerLaunchFiles(dir, entry, level, connectors);
+    } catch (err) {
+      throw guardError(where, `the worker's MCP and rules files could not be written: ${String(err)}`);
+    }
+  }
+  const guarded = spliceWorkerLaunch(line, files.settingsFile, files.mcpConfigFile);
+  if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker\'s MCP config and rules');
+  return { line: guarded, files };
+}
+
+/** A worker launch's two files under `<dir>/factory/` (0600, folders 0700),
+ *  named by their content, and each stdio connection's run folder with its
+ *  empty npm user config. They hold names and paths only. */
+export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[]): BotWorkerLaunchFiles {
+  const factory = path.join(dir, 'factory');
+  const runDir = (c: Connector) => path.join(factory, 'connector-run', c.id);
+  const npmrc = (c: Connector) => path.join(runDir(c), 'npmrc');
+  for (const c of connectors) {
+    if (c.transport !== 'stdio') continue;
+    fs.mkdirSync(runDir(c), { recursive: true, mode: 0o700 });
+    if (!fs.existsSync(npmrc(c))) fs.writeFileSync(npmrc(c), '', { mode: 0o600 });
+  }
+  const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc }), null, 2)}\n`;
+  const settings = `${JSON.stringify(buildWorkerSettings(connectors), null, 2)}\n`;
+  return {
+    settingsFile: writeContentFile(path.join(factory, 'worker-settings'), settings),
+    mcpConfigFile: writeContentFile(path.join(factory, 'worker-mcp'), mcp),
+    level,
+  };
+}
+
+function writeContentFile(folder: string, content: string): string {
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const file = path.join(folder, contentFileName(content));
+  try {
+    if (fs.readFileSync(file, 'utf8') === content) {
+      // In use again: the startup prune keeps it.
+      try { fs.utimesSync(file, new Date(), new Date()); } catch { /* best effort */ }
+      return file;
+    }
+  } catch {
+    /* missing: write it */
+  }
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never written */ }
+    throw err;
+  }
+  return file;
 }
 
 // ── factory/bot-worker-sessions.json ─────────────────────────────────────────
@@ -299,13 +433,20 @@ export function noteBotWorkerSession(
   sessionId: string,
   workspaceId: string,
   dir: string = getWmuxDir(),
-  /** A guarded codex launch: where, and for which repository. */
-  launch?: { agent: string; cwd: string; repoKey?: string; codexHome?: string },
+  /** What the launch carried: a guarded codex launch's folder and
+   *  repository, or a claude launch's files (and whether its shell is WSL). */
+  launch: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string; launch?: BotWorkerLaunchFiles; wsl?: boolean } = {},
 ): void {
   const map = loadSessions(dir);
   if (unreadable) throw guardError('PTY_CREATE', `the worker sessions record is unreadable: ${unreadable}`);
   const next = new Map(map);
-  next.set(sessionId, { workspaceId, at: Date.now(), ...(launch ?? {}) });
+  next.set(sessionId, {
+    workspaceId,
+    at: Date.now(),
+    ...(launch.agent && launch.cwd ? { agent: launch.agent, cwd: launch.cwd, ...(launch.repoKey ? { repoKey: launch.repoKey } : {}), ...(launch.codexHome ? { codexHome: launch.codexHome } : {}) } : {}),
+    ...(launch.launch ? { launch: launch.launch } : {}),
+    ...(launch.wsl ? { wsl: true } : {}),
+  });
   try {
     saveSessions(dir, next);
   } catch (err) {
@@ -365,7 +506,18 @@ export function reloadBotWorkerSessionsForTests(): void {
 export function guardRefireLine(sessionId: string, line: string, deps: BotWorkerGuardDeps = {}): string {
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return line;
   if (namesCodex(line)) throw guardError('worktask:refire', 'codex is not re-fired in a bot\'s worker pane');
-  return guardLaunchLine('worktask:refire', line, deps);
+  return guardLaunchLine('worktask:refire', line, deps, recordedPlan(sessionId, deps)).line;
+}
+
+/** A recorded session's launch: its own files; the worker settings alone
+ *  in a WSL shell; a record written before the files gets wmux-only files
+ *  at the level the owner registered (or every session, while the record
+ *  is unreadable). */
+function recordedPlan(sessionId: string, deps: BotWorkerGuardDeps): LaunchPlan {
+  const rec = loadSessions(deps.dir ?? getWmuxDir()).get(sessionId);
+  if (rec?.wsl) return { kind: 'legacy' };
+  if (rec?.launch) return { kind: 'recorded', files: rec.launch };
+  return { kind: 'strict', connectors: [], level: workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()) };
 }
 
 /**
@@ -378,5 +530,40 @@ export function guardSessionLaunch(sessionId: string, text: string, deps: BotWor
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return text;
   if (namesCodex(text)) throw guardError('pty:write-launch', 'codex is not started again in a bot\'s worker pane');
   if (!namesClaude(text)) return text;
-  return guardLaunchLine('pty:write-launch', text, deps);
+  return guardLaunchLine('pty:write-launch', text, deps, recordedPlan(sessionId, deps)).line;
+}
+
+/** Startup: remove per-launch files no session record names and older than
+ *  a day (a fresh one may be in use between its write and the pane's
+ *  create). Best effort; nothing is removed while the record is unreadable. */
+export function pruneWorkerLaunchFiles(dir: string = getWmuxDir(), now: number = Date.now()): number {
+  const read = readBotWorkerSessions(dir);
+  if (!('sessions' in read)) return 0;
+  const named = new Set<string>();
+  for (const r of read.sessions.values()) {
+    if (r.launch) {
+      named.add(r.launch.settingsFile);
+      named.add(r.launch.mcpConfigFile);
+    }
+  }
+  let removed = 0;
+  for (const sub of ['worker-settings', 'worker-mcp']) {
+    const folder = path.join(dir, 'factory', sub);
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(folder);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const file = path.join(folder, name);
+      if (named.has(file) || !/^[0-9a-f]{12}\.json$/.test(name)) continue;
+      try {
+        if (now - fs.statSync(file).mtimeMs < 24 * 3600_000) continue;
+        fs.unlinkSync(file);
+        removed += 1;
+      } catch { /* best effort */ }
+    }
+  }
+  return removed;
 }

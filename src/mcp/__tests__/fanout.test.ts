@@ -95,6 +95,7 @@ describe('fanout_start: tool surface', () => {
       'agents',
       'cancel_pending',
       'checkout',
+      'connectors',
       'depends_on',
       'files',
       'idempotency_key',

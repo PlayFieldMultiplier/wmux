@@ -233,6 +233,9 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
     ...(d.threadId ? { threadId: d.threadId } : {}),
     ...(typeof d.handoffId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(d.handoffId) ? { handoffId: d.handoffId } : {}),
+    ...(Array.isArray(d.connectors) && d.connectors.length > 0 && d.connectors.length <= 8 && d.connectors.every((n) => typeof n === 'string' && /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(n))
+      ? { connectors: [...d.connectors] }
+      : {}),
   };
 }
 

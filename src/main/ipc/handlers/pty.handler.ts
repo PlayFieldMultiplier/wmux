@@ -19,7 +19,11 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, noteBotWorkerSession, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
+import { namesClaude } from '../../../shared/botWorkerGuard';
+import { namesCodex } from '../../../shared/codexWorkerGuard';
+import { getMcpTarget } from '../../../shared/mcpTargets';
+import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
@@ -169,6 +173,49 @@ function withWmuxTools(options: PtyCreateOptions | undefined): PtyCreateOptions 
   return { ...rest, initialCommand };
 }
 
+/** The shell a create will spawn (the same default both modes use). */
+function createShell(options: PtyCreateOptions | undefined): string {
+  return options?.shell || (process.platform === 'win32' ? new ShellDetector().getDefault() : (process.env.SHELL || '/bin/bash'));
+}
+
+/** The owner's registered claude wmux server level (`core`, `full`, ...). */
+function registeredClaudeLevel(): string | null {
+  try {
+    const target = getMcpTarget('claude');
+    return target ? readTargetStatus(target, app.getPath('home')).wmux.profile ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * pty:create's launch stages, in order: the account quota, the wmux tool
+ * level, the codex worker guard, the merge-lane guard (botWorkerMergeGuard)
+ * and the session pin. A bot worker's claude line loads only the MCP servers
+ * main writes for it, so a role binding's tool level goes to that guard (as
+ * its wmux level) instead of being spliced on its own, and the hint is
+ * dropped. Returns what the guarded launch carried, for its session record.
+ */
+async function stageCreate(options: PtyCreateOptions | undefined, botWorker: BotWorkerCreate | null): Promise<{ options: PtyCreateOptions | undefined; launch: ReturnType<typeof guardedLaunchOf> & ReturnType<typeof launchOfCodex> }> {
+  let staged = await withAccountQuota(options);
+  let level: string | undefined;
+  const line = staged?.initialCommand;
+  if (botWorker && staged && line && namesClaude(line) && !namesCodex(line)) {
+    const { wmuxTools, ...rest } = staged;
+    if (isWmuxToolsHint(wmuxTools)) level = wmuxTools.tools;
+    staged = rest;
+  } else {
+    staged = withWmuxTools(staged);
+  }
+  const guarded = withBotWorkerMergeGuard(await guardCodexBotWorker(staged, botWorker), botWorker, {}, { wsl: isWslShell(createShell(options)), ...(level ? { level } : {}) });
+  return { options: withLaunchSessionPin(guarded), launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded) } };
+}
+
+/** A guarded codex launch's folder and repository, for its session record. */
+function launchOfCodex(options: PtyCreateOptions | undefined): { agent?: string; cwd?: string; repoKey?: string; codexHome?: string } {
+  return guardedCodexLaunch(options) ?? {};
+}
+
 /** Clamp one runaway-guard bound to its cap; falls back to `def` when absent.
  * Defense-in-depth — the schema already clamps wmux.json values, but the funnel
  * payload is re-validated here so a non-schema caller can't exceed the caps. */
@@ -295,6 +342,8 @@ export function registerPTYHandlers(
   getWindow?: () => BrowserWindow | null,
 ): () => void {
   const useDaemon = daemonClient?.isConnected ?? false;
+  // A bot worker's launch writes its own wmux server entry (botWorkerMcp.ts).
+  setWorkerMcpResolvers({ entry: currentMcpEntry, registeredLevel: registeredClaudeLevel });
 
   // Per-session data dispatch. DaemonClient emits a SINGLE 'session:data' event
   // for ALL sessions; the O(N)-listeners-per-chunk fan-out (and its
@@ -438,7 +487,8 @@ export function registerPTYHandlers(
       // the daemon apart from `env` (DaemonCreateSessionParams.secretEnv).
       const secretEnv = secretEnvForCreate(options, botWorker);
       const grantedCwd = options?.cwd;
-      options = withLaunchSessionPin(withBotWorkerMergeGuard(await guardCodexBotWorker(withWmuxTools(await withAccountQuota(options)), botWorker), botWorker));
+      const staged = await stageCreate(options, botWorker);
+      options = staged.options;
 
       // X8 exec-style unit: a supervised wmux.json leaf runs its command as the
       // pane's root process under a daemon-chosen wrapper shell (the daemon
@@ -486,7 +536,7 @@ export function registerPTYHandlers(
       const sessionId = `daemon-${crypto.randomUUID().slice(0, 8)}`;
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       // Recorded before the session exists, so a restart always knows it.
-      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, guardedCodexLaunch(options));
+      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, staged.launch);
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -709,7 +759,12 @@ export function registerPTYHandlers(
         revokeSecretGrant(typeof options.secretGrant === 'string' ? options.secretGrant : null);
         throw new Error('PTY_CREATE: a worker with secrets needs the wmux daemon');
       }
-      options = withLaunchSessionPin(withBotWorkerMergeGuard(await guardCodexBotWorker(withWmuxTools(await withAccountQuota(options)), botWorker), botWorker));
+      // A task's connections, like its secrets, need the daemon.
+      if (botWorker?.spawns?.some((s) => (s.connectors?.length ?? 0) > 0)) {
+        throw new Error('PTY_CREATE: a worker with connections needs the wmux daemon');
+      }
+      const staged = await stageCreate(options, botWorker);
+      options = staged.options;
 
       // X8 — supervision lives inside the daemon (decision ②). In local mode it
       // can't be honored, but a silent drop would be a trust violation: the user
@@ -756,7 +811,7 @@ export function registerPTYHandlers(
       logCwdResolution(instance.id, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       if (botWorker) {
         try {
-          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, guardedCodexLaunch(options));
+          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, staged.launch);
         } catch (err) {
           ptyManager.dispose(instance.id);
           throw err;

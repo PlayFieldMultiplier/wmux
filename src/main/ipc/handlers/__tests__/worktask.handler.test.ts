@@ -17,7 +17,7 @@ vi.mock('electron', () => ({
 }));
 
 import { registerWorktaskHandlers } from '../worktask.handler';
-import { forgetBotWorkerSession, noteBotWorkerSession, reloadBotWorkerSessionsForTests } from '../../../agents/botWorkerMergeGuard';
+import { forgetBotWorkerSession, noteBotWorkerSession, reloadBotWorkerSessionsForTests, setWorkerMcpResolvers } from '../../../agents/botWorkerMergeGuard';
 import { IPC } from '../../../../shared/constants';
 import type { DaemonClient } from '../../../DaemonClient';
 
@@ -116,12 +116,13 @@ describe('worktask:refire (§3·F2 — 원래 initialCommand 재전송)', () => 
     const wt = seedWorktree('task-bot', true);
     reloadBotWorkerSessionsForTests();
     noteBotWorkerSession('pty-bot', 'ws-task');
+    setWorkerMcpResolvers({ entry: () => '/opt/wmux/mcp/index.js', registeredLevel: () => null });
     // The app restarts between the spawn and the re-fire: only the durable record knows the pane.
     reloadBotWorkerSessionsForTests();
     try {
       const ok = (await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-bot', worktreePath: wt, initialCommand: 'claude "$(cat \'/x/prompt.md\')"' })) as { ok: boolean };
       expect(ok.ok).toBe(true);
-      expect(daemon.writes[0].data).toMatch(/^claude --settings="[^"]*factory[\\/]worker-settings\.json" /);
+      expect(daemon.writes[0].data).toMatch(/^claude --settings="[^"]*factory[\\/]worker-settings[\\/][0-9a-f]{12}\.json" --mcp-config="[^"]*factory[\\/]worker-mcp[\\/][0-9a-f]{12}\.json" --strict-mcp-config /);
       const refused = (await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-bot', worktreePath: wt, initialCommand: 'codex "$(cat \'/x/prompt.md\')"' })) as { ok: boolean; error?: string };
       expect(refused.ok).toBe(false);
       // A codex line in a bot worker's pane is re-fired only for a guarded codex launch on record.

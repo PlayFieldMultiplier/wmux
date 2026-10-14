@@ -27,6 +27,7 @@ import { emptyUsage } from '../../../factory/budget';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotWorkerStartOutcome } from '../../../factory/botNotices';
 import { SecretStore, setSecretStore } from '../../../factory/secretStore';
+import { ConnectorStore } from '../../../factory/connectorStore';
 import { setSecretGrantSource } from '../../../factory/secretGrants';
 
 const REPO = nodePath.resolve('/repo');
@@ -68,7 +69,7 @@ interface Rig {
   setDefaultBranchNote: (n: { name: string | null; recorded: boolean }) => void;
 }
 
-function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPresets?: boolean } = {}): Rig {
+function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPresets?: boolean; connectors?: () => ConnectorStore | null; platform?: NodeJS.Platform; presets?: FanoutPreset[] } = {}): Rig {
   const handlers = new Map<string, Handler>();
   const router = { register: (m: string, h: Handler) => handlers.set(m, h) } as unknown as RpcRouter;
   const state = new Map<string, FanOutStatus>();
@@ -137,7 +138,9 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     workerPermissionMode: () => 'auto',
     requireApproval: () => false,
     presets: () => PRESETS,
-    ...(opts.builtinPresets ? {} : { botPresets: () => PRESETS }),
+    ...(opts.builtinPresets ? {} : { botPresets: () => opts.presets ?? PRESETS }),
+    ...(opts.connectors ? { connectors: opts.connectors } : {}),
+    ...(opts.platform ? { workerPlatform: opts.platform } : {}),
     bot: () => port,
     botDefaultBranch: async (root) => {
       defaultBranchReads.push({ root, startedBefore: start.mock.calls.length });
@@ -219,6 +222,51 @@ describe('task.fanout.start — bot origin', () => {
       setSecretGrantSource(null);
       setSecretStore(null);
     }
+  });
+
+  describe('connections', () => {
+    function library(dir: string): ConnectorStore {
+      const lib = new ConnectorStore(nodePath.join(dir, 'connectors.json'), { botIds: () => new Set([BOT_ID]) });
+      lib.load();
+      const base = { transport: 'http' as const, remote: { url: 'https://x.dev/mcp', headers: {} }, secrets: [], tools: { mode: 'all' as const, blocked: [] }, enabled: true };
+      lib.save({ ...base, name: 'shared', scope: { kind: 'all' } });
+      lib.save({ ...base, name: 'mine', scope: { kind: 'bots', botIds: [BOT_ID] } });
+      lib.save({ ...base, name: 'keyed', scope: { kind: 'all' }, secrets: [{ secret: 'KEYED_MCP_TOKEN', as: 'header', header: 'Authorization', scheme: 'bearer' }] });
+      const off = lib.save({ ...base, name: 'turned-off', scope: { kind: 'all' } });
+      if (off.ok) lib.setOffForBot(off.connector.id, BOT_ID, true);
+      return lib;
+    }
+    const call = (r: Rig, connectors: unknown, ctx = botCtx('lead')) =>
+      r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], prompt: 'x', preset: 'repro', connectors }, ctx);
+
+    it('a bot names connections from its own set: the request carries the records and the task is tainted, even from a clean wake', async () => {
+      const lib = library(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-conn-')));
+      const r = rig('lead', {}, { connectors: () => lib, platform: 'darwin' });
+      r.setTainted(false);
+      expect(await call(r, ['shared', 'mine'])).toMatchObject({ ok: true });
+      await r.flush();
+      const req = r.start.mock.calls[0][0] as FanOutRequest;
+      expect(req.connectors?.map((c) => c.name)).toEqual(['shared', 'mine']);
+      expect(req.caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true });
+      await lib.flush();
+    });
+
+    it('refuses a name outside its set, one switched off for it, a missing key, a pane caller, Windows and a non-Claude worker', async () => {
+      const lib = library(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-conn-')));
+      const r = rig('lead', {}, { connectors: () => lib, platform: 'darwin' });
+      expect(errorOf(await call(r, ['nope'])).message).toMatch(/not one of your connections: nope/);
+      expect(errorOf(await call(r, ['turned-off'])).message).toMatch(/not one of your connections: turned-off/);
+      expect(errorOf(await call(r, ['Bad_Name'])).code).toBe('INVALID_ARGUMENT');
+      expect(errorOf(await call(r, ['keyed'])).code).toBe('FAILED_PRECONDITION');
+      const brain = await r.call({ idempotencyKey: 'k', titles: ['x'], connectors: ['shared'] }, { origin: 'local', commanderWorkspace: 'ws-hq' } as RpcContext);
+      expect(errorOf(brain).message).toMatch(/connectors only from a factory bot/);
+      const win = rig('lead', {}, { connectors: () => lib, platform: 'win32' });
+      expect(errorOf(await call(win, ['shared'])).message).toMatch(/Windows/);
+      const codex = rig('lead', {}, { connectors: () => lib, platform: 'darwin', presets: [{ name: 'repro', items: [{ agent: 'codex' }], worktree: true }] });
+      expect(errorOf(await call(codex, ['shared'])).message).toMatch(/Claude workers only/);
+      expect(r.start).not.toHaveBeenCalled();
+      await lib.flush();
+    });
   });
 
   it('records the handoff the asking wake delivers on its tasks', async () => {

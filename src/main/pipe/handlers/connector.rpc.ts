@@ -38,6 +38,7 @@ import { getSecretStore, type SecretStore } from '../../factory/secretStore';
 import { secretForms } from '../../factory/secretRedaction';
 import { getBotStore } from '../../factory/botStore';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
+import { pruneWorkerLaunchFiles } from '../../agents/botWorkerMergeGuard';
 
 export interface ConnectorIpcDeps {
   store: () => ConnectorStore | null;
@@ -224,6 +225,9 @@ export function createConnectorModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'g
       });
       store.load();
       setConnectorStore(store);
+      try {
+        pruneWorkerLaunchFiles(deps.wmuxDir());
+      } catch { /* best effort */ }
       offIpc = registerConnectorIpc(deps.getMainWindow, { store: getConnectorStore, secrets: getSecretStore });
       console.log(`[factory] connectors: ${store.list().length} loaded from ${path.basename(connectorsFilePath(deps.wmuxDir()))}`);
     },

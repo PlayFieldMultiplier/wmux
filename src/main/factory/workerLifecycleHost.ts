@@ -5,6 +5,7 @@
 // the wiring module once every factory module is up; kept apart so that
 // module's imports stay free of the event bus and the pane status handler.
 
+import { getConnectorStore } from './connectorStore';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
 import type { ThreadId } from '../../shared/room';
@@ -179,6 +180,14 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         respawn: async (input: WorkerRespawnInput) => {
           const svc = deps.fanOutService;
           if (!svc) return { ok: false as const, message: 'fan-out is not running' };
+          // The task's connections that are still this bot's (the library
+          // as it is now; one gone or out of scope since is left out).
+          const named = ledger.get(input.taskId)?.dispatch?.connectors ?? [];
+          const current = named.length > 0 ? getConnectorStore()?.forBot(input.botId) ?? [] : [];
+          const connectors = current.filter((c) => named.includes(c.name));
+          if (connectors.length < named.length) {
+            console.log('[factory] resume: connections left out (gone or no longer this bot\'s)', { taskId: input.taskId, names: named.filter((n) => !connectors.some((c) => c.name === n)) });
+          }
           const r = await svc.spawnBotTaskPane({
             ownerWorkspaceId: input.ownerWorkspaceId,
             botId: input.botId,
@@ -189,6 +198,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
             workerPermissionMode: isFanoutWorkerPermissionMode(input.permissionMode) ? input.permissionMode : 'manual',
             // Unknown taint counts as tainted.
             tainted: ledger.get(input.taskId)?.dispatch?.origin.tainted !== false,
+            ...(connectors.length > 0 ? { connectors } : {}),
           });
           return 'error' in r ? { ok: false as const, message: r.error } : { ok: true as const, workspaceId: r.workspaceId, sessionId: r.ptyId };
         },

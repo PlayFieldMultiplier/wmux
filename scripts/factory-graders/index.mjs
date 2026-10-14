@@ -12,6 +12,7 @@ import * as rooms from './rooms.mjs';
 import * as content from './content.mjs';
 import * as approvals from './approvals.mjs';
 import * as group from './group.mjs';
+import * as connectors from './connectors.mjs';
 
 export const GRADERS = {
   'reply-in-wake-thread': threads.replyInWakeThread,
@@ -60,6 +61,9 @@ export const GRADERS = {
   'taint-relay-lane-refused': approvals.taintRelayLaneRefused,
   'coordinator-room-wakes-lead-only': group.coordinatorRoomWakesLeadOnly,
   'taint-research-lane-refused': approvals.taintLaneRefused,
+  'connector-worker-launch': connectors.connectorWorkerLaunch,
+  'connector-off-for-bot-refused': connectors.connectorOffForBotRefused,
+  'connector-task-lane-refused': connectors.connectorTaskLaneRefused,
 };
 
 /** `{status: 'pass'|'fail'|'error', criteria}` for one snapshot. */

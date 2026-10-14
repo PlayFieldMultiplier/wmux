@@ -9,7 +9,7 @@ import path from 'node:path';
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir(), isPackaged: false, getAppPath: () => process.cwd() } }));
 
 import { guardBotWorkerSessionText, guardCodexBotWorker, guardCodexSessionLine, type CodexGuardRun } from '../codexWorkerGuard';
-import { beginBotWorkerSpawn, claimInflightCodexLaunch, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, isGuardedCodexCreate, noteBotWorkerSession, reloadBotWorkerSessionsForTests, withBotWorkerMergeGuard } from '../botWorkerMergeGuard';
+import { beginBotWorkerSpawn, claimInflightCodexLaunch, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, isGuardedCodexCreate, noteBotWorkerSession, reloadBotWorkerSessionsForTests, setWorkerMcpResolvers, withBotWorkerMergeGuard } from '../botWorkerMergeGuard';
 import { CODEX_WORKER_EXCLUDE_LINE, CODEX_WORKER_RULES_PATH } from '../../../shared/codexWorkerGuard';
 import { codexTrustOverride } from '../../../shared/fanoutPreset';
 
@@ -235,11 +235,12 @@ describe('a re-fire or a resume of a guarded codex pane', () => {
     reloadBotWorkerSessionsForTests();
     noteBotWorkerSession('pty-codex', 'ws-task', dir, { agent: 'codex', cwd: wt, repoKey: 'acme/app' });
     noteBotWorkerSession('pty-plain', 'ws-task', dir);
+    setWorkerMcpResolvers({ entry: () => '/opt/wmux/mcp/index.js', registeredLevel: () => null });
     try {
       const typed = `codex resume ${ID} ${codexTrustOverride(wt, 'darwin')}`;
       expect(await guardBotWorkerSessionText('pty-codex', typed, 'write-launch', { ...deps, dir })).toContain('-s workspace-write');
       await expect(guardBotWorkerSessionText('pty-plain', typed, 'refire', { ...deps, dir })).rejects.toThrow(/^worktask:refire: .*no guarded codex launch on record/);
-      expect(await guardBotWorkerSessionText('pty-plain', 'claude --resume x', 'write-launch', { ...deps, dir })).toContain('--settings=');
+      expect(await guardBotWorkerSessionText('pty-plain', 'claude --resume x', 'write-launch', { ...deps, dir })).toContain('--strict-mcp-config');
       expect(await guardBotWorkerSessionText('pty-human', typed, 'write-launch', { ...deps, dir })).toBe(typed);
     } finally {
       forgetBotWorkerSession('pty-codex', dir);

@@ -17,10 +17,11 @@
 //
 // Every read is best effort: what cannot be read is left out.
 
+import { getConnectorStore, type ConnectorStore } from './connectorStore';
 import type { BotProfile } from '../../shared/bot';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
-import type { WakeApprovalSummary, WakeClock, WakeLanguage, WakePromptInput, WakeRunReply } from './wakePrompt';
+import type { WakeApprovalSummary, WakeClock, WakeConnectorSummary, WakeLanguage, WakePromptInput, WakeRunReply } from './wakePrompt';
 
 export const WAKE_CONTEXT_LIMITS = {
   /** Approval requests a wake lists. */
@@ -36,6 +37,8 @@ export const WAKE_CONTEXT_LIMITS = {
 
 /** What wakeContext reads. */
 export interface WakeContextPorts {
+  /** The connection library (default: the running one). */
+  connectors?: () => Pick<ConnectorStore, 'forBot'> | null;
   /** Cards of a room (a thread, or every thread), oldest first: the newest
    *  `limit`, or with `sinceSeq` the first `limit` after it. */
   cards: (workspaceId: string, threadId: ThreadId | null, limit: number, sinceSeq?: number) => readonly RoomCard[];
@@ -207,6 +210,18 @@ export function wakeContext(ports: WakeContextPorts, profile: BotProfile, item: 
     runReplies: wakeRunReplies(ports, profile, item),
     language: wakeLanguage(ports, profile, item),
     clock: wakeClock(now, ports.timeZone?.()),
+    connectors: wakeConnectors(ports, profile),
     now,
   };
+}
+
+/** The connections this bot's workers may use (connectorsForBot): names and
+ *  the owner's purpose, never a key or a command. */
+export function wakeConnectors(ports: WakeContextPorts, profile: BotProfile): WakeConnectorSummary[] {
+  try {
+    const lib = (ports.connectors ?? getConnectorStore)();
+    return (lib?.forBot(profile.id) ?? []).map((c) => ({ name: c.name, ...(c.purpose ? { purpose: c.purpose } : {}) }));
+  } catch {
+    return [];
+  }
 }

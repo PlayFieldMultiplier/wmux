@@ -224,7 +224,7 @@ export function isSingleCommand(command: string): boolean {
 /** Command or process substitution, quoted or not. */
 const SUBSTITUTION = /\$\(|`|<\(|>\(/;
 
-function isClaudeLauncher(word: string): boolean {
+export function isClaudeLauncher(word: string): boolean {
   return launcherStem(word) === 'claude';
 }
 
@@ -272,11 +272,18 @@ export function namesClaude(line: string): boolean {
 
 export const BOT_WORKER_SESSIONS_VERSION = 1;
 
+/** The files a session's claude launches carry (shared/botWorkerMcp.ts),
+ *  so a re-fire or a resume reads the same servers and rules as the first
+ *  launch. */
+export interface BotWorkerLaunchFiles { settingsFile: string; mcpConfigFile: string; level: 'core' | 'full' }
+
 /** One bot worker session. `workspaceId` and `at` are the version-1 record
  *  every reader knows. The rest are optional additions (no version bump: a
  *  reader keeps what it knows, and an older one ignores them): where a codex
  *  worker was launched and for which repository, so a re-fire or a resume of
- *  that pane is guarded the same way (main/agents/codexWorkerGuard.ts). */
+ *  that pane is guarded the same way (main/agents/codexWorkerGuard.ts); the
+ *  files a claude launch carried (`launch`); `wsl`: the pane's shell is WSL,
+ *  whose launches keep the worker settings file alone. */
 export interface BotWorkerSessionRecord {
   workspaceId: string;
   at: number;
@@ -288,6 +295,18 @@ export interface BotWorkerSessionRecord {
   repoKey?: string;
   /** The CODEX_HOME the launch was checked with (an account's), when set. */
   codexHome?: string;
+  launch?: BotWorkerLaunchFiles;
+  wsl?: boolean;
+}
+
+/** The per-launch files under `<dir>/factory/`: only these folders, a JSON
+ *  file name, a path that can be quoted. Pure. */
+export function isWorkerLaunchFiles(raw: unknown, dir: string): raw is BotWorkerLaunchFiles {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  const inside = (p: unknown, sub: string): boolean => typeof p === 'string' && isQuotable(p)
+    && path.dirname(p) === path.join(dir, 'factory', sub) && /^[0-9a-f]{12}\.json$/.test(path.basename(p));
+  return inside(r.settingsFile, 'worker-settings') && inside(r.mcpConfigFile, 'worker-mcp') && (r.level === 'core' || r.level === 'full');
 }
 
 export function botWorkerSessionsPath(dir: string): string {
@@ -304,6 +323,9 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
     for (const [id, rec] of Object.entries(raw.sessions as Record<string, unknown>)) {
       const r = rec as Partial<BotWorkerSessionRecord> | null;
       if (!id || typeof r?.workspaceId !== 'string' || typeof r.at !== 'number') throw new Error(`a malformed record (${id})`);
+      // Launch files that are not main's own are not used (the launch is then
+      // guarded as a record without them).
+      const launch = isWorkerLaunchFiles(r.launch, dir) ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level } : undefined;
       out.set(id, {
         workspaceId: r.workspaceId,
         at: r.at,
@@ -312,6 +334,8 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
         ...(typeof r.cwd === 'string' && r.cwd.length <= 4096 ? { cwd: r.cwd } : {}),
         ...(typeof r.repoKey === 'string' && r.repoKey.length <= 256 ? { repoKey: r.repoKey } : {}),
         ...(typeof r.codexHome === 'string' && r.codexHome.length <= 4096 ? { codexHome: r.codexHome } : {}),
+        ...(launch ? { launch } : {}),
+        ...(r.wsl === true ? { wsl: true } : {}),
       });
     }
   } catch (err) {
