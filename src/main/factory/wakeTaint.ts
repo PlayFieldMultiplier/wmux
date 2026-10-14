@@ -17,12 +17,17 @@
 //   mention   the sender's running wake (a send is synchronous inside the
 //             sender's turn). A handoff from the owner or the system is
 //             clean; one from a bot with no mark (delivered again after a
-//             restart, or its sender's turn already over) is tainted.
+//             restart, or its sender's turn already over) is tainted. A
+//             handoff a researcher-template bot sends is always tainted:
+//             research reads outside text whatever woke it.
 //   human, manual, schedule, routine, intro: clean (the owner's words, the
 //             owner's buttons, timers). Any other reason is tainted.
 //
 // Taint is by the wake's origin: text a bot reads with its tools during a
-// clean wake (pr_read, issue_read) does not mark the wake.
+// clean wake (pr_read, issue_read) does not mark the wake. The one rule by
+// template is the researcher's: its handoffs (above) and the tasks it fans out
+// (fanout.rpc.ts) are always tainted. A bot of any other template is marked by
+// its wake's origin alone.
 //
 // Consequences: a bot's fan-out records `dispatch.origin.tainted` (true or
 // false, fanout.rpc.ts; a bot task without it counts as tainted); the merge lane and a
@@ -37,6 +42,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import type { Fact, FactKind } from '../../shared/facts';
+import { botTemplate, type BotProfile } from '../../shared/bot';
 import type { Handoff } from '../../shared/handoff';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { WakeItem, WakeReason } from '../../shared/wake';
@@ -69,6 +75,8 @@ export interface WakeTaintPorts {
   taskRow: (taskId: string) => LedgerEntry | null;
   /** The wake `botId` is running now and when its turn started, or null. */
   runningWake: (botId: string) => { item: WakeItem; startedAt: number } | null;
+  /** A bot's profile (its template), or null when it is not known. */
+  bot?: (botId: string) => Pick<BotProfile, 'template' | 'role'> | null;
   /** `<wmuxDir>/factory/taint.json`; absent: marks in memory only. */
   file?: string;
   log?: (line: string) => void;
@@ -186,12 +194,26 @@ export class WakeTaint {
     let tainted: boolean;
     if (h.from.kind !== 'bot') {
       tainted = false;
+    } else if (this.alwaysTainted(h.from.botId)) {
+      tainted = true;
     } else {
       // The sender's turn sent it only if that turn began before it was made.
       const running = this.ports.runningWake(h.from.botId);
       tainted = !running || running.startedAt > h.createdAt ? true : this.wakeTainted(running.item);
     }
     this.mark(handoffId, tainted);
+  }
+
+  /** A researcher-template bot's sends are always tainted; a bot that
+   *  cannot be looked up is not known to be clean either. */
+  private alwaysTainted(botId: string): boolean {
+    if (!this.ports.bot) return false;
+    try {
+      const profile = this.ports.bot(botId);
+      return !profile || botTemplate(profile) === 'researcher';
+    } catch {
+      return true;
+    }
   }
 
   /** A fact from the log (subscribe). Never throws. */

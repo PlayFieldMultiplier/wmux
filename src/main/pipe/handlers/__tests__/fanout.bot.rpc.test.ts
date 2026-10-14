@@ -195,6 +195,17 @@ describe('task.fanout.start — bot origin', () => {
     expect((r.start.mock.calls[1][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
   });
 
+  it('a researcher\'s tasks are tainted even from a clean wake; a developer\'s are not', async () => {
+    const researcher = rig('lead', { template: 'researcher' });
+    expect(await researcher.call({ idempotencyKey: 'wake:w-1:1', titles: ['look it up'], prompt: 'research', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
+    await researcher.flush();
+    expect((researcher.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true });
+    const developer = rig('lead', { template: 'developer' });
+    expect(await developer.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
+    await developer.flush();
+    expect((developer.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
+  });
+
   it('reads the bot repository\'s default branch for the workers\' push rules before anything starts', async () => {
     const r = rig('lead');
     expect(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });

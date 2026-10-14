@@ -113,7 +113,7 @@ import {
   type FanoutPreset,
 } from '../../../shared/fanoutPreset';
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
-import type { BotBinding, BotProfile } from '../../../shared/bot';
+import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/bot';
 import { SHARED_SURFACE } from '../../../shared/botSurface';
 import { WAKE_LIMITS, botFanoutIdempotencyKey, type WakeItem } from '../../../shared/wake';
 import { getBotStore } from '../../factory/botStore';
@@ -1150,7 +1150,8 @@ export function registerFanOutRpc(
       const wakeThread = botPort.currentWakeThread(bot.botId);
       botWakeThread = taskOriginThread(wakeThread);
       botNoticeThread = parseThreadId(wakeThread) ?? GENERAL_THREAD;
-      botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false;
+      // A researcher's tasks read outside text whatever woke it.
+      botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false || botTemplate(botProfile) === 'researcher';
       const ordinal = /^wake:.+:([1-9][0-9]*)$/.exec(callerKey)?.[1];
       if (!ordinal || Number(ordinal) > BOT_FANOUTS_PER_WAKE_MAX || callerKey !== botFanoutIdempotencyKey(wakeId, Number(ordinal))) {
         return deny(

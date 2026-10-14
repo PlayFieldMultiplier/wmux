@@ -115,6 +115,29 @@ describe('WakeTaint', () => {
     expect(t.handoffTainted('h-missing')).toBe(true);
   });
 
+  it('a researcher\'s handoff is tainted even from a clean wake; an unknown sender is too', () => {
+    const fromA = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    const fromB = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-b' };
+    const fromGone = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-c' };
+    const hs = [handoff('h-research', fromA), handoff('h-dev', fromB), handoff('h-gone', fromGone)];
+    const profiles: Record<string, { role: 'lead'; template: 'researcher' | 'developer' }> = {
+      'bot-a': { role: 'lead', template: 'researcher' },
+      'bot-b': { role: 'lead', template: 'developer' },
+    };
+    const t = make({
+      runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }),
+      bot: (id) => profiles[id] ?? null,
+    }, [], hs);
+    for (const id of ['h-research', 'h-dev', 'h-gone']) t.onFact(fact(`x-${id}`, 'handoff.received', { handoffId: id }));
+    expect(t.handoffTainted('h-research')).toBe(true);
+    expect(t.handoffTainted('h-dev')).toBe(false);
+    expect(t.handoffTainted('h-gone')).toBe(true);
+    // A directory that throws is not known to be clean (marks in memory only).
+    const broken = make({ file: undefined, runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }), bot: () => { throw new Error('x'); } }, [], hs);
+    broken.onFact(fact('x', 'handoff.received', { handoffId: 'h-dev' }));
+    expect(broken.handoffTainted('h-dev')).toBe(true);
+  });
+
   it('an unreadable marks file starts empty', () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');
