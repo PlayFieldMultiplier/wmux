@@ -290,4 +290,32 @@ describe('RemoteHostsStore', () => {
     expect(store.get('bad')?.tokenKind).toBeUndefined();
     expect('tokenKind' in (store.get('bad') ?? {})).toBe(false);
   });
+
+  it('stores an SSH host under its wmux-ssh origin and round-trips the binding', () => {
+    const store = new RemoteHostsStore(filePath);
+    const binding = {
+      alias: 'office',
+      resolvedHost: 'office.lan',
+      hostKeyFingerprint: 'SHA256:abc',
+      remotePort: 7681,
+      localEndpoint: { socketPath: '/tmp/x.sock' },
+    };
+    const r = store.addSsh('host-1', binding, 'tok', 'office');
+    expect(r).toMatchObject({ ok: true, host: { id: 'host-1', origin: 'wmux-ssh://host-1', ssh: binding } });
+    expect(store.addSsh('host-2', binding, 'tok', 'office')).toEqual({ ok: false, error: 'already registered' });
+    const reloaded = new RemoteHostsStore(filePath);
+    expect(reloaded.get('host-1')?.ssh).toEqual(binding);
+    expect(reloaded.get('host-1')?.tokenKind).toBe('device');
+    expect(reloaded.updateSshBinding('host-1', { ...binding, hostKeyFingerprint: 'SHA256:new' })).toBe(true);
+    expect(new RemoteHostsStore(filePath).get('host-1')?.ssh?.hostKeyFingerprint).toBe('SHA256:new');
+  });
+
+  it('drops a malformed ssh binding instead of guessing a route', () => {
+    fs.writeFileSync(filePath, JSON.stringify([
+      { id: 's', label: 's', origin: 'wmux-ssh://s', token: 't', addedAt: 1, ssh: { alias: '-oProxyCommand=x', resolvedHost: 'h', hostKeyFingerprint: 'SHA256:a', remotePort: 1, localEndpoint: { port: 2 } } },
+    ]));
+    const store = new RemoteHostsStore(filePath);
+    expect(store.get('s')).toBeTruthy();
+    expect(store.get('s')?.ssh).toBeUndefined();
+  });
 });

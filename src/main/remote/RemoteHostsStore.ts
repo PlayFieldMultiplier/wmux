@@ -12,6 +12,8 @@ import type { RemoteHost, RemoteHostPublic } from '../../shared/remoteHosts';
 import { parseWebUrl } from '../../shared/remoteHosts';
 import { reHardenTokenFileAcl, secureWriteTokenFile } from '../../shared/security';
 import type { PcRailTokenKind } from '../../shared/pcRail';
+import type { SshHostBinding } from '../../shared/sshPcContract';
+import { sshHostOrigin } from '../../shared/sshPcContract';
 
 /**
  * A stored host plus how its credential was issued: `operator` for a pasted
@@ -29,6 +31,22 @@ function toPublic(host: RemoteHost): RemoteHostPublic {
   const { token: _token, ...rest } = host;
   void _token;
   return rest;
+}
+
+/** A stored SSH binding, checked field by field: it decides where a bearer goes. */
+export function isSshHostBinding(v: unknown): v is SshHostBinding {
+  if (typeof v !== 'object' || v === null) return false;
+  const b = v as Record<string, unknown>;
+  const ep = b.localEndpoint as Record<string, unknown> | null | undefined;
+  const portOk = (p: unknown): boolean => Number.isInteger(p) && (p as number) > 0 && (p as number) < 65536;
+  return (
+    typeof b.alias === 'string' && b.alias.length > 0 && !b.alias.startsWith('-') &&
+    typeof b.resolvedHost === 'string' &&
+    typeof b.hostKeyFingerprint === 'string' && b.hostKeyFingerprint.startsWith('SHA256:') &&
+    portOk(b.remotePort) &&
+    typeof ep === 'object' && ep !== null &&
+    ((typeof ep.socketPath === 'string' && ep.socketPath.length > 0) || portOk(ep.port))
+  );
 }
 
 /** Structural validation for a loaded file — malformed/foreign shapes are
@@ -128,6 +146,45 @@ export class RemoteHostsStore {
     return { ok: true, host: toPublic(host) };
   }
 
+  /** Registers a host added over SSH. The id is minted by the caller because
+   *  the tunnel that redeemed the pairing code was already keyed by it. */
+  addSsh(
+    id: string,
+    binding: SshHostBinding,
+    token: string,
+    label: string,
+    allowInput?: boolean,
+  ): { ok: true; host: RemoteHostPublic } | { ok: false; error: string } {
+    if (this.hosts.some((h) => h.id === id || h.ssh?.alias === binding.alias)) {
+      return { ok: false, error: 'already registered' };
+    }
+    const host: StoredRemoteHost = {
+      id,
+      label,
+      origin: sshHostOrigin(id),
+      token,
+      addedAt: Date.now(),
+      tokenKind: 'device',
+      ssh: binding,
+      // The grant web was serving with: a revived web must come back with the same one.
+      ...(allowInput !== undefined ? { allowInput } : {}),
+    };
+    const next: StoredRemoteHost[] = [...this.hosts, host];
+    this.persist(next);
+    this.hosts = next;
+    return { ok: true, host: toPublic(host) };
+  }
+
+  /** Records a re-confirmed SSH binding (new host key or resolved name). */
+  updateSshBinding(id: string, binding: SshHostBinding): boolean {
+    const prev = this.hosts.find((h) => h.id === id);
+    if (!prev?.ssh) return false;
+    const next = this.hosts.map((h) => (h.id === id ? { ...h, ssh: binding } : h));
+    this.persist(next);
+    this.hosts = next;
+    return true;
+  }
+
   /** Swaps the credential (and, if the operator typed a different address,
    *  the origin) of an existing host IN PLACE — re-pairing a host that stopped
    *  accepting the old token. The id is kept on purpose: every attachment
@@ -174,10 +231,18 @@ export class RemoteHostsStore {
       const raw = fs.readFileSync(this.filePath, 'utf8');
       const parsed: unknown = JSON.parse(raw);
       // An unknown tokenKind is dropped from that record, never the record.
+      // So is a malformed ssh binding: the host then has no route at all
+      // (its wmux-ssh origin reaches nothing) rather than a guessed one.
       this.hosts = isRemoteHostArray(parsed)
         ? parsed.map((h: StoredRemoteHost) => {
-          if (h.tokenKind === undefined || isTokenKind(h.tokenKind)) return h;
-          const { tokenKind: _bad, ...rest } = h;
+          let rec = h;
+          if (rec.ssh !== undefined && !isSshHostBinding(rec.ssh)) {
+            const { ssh: _badSsh, ...rest } = rec;
+            void _badSsh;
+            rec = rest;
+          }
+          if (rec.tokenKind === undefined || isTokenKind(rec.tokenKind)) return rec;
+          const { tokenKind: _bad, ...rest } = rec;
           void _bad;
           return rest;
         })
