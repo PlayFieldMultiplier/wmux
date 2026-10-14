@@ -505,12 +505,16 @@ export async function reviveHost(run: SshRun, alias: string, remotePort: number,
  * the running daemon, so web keeps its port and flags (E2).
  */
 export function parseServiceResult(stdout: string, on: boolean): SshServiceResult {
+  const tooOld = 'the wmux server there has no install-service; remove this PC and add it again to update it';
   const obj = lastJsonObject(stdout);
-  if (!obj || typeof obj.ok !== 'boolean') {
-    return { ok: false, kind: 'failed', message: 'the wmux server there has no install-service; add the PC again to update it' };
-  }
-  const hint = typeof obj.hint === 'string' ? obj.hint.slice(0, 500) : '';
+  if (!obj || typeof obj.ok !== 'boolean') return { ok: false, kind: 'failed', message: tooOld };
+  const fullHint = typeof obj.hint === 'string' ? obj.hint : '';
+  const hint = fullHint.slice(0, 500);
   const error = typeof obj.error === 'string' ? obj.error.slice(0, 300) : '';
+  // A CLI from before install-service answers `{ok:false, error:'unknown subcommand: …'}`, with no manager.
+  if (obj.manager !== 'systemd' && obj.manager !== 'launchd' && obj.manager !== 'none') {
+    return { ok: false, kind: 'failed', message: /unknown subcommand/i.test(error) ? tooOld : error || hint };
+  }
   if (obj.manager !== 'systemd') {
     if (!on && obj.ok) return { ok: true, on: false };
     return { ok: false, kind: 'service-unsupported', message: hint };
@@ -518,13 +522,15 @@ export function parseServiceResult(stdout: string, on: boolean): SshServiceResul
   if (!obj.ok) return { ok: false, kind: 'failed', message: [error, hint].filter(Boolean).join(' ') };
   if (!on) return { ok: true, on: false };
   if (obj.linger === true) return { ok: true, on: true };
-  const lingerCommand = /sudo loginctl enable-linger [A-Za-z0-9._-]+/.exec(hint)?.[0] ?? 'sudo loginctl enable-linger $USER';
+  // Read from the whole hint: a cut one could end in half a user name.
+  const lingerCommand = /sudo loginctl enable-linger [A-Za-z0-9._-]+/.exec(fullHint)?.[0] ?? 'sudo loginctl enable-linger $USER';
   return { ok: true, on: true, lingerCommand };
 }
 
 /** Turn "Start after reboot" on or off on the host. Never throws. */
 export async function setHostService(run: SshRun, alias: string, on: boolean, signal?: AbortSignal): Promise<SshServiceResult> {
   try {
+    if (signal?.aborted) throw new SshFailure('cancelled', 'cancelled');
     const res = await runCli(run, alias, RUNTIME_CURRENT_LINK, ['daemon', on ? 'install-service' : 'uninstall-service', '--json'], signal);
     if (res.code === 255) assertSshOk(res);
     return parseServiceResult(res.stdout, on);

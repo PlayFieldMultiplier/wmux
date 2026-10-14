@@ -41,8 +41,8 @@ export interface SshAddDeps {
   signal?: AbortSignal;
   /** Opt-in: install the daemon there as a login service once the host is saved. */
   startAfterReboot?: boolean;
-  /** Records that the service is on (only called when it is). */
-  recordService?: (id: string) => void;
+  /** Records that the service is on (only called when it is); false when it could not be saved. */
+  recordService?: (id: string) => boolean;
 }
 
 /** Redeem a code through the tunnel; a wrong, expired or burned code is worth a fresh one. */
@@ -111,11 +111,11 @@ export async function addSshHost(alias: string, label: string | undefined, deps:
     deps.registry.clearPending(id);
     // The host is added either way: a service that could not be installed is
     // reported next to it, never as a failed add.
-    const service = deps.startAfterReboot ? await setHostService(run, alias, true) : undefined;
-    if (service?.ok && service.on) deps.recordService?.(id);
+    const service = deps.startAfterReboot ? await setHostService(run, alias, true, deps.signal) : undefined;
+    const recorded = !!(service?.ok && service.on && deps.recordService?.(id));
     return {
       ok: true,
-      host: service?.ok && service.on ? { ...saved.host, startAfterReboot: true } : saved.host,
+      host: recorded ? { ...saved.host, startAfterReboot: true } : saved.host,
       upgradePending: boot.upgradePending,
       ...(service ? { service } : {}),
       // Web was started without input elsewhere and is never restarted here (E2).

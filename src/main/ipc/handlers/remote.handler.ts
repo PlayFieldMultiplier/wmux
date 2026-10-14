@@ -1114,7 +1114,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
         signal: controller.signal,
         startAfterReboot: startAfterReboot === true,
         recordService: (id) => {
-          try { store.setStartAfterReboot(id, true); } catch { /* the service runs either way */ }
+          try { return store.setStartAfterReboot(id, true) !== null; } catch { return false; }
         },
       }).finally(() => { if (sshAdds.get(requestId) === controller) sshAdds.delete(requestId); });
       if (result.ok) statusProber.invalidate(result.host.id);
@@ -1126,13 +1126,16 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     async (_e: IpcMainInvokeEvent, rawHostId: unknown, on: unknown): Promise<SshServiceResult> => {
       const host = store.get(assertString(rawHostId, 'hostId'));
       if (!host?.ssh || !isValidSshAlias(host.ssh.alias)) return { ok: false, kind: 'failed', message: 'unknown host' };
+      // Only on the computer that was confirmed: a changed key or hostname goes through the check first (E7).
+      const seen = await observeSshHost(host.ssh, deps.sshRun);
+      if (!seen.ok) return seen;
+      if (seen.resolvedHost !== host.ssh.resolvedHost || seen.hostKeyFingerprint !== host.ssh.hostKeyFingerprint) {
+        return { ok: false, kind: 'needs-confirmation', message: 'this computer looks different from when it was added' };
+      }
       const result = await setHostService(deps.sshRun ?? runSsh, host.ssh.alias, on === true);
+      // What the host did stands even if the local flag cannot be written.
       if (result.ok) {
-        try {
-          store.setStartAfterReboot(host.id, result.on);
-        } catch {
-          return { ok: false, kind: 'failed', message: 'could not save host' };
-        }
+        try { store.setStartAfterReboot(host.id, result.on); } catch { /* the menu reads the stale flag */ }
       }
       return result;
     }));

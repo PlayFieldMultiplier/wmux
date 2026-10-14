@@ -48,7 +48,7 @@ describe('AddSshPcDialog', () => {
     await act(async () => options[1].click());
     expect(q<HTMLButtonElement>('remote-ssh-install')?.disabled).toBe(false);
     await act(async () => q<HTMLButtonElement>('remote-ssh-install')?.click());
-    expect(remote.sshAdd).toHaveBeenCalledWith('vps', expect.any(String));
+    expect(remote.sshAdd).toHaveBeenCalledWith('vps', expect.any(String), undefined, false); // Start after reboot is off by default
     const requestId = remote.sshAdd.mock.calls[0][1] as string;
     await act(async () => progress?.({ requestId: 'someone-else', phase: 'pair' }));
     expect(document.querySelector('[data-state="active"]')?.getAttribute('data-phase')).toBe('connect');
@@ -74,7 +74,7 @@ describe('AddSshPcDialog', () => {
     expect(q<HTMLButtonElement>('remote-ssh-install')?.disabled).toBe(true);
     await act(async () => setValue('me@box.lan'));
     await act(async () => q<HTMLButtonElement>('remote-ssh-install')?.click());
-    expect(remote.sshAdd).toHaveBeenCalledWith('me@box.lan', expect.any(String));
+    expect(remote.sshAdd).toHaveBeenCalledWith('me@box.lan', expect.any(String), undefined, false);
   });
 
   it('an auth failure shows the ssh command to run once, and retry runs the same target', async () => {

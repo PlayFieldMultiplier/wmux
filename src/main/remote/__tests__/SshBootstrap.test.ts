@@ -261,7 +261,7 @@ describe('addSshHost', () => {
   it('Start after reboot: installs the service after the host is saved, never touching web', async () => {
     const host = fakeHost({ service: { ok: true, manager: 'systemd', enabled: true, active: false, linger: false, hint: 'Linger is off. Run once: sudo loginctl enable-linger me' } });
     const { d, persist } = deps(host, async () => ({ ok: true, token: 'tok' }));
-    const recordService = vi.fn();
+    const recordService = vi.fn(() => true);
     const r = await addSshHost('office', undefined, { ...d, startAfterReboot: true, recordService });
     expect(r).toMatchObject({ ok: true, host: { startAfterReboot: true }, service: { ok: true, on: true, lingerCommand: 'sudo loginctl enable-linger me' } });
     expect(persist).toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe('addSshHost', () => {
   it('Start after reboot: a host that cannot run the service is still added', async () => {
     const host = fakeHost({});
     const { d, persist } = deps(host, async () => ({ ok: true, token: 'tok' }));
-    const recordService = vi.fn();
+    const recordService = vi.fn(() => true);
     const r = await addSshHost('office', undefined, { ...d, startAfterReboot: true, recordService });
     expect(r).toMatchObject({ ok: true, service: { ok: false, kind: 'failed' } });
     expect(persist).toHaveBeenCalled();
@@ -299,8 +299,10 @@ describe('parseServiceResult', () => {
       .toEqual({ ok: false, kind: 'service-unsupported', message: 'A login service is not supported on macOS yet.' });
     expect(parseServiceResult(json({ ok: true, manager: 'launchd', hint: 'No service is installed on macOS.' }), false)).toEqual({ ok: true, on: false });
     expect(parseServiceResult(json({ ok: false, manager: 'systemd', error: 'enable failed' }), true)).toMatchObject({ ok: false, kind: 'failed', message: 'enable failed' });
-    // A CLI from before install-service prints its usage, not JSON.
+    // A CLI from before install-service: usage text, or `unknown subcommand` with no manager.
     expect(parseServiceResult('Usage: wmux daemon start | stop | status', true)).toMatchObject({ ok: false, kind: 'failed' });
+    expect(parseServiceResult(json({ ok: false, error: 'unknown subcommand: install-service' }), true))
+      .toMatchObject({ ok: false, kind: 'failed', message: expect.stringContaining('no install-service') });
   });
 });
 
