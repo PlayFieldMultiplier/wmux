@@ -167,6 +167,15 @@ export function canTransition(from: string, to: string): boolean {
   return LEDGER_TRANSITIONS[from].includes(to);
 }
 
+/** May `actor` see `entry` at all? The daemon (`system`) sees every task; a
+ *  brain or a worker sees the tasks its workspace owns or runs — the same set
+ *  `ledger.list` answers with. A refusal carries the entry only to an actor
+ *  that may see it. */
+export function canActorSee(actor: LedgerActor, entry: LedgerEntry): boolean {
+  if (actor.kind === 'system') return true;
+  return entry.ownerWorkspaceId === actor.workspaceId || entry.taskWorkspaceId === actor.workspaceId;
+}
+
 /** The single authorization predicate every writer calls. A worker may only
  *  move ITS OWN task (the entry's task workspace is the caller's verified
  *  workspace) to a worker-settable status; a brain may move tasks its

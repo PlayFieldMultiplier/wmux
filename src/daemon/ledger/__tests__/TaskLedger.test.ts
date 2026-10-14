@@ -380,6 +380,36 @@ describe('TaskLedger — authz matrix', () => {
   }
 });
 
+describe('TaskLedger — a refusal reveals only a task the caller may see', () => {
+  const STRANGER_WORKER: LedgerActor = { kind: 'worker', workspaceId: 'ws-other' };
+  const STRANGER_BRAIN: LedgerActor = { kind: 'brain', workspaceId: 'ws-stranger' };
+
+  it('refuses a caller unrelated to the task before the rev, and returns no entry, whatever the rev or status', async () => {
+    const a = open();
+    await seed(a);
+    for (const actor of [STRANGER_WORKER, STRANGER_BRAIN]) {
+      for (const expectedRev of [1, 99]) {
+        for (const status of ['review_requested', 'bogus'] as LedgerStatus[]) {
+          const res = await a.update({ id: 'wtask-1', status, actor, expectedRev });
+          expect(res).toMatchObject({ ok: false, error: 'not_authorized' });
+          expect(res).not.toHaveProperty('entry');
+          expect(JSON.stringify(res)).not.toContain('lane');
+        }
+      }
+      expect(await a.recordGate('wtask-1', PASS, actor)).not.toHaveProperty('entry');
+      expect(await a.rebindTaskWorkspace({ id: 'wtask-1', taskWorkspaceId: 'ws-new', actor, expectedRev: 1 })).not.toHaveProperty('entry');
+    }
+  });
+
+  it('still hands its own task back to a caller that may see it', async () => {
+    const a = open();
+    await seed(a);
+    expect(await a.update({ id: 'wtask-1', status: 'review_requested', actor: WORKER, expectedRev: 99 })).toMatchObject({ ok: false, error: 'stale_rev', entry: { id: 'wtask-1' } });
+    expect(await a.update({ id: 'wtask-1', status: 'cancelled', actor: WORKER, expectedRev: 1 })).toMatchObject({ ok: false, error: 'not_authorized', entry: { id: 'wtask-1' } });
+    expect(await a.update({ id: 'wtask-1', status: 'failed', actor: BRAIN, expectedRev: 99 })).toMatchObject({ ok: false, error: 'stale_rev', entry: { id: 'wtask-1' } });
+  });
+});
+
 describe('TaskLedger — close, orphans, listeners', () => {
   it('closeTask forces cancelled unless already completed', async () => {
     const a = open();
