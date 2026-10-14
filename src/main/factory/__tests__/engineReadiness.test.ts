@@ -32,24 +32,22 @@ describe('engineReadiness', () => {
 describe('startEngineLogin', () => {
   const deps = (over: Partial<EngineLoginDeps> = {}): EngineLoginDeps => ({
     openTab: vi.fn(async () => ({ ptyId: 'pty-1' })),
-    typeLine: vi.fn(),
     windowsShell: () => 'pwsh.exe',
     platform: 'darwin',
     ...over,
   });
 
-  it('opens a tab with the default shell and types the sign-in line into it', async () => {
+  it('opens a tab with the default shell running the sign-in line as its startup command', async () => {
     const d = deps();
-    await startEngineLogin(d);
-    expect(d.openTab).toHaveBeenCalledWith(undefined);
-    expect(d.typeLine).toHaveBeenCalledWith('pty-1', 'env -u CLAUDE_CONFIG_DIR claude auth login');
+    await expect(startEngineLogin(d)).resolves.toBeUndefined();
+    expect(d.openTab).toHaveBeenCalledTimes(1);
+    expect(d.openTab).toHaveBeenCalledWith(undefined, 'env -u CLAUDE_CONFIG_DIR claude auth login');
   });
 
   it('on Windows the tab runs the native shell (a WSL default would sign in a Linux claude)', async () => {
     const d = deps({ platform: 'win32' });
     await startEngineLogin(d);
-    expect(d.openTab).toHaveBeenCalledWith('pwsh.exe');
-    expect(d.typeLine).toHaveBeenCalledWith('pty-1', '$env:CLAUDE_CONFIG_DIR=$null; claude auth login');
+    expect(d.openTab).toHaveBeenCalledWith('pwsh.exe', '$env:CLAUDE_CONFIG_DIR=$null; claude auth login');
   });
 
   it('the line clears CLAUDE_CONFIG_DIR in the syntax of the tab\'s shell', () => {
@@ -60,10 +58,10 @@ describe('startEngineLogin', () => {
     expect(claudeLoginLine('win32', 'C:\\Program Files\\Git\\bin\\bash.exe')).toBe('env -u CLAUDE_CONFIG_DIR claude auth login');
   });
 
-  it('no tab: rejects with the command to run by hand, types nothing', async () => {
+  it('no tab: rejects with the command to run by hand', async () => {
     const d = deps({ openTab: vi.fn(async () => ({ error: 'surface.new: no active workspace' })) });
     await expect(startEngineLogin(d)).rejects.toThrow('claude auth login');
-    expect(d.typeLine).not.toHaveBeenCalled();
+    await expect(startEngineLogin(deps({ openTab: vi.fn(async () => { throw new Error('RPC timeout'); }) }))).rejects.toThrow('claude auth login');
   });
 
   it('a second call while one is opening shares it (one tab)', async () => {
@@ -74,6 +72,5 @@ describe('startEngineLogin', () => {
     release({ ptyId: 'pty-2' });
     await Promise.all([a, b]);
     expect(d.openTab).toHaveBeenCalledTimes(1);
-    expect(d.typeLine).toHaveBeenCalledTimes(1);
   });
 });
