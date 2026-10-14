@@ -1,26 +1,20 @@
 // @vitest-environment jsdom
 //
-// The room dock's pieces, rendered: the thread list's order and unread
-// rule, the composer's addressing, answering a question card, the HQ's
-// pinned plan, the bot chips' presence, the Factory tab without a runtime,
-// and the dock gate that keeps Moa's panel while the factory is off.
+// Room pieces the Bots page shares, rendered: the composer's addressing,
+// answering a question card, a plan naming its workspaces, the bot chips'
+// presence, and the Factory tab without a runtime.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../../stores';
-import type { RoomCard as RoomCardData, ThreadSummary } from '../../../../shared/room';
+import type { RoomCard as RoomCardData } from '../../../../shared/room';
 import type { BotProfile } from '../../../../shared/bot';
 import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
-import { ALL_THREADS, timelineKey } from '../../../stores/slices/roomSlice';
 import { setRoomsApiForTests, type RoomsApi } from '../../../hooks/useRoomSync';
-import { ThreadList } from '../ThreadList';
 import { RoomComposer, roomPostParams, typedMentions } from '../RoomComposer';
 import { RoomCard } from '../RoomCard';
-import { HqRoom, PLAN_RESOLUTION } from '../HqRoom';
 import { BotChips, CHIP_MENU_SIZE, chipMenuPlace } from '../BotChips';
-import { selectRoomDockOn } from '../roomDockGate';
 import { FactoryTab } from '../../Settings/FactoryTab';
-import { RoomTimeline, questionScrollTop } from '../RoomTimeline';
 import { actorLabel, planTextWithNames } from '../roomFormat';
 import type { FactoryBotPort, FactoryBotRow } from '../factoryPorts';
 
@@ -49,10 +43,6 @@ async function render(el: React.ReactElement) {
   await act(async () => root.render(el));
 }
 
-function summary(threadId: ThreadSummary['threadId'], over: Partial<ThreadSummary> = {}): ThreadSummary {
-  return { threadId, title: `T ${threadId}`, lastAt: 0, lastSeq: 0, cardCount: 1, openQuestions: 0, lastKind: 'status', status: 'open', unread: null, ...over };
-}
-
 function card(seq: number, over: Partial<RoomCardData> = {}): RoomCardData {
   return { version: 1, id: `c${seq}`, seq, workspaceId: WS, threadId: 'general', kind: 'status', at: 1, actor: { kind: 'system' }, title: `card ${seq}`, ...over };
 }
@@ -76,31 +66,6 @@ function fakeApi(over: Record<string, unknown> = {}) {
   };
   return Object.assign(api, over) as typeof api;
 }
-
-describe('ThreadList', () => {
-  it('orders open questions first and shows unread only when known and above zero', async () => {
-    await render(createElement(ThreadList, {
-      threads: [
-        summary('general', { lastSeq: 9, unread: null }),
-        summary('task:a', { lastSeq: 8, unread: 0 }),
-        summary('task:b', { lastSeq: 7, unread: 3 }),
-        summary('pr:github.com/o/r#4', { lastSeq: 1, openQuestions: 1 }),
-      ],
-      selected: ALL_THREADS,
-      onSelect: () => undefined,
-      t,
-    }));
-    const rows = [...container.querySelectorAll('[data-testid="room-thread-row"]')];
-    expect(rows.map((r) => r.getAttribute('data-thread-id'))).toEqual(['pr:github.com/o/r#4', 'general', 'task:a', 'task:b']);
-    const unread = (id: string) => container.querySelector(`[data-thread-id="${id}"] [data-thread-unread]`)?.textContent ?? null;
-    expect(unread('general')).toBeNull();
-    expect(unread('task:a')).toBeNull();
-    expect(unread('task:b')).toBe('3');
-    expect(container.textContent).not.toMatch(/\b0\b/);
-    expect(container.querySelector('[data-thread-id="pr:github.com/o/r#4"] [data-thread-attention]')).not.toBeNull();
-    expect(container.querySelector('[data-thread-id="pr:github.com/o/r#4"]')?.textContent).toContain('o/r#4');
-  });
-});
 
 describe('RoomComposer', () => {
   it('no chip: the whole room; a picked chip or a typed @name becomes the post\'s mentions; deleting the name unpicks it', async () => {
@@ -287,81 +252,12 @@ describe('RoomCard evidence', () => {
   });
 });
 
-describe('timeline layout', () => {
-  it('a question card is placed whole: bottom on the view when it fits, top on the view when it does not', () => {
-    // Fits: its bottom (400 + 120) sits on the view's bottom (300 high), 8px in.
-    expect(questionScrollTop({ top: 400, height: 120 }, 300)).toBe(228);
-    // Taller than the view: its top shows.
-    expect(questionScrollTop({ top: 400, height: 500 }, 300)).toBe(392);
-    // Near the start: never negative.
-    expect(questionScrollTop({ top: 4, height: 50 }, 300)).toBe(0);
-  });
-
-  it('the cards sit under one boundary and a header naming the shown thread', async () => {
-    setRoomsApiForTests(fakeApi() as unknown as RoomsApi);
-    useStore.getState().setRoomPage(WS, 'pr:github.com/o/r#4', { cards: [card(1, { threadId: 'pr:github.com/o/r#4' })], nextSinceSeq: 1, hasMore: false }, 'replace');
-    await render(createElement(RoomTimeline, { workspaceId: WS, thread: 'pr:github.com/o/r#4', title: 'PR #4 opened', threadRef: 'o/r#4', t, bots: [] }));
-    const region = container.querySelector('[data-testid="room-timeline-region"]')!;
-    expect(region.className).toContain('border-t');
-    expect(region.querySelector('[data-testid="room-timeline-header"]')?.textContent).toBe('PR #4 openedo/r#4');
-    // The scroll is the cards' own, inside the region, under the header.
-    expect(region.querySelector('[data-testid="room-timeline"]')?.className).toContain('overflow-y-auto');
-  });
-
+describe('card authors', () => {
   it('a card names its bot author by role until the bot runtime lists names', () => {
     const actor = { kind: 'bot' as const, workspaceId: WS, botId: 'bot-00000009' };
     expect(actorLabel(actor, t, [])).toBe('room.actor.bot');
     expect(actorLabel(actor, t, [], { 'bot-00000009': { role: 'verifier' } })).toBe('room.role.verifier');
     expect(actorLabel(actor, t, [{ bot: bot('bot-00000009', { name: 'Vera' }), status: null }], { 'bot-00000009': { role: 'verifier' } })).toBe('Vera');
-  });
-});
-
-describe('HqRoom', () => {
-  it('pins the latest plan with its answers, and the latest report', async () => {
-    const api = fakeApi();
-    setRoomsApiForTests(api as unknown as RoomsApi);
-    useStore.getState().setRoomPage('ws-hq', ALL_THREADS, {
-      cards: [
-        card(1, { workspaceId: 'ws-hq', kind: 'plan', title: 'Old plan', state: 'resolved' }),
-        card(2, { workspaceId: 'ws-hq', kind: 'report', title: 'Morning report' }),
-        card(3, { workspaceId: 'ws-hq', kind: 'plan', title: 'New plan', state: 'open', body: '1. do it' }),
-      ],
-      nextSinceSeq: 3,
-      hasMore: false,
-    }, 'replace');
-    await render(createElement(HqRoom, { workspaceId: 'ws-hq', allBots: [], t, workspaceName: (id: string) => id, api: api as unknown as RoomsApi }));
-    const plan = container.querySelector('[data-testid="hq-plan"]')!;
-    expect(plan.textContent).toContain('New plan');
-    expect(container.querySelector('[data-testid="hq-report"]')?.textContent).toContain('Morning report');
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-approve"]')!.click());
-    expect(api.resolve).toHaveBeenCalledWith({ workspaceId: 'ws-hq', cardId: 'c3', resolution: PLAN_RESOLUTION.approve });
-    expect(useStore.getState().roomTimelines[timelineKey('ws-hq', ALL_THREADS)]).toBeDefined();
-  });
-
-  it('the plan\'s answers are the shared CardAnswers, and its items name workspaces, never their ids', async () => {
-    const api = fakeApi();
-    setRoomsApiForTests(api as unknown as RoomsApi);
-    useStore.setState({ workspaces: [{ id: 'ws-api-1234', name: 'api' }] } as never);
-    useStore.getState().setRoomPage('ws-hq', ALL_THREADS, {
-      cards: [card(1, {
-        workspaceId: 'ws-hq', kind: 'plan', title: 'Today', state: 'open',
-        body: '1. **Fix login** — workspace `ws-api-1234`, size S. why\n2. **Docs** — workspace `ws-gone-9999`, size M. why',
-      })],
-      nextSinceSeq: 1,
-      hasMore: false,
-    }, 'replace');
-    await render(createElement(HqRoom, { workspaceId: 'ws-hq', allBots: [], t, workspaceName: (id: string) => id, api: api as unknown as RoomsApi }));
-    const plan = container.querySelector('[data-testid="hq-plan"]')!;
-    expect(plan.querySelector('[data-card-answers="plan"]')).not.toBeNull();
-    const body = plan.querySelector('[data-plan-body]')!.textContent ?? '';
-    expect(body).toContain('Fix login — api, size S');
-    expect(body).toContain('Docs — room.plan.someWorkspace, size M');
-    expect(body).not.toMatch(/ws-/);
-    // Edit opens the owner's revised plan in place and sends it as an edit.
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-edit"]')!.click());
-    expect(plan.querySelector('[data-plan-body]')).toBeNull();
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="hq-plan-send-edit"]')!.click());
-    expect(api.resolve).toHaveBeenCalledWith(expect.objectContaining({ cardId: 'c1', resolution: expect.stringMatching(/^edit:\n1\. \*\*Fix login/) }));
   });
 });
 
@@ -513,15 +409,5 @@ describe('FactoryTab engine', () => {
     expect(row?.querySelector('select')).toBeNull();
     expect(row?.querySelector('input')).toBeNull();
     expect(row?.querySelector('[data-testid="factory-engine"]')?.textContent).toBe('Claude (SDK)');
-  });
-});
-
-describe('dock gate', () => {
-  it('follows main\'s answer once it is known', () => {
-    expect(selectRoomDockOn({ roomStatus: { running: true, enabled: true, hqWorkspaceId: null } })).toBe(true);
-    expect(selectRoomDockOn({ roomStatus: { running: true, enabled: false, hqWorkspaceId: null } })).toBe(false);
-  });
-  it('reads off before main answers when no earlier answer was seen', () => {
-    expect(selectRoomDockOn({ roomStatus: null })).toBe(false);
   });
 });

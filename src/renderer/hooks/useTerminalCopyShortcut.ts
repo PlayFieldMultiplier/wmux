@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useStore } from '../stores';
 import { terminalRegistry, copySelectionWithFeedback } from './useTerminal';
 import { resolveActivePanePtyId } from './useActivePaneFocus';
-import { PAGES_BESIDE_DOCK } from '../components/Layout/pagesBesideDock';
 import {
   resolveCopyTarget,
   type ActiveElementInfo,
@@ -90,15 +89,11 @@ export function useTerminalCopyShortcut(): void {
       // Ignore OS key auto-repeat: a held Ctrl+C must copy / toast / consume the
       // event at most once, not fire on every repeat tick.
       if (e.repeat) return;
-      // Terminals live on the Workspaces page. Behind Fleet, Schedules,
-      // Remote or Settings they stay mounted under an inert page, and
-      // checkVisibility() still calls them visible — so a stale selection
-      // there would be copied while the user copies a field on the page.
-      // Beside a page that leaves the dock in view (Git), the dock's own
-      // terminals (Moa's) are live: with focus in the dock, only they count.
-      const route = useStore.getState().appRoute;
-      const dockOnly = route !== 'workspaces';
-      if (dockOnly && !(PAGES_BESIDE_DOCK.has(route) && document.activeElement?.closest('[data-dock-region]'))) return;
+      // Terminals live on the Workspaces page. Behind any other page they
+      // stay mounted under an inert page, and checkVisibility() still calls
+      // them visible — so a stale selection there would be copied while the
+      // user copies a field on the page.
+      if (useStore.getState().appRoute !== 'workspaces') return;
 
       // Yield to a genuine NATIVE selection of non-terminal DOM text (a channel
       // message body, the read-only editor <pre>, the roster, markdown). xterm
@@ -133,7 +128,6 @@ export function useTerminalCopyShortcut(): void {
               ? el.checkVisibility()
               : el.offsetParent !== null);
           if (!visible) continue;
-          if (dockOnly && !el.closest('[data-dock-region]')) continue;
           selections.push({ ptyId, selection: terminal.getSelection() });
         } catch {
           // disposed / not-yet-ready terminal — skip it
@@ -142,8 +136,7 @@ export function useTerminalCopyShortcut(): void {
 
       const target = resolveCopyTarget({
         selections,
-        // The active pane is on the (hidden) Workspaces page when dockOnly.
-        activePtyId: dockOnly ? null : resolveActivePanePtyId(useStore.getState()),
+        activePtyId: resolveActivePanePtyId(useStore.getState()),
         activeElement: readActiveElementInfo(document.activeElement),
       });
       if (!target) return; // yield — preserve copy / SIGINT / composer behavior

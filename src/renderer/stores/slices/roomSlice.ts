@@ -44,8 +44,6 @@ export interface RoomSlice {
   roomTimelines: Record<string, RoomTimeline>;
   /** The thread shown per workspace; absent = the whole room. */
   roomSelectedThread: Record<string, TimelineThread>;
-  /** Which room the dock shows while an HQ exists: the active workspace's or the HQ's. */
-  roomScope: 'workspace' | 'hq';
   /** The owner's read position per thread as main accepted it (key: timelineKey). */
   roomReadThrough: Record<string, number>;
   /** Pushes applied so far (a counter), and the count at which each card
@@ -64,7 +62,6 @@ export interface RoomSlice {
   /** A card main wrote or changed, with its thread's new summary. */
   applyRoomEvent: (payload: { workspaceId: string; card: RoomCard; threadSummary: ThreadSummary }) => void;
   selectRoomThread: (workspaceId: string, thread: TimelineThread) => void;
-  setRoomScope: (scope: 'workspace' | 'hq') => void;
   /** Record a read position; false when it would not move forward. */
   noteRoomRead: (workspaceId: string, threadId: ThreadId, seq: number) => boolean;
 }
@@ -107,7 +104,6 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
   roomThreads: {},
   roomTimelines: {},
   roomSelectedThread: {},
-  roomScope: 'workspace',
   roomReadThrough: {},
   roomPushCount: 0,
   roomPushedAt: {},
@@ -144,7 +140,6 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
     }
   }),
   selectRoomThread: (workspaceId, thread) => set((s) => { s.roomSelectedThread[workspaceId] = thread; }),
-  setRoomScope: (scope) => set((s) => { s.roomScope = scope; }),
   noteRoomRead: (workspaceId, threadId, seq) => {
     const key = timelineKey(workspaceId, threadId);
     if ((get().roomReadThrough[key] ?? -1) >= seq) return false;

@@ -14,7 +14,7 @@ function summary(threadId: ThreadSummary['threadId'], over: Partial<ThreadSummar
 }
 
 beforeEach(() => {
-  useStore.setState({ roomStatus: null, roomThreads: {}, roomTimelines: {}, roomSelectedThread: {}, roomReadThrough: {}, roomScope: 'workspace' });
+  useStore.setState({ roomStatus: null, roomThreads: {}, roomTimelines: {}, roomSelectedThread: {}, roomReadThrough: {} });
 });
 
 describe('orderThreads', () => {
