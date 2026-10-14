@@ -221,8 +221,12 @@ async function build(opts) {
     }
     stageNodePty(path.join(resources, 'daemon-bundle', 'node_modules', 'node-pty'));
 
+    // Every native file in the artifact, so a future addon cannot slip past.
     let glibcMin = NODE_GLIBC_FLOOR;
-    const elves = [path.join(nodeDir, 'bin', 'node'), path.join(resources, 'daemon-bundle', 'node_modules', 'node-pty', 'build', 'Release', 'pty.node')];
+    const elves = [
+      path.join(nodeDir, 'bin', 'node'),
+      ...fs.readdirSync(resources, { recursive: true }).filter((f) => f.endsWith('.node')).map((f) => path.join(resources, f)),
+    ];
     for (const file of elves) {
       const buf = fs.readFileSync(file);
       if (buf.includes('ld-musl')) throw new Error(`${path.basename(file)} links against musl; the artifact is glibc-only`);

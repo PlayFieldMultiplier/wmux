@@ -46,10 +46,13 @@ install produces the same layout, so the app picks it up afterwards.
 
 3. **Install under `~/.wmux/runtime`.** The tarball holds one directory named
    after the version. Extract it next to its final place, then rename it in
-   one step so a half-written install is never mistaken for a good one.
+   one step so a half-written install is never mistaken for a good one. If
+   `~/.wmux/runtime/$VER` already exists, that version is installed: skip to
+   step 4.
 
    ```bash
    RT=~/.wmux/runtime
+   rm -rf "$RT/$VER.partial"
    mkdir -p "$RT/$VER.partial"
    tar -xzf "$NAME" -C "$RT/$VER.partial" --strip-components=1
    mv "$RT/$VER.partial" "$RT/$VER"
@@ -87,8 +90,18 @@ its port and flags.
 - **Do not restart `wmux web` with different flags** once devices are paired:
   changing how it is served revokes every paired device on the host.
 - **Upgrading.** Install the new version the same way and repoint `current`.
-  Restarting the daemon ends every process running in its terminals, so do it
-  only when nothing you need is still running there.
+  The running daemon keeps the old version until it restarts, and `daemon
+  start` reuses a daemon that is already running. Restarting ends every
+  process running in its terminals, so do it only when nothing you need is
+  still running there:
+
+  ```bash
+  "$W/node/bin/node" "$W/resources/cli-bundle/index.js" daemon stop
+  "$W/node/bin/node" "$W/resources/cli-bundle/index.js" daemon start
+  "$W/node/bin/node" "$W/resources/cli-bundle/index.js" web --allow-input
+  ```
+
+  Start `wmux web` with the same flags it had before.
 - **Logging out may stop the daemon.** On systemd hosts with
   `KillUserProcesses=yes` in `logind.conf`, the daemon dies when your last SSH
   session ends, taking its terminals with it. Check with
@@ -98,4 +111,4 @@ its port and flags.
   administrator to exempt your user (`KillExcludeUsers=`).
 - **Multi-user hosts.** The server assumes no untrusted users share the host.
 - A leftover `<version>.partial` directory is from an interrupted install;
-  delete it and install again.
+  step 3 deletes it before installing again.

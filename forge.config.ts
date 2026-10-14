@@ -32,6 +32,12 @@ if (shipsTerminalCore && !fs.existsSync(path.join(__dirname, TERMINAL_CORE_STAGE
 // Local and dev builds have none and ship without it.
 const SERVER_MANIFEST_STAGE = './dist/server-manifest.json';
 const shipsServerManifest = fs.existsSync(path.join(__dirname, SERVER_MANIFEST_STAGE));
+if (shipsServerManifest) {
+  const serverVersion = JSON.parse(fs.readFileSync(path.join(__dirname, SERVER_MANIFEST_STAGE), 'utf-8')).version;
+  if (serverVersion !== pkg.version) {
+    throw new Error(`${SERVER_MANIFEST_STAGE} is for ${serverVersion}, not ${pkg.version}; delete it or rewrite it with scripts/build-server-artifact.mjs manifest`);
+  }
+}
 
 function copyDirSync(src: string, dest: string, skipFile?: (name: string) => boolean): void {
   fs.mkdirSync(dest, { recursive: true });

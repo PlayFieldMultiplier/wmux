@@ -96,5 +96,6 @@ describe('release.yml server artifacts', () => {
     const files = RELEASE.slice(RELEASE.indexOf('- name: Create GitHub Release'));
     expect(files).toContain('out/server/wmux-server-*.tar.gz\n');
     expect(files).toContain('out/server/wmux-server-*.tar.gz.sha256\n');
+    expect(files).toContain('dist/server-manifest.json\n');
   });
 });
