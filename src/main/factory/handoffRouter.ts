@@ -405,10 +405,14 @@ export class HandoffRouter {
 
   private prune(): void {
     const cutoff = this.now() - HANDOFF_STORE_LIMITS.RETAIN_MS;
-    for (const [id, h] of this.records) if (!isOpenAsk(h) && h.updatedAt < cutoff) this.records.delete(id);
+    // An open question keeps the hop it was asked on: its answer resumes it.
+    const held = new Set<string>();
+    for (const h of this.records.values()) if (isOpenAsk(h) && h.forHop) held.add(h.forHop);
+    const kept = (h: Handoff): boolean => isOpenAsk(h) || held.has(h.id);
+    for (const [id, h] of this.records) if (!kept(h) && h.updatedAt < cutoff) this.records.delete(id);
     const over = this.records.size - HANDOFF_STORE_LIMITS.MAX_RECORDS;
     if (over > 0) {
-      const closed = [...this.records.values()].filter((h) => !isOpenAsk(h)).sort((a, b) => a.updatedAt - b.updatedAt);
+      const closed = [...this.records.values()].filter((h) => !kept(h)).sort((a, b) => a.updatedAt - b.updatedAt);
       for (const h of closed.slice(0, over)) this.records.delete(h.id);
     }
   }

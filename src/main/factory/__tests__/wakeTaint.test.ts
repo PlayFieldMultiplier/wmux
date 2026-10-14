@@ -148,6 +148,20 @@ describe('WakeTaint', () => {
     expect(t.handoffTainted('h-dev')).toBe(false);
   });
 
+  it('the owner\'s answer to a question asked mid-hop is as tainted as that hop', () => {
+    const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    const human = { kind: 'human' as const };
+    const ask = (id: string, forHop?: string): Handoff => ({ ...handoff(id, fromBot), kind: 'ask_person', to: human, ...(forHop ? { forHop } : {}) });
+    const answer = (id: string, askId: string): Handoff => ({ ...handoff(id, human), kind: 'answer', replyTo: askId });
+    const hs = [handoff('h-dirty', fromBot), handoff('h-clean', fromBot), ask('a-dirty', 'h-dirty'), ask('a-clean', 'h-clean'), ask('a-none'),
+      answer('ans-dirty', 'a-dirty'), answer('ans-clean', 'a-clean'), answer('ans-none', 'a-none')];
+    const t = make({ file: undefined, runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }) }, [], hs);
+    t.onFact(fact('x1', 'handoff.received', { handoffId: 'h-clean' }));
+    expect(t.handoffTainted('ans-dirty')).toBe(true);
+    expect(t.handoffTainted('ans-clean')).toBe(false);
+    expect(t.handoffTainted('ans-none')).toBe(false);
+  });
+
   it('an unreadable marks file starts empty', () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');

@@ -19,7 +19,8 @@
 //             clean; one from a bot with no mark (delivered again after a
 //             restart, or its sender's turn already over) is tainted. A
 //             handoff a researcher-template bot sends is always tainted:
-//             research reads outside text whatever woke it.
+//             research reads outside text whatever woke it. The owner's
+//             answer to a question asked mid-hop is as tainted as that hop.
 //   human, manual, schedule, routine, intro: clean (the owner's words, the
 //             owner's buttons, timers). Any other reason is tainted.
 //
@@ -179,7 +180,20 @@ export class WakeTaint {
     if (!h) return mark ?? true;
     // A researcher's handoff is tainted whatever mark it was given.
     if (h.from.kind === 'bot' && this.alwaysTainted(h.from.botId)) return true;
+    // The owner's answer to a question asked mid-hop resumes that hop: it
+    // is as tainted as the hop.
+    if (h.kind === 'answer' && h.replyTo && this.answerResumesTaintedHop(h.replyTo)) return true;
     return mark ?? h.from.kind === 'bot';
+  }
+
+  private answerResumesTaintedHop(askId: string): boolean {
+    let ask: Handoff | null;
+    try {
+      ask = this.ports.handoff(askId);
+    } catch {
+      return true;
+    }
+    return !!ask?.forHop && this.handoffTainted(ask.forHop);
   }
 
   /** A handoff was delivered: mark it from its sender's running wake. Called

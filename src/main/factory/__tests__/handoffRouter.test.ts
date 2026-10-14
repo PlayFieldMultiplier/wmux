@@ -1135,3 +1135,22 @@ describe('the team lead and a chain that outlives a worker', () => {
     expect(h.router.get(late.handoffId)?.forHop).toBeUndefined();
   });
 });
+
+describe('retention of a hop held by an open question', () => {
+  it('an old dispatch stays while a question asked on it is open', async () => {
+    const lead = bot('ws1', 'moa');
+    const dev = bot('ws1', 'lead');
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const old = now - HANDOFF_STORE_LIMITS.RETAIN_MS - 1000;
+    const base = { version: 1, runId: 'run-old', depth: 0, hopsInRun: 1, landing: 'wake', status: 'delivered', createdAt: old, updatedAt: old };
+    const dispatch = { ...base, id: 'h-held', threadId: 'handoff:h-held', from: { kind: 'bot', workspaceId: 'ws1', botId: lead.id }, to: { kind: 'bot', workspaceId: 'ws1', botId: dev.id }, kind: 'dispatch', attribution: { originator: { kind: 'human' }, chain: [] }, payload: { title: 'Build it', body: '' } };
+    const loose = { ...dispatch, id: 'h-loose', threadId: 'handoff:h-loose' };
+    const ask = { ...base, id: 'h-ask', runId: 'run-ask', threadId: 'handoff:h-held', from: { kind: 'bot', workspaceId: 'ws1', botId: dev.id }, to: { kind: 'human' }, kind: 'ask_person', attribution: { originator: { kind: 'bot', workspaceId: 'ws1', botId: dev.id }, chain: [] }, payload: { title: 'Which DB?', body: '' }, status: 'queued', forHop: 'h-held', createdAt: now, updatedAt: now };
+    fs.writeFileSync(file, [dispatch, loose, ask].map((x) => JSON.stringify(x)).join('\n') + '\n');
+    const h = await harness([lead, dev]);
+    expect(h.router.get('h-held')).not.toBeNull();
+    expect(h.router.get('h-loose')).toBeNull();
+    expect(h.router.get('h-ask')?.forHop).toBe('h-held');
+  });
+});
