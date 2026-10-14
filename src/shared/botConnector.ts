@@ -231,6 +231,7 @@ function secretsOf(raw: unknown, transport: ConnectorTransport): ConnectorSecret
     names.add(s.secret);
     if (s.as === 'env') {
       if (transport !== 'stdio') return 'A remote connection sends its keys in headers.';
+      if (isRefusedConnectorEnvKey(s.secret)) return `${s.secret} may not be set by a connection.`;
       out.push({ secret: s.secret, as: 'env' });
     } else if (s.as === 'header') {
       if (transport === 'stdio') return 'A local command gets its keys as variables.';
@@ -338,6 +339,19 @@ export function parseConnectorShape(
       enabled: raw.enabled,
     },
   };
+}
+
+/** Every string the owner wrote into a connection (field names included):
+ *  what is checked for a stored key value on save and on read. Pure. */
+export function connectorTexts(c: Pick<Connector, 'name' | 'purpose' | 'stdio' | 'remote' | 'secrets' | 'tools'>): string[] {
+  return [
+    c.name,
+    ...(c.purpose ? [c.purpose] : []),
+    ...(c.stdio ? [c.stdio.command, ...c.stdio.args, ...Object.entries(c.stdio.env).flat()] : []),
+    ...(c.remote ? [c.remote.url, ...Object.entries(c.remote.headers).flat()] : []),
+    ...c.secrets.flatMap((s) => (s.as === 'header' ? [s.secret, s.header] : [s.secret])),
+    ...(c.tools.mode === 'all' ? c.tools.blocked : c.tools.allowed),
+  ];
 }
 
 /** The library rules of a save: a unique name, bots that exist. Pure. */

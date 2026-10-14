@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import {
   CONNECTOR_ID_RE,
   connectorSecretNames,
+  connectorTexts,
   connectorsForBot,
   libraryRefusal,
   parseConnectorShape,
@@ -20,6 +21,7 @@ import {
   type ConnectorRefusal,
 } from '../../shared/botConnector';
 import { getSecretStore } from './secretStore';
+import { redactStoredSecrets } from './secretRedaction';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 
 export const CONNECTORS_FILE_VERSION = 1 as const;
@@ -40,8 +42,14 @@ export interface ConnectorStoreOptions {
 
 export type ConnectorStoreResult = { ok: true; connector: Connector } | ConnectorRefusal | { ok: false; field: 'store'; message: string };
 
-/** One record read from disk, or null when it is malformed. */
-export function parseStoredConnector(raw: unknown): Connector | null {
+/** Does `text` hold a stored key value (the redaction matcher)? */
+export function holdsStoredKeyValue(text: string): boolean {
+  return redactStoredSecrets(text) !== text;
+}
+
+/** One record read from disk, or null when it is malformed or a text in it
+ *  holds a stored key value. */
+export function parseStoredConnector(raw: unknown, holds: (text: string) => boolean = holdsStoredKeyValue): Connector | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== 'string' || !CONNECTOR_ID_RE.test(r.id)) return null;
@@ -52,6 +60,7 @@ export function parseStoredConnector(raw: unknown): Connector | null {
   if (!shape.ok) return null;
   const c = shape.connector;
   if (c.stdio && !path.isAbsolute(c.stdio.command)) return null;
+  if (connectorTexts(c).some(holds)) return null;
   return { ...c, id: r.id, createdAt: r.createdAt, updatedAt: r.updatedAt };
 }
 

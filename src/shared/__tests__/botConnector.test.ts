@@ -110,6 +110,9 @@ describe('parseConnectorShape', () => {
 
   it('keys: credential-shaped names, env for a command and headers for a URL only', () => {
     expect(refusedField(stdio({ secrets: [{ secret: 'LOG_LEVEL', as: 'env' }] }))).toBe('secrets');
+    for (const secret of ['ANTHROPIC_API_KEY', 'CLAUDE_TOKEN', 'NPM_CONFIG__AUTH_TOKEN', 'ELECTRON_SECRET', 'LD_SECRET_KEY']) {
+      expect(refusedField(stdio({ secrets: [{ secret, as: 'env' }] })), secret).toBe('secrets');
+    }
     expect(refusedField(stdio({ secrets: [{ secret: 'GH_MCP_TOKEN', as: 'header', header: 'Authorization', scheme: 'bearer' }] }))).toBe('secrets');
     expect(refusedField(remote({ secrets: [{ secret: 'GH_MCP_TOKEN', as: 'env' }] }))).toBe('secrets');
     expect(refusedField(stdio({ secrets: [{ secret: 'GH_MCP_TOKEN', as: 'env' }, { secret: 'GH_MCP_TOKEN', as: 'env' }] }))).toBe('secrets');

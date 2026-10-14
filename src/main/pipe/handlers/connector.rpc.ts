@@ -19,6 +19,8 @@ import { BOT_EVENT } from '../../../shared/bot';
 import {
   CONNECTOR_ID_RE,
   CONNECTOR_IPC,
+  commandRefusal,
+  connectorTexts,
   otherConnectorsUsing,
   parseConnectorShape,
   type Connector,
@@ -30,10 +32,10 @@ import {
 } from '../../../shared/botConnector';
 import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from '../../factory/factoryHost';
-import { ConnectorStore, connectorsFilePath, getConnectorStore, setConnectorStore } from '../../factory/connectorStore';
+import { ConnectorStore, connectorsFilePath, getConnectorStore, holdsStoredKeyValue, setConnectorStore } from '../../factory/connectorStore';
 import { resolveConnectorCommand, type ResolveCommandDeps } from '../../factory/connectorCommand';
 import { getSecretStore, type SecretStore } from '../../factory/secretStore';
-import { redactStoredSecrets, secretForms } from '../../factory/secretRedaction';
+import { secretForms } from '../../factory/secretRedaction';
 import { getBotStore } from '../../factory/botStore';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
 
@@ -56,15 +58,6 @@ function viewOf(c: Connector, secrets: SecretStore | null): ConnectorView {
   return { ...c, missingKeys: c.secrets.map((s) => s.secret).filter((n) => !secrets?.has(n)) };
 }
 
-/** Every literal of a connection: what is refused when it holds a key value. */
-function literalsOf(c: Pick<Connector, 'stdio' | 'remote' | 'purpose'>): string[] {
-  return [
-    ...(c.purpose ? [c.purpose] : []),
-    ...(c.stdio ? [c.stdio.command, ...c.stdio.args, ...Object.values(c.stdio.env)] : []),
-    ...(c.remote ? [c.remote.url, ...Object.values(c.remote.headers)] : []),
-  ];
-}
-
 export function listConnectors(deps: ConnectorIpcDeps): ConnectorListResult {
   const store = deps.store();
   if (!store) return NOT_STARTED;
@@ -78,23 +71,33 @@ export function listConnectors(deps: ConnectorIpcDeps): ConnectorListResult {
 }
 
 export async function saveConnector(raw: unknown, deps: ConnectorIpcDeps): Promise<ConnectorSaveResult> {
-  const store = deps.store();
-  if (!store) return NOT_STARTED;
-  const why = store.writeRefusal();
-  if (why) return { ok: false, code: 'store_unreadable', message: why };
   const p = params(raw);
   const shape = parseConnectorShape(p.connector, deps.platform);
   if (!shape.ok) return { ok: false, code: 'invalid', field: shape.field, message: shape.message };
-  const c = shape.connector;
+  // The one await of a save comes first: every check after it reads the
+  // library and the key store as they are when the save commits.
+  let stdio = shape.connector.stdio;
+  if (stdio) {
+    const resolved = await (deps.resolveCommand ?? ((cmd: string) => resolveConnectorCommand(cmd, { platform: deps.platform } as ResolveCommandDeps)))(stdio.command);
+    if (!resolved) return { ok: false, code: 'invalid', field: 'command', message: `${stdio.command} was not found (looked up on your PATH). Use its absolute path.` };
+    const why = commandRefusal(resolved, deps.platform);
+    if (why) return { ok: false, code: 'invalid', field: 'command', message: `${stdio.command} is ${resolved}, which cannot be used: ${why}` };
+    stdio = { ...stdio, command: resolved };
+  }
+  const c = { ...shape.connector, ...(stdio ? { stdio } : {}) };
+
+  const store = deps.store();
+  if (!store) return NOT_STARTED;
+  const writeRefusal = store.writeRefusal();
+  if (writeRefusal) return { ok: false, code: 'store_unreadable', message: writeRefusal };
   const secrets = deps.secrets();
   const prior = c.id ? store.get(c.id) : null;
   if (c.id && !prior) return { ok: false, code: 'not_found', message: 'That connection no longer exists.' };
 
   // Values typed in the dialog: only for this connection's own key names.
-  const rawValues = params(p.keyValues);
   const keyValues: Record<string, string> = {};
   const names = new Set(c.secrets.map((s) => s.secret));
-  for (const [k, v] of Object.entries(rawValues)) {
+  for (const [k, v] of Object.entries(params(p.keyValues))) {
     if (!names.has(k)) return { ok: false, code: 'invalid', field: 'secrets', message: `${k} is not one of this connection's keys.` };
     if (typeof v !== 'string' || v.length < BOT_SECRET_LIMITS.VALUE_MIN || v.length > BOT_SECRET_LIMITS.VALUE_MAX || v.includes('\0')) {
       return { ok: false, code: 'invalid', field: 'secrets', message: `${k}: the value must be ${BOT_SECRET_LIMITS.VALUE_MIN} to ${BOT_SECRET_LIMITS.VALUE_MAX} characters.` };
@@ -116,22 +119,16 @@ export async function saveConnector(raw: unknown, deps: ConnectorIpcDeps): Promi
     return { ok: false, code: 'key_in_use', field: 'secrets', message: `${n} is a key bots use for their own workers. Give this connection its own key name.` };
   }
 
-  // No literal may hold a key value (stored, or typed now).
+  // No text the owner wrote may hold a key value (stored, or typed now).
   const typed = Object.values(keyValues).flatMap((v) => secretForms(v));
-  const holds = deps.holdsStoredValue ?? ((t: string) => redactStoredSecrets(t) !== t);
-  for (const lit of literalsOf(c)) {
-    if (holds(lit) || typed.some((f) => lit.includes(f))) {
+  const holds = deps.holdsStoredValue ?? holdsStoredKeyValue;
+  for (const text of connectorTexts(c)) {
+    if (holds(text) || typed.some((f) => text.includes(f))) {
       return { ok: false, code: 'invalid', field: 'connection', message: 'A field holds a key\'s value. Add it under Keys instead, so it is stored encrypted.' };
     }
   }
 
-  let stdio = c.stdio;
-  if (stdio) {
-    const resolved = await (deps.resolveCommand ?? ((cmd: string) => resolveConnectorCommand(cmd, { platform: deps.platform } as ResolveCommandDeps)))(stdio.command);
-    if (!resolved) return { ok: false, code: 'invalid', field: 'command', message: `${stdio.command} was not found (looked up on your PATH). Use its absolute path.` };
-    stdio = { ...stdio, command: resolved };
-  }
-  const saved = store.save({ ...c, ...(stdio ? { stdio } : {}) });
+  const saved = store.save(c);
   if (!saved.ok) return { ok: false, code: saved.field === 'store' ? 'store_unreadable' : 'invalid', field: saved.field, message: saved.message };
 
   for (const [name, value] of Object.entries(keyValues)) {

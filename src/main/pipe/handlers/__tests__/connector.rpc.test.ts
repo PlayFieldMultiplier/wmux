@@ -160,6 +160,37 @@ describe('saving a connection', () => {
     expect(secrets.has('GH_MCP_TOKEN')).toBe(false);
   });
 
+  it('refuses a stored value anywhere the owner wrote: the name, a field name, a tool name', async () => {
+    expect(secrets.set('OTHER_TOKEN', 'zzqqvalue12345').ok).toBe(true);
+    for (const d of [
+      draft({ name: 'zzqqvalue12345' }),
+      draft({ remote: { url: 'https://api.example.com/mcp/', headers: { 'zzqqvalue12345': 'x' } } }),
+      draft({ tools: { mode: 'listed', allowed: ['zzqqvalue12345'] } }),
+    ]) {
+      expect(await saveConnector({ connector: d }, deps)).toMatchObject({ ok: false, field: 'connection' });
+    }
+  });
+
+  it('a record on disk holding a stored value is dropped on read', async () => {
+    await saveConnector({ connector: draft({ remote: { url: 'https://api.example.com/mcp/', headers: { 'X-Note': 'later_stored_value_1' } } }) }, deps);
+    await store.flush();
+    expect(newStore().list()).toHaveLength(1);
+    expect(secrets.set('LATER_TOKEN', 'later_stored_value_1').ok).toBe(true);
+    expect(newStore().list()).toEqual([]);
+  });
+
+  it('checks key ownership after the command lookup: a key bots got meanwhile is not adopted', async () => {
+    const local: ConnectorDraft = { name: 'files', transport: 'stdio', stdio: { command: 'srv', args: [], env: {} }, secrets: [{ secret: 'RACE_TOKEN', as: 'env' }], tools: { mode: 'listed', allowed: ['x'] }, scope: { kind: 'all' }, enabled: true };
+    const r = await saveConnector({ connector: local }, { ...deps, resolveCommand: async () => { secrets.set('RACE_TOKEN', 'race_plain_value_1'); return '/usr/bin/srv'; } });
+    expect(r).toMatchObject({ ok: false, code: 'key_in_use' });
+  });
+
+  it('a resolved command that read validation would refuse is refused at save', async () => {
+    const local: ConnectorDraft = { name: 'files', transport: 'stdio', stdio: { command: 'srv', args: [], env: {} }, secrets: [], tools: { mode: 'listed', allowed: ['x'] }, scope: { kind: 'all' }, enabled: true };
+    const r = await saveConnector({ connector: local }, { ...deps, resolveCommand: async () => '/opt/odd (x86)/srv' });
+    expect(r).toMatchObject({ ok: false, field: 'command' });
+  });
+
   it('a value for a name the connection does not hold is refused', async () => {
     expect(await saveConnector({ connector: draft(), keyValues: { NPM_TOKEN: TOKEN } }, deps)).toMatchObject({ ok: false, field: 'secrets' });
   });
@@ -250,5 +281,36 @@ describe('bot.update', () => {
     const r = s.update(made.ok ? made.bot.id : '', { connectors: ['gh'] });
     expect(r).toMatchObject({ ok: false, code: 'invalid_argument' });
     await s.flush();
+  });
+});
+
+describe('plain secret grants', () => {
+  it('a grant naming a key that became a connection\'s is not minted, and does not resolve', async () => {
+    const { mintSecretGrant, resolveSecretGrant, setSecretGrantSource, __resetSecretGrantsForTesting } = await import('../../../factory/secretGrants');
+    const { setConnectorStore } = await import('../../../factory/connectorStore');
+    const { setSecretStore } = await import('../../../factory/secretStore');
+    const { beginBotWorkerSpawn } = await import('../../../agents/botWorkerMergeGuard');
+    __resetSecretGrantsForTesting();
+    setSecretStore(secrets);
+    setConnectorStore(store);
+    setSecretGrantSource(() => secrets);
+    try {
+      secrets.set('PLAIN_TOKEN', 'plain_value_1234567');
+      const cwd = path.join(dir, 'wt');
+      const grant = mintSecretGrant({ botId: A, taskId: 't-1', ownerWorkspaceId: 'ws-1', cwd, names: ['PLAIN_TOKEN'] });
+      expect(grant).not.toBeNull();
+      // The key is deleted and its name is taken by a connection meanwhile.
+      secrets.delete('PLAIN_TOKEN');
+      await saveConnector({ connector: draft({ secrets: [{ secret: 'PLAIN_TOKEN', as: 'header', header: 'Authorization', scheme: 'bearer' }] }), keyValues: { PLAIN_TOKEN: 'connection_value_1' } }, deps);
+      const release = beginBotWorkerSpawn('ws-1', cwd, { botId: A, taskId: 't-1' });
+      const r = resolveSecretGrant(grant, { strictBotWorker: true, fanoutTaskOf: 'ws-1', cwd, spawns: [{ botId: A, taskId: 't-1' }] });
+      release();
+      expect(r.ok).toBe(false);
+      expect(mintSecretGrant({ botId: A, taskId: 't-2', ownerWorkspaceId: 'ws-1', cwd, names: ['PLAIN_TOKEN'] })).toBeNull();
+    } finally {
+      setSecretGrantSource(null);
+      setConnectorStore(null);
+      setSecretStore(null);
+    }
   });
 });

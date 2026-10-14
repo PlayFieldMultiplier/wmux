@@ -14,6 +14,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { BOT_SECRET_LIMITS, SECRET_GRANT_ID_RE, isBotSecretName, type SecretGrantId } from '../../shared/botSecret';
+import { isConnectionKey } from './connectorStore';
 
 export interface SecretGrantSource {
   /** The values of `names`, or the names that are not stored. */
@@ -71,6 +72,8 @@ export function mintSecretGrant(input: { botId: string; taskId: string; ownerWor
   const now = clock();
   sweep(now);
   if (!input.botId || !input.taskId || !input.ownerWorkspaceId || !input.cwd || parseSecretNames([...input.names]) === null) return null;
+  // A connection's key never goes out as a plain secret, whenever it became one.
+  if (input.names.some((n) => isConnectionKey(n))) return null;
   if (secretNamesRefusal(input.names) !== null) return null;
   const id = `sg-${crypto.randomBytes(24).toString('base64url')}`;
   grants.set(id, {
@@ -114,6 +117,7 @@ export function resolveSecretGrant(
   if (!spawn.spawns?.some((s) => s.botId === grant.botId && s.taskId === grant.taskId)) {
     return { ok: false, reason: 'the secret grant is for another bot or task' };
   }
+  if (grant.names.some((n) => isConnectionKey(n))) return { ok: false, reason: 'a key it names belongs to a connection now' };
   const s = source?.() ?? null;
   if (!s) return { ok: false, reason: 'the key store is not running' };
   const r = s.values(grant.names);
