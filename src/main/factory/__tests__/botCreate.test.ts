@@ -52,8 +52,11 @@ describe('resolveBotRepo', () => {
     const top = ok('/src/app\n');
     expect(await resolveBotRepo('/src/app', { git: fakeGit(top, fail), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote' });
     expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('/srv/git/app.git\n')), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote' });
-    expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('https://gitlab.example.com/group/sub/app.git\n')), realpath: (p) => p }))
+    expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('https://gitlab.example.com/app.git\n')), realpath: (p) => p }))
       .toMatchObject({ ok: false, code: 'no_remote' });
+    // A GitLab subgroup project is a repository, keyed by its whole path.
+    expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('ssh://git@gitlab.example.com:2222/group/sub/app.git\n')), realpath: (p) => p }))
+      .toMatchObject({ ok: true, repo: { repoKey: 'gitlab.example.com/group/sub/app' } });
   });
 
   it('refuses a relative or missing folder before running git', async () => {

@@ -21,15 +21,32 @@
 //     a commit; it has no branch to publish).
 //   - main's git runs with no fsmonitor and the worktree's own hooks do not
 //     run (`core.hooksPath` pointed at an empty folder, `--no-verify`).
+//   - IN WHICH git: on Windows, a task whose repository lives inside a WSL
+//     distro (its worktree's `.git` names a `\\wsl$\<distro>\…` or
+//     `\\wsl.localhost\<distro>\…` gitdir) is pushed by that distro's own
+//     git, through `wsl.exe -d <distro> --exec git --git-dir=<linux path>`
+//     (argv only, no shell), so the distro's ssh keys and credential helpers
+//     apply. Every step — the config check, the default-branch read, the push
+//     and the upstream writes — runs in that one git. A gitdir under a WSL
+//     host whose distro or path cannot be read is refused, never guessed.
+//     Any other task is pushed by main's own git.
+//   - The repository's own default branch is GitHub's (read by key) only for
+//     a GitHub host; otherwise, and when GitHub cannot tell, origin/HEAD,
+//     then the remote's own HEAD (`ls-remote --symref`) at the pushed URL.
 //
 // Any fan-out worker may call it; for a bot's worker it is the only way to
 // publish. Afterwards main sets the branch's upstream to origin, so
 // `gh pr create` finds the pushed branch.
 
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
+import { mergeWslEnv } from '../../shared/wsl';
+import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
+import { isGithubHost } from '../github/PrProvider';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import { originUrlRepoKey, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal } from './workerGit';
@@ -91,12 +108,110 @@ export function taskPushArgs(branch: string, url: string): string[] {
   return ['push', '--no-verify', '--no-follow-tags', '--recurse-submodules=no', '--porcelain', '--', url, `HEAD:refs/heads/${branch}`];
 }
 
-/** Push the task branch. Never throws. */
-export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = defaultGit): Promise<TaskPushResult> {
+/** Which git pushes a worktree: main's own, or a WSL distro's. */
+export type TaskPushGitTarget =
+  | { kind: 'host' }
+  | { kind: 'wsl'; distro: string; gitDir: string }
+  | { kind: 'refused'; error: string };
+
+const WSL_GITDIR_RE = /^(?:\\\\|\/\/)(?:wsl\$|wsl\.localhost)[\\/]([^\\/]*)(.*)$/i;
+
+/** The git that pushes a worktree, from its `.git` file's text (null: a
+ *  `.git` folder or none). Only on Windows is a gitdir under a WSL host a
+ *  distro's; its Linux path must be absolute and plain. Pure. */
+export function taskPushGitTarget(dotGit: string | null, platform: NodeJS.Platform = process.platform): TaskPushGitTarget {
+  if (platform !== 'win32' || dotGit === null) return { kind: 'host' };
+  const line = /^gitdir:[ \t]*(.*?)[ \t]*$/m.exec(dotGit.replace(/\r/g, ''));
+  if (!line) return { kind: 'host' };
+  const m = WSL_GITDIR_RE.exec(line[1]);
+  if (!m) return { kind: 'host' };
+  const distro = m[1];
+  if (!isValidWslDistroName(distro)) {
+    return { kind: 'refused', error: `the task's repository is inside WSL, but the distro in its gitdir (${JSON.stringify(line[1].slice(0, 300))}) cannot be read` };
+  }
+  const gitDir = m[2].replace(/\\/g, '/');
+  const segs = gitDir.split('/').slice(1);
+  // eslint-disable-next-line no-control-regex
+  if (!gitDir.startsWith('/') || segs.some((s) => !s || s === '.' || s === '..') || /[\x00-\x1f\x7f]/.test(gitDir)) {
+    return { kind: 'refused', error: `the task's repository is inside WSL distro ${distro}, but its gitdir path (${JSON.stringify(line[1].slice(0, 300))}) cannot be used` };
+  }
+  return { kind: 'wsl', distro, gitDir };
+}
+
+/** Runs `file` with `args`; resolves with the exit code and output, never
+ *  throws. */
+export type TaskPushExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+async function defaultWslExec(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
+  // The Linux child's bytes are UTF-8 (a NUL in `config -z` is data); only
+  // wsl.exe's own failure text may be UTF-16, and only stderr carries it.
+  const opts = { cwd: os.homedir(), env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024, encoding: 'buffer' as const };
+  try {
+    const { stdout, stderr } = await execFileP(file, args, opts);
+    return { code: 0, stdout: stdout.toString('utf8'), stderr: decodeWslOutput(stderr) };
+  } catch (err) {
+    const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: string };
+    const stderr = Buffer.isBuffer(e.stderr) && e.stderr.length > 0 ? decodeWslOutput(e.stderr) : '';
+    return {
+      code: typeof e.code === 'number' ? e.code : 1,
+      stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString('utf8') : '',
+      stderr: stderr || (e.message ?? String(err)),
+    };
+  }
+}
+
+/** The wsl.exe argv that runs `git <args>` on a gitdir inside a distro.
+ *  `--exec` runs git with no shell; `--cd /` keeps the worktree's folder out
+ *  of it. Pure. */
+export function wslGitArgv(distro: string, gitDir: string, args: readonly string[]): string[] {
+  return ['-d', distro, '--cd', '/', '--exec', 'git', `--git-dir=${gitDir}`, ...args];
+}
+
+/** A TaskPushGit that runs inside a WSL distro on its gitdir (the `cwd` it is
+ *  handed — the worktree's Windows path — is not used). */
+export function wslTaskPushGit(distro: string, gitDir: string, exec: TaskPushExec = defaultWslExec, systemRoot = process.env.SystemRoot): TaskPushGit {
+  const wslExe = path.win32.join(systemRoot || 'C:\\Windows', 'System32', 'wsl.exe');
+  const base = getExecEnv();
+  // GIT_TERMINAL_PROMPT reaches the distro only by name in WSLENV.
+  const env = { ...base, GIT_TERMINAL_PROMPT: '0', WSL_UTF8: '1', WSLENV: mergeWslEnv(base.WSLENV, ['GIT_TERMINAL_PROMPT']) };
+  return (args) => exec(wslExe, wslGitArgv(distro, gitDir, args), env);
+}
+
+function readDotGitFile(worktreePath: string): string | null {
+  try {
+    const p = path.join(worktreePath, '.git');
+    return fs.statSync(p).isFile() ? fs.readFileSync(p, 'utf8') : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface TaskPushDeps {
+  platform?: NodeJS.Platform;
+  /** The worktree's `.git` file text, or null (a folder, or none). */
+  readDotGit?: (worktreePath: string) => string | null;
+  /** Runs wsl.exe (a WSL distro's git). */
+  wslExec?: TaskPushExec;
+}
+
+/** `ls-remote --symref` output → the remote HEAD's branch, or null. Pure. */
+export function parseLsRemoteHead(stdout: string): string | null {
+  const m = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(stdout.replace(/\r/g, ''));
+  return m ? m[1] : null;
+}
+
+/** Push the task branch. Never throws. `git` is main's own git (a task in a
+ *  WSL distro uses that distro's, see TaskPushGitTarget). */
+export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = defaultGit, deps: TaskPushDeps = {}): Promise<TaskPushResult> {
   const branchRefusal = taskPushBranchRefusal(input.branch, input.defaultBranches);
   if (branchRefusal) return { ok: false, reason: 'branch-refused', error: branchRefusal };
-  const safe = workerGitSafeArgs(path.resolve(input.noHooksDir));
-  const run = (args: string[]) => git([...safe, ...args], input.worktreePath);
+  const platform = deps.platform ?? process.platform;
+  const target = taskPushGitTarget(platform === 'win32' ? (deps.readDotGit ?? readDotGitFile)(input.worktreePath) : null, platform);
+  if (target.kind === 'refused') return { ok: false, reason: 'git-failed', error: target.error };
+  // In a distro the hooks folder is a Linux path; /dev/null holds no hook.
+  const safe = workerGitSafeArgs(target.kind === 'wsl' ? '/dev/null' : path.resolve(input.noHooksDir));
+  const runner = target.kind === 'wsl' ? wslTaskPushGit(target.distro, target.gitDir, deps.wslExec) : git;
+  const run = (args: string[]) => runner([...safe, ...args], input.worktreePath);
   const pre = await workerGitPreflight(run);
   if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
   const origin = workerOriginRefusal(pre.entries);
@@ -110,12 +225,19 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }
-  // The repository's own default branch: GitHub's by the key, else origin/HEAD.
-  let own = key && input.repoDefaultBranch ? await input.repoDefaultBranch(key).catch(() => null) : null;
+  // The repository's own default branch: GitHub's by the key (a GitHub host
+  // only), else origin/HEAD, else the remote's HEAD at the pushed URL.
+  let own = key && isGithubHost(key.split('/')[0]) && input.repoDefaultBranch
+    ? await input.repoDefaultBranch(key).catch(() => null)
+    : null;
   if (!own) {
     const ref = await run(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
     const name = ref.code === 0 ? ref.stdout.trim() : '';
     own = name.startsWith('refs/remotes/origin/') ? name.slice('refs/remotes/origin/'.length) : null;
+  }
+  if (!own) {
+    const remote = await run(['ls-remote', '--symref', '--', origin.url, 'HEAD']);
+    own = remote.code === 0 ? parseLsRemoteHead(remote.stdout) : null;
   }
   if (own) {
     const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, own]);

@@ -5,9 +5,11 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pushTaskBranch, taskPushArgs, taskPushBranchRefusal } from '../taskPush';
+import { parseLsRemoteHead, pushTaskBranch, taskPushArgs, taskPushBranchRefusal, taskPushGitTarget, wslGitArgv, wslTaskPushGit, type TaskPushExec } from '../taskPush';
 import { originUrlRepoKey, runWorkerGitRead } from '../workerGit';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
+import { parseRemoteKey } from '../../github/PrProvider';
+import { normalizeRepoKey } from '../../../shared/repoKey';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -145,9 +147,192 @@ describe('pushTaskBranch', () => {
     expect(originUrlRepoKey('https://github.com/acme/app')).toBe('github.com/acme/app');
     expect(originUrlRepoKey('ssh://git@github.com/acme/app.git')).toBe('github.com/acme/app');
     expect(originUrlRepoKey('ssh://git@github.com:22/acme/app.git')).toBe('github.com/acme/app');
-    for (const bad of ['/srv/app.git', 'file:///srv/app.git', 'ext::sh -c x', 'https://github.com/acme/app/extra', '--upload-pack=x', 'git@github.com:22:acme/app.git']) {
+    for (const bad of ['/srv/app.git', 'file:///srv/app.git', 'ext::sh -c x', 'https://github.com/acme/app?x=1', '--upload-pack=x', 'git@github.com:22:acme/app.git', 'https://u:secret@gitlab.example.com/g/p.git', 'http://gitlab.example.com/g/p.git', 'https://gitlab.example.com/g/../p.git']) {
       expect(originUrlRepoKey(bad), bad).toBeNull();
     }
+  });
+});
+
+describe('task.push: GitLab remotes', () => {
+  const key = 'gitlab.corp.example/group/sub/proj';
+  const forms = [
+    'https://gitlab.corp.example/group/sub/proj.git',
+    'https://GitLab.Corp.Example/group/sub/proj',
+    'https://gitlab.corp.example:8443/group/sub/proj.git/',
+    'https://deploy@gitlab.corp.example/group/sub/proj.git',
+    'ssh://git@gitlab.corp.example:2222/group/sub/proj.git',
+    'ssh://git@gitlab.corp.example/group/sub/proj',
+    'ssh://gitlab.corp.example/group/sub/proj.git',
+    'git@gitlab.corp.example:group/sub/proj.git',
+    'git@GITLAB.corp.example:Group/Sub/Proj',
+  ];
+
+  it('keys every https, ssh:// and scp-like form of a self-hosted subgroup project the same', () => {
+    for (const u of forms) expect(originUrlRepoKey(u), u).toBe(key);
+    expect(originUrlRepoKey('git@gitlab.com:group/proj.git')).toBe('gitlab.com/group/proj');
+  });
+
+  it('agrees with the key a bot\'s repository is stored under', () => {
+    // botCreate stores normalizeRepoKey(parseRemoteKey(origin)); task.push
+    // compares originUrlRepoKey(origin) against it.
+    for (const u of forms.filter((f) => !f.startsWith('https://deploy@'))) {
+      expect(normalizeRepoKey(parseRemoteKey(u)), u).toBe(originUrlRepoKey(u));
+    }
+    expect(normalizeRepoKey('gitlab.corp.example/Group/Sub/Proj.git')).toBe(key);
+    expect(normalizeRepoKey('acme/app')).toBe('github.com/acme/app');
+    expect(normalizeRepoKey('gitlab.corp.example/' + Array(22).fill('g').join('/'))).toBeNull();
+  });
+
+  it('a bot\'s GitLab task pushes to its own project and to no other', async () => {
+    const calls: string[][] = [];
+    const fake = async (args: string[]) => {
+      calls.push(args);
+      const sub = args[args.indexOf('-c', 2) + 2];
+      if (sub === 'config') return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@gitlab.corp.example:2222/group/sub/proj.git\0', stderr: '' };
+      if (sub === 'rev-parse') return { code: 0, stdout: 'abc\n', stderr: '' };
+      if (sub === 'ls-remote') return { code: 0, stdout: 'ref: refs/heads/develop\tHEAD\nabc\tHEAD\n', stderr: '' };
+      return { code: sub === 'symbolic-ref' ? 1 : 0, stdout: '', stderr: '' };
+    };
+    const repoDefaultBranch = vi.fn(async () => 'main');
+    const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', repoDefaultBranch };
+    expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
+    // GitHub is never asked about a GitLab project; the remote's HEAD is.
+    expect(repoDefaultBranch).not.toHaveBeenCalled();
+    expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);
+    expect(await pushTaskBranch({ ...base, branch: 'develop', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/other' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
+    expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/proj' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
+    expect(parseLsRemoteHead('ref: refs/heads/main\tHEAD\r\n0123\tHEAD\n')).toBe('main');
+    expect(parseLsRemoteHead('0123\tHEAD\n')).toBeNull();
+  });
+});
+
+describe('task.push: a repository inside WSL', () => {
+  it('reads the distro and Linux gitdir from the worktree\'s .git file, on Windows only', () => {
+    expect(taskPushGitTarget('gitdir: //wsl$/Ubuntu/home/me/repo/.git/worktrees/one\n', 'win32'))
+      .toEqual({ kind: 'wsl', distro: 'Ubuntu', gitDir: '/home/me/repo/.git/worktrees/one' });
+    expect(taskPushGitTarget('gitdir: \\\\wsl.localhost\\Ubuntu-24.04\\home\\me\\my repo\\.git\\worktrees\\one\r\n', 'win32'))
+      .toEqual({ kind: 'wsl', distro: 'Ubuntu-24.04', gitDir: '/home/me/my repo/.git/worktrees/one' });
+    expect(taskPushGitTarget('gitdir: //WSL.LOCALHOST/Debian/srv/r/.git/worktrees/x', 'win32')).toMatchObject({ kind: 'wsl', distro: 'Debian' });
+    expect(taskPushGitTarget('gitdir: D:/repo/.git/worktrees/one', 'win32')).toEqual({ kind: 'host' });
+    expect(taskPushGitTarget('gitdir: //server/share/repo/.git/worktrees/one', 'win32')).toEqual({ kind: 'host' });
+    expect(taskPushGitTarget(null, 'win32')).toEqual({ kind: 'host' });
+    expect(taskPushGitTarget('gitdir: //wsl$/Ubuntu/home/me/repo/.git/worktrees/one', 'linux')).toEqual({ kind: 'host' });
+  });
+
+  it('refuses a WSL gitdir whose distro or path cannot be read, instead of guessing', () => {
+    for (const bad of [
+      'gitdir: //wsl$//home/me/repo/.git',
+      'gitdir: //wsl$/-d/home/me/repo/.git',
+      'gitdir: //wsl.localhost/Ubuntu',
+      'gitdir: //wsl$/Ubuntu/home/me/../other/.git',
+      'gitdir: //wsl$/Ubuntu/home/me/a\u0001b/.git',
+    ]) {
+      const t = taskPushGitTarget(bad, 'win32');
+      expect(t.kind, bad).toBe('refused');
+      expect((t as { error: string }).error).toMatch(/inside WSL/);
+    }
+  });
+
+  it('runs git inside the distro: wsl.exe by its full path, argv only, prompts off', async () => {
+    const exec = vi.fn<TaskPushExec>(async () => ({ code: 0, stdout: '', stderr: '' }));
+    await wslTaskPushGit('Ubuntu', '/home/me/repo/.git/worktrees/one', exec, 'C:\\Windows')(['push', '--', 'u'], 'C:\\ignored');
+    const [file, args, env] = exec.mock.calls[0];
+    expect(file).toBe('C:\\Windows\\System32\\wsl.exe');
+    expect(args).toEqual(['-d', 'Ubuntu', '--cd', '/', '--exec', 'git', '--git-dir=/home/me/repo/.git/worktrees/one', 'push', '--', 'u']);
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env.WSLENV?.split(':')).toContain('GIT_TERMINAL_PROMPT');
+    expect(wslGitArgv('D', '/g', ['x'])).toEqual(['-d', 'D', '--cd', '/', '--exec', 'git', '--git-dir=/g', 'x']);
+  });
+
+  describe('end to end, with a stand-in wsl.exe that runs this machine\'s git', () => {
+    let root: string;
+    let work: string;
+    let wt: string;
+    let origin: string;
+    beforeEach(() => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-wsl-')));
+      origin = path.join(root, 'origin.git');
+      work = path.join(root, 'work');
+      wt = path.join(root, 'wt');
+      execFileSync('git', ['init', '-q', '--bare', origin]);
+      execFileSync('git', ['init', '-q', '-b', 'main', work]);
+      fs.writeFileSync(path.join(work, 'a.txt'), 'a\n');
+      git(work, 'add', '.');
+      git(work, 'commit', '-qm', 'init');
+      git(work, 'remote', 'add', 'origin', origin);
+      git(work, 'push', '-q', 'origin', 'main');
+      git(work, 'worktree', 'add', '-q', '-b', 'wtask/one', wt);
+      fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
+      git(wt, 'add', '.');
+      git(wt, 'commit', '-qm', 'work');
+    });
+    afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+    const gitDir = () => path.join(work, '.git', 'worktrees', 'wt');
+    const run = (wslCalls: string[][], hostCalls: string[][]) => ({
+      git: async (args: string[]) => { hostCalls.push(args); return { code: 1, stdout: '', stderr: 'host git' }; },
+      deps: {
+        platform: 'win32' as const,
+        // The worktree's .git as Git for Windows writes it for a repository in a distro.
+        readDotGit: () => `gitdir: //wsl.localhost/Ubuntu${gitDir()}\n`,
+        wslExec: (async (_file, args) => {
+          wslCalls.push(args);
+          expect(args.slice(0, 7)).toEqual(['-d', 'Ubuntu', '--cd', '/', '--exec', 'git', `--git-dir=${gitDir()}`]);
+          try {
+            const stdout = execFileSync('git', args.slice(6), { cwd: '/', encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+            return { code: 0, stdout, stderr: '' };
+          } catch (e) {
+            const err = e as { status?: number; stdout?: string; stderr?: string };
+            return { code: err.status ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
+          }
+        }) as TaskPushExec,
+      },
+    });
+
+    it('pushes every step through the distro\'s git, hooks from /dev/null, never main\'s', async () => {
+      const wslCalls: string[][] = [];
+      const hostCalls: string[][] = [];
+      const { git: hostGit, deps } = run(wslCalls, hostCalls);
+      const r = await pushTaskBranch({ worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') }, hostGit, deps);
+      expect(r).toMatchObject({ ok: true, branch: 'wtask/one', head: git(wt, 'rev-parse', 'HEAD') });
+      expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(wt, 'rev-parse', 'HEAD'));
+      expect(git(work, 'config', '--get', 'branch.wtask/one.remote')).toBe('origin');
+      expect(hostCalls).toEqual([]);
+      for (const a of wslCalls) expect(a.slice(7, 11)).toEqual(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']);
+    });
+
+    it('checks the config in the same git it pushes with, and keeps every refusal', async () => {
+      const { git: hostGit, deps } = run([], []);
+      git(work, 'config', 'core.sshCommand', 'false');
+      const input = { worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') };
+      expect(await pushTaskBranch(input, hostGit, deps)).toMatchObject({ ok: false, reason: 'config-refused' });
+      git(work, 'config', '--unset', 'core.sshCommand');
+      expect(await pushTaskBranch({ ...input, expectedRepoKey: 'acme/app' }, hostGit, deps)).toMatchObject({ ok: false, reason: 'remote-refused' });
+      expect(await pushTaskBranch({ ...input, branch: 'main' }, hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      // The remote's own HEAD, read through the distro's git, is refused too.
+      git(work, 'push', '-q', 'origin', 'main:develop');
+      execFileSync('git', ['--git-dir', origin, 'symbolic-ref', 'HEAD', 'refs/heads/develop']);
+      expect(await pushTaskBranch({ ...input, branch: 'develop' }, hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/develop\nrefs/heads/main');
+      expect(git(origin, 'rev-parse', 'develop')).toBe(git(work, 'rev-parse', 'main'));
+    });
+
+    it('fails closed, with the cause, when the distro cannot be resolved', async () => {
+      const { git: hostGit, deps } = run([], []);
+      const r = await pushTaskBranch(
+        { worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') },
+        hostGit,
+        { ...deps, readDotGit: () => 'gitdir: //wsl$//home/me/.git/worktrees/wt' },
+      );
+      expect(r).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/inside WSL/) });
+      const gone = await pushTaskBranch(
+        { worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') },
+        hostGit,
+        { ...deps, wslExec: async () => ({ code: 1, stdout: '', stderr: 'There is no distribution with the supplied name.' }) },
+      );
+      expect(gone).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringMatching(/no distribution/) });
+    });
   });
 });
 

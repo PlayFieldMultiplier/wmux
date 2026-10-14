@@ -158,12 +158,14 @@ describe('BotStore', () => {
     expect(a).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
     const b = s.create({ workspaceId: 'ws-2', role: 'lead', repo: { repoKey: 'GHE.corp/acme/app', repoPath: '/tmp/r' } });
     expect(b).toMatchObject({ ok: true, bot: { repo: { repoKey: 'ghe.corp/acme/app' } } });
-    for (const repoKey of ['app', 'h/a/b/c', 'a b/c']) {
+    expect(s.create({ workspaceId: 'ws-5', role: 'lead', repo: { repoKey: 'GitLab.corp/g/sub/app', repoPath: '/tmp/r' } }))
+      .toMatchObject({ ok: true, bot: { repo: { repoKey: 'gitlab.corp/g/sub/app' } } });
+    for (const repoKey of ['app', 'h/a//c', 'a b/c']) {
       expect(s.create({ workspaceId: 'ws-3', role: 'lead', repo: { repoKey, repoPath: '/tmp/r' } }), repoKey).toMatchObject({ ok: false, code: 'invalid_argument' });
     }
     const t = s.create({ workspaceId: 'ws-3', role: 'lead', triggers: [{ kind: 'pr.opened', filter: { repoKey: 'Acme/App' } }] });
     expect(t).toMatchObject({ ok: true, bot: { triggers: [{ filter: { repoKey: 'github.com/acme/app' } }] } });
-    expect(s.create({ workspaceId: 'ws-4', role: 'lead', triggers: [{ kind: 'pr.opened', filter: { repoKey: 'h/a/b/c' } }] }).ok).toBe(false);
+    expect(s.create({ workspaceId: 'ws-4', role: 'lead', triggers: [{ kind: 'pr.opened', filter: { repoKey: 'h/a//c' } }] }).ok).toBe(false);
   });
 
   it('persists profiles and usage, and refuses a file of another version', async () => {

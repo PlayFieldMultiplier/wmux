@@ -103,7 +103,8 @@ describe('thread ids', () => {
   });
 
   it('rejects anything else', () => {
-    for (const bad of ['', 'pr:a/b#0', 'pr:ab#1', 'pr:h/a/b/c#1', 'pr:a/b#x', 'nope:1', 'task:', 'task:a b', 42, null, `plan:${'x'.repeat(300)}`]) {
+    expect(parseThreadId('pr:GitLab.corp/G/Sub/P#1')).toBe('pr:gitlab.corp/g/sub/p#1');
+    for (const bad of ['', 'pr:a/b#0', 'pr:ab#1', 'pr:h/a//c#1', 'pr:a/b#x', 'nope:1', 'task:', 'task:a b', 42, null, `plan:${'x'.repeat(300)}`]) {
       expect(parseThreadId(bad), String(bad)).toBeNull();
     }
   });
@@ -162,7 +163,9 @@ describe('repo keys', () => {
     expect(normalizeRepoKey(long)).toBeNull();
     const fits = normalizeRepoKey(`${'o'.repeat(120)}/${'r'.repeat(120)}`);
     expect(fits && normalizeRepoKey(fits)).toBe(fits);
-    for (const bad of ['', 'app', 'a//b', 'h/a/b/c', 'a b/c', 'a/b#1', `${'x'.repeat(260)}/a/b`, 42, null, undefined]) {
+    // A GitLab subgroup project keeps its whole path.
+    expect(normalizeRepoKey('GitLab.corp/Group/Sub/App.git')).toBe('gitlab.corp/group/sub/app');
+    for (const bad of ['', 'app', 'a//b', 'h/a//c', `h/${Array(22).fill('g').join('/')}`, 'a b/c', 'a/b#1', `${'x'.repeat(260)}/a/b`, 42, null, undefined]) {
       expect(normalizeRepoKey(bad), String(bad)).toBeNull();
     }
   });

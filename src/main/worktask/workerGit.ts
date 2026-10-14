@@ -83,23 +83,32 @@ export function workerOriginRefusal(entries: readonly GitConfigEntry[]): { error
   return { url: urls[0].value };
 }
 
-/** A plain https or ssh GitHub-style address → `host/owner/repo`
- *  (lowercased; a port is allowed and not part of the key), or null for any
- *  other form (a path, file://, ext::, a query, more path parts). Pure. */
+/** Path segments a repository address may hold after its host: GitLab nests
+ *  groups up to 20 deep under the project. */
+const MAX_REPO_PATH_SEGMENTS = 21;
+
+/** A plain https or ssh address → `host/owner/repo`, or `host/group/…/repo`
+ *  for a GitLab subgroup (lowercased; a port and an ssh user are allowed and
+ *  not part of the key; a trailing `.git` or `/` is dropped), or null for any
+ *  other form (a path, file://, ext::, a query, credentials in the URL).
+ *  Self-hosted hosts are keyed by their own name. Pure. */
 export function originUrlRepoKey(url: string): string | null {
   const seg = '[A-Za-z0-9_.-]+';
+  const repoPath = `(${seg}(?:/${seg})+)`;
   const forms = [
-    new RegExp(`^https://(?:${seg}@)?(${seg})(?::\\d{1,5})?/(${seg})/(${seg})$`),
-    new RegExp(`^ssh://${seg}@(${seg})(?::\\d{1,5})?/(${seg})/(${seg})$`),
-    new RegExp(`^${seg}@(${seg}):(${seg})/(${seg})$`),
+    new RegExp(`^https://(?:${seg}@)?(${seg})(?::\\d{1,5})?/${repoPath}$`),
+    new RegExp(`^ssh://(?:${seg}@)?(${seg})(?::\\d{1,5})?/${repoPath}$`),
+    new RegExp(`^${seg}@(${seg}):${repoPath}$`),
   ];
   const trimmed = url.trim().replace(/\/$/, '');
   for (const re of forms) {
     const m = re.exec(trimmed);
     if (!m) continue;
-    const repo = m[3].replace(/\.git$/i, '');
-    if (!repo || [m[1], m[2], repo].some((p) => p === '.' || p === '..' || p.startsWith('-'))) return null;
-    return `${m[1]}/${m[2]}/${repo}`.toLowerCase();
+    const parts = m[2].split('/');
+    parts[parts.length - 1] = parts[parts.length - 1].replace(/\.git$/i, '');
+    if (parts.length > MAX_REPO_PATH_SEGMENTS) return null;
+    if ([m[1], ...parts].some((p) => !p || p === '.' || p === '..' || p.startsWith('-'))) return null;
+    return `${m[1]}/${parts.join('/')}`.toLowerCase();
   }
   return null;
 }
