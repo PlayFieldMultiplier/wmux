@@ -330,10 +330,10 @@ export class WorktaskScanService {
 /** 기본 dirty 판정: `git status --porcelain` 비어있지 않으면 dirty. */
 async function defaultIsDirty(worktreePath: string): Promise<boolean> {
   // A config that names a content filter is refused (worktask/workerGit.ts):
-  // a status read could run it. No fsmonitor either.
+  // a status read could run it. No fsmonitor, no submodule entered.
   const pre = await workerGitPreflight((args) => git(args, worktreePath), 'read');
   if (!pre.ok) throw new Error(pre.error);
-  const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', 'status', '--porcelain'], {
+  const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', 'status', '--porcelain', '--ignore-submodules=all'], {
     cwd: worktreePath,
     timeout: 30000,
     windowsHide: true,

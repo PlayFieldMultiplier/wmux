@@ -354,7 +354,7 @@ const defaultSpawn: GateSpawn = (cmd, args, opts) => {
 async function defaultReadHead(worktreePath: string): Promise<string | null> {
   const [r, status] = await Promise.all([
     git(['rev-parse', 'HEAD'], worktreePath),
-    git(['status', '--porcelain', '--untracked-files=all'], worktreePath),
+    git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=all'], worktreePath),
   ]);
   const sha = r.stdout.trim();
   // A tree with changes of its own is not the commit: name none.
