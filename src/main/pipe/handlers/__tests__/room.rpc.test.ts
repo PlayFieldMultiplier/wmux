@@ -253,6 +253,21 @@ describe('room.post', () => {
     expect(room.bots.map((b) => b.id)).toEqual(many.slice(0, 16).map((b) => b.id));
   });
 
+  it('humanAddressees: a room with an enabled coordinator talks to it alone; mentions and toBotId still win', () => {
+    const dev = bot('ws1', 'lead', { createdAt: 1 });
+    const lead = bot('ws1', 'lead', { template: 'coordinator', createdAt: 2 });
+    const younger = bot('ws1', 'moa', { createdAt: 3 });
+    const far = bot('ws2', 'moa', { createdAt: 0 });
+    const offLead = bot('ws3', 'moa', { enabled: false });
+    const ws3dev = bot('ws3', 'lead');
+    const ports = { listEnabled: () => [far, younger, dev, lead, offLead, ws3dev] } as unknown as FactoryRoomPorts['bots'];
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead], room: false });
+    expect(humanAddressees(ports, 'ws1', { mentions: [dev.id] })).toEqual({ bots: [dev], room: false });
+    expect(humanAddressees(ports, 'ws1', { toBotId: dev.id })).toEqual({ bots: [dev], room: false });
+    // A disabled coordinator, or one in another workspace, leaves the room as it was.
+    expect(humanAddressees(ports, 'ws3', {})).toEqual({ bots: [ws3dev], room: true });
+  });
+
   it('a bot card\'s mentions are settled by main and routed through the handoff router, once per card', async () => {
     const lead = bot('ws1', 'lead');
     const verifier = bot('ws1', 'verifier');

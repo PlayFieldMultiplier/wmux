@@ -11,8 +11,9 @@
 //              in any workspace — a 1:1 conversation is a message with one;
 //   toBotId    one bot by id (the phone's bot), when it is enabled;
 //   to         a legacy role (the phone's `moa`): that role's bot there;
-//   neither    the room: every enabled bot of the workspace (the oldest
-//              ROOM_LIMITS.MENTIONS_MAX).
+//   neither    the room: its coordinator when one is enabled there (the
+//              oldest; the team's lead hands the work on), else every enabled
+//              bot of the workspace (the oldest ROOM_LIMITS.MENTIONS_MAX).
 //
 // The card keeps the addressees main settled on (`refs.botIds`, and
 // `refs.botId` when there is exactly one, so a 1:1 stays a 1:1). Every wake
@@ -30,7 +31,7 @@
 // record for HUMAN_RETRY_WINDOW_MS).
 
 import type { BotProfile, BotRole } from '../../shared/bot';
-import { BOT_ID_RE, isBotRole } from '../../shared/bot';
+import { BOT_ID_RE, isBotRole, isCoordinatorBot } from '../../shared/bot';
 import type { FactDraft } from '../../shared/facts';
 import { GENERAL_THREAD, ROOM_LIMITS, type RoomCard, type ThreadId } from '../../shared/room';
 import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
@@ -78,9 +79,9 @@ export function parseMentions(raw: unknown): string[] | null {
 /** Who one owner message in a workspace's room is for (see the header):
  *  the mentioned bots that exist and are enabled (in the order named), else
  *  the bot named by `toBotId` (the phone's bot) when it is enabled, else the
- *  `to` role's bot, else every enabled bot of the room, oldest first (at
- *  most ROOM_LIMITS.MENTIONS_MAX).
- *  `room` is true for the last. Pure over the directory. */
+ *  `to` role's bot, else the room's oldest enabled coordinator, else every
+ *  enabled bot of the room, oldest first (at most ROOM_LIMITS.MENTIONS_MAX).
+ *  `room` is true for the last only. Pure over the directory. */
 export function humanAddressees(
   bots: FactoryRoomPorts['bots'] | undefined,
   workspaceId: string,
@@ -99,9 +100,13 @@ export function humanAddressees(
     const { bot } = humanAddressee(bots, workspaceId, addressing.to);
     return { bots: bot ? [bot] : [], room: false };
   }
+  const inRoom = enabled.filter((b) => b.workspaceId === workspaceId).sort(byAge);
+  // A room with a coordinator talks to it: it decides who else works.
+  const lead = inRoom.find((b) => isCoordinatorBot(b));
+  if (lead) return { bots: [lead], room: false };
   // At most MENTIONS_MAX, the oldest: the card names every addressee
   // (refs.botIds), and a retry wakes from that list.
-  return { bots: enabled.filter((b) => b.workspaceId === workspaceId).sort(byAge).slice(0, ROOM_LIMITS.MENTIONS_MAX), room: true };
+  return { bots: inRoom.slice(0, ROOM_LIMITS.MENTIONS_MAX), room: true };
 }
 
 /** The run every wake of an owner message shares. */
