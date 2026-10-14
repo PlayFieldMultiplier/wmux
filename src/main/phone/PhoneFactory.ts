@@ -188,13 +188,11 @@ type RoomCommandReply =
   | { notFound: true }
   | { invalid: true };
 
-/** A workspace whose room the phone may read: one with a bot, the HQ, or a
- *  room already on disk. Anything else is not found, so a phone cannot make
- *  main load a room for an id that names nothing. */
+/** A workspace whose room the phone may read: one with a bot or a room
+ *  already on disk. Anything else is not found, so a phone cannot make main
+ *  load a room for an id that names nothing. */
 function roomKnown(ports: PhoneFactoryPorts, workspaceId: string, bots: readonly BotProfile[]): boolean {
-  return bots.some((b) => b.workspaceId === workspaceId) ||
-    ports.settings().hqWorkspaceId === workspaceId ||
-    ports.roomFileExists(workspaceId);
+  return bots.some((b) => b.workspaceId === workspaceId) || ports.roomFileExists(workspaceId);
 }
 
 function botInfo(bots: readonly BotProfile[]): (botId: string) => { role: BotProfile['role']; name: string } | null {

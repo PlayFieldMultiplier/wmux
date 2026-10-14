@@ -453,6 +453,10 @@ export const IPC = {
   // The owner resumes the stopped worker of an ended bot task
   // (main/factory/workerReclaim.ts); main window only.
   FACTORY_WORKER_RESUME: 'factory:worker:resume',
+  // Whether the default bot engine (Claude) can run here, checked without a
+  // model turn, and the Claude sign-in (shared/factoryEngine.ts); main window only.
+  FACTORY_ENGINE_READINESS: 'factory:engine:readiness',
+  FACTORY_ENGINE_LOGIN: 'factory:engine:login',
   TRACK_RECORD_CHANGED: 'trackRecord:changed',
   // Git page ship button: the branch's status, commit / push / create PR
   GIT_SHIP_STATUS: 'gitShip:status',

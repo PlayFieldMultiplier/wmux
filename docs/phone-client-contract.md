@@ -4060,8 +4060,8 @@ GET /api/config   (X-Wmux-Client-Caps: rooms-v1)
   While `enabled`:
   - `hqBotId` — the bot the phone talks to (called the HQ bot below): the
     one the owner pinned in Settings › Bots while it is enabled, else the
-    oldest enabled Coordinator-template bot, else the oldest enabled bot of
-    the HQ workspace. Omitted when there is none. It may be any bot, so its
+    oldest enabled Coordinator-template bot, else the oldest enabled bot in
+    any workspace. Omitted when there is none. It may be any bot, so its
     `role` in a workspace row's `bots` is whatever label that bot carries
     (the same five values as before).
   - `hqWorkspaceId` — that bot's workspace: its room is where Moa's replies
