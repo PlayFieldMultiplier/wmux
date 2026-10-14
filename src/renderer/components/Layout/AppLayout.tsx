@@ -48,10 +48,7 @@ import ToastContainer from '../Toast/ToastContainer';
 import { HooksInstallPromptContainer } from '../Deck/HooksInstallPrompt';
 import FloatingPane from '../Terminal/FloatingPane';
 import SearchResultsPanel from '../Search/SearchResultsPanel';
-import RoomDock from '../Room/RoomDock';
-import { useRoomDockHint } from '../Room/roomDockGate';
 import { useRoomSync } from '../../hooks/useRoomSync';
-import { useDockMode } from './dockLayout';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { useKeyboard } from '../../hooks/useKeyboard';
 import { FocusManager } from './LayoutLogicMounts';
@@ -111,7 +108,6 @@ import {
 } from '../../../shared/ptyRecovery';
 import { isChatV2Covering } from '../ChatV2/coverage';
 import { overlayColors } from '../../utils/titlebarOverlay';
-import { dockShownOn } from './pagesBesideDock';
 
 interface ReconcilePtySession extends DeadPaneSessionSnapshot {
   id: string;
@@ -787,35 +783,10 @@ export default function AppLayout() {
   // theme (overlay colors) does — see useUiScaleSync below.
   useUiScaleSync(uiScale);
   const sidebarVisible = useStore((s) => s.sidebarVisible);
-  // The right slot holds the room dock, open on the panel's own flag.
-  const dockOpen = useStore((s) => s.channelDockVisible);
   useRoomSync();
-  useRoomDockHint();
   const sidebarPosition = useStore((s) => s.sidebarPosition);
-  // The dock never pushes the sheet past the window: when inline would leave
-  // the panes under their floor, it collapses and reopens as an overlay
-  // (dockLayout.ts). Re-opened when the window is wide enough again, if it
-  // was open when it collapsed.
   const sidebarWidth = useStore((s) => s.sidebarWidth);
-  const sidebarWidthPx = sidebarVisible ? sidebarWidth : 0;
-  // The file tree column takes its width from the panes too, so it counts
-  // toward the floor the inline dock must leave them.
   const fileTreeVisible = useStore((s) => s.fileTreeVisible);
-  const fileTreeWidth = useStore((s) => s.fileTreeWidth);
-  const [dockMode, shellRef] = useDockMode(sidebarWidthPx + (fileTreeVisible ? fileTreeWidth : 0));
-  const dockAutoCollapsed = useRef(false);
-  useEffect(() => {
-    const st = useStore.getState();
-    if (dockMode === 'overlay' && st.channelDockVisible) {
-      dockAutoCollapsed.current = true;
-      st.setChannelDockVisible(false);
-    } else if (dockMode === 'inline' && dockAutoCollapsed.current) {
-      dockAutoCollapsed.current = false;
-      if (!st.channelDockVisible) st.setChannelDockVisible(true);
-    }
-    // Only a mode change collapses or restores; opening the overlay later
-    // must not be undone.
-  }, [dockMode]);
   const companyViewVisible = useStore((s) => s.companyViewVisible);
   const setCompanyViewVisible = useStore((s) => s.setCompanyViewVisible);
   // PERF (2026-07-13): AppLayout does NOT subscribe to the whole `workspaces`
@@ -839,7 +810,7 @@ export default function AppLayout() {
   const remoteRepairHostId = useStore((s) => s.remoteRepairHostId);
   const requestRemoteRepair = useStore((s) => s.requestRemoteRepair);
   // The rail page shown in the sheet. Anything but Workspaces covers the
-  // sidebar, panes and dock, which stay mounted and inert underneath.
+  // sidebar and the panes, which stay mounted and inert underneath.
   const fleetViewVisible = useStore((s) => s.fleetViewVisible);
   const appRoute = useStore((s) => s.appRoute);
   // TASK-2: render gates for the lazy overlays. Lift each component's own
@@ -2075,14 +2046,14 @@ export default function AppLayout() {
       }}
     >
       {/* Bridge redesign — custom 40px titlebar spans the FULL window width,
-          above the sidebar|main|dock row. The BrowserWindow is frameless
+          above the sidebar|main row. The BrowserWindow is frameless
           (titleBarStyle:'hidden'), so this bar owns window dragging. */}
       <ErrorBoundary name="Titlebar">
         <Titlebar />
       </ErrorBoundary>
       {/* The icon rail sits on the window frame beside the floating sheet and
           stays when the sidebar collapses (MiniSidebar `rail`); the sheet holds
-          the sidebar, the panes and the dock. */}
+          the sidebar and the panes. */}
       <div className={`wmux-frame-row flex flex-1 min-h-0 ${sidebarPosition === 'right' ? 'flex-row-reverse' : ''}`}>
       <ErrorBoundary name="PcRail">
         {/* Host roster, feeds and attention for the sidebar's PC switcher.
@@ -2095,7 +2066,7 @@ export default function AppLayout() {
       <ErrorBoundary name="SidebarRail">
         <MiniSidebar rail collapsed={!sidebarVisible} />
       </ErrorBoundary>
-      <div ref={shellRef} className={`wmux-shell-body relative flex flex-1 min-h-0 min-w-0 ${sidebarPosition === 'right' ? 'flex-row-reverse' : ''}`}>
+      <div className={`wmux-shell-body relative flex flex-1 min-h-0 min-w-0 ${sidebarPosition === 'right' ? 'flex-row-reverse' : ''}`}>
       {/* The Workspaces page. Another rail page covers it (RailPage) while it
           stays mounted, full size and inert, so no PTY is resized or lost. */}
       <div className="contents" inert={appRoute !== 'workspaces' && !inspectModeActive} data-workspaces-page>
@@ -2150,51 +2121,16 @@ export default function AppLayout() {
         </div>
       </div>
       </ErrorBoundary>
-      {/* A2A channel dock (Approach A). A flex sibling on the OPPOSITE edge
-          from the workspace sidebar — the root row's flex-row-reverse (when
-          the sidebar is docked right) puts this on the correct edge, so it
-          reflows the panes instead of the old fixed overlay that covered them.
-          Holds the channel list + active conversation; collapsible. */}
-      {/* Collapsed, the deck renders NOTHING here — the terminals take the
-          whole width. The way back is Moa's titlebar button; with Moa off
-          there is no panel at all (owner decision 2026-08-18, replacing the 36px glyph rail).
-          The rail spent a full-height column on four glyphs and an expand
-          chevron, ~85% of it empty; one button on a row that already exists
-          costs the terminals nothing. */}
       </div>
-      {/* The file tree column: Workspaces-page chrome between the panes and
-          Moa's dock, so a rail page (which stops at the dock) covers it with
-          the panes. */}
+      {/* Nothing docks opposite the sidebar (owner decision 2026-10-14: the
+          Bots page is the one place for bot conversations). The file tree
+          column is the only opt-in column on that edge: Workspaces-page
+          chrome, so a rail page covers it with the panes. */}
       <div className="contents" inert={appRoute !== 'workspaces' && !inspectModeActive} data-workspaces-page>
       {fileTreeVisible && (
         <ErrorBoundary name="FileTree">
           <FileTreePanel position={sidebarPosition === 'left' ? 'right' : 'left'} />
         </ErrorBoundary>
-      )}
-      </div>
-      {/* The dock stays interactive beside every rail page but Settings (they
-          cover only the sidebar and the panes, so the room is in reach); Settings
-          covers it, inert, like the rest of the Workspaces page. Both dock
-          modes live in this region: `contents` keeps the inline dock the same
-          flex item it always was, and the overlay still positions against
-          the sheet. */}
-      <div className="contents" inert={!dockShownOn(appRoute) && !inspectModeActive} data-dock-region>
-      {dockOpen && dockMode === 'inline' && (
-        <ErrorBoundary name="RoomDock">
-          <RoomDock />
-        </ErrorBoundary>
-      )}
-      {/* Too narrow for the dock beside the panes: it floats over them on the
-          far edge instead, and never reflows a PTY. */}
-      {dockOpen && dockMode === 'overlay' && (
-        <div
-          data-dock-overlay
-          className={`absolute inset-y-0 z-30 flex max-w-full ${sidebarPosition === 'right' ? 'left-0' : 'right-0'}`}
-        >
-          <ErrorBoundary name="RoomDock">
-            <RoomDock />
-          </ErrorBoundary>
-        </div>
       )}
       </div>
       {/* Fleet, Schedules, Remote or Settings, swapped in by the rail. */}

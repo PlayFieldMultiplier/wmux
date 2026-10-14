@@ -61,7 +61,7 @@ another face.
 
 | Token | CSS | Role |
 |---|---|---|
-| `bgBase` | `--bg-base` | the sheet: panes, pages, dock |
+| `bgBase` | `--bg-base` | the sheet: panes, pages |
 | `bgMantle` | `--bg-mantle` | the sidebar column inside the sheet |
 | `bgSurface` | `--bg-surface` | the look's fill for raised controls |
 | `textMain` / `textSub` / `textMuted` | `--text-main` / `--text-sub` / `--text-muted` | titles and body · secondary lines · metadata, idle, disabled |
@@ -99,14 +99,14 @@ in the terminal whatever the chrome accent.
 
 ```
 ┌ frame ─ titlebar 40px ───────────────────────────────────────────────┐
-│ [lights][wmux      ◧]            (drag region)           [vitals][Room]│
+│ [lights][wmux      ◧]            (drag region)          [vitals][tree]│
 ├──┬───────────────────────────────────────────────────────────────────┤
 │  │╭ sheet ────────────────────────────────────────────────────────╮ │
-│r │ sidebar   │ pane tab strip                       │ tools dock    │ │
-│a │ 264px     ├──────────────────────────────────────┤ 248–320px     │ │
-│i │ (mantle)  │  terminal grid (THE HERO)            │               │ │
-│l │           │                                      │               │ │
-│48│           │  [agent bar — overlay, on approach]  │               │ │
+│r │ sidebar   │ pane tab strip                                      │ │
+│a │ 264px     ├─────────────────────────────────────────────────────┤ │
+│i │ (mantle)  │  terminal grid (THE HERO)                           │ │
+│l │           │                                                     │ │
+│48│           │  [agent bar — overlay, on approach]                 │ │
 │  │╰───────────────────────────────────────────────────────────────╯ │
 └──┴── 8px frame margin ───────────────────────────────────────────────┘
 ```
@@ -115,7 +115,8 @@ in the terminal whatever the chrome accent.
   (`--sheet-inset`) on the left, right and bottom, painted `--frame-bg` — a
   step darker than the sheet in the dark looks, a soft grey in Paper.
 - **Sheet:** one rounded panel (`--sheet-radius` 12px) flush under the
-  titlebar, holding the sidebar, the panes and the tools dock. It is set
+  titlebar, holding the sidebar and the panes (and the file tree column
+  when it is shown). Nothing docks opposite the sidebar. It is set
   off by a 1px `--sheet-edge` hairline and a faint `--sheet-shadow`, nothing
   else. Inside, the sidebar keeps its mantle tone and meets the body at a
   single seam.
@@ -152,8 +153,8 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   The toggle sits right after the wordmark, 8px from it, whether the
   sidebar is open or collapsed (collapsed, the segment takes their width
   instead of the rail's 48px; the look paints it transparent). It is a 28px square with a 16px panel icon (the
-  bar drawn on the sidebar's side), the left-hand pair of the room dock's toggle
-  at the bar's other end. **Both titlebar panel toggles are bare icons:** no
+  bar drawn on the sidebar's side), the left-hand pair of the file tree
+  toggle at the bar's other end. **Both titlebar panel toggles are bare icons:** no
   fill at rest and none when on — the icon and `aria-pressed` /
   `aria-expanded` carry the state —
   only the `--hover-fill` on hover and the focus ring. The sidebar toggle's
@@ -176,8 +177,8 @@ bar is a drag region; each interactive child opts out with `no-drag`.
 - **Right:** Fleet vitals as appearing chips (`N running`, `N need you`; only
   when nonzero, and dropped while Fleet is the page), the account usage when
   it matters, then the **file tree toggle** (a bare icon like the sidebar's,
-  ⌘⇧E / Ctrl+Shift+E), then the room dock's toggle ("Room"), the dock's only
-  toggle (see Tools panel).
+  ⌘⇧E / Ctrl+Shift+E), the bar's last icon (see File tree column). There
+  is no room or bot panel toggle: bot conversations live on the Bots page.
   Settings is not here: it lives in the rail's More menu (and ⌘,).
 - **Windows:** the native window controls sit at the right edge in the
   `titleBarOverlay` strip, drawn in the colour the frame actually paints
@@ -199,7 +200,7 @@ the UI store owns the current page; every entry point — shortcuts, palette
 commands, sidebar links, toast and notification jumps, schedule deep links —
 navigates through it.
 
-- **Pages, in order:** Workspaces (home: the sidebar, panes and tools dock)
+- **Pages, in order:** Workspaces (home: the sidebar and the panes)
   · Bots · Fleet · Schedules · Remote · Git. Settings is a page too,
   opened from the rail's More menu or ⌘,.
 - **The rail's foot** holds one `⋯` **More** button (named "More",
@@ -216,15 +217,8 @@ navigates through it.
   `--hover-fill`; Bots', Fleet's and Remote's needs-you counts are small
   number badges on the icon's corner. Every button is named, and the arrow keys move between
   them.
-- **A page fills the sheet beside the tools dock** (every rail page — Git,
-  Fleet, Schedules, Remote — leaves the dock in view and usable, so the room
-  is in reach; the page is inset off the dock by measuring it, never by reflowing
-  the sheet, whether the dock sits inline or floats as the narrow-window
-  overlay; the titlebar's Room toggle opens and closes it in place there).
-  Bots and Settings cover the whole sheet, dock included (inert under
-  them): on Bots the conversation is the page, so a second view of the
-  same room beside it would only repeat it, and the Room toggle pressed there
-  brings Workspaces forward. The
+- **A page fills the whole sheet** (every rail page and Settings; with no
+  dock there is nothing to leave in view beside it). The
   Workspaces page stays mounted at full size and **inert** under every page, so no terminal is resized or unmounted
   and PTYs, scrollback, the WebGL atlas and IME state survive the round trip.
   Showing a page drops focus left in the panes, and the focus self-heal runs
@@ -354,7 +348,7 @@ group of bot tasks is "Started by bots", never "From closed pane".
   content-10% fill, with the delivery line ("Sent to Lead", "Queued for
   Lead") under one sent from here. A question is the room's own question
   card, answered in place (its needs-you hairline is the bubble's
-  boundary). A plan and a proposal take the room dock's own answers (one
+  boundary). A plan and a proposal take the room's shared answers (one
   shared component: a plan's Approve — the primary — Edit and Decline, a
   proposal's Approve / Decline), right under the title, and while they
   wait the needs-you hairline is the bubble's boundary; a plan names each
@@ -380,12 +374,29 @@ group of bot tasks is "Started by bots", never "From closed pane".
   Fleet, and still shows) — close its 1:1, and its room under the bot's
   face, as compact status bubbles while the worker's pane is open — a muted
   dot or the attention ring, the task's name, the state in words ("Worker
-  needs input", with what it waits for under it) — with Open, which jumps to the worker's pane on
-  Workspaces; a done worker that can resume offers Resume; finished
-  workers leave.
+  needs input", with what it waits for under it) — with Open; a done
+  worker that can resume offers Resume; finished workers leave. Open (and
+  a Resume that started) shows the worker's terminal in a **worker panel**
+  beside the chat, on the Bots page, and never switches the active
+  workspace (owner decision 2026-10-14): one `--stroke` seam on its chat
+  side, a 40px header (the worker's name in 13px/500 over its state in
+  words, the needs-you text while it waits; Close as a 28px icon button),
+  then the worker's panes, live and typed into in place. It takes half the
+  chat area (360–760px); under a 720px chat area it covers the chat until
+  Close. Another conversation closes it. The worker's terminal has one
+  mount: while the panel shows it, Workspaces does not. A worker that also
+  holds a browser or an editor stays on Workspaces (their state would not
+  survive the move): the panel says so in one muted line, with Open in
+  Workspaces (secondary). While a
+  conversation has live workers, its header carries a **"N working"** line
+  right of the name pill: the count in 12px muted, then up to three
+  workers as 24px chips (the thread chip's `--selection` fill; pressed =
+  `--selection-emphasis` while the panel shows that worker) with the
+  bubble's dot (the attention ring while it waits) and its name, "+N" for
+  the rest; a chip opens or closes the panel.
 - **Composer:** the shared composer box at the foot, "Message <name>". A 1:1
   message is addressed to that bot alone. A room's message goes to every bot
-  of the room (they may answer each other), as the room dock's does, unless
+  of the room (they may answer each other), unless
   bots are picked: a row of `@name` chips under the box (the room's bots,
   26px, the selection fills; pressed = `--selection-emphasis`), with a muted
   "To everyone here" while none is picked; starting the message with `@` and
@@ -450,7 +461,7 @@ tests, changelog draft, issue triage) that open the composer filled in.
 
 ### Remote
 
-One page, Tailnet first, on the sheet beside the tools dock with 28px sides
+One page, Tailnet first, filling the sheet with 28px sides
 (14px under a 640px sheet). Top to bottom:
 
 - **Header:** the 16px title, then one muted line that sums it up
@@ -550,7 +561,7 @@ One page, Tailnet first, on the sheet beside the tools dock with 28px sides
 
 Opened from the rail (the branch icon under Remote) or by clicking the
 branch text in the titlebar. It is about the **repo**, not its branches:
-the sheet beside the dock (see Rail and pages) with 28px sides; the header
+the whole sheet (see Rail and pages) with 28px sides; the header
 is the repo as `owner/repo` at the title size (the folder name without a
 GitHub remote), a small GitHub link icon beside it, a muted line with the
 open counts ("12 issues · 4 pull requests", "100+" at the read cap), and a
@@ -814,25 +825,21 @@ leaves the page.
   changed-since-you-looked dot) are in "Sidebar rows" after the Decisions
   Log.
 
-## Tools panel (Workspaces page)
+## File tree column (Workspaces page)
 
-The dock opposite the sidebar is the **room dock** (the agent factory's room
-for the active workspace), present on every launch. The titlebar's Room
-toggle is its only toggle, and its open state persists. With the factory off
-the dock says so in a few lines and offers to turn it on (or open Settings ›
-Factory) instead of threads. Task status and fan-out work are read in Fleet
-(the sidebar's Tasks line opens Fleet); a bot's workers are read on the
-Bots page. Git is not here: it is a page on the
-rail.
+Nothing docks opposite the sidebar (owner decision 2026-10-14): the bots'
+rooms and 1:1s are read and answered on the Bots page only, task status and
+fan-out work in Fleet (the sidebar's Tasks line opens Fleet), and Git is a
+page on the rail.
 
-**File tree column.** A separate, opt-in column on the same edge, between
-the panes and the room dock. Its titlebar
+**File tree column.** The one opt-in column on that edge, beside the
+panes. Its titlebar
 toggle (or ⌘⇧E / Ctrl+Shift+E, or the palette) shows it; open state and
 width (200–480px, drag the inner seam) persist. It is Workspaces-page
 chrome: a rail page covers it with the panes, and the toggle pressed from a
 rail page brings Workspaces forward. It lists the focused pane's folder, or
 that folder's git repository root when it is inside one. One seam on its
-pane side, a 40px header on the dock header's line, 24px rows with a chevron
+pane side, a 40px header on the pane tab strip's line, 24px rows with a chevron
 and a line icon; a selected row is a `--selection` fill. Click opens a file
 in an editor tab of the focused pane; drag drops its path into a terminal;
 the row menu has Open, Insert path into terminal, Copy path, Copy relative
@@ -909,13 +916,13 @@ A pane is a terminal column plus, when it needs one, a work area.
 
 - One seam per edge: the sidebar and the body share one 1px `--stroke` seam
   from the titlebar down; the pane border lands on the titlebar, sidebar and
-  dock seams instead of beside them; the pane tab strip and the dock header
-  end on the same line.
+  file tree seams instead of beside them; the pane tab strip and the file
+  tree header end on the same line.
 - A fill **or** a hairline, never both: user bubbles are fills without a
   border; composers are a hairline without a fill; Fleet cards and selected
   rows are fills; the sheet is an edge plus a faint shadow.
 - No boxes inside boxes: no inner card around a selected workspace's agents,
-  no doubled container in the dock, no dividers between toolbar buttons, no
+  no doubled container in a column, no dividers between toolbar buttons, no
   rule under the chat session header.
 - A boundary that only appears on demand stays hidden until then: the
   sidebar's filter field appears from its button and folds away when empty.
@@ -992,8 +999,8 @@ always neutral (the fill ladder).
   Tabular figures for counts, durations and diff stats.
 - **Icons** cap at 16px in chrome (19px on the rail); wmux's own icon set
   (`icons.tsx`), never emoji.
-- **Density:** the chrome module is **40px** (titlebar, pane header, dock
-  header, resume row, section headers). Sidebar rows are a title over one
+- **Density:** the chrome module is **40px** (titlebar, pane header, file
+  tree header, resume row, section headers). Sidebar rows are a title over one
   13px meta line; controls are 24–28px tall;
   every interactive element keeps a hit area of at least 24×24px. Base unit
   4px.
@@ -1012,7 +1019,7 @@ always neutral (the fill ladder).
   `fill` (Tint, Paper, Graphite), `fill-ring` (Zinc: fill plus a 1px inset
   ring), or `left-bar` (Amber Line: a 2px accent bar on the left edge). One
   selected thing per list; selection is never a status colour.
-- **Active tab** (pane tabs, dock tabs): a square-bottomed cell joined to
+- **Active tab** (pane tabs, work strip tabs): a square-bottomed cell joined to
   the body and marked by **one straight 2px bar on the strip's line** — the
   accent in the focused pane, a quiet tone elsewhere. Looks with
   `--tab-underline: 2px` draw that bar as the accent underline on every
@@ -1234,6 +1241,8 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
 | 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
 | 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
+| 2026-10-14 | Owner decision: the room dock goes — the dock opposite the sidebar, its titlebar Room toggle and the HQ room in it. The right side returns to what it held before the room dock replaced Moa's panel: nothing (Moa's panel existed only while Moa was on, 2026-10-05, and Moa is gone), with the file tree as the only opt-in column on that edge and its toggle the titlebar's last icon. Every rail page, Bots included, fills the whole sheet. Bot rooms and 1:1s are read and answered on the Bots page only. Amends the frame, Titlebar › Right, Rail and pages, the Tools panel (now File tree column) and the 2026-10-12/2026-10-13 rows | The dock showed the same rooms as the Bots page, so the owner met every conversation twice and the Bots page had to cover the dock to avoid a second copy. One place for bot conversations, and the panes keep the dock's 248–320px |
+| 2026-10-14 | Owner decision: a bot worker's terminal opens in a worker panel beside its bot's chat on the Bots page — Open and Resume no longer jump to Workspaces or change the active workspace — and a conversation with live workers shows "N working" in its header with the workers as chips that open the panel | Bot workers are hidden from the Workspaces sidebar, so a jump landed on a workspace the owner could not find again; reading or answering a worker belongs next to the bot that started it. The chips answer "what is it doing right now" without scrolling to the foot of the chat |
 
 ### Desktop conversation view
 
@@ -1417,8 +1426,8 @@ Agent, Git and Channels remain in the tools panel. The compact sidebar
 uses the same destinations with accessible names.
 
 The 2026-10-05 rules for Moa's panel and the Agent conversation's composer
-rows went with them in 5.0 (Decisions Log, 2026-10-12): the dock is the room
-dock.
+rows went with them in 5.0 (Decisions Log, 2026-10-12), and the room dock
+that replaced them went on 2026-10-14: nothing docks opposite the sidebar.
 
 ### Fleet page (2026-10-05 list; a rail page since 2026-10-03)
 

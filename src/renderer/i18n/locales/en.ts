@@ -4287,6 +4287,11 @@ export const en = {
   'botsPage.add.starting': "Starting {name}…",
   'botsPage.add.startingDetail': "It greets you here in a moment.",
   'botsPage.onboarding.loginOpened': "Finish signing in to Claude in the terminal tab, then come back to Bots.",
+  'botsPage.chat.working': "{count} working",
+  'botsPage.chat.workerPanel': "{name} terminal",
+  'botsPage.chat.closeWorker': "Close worker terminal",
+  'botsPage.chat.workerElsewhere': "This worker also has a browser or an editor open, which would reload if it moved here. It stays on Workspaces.",
+  'botsPage.chat.openInWorkspaces': "Open in Workspaces",
 } as const;
 
 export type TranslationKey = keyof typeof en;

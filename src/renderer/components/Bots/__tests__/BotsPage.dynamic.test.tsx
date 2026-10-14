@@ -499,7 +499,7 @@ describe('Bots page', () => {
     expect(posted[1]).toMatchObject({ workspaceId: 'w1', mentions: [LEAD] });
   });
 
-  it('a live worker shows in its bot\'s conversation; Open jumps to its pane on Workspaces', async () => {
+  it('a live worker shows in its bot\'s conversation; Open shows its terminal beside the chat, never switching workspace', async () => {
     seedRooms();
     // t1 is running.
     act(() => useStore.setState({
@@ -516,12 +516,24 @@ describe('Bots page', () => {
     const worker = q('[data-bots-worker="t1"]');
     expect(worker?.textContent).toContain('wtask: fix login');
     expect(worker?.getAttribute('data-worker-waiting')).toBe('true');
+    // The header names it: "1 working", the worker a toggle for the panel.
+    expect(q('[data-bots-working]')?.getAttribute('data-bots-working')).toBe('1');
     act(() => q('[data-bots-worker-open="t1"]')!.click());
-    expect(useStore.getState().activeWorkspaceId).toBe('t1');
-    expect(useStore.getState().appRoute).toBe('workspaces');
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
+    expect(useStore.getState().appRoute).toBe('bots');
+    expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: `bot:${LEAD}` });
+    expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
+    expect(q('[data-bots-working-worker="t1"]')?.getAttribute('aria-pressed')).toBe('true');
+    // The header chip closes it again; another conversation closes it too.
+    act(() => q('[data-bots-working-worker="t1"]')!.click());
+    expect(q('[data-bots-worker-panel]')).toBeNull();
+    act(() => q('[data-bots-worker-open="t1"]')!.click());
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    expect(useStore.getState().botsWorkerPanel).toBeNull();
+    expect(q('[data-bots-worker-panel]')).toBeNull();
   });
 
-  it('a done task offers Open only while its pane is open; a cleared one offers Resume, which focuses the new pane', async () => {
+  it('a done task offers Open only while its pane is open; a cleared one offers Resume, which shows the new pane beside the chat', async () => {
     seedRooms();
     const now = Date.now();
     const task = (taskId: string, taskWorkspaceId: string, extra: Record<string, unknown> = {}) => ({
@@ -541,7 +553,10 @@ describe('Bots page', () => {
     expect(bubble('wtask-moved-0000003').querySelector('[data-bots-worker-open="t1"]')).not.toBeNull();
     await act(async () => { (bubble('wtask-gone-00000002').querySelector('[data-bots-task-resume]') as HTMLButtonElement).click(); });
     expect(resumeWorker).toHaveBeenCalledWith('wtask-gone-00000002');
-    expect(useStore.getState().activeWorkspaceId).toBe('t1');
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
+    expect(useStore.getState().botsWorkerPanel?.workspaceId).toBe('t1');
+    expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
+    act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
   it('a worker waiting on input shows in its bot\'s 1:1 and in the room, with Open, though its pane reads idle', async () => {
@@ -565,8 +580,11 @@ describe('Bots page', () => {
     act(() => q('[data-bots-row="room:w1"]')!.click());
     expect(q('[data-bots-worker="t1"]')?.getAttribute('data-worker-needs-input')).toBe('true');
     act(() => q('[data-bots-worker-open="t1"]')!.click());
-    expect(useStore.getState().activeWorkspaceId).toBe('t1');
-    expect(useStore.getState().appRoute).toBe('workspaces');
+    expect(useStore.getState().activeWorkspaceId).toBe('hq');
+    expect(useStore.getState().appRoute).toBe('bots');
+    expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: 'room:w1' });
+    expect(q('[data-bots-worker-panel="t1"]')?.textContent).toContain('Worker needs input');
+    act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
   it('in a room a new bot\'s greeting is a "joined" line that opens its 1:1, where the greeting is', async () => {

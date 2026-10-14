@@ -221,10 +221,72 @@
 
 .wmux-bots-composer { flex-shrink: 0; padding: 4px 20px 16px; }
 
+/* The header's "N working" line: the live workers as chips (the thread
+   chip's fill; pressed = the worker panel shows it). */
+.wmux-bots-working {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.wmux-bots-working-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 160px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--chip-radius);
+  background: var(--selection);
+  font-size: 12px;
+  color: var(--text-sub);
+}
+.wmux-bots-working-chip:hover { background: var(--selection-hover); color: var(--text-main); }
+.wmux-bots-working-chip[aria-pressed='true'] { background: var(--selection-emphasis); color: var(--text-main); }
+
+/* The chat and, when one is open, a worker's terminal beside it
+   (BotsWorkerPanel): one --stroke seam on the panel's chat side, a 40px
+   header, the worker's panes below. Under a 720px chat area the panel
+   covers the chat instead; its Close returns to it. */
+.wmux-bots-chat-area {
+  container-type: inline-size;
+  container-name: botschat;
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.wmux-bots-worker {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: clamp(360px, 50%, 760px);
+  min-height: 0;
+  background: var(--bg-base);
+  border-left: 1px solid var(--stroke);
+}
+.wmux-bots-worker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 8px 0 12px;
+}
+.wmux-bots-worker-body { position: relative; flex: 1; min-height: 0; }
+.wmux-bots-worker-panes { position: absolute; inset: 0; display: flex; flex-direction: column; }
+@container botschat (max-width: 719px) {
+  .wmux-bots-worker { position: absolute; inset: 0; z-index: 4; width: auto; border-left: 0; }
+}
+
 @container bots (max-width: 799px) {
   .wmux-bots-list { width: 100%; border-right: 0; }
   .wmux-bots[data-view='chat'] .wmux-bots-list { display: none; }
   .wmux-bots[data-view='list'] .wmux-bots-chat { display: none; }
+  .wmux-bots[data-view='list'] .wmux-bots-chat-area { display: none; }
   .wmux-bots-back { display: inline-flex; }
   .wmux-bots-messages { padding-left: 12px; padding-right: 12px; }
   .wmux-bots-composer { padding-left: 12px; padding-right: 12px; }

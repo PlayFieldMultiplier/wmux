@@ -1,8 +1,8 @@
-// Pure display helpers for the room dock: labels, times and the one state
-// word a card may colour.
+// Pure display helpers for rooms and bot chats: labels, times and the one
+// state word a card may colour.
 import { BOT_ROLES, botTemplate, type BotRole, type BotTemplate } from '../../../shared/bot';
 import type { Party } from '../../../shared/handoff';
-import type { CardKind, RoomCard, ThreadId } from '../../../shared/room';
+import type { CardKind, RoomCard, ThreadId, ThreadSummary } from '../../../shared/room';
 import type { FactoryBotRow } from './factoryPorts';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -235,4 +235,11 @@ export function planTextWithNames(text: string, workspaceName: (id: string) => s
     const id = item ?? bare ?? '';
     return workspaceName(id) ?? t('room.plan.someWorkspace');
   });
+}
+
+/** The thread most recently written of a kind (`plan:` / `report:`). */
+export function latestThreadOf(threads: readonly ThreadSummary[], prefix: 'plan:' | 'report:'): ThreadSummary | null {
+  let best: ThreadSummary | null = null;
+  for (const th of threads) if (th.threadId.startsWith(prefix) && (!best || th.lastSeq > best.lastSeq)) best = th;
+  return best;
 }

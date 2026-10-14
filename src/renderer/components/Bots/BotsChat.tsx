@@ -6,14 +6,16 @@
 // bodies), the owner on the right in the user bubble, with the delivery line
 // (sent to / queued for) under a message sent from here. A question is the
 // room's own question card, answered in place; a plan or a proposal takes
-// the room's own answers (CardAnswers), so it is answered here exactly as in
-// the room dock. A system card (a refusal, a gate, a task's end, an error) is
+// the room's own answers (CardAnswers). A system card (a refusal, a gate, a task's end, an error) is
 // a quiet centred line with its body folded under Show more. A bot's live
 // worker — at work, or waiting on input — sits at the foot as a compact
-// status bubble with Open (the jump to its pane returns to Workspaces); so
-// does a worker waiting for an agent slot, and a done one whose stopped
-// Claude can resume the same conversation, with Resume. A room shows its
-// bots' workers the same way, under each bot's face. A bot's `job_changed`
+// status bubble with Open; so does a worker waiting for an agent slot, and a
+// done one whose stopped Claude can resume the same conversation, with
+// Resume. Open (and a Resume that started) shows the worker's terminal in a
+// panel beside the chat (BotsWorkerPanel), never switching the active
+// workspace, and the header's "N working" line names the live workers, each
+// a toggle for that panel. A room shows its bots' workers the same way,
+// under each bot's face. A bot's `job_changed`
 // card carries Undo (the previous job, written back through the bot port's
 // update).
 //
@@ -33,14 +35,13 @@
 // Sending: a 1:1 message is a room post in the bot's workspace that mentions
 // that one bot (main wakes it alone). A group message goes to the whole room
 // — main wakes every bot of the workspace — unless bots are picked: the chip
-// row under the box, or a leading `@name`, as in the room dock.
+// row under the box, or a leading `@name`.
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { RoomCard as RoomCardData, ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import Button from '../ui/Button';
 import { renderBrainMarkdown } from '../shared/BrainMarkdown';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
-import { focusNotificationTarget } from '../../hooks/useNotificationListener';
 import { useStore } from '../../stores';
 import type { FactoryBotPort, FactoryBotRow } from '../Room/factoryPorts';
 import { RoomCard, useIdLabels } from '../Room/RoomCard';
@@ -59,6 +60,9 @@ import type { BotTaskView } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
 import { stopBotSummary, type BotsStopPort } from './botsStop';
 import { InlineConfirm } from './InlineConfirm';
+import BotsWorkerPanel from './BotsWorkerPanel';
+import { displayWorkspaceName } from '../../utils/fanoutProvenance';
+import { selectWorkerPanelHost } from '../../stores/slices/roomSlice';
 import { routineScheduleText, routineStateText, useBotRoutines } from '../Schedules/BotRoutines';
 import '../Chat/chatMono.css';
 
@@ -289,7 +293,7 @@ function workerState(worker: BotWorker): string {
   return worker.waiting ? 'botsPage.worker.waiting' : 'botsPage.worker.running';
 }
 
-function WorkerBubble({ worker, t }: { worker: BotWorker; t: T }) {
+function WorkerBubble({ worker, t, shown, onOpen }: { worker: BotWorker; t: T; shown: boolean; onOpen: (workspaceId: string) => void }) {
   return (
     <div
       className="wmux-bots-bubble wmux-bots-bubble-bot flex items-center gap-2"
@@ -315,7 +319,8 @@ function WorkerBubble({ worker, t }: { worker: BotWorker; t: T }) {
         variant="secondary"
         data-bots-worker-open={worker.workspaceId}
         aria-label={t('botsPage.worker.openName', { name: worker.name })}
-        onClick={() => { focusNotificationTarget(() => useStore.getState(), { workspaceId: worker.workspaceId }); }}
+        aria-pressed={shown}
+        onClick={() => onOpen(worker.workspaceId)}
       >
         {t('botsPage.worker.open')}
       </Button>
@@ -323,14 +328,69 @@ function WorkerBubble({ worker, t }: { worker: BotWorker; t: T }) {
   );
 }
 
+/** The most worker names the header line spells out; the rest are "+N". */
+const WORKING_NAMES_MAX = 3;
+
+/** The header's "N working" line: the live workers by name, each a toggle
+ *  for the worker panel (pressed while it shows), a waiting one marked by
+ *  the attention ring as on its bubble. */
+function WorkingLine({ workers, shownId, onToggle, t }: { workers: readonly BotWorker[]; shownId: string | null; onToggle: (workspaceId: string) => void; t: T }) {
+  const named = workers.slice(0, WORKING_NAMES_MAX);
+  const more = workers.length - named.length;
+  return (
+    <div data-bots-working={workers.length} role="group" aria-label={t('botsPage.chat.working', { count: workers.length })} className="wmux-bots-working">
+      <span className="shrink-0 text-[12px] text-[var(--text-muted)]">{t('botsPage.chat.working', { count: workers.length })}</span>
+      {named.map((w) => (
+        <button
+          key={w.workspaceId}
+          type="button"
+          data-bots-working-worker={w.workspaceId}
+          aria-pressed={shownId === w.workspaceId}
+          aria-label={t('botsPage.worker.openName', { name: w.name })}
+          title={w.name}
+          onClick={() => onToggle(w.workspaceId)}
+          className={`wmux-bots-working-chip ${FOCUS_RING}`}
+        >
+          <span
+            aria-hidden="true"
+            className={`inline-block h-[6px] w-[6px] shrink-0 rounded-full ${w.waiting ? 'border-[1.5px] border-[var(--attention)]' : 'bg-[var(--text-muted)]'}`}
+          />
+          <span className="min-w-0 truncate">{w.name}</span>
+        </button>
+      ))}
+      {more > 0 && <span className="shrink-0 text-[12px] text-[var(--text-muted)]">{`+${more}`}</span>}
+    </div>
+  );
+}
+
+/** What the worker panel's header says for the shown workspace: a live
+ *  worker's name and state (needs-you text while it waits), else a task's
+ *  title (a done worker), else its workspace's name with no state. */
+function workerPanelView(workspaceId: string, workers: readonly BotWorker[], tasks: readonly BotTaskView[], t: T): { name: string; state: string | null; attention: boolean } {
+  const live = workers.find((w) => w.workspaceId === workspaceId);
+  if (live) return { name: live.name, state: t(workerState(live)), attention: live.waiting };
+  const task = tasks.find((x) => (x.workerWorkspaceId ?? x.taskWorkspaceId) === workspaceId);
+  if (task) return { name: task.title, state: t(task.stage === 'waiting_slot' ? 'botsPage.worker.waitingSlot' : 'botsPage.worker.resumable'), attention: false };
+  const ws = useStore.getState().workspaces.find((w) => w.id === workspaceId);
+  return { name: displayWorkspaceName(ws?.name ?? '', true), state: null, attention: false };
+}
+
 /** A bot's task that is not a live worker: waiting for an agent slot, or
  *  done with a stopped worker that can resume the same conversation. Open
  *  shows only while the worker's pane is still open; a cleared task offers
  *  Resume, which opens a new pane. */
-function TaskBubble({ task, t, resumePort, readOnly }: { task: BotTaskView; t: T; resumePort?: Pick<FactoryBotPort, 'resumeWorker'>; readOnly: boolean }) {
+function TaskBubble({ task, t, resumePort, readOnly, shownId, onOpen }: { task: BotTaskView; t: T; resumePort?: Pick<FactoryBotPort, 'resumeWorker'>; readOnly: boolean; shownId: string | null; onOpen: (workspaceId: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resumeWorker = resumePort?.resumeWorker;
+  // A Resume answered after this bubble left (another conversation) opens
+  // nothing; one still shown opens in the conversation shown now.
+  const live = useRef({ mounted: true, onOpen });
+  live.current.onOpen = onOpen;
+  useEffect(() => {
+    live.current.mounted = true;
+    return () => { live.current.mounted = false; };
+  }, []);
   const waiting = task.stage === 'waiting_slot';
   const paneWorkspaceId = task.workerWorkspaceId ?? task.taskWorkspaceId;
   const paneOpen = useStore((s) => !!paneWorkspaceId && s.workspaces.some((w) => w.id === paneWorkspaceId));
@@ -347,7 +407,8 @@ function TaskBubble({ task, t, resumePort, readOnly }: { task: BotTaskView; t: T
           variant="secondary"
           data-bots-worker-open={paneWorkspaceId}
           aria-label={t('botsPage.worker.openName', { name: task.title })}
-          onClick={() => { focusNotificationTarget(() => useStore.getState(), { workspaceId: paneWorkspaceId }); }}
+          aria-pressed={!!paneWorkspaceId && shownId === paneWorkspaceId}
+          onClick={() => { if (paneWorkspaceId) onOpen(paneWorkspaceId); }}
         >
           {t('botsPage.worker.open')}
         </Button>
@@ -364,11 +425,15 @@ function TaskBubble({ task, t, resumePort, readOnly }: { task: BotTaskView; t: T
             setError(null);
             void resumeWorker(task.taskId)
               .then((r) => {
+                if (!live.current.mounted) return;
                 if (!r.ok) setError(r.message ?? null);
-                else focusNotificationTarget(() => useStore.getState(), { workspaceId: r.workspaceId ?? paneWorkspaceId });
+                else {
+                  const opened = r.workspaceId ?? paneWorkspaceId;
+                  if (opened) live.current.onOpen(opened);
+                }
               })
-              .catch((err: unknown) => setError(String(err)))
-              .finally(() => setBusy(false));
+              .catch((err: unknown) => { if (live.current.mounted) setError(String(err)); })
+              .finally(() => { if (live.current.mounted) setBusy(false); });
           }}
         >
           {t('botsPage.worker.resume')}
@@ -773,8 +838,26 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     };
   }, [profileOpen]);
   const presence = conversation.kind === 'bot' ? botPresence(conversation.row) : null;
+  // The worker panel belongs to the conversation it was opened from: another
+  // conversation closes it.
+  const panel = useStore((s) => s.botsWorkerPanel);
+  const shownId = panel && panel.conversationId === conversation.id ? panel.workspaceId : null;
+  const hostedId = useStore(selectWorkerPanelHost);
+  useEffect(() => {
+    const st = useStore.getState();
+    if (st.botsWorkerPanel && st.botsWorkerPanel.conversationId !== conversation.id) st.setBotsWorkerPanel(null);
+  }, [conversation.id]);
+  const openWorker = useCallback((workspaceId: string) => {
+    useStore.getState().setBotsWorkerPanel({ workspaceId, conversationId: conversation.id });
+  }, [conversation.id]);
+  const toggleWorker = (workspaceId: string) => {
+    if (shownId === workspaceId) useStore.getState().setBotsWorkerPanel(null);
+    else openWorker(workspaceId);
+  };
+  const shown = shownId ? workerPanelView(shownId, workers, tasks, t) : null;
 
   return (
+    <div className="wmux-bots-chat-area" data-worker-open={shownId ? 'true' : undefined}>
     <section className="wmux-bots-chat" data-bots-chat={conversation.id} aria-label={title}>
       <div className="wmux-bots-chat-head">
         <button type="button" data-bots-back onClick={onBack} aria-label={t('botsPage.back')} title={t('botsPage.back')} className={`wmux-bots-back ${FOCUS_RING}`}>
@@ -794,6 +877,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
           {presence && <PresenceDot presence={presence} />}
           {group && <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{conversation.bots.length === 1 ? t('botsPage.botCountOne') : t('botsPage.botCount', { count: conversation.bots.length })}</span>}
         </button>
+        {!thread && workers.length > 0 && <WorkingLine workers={workers} shownId={shownId} onToggle={toggleWorker} t={t} />}
         {thread && (
           <button
             type="button"
@@ -880,7 +964,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
           return (
             <div key={w.workspaceId} className="wmux-bots-row wmux-bots-row-bot">
               {group && <span className="wmux-bots-row-avatar">{face ? <BotAvatar bot={face} size={24} /> : null}</span>}
-              <WorkerBubble worker={w} t={t} />
+              <WorkerBubble worker={w} t={t} shown={shownId === w.workspaceId} onOpen={openWorker} />
             </div>
           );
         })}
@@ -889,7 +973,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
           return (
             <div key={task.taskId} className="wmux-bots-row wmux-bots-row-bot">
               {group && <span className="wmux-bots-row-avatar">{face ? <BotAvatar bot={face} size={24} /> : null}</span>}
-              <TaskBubble task={task} t={t} resumePort={resumePort} readOnly={readOnly} />
+              <TaskBubble task={task} t={t} resumePort={resumePort} readOnly={readOnly} shownId={shownId} onOpen={openWorker} />
             </div>
           );
         })}
@@ -909,5 +993,17 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         />
       </div>
     </section>
+    {shownId && shown && (
+      <BotsWorkerPanel
+        workspaceId={shownId}
+        hosted={hostedId === shownId}
+        name={shown.name}
+        state={shown.state}
+        attention={shown.attention}
+        t={t}
+        onClose={() => useStore.getState().setBotsWorkerPanel(null)}
+      />
+    )}
+    </div>
   );
 }

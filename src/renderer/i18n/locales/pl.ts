@@ -4248,4 +4248,9 @@ export const pl = {
   'botsPage.add.starting': "Uruchamianie {name}…",
   'botsPage.add.startingDetail': "Za chwilę przywita się tutaj.",
   'botsPage.onboarding.loginOpened': "Dokończ logowanie do Claude w karcie terminala, a potem wróć do Botów.",
+  'botsPage.chat.working': "Pracuje: {count}",
+  'botsPage.chat.workerPanel': "Terminal: {name}",
+  'botsPage.chat.closeWorker': "Zamknij terminal workera",
+  'botsPage.chat.workerElsewhere': "Ten worker ma też otwartą przeglądarkę lub edytor, które przeładowałyby się po przeniesieniu tutaj. Zostaje w Obszarach roboczych.",
+  'botsPage.chat.openInWorkspaces': "Otwórz w Obszarach roboczych",
 } as const;
