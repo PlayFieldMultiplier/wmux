@@ -122,8 +122,8 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
 
 describe('handoff.send — addressee, attribution, delivery', () => {
   it('a Moa dispatch goes to the target workspace lead: delivered, directed fact, priority-1 wake, cards in both rooms', async () => {
-    const moa = bot('hq', 'moa');
-    const lead = bot('ws1', 'lead');
+    const moa = { ...bot('hq', 'moa'), name: 'Boss' };
+    const lead = { ...bot('ws1', 'lead'), name: 'Ada' };
     const verifier = bot('ws1', 'verifier');
     const h = await harness([moa, lead, verifier]);
     const r = h.router.send(binding(moa), { kind: 'dispatch', toWorkspaceId: 'ws1', title: 'Fix the login bug', body: 'details' });
@@ -140,7 +140,9 @@ describe('handoff.send — addressee, attribution, delivery', () => {
     expect(botSeesFact(verifier, received)).toBe(false);
     expect(h.rooms.read('ws1').cards.map((c) => c.kind)).toEqual(['fact']);
     expect(h.rooms.read('hq').cards).toHaveLength(1);
-    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'moa (moa)', title: 'Fix the login bug', body: 'details', fromWorkspaceId: 'hq' });
+    // A bot is named by its name alone: its internal role never shows.
+    expect(h.rooms.read('ws1').cards[0].title).toBe('dispatch → Ada: Fix the login bug');
+    expect(h.router.summarize(r.handoffId)).toEqual({ handoffId: r.handoffId, kind: 'dispatch', from: 'Boss', title: 'Fix the login bug', body: 'details', fromWorkspaceId: 'hq' });
   });
 
   it('any bot may dispatch into another workspace (messaging is every bot\'s); its chain starts at depth 1', async () => {

@@ -1273,11 +1273,13 @@ export class HandoffRouter {
     if (rooms) writeFactCards(rooms, { ...draft, id: `local-${kind}-${h.id}`, seq: 0, dedupeKey: '' }, ports.bots);
   }
 
+  /** A party as the owner reads it: a bot by its name alone (its internal
+   *  role never reaches a room line or a wake summary). */
   private partyLabel(p: Party): string {
     if (p.kind === 'human') return 'the owner';
     if (p.kind === 'system') return 'wmux';
     const bot = safeGet(this.opts.ports().bots, p.botId);
-    return bot ? `${bot.name || bot.role} (${bot.role})` : p.botId;
+    return bot ? bot.name || bot.role : p.botId;
   }
 
   // ── ask_person ──
