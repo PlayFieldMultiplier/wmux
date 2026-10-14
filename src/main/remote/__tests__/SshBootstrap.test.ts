@@ -15,6 +15,7 @@ import {
   lastJsonObject,
   parsePairResult,
   parseProbe,
+  parseServiceResult,
   planInstall,
   type HostProbe,
   type SshRun,
@@ -93,6 +94,8 @@ function fakeHost(state: {
   desktop?: boolean;
   downloadFails?: boolean;
   codes?: string[];
+  /** `daemon install-service --json` output; absent = a CLI without the verb. */
+  service?: Record<string, unknown>;
 }) {
   const calls: string[][] = [];
   const cliLog: string[] = [];
@@ -130,6 +133,9 @@ function fakeHost(state: {
     if (cli[0] === 'daemon' && cli[1] === 'stop') {
       state.status = { running: false };
       return ok('{"ok":true}');
+    }
+    if (cli[0] === 'daemon' && cli[1] === 'install-service' && state.service) {
+      return { ...ok(JSON.stringify(state.service, null, 2)), code: state.service.ok ? 0 : 1 };
     }
     if (cli[0] === 'web' && cli[1] === 'pair') {
       return ok(JSON.stringify({ code: codes.shift() ?? 'ZZZZ2345', expiresAt: 1, port: 7681, allowInput: true }));
@@ -252,11 +258,49 @@ describe('addSshHost', () => {
     expect(stop).toHaveBeenCalledWith('host-1');
   });
 
+  it('Start after reboot: installs the service after the host is saved, never touching web', async () => {
+    const host = fakeHost({ service: { ok: true, manager: 'systemd', enabled: true, active: false, linger: false, hint: 'Linger is off. Run once: sudo loginctl enable-linger me' } });
+    const { d, persist } = deps(host, async () => ({ ok: true, token: 'tok' }));
+    const recordService = vi.fn();
+    const r = await addSshHost('office', undefined, { ...d, startAfterReboot: true, recordService });
+    expect(r).toMatchObject({ ok: true, host: { startAfterReboot: true }, service: { ok: true, on: true, lingerCommand: 'sudo loginctl enable-linger me' } });
+    expect(persist).toHaveBeenCalled();
+    expect(recordService).toHaveBeenCalledWith('host-1');
+    const cli = host.cliCalls();
+    expect(cli[cli.length - 1]).toBe('daemon install-service --json');
+    expect(cli.filter((c) => c.startsWith('web ') && !c.startsWith('web pair'))).toEqual(['web --allow-input --json']);
+  });
+
+  it('Start after reboot: a host that cannot run the service is still added', async () => {
+    const host = fakeHost({});
+    const { d, persist } = deps(host, async () => ({ ok: true, token: 'tok' }));
+    const recordService = vi.fn();
+    const r = await addSshHost('office', undefined, { ...d, startAfterReboot: true, recordService });
+    expect(r).toMatchObject({ ok: true, service: { ok: false, kind: 'failed' } });
+    expect(persist).toHaveBeenCalled();
+    expect(recordService).not.toHaveBeenCalled();
+  });
+
   it('rejects an option-shaped alias without running ssh', async () => {
     const host = fakeHost({});
     const { d } = deps(host, async () => ({ ok: true, token: 't' }));
     expect(await addSshHost('-oProxyCommand=x', undefined, d)).toMatchObject({ ok: false, kind: 'invalid-alias' });
     expect(host.calls).toHaveLength(0);
+  });
+});
+
+describe('parseServiceResult', () => {
+  it('reads what install-service and uninstall-service answered', () => {
+    const json = (o: Record<string, unknown>) => `note\n${JSON.stringify(o, null, 2)}\n`;
+    expect(parseServiceResult(json({ ok: true, manager: 'systemd', enabled: true, linger: true }), true)).toEqual({ ok: true, on: true });
+    expect(parseServiceResult(json({ ok: true, manager: 'systemd', enabled: true, linger: null, hint: 'Run once: sudo loginctl enable-linger dev.user' }), true))
+      .toEqual({ ok: true, on: true, lingerCommand: 'sudo loginctl enable-linger dev.user' });
+    expect(parseServiceResult(json({ ok: false, manager: 'launchd', hint: 'A login service is not supported on macOS yet.' }), true))
+      .toEqual({ ok: false, kind: 'service-unsupported', message: 'A login service is not supported on macOS yet.' });
+    expect(parseServiceResult(json({ ok: true, manager: 'launchd', hint: 'No service is installed on macOS.' }), false)).toEqual({ ok: true, on: false });
+    expect(parseServiceResult(json({ ok: false, manager: 'systemd', error: 'enable failed' }), true)).toMatchObject({ ok: false, kind: 'failed', message: 'enable failed' });
+    // A CLI from before install-service prints its usage, not JSON.
+    expect(parseServiceResult('Usage: wmux daemon start | stop | status', true)).toMatchObject({ ok: false, kind: 'failed' });
   });
 });
 

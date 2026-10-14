@@ -175,6 +175,19 @@ export class RemoteHostsStore {
     return { ok: true, host: toPublic(host) };
   }
 
+  /** Records whether an SSH host's daemon runs as a login service. */
+  setStartAfterReboot(id: string, on: boolean): RemoteHostPublic | null {
+    const prev = this.hosts.find((h) => h.id === id);
+    if (!prev?.ssh) return null;
+    const { startAfterReboot: _prev, ...rest } = prev;
+    void _prev;
+    const updated: StoredRemoteHost = on ? { ...rest, startAfterReboot: true } : rest;
+    const next = this.hosts.map((h) => (h.id === id ? updated : h));
+    this.persist(next);
+    this.hosts = next;
+    return toPublic(updated);
+  }
+
   /** Records a re-confirmed SSH binding (new host key or resolved name). */
   updateSshBinding(id: string, binding: SshHostBinding): boolean {
     const prev = this.hosts.find((h) => h.id === id);

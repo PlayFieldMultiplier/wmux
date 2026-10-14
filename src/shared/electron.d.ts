@@ -67,7 +67,7 @@ import type {
   WebDiagnosis,
 } from './web';
 import type { BrowserHelpOutcome, BrowserHelpRequestInfo } from './browserHelp';
-import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshTunnelState } from './remoteHosts';
+import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from './remoteHosts';
 import type {
   FirstRunCheckResult,
   RegisterMcpResult,
@@ -451,7 +451,8 @@ declare global {
         onPollTick?: (callback: () => void) => () => void;
         /** Add PC over SSH. Optional: absent on a preload that predates it. */
         sshCandidates?: () => Promise<string[]>;
-        sshAdd?: (alias: string, requestId: string, label?: string) => Promise<SshAddResult>;
+        sshAdd?: (alias: string, requestId: string, label?: string, startAfterReboot?: boolean) => Promise<SshAddResult>;
+        sshService?: (hostId: string, on: boolean) => Promise<SshServiceResult>;
         sshStates?: () => Promise<Record<string, SshTunnelState>>;
         sshConfirm?: (hostId: string, accept?: { resolvedHost: string; hostKeyFingerprint: string }) => Promise<SshConfirmResult>;
         sshRepair?: (hostId: string) => Promise<SshAddResult>;

@@ -27,6 +27,8 @@ export interface RemoteHost {
   /** Present on hosts added with "Add PC over SSH": `origin` is then
    * `wmux-ssh://<id>` and every request goes through this binding's tunnel. */
   ssh?: SshHostBinding;
+  /** SSH hosts: the daemon there is installed as a login service ("Start after reboot"). */
+  startAfterReboot?: boolean;
 }
 
 /** One SSH host's tunnel, as the UI shows it. `kind` is an SshFailureKind. */
@@ -326,6 +328,8 @@ export const REMOTE_SSH_IPC = {
   REPAIR: 'remote:ssh:repair',
   /** Cancel an ADD in flight by its request id. */
   CANCEL: 'remote:ssh:cancel',
+  /** Turn "Start after reboot" on or off for an SSH host. */
+  SERVICE: 'remote:ssh:service',
 } as const;
 
 export type SshAddPhase = 'connect' | 'probe' | 'install' | 'start' | 'pair' | 'register';
@@ -347,7 +351,19 @@ export interface SshAddFailure {
 }
 
 export type SshAddResult =
-  | { ok: true; host: RemoteHostPublic; upgradePending: boolean; viewOnly?: boolean }
+  | { ok: true; host: RemoteHostPublic; upgradePending: boolean; viewOnly?: boolean; service?: SshServiceResult }
+  | SshAddFailure;
+
+/**
+ * "Start after reboot" on an SSH host (`wmux daemon install-service` /
+ * `uninstall-service` there). `lingerCommand` is set when the service is on
+ * but systemd stops it at logout and skips it at boot until someone with sudo
+ * runs that command on the host. `unsupported` carries the host's own hint
+ * (no systemd user manager, macOS) for running it under another supervisor.
+ */
+export type SshServiceResult =
+  | { ok: true; on: true; lingerCommand?: string }
+  | { ok: true; on: false }
   | SshAddFailure;
 
 export type SshConfirmResult =

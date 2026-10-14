@@ -114,7 +114,7 @@ import type {
   PcRailStreamEvent,
 } from '../shared/pcRail';
 import type { PcRailFeedEvent } from '../main/remote/pcRailWire';
-import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshTunnelState } from '../shared/remoteHosts';
+import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from '../shared/remoteHosts';
 import { REMOTE_SSH_IPC } from '../shared/remoteHosts';
 
 /** Mirrors {@link McpStatusPayload} in src/main/ipc/handlers/mcp.handler.ts. */
@@ -2077,8 +2077,9 @@ document.addEventListener('DOMContentLoaded', () => {
   },
   // Add PC over SSH: main runs ssh; the renderer only names the destination.
   sshCandidates: () => ipcRenderer.invoke(REMOTE_SSH_IPC.CANDIDATES) as Promise<string[]>,
-  sshAdd: (alias: string, requestId: string, label?: string) =>
-    ipcRenderer.invoke(REMOTE_SSH_IPC.ADD, alias, requestId, label) as Promise<SshAddResult>,
+  sshAdd: (alias: string, requestId: string, label?: string, startAfterReboot?: boolean) =>
+    ipcRenderer.invoke(REMOTE_SSH_IPC.ADD, alias, requestId, label, startAfterReboot) as Promise<SshAddResult>,
+  sshService: (hostId: string, on: boolean) => ipcRenderer.invoke(REMOTE_SSH_IPC.SERVICE, hostId, on) as Promise<SshServiceResult>,
   sshStates: () => ipcRenderer.invoke(REMOTE_SSH_IPC.STATES) as Promise<Record<string, SshTunnelState>>,
   sshConfirm: (hostId: string, accept?: { resolvedHost: string; hostKeyFingerprint: string }) =>
     ipcRenderer.invoke(REMOTE_SSH_IPC.CONFIRM, hostId, accept) as Promise<SshConfirmResult>,

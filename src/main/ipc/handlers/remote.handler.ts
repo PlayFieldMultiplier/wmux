@@ -32,8 +32,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { addSshHost, observeSshHost, repairSshHost } from '../../remote/sshAddFlow';
 import { listSshConfigHosts } from '../../remote/sshConfigHosts';
-import { loadServerManifest, openVerifiedArtifact, type SshRun } from '../../remote/SshBootstrap';
-import { isValidSshAlias } from '../../remote/sshCommand';
+import { loadServerManifest, openVerifiedArtifact, setHostService, type SshRun } from '../../remote/SshBootstrap';
+import { isValidSshAlias, runSsh } from '../../remote/sshCommand';
 import type { ServerArtifactManifest } from '../../../shared/sshPcContract';
 import { RemoteAttentionSubscriber } from '../../remote/RemoteAttentionSubscriber';
 import type { RemoteAttentionNotification } from '../../remote/remoteAttention';
@@ -57,6 +57,7 @@ import type {
   RemoteWorkspaceSummary,
   SshAddResult,
   SshConfirmResult,
+  SshServiceResult,
   SshTunnelState,
 } from '../../../shared/remoteHosts';
 
@@ -1074,7 +1075,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
 
   ipcMain.removeHandler(REMOTE_SSH_IPC.ADD);
   ipcMain.handle(REMOTE_SSH_IPC.ADD, wrapHandler(REMOTE_SSH_IPC.ADD,
-    async (e: IpcMainInvokeEvent, rawAlias: unknown, rawRequestId: unknown, label?: unknown): Promise<SshAddResult> => {
+    async (e: IpcMainInvokeEvent, rawAlias: unknown, rawRequestId: unknown, label?: unknown, startAfterReboot?: unknown): Promise<SshAddResult> => {
       const alias = typeof rawAlias === 'string' ? rawAlias.trim() : '';
       const requestId = typeof rawRequestId === 'string' ? rawRequestId.slice(0, 64) : '';
       const safeLabel = typeof label === 'string' ? label.slice(0, 128) : undefined;
@@ -1111,8 +1112,28 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
           if (!sender.isDestroyed()) sender.send(REMOTE_SSH_IPC.PROGRESS, { requestId, phase });
         },
         signal: controller.signal,
+        startAfterReboot: startAfterReboot === true,
+        recordService: (id) => {
+          try { store.setStartAfterReboot(id, true); } catch { /* the service runs either way */ }
+        },
       }).finally(() => { if (sshAdds.get(requestId) === controller) sshAdds.delete(requestId); });
       if (result.ok) statusProber.invalidate(result.host.id);
+      return result;
+    }));
+
+  ipcMain.removeHandler(REMOTE_SSH_IPC.SERVICE);
+  ipcMain.handle(REMOTE_SSH_IPC.SERVICE, wrapHandler(REMOTE_SSH_IPC.SERVICE,
+    async (_e: IpcMainInvokeEvent, rawHostId: unknown, on: unknown): Promise<SshServiceResult> => {
+      const host = store.get(assertString(rawHostId, 'hostId'));
+      if (!host?.ssh || !isValidSshAlias(host.ssh.alias)) return { ok: false, kind: 'failed', message: 'unknown host' };
+      const result = await setHostService(deps.sshRun ?? runSsh, host.ssh.alias, on === true);
+      if (result.ok) {
+        try {
+          store.setStartAfterReboot(host.id, result.on);
+        } catch {
+          return { ok: false, kind: 'failed', message: 'could not save host' };
+        }
+      }
       return result;
     }));
 
@@ -1226,6 +1247,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     ipcMain.removeHandler(REMOTE_SSH_IPC.CONFIRM);
     ipcMain.removeHandler(REMOTE_SSH_IPC.REPAIR);
     ipcMain.removeHandler(REMOTE_SSH_IPC.CANCEL);
+    ipcMain.removeHandler(REMOTE_SSH_IPC.SERVICE);
     // #1391 — the timer is the one thing here that outlives `removeHandler`.
     // Every other resource above is reachable only through a route that has
     // just been unregistered; an interval keeps firing on its own, against

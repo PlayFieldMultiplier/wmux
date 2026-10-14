@@ -4,8 +4,10 @@ import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Field from '../ui/Field';
+import Checkbox from '../ui/Checkbox';
+import { SshServiceNote } from './SshServiceDialog';
 import { FOCUS_RING } from '../focusRing';
-import type { SshAddFailure, SshAddPhase, SshAddResult } from '../../../shared/remoteHosts';
+import type { SshAddFailure, SshAddPhase, SshAddResult, SshServiceResult } from '../../../shared/remoteHosts';
 import type { TranslationKey } from '../../i18n/locales/en';
 
 // ─── "Add PC over SSH" ───────────────────────────────────────────────────────
@@ -80,7 +82,7 @@ type Step =
   | { kind: 'pick' }
   | { kind: 'working'; alias: string; phase: SshAddPhase }
   | { kind: 'failed'; alias: string; failure: SshAddFailure }
-  | { kind: 'done'; label: string; upgradePending: boolean; viewOnly: boolean };
+  | { kind: 'done'; label: string; upgradePending: boolean; viewOnly: boolean; service?: SshServiceResult };
 
 export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps) {
   const t = useT();
@@ -88,6 +90,8 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
+  // Opt-in, off by default: a login service outlives this dialog on someone else's computer.
+  const [startAfterReboot, setStartAfterReboot] = useState(false);
   const [step, setStep] = useState<Step>({ kind: 'pick' });
   const requestRef = useRef('');
   const mounted = useRef(true);
@@ -117,7 +121,7 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
     setStep({ kind: 'working', alias, phase: 'connect' });
     let res: SshAddResult;
     try {
-      res = await remote.sshAdd(alias, requestId);
+      res = await remote.sshAdd(alias, requestId, undefined, startAfterReboot);
     } catch {
       res = { ok: false, kind: 'failed', message: '' };
     }
@@ -127,7 +131,7 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
       return;
     }
     if (res.ok) {
-      setStep({ kind: 'done', label: res.host.label, upgradePending: res.upgradePending, viewOnly: res.viewOnly === true });
+      setStep({ kind: 'done', label: res.host.label, upgradePending: res.upgradePending, viewOnly: res.viewOnly === true, service: res.service });
       onAdded?.(res.host.id);
     } else {
       setStep({ kind: 'failed', alias, failure: res });
@@ -209,6 +213,9 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
             {typedTarget && !target && (
               <p className="wmux-a2a-note" data-tone="danger" role="alert">{t('remoteSsh.badTarget')}</p>
             )}
+            <Field label={t('remoteSsh.startAfterReboot')} description={t('remoteSsh.startAfterRebootHint')}>
+              <Checkbox checked={startAfterReboot} onCheckedChange={setStartAfterReboot} data-testid="remote-ssh-start-after-reboot" />
+            </Field>
             <p className="wmux-remote-connect-note" data-testid="remote-ssh-consent">{t('remoteSsh.consent')}</p>
           </div>
         )}
@@ -249,6 +256,7 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
             <p className="wmux-remote-connect-note">{t('remoteSsh.added', { name: step.label })}</p>
             {step.viewOnly && <p className="wmux-a2a-note" data-tone="warning" data-testid="remote-ssh-view-only">{t('remoteSsh.viewOnly')}</p>}
             {step.upgradePending && <p className="wmux-a2a-note" data-tone="warning">{t('remoteSsh.upgradePending')}</p>}
+            {step.service && <SshServiceNote result={step.service} name={step.label} />}
           </div>
         )}
       </DialogBody>
