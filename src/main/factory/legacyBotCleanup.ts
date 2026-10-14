@@ -12,7 +12,12 @@
 // (Moa / Lead), and, for a Lead, it is still not enabled (the owner turning
 // one on keeps it). It counts as talked to when any `human` card in any room
 // (factory/rooms/*.jsonl) is addressed to it (refs.botIds / refs.botId).
-// When the rooms cannot be read, nothing is removed.
+// Rooms and that migration shipped together (4.4.0), and room retention only
+// drops cards older than ROOM_LIMITS.RETAIN_DAYS (90), so a card the owner
+// wrote cannot have aged out before this step's first run; the card cap
+// (ROOM_STORE_LIMITS.MAX_CARDS) can drop old cards sooner, so a room at the
+// cap counts as unreadable. When the rooms cannot be read, nothing is
+// removed.
 //
 // Removing a bot is what the bot store does on remove: the profile and its
 // usage go; a phone pin (settings.phoneBotId) naming it is cleared. bots.json
@@ -24,14 +29,16 @@ import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import { BOT_ID_RE } from '../../shared/bot';
 import { BOTS_FILE_VERSION, botsFilePath } from './botStore';
+import { ROOM_STORE_LIMITS } from './roomWriter';
 import { factorySettingsPath } from './factorySettings';
 import type { FactoryMigrationContext } from './migrate';
 
 const LEGACY_NAMES: Readonly<Record<string, string>> = { moa: 'Moa', lead: 'Lead' };
 
 /** The bot ids an owner message in the rooms was addressed to, or null when
- *  the rooms folder exists but cannot be read. */
-export function botsTalkedTo(roomsDir: string): Set<string> | null {
+ *  the rooms folder exists but cannot be read, or a room is at the card cap
+ *  (its oldest cards may be gone). */
+export function botsTalkedTo(roomsDir: string, maxCards: number = ROOM_STORE_LIMITS.MAX_CARDS): Set<string> | null {
   const out = new Set<string>();
   let names: string[];
   try {
@@ -46,7 +53,10 @@ export function botsTalkedTo(roomsDir: string): Set<string> | null {
     } catch {
       return null;
     }
+    const cardIds = new Set<string>();
     for (const line of text.split('\n')) {
+      const id = /"id":"([^"]{1,200})"/.exec(line)?.[1];
+      if (id) cardIds.add(id);
       if (!line.includes('"human"')) continue;
       let card: unknown;
       try {
@@ -60,6 +70,7 @@ export function botsTalkedTo(roomsDir: string): Set<string> | null {
       const ids = [...(Array.isArray(c.refs?.botIds) ? c.refs.botIds : []), c.refs?.botId];
       for (const id of ids) if (typeof id === 'string' && BOT_ID_RE.test(id)) out.add(id);
     }
+    if (cardIds.size >= maxCards) return null;
   }
   return out;
 }

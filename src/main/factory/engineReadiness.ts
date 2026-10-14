@@ -9,9 +9,13 @@
 //
 // FACTORY_ENGINE_LOGIN starts the sign-in the app already uses for accounts:
 // `claude auth login` in a new terminal tab of the active workspace (the
-// renderer's `surface.new`), typed once the shell is up. The CLI opens the
-// browser itself; the tab stays for the owner to read or close. One at a
-// time. The renderer polls readiness to see the sign-in land.
+// renderer's `surface.new`), typed once the shell is up. The line clears
+// CLAUDE_CONFIG_DIR first, so a workspace profile or account binding cannot
+// send the sign-in to another config folder than the one readiness reads.
+// The CLI opens the browser itself; the tab stays for the owner to read or
+// close. One at a time. The renderer polls readiness to see the sign-in land.
+// Known gap: a workspace whose profile starts an agent in every new pane
+// receives the line as that agent's input.
 
 import type { FactoryEngineReadiness } from '../../shared/factoryEngine';
 
@@ -44,7 +48,19 @@ export async function engineReadiness(deps: EngineReadinessDeps): Promise<Factor
   }
 }
 
-export const CLAUDE_LOGIN_LINE = 'claude auth login';
+export const CLAUDE_LOGIN_COMMAND = 'claude auth login';
+
+/** The sign-in line for the tab's shell, with CLAUDE_CONFIG_DIR cleared.
+ *  `shell` is the shell the tab runs (Windows: the native one main picked;
+ *  elsewhere undefined = the user's POSIX shell). Pure. */
+export function claudeLoginLine(platform: NodeJS.Platform, shell: string | undefined): string {
+  if (platform === 'win32') {
+    const base = (shell ?? '').split(/[\\/]/).pop()?.toLowerCase() ?? '';
+    if (base.startsWith('cmd')) return `set "CLAUDE_CONFIG_DIR=" & ${CLAUDE_LOGIN_COMMAND}`;
+    if (base.startsWith('pwsh') || base.startsWith('powershell') || base === '') return `$env:CLAUDE_CONFIG_DIR=$null; ${CLAUDE_LOGIN_COMMAND}`;
+  }
+  return `env -u CLAUDE_CONFIG_DIR ${CLAUDE_LOGIN_COMMAND}`;
+}
 
 export interface EngineLoginDeps {
   /** Open a terminal tab in the active workspace (renderer `surface.new`);
@@ -79,5 +95,5 @@ async function open(deps: EngineLoginDeps): Promise<void> {
   if (!ptyId) {
     throw new Error('wmux could not open a terminal for the Claude sign-in. Run `claude auth login` in a terminal.');
   }
-  deps.typeLine(ptyId, CLAUDE_LOGIN_LINE);
+  deps.typeLine(ptyId, claudeLoginLine(deps.platform, shell));
 }

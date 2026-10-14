@@ -1,7 +1,7 @@
 // The default engine's readiness (no model turn) and the Claude sign-in tab.
 
 import { describe, expect, it, vi } from 'vitest';
-import { CLAUDE_LOGIN_LINE, engineReadiness, startEngineLogin, type EngineLoginDeps } from '../engineReadiness';
+import { claudeLoginLine, engineReadiness, startEngineLogin, type EngineLoginDeps } from '../engineReadiness';
 
 describe('engineReadiness', () => {
   it('no claude executable: not installed, and the credential is never read', async () => {
@@ -42,13 +42,22 @@ describe('startEngineLogin', () => {
     const d = deps();
     await startEngineLogin(d);
     expect(d.openTab).toHaveBeenCalledWith(undefined);
-    expect(d.typeLine).toHaveBeenCalledWith('pty-1', CLAUDE_LOGIN_LINE);
+    expect(d.typeLine).toHaveBeenCalledWith('pty-1', 'env -u CLAUDE_CONFIG_DIR claude auth login');
   });
 
   it('on Windows the tab runs the native shell (a WSL default would sign in a Linux claude)', async () => {
     const d = deps({ platform: 'win32' });
     await startEngineLogin(d);
     expect(d.openTab).toHaveBeenCalledWith('pwsh.exe');
+    expect(d.typeLine).toHaveBeenCalledWith('pty-1', '$env:CLAUDE_CONFIG_DIR=$null; claude auth login');
+  });
+
+  it('the line clears CLAUDE_CONFIG_DIR in the syntax of the tab\'s shell', () => {
+    expect(claudeLoginLine('darwin', undefined)).toBe('env -u CLAUDE_CONFIG_DIR claude auth login');
+    expect(claudeLoginLine('win32', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe('$env:CLAUDE_CONFIG_DIR=$null; claude auth login');
+    expect(claudeLoginLine('win32', 'powershell.exe')).toBe('$env:CLAUDE_CONFIG_DIR=$null; claude auth login');
+    expect(claudeLoginLine('win32', 'C:\\Windows\\System32\\cmd.exe')).toBe('set "CLAUDE_CONFIG_DIR=" & claude auth login');
+    expect(claudeLoginLine('win32', 'C:\\Program Files\\Git\\bin\\bash.exe')).toBe('env -u CLAUDE_CONFIG_DIR claude auth login');
   });
 
   it('no tab: rejects with the command to run by hand, types nothing', async () => {

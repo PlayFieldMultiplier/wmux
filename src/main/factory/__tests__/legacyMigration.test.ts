@@ -144,6 +144,14 @@ describe('Moa-era bot cleanup (step 2 → 3)', () => {
     expect(botsTalkedTo(path.join(dir, 'factory', 'rooms-file'))).toBeNull();
   });
 
+  it('a room at the card cap (its oldest cards may be gone) removes nothing', () => {
+    seed();
+    const rooms = path.join(dir, 'factory', 'rooms');
+    expect(botsTalkedTo(rooms, 3)?.has(TALKED)).toBe(true);
+    fs.writeFileSync(path.join(rooms, 'ws-full.jsonl'), ['c1', 'c2', 'c3'].map((id, i) => JSON.stringify({ version: 1, id, seq: i + 1, kind: 'status' })).join('\n'));
+    expect(botsTalkedTo(rooms, 3)).toBeNull();
+  });
+
   it('recognizes only the shape the old step wrote', () => {
     expect(isLegacyMigrationBot(bot(MOA, 'moa', 'Moa', true), RUN_AT)).toBe(true);
     expect(isLegacyMigrationBot(bot(MOA, 'moa', 'Moa (mine)', true), RUN_AT)).toBe(false);

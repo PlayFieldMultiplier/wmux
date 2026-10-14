@@ -124,7 +124,8 @@ export function factoryWorkerResumeHandler(
 const DEFAULT_READINESS_DEPS: EngineReadinessDeps = {
   claudeExecutable: resolveClaudeExecutable,
   credential: async () => {
-    const r = await loadClaudeCredential();
+    // The folder the bot engine's claude reads (it inherits main's env).
+    const r = await loadClaudeCredential(process.env.CLAUDE_CONFIG_DIR || undefined);
     return r.ok ? { ok: true } : { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) };
   },
 };
