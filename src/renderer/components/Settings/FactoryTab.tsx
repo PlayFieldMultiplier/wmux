@@ -23,9 +23,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { BOT_JOB_MAX, BOT_NAME_MAX, TEMPLATE_LEGACY_ROLE, normalizeBotJob, normalizeBotName, type BotRole, type BotTemplate } from '../../../shared/bot';
-import type { FactoryBotAvatarPickResult, FactoryBotRepoSuggestion } from '../../../shared/botCreate';
-import type { BotProfile } from '../../../shared/bot';
+import { BOT_JOB_MAX, BOT_NAME_MAX, TEMPLATE_LEGACY_ROLE, isCoordinatorBot, normalizeBotJob, normalizeBotName, type BotProfile, type BotRole, type BotTemplate } from '../../../shared/bot';
+import { TEAM_TEMPLATES, type FactoryBotAvatarPickResult, type FactoryBotRepoSuggestion } from '../../../shared/botCreate';
 import { FACTORY_LANE_DAILY_CAP_MAX } from '../../../shared/factorySettings';
 import { refreshRoomStatus } from '../../hooks/useRoomSync';
 import {
@@ -417,6 +416,11 @@ export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow
   return { view, repoFolder, choose, chooseNone: () => { setNone(true); setFolder(null); }, error };
 }
 
+/** The names "Add team" gives its bots, in the owner's language. */
+export function teamNames(t: T): Record<string, string> {
+  return Object.fromEntries(TEAM_TEMPLATES.map((tpl) => [tpl, t(`botsPage.teamName.${tpl}`)]));
+}
+
 /** "Add bot": a workspace and a name, optionally a picture, a template
  *  chip that prefills the job, the job itself and the repository
  *  (addBotRepoView; optional, always shown). Main derives the repo from the
@@ -445,14 +449,18 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
   const [avatar, setAvatar] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // The bots are off: Add first asks, in place, to turn them on.
-  const [confirmOn, setConfirmOn] = useState(false);
+  // The bots are off: Add (or Add team) first asks, in place, to turn them on.
+  const [confirmOn, setConfirmOn] = useState<'bot' | 'team' | null>(null);
   const repo = useAddBotRepo(port, rows, workspaceId, pickFolder);
   // A name is required; a job is optional but, when written, one the store keeps.
   const typedName = normalizeBotName(name);
   const typedJob = normalizeBotJob(job);
   const jobOk = job.trim() === '' || typedJob !== undefined;
   const blocked = addBotBlockedReason({ canCreate: !!port.create, workspaceId, name, jobOk });
+  // "Add team": the five team bots in this workspace, offered while it has no
+  // coordinator (the team's lead is its first bot).
+  const hasLead = rows.some((r) => r.bot.workspaceId === workspaceId && r.bot.enabled && isCoordinatorBot(r.bot));
+  const canTeam = !!port.createTeam && !!workspaceId && !hasLead;
 
   const pickTemplate = (next: BotTemplate) => {
     const picked = template === next ? null : next;
@@ -465,7 +473,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
   };
 
   // An edit that makes the form invalid closes the turn-on confirm.
-  useEffect(() => { if (blocked) setConfirmOn(false); }, [blocked]);
+  useEffect(() => { if (blocked) setConfirmOn((c) => (c === 'bot' ? null : c)); }, [blocked]);
 
   const add = async (turnOnFirst: boolean) => {
     if (!port.create || !typedName || blocked) return;
@@ -490,10 +498,31 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
-      setConfirmOn(false);
+      setConfirmOn(null);
+    }
+  };
+  const addTeam = async (turnOnFirst: boolean) => {
+    if (!port.createTeam || !canTeam) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (turnOnFirst) {
+        const turnOn = props.turnOn ?? (() => turnBotsOn(getFactorySettingsPort()));
+        if (!(await turnOn())) { setError(t('settings.factory.notStarted')); return; }
+      }
+      const r = await port.createTeam({ workspaceId, names: teamNames(t), ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      // The team's lead is the one to talk to: its chat opens.
+      if (r.ok) onDone(r.bots[0]);
+      else setError(r.message || t('settings.factory.addTeamFailed'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+      setConfirmOn(null);
     }
   };
   const shownError = error ?? repo.error;
+  const names = teamNames(t);
 
   return (
     <div data-testid="factory-add-bot" className="flex flex-col gap-2 px-3 py-2">
@@ -574,24 +603,36 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
       {shownError && <SettingNote tone="danger" role="alert" data-testid="factory-add-bot-error">{shownError}</SettingNote>}
       {confirmOn ? (
         <InlineConfirm
-          text={t('settings.factory.addBotTurnsOn', { name: typedName ?? '' })}
+          text={confirmOn === 'team' ? t('settings.factory.addTeamTurnsOn') : t('settings.factory.addBotTurnsOn', { name: typedName ?? '' })}
           confirmLabel={t('settings.factory.addBotTurnOnAndAdd')}
           cancelLabel={t('settings.factory.cancel')}
           busy={busy}
           tone="primary"
-          onConfirm={() => void add(true)}
-          onCancel={() => setConfirmOn(false)}
+          onConfirm={() => void (confirmOn === 'team' ? addTeam(true) : add(true))}
+          onCancel={() => setConfirmOn(null)}
           testId="factory-add-bot-on"
         />
       ) : (
         <div className="flex items-center justify-end gap-1.5">
           {blocked && <span data-testid="factory-add-bot-blocked" className="mr-auto min-w-0 truncate text-[11px] text-[var(--text-muted)]">{t(blocked, { max: BOT_NAME_MAX })}</span>}
+          {canTeam && (
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="factory-add-team"
+              title={t('settings.factory.addTeamHint', { names: TEAM_TEMPLATES.map((tpl) => names[tpl]).join(', '), lead: names.coordinator })}
+              onClick={() => (props.botsOff ? setConfirmOn('team') : void addTeam(false))}
+              disabled={busy}
+            >
+              {t('settings.factory.addTeam')}
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => onDone()} disabled={busy}>{t('settings.factory.cancel')}</Button>
           <Button
             size="sm"
             variant="primary"
             data-testid="factory-add-bot-submit"
-            onClick={() => (props.botsOff ? setConfirmOn(true) : void add(false))}
+            onClick={() => (props.botsOff ? setConfirmOn('bot') : void add(false))}
             disabled={busy || blocked !== null}
           >
             {t('settings.factory.addBotSubmit')}

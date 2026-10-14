@@ -1184,6 +1184,8 @@ const electronAPI = {
       factoryBotCall('bot.update', { botId, patch }),
     createBot: (req: import('../shared/botCreate').FactoryBotCreateRequest) =>
       ipcRenderer.invoke(IPC.FACTORY_BOT_CREATE, req) as Promise<import('../shared/botCreate').FactoryBotCreateResult>,
+    createBotTeam: (req: import('../shared/botCreate').FactoryBotCreateTeamRequest) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_CREATE_TEAM, req) as Promise<import('../shared/botCreate').FactoryBotCreateTeamResult>,
     pickBotAvatar: () =>
       ipcRenderer.invoke(IPC.FACTORY_BOT_PICK_AVATAR) as Promise<import('../shared/botCreate').FactoryBotAvatarPickResult>,
     setBotAvatar: (botId: string, avatar: string | null) =>

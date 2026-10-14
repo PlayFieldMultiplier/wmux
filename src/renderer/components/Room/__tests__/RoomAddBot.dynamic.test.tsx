@@ -11,12 +11,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../../stores';
 import type { BotProfile } from '../../../../shared/bot';
 import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
-import { RoomComposer, roomBots } from '../RoomComposer';
+import { MentionChips, RoomComposer, roomBots, roomLead } from '../RoomComposer';
 import { BotChips } from '../BotChips';
 import { en } from '../../../i18n/locales/en';
 import { AddBotForm, FactoryTab, addBotRepoView, repoKeyLabel } from '../../Settings/FactoryTab';
 import type { FactoryBotPort, FactoryBotRow } from '../factoryPorts';
-import type { FactoryBotCreateRequest, FactoryBotCreateResult, FactoryBotRepoSuggestion } from '../../../../shared/botCreate';
+import type { FactoryBotCreateRequest, FactoryBotCreateResult, FactoryBotCreateTeamRequest, FactoryBotCreateTeamResult, FactoryBotRepoSuggestion } from '../../../../shared/botCreate';
 
 const WS = 'ws-a';
 const t = (key: string, vars?: Record<string, string | number>) =>
@@ -353,5 +353,60 @@ describe('BotChips secondary word', () => {
     expect(secondary.className).toContain('truncate');
     expect(Number(secondary.style.flexShrink)).toBeGreaterThan(Number(getComputedStyle(name).flexShrink || 1));
     expect(chip.getAttribute('aria-label')).toContain('Moa, A very long workspace name');
+  });
+});
+
+describe('Add team', () => {
+  const q = <E extends Element = HTMLElement>(id: string) => container.querySelector<E & HTMLElement>(`[data-testid="${id}"]`);
+  function teamPort(rows: FactoryBotRow[]) {
+    const lead = row('bot-0000000a', { template: 'coordinator', role: 'moa', name: 'botsPage.teamName.coordinator' }).bot;
+    const createTeam = vi.fn(async (_req: FactoryBotCreateTeamRequest): Promise<FactoryBotCreateTeamResult> => ({ ok: true, bots: [lead] }));
+    const port: FactoryBotPort = {
+      available: true, list: async () => rows, subscribe: () => () => undefined, act: async () => ({ ok: true }),
+      create: async () => ({ ok: false, code: 'invalid_argument', message: 'x' }), createTeam,
+    };
+    return { port, createTeam, lead };
+  }
+
+  it('adds the five named bots to the chosen workspace with its repository, and opens the lead', async () => {
+    const { port, createTeam, lead } = teamPort([]);
+    const onDone = vi.fn();
+    await render(createElement(AddBotForm, { port, t, rows: [], workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, pickFolder: async () => '/src/app', onDone }));
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-folder')!.click());
+    const button = q<HTMLButtonElement>('factory-add-team')!;
+    expect(button.textContent).toBe('settings.factory.addTeam');
+    // No name needed: Add team works while Add waits for one.
+    expect(button.disabled).toBe(false);
+    await act(async () => button.click());
+    expect(createTeam).toHaveBeenCalledWith({
+      workspaceId: WS,
+      repoFolder: '/src/app',
+      names: {
+        coordinator: 'botsPage.teamName.coordinator', researcher: 'botsPage.teamName.researcher', developer: 'botsPage.teamName.developer',
+        issue: 'botsPage.teamName.issue', reviewer: 'botsPage.teamName.reviewer',
+      },
+    });
+    expect(onDone).toHaveBeenCalledWith(lead);
+  });
+
+  it('is not offered in a workspace that already has a coordinator; with the bots off it asks first', async () => {
+    const withLead = [row('bot-00000001', { template: 'coordinator', role: 'moa' })];
+    const { port } = teamPort(withLead);
+    await render(createElement(AddBotForm, { port, t, rows: withLead, workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined }));
+    expect(q('factory-add-team')).toBeNull();
+    const off = teamPort([]);
+    const turnOn = vi.fn(async () => true);
+    await render(createElement(AddBotForm, { port: off.port, t, rows: [], workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined, botsOff: true, turnOn }));
+    await act(async () => q<HTMLButtonElement>('factory-add-team')!.click());
+    expect(off.createTeam).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('settings.factory.addTeamTurnsOn');
+  });
+
+  it('a room with a coordinator says its message goes to the lead', async () => {
+    const team = [row('bot-00000002', { createdAt: 1 }), row('bot-00000003', { template: 'coordinator', role: 'moa', name: 'Lead', createdAt: 2 })];
+    expect(roomLead(team)?.bot.id).toBe('bot-00000003');
+    expect(roomLead([team[0]])).toBeNull();
+    await render(createElement(MentionChips, { candidates: team, bots: team, picked: [], onToggle: () => undefined, t, testId: 'chips' }));
+    expect(q('chips-to-room')!.textContent).toBe('room.composer.toLead(name=Lead)');
   });
 });

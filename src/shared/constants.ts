@@ -440,6 +440,7 @@ export const IPC = {
   FACTORY_SETTINGS_SET: 'factory:settings:set',
   // Settings › Factory's "Add bot" (shared/botCreate.ts); main window only.
   FACTORY_BOT_CREATE: 'factory:bot:create',
+  FACTORY_BOT_CREATE_TEAM: 'factory:bot:create-team',
   // A bot's picture (shared/botCreate.ts): pick = main's open dialog, set =
   // save or clear; main window only.
   FACTORY_BOT_PICK_AVATAR: 'factory:bot:pickAvatar',

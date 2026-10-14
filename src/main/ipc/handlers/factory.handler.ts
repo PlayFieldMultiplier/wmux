@@ -3,7 +3,7 @@
 // (pipe/handlers/bot.rpc.ts); this reads its singletons, which are null
 // before the factory started (an empty list, null status, default settings).
 // Changes to bots reach the renderer as BOT_EVENT pushes from that module.
-// The writes (FACTORY_BOT_CREATE, FACTORY_SETTINGS_SET, and a bot's picture:
+// The writes (FACTORY_BOT_CREATE, FACTORY_BOT_CREATE_TEAM, FACTORY_SETTINGS_SET, and a bot's picture:
 // FACTORY_BOT_PICK_AVATAR, FACTORY_BOT_SET_AVATAR) act as the operator, so
 // they answer only the main window's top frame, as rpc:invoke does for the
 // other bot writes. So does FACTORY_BOT_SUGGEST_REPO, which reads a
@@ -19,12 +19,13 @@ import { wrapHandler } from '../wrapHandler';
 import { getBotStore } from '../../factory/botStore';
 import { getBotRuntime } from '../../factory/BotRuntime';
 import { getFactorySettings, getFactorySettingsStore, type FactorySettings } from '../../factory/factorySettings';
-import { createBotFromFolder, greetNewBot, suggestBotRepo, type BotRepoDeps, type BotRepoSuggestDeps } from '../../factory/botCreate';
+import { createBotFromFolder, createTeamFromFolder, greetNewBot, suggestBotRepo, type BotRepoDeps, type BotRepoSuggestDeps } from '../../factory/botCreate';
 import { getWakeQueue } from '../../factory/wakeQueue';
 import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
   FactoryBotCreateResult,
+  FactoryBotCreateTeamResult,
   FactoryBotRepoSuggestion,
 } from '../../../shared/botCreate';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
@@ -182,6 +183,22 @@ export function factoryBotCreateHandler(
   };
 }
 
+/** FACTORY_BOT_CREATE_TEAM's body: the sender check, the five bots, then
+ *  the coordinator's greeting only (five greetings at once would flood the
+ *  owner). */
+export function factoryBotCreateTeamHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: BotRepoDeps & { store?: typeof getBotStore; greet?: (bot: BotProfile) => void } = {},
+): (e: { sender?: unknown; senderFrame?: unknown }, req: unknown) => Promise<FactoryBotCreateTeamResult> {
+  return async (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may add bots' };
+    const r = await createTeamFromFolder((deps.store ?? getBotStore)(), req, deps);
+    const lead = r.ok ? r.bots[0] : r.bots?.[0];
+    if (lead) (deps.greet ?? greetAddedBot)(lead);
+    return r;
+  };
+}
+
 /** FACTORY_BOT_SUGGEST_REPO's body: the sender check, then the suggestion
  *  from main's own state (the bot store, the workspace mirror's panes and
  *  main's tracked shell cwds, `cwdOf`, which registerHandlers.ts hands in as
@@ -278,6 +295,7 @@ export function registerFactoryHandlers(
     IPC.FACTORY_SETTINGS_GET,
     IPC.FACTORY_SETTINGS_SET,
     IPC.FACTORY_BOT_CREATE,
+    IPC.FACTORY_BOT_CREATE_TEAM,
     IPC.FACTORY_BOT_PICK_AVATAR,
     IPC.FACTORY_BOT_SET_AVATAR,
     IPC.FACTORY_BOT_SUGGEST_REPO,
@@ -312,6 +330,8 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_SETTINGS_SET, wrapHandler(IPC.FACTORY_SETTINGS_SET, factorySettingsSetHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_BOT_CREATE, wrapHandler(IPC.FACTORY_BOT_CREATE, factoryBotCreateHandler(getWindow)));
+
+  ipcMain.handle(IPC.FACTORY_BOT_CREATE_TEAM, wrapHandler(IPC.FACTORY_BOT_CREATE_TEAM, factoryBotCreateTeamHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_BOT_PICK_AVATAR, wrapHandler(IPC.FACTORY_BOT_PICK_AVATAR, factoryBotPickAvatarHandler(getWindow)));
 

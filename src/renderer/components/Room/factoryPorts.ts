@@ -20,6 +20,8 @@
 //         // bot.update, as the operator (optional: without it the profile rows are read-only)
 //     createBot(req: FactoryBotCreateRequest): Promise<FactoryBotCreateResult>
 //         // IPC.FACTORY_BOT_CREATE (optional: without it Settings › Factory cannot add a bot)
+//     createBotTeam(req: FactoryBotCreateTeamRequest): Promise<FactoryBotCreateTeamResult>
+//         // IPC.FACTORY_BOT_CREATE_TEAM (optional: without it "Add team" is not offered)
 //     pickBotAvatar(): Promise<FactoryBotAvatarPickResult>
 //         // IPC.FACTORY_BOT_PICK_AVATAR: main's image dialog → a preview (optional)
 //     setBotAvatar(botId: string, avatar: string | null): Promise<FactoryBotAvatarSetResult>
@@ -46,6 +48,8 @@ import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
   FactoryBotCreateRequest,
+  FactoryBotCreateTeamRequest,
+  FactoryBotCreateTeamResult,
   FactoryBotCreateResult,
   FactoryBotRepoSuggestion,
 } from '../../../shared/botCreate';
@@ -92,6 +96,8 @@ export interface FactoryBotPort {
   update?(botId: string, patch: BotProfilePatch): Promise<{ ok: boolean; message?: string }>;
   /** Absent: no bot can be added here. */
   create?(req: FactoryBotCreateRequest): Promise<FactoryBotCreateResult>;
+  /** Absent: no team can be added here. */
+  createTeam?(req: FactoryBotCreateTeamRequest): Promise<FactoryBotCreateTeamResult>;
   /** Absent: no picture can be chosen here. The answer is a preview. */
   pickAvatar?(): Promise<FactoryBotAvatarPickResult>;
   /** Absent: pictures are read-only here. null clears the picture. */
@@ -142,6 +148,7 @@ interface FactoryBridge {
   botAction?: (action: BotAction, botId: string) => Promise<{ ok: boolean; message?: string }>;
   updateBot?: (botId: string, patch: BotProfilePatch) => Promise<{ ok: boolean; message?: string }>;
   createBot?: (req: FactoryBotCreateRequest) => Promise<FactoryBotCreateResult>;
+  createBotTeam?: (req: FactoryBotCreateTeamRequest) => Promise<FactoryBotCreateTeamResult>;
   pickBotAvatar?: () => Promise<FactoryBotAvatarPickResult>;
   setBotAvatar?: (botId: string, avatar: string | null) => Promise<FactoryBotAvatarSetResult>;
   suggestBotRepo?: (workspaceId: string) => Promise<FactoryBotRepoSuggestion>;
@@ -183,6 +190,7 @@ export function bridgeBotPort(): FactoryBotPort {
     act: (action, botId) => b.botAction?.(action, botId) ?? Promise.resolve({ ok: false, message: 'no bot runtime' }),
     ...(b.updateBot ? { update: b.updateBot } : {}),
     ...(b.createBot ? { create: b.createBot } : {}),
+    ...(b.createBotTeam ? { createTeam: b.createBotTeam } : {}),
     ...(b.pickBotAvatar ? { pickAvatar: b.pickBotAvatar } : {}),
     ...(b.setBotAvatar ? { setAvatar: b.setBotAvatar } : {}),
     ...(b.suggestBotRepo ? { suggestRepo: b.suggestBotRepo } : {}),

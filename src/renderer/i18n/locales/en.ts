@@ -4391,6 +4391,16 @@ export const en = {
   'remoteSsh.identityChanged': "Identity changed",
   'remoteSsh.error.webStopped': "wmux web was stopped on {alias}. Start it there again with wmux web, then try again.",
   'remoteSsh.needsCheck': "SSH needs you",
+  'settings.factory.addTeam': "Add team",
+  'settings.factory.addTeamHint': "Adds {names} to this workspace. You talk to {lead}; it hands the work on.",
+  'settings.factory.addTeamTurnsOn': "Bots are off. Adding the team turns bots on.",
+  'settings.factory.addTeamFailed': "The team could not be added.",
+  'botsPage.teamName.coordinator': "Lead",
+  'botsPage.teamName.researcher': "Research",
+  'botsPage.teamName.developer': "Developer",
+  'botsPage.teamName.issue': "Issues",
+  'botsPage.teamName.reviewer': "Reviewer",
+  'room.composer.toLead': "To {name}",
 } as const;
 
 export type TranslationKey = keyof typeof en;

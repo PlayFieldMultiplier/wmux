@@ -18,7 +18,7 @@
 // names who the message went to, as main answered. With no enabled bot in
 // this workspace, the row says so and points to Settings › Factory.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { BotRole } from '../../../shared/bot';
+import { isCoordinatorBot, type BotRole } from '../../../shared/bot';
 import type { ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
@@ -186,9 +186,17 @@ export function useMentionPicks(bots: readonly FactoryBotRow[], workspaceId: str
   return { picked, onText, toggle, reset };
 }
 
+/** The bot a room message with no bot picked goes to when the room has a
+ *  coordinator (its oldest enabled one; main's rule, humanMessage.ts), or
+ *  null when it goes to every bot. Pure. */
+export function roomLead(candidates: readonly FactoryBotRow[]): FactoryBotRow | null {
+  return [...candidates].filter((r) => r.bot.enabled && isCoordinatorBot(r.bot)).sort((a, b) => a.bot.createdAt - b.bot.createdAt)[0] ?? null;
+}
+
 /** The chip row: one chip per bot of the room (and any bot picked from
- *  elsewhere), pressed when picked; with none picked, a muted "To everyone
- *  here" says where the message goes. */
+ *  elsewhere), pressed when picked; with none picked, a muted line says
+ *  where the message goes: "To everyone here", or "To <lead>" in a room
+ *  with a coordinator. */
 export function MentionChips({ candidates, bots, picked, onToggle, t, testId }: {
   candidates: readonly FactoryBotRow[];
   bots: readonly FactoryBotRow[];
@@ -197,13 +205,14 @@ export function MentionChips({ candidates, bots, picked, onToggle, t, testId }: 
   t: T;
   testId: string;
 }): React.ReactElement {
+  const lead = roomLead(candidates);
   const elsewhere = picked
     .filter((id) => !candidates.some((r) => r.bot.id === id))
     .map((id) => bots.find((r) => r.bot.id === id))
     .filter((r): r is FactoryBotRow => !!r);
   return (
     <div role="group" aria-label={t('room.composer.to')} data-testid={`${testId}-chips`} className="flex flex-wrap items-center gap-1">
-      {picked.length === 0 && <span data-testid={`${testId}-to-room`} className="mr-0.5 text-[11px] text-[var(--text-muted)]">{t('room.composer.toRoom')}</span>}
+      {picked.length === 0 && <span data-testid={`${testId}-to-room`} className="mr-0.5 text-[11px] text-[var(--text-muted)]">{lead ? t('room.composer.toLead', { name: lead.bot.name }) : t('room.composer.toRoom')}</span>}
       {[...candidates, ...elsewhere].map((r) => {
         const on = picked.includes(r.bot.id);
         return (

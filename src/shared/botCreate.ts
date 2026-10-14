@@ -54,6 +54,28 @@ export type FactoryBotCreateResult =
   | { ok: true; bot: BotProfile }
   | { ok: false; code: FactoryBotCreateCode; message: string };
 
+/** The bots "Add team" makes, in the order they are made: the coordinator
+ *  first (it is then the room's oldest coordinator, its lead). */
+export const TEAM_TEMPLATES: readonly BotTemplate[] = ['coordinator', 'researcher', 'developer', 'issue', 'reviewer'];
+
+/** IPC.FACTORY_BOT_CREATE_TEAM: the five bots of a team in one workspace,
+ *  on one repository (as "Add bot" resolves it), named by the renderer (in
+ *  the owner's language). Refused, before any bot is made, when a name is
+ *  not one the store keeps or is taken (twice in the team, or by a bot of
+ *  the workspace), or when the workspace already has an enabled
+ *  coordinator. Only the coordinator greets the owner. */
+export interface FactoryBotCreateTeamRequest {
+  workspaceId: string;
+  /** One name per team template. */
+  names: Record<string, string>;
+  /** As FactoryBotCreateRequest.repoFolder. */
+  repoFolder?: string;
+}
+
+export type FactoryBotCreateTeamResult =
+  | { ok: true; bots: BotProfile[] }
+  | { ok: false; code: FactoryBotCreateCode | 'has_lead' | 'name_taken'; message: string; bots?: BotProfile[] };
+
 /** @deprecated legacy Add-bot rule (the HQ Moa took no repository); the
  *  repository is optional for every bot. */
 export function roleWorksOnRepo(role: BotRole): boolean {
