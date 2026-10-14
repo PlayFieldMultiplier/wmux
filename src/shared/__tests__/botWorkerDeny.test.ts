@@ -29,9 +29,9 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(275);
+    expect(BOT_WORKER_DENY.length).toBe(289);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('b5241f5a40ec02fb13a83c4b90451243e88144f3c336fd894ec376edac77492c');
+      .toBe('682d41805516beb078960a404862ae7b8169cad228c892718eefe1ad8469f091');
   });
 
   it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
@@ -98,6 +98,15 @@ describe('bot worker deny rules', () => {
     'git remote set-url origin git@example.com:o/other.git',
     'git -C /w remote set-url origin git@example.com:o/other.git',
     'git config url.git@example.com:o/other.git.pushInsteadOf git@github.com:o/r.git',
+    'git remote add other git@example.com:o/other.git',
+    'git remote rename origin old',
+    'git remote remove origin',
+    'git -C /w remote rm origin',
+    'git send-pack git@example.com:o/other.git HEAD:refs/heads/x',
+    'git http-push https://example.com/o/r.git x',
+    'git config alias.p push',
+    'git config --local alias.p "!git push"',
+    'git -c alias.p=push p origin wtask/a',
     // Every push is main's (task.push): the worker's own, in any form.
     'git push origin wtask/fix-main-menu',
     'git push -u origin wtask/a',

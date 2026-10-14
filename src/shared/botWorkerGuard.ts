@@ -72,11 +72,18 @@ export function isDenyableBranchName(name: unknown): name is string {
  *  (`task.push`), so the worker's own `git push` is refused in every form —
  *  directly or after git's global options (`-C <dir>`, `-c <key>=<value>`).
  *  Plus what would redirect where main's push lands: a remote's URL, a push
- *  URL or a URL rewrite. */
+ *  URL, a URL rewrite or the remotes themselves; git's lower-level pushes;
+ *  and a git alias, which can name any of these. */
 export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   'Bash(git push)', 'Bash(git push *)', 'Bash(git -* push)', 'Bash(git -* push *)',
   'Bash(git remote set-url*)', 'Bash(git -* remote set-url*)',
   'Bash(git*config*remote.*.push*)', 'Bash(git*config*remote.*.url*)', 'Bash(git*config*url.*)',
+  // A remote added, renamed or removed changes what `origin` names.
+  ...['add', 'rename', 'remove', 'rm'].flatMap((v) => [`Bash(git remote ${v}*)`, `Bash(git -* remote ${v}*)`]),
+  // git's lower-level pushes.
+  ...['send-pack', 'http-push'].flatMap((v) => [`Bash(git ${v}*)`, `Bash(git -* ${v}*)`]),
+  // An alias names any of the acts above under another word.
+  'Bash(git*config*alias.*)', 'Bash(git*-c*alias.*)',
 ];
 
 /** Public acts under the owner's GitHub identity — issues, comments,
