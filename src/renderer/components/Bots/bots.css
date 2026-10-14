@@ -577,4 +577,4 @@
 .wmux-bots-worker-panes .notification-ring::before,
 .wmux-bots-worker-panes .pane-flash::after { display: none; }
 .wmux-bots-worker-panes .pane-ring-flash,
-.wmux-bots-worker-panes .pane-ring-glow { box-shadow: none; opacity: 1; border-color: transparent !important; }
+.wmux-bots-worker-panes .pane-ring-glow { box-shadow: none; opacity: 1; border-color: transparent !important; border-style: none !important; }
