@@ -138,7 +138,7 @@ describe('bot prompts (job, powers and outputs)', () => {
       expect(prompt).toMatch(/wmux passes it to the next bot or back to the coordinator/);
     }
     expect(rolePrompt(profile('researcher'))).toMatch(/send its `result`: the findings with their sources/);
-    expect(rolePrompt(profile('developer'))).toMatch(/once the last task of that dispatch has settled/);
+    expect(rolePrompt(profile('developer'))).toMatch(/once its work is where the dispatch asked for it/);
   });
 
   it('a profile without a repository leaves the repository sentence out', () => {

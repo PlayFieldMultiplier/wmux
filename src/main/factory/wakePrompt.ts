@@ -348,6 +348,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
   // handed over, and always for the coordinator, who decides who works.
   if (input.roster && input.roster.length > 0 && (r.kind === 'human' || r.kind === 'mention' || r.kind === 'handoff' || isCoordinatorBot(profile))) {
     lines.push('', `Other bots in this room (mention them by id): ${input.roster.map(rosterLine).join('; ')}`);
+    // Jobs are written by the owner or by the bots themselves: material.
+    const jobs = input.roster.filter((b) => b.job).map((b) => `${oneLineName(b.name)}: ${b.job}`);
+    if (jobs.length > 0) lines.push('What each of them does (their jobs as written):', fenceData(jobs.join('\n'), 'roster'));
   }
   const approvals = input.approvals ?? [];
   if (approvals.length > 0) {
@@ -425,8 +428,7 @@ function ago(at: number, now: number): string {
 }
 
 function rosterLine(b: WakeRosterEntry): string {
-  const what = [b.template, b.job ? oneLineName(b.job) : ''].filter(Boolean).join(': ');
-  return `${oneLineName(b.name)}${what ? ` (${what})` : ''} = ${b.botId}`;
+  return `${oneLineName(b.name)}${b.template ? ` (${b.template})` : ''} = ${b.botId}`;
 }
 
 function oneLineName(name: string): string {
