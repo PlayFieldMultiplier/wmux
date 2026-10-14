@@ -75,6 +75,23 @@ export interface BotConversation extends ConversationBase {
   /** Its live plan and open proposals, waiting on the owner's answer. */
   openApprovals: number;
   workers: BotWorker[];
+  /** The rows nested under the bot in the list (botWorkerTree). */
+  tree: BotTreeRow[];
+}
+
+/** A worker row under its bot in the list, as the Sidebar draws a task. */
+export interface BotTreeRow {
+  workspaceId: string;
+  title: string;
+  /** running · waits on the owner · errored, live; done · failed, ended. */
+  state: 'running' | 'needsYou' | 'error' | 'done' | 'failed';
+  taskId?: string;
+  /** An ended task whose stopped worker can resume the same conversation. */
+  resumable: boolean;
+  /** The task's ledger says its worker asked for input. */
+  needsInput?: boolean;
+  /** What a worker waiting on input waits for (its task's summary). */
+  summary?: string;
 }
 
 export interface RoomConversation extends ConversationBase {
@@ -300,6 +317,48 @@ export function botWorkers(
   return out.sort((a, b) => a.name.localeCompare(b.name) || a.workspaceId.localeCompare(b.workspaceId));
 }
 
+/** A task that ended: its worker no longer runs for it. */
+const ENDED_STAGE: ReadonlySet<BotTaskView['stage']> = new Set<BotTaskView['stage']>(['coded', 'checked', 'waiting_to_merge', 'merged', 'closed', 'failed', 'cancelled']);
+
+/** The worker rows nested under a bot in the list (owner decision
+ *  2026-10-14, the Sidebar's task tree): its live workers, then its ended
+ *  tasks whose workspace is still open, newest first. A row drops off when
+ *  its workspace is cleared. Pure. */
+export function botWorkerTree(
+  botId: string,
+  workers: readonly BotWorker[],
+  tasks: readonly BotTaskView[] = [],
+  workspaceName: BotsInput['workspaceName'],
+): BotTreeRow[] {
+  const out: BotTreeRow[] = workers.map((w) => ({
+    workspaceId: w.workspaceId,
+    title: w.name,
+    state: w.cls === 'error' ? 'error' : w.waiting ? 'needsYou' : 'running',
+    ...(w.taskId ? { taskId: w.taskId } : {}),
+    resumable: false,
+    ...(w.needsInput ? { needsInput: true } : {}),
+    ...(w.needsInput && w.summary ? { summary: w.summary } : {}),
+  }));
+  const seen = new Set(out.map((r) => r.workspaceId));
+  const ended = tasks
+    .filter((task) => task.botId === botId && ENDED_STAGE.has(task.stage))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const task of ended) {
+    const workspaceId = task.workerWorkspaceId || task.taskWorkspaceId;
+    const name = workspaceId ? workspaceName(workspaceId) : null;
+    if (!workspaceId || name === null || seen.has(workspaceId)) continue;
+    seen.add(workspaceId);
+    out.push({
+      workspaceId,
+      title: task.title || name,
+      state: task.stage === 'failed' || task.stage === 'cancelled' ? 'failed' : 'done',
+      taskId: task.taskId,
+      resumable: task.worker === 'resumable',
+    });
+  }
+  return out;
+}
+
 function lastOf(cards: readonly RoomCard[]): RoomCard | null {
   return cards.length > 0 ? cards[cards.length - 1] : null;
 }
@@ -340,6 +399,7 @@ export function buildBots(input: BotsInput): BotsModel {
       openQuestions,
       openApprovals,
       workers,
+      tree: botWorkerTree(row.bot.id, workers, row.tasks, input.workspaceName),
       // A waiting worker whose question the bot already asked counts once.
       needsYou: input.readOnly ? 0 : openQuestions + openApprovals + waitingWorkers(workers, openQuestionTasks(own, row.bot.id, input.threads)),
     };

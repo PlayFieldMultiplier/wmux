@@ -309,7 +309,7 @@ describe('Bots page', () => {
   it('composerHint: a Lead\'s empty 1:1 asks for its first task; otherwise "Message <name>"', () => {
     const tt = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;
     const conv = (role: BotRole): Conversation => ({
-      kind: 'bot', id: 'bot:x', workspaceId: 'w1', row: botRow(LEAD, role, 'w1', 1, 'Lead'), last: null, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [],
+      kind: 'bot', id: 'bot:x', workspaceId: 'w1', row: botRow(LEAD, role, 'w1', 1, 'Lead'), last: null, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [],
     });
     expect(composerHint(conv('lead'), 0, 'Lead', tt)).toBe('botsPage.leadHint{"name":"Lead"}');
     expect(composerHint(conv('lead'), 2, 'Lead', tt)).toBe('botsPage.messageTo{"name":"Lead"}');
@@ -512,7 +512,7 @@ describe('Bots page', () => {
     expect(posted[1]).toMatchObject({ workspaceId: 'w1', mentions: [LEAD] });
   });
 
-  it('a live worker shows in its bot\'s conversation; Open shows its terminal beside the chat, never switching workspace', async () => {
+  it('a live worker is a row under its bot in the list; a click shows its terminal beside the chat, never switching workspace', async () => {
     seedRooms();
     // t1 is running.
     act(() => useStore.setState({
@@ -525,30 +525,39 @@ describe('Bots page', () => {
     } as never));
     await render(<BotsPage />);
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('2');
-    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    const worker = q('[data-bots-worker="t1"]');
+    // Under the bot's row in the list, not in the rail or the history.
+    const worker = q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree] [data-bots-worker="t1"]`);
     expect(worker?.textContent).toContain('fix login');
     expect(worker?.textContent).not.toContain('wtask:');
-    expect(worker?.getAttribute('data-worker-waiting')).toBe('true');
-    // It sits in the working rail above the composer, not in the history.
-    expect(q('[data-bots-rail] [data-bots-worker="t1"]')).not.toBeNull();
+    expect(worker?.getAttribute('data-worker-state')).toBe('needsYou');
+    expect(q('[data-bots-rail] [data-bots-worker]')).toBeNull();
     expect(q('[data-bots-messages] [data-bots-worker]')).toBeNull();
-    act(() => q('[data-bots-worker-open="t1"]')!.click());
+    // The panel never opens on its own.
+    expect(useStore.getState().botsWorkerPanel).toBeNull();
+    // The toggle folds and unfolds the rows.
+    const toggle = q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)!;
+    expect(toggle.textContent).toContain('1');
+    act(() => toggle.click());
+    expect(q('[data-bots-worker="t1"]')).toBeNull();
+    act(() => q(`[data-bots-entry="bot:${LEAD}"] [data-bots-tree-toggle]`)!.click());
+    act(() => q('[data-bots-worker="t1"]')!.click());
     expect(useStore.getState().activeWorkspaceId).toBe('hq');
     expect(useStore.getState().appRoute).toBe('bots');
     expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: `bot:${LEAD}` });
+    expect(q(`[data-bots-chat="bot:${LEAD}"]`)).not.toBeNull();
     expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
-    expect(q('[data-bots-worker-open="t1"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(q('[data-bots-worker="t1"]')?.getAttribute('aria-current')).toBe('true');
+    expect(q('[data-bots-splitter]')).not.toBeNull();
     // Close closes it; another conversation closes it too.
     act(() => q('[data-bots-worker-panel-close]')!.click());
     expect(q('[data-bots-worker-panel]')).toBeNull();
-    act(() => q('[data-bots-worker-open="t1"]')!.click());
+    act(() => q('[data-bots-worker="t1"]')!.click());
     act(() => q('[data-bots-row="room:w1"]')!.click());
     expect(useStore.getState().botsWorkerPanel).toBeNull();
     expect(q('[data-bots-worker-panel]')).toBeNull();
   });
 
-  it('a done task offers Open only while its pane is open; a cleared one offers Resume, which shows the new pane beside the chat', async () => {
+  it('a done task is a tree row while its pane is open (Resume in the panel\'s menu); a cleared one offers Resume in the rail, which shows the new pane', async () => {
     seedRooms();
     const now = Date.now();
     const task = (taskId: string, taskWorkspaceId: string, extra: Record<string, unknown> = {}) => ({
@@ -561,11 +570,18 @@ describe('Bots page', () => {
     await render(<BotsPage />);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     const bubble = (id: string) => q(`[data-bots-task="${id}"]`)!;
-    expect(bubble('wtask-kept-00000001').querySelector('[data-bots-worker-open="t1"]')).not.toBeNull();
+    // Its pane open: a done row in the list (the newest task on t1), none in the rail.
+    expect(q('[data-bots-tree] [data-bots-worker="t1"]')?.getAttribute('data-worker-state')).toBe('done');
+    expect(q('[data-bots-task="wtask-kept-00000001"]')).toBeNull();
+    expect(q('[data-bots-task="wtask-moved-0000003"]')).toBeNull();
+    act(() => q('[data-bots-worker="t1"]')!.click());
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    expect(q('[data-bots-worker-panel-resume]')).not.toBeNull();
+    expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
+    act(() => useStore.getState().setBotsWorkerPanel(null));
+    // Its pane cleared: the rail keeps it, with Resume.
     expect(bubble('wtask-gone-00000002').querySelector('[data-bots-worker-open]')).toBeNull();
     expect(bubble('wtask-gone-00000002').textContent).toContain('Done');
-    // A resume opened a new pane: Open goes there.
-    expect(bubble('wtask-moved-0000003').querySelector('[data-bots-worker-open="t1"]')).not.toBeNull();
     await act(async () => { (bubble('wtask-gone-00000002').querySelector('[data-bots-task-resume]') as HTMLButtonElement).click(); });
     expect(resumeWorker).toHaveBeenCalledWith('wtask-gone-00000002');
     expect(useStore.getState().activeWorkspaceId).toBe('hq');
@@ -574,7 +590,7 @@ describe('Bots page', () => {
     act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
-  it('a worker waiting on input shows in its bot\'s 1:1 and in the room, with Open, though its pane reads idle', async () => {
+  it('a worker waiting on input is a tree row with what it asks, though its pane reads idle', async () => {
     seedRooms();
     const now = Date.now();
     const task = (taskId: string, taskWorkspaceId: string, stage: 'working' | 'needs_input', title: string) => ({
@@ -584,20 +600,18 @@ describe('Bots page', () => {
     bots[1] = { ...bots[1], tasks: [{ ...task('wtask-ask-00000001', 't1', 'needs_input', 'README title'), summary: 'The push was denied; tell me the branch' }, task('wtask-gone-0000002', 't-gone', 'working', 'Gone')] };
     await render(<BotsPage />);
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('2');
-    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     const worker = q('[data-bots-worker="t1"]')!;
     expect(worker.getAttribute('data-worker-needs-input')).toBe('true');
     expect(worker.textContent).toContain('README title');
-    expect(worker.textContent).toContain('Worker needs input');
+    expect(worker.getAttribute('aria-label')).toContain('Worker needs input');
     expect(worker.querySelector('[data-bots-worker-summary]')?.textContent).toBe('The push was denied; tell me the branch');
     expect(q('[data-bots-worker="t-gone"]')).toBeNull();
-    // The room shows it too, under the bot's face.
+    // From a room, the row opens its bot's 1:1 with the terminal beside it.
     act(() => q('[data-bots-row="room:w1"]')!.click());
-    expect(q('[data-bots-worker="t1"]')?.getAttribute('data-worker-needs-input')).toBe('true');
-    act(() => q('[data-bots-worker-open="t1"]')!.click());
+    act(() => q('[data-bots-worker="t1"]')!.click());
     expect(useStore.getState().activeWorkspaceId).toBe('hq');
     expect(useStore.getState().appRoute).toBe('bots');
-    expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: 'room:w1' });
+    expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: `bot:${LEAD}` });
     expect(q('[data-bots-worker-panel="t1"]')?.textContent).toContain('Worker needs input');
     act(() => useStore.getState().setBotsWorkerPanel(null));
   });
@@ -839,7 +853,7 @@ describe('Bots page', () => {
   it('isStillStarting: a new bot starts until its first message, unless its turn failed', () => {
     const conv = (last: RoomCard | null, lastError?: { message: string; at: number }): Conversation => {
       const row = botRow(LEAD, 'lead', 'w1', 1, 'Lead');
-      return { kind: 'bot', id: `bot:${LEAD}`, workspaceId: 'w1', row: { ...row, status: { ...row.status!, ...(lastError ? { lastError } : {}) } }, last, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [] };
+      return { kind: 'bot', id: `bot:${LEAD}`, workspaceId: 'w1', row: { ...row, status: { ...row.status!, ...(lastError ? { lastError } : {}) } }, last, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [] };
     };
     expect(isStillStarting(undefined)).toBe(true);
     expect(isStillStarting(conv(null))).toBe(true);

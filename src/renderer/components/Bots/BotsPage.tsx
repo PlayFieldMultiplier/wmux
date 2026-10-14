@@ -41,6 +41,7 @@ import { PresenceDot, botPresence } from '../Room/BotChips';
 import { actorLabel, formatCardTime } from '../Room/roomFormat';
 import BotAvatar from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
+import BotsWorkerTree, { TreeToggle } from './BotsWorkerTree';
 import { BotsChat } from './BotsChat';
 import { createBot, openFactorySettings, turnBotsOn } from './botsAddBot';
 import { showWorkspaces } from '../../utils/showWorkspaces';
@@ -409,6 +410,17 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
     setView('chat');
   };
 
+  // Each bot's workers nest under its row (BotsWorkerTree), unfolded until
+  // the owner folds them. A click shows the worker's terminal beside that
+  // bot's chat; the panel never opens on its own.
+  const [folded, setFolded] = useState<Readonly<Record<string, boolean>>>({});
+  const panel = useStore((s) => s.botsWorkerPanel);
+  const openWorker = (botId: string, workspaceId: string) => {
+    const conversationId = botConversationId(botId);
+    select(conversationId);
+    useStore.getState().setBotsWorkerPanel({ workspaceId, conversationId });
+  };
+
   // A bot just added (here or by the first screen) is selected at once; its
   // chat says "Starting…" until its greeting arrives (isStillStarting).
   const [pending, setPending] = useState<{ bot: BotProfile; at: number } | null>(null);
@@ -569,19 +581,49 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
           <div className="wmux-bots-rows">
             {shown.length === 0 && rows.length > 0 && <p className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noMatch')}</p>}
             {rows.length === 0 && !starting && <p data-bots-empty className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noConversations')}</p>}
-            {shown.map((r) => (
-              <ConversationRow
-                key={r.c.id}
-                c={r.c}
-                title={r.title}
-                preview={r.preview}
-                selected={selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId)}
-                t={t}
-                now={now}
-                unread={r.unread}
-                onSelect={() => select(r.c.id)}
-              />
-            ))}
+            {shown.map((r) => {
+              const tree = r.c.kind === 'bot' ? r.c.tree : [];
+              const botId = r.c.kind === 'bot' ? r.c.row.bot.id : '';
+              const open = tree.length > 0 && !folded[r.c.id];
+              const treeId = `bots-tree-${r.c.id}`;
+              const isSelected = selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId);
+              return (
+                <div key={r.c.id} data-bots-entry={r.c.id}>
+                  <div className="wmux-bots-row-wrap">
+                    <ConversationRow
+                      c={r.c}
+                      title={r.title}
+                      preview={r.preview}
+                      selected={isSelected}
+                      t={t}
+                      now={now}
+                      unread={r.unread}
+                      onSelect={() => select(r.c.id)}
+                    />
+                    {tree.length > 0 && (
+                      <TreeToggle
+                        count={tree.length}
+                        expanded={open}
+                        controls={treeId}
+                        name={r.title}
+                        t={t}
+                        onToggle={() => setFolded((cur) => ({ ...cur, [r.c.id]: open }))}
+                      />
+                    )}
+                  </div>
+                  {open && (
+                    <BotsWorkerTree
+                      id={treeId}
+                      rows={tree}
+                      name={r.title}
+                      shownId={isSelected && panel?.conversationId === r.c.id ? panel.workspaceId : null}
+                      t={t}
+                      onOpen={(workspaceId) => openWorker(botId, workspaceId)}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </nav>
         {starting ? (

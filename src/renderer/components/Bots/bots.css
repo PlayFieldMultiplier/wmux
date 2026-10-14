@@ -91,6 +91,47 @@
 .wmux-bots-row-button:hover { background: var(--hover-fill); }
 .wmux-bots-row-button.is-selected { background: var(--selection); box-shadow: var(--select-ring, none); }
 
+/* A bot's workers nest under its row as the Sidebar nests a workspace's
+   tasks (owner decision 2026-10-14): the fold toggle ("N" and a chevron) at
+   the row's right edge, the rows indented on a hairline guide under the
+   avatar, each a status mark, the fan-out mark and the title, and the branch
+   with its diff counts under it. */
+.wmux-bots-row-wrap { display: flex; align-items: center; min-width: 0; }
+.wmux-bots-row-wrap > .wmux-bots-row-button { flex: 1; min-width: 0; }
+.wmux-bots-tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  height: 24px;
+  margin-left: 2px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wmux-bots-tree-toggle:hover { background: var(--hover-fill); color: var(--text-main); }
+.wmux-bots-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 4px 25px;
+  padding-left: 8px;
+  border-left: 1px solid var(--stroke);
+}
+.wmux-bots-tree-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+.wmux-bots-tree-row:hover { background: var(--hover-fill); }
+.wmux-bots-tree-row.is-selected { background: var(--selection); box-shadow: var(--select-ring, none); }
+
 .wmux-bots-badge {
   display: inline-flex;
   align-items: center;
@@ -209,6 +250,10 @@
 /* The conversation's column: capped at 44rem and centred, so a wide window
    does not spread the messages edge to edge. */
 .wmux-bots-column { width: 100%; max-width: 44rem; margin: 0 auto; }
+/* With a side panel open the chat is narrow already: the column fills it. */
+.wmux-bots-chat-area[data-worker-open] .wmux-bots-column { max-width: none; }
+/* A question or greeting card reads in the bubbles' type. */
+.wmux-bots-msg [data-card-body] { font-size: 14px; line-height: 1.45; }
 .wmux-bots-scroll-wrap { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .wmux-bots-foot { flex-shrink: 0; }
 
@@ -222,9 +267,9 @@
   align-items: flex-end;
   gap: 8px;
   min-width: 0;
-  padding-top: 10px;
+  padding-top: 12px;
 }
-.wmux-bots-msg.is-continuation { padding-top: 2px; }
+.wmux-bots-msg.is-continuation { padding-top: 4px; }
 .wmux-bots-msg.is-owner { justify-content: flex-end; }
 .wmux-bots-msg-gutter { width: 28px; flex-shrink: 0; }
 .wmux-bots-msg-gutter:empty { height: 1px; }
@@ -233,9 +278,9 @@
   flex-direction: column;
   align-items: flex-start;
   min-width: 0;
-  max-width: min(36rem, 85%);
+  max-width: 78%;
 }
-.wmux-bots-msg.is-owner .wmux-bots-msg-main { align-items: flex-end; max-width: min(32rem, 80%); }
+.wmux-bots-msg.is-owner .wmux-bots-msg-main { align-items: flex-end; }
 .wmux-bots-msg-head {
   display: flex;
   min-width: 0;
@@ -254,7 +299,7 @@
 .wmux-bots-bubble-owner { background: color-mix(in srgb, var(--text-main) 10%, transparent); }
 .wmux-bots-prose {
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.45;
   color: var(--text-main);
   overflow-wrap: anywhere;
 }
@@ -441,11 +486,29 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: clamp(360px, 50%, 760px);
+  /* The splitter sets the width (55% by default); the chat keeps 360px. */
+  width: 55%;
+  min-width: 320px;
+  max-width: calc(100% - 360px);
   min-height: 0;
   background: var(--bg-base);
-  border-left: 1px solid var(--stroke);
 }
+/* The seam between the chat and its panel: one --stroke line, a wider grab
+   area around it. */
+.wmux-bots-splitter {
+  position: relative;
+  flex-shrink: 0;
+  width: 1px;
+  background: var(--stroke);
+  cursor: col-resize;
+  touch-action: none;
+}
+.wmux-bots-splitter::before { content: ''; position: absolute; inset: 0 -4px; }
+.wmux-bots-splitter:hover,
+.wmux-bots-splitter:focus-visible { background: var(--line-strong); }
+/* The worker panel only views the terminal: the pane's tab strip and its
+   split, browser and zoom controls stay on Workspaces. */
+.wmux-bots-worker-panes [data-pane-header] { display: none; }
 .wmux-bots-worker-head {
   display: flex;
   align-items: center;
@@ -460,7 +523,8 @@
 .wmux-bots-side-count { margin: 6px 0 0 46px; font-size: 11px; color: var(--text-muted); }
 @container botschat (max-width: 719px) {
   .wmux-bots-worker,
-  .wmux-bots-side { position: absolute; inset: 0; z-index: 4; width: auto; border-left: 0; }
+  .wmux-bots-side { position: absolute; inset: 0; z-index: 4; width: auto !important; min-width: 0; max-width: none; }
+  .wmux-bots-splitter { display: none; }
 }
 
 @container bots (max-width: 799px) {

@@ -1097,6 +1097,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
           restores the split). */}
       <div
         ref={splitHeaderRef}
+        data-pane-header
         className="flex min-w-0 shrink-0"
         style={{ '--wmux-split-term': 50, '--wmux-split-work': 50 } as React.CSSProperties}
       >

@@ -8,7 +8,7 @@ import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
 import type { FactoryBotRow } from '../../Room/factoryPorts';
 import { timelineKey, ALL_THREADS } from '../../../stores/slices/roomSlice';
 import {
-  awaitsApproval, botConversationCards, botWorkScope, botWorkers, buildBots, botsNeedsYou, botsRooms, conversationCards, greetingCardIds, isBotSystemCard,
+  awaitsApproval, botConversationCards, botWorkScope, botWorkerTree, botWorkers, buildBots, botsNeedsYou, botsRooms, conversationCards, greetingCardIds, isBotSystemCard,
   livePlanIds, openApprovalsBy, openQuestionsBy, roomCardsByWorkspace, roomEntries, taskBubbles,
   type BotsInput,
 } from '../botsModel';
@@ -133,6 +133,24 @@ describe('botWorkers from the bot\'s tasks', () => {
       ['t1', 'task a', true, true, 'a'],
       ['t2', 'task b', false, false, 'b'],
       ['t5', 'task e', false, false, 'e'],
+    ]);
+  });
+
+  it('the list\'s tree: live workers, then ended tasks whose workspace is open (newest first); a cleared one drops off', () => {
+    const tasks = [
+      view('a', 't1', 'working'),
+      view('b', 't2', 'coded', { updatedAt: 5, worker: 'resumable' }),
+      view('c', 't3', 'closed', { updatedAt: 9, stage: 'failed' }),
+      view('d', 'gone', 'closed', { updatedAt: 10 }),
+      view('e', 't4', 'closed', { botId: VERIFIER }),
+    ];
+    const live = botWorkers(LEAD, { t5: LEAD }, { t1: 'running', t5: 'error' }, names, tasks);
+    const tree = botWorkerTree(LEAD, live, tasks, names);
+    expect(tree.map((r) => [r.workspaceId, r.title, r.state, r.resumable])).toEqual([
+      ['t1', 'task a', 'running', false],
+      ['t5', 'wtask: t5', 'error', false],
+      ['t3', 'task c', 'failed', false],
+      ['t2', 'task b', 'done', true],
     ]);
   });
 

@@ -63,7 +63,9 @@ import { BOT_JOB_MAX, botTemplate, normalizeBotJob } from '../../../shared/bot';
 import { templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botIdentityColor } from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
-import { awaitsApproval, conversationCards, greetingCardIds, livePlanIds, roomEntries, taskBubbles, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
+import { awaitsApproval, conversationCards, greetingCardIds, livePlanIds, roomEntries, taskBubbles, type BotTreeRow, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
+import { treeRowState } from './BotsWorkerTree';
+import { useShallow } from 'zustand/react/shallow';
 import type { BotTaskView } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
 import { stopBotSummary, type BotsStopPort } from './botsStop';
@@ -74,6 +76,8 @@ import { BOTS_SESSION_START, selectWorkerPanelHost } from '../../stores/slices/r
 import { routineScheduleText, routineStateText, useBotRoutines } from '../Schedules/BotRoutines';
 import { buildTimeline, clockTime, elapsed, fullTime, hasKindWord, separatorLabel, splitThreads, threadCards, type ThreadView, type TimelineItem } from './botsTimeline';
 import '../Chat/chatMono.css';
+
+const EMPTY_TREE: readonly BotTreeRow[] = [];
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -543,44 +547,6 @@ function TurnLine({ row, t, now, readOnly }: { row: FactoryBotRow; t: T; now?: n
   );
 }
 
-/** A live worker in the rail: its dot (the attention ring while it waits),
- *  the task's name, its state in words, Open. */
-function WorkerRow({ worker, t, shown, onOpen }: { worker: BotWorker; t: T; shown: boolean; onOpen: (workspaceId: string) => void }) {
-  return (
-    <div
-      className="wmux-bots-rail-row"
-      data-bots-worker={worker.workspaceId}
-      data-worker-waiting={worker.waiting ? 'true' : undefined}
-      data-worker-needs-input={worker.needsInput ? 'true' : undefined}
-    >
-      <span
-        aria-hidden="true"
-        className={`inline-block h-[6px] w-[6px] shrink-0 rounded-full ${worker.waiting ? 'border-[1.5px] border-[var(--attention)]' : 'bg-[var(--text-muted)]'}`}
-      />
-      <span className="min-w-0 flex-1 truncate text-[12px]">
-        <span className="text-[var(--text-main)]">{worker.name}</span>
-        <span className={worker.waiting ? 'text-[var(--attention-text)]' : 'text-[var(--text-muted)]'}>{` · ${t(workerState(worker))}`}</span>
-        {worker.needsInput && worker.summary && (
-          <>
-            <span aria-hidden="true" className="text-[var(--text-muted)]">{' · '}</span>
-            <span data-bots-worker-summary title={worker.summary} className="text-[var(--text-sub)]">{worker.summary}</span>
-          </>
-        )}
-      </span>
-      <Button
-        size="sm"
-        variant="secondary"
-        data-bots-worker-open={worker.workspaceId}
-        aria-label={t('botsPage.worker.openName', { name: worker.name })}
-        aria-pressed={shown}
-        onClick={() => onOpen(worker.workspaceId)}
-      >
-        {t('botsPage.worker.open')}
-      </Button>
-    </div>
-  );
-}
-
 /** A bot's task that is not a live worker, in the rail: waiting for an agent
  *  slot, or done with a stopped worker that can resume the same
  *  conversation. Open shows only while the worker's pane is still open; a
@@ -652,12 +618,14 @@ function TaskRow({ task, t, resumePort, readOnly, shownId, onOpen }: { task: Bot
 /** Rows the rail shows before "+N more". */
 const RAIL_ROWS_MAX = 3;
 
-/** The working rail right above the composer: each running bot's turn, then
- *  its live workers and its waiting or resumable tasks. Nothing at all while
- *  nothing works; with the bots off, no turns and no Stop or Resume. */
-function WorkingRail({ turns, workers, tasks, t, now, readOnly, resumePort, shownId, onOpen }: {
+/** The working rail right above the composer: each running bot's turn on
+ *  one line ("<bot> working · 0:02 · Stop"), then the tasks the list's
+ *  worker tree cannot show — waiting for an agent slot, or resumable with
+ *  their pane cleared (owner decision 2026-10-14: the workers themselves are
+ *  rows under their bot in the list). Nothing at all while nothing works;
+ *  with the bots off, no turns and no Stop or Resume. */
+function WorkingRail({ turns, tasks, t, now, readOnly, resumePort, shownId, onOpen }: {
   turns: readonly FactoryBotRow[];
-  workers: readonly BotWorker[];
   tasks: readonly BotTaskView[];
   t: T;
   now?: number;
@@ -667,10 +635,7 @@ function WorkingRail({ turns, workers, tasks, t, now, readOnly, resumePort, show
   onOpen: (workspaceId: string) => void;
 }) {
   const [all, setAll] = useState(false);
-  const rows = [
-    ...workers.map((w) => <WorkerRow key={`w:${w.workspaceId}`} worker={w} t={t} shown={shownId === w.workspaceId} onOpen={onOpen} />),
-    ...tasks.map((task) => <TaskRow key={`t:${task.taskId}`} task={task} t={t} resumePort={resumePort} readOnly={readOnly} shownId={shownId} onOpen={onOpen} />),
-  ];
+  const rows = tasks.map((task) => <TaskRow key={`t:${task.taskId}`} task={task} t={t} resumePort={resumePort} readOnly={readOnly} shownId={shownId} onOpen={onOpen} />);
   const live = readOnly ? [] : turns;
   if (live.length === 0 && rows.length === 0) return null;
   const shownRows = all ? rows : rows.slice(0, RAIL_ROWS_MAX);
@@ -719,10 +684,83 @@ function ChatIntro({ row, t, onPick, readOnly }: { row: FactoryBotRow; t: T; onP
   );
 }
 
+/** The side panel's share of the area right of the list (owner decision
+ *  2026-10-14: chat ~45%, panel ~55%), the bounds a drag keeps it in, and
+ *  where the owner's choice is kept (this window's browser storage: a
+ *  per-viewer convenience). */
+export const SIDE_SPLIT_DEFAULT = 0.55;
+const SIDE_SPLIT_MIN = 0.3;
+const SIDE_SPLIT_MAX = 0.75;
+const SIDE_SPLIT_KEY = 'wmux.bots.sideSplit';
+
+export function clampSideSplit(v: number): number {
+  return Number.isFinite(v) ? Math.min(SIDE_SPLIT_MAX, Math.max(SIDE_SPLIT_MIN, v)) : SIDE_SPLIT_DEFAULT;
+}
+
+function readSideSplit(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDE_SPLIT_KEY);
+    return raw === null ? SIDE_SPLIT_DEFAULT : clampSideSplit(Number(raw));
+  } catch {
+    return SIDE_SPLIT_DEFAULT;
+  }
+}
+
+function writeSideSplit(v: number): void {
+  try { window.localStorage.setItem(SIDE_SPLIT_KEY, String(v)); } catch { /* not kept: the default next time */ }
+}
+
+/** The seam between the chat and its side panel: drag it, or focus it and
+ *  use the arrow keys, to share the width. */
+function SideSplitter({ areaRef, split, t, onChange }: {
+  areaRef: React.RefObject<HTMLDivElement | null>;
+  split: number;
+  t: T;
+  onChange: (next: number, done: boolean) => void;
+}) {
+  const at = (clientX: number) => {
+    const box = areaRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0) return split;
+    return clampSideSplit((box.right - clientX) / box.width);
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t('botsPage.chat.resizePanel')}
+      aria-valuemin={Math.round(SIDE_SPLIT_MIN * 100)}
+      aria-valuemax={Math.round(SIDE_SPLIT_MAX * 100)}
+      aria-valuenow={Math.round(split * 100)}
+      tabIndex={0}
+      data-bots-splitter
+      className={`wmux-bots-splitter ${FOCUS_RING}`}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) onChange(at(e.clientX), false);
+      }}
+      onPointerUp={(e) => {
+        if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
+        e.currentTarget.releasePointerCapture?.(e.pointerId);
+        onChange(at(e.clientX), true);
+      }}
+      onKeyDown={(e) => {
+        // The panel is on the right: the left arrow widens it.
+        const step = e.key === 'ArrowLeft' ? 0.02 : e.key === 'ArrowRight' ? -0.02 : 0;
+        if (!step) return;
+        e.preventDefault();
+        onChange(clampSideSplit(split + step), true);
+      }}
+    />
+  );
+}
+
 /** A thread beside the chat: its root, how many replies, the replies as a
  *  timeline, and a composer that posts into the thread. The main timeline
  *  stays where it was. */
-function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: parentCtx, waits, bots, api, readOnly, onClose, onSent }: {
+function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: parentCtx, waits, bots, api, readOnly, onClose, onSent, style }: {
   conversation: Conversation;
   /** The thread's cards (and those linking it), in order; the approve chip
    *  counts theirs. */
@@ -736,6 +774,8 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: pare
   readOnly: boolean;
   onClose: () => void;
   onSent: (cardId: string, to: SentTo[] | null) => void;
+  /** The panel's width beside the chat (the splitter's). */
+  style?: React.CSSProperties;
 }) {
   const ctx = { ...parentCtx, hideThread: threadId };
   const { t } = ctx;
@@ -750,7 +790,7 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: pare
     if (el) el.scrollTop = el.scrollHeight;
   }, [lastId]);
   return (
-    <aside className="wmux-bots-side" data-bots-thread-panel={threadId} aria-label={t('botsPage.chat.threadPanel', { name: label })}>
+    <aside className="wmux-bots-side" data-bots-thread-panel={threadId} aria-label={t('botsPage.chat.threadPanel', { name: label })} style={style}>
       <div className="wmux-bots-worker-head">
         <span className={`min-w-0 flex-1 truncate text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)] ${isRefThread(threadId) ? 'font-mono' : ''}`}>{label}</span>
         <button
@@ -858,11 +898,14 @@ function workerState(worker: BotWorker): string {
 }
 
 /** What the worker panel's header says for the shown workspace: a live
- *  worker's name and state (needs-you text while it waits), else a task's
- *  title (a done worker), else its workspace's name with no state. */
-function workerPanelView(workspaceId: string, workers: readonly BotWorker[], tasks: readonly BotTaskView[], t: T): { name: string; state: string | null; attention: boolean } {
+ *  worker's name and state (needs-you text while it waits), else its row in
+ *  the list's tree (an ended task: done or failed, and whether it can
+ *  resume), else a task's title, else its workspace's name with no state. */
+function workerPanelView(workspaceId: string, workers: readonly BotWorker[], tree: readonly BotTreeRow[], tasks: readonly BotTaskView[], t: T): { name: string; state: string | null; attention: boolean; resumeTaskId?: string } {
   const live = workers.find((w) => w.workspaceId === workspaceId);
   if (live) return { name: live.name, state: t(workerState(live)), attention: live.waiting };
+  const row = tree.find((r) => r.workspaceId === workspaceId);
+  if (row) return { name: row.title, state: treeRowState(row, t), attention: row.state === 'needsYou', ...(row.resumable && row.taskId ? { resumeTaskId: row.taskId } : {}) };
   const task = tasks.find((x) => (x.workerWorkspaceId ?? x.taskWorkspaceId) === workspaceId);
   if (task) return { name: task.title, state: t(task.stage === 'waiting_slot' ? 'botsPage.worker.waitingSlot' : 'botsPage.worker.resumable'), attention: false };
   const ws = useStore.getState().workspaces.find((w) => w.id === workspaceId);
@@ -1439,7 +1482,37 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     useStore.getState().setBotsWorkerPanel(null);
     setOpenThread({ workspaceId, threadId });
   }, []);
-  const shown = shownId && !openThread ? workerPanelView(shownId, workers, tasks, t) : null;
+  // The chat and its side panel share the width by the splitter.
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [split, setSplit] = useState(readSideSplit);
+  const onSplit = useCallback((next: number, done: boolean) => {
+    setSplit(next);
+    if (done) writeSideSplit(next);
+  }, []);
+  const sideStyle = useMemo((): React.CSSProperties => ({ width: `${(split * 100).toFixed(2)}%` }), [split]);
+  // Resume from the panel's menu: the resumed worker's pane (a new one when
+  // the old was cleared) takes the panel; a failure is a toast.
+  const resumeShown = useCallback((taskId: string) => {
+    const resume = resumePort?.resumeWorker;
+    if (!resume) return;
+    void resume(taskId).then((r) => {
+      if (!r.ok) useStore.getState().pushToast({ message: r.message || t('botsPage.worker.resume'), level: 'error' });
+      else if (r.workspaceId) useStore.getState().setBotsWorkerPanel({ workspaceId: r.workspaceId, conversationId });
+    }).catch((err: unknown) => useStore.getState().pushToast({ message: String(err), level: 'error' }));
+  }, [resumePort, conversationId, t]);
+  // A worker picked in the list while a thread is open takes the side.
+  useEffect(() => { if (shownId) setOpenThread(null); }, [shownId]);
+  const tree = conversation.kind === 'bot' ? conversation.tree : EMPTY_TREE;
+  const shown = shownId && !openThread ? workerPanelView(shownId, workers, tree, tasks, t) : null;
+  // The rail lists only the tasks with no row in the list's tree.
+  const openWorkspaceIds = useStore(useShallow((s) => s.workspaces.map((w) => w.id)));
+  const railTasks = useMemo(() => {
+    const open = new Set(openWorkspaceIds);
+    return tasks.filter((task) => {
+      const pane = task.workerWorkspaceId ?? task.taskWorkspaceId;
+      return task.stage === 'waiting_slot' || !pane || !open.has(pane);
+    });
+  }, [tasks, openWorkspaceIds]);
   // PR and issue links become chips: titled from a thread this conversation
   // holds, which they open beside the chat.
   const roomThreads = useStore((s) => s.roomThreads);
@@ -1473,10 +1546,10 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   }), [cards, roomThreads, onThread, pattern, bots]);
   const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, started, onThread, onOpenBot, markdown };
   const threadShown = openThread ? threadCards(cards, openThread.workspaceId, openThread.threadId) : null;
-  const empty = items.length === 0 && workers.length === 0 && tasks.length === 0;
+  const empty = items.length === 0;
 
   return (
-    <div className="wmux-bots-chat-area" data-worker-open={shownId || openThread ? 'true' : undefined}>
+    <div ref={areaRef} className="wmux-bots-chat-area" data-worker-open={shownId || openThread ? 'true' : undefined}>
     <section className="wmux-bots-chat" data-bots-chat={conversation.id} aria-label={title}>
       <div className="wmux-bots-chat-head">
         <button type="button" data-bots-back onClick={onBack} aria-label={t('botsPage.back')} title={t('botsPage.back')} className={`wmux-bots-back ${FOCUS_RING}`}>
@@ -1536,7 +1609,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       </div>
 
       <div className="wmux-bots-column wmux-bots-foot">
-        <WorkingRail turns={turns} workers={workers} tasks={tasks} t={t} now={now} readOnly={readOnly} resumePort={resumePort} shownId={shownId} onOpen={openWorker} />
+        <WorkingRail turns={turns} tasks={railTasks} t={t} now={now} readOnly={readOnly} resumePort={resumePort} shownId={shownId} onOpen={openWorker} />
         <div className="wmux-bots-composer">
           <BotsComposer
             conversation={conversation}
@@ -1553,6 +1626,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         </div>
       </div>
     </section>
+    {((openThread && threadShown) || (shownId && shown)) && <SideSplitter areaRef={areaRef} split={split} t={t} onChange={onSplit} />}
     {openThread && threadShown && (
       <BotsThreadPanel
         key={`${openThread.workspaceId}:${openThread.threadId}`}
@@ -1567,6 +1641,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         readOnly={readOnly}
         onClose={() => setOpenThread(null)}
         onSent={onSent}
+        style={sideStyle}
       />
     )}
     {!openThread && shownId && shown && (
@@ -1578,6 +1653,8 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         attention={shown.attention}
         t={t}
         onClose={() => useStore.getState().setBotsWorkerPanel(null)}
+        onResume={shown.resumeTaskId && !readOnly && resumePort?.resumeWorker ? () => resumeShown(shown.resumeTaskId!) : undefined}
+        style={sideStyle}
       />
     )}
     </div>
