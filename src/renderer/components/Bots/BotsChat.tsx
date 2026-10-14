@@ -569,7 +569,7 @@ function WorkingRail({ turns, workers, tasks, t, now, readOnly, resumePort, show
   const shownRows = all ? rows : rows.slice(0, RAIL_ROWS_MAX);
   const more = rows.length - shownRows.length;
   return (
-    <div className="wmux-bots-rail" data-bots-rail role="status" aria-label={t('botsPage.chat.rail')}>
+    <div className="wmux-bots-rail" data-bots-rail role="group" aria-label={t('botsPage.chat.rail')}>
       {live.map((row) => <TurnLine key={row.bot.id} row={row} t={t} now={now} readOnly={readOnly} />)}
       {shownRows}
       {(more > 0 || all) && rows.length > RAIL_ROWS_MAX && (
@@ -1154,14 +1154,18 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   const markSeen = useCallback(() => {
     if (!atBottom.current || newestAt <= 0) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    // The narrow layout keeps the chat mounted but hidden behind the list.
+    const el = scrollRef.current;
+    if (el && typeof el.checkVisibility === 'function' && !el.checkVisibility()) return;
     useStore.getState().markBotsSeen(conversationId, newestAt);
   }, [conversationId, newestAt]);
-  // "N new" while scrolled up: the cards from others that arrived since.
+  // "N new" while scrolled up: the cards from others newer than any seen
+  // before (older history read in later is not new).
   const [newCount, setNewCount] = useState(0);
-  const prevLen = useRef(cards.length);
+  const newestSeen = useRef(cards.reduce((m, c) => Math.max(m, c.at), 0));
   useEffect(() => {
-    const added = cards.slice(prevLen.current).filter((c) => c.actor.kind !== 'human').length;
-    prevLen.current = cards.length;
+    const added = cards.filter((c) => c.actor.kind !== 'human' && c.at > newestSeen.current).length;
+    newestSeen.current = cards.reduce((m, c) => Math.max(m, c.at), newestSeen.current);
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
     else if (added > 0) setNewCount((n) => n + added);
@@ -1170,7 +1174,14 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   useEffect(() => {
     const onVisible = () => markSeen();
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    // The chat coming into view (the narrow layout's list → chat) resizes it.
+    const el = scrollRef.current;
+    const ro = el && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => markSeen()) : null;
+    if (el) ro?.observe(el);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      ro?.disconnect();
+    };
   }, [markSeen]);
   const toBottom = () => {
     const el = scrollRef.current;

@@ -929,7 +929,17 @@ describe('Bots page', () => {
     // Lead has a question open: its needs-you badge shows, never an unread one.
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)).not.toBeNull();
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-unread]`)).toBeNull();
+    // A chat the narrow layout keeps hidden behind the list reads nothing.
+    const proto = HTMLElement.prototype as unknown as { checkVisibility?: () => boolean };
+    proto.checkVisibility = () => false;
+    try {
+      act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+      expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)?.textContent).toBe('1');
+    } finally {
+      delete proto.checkVisibility;
+    }
     // Reading the 1:1 to its end clears it.
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
     expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)).toBeNull();
   });
