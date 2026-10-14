@@ -53,6 +53,8 @@ export const GRADERS = {
   'mention-loop-bounded': group.mentionLoopBounded,
   'routine-create-fire-pause': group.routineCreateFirePause,
   'chat-stop-all': group.chatStopAll,
+  'coordinator-room-wakes-lead-only': group.coordinatorRoomWakesLeadOnly,
+  'taint-research-lane-refused': approvals.taintLaneRefused,
 };
 
 /** `{status: 'pass'|'fail'|'error', criteria}` for one snapshot. */

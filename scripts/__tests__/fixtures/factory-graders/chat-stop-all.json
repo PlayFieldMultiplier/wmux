@@ -75,9 +75,9 @@
     "version": 1,
     "id": "bot-8323aac0",
     "workspaceId": "ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125",
-    "role": "moa",
-    "template": "coordinator",
-    "name": "Moa",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Verifier",
     "engine": {
      "kind": "acp",
      "command": "/home/owner/.local/node/bin/node",
@@ -104,7 +104,7 @@
   "botKeys": {
    "lead": "bot-b1b445df",
    "triage": "bot-5c4afddc",
-   "moa": "bot-8323aac0"
+   "verifier": "bot-8323aac0"
   },
   "injected": [
    {
@@ -1089,7 +1089,7 @@
      "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g5b3z1d56512109\",\n    \"seq\": 16,\n    \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881781119,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-9ef2cd04-7e4f-4f3e-8fe8-99002e1de125\",\n      \"botId\": \"bot-5c4afddc\"\n    },\n    \"title\": \"Stopped\",\n    \"body\": \"My workers are stopped and my routines paused.\",\n    \"clientPostId\": \"wake:w-mv6g5azy-c57e25c7:1\"\n  }\n}"
     }
    ],
-   "moa": [
+   "verifier": [
     {
      "at": 1791881769951,
      "event": "initialize"
@@ -1399,9 +1399,9 @@
    ]
   },
   {
-   "why": "the HQ bot said nothing",
+   "why": "the verifier said nothing",
    "failing": [
-    "moa_one_line"
+    "verifier_one_line"
    ],
    "mutate": [
     {
