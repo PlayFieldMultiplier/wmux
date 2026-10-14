@@ -71,6 +71,12 @@ export interface Handoff {
   relayStopped?: string;
   /** The coordinator's wake for a stopped relay is on disk. Main-written. */
   relayStopTold?: true;
+  /** dispatch: the router opened its thread (a coordinator's parentless
+   *  dispatch said in General). Main-written. */
+  opensThread?: true;
+  /** result / refusal: the General card pointing at its thread is written.
+   *  Main-written. */
+  pointed?: true;
   createdAt: number;
   updatedAt: number;
 }

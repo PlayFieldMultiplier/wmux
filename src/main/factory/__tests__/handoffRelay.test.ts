@@ -51,7 +51,7 @@ interface Rig {
   run: (b: BotProfile, reason: WakeItem['reason'], extra?: Partial<RunningWake>, thread?: ThreadId | null) => void;
 }
 
-async function rig(bots: BotProfile[]): Promise<Rig> {
+async function rig(bots: BotProfile[], opts: { slowFlush?: boolean } = {}): Promise<Rig> {
   const facts: Fact[] = [];
   const subs = new Set<(f: Fact) => void>();
   const rooms = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), now: () => now, log: () => undefined });
@@ -83,6 +83,8 @@ async function rig(bots: BotProfile[]): Promise<Rig> {
         wakes.push(input);
         return { id: `w-${wakes.length}`, ...input, enqueuedAt: now, attempts: 0, state: 'queued' } as WakeItem;
       },
+      // A wake reaches the disk later: a delivery stays queued until then.
+      ...(opts.slowFlush ? { flush: () => new Promise<void>((done) => setTimeout(done, 5)) } : {}),
     },
     currentWakeThread: (botId) => running.get(botId)?.thread ?? null,
     currentWake: (botId) => running.get(botId)?.wake ?? null,
@@ -285,6 +287,10 @@ describe('a coordinator\'s relay', () => {
     expect(r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.res.id, title: 'x', body: '', next: [t.lead.id] })).toMatchObject({ ok: false, code: 'no_addressee' });
     expect(r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.res.id, title: 'x', body: '', next: [t.res.id] })).toMatchObject({ ok: false, code: 'no_addressee' });
     expect(r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.res.id, title: 'x', body: '', clientHandoffId: 'forward:h-x' })).toMatchObject({ ok: false, code: 'invalid' });
+    // A question cannot take a key wmux keeps for its own hops either.
+    for (const key of ['forward:h-x', 'mention:c-1:bot-00000001']) {
+      expect(await r.router.askPerson(binding(t.lead), { title: 'q', body: '', clientHandoffId: key })).toMatchObject({ ok: false, code: 'invalid' });
+    }
     r.run(t.dev, owner());
     expect(r.router.send(binding(t.dev), { kind: 'dispatch', toBotId: t.iss.id, title: 'x', body: '', next: [t.res.id] })).toMatchObject({ ok: false, code: 'surface' });
   });
@@ -477,5 +483,81 @@ describe('a relay across a restart', () => {
     expect(again.router.get(f.id)).toMatchObject({ status: 'refused', refusal: { code: 'no_addressee' } });
     expect(again.router.get(res1.handoffId)?.relayStopped).toMatch(/relay stopped/);
     expect(again.wakes.filter((w) => w.botId === t.lead.id)).toEqual([expect.objectContaining({ reason: { kind: 'handoff', handoffId: res1.handoffId } })]);
+  });
+});
+
+describe('the General card that points at a coordinator\'s thread', () => {
+  const pointers = (r: Rig, thread: string) => r.rooms.read('ws1', { threadId: 'general' }).cards.filter((c) => c.refs?.threadId === thread);
+
+  it('a stopped relay points there too, once: "Stopped: <title>"', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t);
+    expect(root.opensThread).toBe(true);
+    t.dev.enabled = false;
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    await r.router.idle();
+    expect(pointers(r, root.threadId).map((c) => c.title)).toEqual(['Stopped: Ship the widget']);
+    expect(r.router.get(res1.handoffId)?.pointed).toBe(true);
+    // A restart writes no second card.
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(pointers(again, root.threadId)).toHaveLength(1);
+  });
+
+  it('a restart re-points nothing: the mark is on the result', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t, [t.dev.id]);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    const res2 = answer(r, t.dev, forwardOf(r, res1.handoffId)!, 'Built');
+    if (!res2.ok) throw new Error('refused');
+    await r.router.idle();
+    expect(r.router.get(res2.handoffId)).toMatchObject({ status: 'delivered', pointed: true });
+    for (let i = 0; i < 2; i++) {
+      const again = await rig(t.all);
+      await again.router.idle();
+      expect(pointers(again, root.threadId)).toHaveLength(1);
+    }
+  });
+
+  it('after an upgrade, older coordinator dispatches in a thread of their own get no card', async () => {
+    const t = team();
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const lead = { kind: 'bot' as const, workspaceId: 'ws1', botId: t.lead.id };
+    const dev = { kind: 'bot' as const, workspaceId: 'ws1', botId: t.dev.id };
+    const base = { version: 1, runId: 'run-c-old', landing: 'wake', createdAt: now, updatedAt: now, hopsInRun: 1 };
+    const oldRoot = { ...base, id: 'h-old', threadId: 'handoff:h-old', depth: 0, from: lead, to: dev, kind: 'dispatch', attribution: { originator: { kind: 'human' }, chain: [] }, payload: { title: 'Old work', body: '' }, status: 'delivered' };
+    const oldResult = { ...base, id: 'h-old-r', threadId: 'handoff:h-old', depth: 1, hopsInRun: 2, from: dev, to: lead, kind: 'result', replyTo: 'h-old', attribution: { originator: { kind: 'human' }, chain: ['h-old'] }, payload: { title: 'Done', body: '' }, status: 'delivered' };
+    fs.writeFileSync(file, `${JSON.stringify(oldRoot)}\n${JSON.stringify(oldResult)}\n`);
+    const r = await rig(t.all);
+    await r.router.idle();
+    expect(pointers(r, 'handoff:h-old')).toEqual([]);
+  });
+
+  it('a last result redelivered at start (still queued) is pointed to', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t, [t.dev.id]);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    const f = forwardOf(r, res1.handoffId)!;
+    // The last result as a stop left it: stored, its wake not on disk yet.
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    const last: Handoff = {
+      ...f, id: 'h-last', kind: 'result', from: { kind: 'bot', workspaceId: 'ws1', botId: t.dev.id }, to: { kind: 'bot', workspaceId: 'ws1', botId: t.lead.id },
+      replyTo: f.id, depth: 2, hopsInRun: f.hopsInRun + 1, attribution: { originator: { kind: 'human' }, chain: [...f.attribution.chain, f.id] },
+      payload: { title: 'Built', body: '' }, status: 'queued', createdAt: now, updatedAt: now,
+    };
+    for (const k of ['relay', 'next', 'clientHandoffId', 'opensThread'] as const) delete (last as Partial<Handoff>)[k];
+    fs.appendFileSync(file, `${JSON.stringify(last)}\n`);
+    const again = await rig(t.all, { slowFlush: true });
+    // Pointed to at start, while its delivery is still settling.
+    expect(pointers(again, root.threadId).map((c) => c.refs?.handoffId)).toEqual(['h-last']);
+    await again.router.idle();
+    expect(again.router.get('h-last')).toMatchObject({ status: 'delivered', pointed: true });
   });
 });

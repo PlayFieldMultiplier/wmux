@@ -319,6 +319,8 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(h.kind === 'dispatch' && h.relay === true ? { relay: true as const } : {}),
     ...(typeof h.relayStopped === 'string' && oneLine(h.relayStopped, 300) ? { relayStopped: oneLine(h.relayStopped, 300) } : {}),
     ...(h.relayStopTold === true ? { relayStopTold: true as const } : {}),
+    ...(h.kind === 'dispatch' && h.opensThread === true ? { opensThread: true as const } : {}),
+    ...((h.kind === 'result' || h.kind === 'refusal') && h.pointed === true ? { pointed: true as const } : {}),
     createdAt: h.createdAt,
     updatedAt: h.updatedAt,
   };
@@ -552,6 +554,12 @@ export class HandoffRouter {
         }
         continue;
       }
+      // A last result taken but not yet marked delivered (redelivered at this
+      // start) is pointed to as well.
+      if (r.status === 'queued' && (parent.next?.length ?? 0) === 0) {
+        this.pointToThread(r.id, parent, 'finished');
+        continue;
+      }
       if (r.status !== 'delivered') continue;
       if ((parent.next?.length ?? 0) > 0) {
         if (parent.from.kind !== 'bot') continue;
@@ -565,7 +573,7 @@ export class HandoffRouter {
         // the dispatch takes the result's own mark.
         this.forward(r, parent, null);
       } else {
-        this.pointToThread(r, parent);
+        this.pointToThread(r.id, parent, 'finished');
       }
     }
   }
@@ -758,6 +766,7 @@ export class HandoffRouter {
     // own: the whole flow (hops, workers, the report) stays together there.
     if (kind === 'dispatch' && coordinator && !spec.namedThread && !parent && draft.threadId === GENERAL_THREAD) {
       draft.threadId = `handoff:${id}` as ThreadId;
+      draft.opensThread = true;
     }
 
     if (!surfaceAllows(sender, 'handoff_send')) return this.refuse(draft, 'surface', 'the bot surface has no handoff_send');
@@ -812,7 +821,7 @@ export class HandoffRouter {
     const result = kind === 'result' && parent && (parent.next?.length ?? 0) > 0
       ? this.relayOn(draft, parent, target.bot)
       : this.deliver(draft, target.bot);
-    if (result.ok && kind === 'result' && parent) this.pointToThread(draft, parent);
+    if (result.ok && kind === 'result' && parent) this.pointToThread(draft.id, parent, 'finished');
     // The coordinator's queue did not take a relay's last result: it is
     // brought to it as a stopped relay (retried on the next start).
     if (!result.ok && inRelay && result.code === 'budget') this.stopRelay(draft.id, target.bot, 'your queue did not take its last result');
@@ -963,6 +972,8 @@ export class HandoffRouter {
     // so the next start enqueues it again when this one was not taken.
     if (!this.put({ ...result, relayStopped: oneLine(`relay stopped: ${why}`, 300) })) return;
     this.wakeForStop(result.id, lead);
+    const parent = result.replyTo ? this.records.get(result.replyTo) : undefined;
+    if (parent) this.pointToThread(result.id, parent, 'stopped');
   }
 
   private wakeForStop(resultId: string, lead: BotProfile): void {
@@ -1007,25 +1018,30 @@ export class HandoffRouter {
    *  General, relayed or not) is in: one card in General points at that
    *  thread, replying to the owner's message when the run is one. Written
    *  once per result. */
-  private pointToThread(result: Handoff, parent: Handoff): void {
-    if ((parent.next?.length ?? 0) > 0) return;
+  private pointToThread(resultId: string, parent: Handoff, how: 'finished' | 'stopped'): void {
+    const result = this.records.get(resultId);
+    if (!result || result.pointed) return;
+    if (how === 'finished' && (parent.next?.length ?? 0) > 0) return;
     const root = this.rootOf(parent);
-    if (root.kind !== 'dispatch' || root.from.kind !== 'bot' || root.threadId !== `handoff:${root.id}`) return;
+    // Only a thread this router opened for a coordinator's work in General.
+    if (root.kind !== 'dispatch' || root.from.kind !== 'bot' || root.opensThread !== true) return;
     if (!isCoordinatorBot(safeGet(this.opts.ports().bots, root.from.botId))) return;
     const rooms = this.opts.rooms();
     const ws = root.from.workspaceId;
     if (!rooms) return;
-    if (rooms.find(ws, (c) => c.threadId === GENERAL_THREAD && c.refs?.handoffId === result.id)) return;
     const ownerCardId = humanCardIdOfRun(root.runId);
     const ownerCard = ownerCardId ? rooms.get(ws, ownerCardId) : null;
-    rooms.append({
+    const card = rooms.append({
       workspaceId: ws,
       threadId: GENERAL_THREAD,
       kind: 'fact',
       actor: { kind: 'system' },
-      title: `Finished: ${root.payload.title}`,
+      title: `${how === 'stopped' ? 'Stopped' : 'Finished'}: ${root.payload.title}`,
       refs: { handoffId: result.id, threadId: root.threadId },
     }, ownerCard && ownerCard.threadId === GENERAL_THREAD && ownerCard.kind === 'human' ? { replyTo: ownerCard.id } : undefined);
+    // Written once per result: the mark is on the result itself.
+    const now = card ? this.records.get(resultId) : null;
+    if (now) this.put({ ...now, pointed: true });
   }
 
   private addresseeFor(
@@ -1164,8 +1180,10 @@ export class HandoffRouter {
     // Wake first, then the status: a stop before the status line leaves the
     // handoff queued, and the next start redelivers it into the same wake.
     const mark = (): void => {
-      if (this.records.get(h.id)?.status !== 'queued') return;
-      const delivered: Handoff = { ...h, status: 'delivered' };
+      // The stored record, not the draft: main may have marked it meanwhile.
+      const cur = this.records.get(h.id);
+      if (cur?.status !== 'queued') return;
+      const delivered: Handoff = { ...cur, status: 'delivered' };
       if (this.put(delivered)) this.emit('handoff.received', delivered);
     };
     if (wakes?.flush) {
@@ -1263,7 +1281,9 @@ export class HandoffRouter {
       if (!title) return invalid('title is required');
       const namedThread = params.threadId === undefined ? undefined : parseThreadId(params.threadId);
       if (namedThread === null) return invalid('threadId is not a thread id');
-      if (params.clientHandoffId !== undefined && !isClientId(params.clientHandoffId)) return invalid('clientHandoffId is not a valid key');
+      if (params.clientHandoffId !== undefined && (!isClientId(params.clientHandoffId) || params.clientHandoffId.startsWith('mention:') || params.clientHandoffId.startsWith('forward:'))) {
+        return invalid('clientHandoffId is not a valid key');
+      }
       const prior = this.byClientId(sender.botId, clientHandoffId);
       if (prior) return prior.kind === 'ask_person' ? this.resultOf(prior, true) : invalid('clientHandoffId was used for a handoff');
       const from = botParty(sender);
