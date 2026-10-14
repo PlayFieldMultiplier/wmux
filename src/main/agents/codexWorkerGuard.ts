@@ -1,0 +1,253 @@
+// ─── A bot's codex fan-out worker: the launch main allows ───────────────────
+//
+// pty:create's stage for a codex line in a bot's worker pane (shared/
+// codexWorkerGuard.ts holds the pure parts and the threat model). Only the
+// fan-out's own first launch (strict) of a codex worker is allowed; every
+// other codex launch in a bot's worker pane is refused (botWorkerMergeGuard).
+// Before the line is handed on, main:
+//
+//   1. checks the line against the allowlist and rebuilds it with its own
+//      sandbox, approval, writable roots and network (POSIX hosts only);
+//   2. checks the worktree's `.codex/`: no symlink on the way to the rules
+//      file, and no file the repository does not track other than ours (a
+//      project config, hook or rules file there would load with ours);
+//   3. writes the rules file and lists it, anchored, in the repository's
+//      `info/exclude` (shared by every worktree; written under a lock);
+//   4. finds the codex the pane will run (the login shell's PATH), refuses
+//      one older than the measured floor, and proves the rules load: Codex's
+//      own `execpolicy check` over every rules file the session reads (the
+//      user's and the worktree's) must refuse a push with our rule. A rules
+//      file that does not parse makes an interactive codex start with no
+//      rules at all, so this check is what keeps the guard from failing open.
+//
+// Any failure throws: the create fails and the fan-out reports the task as
+// not launched. Once the folder is resolved, pty:create refuses a guarded
+// create that would start anywhere else (botWorkerMergeGuard
+// guardedCodexCwdRefusal), and the line pins Codex's working root (`-C`).
+//
+// Not covered: a rules file another process changes between this check and
+// the session's start, and commands the prefix rules do not match (see
+// shared/codexWorkerGuard.ts).
+
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { agentExecEnv } from '../../shared/execEnv';
+import {
+  CODEX_WORKER_EXCLUDE_LINE,
+  CODEX_WORKER_JUSTIFICATION_PREFIX,
+  CODEX_WORKER_RULES_PATH,
+  buildCodexWorkerLaunchLine,
+  buildCodexWorkerRules,
+  codexVersionAtLeastFloor,
+  parseCodexVersion,
+  launchesCodex,
+  parseCodexWorkerLine,
+  CODEX_WORKER_MIN_VERSION,
+} from '../../shared/codexWorkerGuard';
+import { resolveOnPath } from '../factory/botEngines';
+import { getBotStore } from '../factory/botStore';
+import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
+
+const execFileP = promisify(execFile);
+const RUN_TIMEOUT_MS = 15_000;
+
+export interface CodexGuardRun { code: number; stdout: string; stderr: string }
+
+export interface CodexWorkerGuardDeps {
+  /** Runs a program (no shell). Never throws. */
+  run?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => Promise<CodexGuardRun>;
+  /** The codex binary the pane's shell resolves, or null. */
+  resolveCodex?: (env: NodeJS.ProcessEnv) => Promise<string | null>;
+  /** The env a pane's agent launch sees (login-shell PATH). */
+  paneEnv?: () => Promise<NodeJS.ProcessEnv>;
+  /** The bot repository's key, for the one-word gh repository options. */
+  repoKey?: (botIds: readonly string[]) => string | undefined;
+  /** Claims the in-flight fan-out spawn's one codex launch (botWorkerMergeGuard). */
+  claimLaunch?: (ownerWorkspaceId: string, cwd: string) => boolean;
+  platform?: NodeJS.Platform;
+  home?: string;
+}
+
+/** What pty:create knows about this create (botWorkerMergeGuard's record). */
+export interface CodexGuardWorker { strict: boolean; spawns?: { botId: string }[] }
+
+/** The pty:create options this stage reads. */
+interface CodexGuardOptions { initialCommand?: string; cwd?: string; env?: Record<string, string>; fanoutTaskOf?: unknown }
+
+async function defaultRun(cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }): Promise<CodexGuardRun> {
+  try {
+    const { stdout, stderr } = await execFileP(cmd, args, { cwd: opts.cwd, env: opts.env, timeout: RUN_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024 });
+    return { code: 0, stdout: String(stdout), stderr: String(stderr) };
+  } catch (err) {
+    const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: string };
+    return { code: typeof e.code === 'number' ? e.code : 1, stdout: typeof e.stdout === 'string' ? e.stdout : '', stderr: typeof e.stderr === 'string' && e.stderr ? e.stderr : (e.message ?? String(err)) };
+  }
+}
+
+function refuse(why: string): Error {
+  return new Error(`PTY_CREATE: a bot's codex worker was not launched: ${why}`);
+}
+
+let excludeLock: Promise<void> = Promise.resolve();
+
+/** Add the anchored rules path to `info/exclude` once (check, then append),
+ *  one writer at a time. */
+async function excludeRulesFile(commonDir: string): Promise<void> {
+  const run = async (): Promise<void> => {
+    const file = path.join(commonDir, 'info', 'exclude');
+    let text = '';
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      /* missing: created below */
+    }
+    if (text.split(/\r?\n/).includes(CODEX_WORKER_EXCLUDE_LINE)) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${CODEX_WORKER_EXCLUDE_LINE}\n`);
+  };
+  const next = excludeLock.then(run, run);
+  excludeLock = next.catch(() => undefined);
+  await next;
+}
+
+const SCAN_MAX = 500;
+
+/** Every file under `dir` (relative, `/`-separated); a symlink anywhere is
+ *  reported as such. Past SCAN_MAX entries `exhausted` is set (the caller
+ *  refuses: what was not read was not checked). */
+function listFiles(dir: string, rel = '', out: { files: string[]; symlink: string | null; exhausted: boolean } = { files: [], symlink: null, exhausted: false }): typeof out {
+  for (const ent of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+    if (out.symlink || out.exhausted) break;
+    if (out.files.length >= SCAN_MAX) {
+      out.exhausted = true;
+      break;
+    }
+    const r = rel ? `${rel}/${ent.name}` : ent.name;
+    if (ent.isSymbolicLink()) out.symlink = r;
+    else if (ent.isDirectory()) listFiles(dir, r, out);
+    else out.files.push(r);
+  }
+  return out;
+}
+
+/** The rules files a codex session in `cwd` may read, absolute: the system's
+ *  (`/etc/codex/rules`), the user's (`$CODEX_HOME/rules`), and every
+ *  `.codex/rules` from the filesystem root down to `cwd`. Reading more than
+ *  the session loads only makes the check stricter. */
+function rulesFiles(cwd: string, codexHome: string): string[] {
+  const out: string[] = [];
+  const ancestors: string[] = [];
+  for (let d = cwd; ; d = path.dirname(d)) {
+    ancestors.unshift(path.join(d, '.codex', 'rules'));
+    if (path.dirname(d) === d || ancestors.length > 64) break;
+  }
+  for (const dir of ['/etc/codex/rules', path.join(codexHome, 'rules'), ...ancestors]) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const n of names.sort()) if (n.endsWith('.rules')) out.push(path.join(dir, n));
+  }
+  return out;
+}
+
+/**
+ * pty:create's stage. Returns `options` unchanged unless this is a bot
+ * worker's codex line; then the guarded line, or this throws.
+ */
+export async function guardCodexBotWorker<T extends CodexGuardOptions>(
+  options: T | undefined,
+  worker: CodexGuardWorker | null,
+  deps: CodexWorkerGuardDeps = {},
+): Promise<T | undefined> {
+  if (!options || !worker || !launchesCodex(options.initialCommand)) return options;
+  // The fan-out's own launch: main marked this spawn in flight (never the
+  // renderer's word alone), and it launches codex once.
+  const owner = typeof options.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
+  if (!worker.strict || !worker.spawns || worker.spawns.length === 0 || !options.cwd
+    || !(deps.claimLaunch ?? claimInflightCodexLaunch)(owner, options.cwd)) {
+    throw refuse('codex runs in a bot\'s worker pane only as the fan-out\'s own first launch');
+  }
+  if ((deps.platform ?? process.platform) === 'win32') throw refuse('the codex worker guard is not available on Windows yet');
+  const cwd = typeof options.cwd === 'string' ? path.resolve(options.cwd) : '';
+  const parsed = cwd ? parseCodexWorkerLine(options.initialCommand ?? '', cwd) : null;
+  if (!parsed) throw refuse('the launch line is not one the guard allows');
+  const run = deps.run ?? defaultRun;
+  // The pane's environment as far as main knows it: the login shell's PATH,
+  // then the create's own env (a profile's, an account's CODEX_HOME).
+  const env = { ...(await (deps.paneEnv ?? (() => agentExecEnv(process.env)))()), ...(options.env ?? {}) };
+  const git = async (args: string[]): Promise<string> => {
+    const r = await run('git', args, { cwd, env });
+    if (r.code !== 0) throw refuse(`git ${args[0]} failed: ${r.stderr.trim().slice(0, 300)}`);
+    return r.stdout.trim();
+  };
+
+  // 2. The worktree's .codex/: no symlink, nothing untracked but ours.
+  const gitDir = await git(['rev-parse', '--path-format=absolute', '--git-dir']);
+  const commonDir = await git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const tracked = new Set((await git(['ls-files', '-z', '--', '.codex'])).split('\0').filter(Boolean));
+  if (tracked.has(CODEX_WORKER_RULES_PATH)) throw refuse(`the repository tracks ${CODEX_WORKER_RULES_PATH}`);
+  const codexDir = path.join(cwd, '.codex');
+  for (const p of [codexDir, path.join(codexDir, 'rules')]) {
+    if (fs.existsSync(p) && fs.lstatSync(p).isSymbolicLink()) throw refuse(`${path.relative(cwd, p)} is a symlink`);
+  }
+  if (fs.existsSync(codexDir)) {
+    const listed = listFiles(codexDir);
+    if (listed.symlink) throw refuse(`.codex/${listed.symlink} is a symlink`);
+    if (listed.exhausted) throw refuse(`.codex/ holds more than ${SCAN_MAX} files`);
+    const stray = listed.files.map((f) => `.codex/${f}`).filter((f) => f !== CODEX_WORKER_RULES_PATH && !tracked.has(f));
+    if (stray.length > 0) throw refuse(`.codex/ holds files the repository does not track (${stray.slice(0, 3).join(', ')})`);
+  }
+
+  // 3. The rules file, and the exclude line.
+  const botIds = (worker.spawns ?? []).map((s) => s.botId);
+  const repoKey = (deps.repoKey ?? ((ids: readonly string[]) => (ids.length > 0 ? getBotStore()?.get(ids[0])?.repo?.repoKey : undefined)))(botIds);
+  const rules = buildCodexWorkerRules({ ...(repoKey ? { repoKey } : {}), cwd, gitDirs: [...new Set([gitDir, commonDir])] });
+  const rulesFile = path.join(cwd, CODEX_WORKER_RULES_PATH);
+  fs.mkdirSync(path.dirname(rulesFile), { recursive: true });
+  const tmp = `${rulesFile}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(tmp, rules, { encoding: 'utf8', mode: 0o644 });
+    fs.renameSync(tmp, rulesFile);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never written */ }
+    throw refuse(`the rules file could not be written: ${String(err)}`);
+  }
+  await excludeRulesFile(commonDir).catch((err) => { throw refuse(`info/exclude could not be written: ${String(err)}`); });
+
+  // 4. The pane's codex: its version, and the rules it will load. The line
+  // still names plain `codex`, so the pane shell's own codex wrapper (shell
+  // integration: no shared app-server, the pane's identity) runs it; the
+  // binary checked here is the one the same PATH resolves.
+  const codex = await (deps.resolveCodex ?? (async (e: NodeJS.ProcessEnv) => resolveOnPath('codex', e)))(env);
+  if (!codex) throw refuse('codex is not on the pane\'s PATH');
+  const version = parseCodexVersion((await run(codex, ['--version'], { cwd, env })).stdout);
+  if (!version || !codexVersionAtLeastFloor(version)) throw refuse(`codex ${version ? version.join('.') : '(unknown version)'} is older than ${CODEX_WORKER_MIN_VERSION}`);
+  const home = deps.home ?? os.homedir();
+  const codexHome = env.CODEX_HOME || path.join(home, '.codex');
+  const files = rulesFiles(cwd, codexHome);
+  const canary = await run(codex, ['execpolicy', 'check', ...files.flatMap((f) => ['--rules', f]), 'git', 'push', 'origin', 'HEAD'], { cwd, env });
+  type Decision = { decision?: unknown; matchedRules?: { prefixRuleMatch?: { justification?: unknown } }[] };
+  let decision: Decision | null;
+  try {
+    decision = JSON.parse(canary.stdout) as Decision;
+  } catch {
+    decision = null;
+  }
+  const ours = (decision?.matchedRules ?? []).some((m) => typeof m.prefixRuleMatch?.justification === 'string' && m.prefixRuleMatch.justification.startsWith(CODEX_WORKER_JUSTIFICATION_PREFIX));
+  if (canary.code !== 0 || decision?.decision !== 'forbidden' || !ours) {
+    throw refuse(`the codex rules do not load as written (${(canary.stderr || canary.stdout).trim().slice(0, 300) || 'no forbidden decision'})`);
+  }
+
+  // 1. The line main launches.
+  const line = buildCodexWorkerLaunchLine(parsed, cwd, [...new Set([gitDir, commonDir])]);
+  if (!line) throw refuse('a worktree path cannot be written into the launch line');
+  const out = { ...options, initialCommand: line };
+  markGuardedCodexCreate(out, line, cwd);
+  return out;
+}

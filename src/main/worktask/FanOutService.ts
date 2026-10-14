@@ -25,6 +25,7 @@
  * in-flight 중복=거부.
  */
 
+import { botWorkerAgentPromptNote } from '../../shared/codexWorkerGuard';
 import { ensureSecretHook } from '../git/secretHookHost';
 import { beginBotWorkerSpawn } from '../agents/botWorkerMergeGuard';
 import { mintSecretGrant, revokeSecretGrant } from '../factory/secretGrants';
@@ -123,12 +124,12 @@ Your task has a row in the task ledger; the brain reads that row, not your prose
  * worker never has to look its task up; ledger_update also resolves the task
  * of the caller's own workspace when `task_id` is left out.
  */
-export function workerTaskIdentityNote(taskId: string, channelId: string, botBranch?: string): string {
+export function workerTaskIdentityNote(taskId: string, channelId: string, botBranch?: string, agent?: string): string {
   // A bot's worker cannot run `git push` (its deny list refuses every form,
   // shared/botWorkerGuard.ts): main pushes its task branch (task_push).
   const push = botBranch
     ? `- Your branch: \`${botBranch}\`. Commit, then publish it with the \`task_push\` tool (wmux pushes this branch to origin, fast-forward only); \`git push\` itself is refused. Open the pull request with \`gh pr create --head ${botBranch}\`.
-`
+${botWorkerAgentPromptNote(agent)}`
     : '';
   return `
 - Your task: \`task_id\` **${taskId}**, \`expected_rev\` **1** right now (or leave \`task_id\` out: wmux reports on the task of your own workspace). Your mission channel: \`${channelId}\`.
@@ -1304,7 +1305,7 @@ export class FanOutService {
           ? `\n\n---\n\nYour private scratch directory is ${tempDir}; TMPDIR, TMP and TEMP point there. Put temporary helpers and test output there, not anywhere else outside the project.`
           : '';
         const botBranch = ctx.requester?.kind === 'bot' && !ctx.checkout ? plan?.branch : undefined;
-        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch), 'utf8');
+        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch, ctx.agentChoice?.agent), 'utf8');
       }
       const stamp: WorkTaskMetaStamp = {
         taskId,

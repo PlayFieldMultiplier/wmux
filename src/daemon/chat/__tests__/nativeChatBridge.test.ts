@@ -514,12 +514,13 @@ describe('launch', () => {
       expect(f.typed).toEqual([]);
     });
 
-    it('another pane, and a line that starts no claude, pass unchanged', async () => {
+    it('another pane passes unchanged; a codex line in a bot worker pane is refused', async () => {
       const f = fixture();
       record(f.dir, { version: 1, sessions: { other: { workspaceId: 'ws-task', at: 1 } } });
       expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toMatchObject({ ok: true });
       expect(f.typed).toEqual(['claude --session-id PIN\r']);
-      expect(guardBotWorkerLaunch('other', "codex -- 'go'", 'codex', f.dir)).toBe("codex -- 'go'");
+      expect(guardBotWorkerLaunch('other', "codex -- 'go'", 'codex', f.dir)).toBeNull();
+      expect(guardBotWorkerLaunch('pane', "codex -- 'go'", 'codex', f.dir)).toBe("codex -- 'go'");
     });
 
     it('the guard reads only the launcher part: a line that does not start with it is refused', () => {

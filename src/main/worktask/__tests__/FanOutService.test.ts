@@ -669,6 +669,9 @@ describe('§0 E2E 정상 — N=2 전부 성공', () => {
     expect(body.endsWith(workerTaskIdentityNote(res.tasks[0].taskId!, res.tasks[0].channelId!, branch))).toBe(true);
     // A person's fan-out keeps the note it had.
     expect(workerTaskIdentityNote('wtask-x', 'ch-1')).not.toContain('task_push');
+    // A codex worker is told what its rules leave out.
+    expect(workerTaskIdentityNote('wtask-x', 'ch-1', 'wtask/b', 'codex')).toContain('`gh api` and `git config` are not available');
+    expect(workerTaskIdentityNote('wtask-x', 'ch-1', 'wtask/b', 'claude')).not.toContain('gh api');
   });
 
   it('A3: 배달 계약문이 워커 프롬프트에 실려, 유휴 후 지시가 어떻게 오는지 워커가 안다', async () => {

@@ -19,9 +19,10 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardSessionLaunch, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardSessionLaunch, guardedCodexCwdRefusal, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
+import { guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
 import { withheldCredentialNames } from '../../../shared/envFilter';
 import { getShellUtf8Locale } from '../../pty/shellLocale';
@@ -436,7 +437,7 @@ export function registerPTYHandlers(
       // the daemon apart from `env` (DaemonCreateSessionParams.secretEnv).
       const secretEnv = secretEnvForCreate(options, botWorker);
       const grantedCwd = options?.cwd;
-      options = withLaunchSessionPin(withBotWorkerMergeGuard(withWmuxTools(await withAccountQuota(options)), botWorker));
+      options = withLaunchSessionPin(withBotWorkerMergeGuard(await guardCodexBotWorker(withWmuxTools(await withAccountQuota(options)), botWorker), botWorker));
 
       // X8 exec-style unit: a supervised wmux.json leaf runs its command as the
       // pane's root process under a daemon-chosen wrapper shell (the daemon
@@ -454,6 +455,9 @@ export function registerPTYHandlers(
       // both modes pick the same default.
       const shell = options?.shell || (process.platform === 'win32' ? new ShellDetector().getDefault() : (process.env.SHELL || '/bin/bash'));
       const cwdResolution = resolvePtyCreateCwdForShell(options?.cwd, options?.recoveryCwds, shell);
+      // A bot's codex worker starts in the folder its rules were written into.
+      const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution);
+      if (codexCwdRefusal) throw new Error(codexCwdRefusal);
       if (secretEnv) {
         const refusal = secretCreateCwdRefusal(grantedCwd, cwdResolution);
         if (refusal) throw new Error(refusal);
@@ -703,7 +707,7 @@ export function registerPTYHandlers(
         revokeSecretGrant(typeof options.secretGrant === 'string' ? options.secretGrant : null);
         throw new Error('PTY_CREATE: a worker with secrets needs the wmux daemon');
       }
-      options = withLaunchSessionPin(withBotWorkerMergeGuard(withWmuxTools(await withAccountQuota(options)), botWorker));
+      options = withLaunchSessionPin(withBotWorkerMergeGuard(await guardCodexBotWorker(withWmuxTools(await withAccountQuota(options)), botWorker), botWorker));
 
       // X8 — supervision lives inside the daemon (decision ②). In local mode it
       // can't be honored, but a silent drop would be a trust violation: the user
@@ -733,6 +737,9 @@ export function registerPTYHandlers(
       const shell = options?.shell
         || (process.platform === 'win32' ? new ShellDetector().getDefault() : (process.env.SHELL || '/bin/bash'));
       const cwdResolution = resolvePtyCreateCwdForShell(options?.cwd, options?.recoveryCwds, shell);
+      // A bot's codex worker starts in the folder its rules were written into.
+      const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution);
+      if (codexCwdRefusal) throw new Error(codexCwdRefusal);
       const safeCwd = cwdResolution.safeCwd;
       const effectiveCwd = safeCwd ?? undefined;
       // Split off initialCommand — it's written into the shell post-create, not

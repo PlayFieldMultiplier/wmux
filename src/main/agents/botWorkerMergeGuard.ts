@@ -10,10 +10,14 @@
 // resume typed into its pane, and on a re-fire, across app restarts. Workers a
 // person started (a pane, the GUI, an orchestrator) launch exactly as before.
 //
+// A codex worker is launched only as the fan-out's own first launch, on the
+// line its own guard rebuilt (codexWorkerGuard.ts); every other codex line in
+// a bot's worker pane (a later pane, a re-fire, a resume) is refused.
+//
 // Fail-closed: a bot worker's launch line that cannot carry the file (it could
-// not be written, the path cannot be quoted, the launcher is not claude, the
-// line is more than one plain command or holds a substitution, or it already
-// names another settings file) is not run. pty:create throws (the renderer
+// not be written, the path cannot be quoted, the launcher is not claude or a
+// guarded codex, the line is more than one plain command or holds a
+// substitution, or it already names another settings file) is not run. pty:create throws (the renderer
 // rolls the workspace back and the fan-out reports the task as not launched);
 // a resume or re-fire types nothing.
 //
@@ -35,6 +39,7 @@ import {
   type BotWorkerSessionRecord,
 } from '../../shared/botWorkerGuard';
 import { getTaskLedger } from '../deck/taskLedgerHost';
+import { launchesCodex, namesCodex } from '../../shared/codexWorkerGuard';
 
 // The pure parts live in shared/ (the daemon guards a phone's launches too).
 export {
@@ -92,8 +97,56 @@ export function beginBotWorkerSpawn(ownerWorkspaceId: string, cwd: string, ident
     }
     const n = (inflightBotSpawns.get(key) ?? 1) - 1;
     if (n > 0) inflightBotSpawns.set(key, n);
-    else inflightBotSpawns.delete(key);
+    else {
+      inflightBotSpawns.delete(key);
+      codexLaunched.delete(key);
+    }
   };
+}
+
+/** In-flight spawns (by spawnKey) whose one codex launch was claimed. */
+const codexLaunched = new Set<string>();
+
+/** codexWorkerGuard: the in-flight fan-out spawn of `ownerWorkspaceId` in
+ *  `cwd` launches codex once; true for that one claim, false otherwise. */
+export function claimInflightCodexLaunch(ownerWorkspaceId: string, cwd: string): boolean {
+  const key = spawnKey(ownerWorkspaceId, cwd);
+  if (!ownerWorkspaceId || !inflightBotSpawns.has(key) || codexLaunched.has(key)) return false;
+  codexLaunched.add(key);
+  return true;
+}
+
+/** The creates whose codex line codexWorkerGuard built, with the line and the
+ *  folder it checked (main's own memory, per options object: a renderer cannot
+ *  put an entry here, and an entry goes with its create). */
+const guardedCodexCreates = new WeakMap<object, { line: string; cwd: string }>();
+
+/** codexWorkerGuard: record a create it built. */
+export function markGuardedCodexCreate(options: object, line: string, cwd: string): void {
+  guardedCodexCreates.set(options, { line, cwd: path.resolve(cwd) });
+}
+
+/** Did the codex guard build this create's line? */
+export function isGuardedCodexCreate(options: { initialCommand?: string } | undefined): boolean {
+  const g = options ? guardedCodexCreates.get(options) : undefined;
+  return !!g && g.line === options?.initialCommand;
+}
+
+/**
+ * pty:create, once the folder is resolved: a guarded codex create starts in
+ * the folder it was checked in, or not at all (never a recovery folder or the
+ * home fallback). Null when it may start, and for every other create.
+ */
+export function guardedCodexCwdRefusal(
+  options: { initialCommand?: string } | undefined,
+  resolution: { source: string; safeCwd?: string | null },
+): string | null {
+  const g = options ? guardedCodexCreates.get(options) : undefined;
+  if (!g) return null;
+  if (resolution.source !== 'requested' || !resolution.safeCwd || path.resolve(resolution.safeCwd) !== g.cwd) {
+    return 'PTY_CREATE: a bot\'s codex worker starts only in the folder its rules were written into';
+  }
+  return null;
 }
 
 function ledgerSaysBot(workspaceId: string): boolean {
@@ -149,6 +202,14 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   if (worker.strict) {
     if (options.exec !== undefined) throw guardError('PTY_CREATE', 'an exec unit has no launch line to guard');
     if (!options.initialCommand) throw guardError('PTY_CREATE', 'no launch line');
+    // A codex worker's line is rebuilt by its own guard (codexWorkerGuard.ts),
+    // which ran first; any other codex line is refused.
+    if (launchesCodex(options.initialCommand)) {
+      if (isGuardedCodexCreate(options)) return options;
+      throw guardError('PTY_CREATE', 'a codex launch line the codex worker guard did not build');
+    }
+  } else if (options.initialCommand && namesCodex(options.initialCommand)) {
+    throw guardError('PTY_CREATE', 'codex runs in a bot\'s worker pane only as the fan-out\'s own first launch');
   } else if (!options.initialCommand || !namesClaude(options.initialCommand)) {
     return options;
   }
@@ -281,6 +342,7 @@ export function reloadBotWorkerSessionsForTests(): void {
  */
 export function guardRefireLine(sessionId: string, line: string, deps: BotWorkerGuardDeps = {}): string {
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return line;
+  if (namesCodex(line)) throw guardError('worktask:refire', 'codex is not re-fired in a bot\'s worker pane');
   return guardLaunchLine('worktask:refire', line, deps);
 }
 
@@ -292,6 +354,7 @@ export function guardRefireLine(sessionId: string, line: string, deps: BotWorker
  */
 export function guardSessionLaunch(sessionId: string, text: string, deps: BotWorkerGuardDeps = {}): string {
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return text;
+  if (namesCodex(text)) throw guardError('pty:write-launch', 'codex is not started again in a bot\'s worker pane');
   if (!namesClaude(text)) return text;
   return guardLaunchLine('pty:write-launch', text, deps);
 }

@@ -105,7 +105,11 @@ async function mcpCall(name, args) {
 
 async function main() {
   const id = taskId();
-  log('start', { taskId: id, args: process.argv.slice(2).map((a) => a.slice(0, 200)) });
+  // Which CLI ran this worker (fake-codex.mjs sets codex), and whether the
+  // codex rules file main writes was in place.
+  const agent = process.env.FACTORY_E2E_WORKER_AGENT || 'claude';
+  const rulesPresent = fs.existsSync(path.join(process.cwd(), '.codex', 'rules', 'wmux-bot-worker.rules'));
+  log('start', { taskId: id, agent, rulesPresent, args: process.argv.slice(2).map((a) => a.slice(0, 200)) });
   if (!id) {
     log('no-task-id');
   } else {
