@@ -1,9 +1,15 @@
 // ─── task.push — a fan-out worker publishes its own task branch ─────────────
 //
-// The caller is a worker pane: its senderPtyId resolves (main's mirror) to its
-// task workspace, whose open ledger row names the task, and the WorkTask main
-// created names the worktree and the branch. Nothing about the push comes
-// from the wire; the push itself is main/worktask/taskPush.ts.
+// What is trusted, and from where:
+//   - WHO: the caller's senderPtyId, which the wmux MCP server fills from its
+//     own process-tree walk to the pane it runs under (not a field the model
+//     writes); main resolves it to the pane's task workspace.
+//   - WHICH task: that workspace's open ledger row, and the WorkTask main
+//     created for it (worktree, branch). The wire names neither.
+//   - WHERE: a bot's task goes only to the bot's own repository (its profile,
+//     set by the owner); an operator's task to the operator's origin.
+//   - HOW: the task's own branch, fast-forward only, never a default branch,
+//     under the config checks of main/worktask/taskPush.ts.
 //
 // Refused for a commander (brain) or a bot token — they own tasks, they are
 // not a task's worker — and for a task on a detached checkout (verify).
@@ -17,7 +23,8 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { getWmuxDir } from '../../../daemon/config';
 import { readBotWorkerDefaultBranches } from '../../../shared/botWorkerGuard';
-import { readRepoDefaultBranch } from '../../agents/botWorkerDefaultBranch';
+import { readRepoDefaultBranchByKey } from '../../agents/botWorkerDefaultBranch';
+import { getBotStore } from '../../factory/botStore';
 import { pushTaskBranch, type TaskPushGit, type TaskPushResult } from '../../worktask/taskPush';
 
 type GetWindow = () => BrowserWindow | null;
@@ -31,8 +38,10 @@ export interface TaskPushRpcDeps {
   wmuxDir?: () => string;
   git?: TaskPushGit;
   push?: typeof pushTaskBranch;
-  /** The repository's own default branch (GitHub's, else origin/HEAD). */
-  repoDefaultBranch?: (worktreePath: string) => Promise<string | null>;
+  /** The repository's own default branch, by its `host/owner/repo` key. */
+  repoDefaultBranch?: (repoKey: string) => Promise<string | null>;
+  /** A bot's repository key (its profile). */
+  botRepoKey?: (botId: string) => string | undefined;
 }
 
 function deny(code: string, message: string): { ok: false; error: { code: string; message: string } } {
@@ -79,15 +88,22 @@ export function registerTaskPushRpc(router: RpcRouter, deps: TaskPushRpcDeps): v
       return deny('FAILED_PRECONDITION', 'task.push: the task has no worktree branch to publish');
     }
     const dir = (deps.wmuxDir ?? getWmuxDir)();
-    // Every task, bot or not: the repository's own default branch is read
-    // here (a task branch can be named by a person), next to the ones main
-    // recorded for bots.
-    const own = await (deps.repoDefaultBranch ?? ((p: string) => readRepoDefaultBranch(p)))(task.worktreePath).catch(() => null);
+    // A bot's task lands only in the bot's own repository.
+    const origin = row.dispatch?.origin;
+    let expectedRepoKey: string | undefined;
+    if (origin?.kind === 'bot') {
+      expectedRepoKey = origin.botId ? (deps.botRepoKey ?? ((id: string) => getBotStore()?.get(id)?.repo?.repoKey))(origin.botId) : undefined;
+      if (!expectedRepoKey) return deny('FAILED_PRECONDITION', 'task.push: the task\'s bot names no repository to push to');
+    }
     const result: TaskPushResult = await push({
       worktreePath: task.worktreePath,
       branch: task.branch,
-      defaultBranches: [...readBotWorkerDefaultBranches(dir), ...(own ? [own] : [])],
+      defaultBranches: readBotWorkerDefaultBranches(dir),
       noHooksDir: path.join(dir, 'factory', 'no-hooks'),
+      ...(expectedRepoKey ? { expectedRepoKey } : {}),
+      // Every task, bot or not: the repository's own default branch too (a
+      // task branch can be named by a person), read by the pushed-to key.
+      repoDefaultBranch: deps.repoDefaultBranch ?? ((key: string) => readRepoDefaultBranchByKey(key)),
     }, ...(deps.git ? [deps.git] : []));
     return { ...result, taskId: row.id };
   });

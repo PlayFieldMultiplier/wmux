@@ -7,23 +7,32 @@
 //   - WHICH branch: the task's own branch, from main's task record (the
 //     worker's verified pane → its task workspace → the open ledger row →
 //     the WorkTask main created). Never a name from the wire.
-//   - WHERE: `origin`, as `HEAD:refs/heads/<task branch>`.
+//   - WHERE: origin's URL, read from the repository config right before the
+//     push and pushed to as a URL (not through the remote's name). Refused
+//     when origin sets anything but its URL and fetch refspec, when any URL
+//     rewrite or a program-running key is set (worktask/workerGit.ts), and —
+//     for a bot's task — when the URL is not a plain https/ssh address of the
+//     bot's own repository. A task of the operator's goes to the operator's
+//     own origin.
 //   - HOW: fast-forward only (no force, no `+`), the branch alone (no tags
-//     follow it), never onto a default branch (main/master, every default
-//     branch main recorded, and the repository's own), never for a task
-//     on a detached checkout (the verify preset grades a commit; it has no
-//     branch to publish).
-//   - The worktree's own hooks do not run (`core.hooksPath` pointed at an empty
-//     folder, `--no-verify`): main runs this, not the worker.
+//     follow it, no submodule is pushed), never onto a default branch
+//     (main/master, every default branch main recorded, and the repository's
+//     own), never for a task on a detached checkout (the verify preset grades
+//     a commit; it has no branch to publish).
+//   - main's git runs with no fsmonitor and the worktree's own hooks do not
+//     run (`core.hooksPath` pointed at an empty folder, `--no-verify`).
 //
 // Any fan-out worker may call it; for a bot's worker it is the only way to
-// publish. The upstream is set, so `gh pr create` finds the pushed branch.
+// publish. Afterwards main sets the branch's upstream to origin, so
+// `gh pr create` finds the pushed branch.
 
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
+import { normalizeRepoKey } from '../../shared/repoKey';
+import { originUrlRepoKey, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal } from './workerGit';
 
 const execFileP = promisify(execFile);
 
@@ -42,11 +51,17 @@ export interface TaskPushInput {
   defaultBranches: readonly string[];
   /** An empty folder for `core.hooksPath`. */
   noHooksDir: string;
+  /** A bot's task: the repository the push must land in (`host/owner/repo`
+   *  or `owner/repo`). Absent for a task of the operator's. */
+  expectedRepoKey?: string;
+  /** The repository's own default branch, read by its key (never from the
+   *  worktree). */
+  repoDefaultBranch?: (repoKey: string) => Promise<string | null>;
 }
 
 export type TaskPushResult =
   | { ok: true; branch: string; remote: 'origin'; head: string; output: string }
-  | { ok: false; reason: 'branch-refused' | 'no-origin' | 'rejected' | 'git-failed'; error: string };
+  | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'rejected' | 'git-failed'; error: string };
 
 async function defaultGit(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
   const env = { ...getExecEnv(), GIT_TERMINAL_PROMPT: '0' };
@@ -71,28 +86,48 @@ export function taskPushBranchRefusal(branch: string, defaultBranches: readonly 
   return null;
 }
 
-/** The git argv of main's push. Pure. */
-export function taskPushArgs(branch: string, noHooksDir: string): string[] {
-  return ['-c', `core.hooksPath=${noHooksDir}`, 'push', '--no-verify', '--no-follow-tags', '--porcelain', '--set-upstream', 'origin', `HEAD:refs/heads/${branch}`];
+/** The git argv of main's push (after the safe `-c` options). Pure. */
+export function taskPushArgs(branch: string, url: string): string[] {
+  return ['push', '--no-verify', '--no-follow-tags', '--recurse-submodules=no', '--porcelain', '--', url, `HEAD:refs/heads/${branch}`];
 }
 
 /** Push the task branch. Never throws. */
 export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = defaultGit): Promise<TaskPushResult> {
-  const refusal = taskPushBranchRefusal(input.branch, input.defaultBranches);
-  if (refusal) return { ok: false, reason: 'branch-refused', error: refusal };
-  const remotes = await git(['remote'], input.worktreePath);
-  if (remotes.code !== 0) return { ok: false, reason: 'git-failed', error: `git remote failed: ${remotes.stderr.trim().slice(0, 500)}` };
-  if (!remotes.stdout.split('\n').map((r) => r.trim()).includes('origin')) {
-    return { ok: false, reason: 'no-origin', error: 'the repository has no origin remote' };
+  const branchRefusal = taskPushBranchRefusal(input.branch, input.defaultBranches);
+  if (branchRefusal) return { ok: false, reason: 'branch-refused', error: branchRefusal };
+  const safe = workerGitSafeArgs(path.resolve(input.noHooksDir));
+  const run = (args: string[]) => git([...safe, ...args], input.worktreePath);
+  const pre = await workerGitPreflight(run);
+  if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
+  const origin = workerOriginRefusal(pre.entries);
+  if ('error' in origin) {
+    return { ok: false, reason: /no origin remote/.test(origin.error) ? 'no-origin' : 'remote-refused', error: origin.error };
   }
-  const head = await git(['rev-parse', 'HEAD'], input.worktreePath);
+  const key = originUrlRepoKey(origin.url);
+  if (input.expectedRepoKey !== undefined) {
+    const expected = normalizeRepoKey(input.expectedRepoKey);
+    if (!expected || !key || key !== expected) {
+      return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
+    }
+  }
+  const own = key && input.repoDefaultBranch ? await input.repoDefaultBranch(key).catch(() => null) : null;
+  if (own) {
+    const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, own]);
+    if (refusal) return { ok: false, reason: 'branch-refused', error: refusal };
+  }
+  const head = await run(['rev-parse', 'HEAD']);
   if (head.code !== 0) return { ok: false, reason: 'git-failed', error: `git rev-parse HEAD failed: ${head.stderr.trim().slice(0, 500)}` };
-  const res = await git(taskPushArgs(input.branch, path.resolve(input.noHooksDir)), input.worktreePath);
+  const sha = head.stdout.trim();
+  const res = await run(taskPushArgs(input.branch, origin.url));
   const output = `${res.stdout}\n${res.stderr}`.trim().slice(0, 2000);
   if (res.code !== 0) {
     // --porcelain marks a refused ref with `!` (non-fast-forward, remote hook).
     const rejected = /^!\t/m.test(res.stdout);
     return { ok: false, reason: rejected ? 'rejected' : 'git-failed', error: output || `git push exited ${res.code}` };
   }
-  return { ok: true, branch: input.branch, remote: 'origin', head: head.stdout.trim(), output };
+  // The upstream, as `--set-upstream origin` would set it.
+  await run(['update-ref', `refs/remotes/origin/${input.branch}`, sha]);
+  await run(['config', `branch.${input.branch}.remote`, 'origin']);
+  await run(['config', `branch.${input.branch}.merge`, `refs/heads/${input.branch}`]);
+  return { ok: true, branch: input.branch, remote: 'origin', head: sha, output };
 }

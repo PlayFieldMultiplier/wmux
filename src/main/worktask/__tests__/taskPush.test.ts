@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pushTaskBranch, taskPushArgs, taskPushBranchRefusal } from '../taskPush';
+import { originUrlRepoKey } from '../workerGit';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -84,16 +85,55 @@ describe('pushTaskBranch', () => {
     expect(await pushTaskBranch(input())).toMatchObject({ ok: false, reason: 'no-origin' });
   });
 
-  it('pushes exactly HEAD to refs/heads/<task branch>, fast-forward only', () => {
-    const args = taskPushArgs('wtask/one', '/x/no-hooks');
-    expect(args).toEqual(['-c', 'core.hooksPath=/x/no-hooks', 'push', '--no-verify', '--no-follow-tags', '--porcelain', '--set-upstream', 'origin', 'HEAD:refs/heads/wtask/one']);
+  it('pushes exactly HEAD to refs/heads/<task branch> at origin\'s URL, fast-forward only', () => {
+    const args = taskPushArgs('wtask/one', 'git@github.com:o/r.git');
+    expect(args).toEqual(['push', '--no-verify', '--no-follow-tags', '--recurse-submodules=no', '--porcelain', '--', 'git@github.com:o/r.git', 'HEAD:refs/heads/wtask/one']);
     expect(args.some((a) => a.startsWith('+') || a.includes('force'))).toBe(false);
+  });
+
+  it('refuses when the repository config redirects the push or names a program, and runs none of it', async () => {
+    const marker = path.join(root, 'program-ran');
+    const prog = path.join(root, 'prog.sh');
+    fs.writeFileSync(prog, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    const other = path.join(root, 'other.git');
+    execFileSync('git', ['init', '-q', '--bare', other]);
+    const cases: Array<[string, string, string]> = [
+      ['url.' + other + '.pushInsteadOf', origin, 'config-refused'],
+      ['url.' + other + '.insteadOf', origin, 'config-refused'],
+      ['remote.origin.pushurl', other, 'remote-refused'],
+      ['remote.origin.receivepack', prog, 'config-refused'],
+      ['core.fsmonitor', prog, 'config-refused'],
+      ['core.sshCommand', prog, 'config-refused'],
+      ['credential.helper', `!${prog}`, 'config-refused'],
+      ['include.path', path.join(root, 'more.config'), 'config-refused'],
+    ];
+    for (const [key, value, reason] of cases) {
+      git(work, 'config', key, value);
+      expect(await pushTaskBranch(input()), key).toMatchObject({ ok: false, reason });
+      git(work, 'config', '--unset-all', key);
+    }
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(git(other, 'for-each-ref')).toBe('');
+    // A renamed origin is no origin; an added remote is never pushed to.
+    git(work, 'remote', 'rename', 'origin', 'up');
+    expect(await pushTaskBranch(input())).toMatchObject({ ok: false, reason: 'no-origin' });
+  });
+
+  it('a bot\'s task lands only in the bot\'s repository', async () => {
+    expect(await pushTaskBranch({ ...input(), expectedRepoKey: 'acme/app' })).toMatchObject({ ok: false, reason: 'remote-refused' });
+    expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
+    expect(originUrlRepoKey('git@github.com:Acme/App.git')).toBe('github.com/acme/app');
+    expect(originUrlRepoKey('https://github.com/acme/app')).toBe('github.com/acme/app');
+    expect(originUrlRepoKey('ssh://git@github.com/acme/app.git')).toBe('github.com/acme/app');
+    for (const bad of ['/srv/app.git', 'file:///srv/app.git', 'ext::sh -c x', 'https://github.com/acme/app/extra', '--upload-pack=x', 'ssh://git@github.com:22/acme/app.git']) {
+      expect(originUrlRepoKey(bad), bad).toBeNull();
+    }
   });
 });
 
 describe('task.push RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
-  const setup = (over: { row?: unknown; tasks?: unknown[]; caller?: string | null; repoDefault?: string | null } = {}) => {
+  const setup = (over: { row?: unknown; tasks?: unknown[]; caller?: string | null; repoDefault?: string | null; botRepo?: string } = {}) => {
     const handlers = new Map<string, Handler>();
     const push = vi.fn(async (i: { branch: string }) => ({ ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'abc', output: '' }));
     const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task' } : over.row;
@@ -105,6 +145,7 @@ describe('task.push RPC', () => {
       wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
       push: push as never,
       repoDefaultBranch: async () => (over.repoDefault === undefined ? 'main' : over.repoDefault),
+      botRepoKey: () => over.botRepo,
     });
     return { call: handlers.get('task.push')!, push };
   };
@@ -125,10 +166,22 @@ describe('task.push RPC', () => {
     expect(await setup({ caller: 'ws-other' }).call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
   });
 
-  it('hands the repository\'s own default branch to the push, for any task', async () => {
+  it('hands the push a reader of the repository\'s own default branch, for any task', async () => {
     const { call, push } = setup({ repoDefault: 'trunk' });
     await call({ senderPtyId: 'pty-1' }, local);
-    expect(push).toHaveBeenCalledWith(expect.objectContaining({ defaultBranches: expect.arrayContaining(['trunk']) }));
+    const given = push.mock.calls[0][0] as unknown as { repoDefaultBranch: (k: string) => Promise<string | null>; expectedRepoKey?: string };
+    expect(await given.repoDefaultBranch('github.com/o/r')).toBe('trunk');
+    expect(given.expectedRepoKey).toBeUndefined();
+  });
+
+  it('pins a bot\'s task to the bot\'s repository, and refuses a bot that names none', async () => {
+    const botRow = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', dispatch: { origin: { kind: 'bot', botId: 'bot-1', tainted: false } } };
+    const pinned = setup({ row: botRow, botRepo: 'acme/app' });
+    await pinned.call({ senderPtyId: 'pty-1' }, local);
+    expect(pinned.push).toHaveBeenCalledWith(expect.objectContaining({ expectedRepoKey: 'acme/app' }));
+    const none = setup({ row: botRow });
+    expect(await none.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION' } });
+    expect(none.push).not.toHaveBeenCalled();
   });
 
   it('refuses a detached checkout (verify) and a closed or branchless task', async () => {

@@ -9,6 +9,7 @@
 // A branch read but not recordable refuses the launch. One successful read
 // per repository per DEFAULT_BRANCH_TTL_MS.
 import { execFile } from 'node:child_process';
+import os from 'node:os';
 import { promisify } from 'node:util';
 import { getWmuxDir } from '../../daemon/config';
 import { getExecEnv } from '../../shared/execEnv';
@@ -53,6 +54,19 @@ export async function readRepoDefaultBranch(repoRoot: string, deps: DefaultBranc
     /* origin/HEAD unset */
   }
   return null;
+}
+
+/** A repository's default branch as GitHub names it, by its `host/owner/repo`
+ *  key: read without a working folder, so no repository config is involved.
+ *  null when gh cannot tell. */
+export async function readRepoDefaultBranchByKey(repoKey: string, deps: DefaultBranchDeps = {}): Promise<string | null> {
+  const run = deps.run ?? defaultRun;
+  try {
+    const name = (await run('gh', ['repo', 'view', repoKey, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], os.tmpdir())).trim();
+    return name || null;
+  } catch {
+    return null;
+  }
 }
 
 /** What a launch learned: the default branch (null: unread, so main and
