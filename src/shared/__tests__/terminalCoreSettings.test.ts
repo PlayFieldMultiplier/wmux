@@ -15,6 +15,14 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('persisted terminal engine', () => {
+  it('keeps Node as the default when the packaged Rust module is available', async () => {
+    const native = await import('../nativeTerminalCore');
+    vi.mocked(native.loadNativeTerminalCore).mockReturnValue({} as never);
+    const settings = await import('../terminalCoreSettings');
+    expect(settings.terminalCoreRuntime()).toEqual({
+      requested: 'node', effective: 'node', rustAvailable: true, environmentOverride: false,
+    });
+  });
   it('keeps the live host unchanged until the next boot, in both directions', async () => {
     let settings = await import('../terminalCoreSettings');
     expect(settings.terminalCoreSelection()).toBe('node');

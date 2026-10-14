@@ -64,6 +64,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Ship the module on every desktop target; engine selection stays Node
+      # until the user opts into Rust in Settings. Forge checks the copied
+      # module and runs a PTY with the packaged executable before making assets.
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Build native terminal module
+        run: npm run build:terminal-core
+
       # ── Windows computer-use helper ──────────────────────────────────────
       # Order is load-bearing (scripts/__tests__/computerHelperRelease.test.mjs
       # enforces it): build -> sign -> stage -> make -> check. `make` bakes the
@@ -141,6 +150,8 @@ jobs:
           Write-Host "Staged helper sha256=$hash (release-signed: $([bool]$env:WMUX_WIN_HELPER_RELEASE_SIGNED))"
 
       - name: Build & Make
+        env:
+          WMUX_PACKAGE_TERMINAL_CORE: '1'
         run: npm run make
 
       # The packaged helper must be byte-identical to the one the main bundle
@@ -450,6 +461,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Ship the module on every desktop target; engine selection stays Node
+      # until the user opts into Rust in Settings. Forge checks the copied
+      # module and runs a PTY with the packaged executable before making assets.
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Build native terminal module
+        run: npm run build:terminal-core
+
       # Import the Developer ID Application cert into a throwaway keychain so
       # Forge's osxSign can discover it. No-op when the cert secret is empty.
       - name: Import Apple Developer ID certificate
@@ -505,6 +525,8 @@ jobs:
       # minutes but can sit in Apple's queue much longer, and a timeout here
       # skips the upload step below, discarding the .zip along with the .dmg.
       - name: Build & Make
+        env:
+          WMUX_PACKAGE_TERMINAL_CORE: '1'
         run: npm run make
         timeout-minutes: 60
 
@@ -692,7 +714,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Ship the module on every desktop target; engine selection stays Node
+      # until the user opts into Rust in Settings. Forge checks the copied
+      # module and runs a PTY with the packaged executable before making assets.
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Build native terminal module
+        run: npm run build:terminal-core
+
       - name: Build & Make
+        env:
+          WMUX_PACKAGE_TERMINAL_CORE: '1'
         run: npm run make
         timeout-minutes: 30
 

@@ -292,10 +292,22 @@ The build script targets macOS arm64, Linux x64 GNU or Windows x64 MSVC. It stag
 an adjacent-only loader, binary, target/ABI/hash manifest and dependency license
 notices in `dist/wmux-native`. Original S-A1 and WASM paths remain separate.
 
-Set `WMUX_PACKAGE_TERMINAL_CORE=1` for an experimental Forge package after building
-the module. Forge copies it before the existing signing step and rejects a
-mismatched target. Packaging does not enable Rust. No version or release changes
-are included. Full signed-package QA remains a qualification gate.
+Set `WMUX_PACKAGE_TERMINAL_CORE=1` for a local Forge package after building
+the module. The desktop release workflow builds and includes it on all three
+targets, including non-publishing `workflow_dispatch` rehearsals. The v4.4.0
+workflow omitted this step; its official installers therefore leave Rust disabled
+in the picker. Installing a subsequent build containing the module is required.
+
+Forge checks the copied resource's target, ABI, binary hash, loader and notices
+before signing (signing changes Mach-O bytes). After signing, it runs the packaged
+executable in the daemon's Electron-as-Node mode to load the shipped module,
+exercise snapshots and output interpretation, and drain a real PTY into a frozen
+ring. Windows uses the package's ConPTY DLL. Failure stops packaging before makers
+create installers. This smoke never starts a daemon or changes user settings.
+
+Including the module does not enable Rust: Node stays the default, and switching
+still requires an explicit saved choice and a host restart. The packaging smoke
+does not replace interactive signed-app, team-session or long-soak qualification.
 
 ## Reproduce validation
 

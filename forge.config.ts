@@ -263,10 +263,6 @@ const config: ForgeConfig = {
       // beats a broken one.
       const targetPlatform = (packageResult as { platform?: string }).platform;
       const targetArch = (packageResult as { arch?: string }).arch;
-      if (shipsTerminalCore) {
-        const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, TERMINAL_CORE_STAGE, 'manifest.json'), 'utf8'));
-        if (manifest.platform !== targetPlatform || manifest.arch !== targetArch) throw new Error('Native terminal stage does not match the package target');
-      }
       const canPrune = Boolean(targetPlatform && targetArch);
       if (!canPrune) {
         console.warn('[postPackage] packageResult platform/arch unavailable — skipping node-pty prebuild pruning.');
@@ -311,6 +307,12 @@ const config: ForgeConfig = {
       const resourcesDir = appBundle
         ? path.join(outputPath, appBundle, 'Contents', 'Resources')
         : path.join(outputPath, 'resources');
+      if (shipsTerminalCore) {
+        // Check the actual copied resource before signing changes Mach-O bytes.
+        require('./scripts/verify-native-terminal-package.cjs').verifyIntegrity(
+          path.join(resourcesDir, 'wmux-native'), targetPlatform, targetArch,
+        );
+      }
       const asarPath = path.join(resourcesDir, 'app.asar');
       const tempDir = path.join(resourcesDir, '_app_tmp');
       const unpackedDir = asarPath + '.unpacked';
@@ -426,6 +428,20 @@ const config: ForgeConfig = {
       //    수행해야 서명이 깨지지 않는다. darwin이 아니거나 자격증명 없으면 no-op.
       if (appBundle) {
         await signMacAppIfConfigured(path.join(outputPath, appBundle));
+      }
+      if (shipsTerminalCore) {
+        // Use the same Electron-as-Node runtime as the detached daemon, after
+        // signing, and only the module/DLLs from this package. No running app or
+        // user settings are touched. A broken native option must fail the build.
+        const executable = appBundle
+          ? path.join(outputPath, appBundle, 'Contents', 'MacOS', 'wmux')
+          : path.join(outputPath, targetPlatform === 'win32' ? 'wmux.exe' : 'wmux');
+        require('node:child_process').execFileSync(executable, [
+          path.join(__dirname, 'scripts/verify-native-terminal-package.cjs'), resourcesDir,
+        ], {
+          cwd: outputPath, stdio: 'inherit', timeout: 30000,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        });
       }
     },
 
