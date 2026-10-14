@@ -8,14 +8,13 @@
 // to learn that it exists; nothing of it leaves this module.
 //
 // FACTORY_ENGINE_LOGIN starts the sign-in the app already uses for accounts:
-// `claude auth login` in a new terminal tab of the active workspace (the
-// renderer's `surface.new`), typed once the shell is up. The line clears
+// `claude auth login` in a new terminal tab of the active workspace, as the
+// tab's startup command (the renderer's `surface.new` with `initialCommand`,
+// which replaces a workspace profile's own startup command). The line clears
 // CLAUDE_CONFIG_DIR first, so a workspace profile or account binding cannot
 // send the sign-in to another config folder than the one readiness reads.
 // The CLI opens the browser itself; the tab stays for the owner to read or
 // close. One at a time. The renderer polls readiness to see the sign-in land.
-// Known gap: a workspace whose profile starts an agent in every new pane
-// receives the line as that agent's input.
 
 import type { FactoryEngineReadiness } from '../../shared/factoryEngine';
 
@@ -63,11 +62,10 @@ export function claudeLoginLine(platform: NodeJS.Platform, shell: string | undef
 }
 
 export interface EngineLoginDeps {
-  /** Open a terminal tab in the active workspace (renderer `surface.new`);
-   *  `shell` overrides the default shell. Resolves the new tab's PTY id. */
-  openTab: (shell: string | undefined) => Promise<{ ptyId?: unknown; error?: unknown } | null | undefined>;
-  /** Type `line` + Enter into the tab once its shell can read it. */
-  typeLine: (ptyId: string, line: string) => void;
+  /** Open a terminal tab in the active workspace running `initialCommand`
+   *  (renderer `surface.new`); `shell` overrides the default shell. Resolves
+   *  the new tab's PTY id, or an error. */
+  openTab: (shell: string | undefined, initialCommand: string) => Promise<{ ptyId?: unknown; error?: unknown } | null | undefined>;
   /** On Windows, the native shell to use: a WSL default shell would run a
    *  Linux claude whose sign-in this app does not read. */
   windowsShell: () => string;
@@ -87,7 +85,7 @@ async function open(deps: EngineLoginDeps): Promise<void> {
   const shell = deps.platform === 'win32' ? deps.windowsShell() : undefined;
   let r: Awaited<ReturnType<EngineLoginDeps['openTab']>>;
   try {
-    r = await deps.openTab(shell);
+    r = await deps.openTab(shell, claudeLoginLine(deps.platform, shell));
   } catch {
     throw new Error('wmux could not open a terminal for the Claude sign-in. Run `claude auth login` in a terminal.');
   }
@@ -95,5 +93,4 @@ async function open(deps: EngineLoginDeps): Promise<void> {
   if (!ptyId) {
     throw new Error('wmux could not open a terminal for the Claude sign-in. Run `claude auth login` in a terminal.');
   }
-  deps.typeLine(ptyId, claudeLoginLine(deps.platform, shell));
 }

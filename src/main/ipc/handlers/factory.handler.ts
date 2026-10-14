@@ -39,8 +39,6 @@ import type { FactoryEngineReadiness } from '../../../shared/factoryEngine';
 import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { loadClaudeCredential } from '../../claude/claudeCredential';
 import { sendToRenderer } from '../../pipe/handlers/_bridge';
-import { scheduleInitialCommand } from './scheduleInitialCommand';
-import { sanitizePtyText } from '../../../shared/types';
 import { ShellDetector } from '../../../shared/ShellDetector';
 
 export interface FactoryBotRow {
@@ -142,9 +140,6 @@ export function factoryEngineReadinessHandler(
   };
 }
 
-/** How main types into a PTY it did not create (daemon session or local PTY). */
-export type PtyLineWriter = (ptyId: string, data: string) => boolean | void;
-
 /** FACTORY_ENGINE_LOGIN: open the Claude sign-in tab; main window only. */
 export function factoryEngineLoginHandler(
   getWindow: () => BrowserWindow | null,
@@ -156,15 +151,10 @@ export function factoryEngineLoginHandler(
   };
 }
 
-function defaultEngineLoginDeps(getWindow: () => BrowserWindow | null, write: PtyLineWriter): Omit<EngineLoginDeps, 'platform'> {
+function defaultEngineLoginDeps(getWindow: () => BrowserWindow | null): Omit<EngineLoginDeps, 'platform'> {
   return {
-    openTab: async (shell) =>
-      (await sendToRenderer(getWindow, 'surface.new', shell ? { shell } : {}, { timeoutMs: 15_000 })) as { ptyId?: unknown; error?: unknown } | null,
-    // Typed once the shell has had time to start (the profile startup
-    // command's fallback timing); retried while the session is not writable.
-    typeLine: (ptyId, line) => {
-      scheduleInitialCommand(line, { write: (cmd) => write(ptyId, sanitizePtyText(cmd) + '\r') });
-    },
+    openTab: async (shell, initialCommand) =>
+      (await sendToRenderer(getWindow, 'surface.new', { ...(shell ? { shell } : {}), initialCommand }, { timeoutMs: 15_000 })) as { ptyId?: unknown; error?: unknown } | null,
     windowsShell: () => new ShellDetector().getDefault(),
   };
 }
@@ -280,7 +270,6 @@ export function factorySettingsSetHandler(
 export function registerFactoryHandlers(
   getWindow: () => BrowserWindow | null,
   suggestDeps: Pick<BotRepoSuggestDeps, 'cwdOf'> = {},
-  writeToPty?: PtyLineWriter,
 ): () => void {
   const channels = [
     IPC.FACTORY_BOT_LIST,
@@ -337,8 +326,7 @@ export function registerFactoryHandlers(
 
   ipcMain.handle(IPC.FACTORY_ENGINE_READINESS, wrapHandler(IPC.FACTORY_ENGINE_READINESS, factoryEngineReadinessHandler(getWindow)));
 
-  const loginWrite: PtyLineWriter = writeToPty ?? (() => false);
-  ipcMain.handle(IPC.FACTORY_ENGINE_LOGIN, wrapHandler(IPC.FACTORY_ENGINE_LOGIN, factoryEngineLoginHandler(getWindow, defaultEngineLoginDeps(getWindow, loginWrite))));
+  ipcMain.handle(IPC.FACTORY_ENGINE_LOGIN, wrapHandler(IPC.FACTORY_ENGINE_LOGIN, factoryEngineLoginHandler(getWindow, defaultEngineLoginDeps(getWindow))));
 
   return () => {
     for (const c of channels) ipcMain.removeHandler(c);
