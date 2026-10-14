@@ -273,6 +273,10 @@ no difference). A2A-only peers stay on the Remote page.
   operator link says so and suggests pairing again with a code; for a host
   paired before the credential kind was recorded, the menu names both ways to
   revoke and promises neither.
+  An SSH host whose tunnel needs a person reads "SSH needs you" or, when
+  its host key changed, "Identity changed" on the second line instead of a
+  state, and the row opens the host check rather than switching to it. The
+  last row, "+ Add PC over SSH…", opens the Add PC over SSH dialog.
 - **Badge:** one `--attention` number badge beside the title, the sum of
   the needs-you of the computers **not** selected (this computer's Fleet
   count counts while a host is selected). The selected computer has none —
@@ -534,6 +538,8 @@ One page, Tailnet first, on the sheet beside the tools dock with 28px sides
   A2A (then offers Link a pane now), and every remote-host shape — a pairing
   link, a `wmux web` URL with its token, an address and a code — pairs a
   workspace share. Nothing connects before Connect.
+  Under Paste, one ghost link, "No invite? Add a PC over SSH…", opens the
+  Add PC over SSH dialog for a computer that cannot send an invite.
 - **Link dialog from this page:** picks the PC when there is one, picks the
   other PC's pane when there is one choice or one on the same repo, and
   offers this PC's pane with the focused one preselected.
@@ -1234,6 +1240,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-13 | Owner decision: a pane is a terminal column plus a work area. Browser, editor and diff tabs leave the pane strip for a work strip on the same header line, split where the body is, with one expand toggle (#2140, #2151) | A pane that held a terminal and a browser split them, but an editor or diff tab covered both as a full-pane overlay, so one pane drew three different ways. One rule for every non-terminal tab keeps the terminal in view beside it; the shared line spends no header height and continues the body's one seam |
 | 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
 | 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
+| 2026-10-14 | Add PC over SSH has two entry points: a last "+ Add PC over SSH…" row in the PC switcher dropdown and a ghost "No invite? Add a PC over SSH…" link under Connect a PC's Paste tab. An SSH host that needs a person shows "SSH needs you" / "Identity changed" in its switcher row, which opens the host check (owner decision) | A server or VPS has no desktop to send an invite from; the entry belongs where computers are already chosen and where pairing starts, without a new page or rail item |
 
 ### Desktop conversation view
 
