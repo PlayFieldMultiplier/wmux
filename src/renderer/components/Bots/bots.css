@@ -468,3 +468,12 @@
   .wmux-bots-composer { padding-left: 12px; padding-right: 12px; }
   .wmux-bots-rail { padding-left: 20px; padding-right: 20px; }
 }
+
+/* A bot named in a message: its small mark and its name in its colour. */
+.wmux-bots-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 500;
+  vertical-align: -2px;
+}

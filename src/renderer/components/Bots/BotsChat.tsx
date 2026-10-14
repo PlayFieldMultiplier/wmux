@@ -60,7 +60,7 @@ import { MentionChips, deliveryLine, roomBots, roomPostParams, sentFrom, useMent
 import { actorLabel, botKindLabel, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, threadLabel, threadRef, type IdLabels } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, normalizeBotJob } from '../../../shared/bot';
 import { templateJob } from '../Settings/FactoryTab';
-import BotAvatar from '../Room/BotAvatar';
+import BotAvatar, { botIdentityColor } from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
 import { awaitsApproval, conversationCards, greetingCardIds, livePlanIds, roomEntries, taskBubbles, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
 import type { BotTaskView } from '../../../shared/botTask';
@@ -157,9 +157,19 @@ function RefChip({ url, label, title, onOpen }: { url: string; label: string | n
   );
 }
 
-/** A bot's name above its run. Neutral until identity colours. */
-function botNameStyle(_botId: string): React.CSSProperties {
-  return { color: 'var(--text-sub)' };
+/** A bot's name above its run, in its identity colour (an unknown author
+ *  stays neutral). */
+function botNameStyle(botId: string): React.CSSProperties {
+  return { color: botId ? botIdentityColor(botId) : 'var(--text-sub)' };
+}
+
+/** The `@Name` mentions of these bots in a message, longest name first (so
+ *  "@Ada Lovelace" is not read as "@Ada"); null when there are none. Pure. */
+export function mentionPattern(names: readonly string[]): RegExp | null {
+  const list = [...new Set(names.map((n) => n.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (list.length === 0) return null;
+  const escaped = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`@(${escaped.join('|')})(?![\\p{L}\\p{N}_])`, 'gu');
 }
 
 /** The thread chip under a bubble (General has none): a PR or issue
@@ -1376,9 +1386,25 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   // PR and issue links become chips: titled from a thread this conversation
   // holds, which they open beside the chat.
   const roomThreads = useStore((s) => s.roomThreads);
+  const pattern = useMemo(() => mentionPattern(bots.map((b) => b.bot.name)), [bots]);
   const markdown = useMemo((): MarkdownOptions => ({
     links: true,
     richCode: true,
+    ...(pattern ? {
+      mention: {
+        pattern,
+        render: (name: string) => {
+          const row = bots.find((b) => b.bot.name.trim() === name);
+          if (!row) return `@${name}`;
+          return (
+            <span data-bots-mention={row.bot.id} className="wmux-bots-mention" style={{ color: botIdentityColor(row.bot.id) }}>
+              <BotAvatar bot={row.bot} size={14} />
+              {name}
+            </span>
+          );
+        },
+      },
+    } : {}),
     linkChip: (url, label) => {
       const ref = githubRef(url);
       if (!ref) return null;
@@ -1387,7 +1413,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       const summary = holder ? roomThreads[holder.workspaceId]?.find((th) => th.threadId === threadId) : undefined;
       return <RefChip url={url} label={label} title={summary?.title ?? null} onOpen={holder ? () => onThread(holder.workspaceId, threadId) : null} />;
     },
-  }), [cards, roomThreads, onThread]);
+  }), [cards, roomThreads, onThread, pattern, bots]);
   const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, onThread, onOpenBot, markdown };
   const threadShown = openThread ? threadCards(cards, openThread.workspaceId, openThread.threadId) : null;
   const empty = items.length === 0 && workers.length === 0 && tasks.length === 0;

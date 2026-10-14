@@ -40,6 +40,27 @@ export interface MarkdownOptions {
   /** Draw a link as something else (the Bots chat's PR and issue chips);
    *  null keeps the plain link. Only with `links`. */
   linkChip?: (url: string, label: string | null) => React.ReactNode | null;
+  /** Draw `@Name` mentions in plain text as something else (the Bots chat's
+   *  bot marks). `pattern` matches the whole mention, group 1 the name. */
+  mention?: { pattern: RegExp; render: (name: string, key: string) => React.ReactNode };
+}
+
+/** Plain text, with its mentions drawn by `opts.mention` when given. */
+function plainText(text: string, key: string, opts: MarkdownOptions): React.ReactNode[] {
+  const m = opts.mention;
+  if (!m || !text.includes('@')) return [text];
+  const re = new RegExp(m.pattern.source, m.pattern.flags.includes('g') ? m.pattern.flags : `${m.pattern.flags}g`);
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let hit: RegExpExecArray | null;
+  while ((hit = re.exec(text)) !== null) {
+    if (hit[0].length === 0) { re.lastIndex++; continue; }
+    if (hit.index > last) out.push(text.slice(last, hit.index));
+    out.push(<Fragment key={`${key}m${hit.index}`}>{m.render(hit[1] ?? hit[0], `${key}m${hit.index}`)}</Fragment>);
+    last = hit.index + hit[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
 }
 
 /** A fenced code block with its language label and Copy (richCode). */
@@ -173,7 +194,7 @@ function renderInline(raw: string, keyPrefix: string, opts: MarkdownOptions = {}
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    if (match.index > lastIndex) parts.push(...plainText(text.slice(lastIndex, match.index), `${keyPrefix}p${lastIndex}`, opts));
     const m = match[0];
     if (m.startsWith('`')) {
       parts.push(
@@ -227,8 +248,8 @@ function renderInline(raw: string, keyPrefix: string, opts: MarkdownOptions = {}
     }
     lastIndex = match.index + m.length;
   }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts.length > 0 ? parts : [text];
+  if (lastIndex < text.length) parts.push(...plainText(text.slice(lastIndex), `${keyPrefix}p${lastIndex}`, opts));
+  return parts.length > 0 ? parts : plainText(text, `${keyPrefix}p0`, opts);
 }
 
 /** A GFM table delimiter row: `| --- | :--: |`, at least one pipe. */

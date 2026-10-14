@@ -890,20 +890,25 @@ describe('Bots page', () => {
 
   it('messages are bubbles in runs: in a room the name tops the run, the avatar sits beside its last bubble', async () => {
     // Right after c2 (seq 2), before the owner's reply.
-    cards.splice(2, 0, { ...card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'And the second part', at: 205 }), seq: 2.5 });
+    cards.splice(2, 0, { ...card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'And the second part, @Verifier please check', at: 205 }), seq: 2.5 });
     seedRooms();
     await render(<BotsPage />);
     act(() => q('[data-bots-row="room:w1"]')!.click());
     const first = q('[data-room-card-id="c2"]')!;
     const next = q(`[data-room-card-id="${cards[2].id}"]`)!;
     expect(first.querySelector('[data-bots-msg-head]')?.textContent).toBe('Lead');
+    // The name is in the bot's identity colour; a mention is the bot's mark and name.
+    expect((first.querySelector('[data-bots-msg-head] span') as HTMLElement).style.color).toContain('color-mix');
     expect(first.querySelector('.wmux-bots-bubble-bot')).not.toBeNull();
     expect(first.getAttribute('data-run-end')).toBeNull();
     expect(first.querySelector('[data-bot-avatar]')).toBeNull();
     expect(next.getAttribute('data-continuation')).toBe('true');
     expect(next.querySelector('[data-bots-msg-head]')).toBeNull();
     expect(next.getAttribute('data-run-end')).toBe('true');
-    expect(next.querySelector('[data-bot-avatar]')).not.toBeNull();
+    expect(next.querySelector('.wmux-bots-msg-gutter [data-bot-avatar]')).not.toBeNull();
+    const mention = next.querySelector(`[data-bots-mention="${VERIFIER}"]`)!;
+    expect(mention.textContent).toBe('Verifier');
+    expect(mention.querySelector('[data-bot-avatar]')).not.toBeNull();
     // The owner's message is its own bubble on the right, read as markdown.
     const mine = q('[data-bots-bubble="owner"]')!;
     expect(mine.className).toContain('is-owner');
@@ -995,6 +1000,13 @@ describe('Bots page', () => {
 });
 
 describe('BotsChat helpers', () => {
+  it('mentionPattern: the longest name wins, a name ends at a word boundary, no names no pattern', async () => {
+    const { mentionPattern } = await import('../BotsChat');
+    const re = mentionPattern(['Ada', 'Ada Lovelace', 'Q.A'])!;
+    expect([...'hi @Ada Lovelace and @Ada, not @Adam or @Q.A!'.matchAll(re)].map((m) => m[1])).toEqual(['Ada Lovelace', 'Ada', 'Q.A']);
+    expect(mentionPattern([' '])).toBeNull();
+  });
+
   const t = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;
 
   it('oneToOneRefusal: only an off bot; a 1:1 mentions its bot, so a second bot of a role is reachable too', () => {

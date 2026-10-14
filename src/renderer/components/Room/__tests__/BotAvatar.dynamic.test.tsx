@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// Bots look like members: BotAvatar draws the owner's picture or the name's
-// initials on a theme colour fixed by the bot id; Settings › Factory's Add bot takes
+// Bots look like members: BotAvatar draws the owner's picture or the bot's
+// own mark — an identity colour and a shape fixed by the bot id, with a
+// small face; Settings › Factory's Add bot takes
 // a name and a picture (a preview from main), the profile editor changes or
 // removes the picture on Save, and the bot list and chips show the avatar.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -10,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../../stores';
 import { BOT_NAME_MAX, DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../../shared/bot';
 import type { FactoryBotAvatarPickResult, FactoryBotCreateRequest } from '../../../../shared/botCreate';
-import BotAvatar, { BOT_AVATAR_TONES, botAvatarTone, botInitials } from '../BotAvatar';
+import BotAvatar, { BOT_AVATAR_SHAPES, BOT_IDENTITY_HUES, botAvatarShape, botIdentityColor, botInitials } from '../BotAvatar';
 import { BotChips } from '../BotChips';
 import { RoomCard } from '../RoomCard';
 import type { RoomCard as RoomCardData } from '../../../../shared/room';
@@ -80,15 +81,34 @@ describe('botInitials', () => {
   });
 });
 
-describe('botAvatarTone', () => {
-  it('is the same for the same id, one of the tile tokens and never a state colour', () => {
-    const ids = Array.from({ length: 30 }, (_, i) => `bot-${i.toString(16).padStart(8, '0')}`);
+/** A hex colour's hue in degrees and its saturation (0–1). */
+function hueOf(hex: string): { h: number; s: number } {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return { h: 0, s: 0 };
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return { h: (h * 60 + 360) % 360, s: d / (1 - Math.abs(max + min - 1)) };
+}
+
+describe('bot identity', () => {
+  it('a bot keeps its colour and shape; bots differ; no identity colour is a state colour', () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `bot-${i.toString(16).padStart(8, '0')}`);
     for (const id of ids) {
-      expect(botAvatarTone(id)).toBe(botAvatarTone(id));
-      expect(BOT_AVATAR_TONES).toContain(botAvatarTone(id));
+      expect(botIdentityColor(id)).toBe(botIdentityColor(id));
+      expect(BOT_AVATAR_SHAPES).toContain(botAvatarShape(id));
     }
-    expect(new Set(ids.map(botAvatarTone)).size).toBeGreaterThan(1);
-    for (const state of ['--accent-red', '--accent-yellow', '--attention']) expect(BOT_AVATAR_TONES).not.toContain(state);
+    expect(new Set(ids.map(botIdentityColor)).size).toBeGreaterThan(4);
+    expect(new Set(ids.map(botAvatarShape)).size).toBeGreaterThan(2);
+    // Red, orange, yellow and green (0–170°) mean error, needs you,
+    // caution and done: every saturated identity hue sits outside them.
+    for (const hex of BOT_IDENTITY_HUES) {
+      const { h, s } = hueOf(hex);
+      if (s > 0.25) expect(h >= 185 && h <= 330).toBe(true);
+    }
+    // Mixed toward the look's text colour, so it reads on light and dark looks.
+    expect(botIdentityColor(ids[0])).toContain('var(--text-main)');
   });
 });
 
@@ -102,20 +122,19 @@ describe('BotAvatar', () => {
     expect(el.getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('draws initials (role fallback for a blank name) on the bot\'s tone, and names itself when asked', async () => {
+  it('without a picture draws the bot\'s mark in its colour and shape, and names itself when asked', async () => {
     await render(createElement(BotAvatar, { bot: { id: 'bot-00000002', name: ' ', role: 'verifier' }, size: 16, t: roleT, alt: 'Verifier' }));
     const el = container.querySelector<HTMLElement>('[data-bot-avatar]')!;
-    expect(el.dataset.botAvatar).toBe('initials');
-    expect(el.textContent).toBe('V');
-    expect(el.dataset.avatarTone).toBe(botAvatarTone('bot-00000002'));
-    expect(el.style.background).toBe(`var(${botAvatarTone('bot-00000002')})`);
+    expect(el.dataset.botAvatar).toBe('face');
+    expect(el.dataset.avatarShape).toBe(botAvatarShape('bot-00000002'));
+    expect(el.querySelector('svg g')?.getAttribute('style')).toContain('color-mix');
     expect(el.getAttribute('role')).toBe('img');
     expect(el.getAttribute('aria-label')).toBe('Verifier');
   });
 
   it('never uses something other than a PNG data URL as an image', async () => {
     await render(createElement(BotAvatar, { bot: { id: 'bot-00000003', name: 'Ada', role: 'lead', avatar: 'https://example.com/a.png' }, size: 16, t: roleT }));
-    expect(container.querySelector('[data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('initials');
+    expect(container.querySelector('[data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('face');
     expect(container.querySelector('img')).toBeNull();
   });
 });
@@ -139,10 +158,9 @@ describe('Add bot: name and picture', () => {
     const name = container.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
     expect(name.placeholder).toBe('settings.factory.addBotNamePlaceholder');
     expect(name.maxLength).toBe(BOT_NAME_MAX);
-    // No name yet: the avatar's initials fall back to the default template's role word.
-    expect(container.querySelector('[data-testid="factory-picture-preview"] [data-bot-avatar]')?.textContent).toBe('L');
+    // No picture yet: the preview is the bot's mark.
+    expect(container.querySelector('[data-testid="factory-picture-preview"] [data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('face');
     await act(async () => typeInto(name, '  Ada Lovelace '));
-    expect(container.querySelector('[data-testid="factory-picture-preview"] [data-bot-avatar]')?.textContent).toBe('AL');
     expect(container.querySelector('[data-testid="factory-picture-remove"]')).toBeNull();
     await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="factory-picture-choose"]')!.click());
     expect(pickAvatar).toHaveBeenCalledTimes(1);
@@ -210,7 +228,7 @@ describe('Settings bot list, profile editor and chips', () => {
     await render(createElement(FactoryTab, { settingsPort, botPort }));
     const rowEls = [...container.querySelectorAll<HTMLButtonElement>('[data-testid="factory-bot-row"]')];
     expect(rowEls[0].querySelector('[data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('image');
-    expect(rowEls[1].querySelector('[data-bot-avatar]')?.textContent).toBe('검');
+    expect(rowEls[1].querySelector('[data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('face');
 
     // Change: nothing is saved until Save.
     await act(async () => rowEls[0].click());
@@ -245,8 +263,7 @@ describe('Settings bot list, profile editor and chips', () => {
     const port: FactoryBotPort = { available: true, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: true }) };
     await render(createElement(BotChips, { rows: [row('bot-00000001', { name: 'Ada Lovelace' }), row('bot-00000002', { name: 'Moa', avatar: PICTURE })], t, port }));
     const chips = [...container.querySelectorAll('[data-testid="room-bot-chip"]')];
-    expect(chips[0].firstElementChild?.getAttribute('data-bot-avatar')).toBe('initials');
-    expect(chips[0].firstElementChild?.textContent).toBe('AL');
+    expect(chips[0].firstElementChild?.getAttribute('data-bot-avatar')).toBe('face');
     expect(chips[1].querySelector('img')?.getAttribute('src')).toBe(PICTURE);
   });
 });
