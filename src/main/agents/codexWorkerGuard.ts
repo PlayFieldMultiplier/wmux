@@ -1,10 +1,13 @@
 // ─── A bot's codex fan-out worker: the launch main allows ───────────────────
 //
 // pty:create's stage for a codex line in a bot's worker pane (shared/
-// codexWorkerGuard.ts holds the pure parts and the threat model). Only the
-// fan-out's own first launch (strict) of a codex worker is allowed; every
-// other codex launch in a bot's worker pane is refused (botWorkerMergeGuard).
-// Before the line is handed on, main:
+// codexWorkerGuard.ts holds the pure parts and the threat model). A codex
+// worker starts as the fan-out's own first launch (strict); main records where
+// (the session record's optional `agent`/`cwd`/`repoKey`), and a re-fire or a
+// resume typed into that pane later is guarded from that record
+// (guardBotWorkerSessionText). Every other codex start in a bot's worker pane
+// — a later pane, the factory's worker resume, a phone launch — is refused.
+// Before a line is handed on, main:
 //
 //   1. checks the line against the allowlist and rebuilds it with its own
 //      sandbox, approval, writable roots and network (POSIX hosts only);
@@ -47,6 +50,7 @@ import {
   isCodexToolKey,
   parseCodexVersion,
   launchesCodex,
+  namesCodex,
   parseCodexWorkerLine,
   CODEX_WORKER_MIN_VERSION,
 } from '../../shared/codexWorkerGuard';
@@ -54,7 +58,7 @@ import { codexDefinesWmuxServer, codexWmuxApprovedTools } from '../../shared/mcp
 import { resolveOnPath } from '../factory/botEngines';
 import { locateWmuxMcpEntry } from './toolSurfaceLaunch';
 import { getBotStore } from '../factory/botStore';
-import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
+import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guardSessionLaunch, isBotWorkerSession, markGuardedCodexCreate } from './botWorkerMergeGuard';
 import { getWmuxDir } from '../../daemon/config';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 
@@ -109,8 +113,8 @@ async function defaultRun(cmd: string, args: string[], opts: { cwd: string; env:
   }
 }
 
-function refuse(why: string): Error {
-  return new Error(`PTY_CREATE: a bot's codex worker was not launched: ${why}`);
+function refuse(why: string, where = 'PTY_CREATE'): Error {
+  return new Error(`${where}: a bot's codex worker was not launched: ${why}`);
 }
 
 let excludeLock: Promise<void> = Promise.resolve();
@@ -195,14 +199,77 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
     || !(deps.claimLaunch ?? claimInflightCodexLaunch)(owner, options.cwd)) {
     throw refuse('codex runs in a bot\'s worker pane only as the fan-out\'s own first launch');
   }
-  if ((deps.platform ?? process.platform) === 'win32') throw refuse('the codex worker guard is not available on Windows yet');
-  const cwd = typeof options.cwd === 'string' ? path.resolve(options.cwd) : '';
-  const parsed = cwd ? parseCodexWorkerLine(options.initialCommand ?? '', cwd) : null;
+  const cwd = path.resolve(options.cwd);
+  const parsed = parseCodexWorkerLine(options.initialCommand ?? '', cwd);
   if (!parsed) throw refuse('the launch line is not one the guard allows');
+  const botIds = worker.spawns.map((s) => s.botId);
+  const repoKey = (deps.repoKey ?? ((ids: readonly string[]) => (ids.length > 0 ? getBotStore()?.get(ids[0])?.repo?.repoKey : undefined)))(botIds);
+  const { line, codexHome } = await guardedCodexLine(parsed, cwd, repoKey, options.env, deps);
+  // The session reads the rules and the config main checked: the codex home
+  // goes into the pane's env, and into the record a resume rebuilds from.
+  const out = { ...options, initialCommand: line, env: { ...(options.env ?? {}), CODEX_HOME: codexHome } };
+  markGuardedCodexCreate(out, line, cwd, repoKey, codexHome);
+  return out;
+}
+
+/**
+ * A re-fire or a resume typed into a bot worker's codex pane: the folder and
+ * repository come from main's session record (written at the guarded first
+ * launch), never from the caller; the line is checked against the same
+ * allowlist (a resume may name `codex resume <id>`), the worktree is checked
+ * and the rules rewritten and proven again, and the line is rebuilt.
+ */
+export async function guardCodexSessionLine(
+  record: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string } | null,
+  line: string,
+  deps: CodexWorkerGuardDeps = {},
+  where = 'pty:write-launch',
+): Promise<string> {
+  if (!record || record.agent !== 'codex' || !record.cwd) {
+    throw refuse('this pane has no guarded codex launch on record', where);
+  }
+  const parsed = parseCodexWorkerLine(line, record.cwd, { resume: true });
+  if (!parsed) throw refuse('the launch line is not one the guard allows', where);
+  try {
+    return (await guardedCodexLine(parsed, record.cwd, record.repoKey, record.codexHome ? { CODEX_HOME: record.codexHome } : undefined, deps)).line;
+  } catch (err) {
+    const message = String(err instanceof Error ? err.message : err);
+    throw message.startsWith('PTY_CREATE:') ? new Error(message.replace(/^PTY_CREATE:/, `${where}:`)) : refuse(message, where);
+  }
+}
+
+/**
+ * The stage for a line typed into an existing pane (worktask:refire,
+ * pty:write-launch): in a bot worker's pane, a codex line goes through
+ * guardCodexSessionLine and every other line through the merge guard's own
+ * stage; any other pane's line is returned as given. Throws on a refusal
+ * (nothing is typed).
+ */
+export async function guardBotWorkerSessionText(
+  sessionId: string,
+  text: string,
+  kind: 'refire' | 'write-launch',
+  deps: CodexWorkerGuardDeps & { dir?: string } = {},
+): Promise<string> {
+  if (namesCodex(text) && isBotWorkerSession(sessionId, deps.dir)) {
+    return guardCodexSessionLine(botWorkerSessionRecord(sessionId, deps.dir), text, deps, kind === 'refire' ? 'worktask:refire' : 'pty:write-launch');
+  }
+  return kind === 'refire' ? guardRefireLine(sessionId, text, deps.dir ? { dir: deps.dir } : {}) : guardSessionLaunch(sessionId, text, deps.dir ? { dir: deps.dir } : {});
+}
+
+/** Steps 2-4 and the rebuilt line (see the file header). Throws on any refusal. */
+async function guardedCodexLine(
+  parsed: NonNullable<ReturnType<typeof parseCodexWorkerLine>>,
+  cwd: string,
+  repoKey: string | undefined,
+  createEnv: Record<string, string> | undefined,
+  deps: CodexWorkerGuardDeps,
+): Promise<{ line: string; codexHome: string }> {
+  if ((deps.platform ?? process.platform) === 'win32') throw refuse('the codex worker guard is not available on Windows yet');
   const run = deps.run ?? defaultRun;
   // The pane's environment as far as main knows it: the login shell's PATH,
   // then the create's own env (a profile's, an account's CODEX_HOME).
-  const env = { ...(await (deps.paneEnv ?? (() => agentExecEnv(process.env)))()), ...(options.env ?? {}) };
+  const env = { ...(await (deps.paneEnv ?? (() => agentExecEnv(process.env)))()), ...(createEnv ?? {}) };
   // Main's git in the worktree: never with a config key that runs a program
   // (worktask/workerGit.ts), no fsmonitor, no hooks.
   const safe = workerGitSafeArgs(deps.noHooksDir ?? path.join(getWmuxDir(), 'factory', 'no-hooks'));
@@ -238,8 +305,6 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   }
 
   // 3. The rules file, and the exclude line.
-  const botIds = (worker.spawns ?? []).map((s) => s.botId);
-  const repoKey = (deps.repoKey ?? ((ids: readonly string[]) => (ids.length > 0 ? getBotStore()?.get(ids[0])?.repo?.repoKey : undefined)))(botIds);
   const rules = buildCodexWorkerRules({ ...(repoKey ? { repoKey } : {}), cwd, gitDirs: [...new Set([gitDir, commonDir])] });
   const rulesFile = path.join(cwd, CODEX_WORKER_RULES_PATH);
   fs.mkdirSync(path.dirname(rulesFile), { recursive: true });
@@ -292,9 +357,5 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
     ...(parsed.wmuxTools ? { mcpEntry: (deps.mcpEntry ?? currentMcpEntry)() ?? undefined } : {}),
   });
   if (!line) throw refuse('a worktree path cannot be written into the launch line');
-  // The session reads the rules and the config main checked: the codex home
-  // goes into the pane's env.
-  const out = { ...options, initialCommand: line, env: { ...(options.env ?? {}), CODEX_HOME: codexHome } };
-  markGuardedCodexCreate(out, line, cwd);
-  return out;
+  return { line, codexHome };
 }

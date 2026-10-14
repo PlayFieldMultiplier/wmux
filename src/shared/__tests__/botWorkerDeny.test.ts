@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   BOT_WORKER_DENY, BOT_WORKER_MERGE_DENY, BOT_WORKER_PUBLIC_DENY, BOT_WORKER_PUSH_DENY, buildBotWorkerSettings, botWorkerDefaultBranchesPath,
-  isDenyableBranchName, namesClaude, readBotWorkerDefaultBranches, recordBotWorkerDefaultBranch, writeBotWorkerSettings,
+  botWorkerSessionsPath, isDenyableBranchName, namesClaude, readBotWorkerDefaultBranches, readBotWorkerSessions, recordBotWorkerDefaultBranch, writeBotWorkerSettings,
 } from '../botWorkerGuard';
 
 function denied(command: string, rules: readonly string[] = BOT_WORKER_DENY): boolean {
@@ -170,6 +170,25 @@ describe('which lines start claude', () => {
   it('sees every claude launcher, a glued one included, and not a longer word', () => {
     for (const yes of ['claude', '/opt/bin/claude --resume x', 'true;claude', 'a&&claude -p x', '(claude)', 'x|claude.exe']) expect(namesClaude(yes), yes).toBe(true);
     for (const no of ['codex', 'git log --grep claudex', 'echo claudeish']) expect(namesClaude(no), no).toBe(false);
+  });
+});
+
+describe('the bot worker sessions record', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-sessions-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('keeps the optional codex launch fields of a version-1 record, and ignores malformed ones without dropping the record', () => {
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(botWorkerSessionsPath(dir), JSON.stringify({ version: 1, sessions: {
+      a: { workspaceId: 'ws-a', at: 1, agent: 'codex', cwd: '/w/a', repoKey: 'acme/app' },
+      b: { workspaceId: 'ws-b', at: 2, agent: 7, cwd: { no: 1 } },
+      c: { workspaceId: 'ws-c', at: 3 },
+    } }));
+    const read = readBotWorkerSessions(dir) as { sessions: Map<string, unknown> };
+    expect(read.sessions.get('a')).toEqual({ workspaceId: 'ws-a', at: 1, agent: 'codex', cwd: '/w/a', repoKey: 'acme/app' });
+    expect(read.sessions.get('b')).toEqual({ workspaceId: 'ws-b', at: 2 });
+    expect(read.sessions.get('c')).toEqual({ workspaceId: 'ws-c', at: 3 });
   });
 });
 

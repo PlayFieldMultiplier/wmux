@@ -19,10 +19,10 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardSessionLaunch, guardedCodexCwdRefusal, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, noteBotWorkerSession, withBotWorkerMergeGuard } from '../../agents/botWorkerMergeGuard';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
-import { guardCodexBotWorker } from '../../agents/codexWorkerGuard';
+import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
 import { withheldCredentialNames } from '../../../shared/envFilter';
 import { getShellUtf8Locale } from '../../pty/shellLocale';
@@ -485,7 +485,7 @@ export function registerPTYHandlers(
       const sessionId = `daemon-${crypto.randomUUID().slice(0, 8)}`;
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       // Recorded before the session exists, so a restart always knows it.
-      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId);
+      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, guardedCodexLaunch(options));
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -754,7 +754,7 @@ export function registerPTYHandlers(
       logCwdResolution(instance.id, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       if (botWorker) {
         try {
-          noteBotWorkerSession(instance.id, botWorker.workspaceId);
+          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, guardedCodexLaunch(options));
         } catch (err) {
           ptyManager.dispose(instance.id);
           throw err;
@@ -885,7 +885,7 @@ export function registerPTYHandlers(
     if (typeof id !== 'string' || typeof text !== 'string' || text.length > PTY_WRITE_BACKSTOP) {
       throw new Error('PTY_WRITE_LAUNCH: an id and a line are required');
     }
-    const line = sanitizePtyText(guardSessionLaunch(id, text)) + (submit === true ? '\r' : '');
+    const line = sanitizePtyText(await guardBotWorkerSessionText(id, text, 'write-launch')) + (submit === true ? '\r' : '');
     if (useDaemon && daemonClient) {
       if (!daemonClient.writeToSession(id, line)) throw new Error('PTY_WRITE_LAUNCH: the session is not live');
     } else {

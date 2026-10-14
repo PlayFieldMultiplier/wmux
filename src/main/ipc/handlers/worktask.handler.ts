@@ -32,7 +32,7 @@ import { prStatusCache } from '../../metadata/PrStatusCache';
 import { getWmuxHomeDir } from '../../../shared/constants';
 import { sanitizePtyText } from '../../../shared/types';
 import { normalizeWorktreePath } from '../../../shared/workTask';
-import { guardRefireLine } from '../../agents/botWorkerMergeGuard';
+import { guardBotWorkerSessionText } from '../../agents/codexWorkerGuard';
 
 const execFileAsync = promisify(execFile);
 
@@ -253,7 +253,7 @@ export function registerWorktaskHandlers(
       // nothing is typed (botWorkerMergeGuard.ts).
       let line: string;
       try {
-        line = guardRefireLine(ptyId, initialCommand);
+        line = await guardBotWorkerSessionText(ptyId, initialCommand, 'refire');
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
       }

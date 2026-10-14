@@ -10,9 +10,11 @@
 // resume typed into its pane, and on a re-fire, across app restarts. Workers a
 // person started (a pane, the GUI, an orchestrator) launch exactly as before.
 //
-// A codex worker is launched only as the fan-out's own first launch, on the
-// line its own guard rebuilt (codexWorkerGuard.ts); every other codex line in
-// a bot's worker pane (a later pane, a re-fire, a resume) is refused.
+// A codex worker is launched as the fan-out's own first launch, on the line
+// its own guard rebuilt (codexWorkerGuard.ts), which records where; a re-fire
+// or a typed resume in that pane goes through the codex guard again from the
+// record. The sync stages here refuse every codex line (a later pane, the
+// factory's worker resume).
 //
 // Fail-closed: a bot worker's launch line that cannot carry the file (it could
 // not be written, the path cannot be quoted, the launcher is not claude or a
@@ -119,11 +121,17 @@ export function claimInflightCodexLaunch(ownerWorkspaceId: string, cwd: string):
 /** The creates whose codex line codexWorkerGuard built, with the line and the
  *  folder it checked (main's own memory, per options object: a renderer cannot
  *  put an entry here, and an entry goes with its create). */
-const guardedCodexCreates = new WeakMap<object, { line: string; cwd: string }>();
+const guardedCodexCreates = new WeakMap<object, { line: string; cwd: string; repoKey?: string; codexHome?: string }>();
 
 /** codexWorkerGuard: record a create it built. */
-export function markGuardedCodexCreate(options: object, line: string, cwd: string): void {
-  guardedCodexCreates.set(options, { line, cwd: path.resolve(cwd) });
+export function markGuardedCodexCreate(options: object, line: string, cwd: string, repoKey?: string, codexHome?: string): void {
+  guardedCodexCreates.set(options, { line, cwd: path.resolve(cwd), ...(repoKey ? { repoKey } : {}), ...(codexHome ? { codexHome } : {}) });
+}
+
+/** pty:create: what the session record keeps of a guarded codex create. */
+export function guardedCodexLaunch(options: object | undefined): { agent: string; cwd: string; repoKey?: string; codexHome?: string } | undefined {
+  const g = options ? guardedCodexCreates.get(options) : undefined;
+  return g ? { agent: 'codex', cwd: g.cwd, ...(g.repoKey ? { repoKey: g.repoKey } : {}), ...(g.codexHome ? { codexHome: g.codexHome } : {}) } : undefined;
 }
 
 /** Did the codex guard build this create's line? */
@@ -287,11 +295,17 @@ function saveSessions(dir: string, map: Map<string, SessionRecord>): void {
 /** pty:create records a bot worker's session. Throws when the record cannot
  *  be written (the create fails: a session nobody could recognise after a
  *  restart is not started). */
-export function noteBotWorkerSession(sessionId: string, workspaceId: string, dir: string = getWmuxDir()): void {
+export function noteBotWorkerSession(
+  sessionId: string,
+  workspaceId: string,
+  dir: string = getWmuxDir(),
+  /** A guarded codex launch: where, and for which repository. */
+  launch?: { agent: string; cwd: string; repoKey?: string; codexHome?: string },
+): void {
   const map = loadSessions(dir);
   if (unreadable) throw guardError('PTY_CREATE', `the worker sessions record is unreadable: ${unreadable}`);
   const next = new Map(map);
-  next.set(sessionId, { workspaceId, at: Date.now() });
+  next.set(sessionId, { workspaceId, at: Date.now(), ...(launch ?? {}) });
   try {
     saveSessions(dir, next);
   } catch (err) {
@@ -312,6 +326,14 @@ export function forgetBotWorkerSession(sessionId: string, dir: string = getWmuxD
   } catch (err) {
     console.warn(`[factory] could not forget bot worker session ${sessionId}: ${String(err)}`);
   }
+}
+
+/** A bot worker's session record, or null (none, or the record is unreadable). */
+export function botWorkerSessionRecord(sessionId: string, dir: string = getWmuxDir()): SessionRecord | null {
+  const map = loadSessions(dir);
+  if (unreadable !== null) return null;
+  const r = map.get(sessionId);
+  return r ? { ...r } : null;
 }
 
 /** A bot worker's session — every session while the record is unreadable. */

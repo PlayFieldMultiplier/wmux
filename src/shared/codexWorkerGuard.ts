@@ -37,7 +37,7 @@
 // command the rules do not match can still reach the same effects.
 
 import path from 'node:path';
-import { launcherStem, tokenize } from './agentResume';
+import { isPlausibleResumeSessionId, launcherStem, tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE } from './agentLaunchOptions';
 import { FANOUT_MODEL_RE, codexTrustOverride } from './fanoutPreset';
 import { ORCH_ROLES, ROLE_BINDING_MODEL_MAX, type OrchRole, type WmuxTools } from './orchestratorRole';
@@ -160,7 +160,9 @@ export interface CodexWorkerLine {
   /** The wmux tool level the line asked for (`-c mcp_servers.wmux…`): only
    *  the level is kept; main writes the server's arguments itself. */
   wmuxTools?: CodexWorkerToolLevel;
-  /** The prompt-file argument, verbatim. */
+  /** `codex resume <id>`: the conversation to resume (session lines only). */
+  resumeId?: string;
+  /** The prompt-file argument, verbatim; '' for a resume without one. */
   promptArgument: string;
 }
 
@@ -223,6 +225,8 @@ export function isCodexToolKey(name: string): boolean {
   return TOOL_KEY.test(name);
 }
 const DEFAULT_ASK_VALUE = 'mcp_servers.wmux.default_tools_approval_mode=prompt';
+const TOOL_TABLE_VALUE = /^mcp_servers\.wmux\.tools=\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}$/;
+const TOOL_ENTRY = /^([A-Za-z0-9_-]{1,64})=\{approval_mode="(approve|prompt)"\}$/;
 
 /**
  * The `-c` words that set a codex bot worker's wmux tool approvals: the
@@ -239,7 +243,24 @@ export function codexWorkerToolApprovals(ownerApproved: readonly string[] = []):
   return [`-c ${DEFAULT_ASK_VALUE}`, `-c ${shellWord(`mcp_servers.wmux.tools={${table}}`)}`];
 }
 
+/** A tool table codexWorkerToolApprovals writes: each entry once, and
+ *  `approve` only for an approved tool. Pure. */
+function isWorkerToolTable(value: string): boolean {
+  const m = TOOL_TABLE_VALUE.exec(value);
+  if (!m) return false;
+  const seen = new Set<string>();
+  for (const entry of m[1].split(',')) {
+    const e = TOOL_ENTRY.exec(entry);
+    if (!e || seen.has(e[1])) return false;
+    if (e[2] === 'approve' && !CODEX_WORKER_APPROVED_TOOLS.includes(e[1])) return false;
+    seen.add(e[1]);
+  }
+  return true;
+}
+
 const POSIX_PROMPT_ARGUMENT = /^"\$\(cat '(?:[^']|'\\'')*'\)"$/;
+/** The writable-roots override main builds: a TOML array of guardable paths. */
+const WRITABLE_ROOTS_VALUE = /^sandbox_workspace_write\.writable_roots=\[(?:"\/[^"'`$\\]*",)*"\/[^"'`$\\]*"\]$/;
 
 /**
  * A codex fan-out line, checked against an ALLOWLIST: the launcher `codex`,
@@ -249,21 +270,23 @@ const POSIX_PROMPT_ARGUMENT = /^"\$\(cat '(?:[^']|'\\'')*'\)"$/;
  * at most once. Anything else — another flag, a subcommand, a second shell
  * command — returns null. POSIX shells only. Pure.
  */
-export function parseCodexWorkerLine(fullLine: string, cwd: string): CodexWorkerLine | null {
+export function parseCodexWorkerLine(fullLine: string, cwd: string, opts: { resume?: boolean } = {}): CodexWorkerLine | null {
   if (!isGuardablePath(cwd)) return null;
   const { marker, command } = splitModelEnvMarker(fullLine);
   if (marker) return null;
   const trimmed = command.trim();
   const lastSpace = trimmed.lastIndexOf(' "$(cat ');
-  if (lastSpace < 0) return null;
-  const promptArgument = trimmed.slice(lastSpace + 1);
-  if (!POSIX_PROMPT_ARGUMENT.test(promptArgument)) return null;
-  const head = trimmed.slice(0, lastSpace);
-  if (stripPromptFileArgument(head) !== head || /[;&|`\n\r<>]|\$\(/.test(head.replace(/'[^']*'/g, "''"))) return null;
+  const promptArgument = lastSpace < 0 ? '' : trimmed.slice(lastSpace + 1);
+  if (promptArgument && !POSIX_PROMPT_ARGUMENT.test(promptArgument)) return null;
+  // The line main builds puts `--` before the prompt.
+  const head = (lastSpace < 0 ? trimmed : trimmed.slice(0, lastSpace)).replace(/ --$/, '');
+  if (stripPromptFileArgument(head) !== head || !plainQuotedWords(head) || /[;&|`\n\r<>]|\$\(/.test(head.replace(/'[^']*'/g, "''"))) return null;
   const tokens = tokenize(head);
   if (tokens.length === 0 || tokens[0].value !== 'codex' || tokens[0].quoted) return null;
+  const first = 1;
+  let resumeId: string | undefined;
   const trust = codexTrustOverride(cwd, 'darwin');
-  const trustValue = trust ? trust.slice(4, -1).replace(/'\\''/g, "'") : undefined;
+  const trustValue = trust ? trust.slice(4, -1) : undefined;
   const seen = new Set<string>();
   const once = (key: string): boolean => {
     if (seen.has(key)) return false;
@@ -271,12 +294,17 @@ export function parseCodexWorkerLine(fullLine: string, cwd: string): CodexWorker
     return true;
   };
   const out: Omit<CodexWorkerLine, 'promptArgument'> = {};
-  for (let k = 1; k < tokens.length; k++) {
+  for (let k = first; k < tokens.length; k++) {
     const flag = tokens[k].value;
     const value = tokens[k + 1]?.value;
     if (tokens[k].quoted || value === undefined) return null;
     k++;
-    if (flag === '-a' && value === 'never') {
+    // `resume <id>` (session lines only), once, among the flags: the resume
+    // chip may put a model flag before it.
+    if (opts.resume && flag === 'resume') {
+      if (resumeId !== undefined || tokens[k].quoted || !isPlausibleResumeSessionId('codex', value) || !/^[A-Za-z0-9-]+$/.test(value)) return null;
+      resumeId = value;
+    } else if (flag === '-a' && value === 'never') {
       if (!once('-a')) return null;
     } else if (flag === '-s' && value === 'workspace-write') {
       if (!once('-s')) return null;
@@ -291,12 +319,41 @@ export function parseCodexWorkerLine(fullLine: string, cwd: string): CodexWorker
     } else if (flag === '-c' && value.startsWith('mcp_servers.wmux.') && parseCodexToolLevel(value)) {
       if (!once('wmux')) return null;
       out.wmuxTools = parseCodexToolLevel(value)!;
+    // What main itself adds to a line it built (a re-fire or a resume brings it
+    // back): accepted and then rebuilt, never taken as given.
+    } else if (flag === '-c' && WRITABLE_ROOTS_VALUE.test(value)) {
+      if (!once('roots')) return null;
+    } else if (flag === '-c' && value === 'sandbox_workspace_write.network_access=true') {
+      if (!once('network')) return null;
+    } else if (flag === '-c' && value === DEFAULT_ASK_VALUE) {
+      if (!once('default-ask')) return null;
+    } else if (flag === '-c' && isWorkerToolTable(value)) {
+      if (!once('tool-table')) return null;
+    } else if (flag === '-C' && path.posix.resolve(value) === path.posix.resolve(cwd)) {
+      if (!once('-C')) return null;
     } else {
       return null;
     }
   }
-  if (!seen.has('trust')) return null;
-  return { ...out, promptArgument };
+  // A launch names the prompt and the trust override; a resume names neither
+  // necessarily (main rebuilds the trust from its own record of the folder).
+  if (!resumeId && (!promptArgument || !seen.has('trust'))) return null;
+  return { ...out, ...(resumeId ? { resumeId } : {}), promptArgument };
+}
+
+/** Every quote on the line is closed, and nothing is escaped: a backslash
+ *  anywhere, or an unterminated quote, is not a word this guard reads. Pure. */
+function plainQuotedWords(head: string): boolean {
+  if (head.includes('\\')) return false;
+  let quote: string | null = null;
+  for (const c of head) {
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    }
+  }
+  return quote === null;
 }
 
 /** A POSIX single-quoted shell word. Pure. */
@@ -329,6 +386,7 @@ export function buildCodexWorkerLaunchLine(
   if (toolLevel === null) return null;
   return [
     'codex',
+    ...(parsed.resumeId ? [`resume ${parsed.resumeId}`] : []),
     trust,
     '-a never',
     '-s workspace-write',
@@ -343,8 +401,7 @@ export function buildCodexWorkerLaunchLine(
     // Codex's working root, pinned to the folder the rules were written into.
     `-C ${shellWord(cwd)}`,
     // The prompt is never read as an option, whatever its text starts with.
-    '--',
-    parsed.promptArgument,
+    ...(parsed.promptArgument ? ['--', parsed.promptArgument] : []),
   ].join(' ');
 }
 

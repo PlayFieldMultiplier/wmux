@@ -124,7 +124,8 @@ describe('worktask:refire (§3·F2 — 원래 initialCommand 재전송)', () => 
       expect(daemon.writes[0].data).toMatch(/^claude --settings="[^"]*factory[\\/]worker-settings\.json" /);
       const refused = (await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-bot', worktreePath: wt, initialCommand: 'codex "$(cat \'/x/prompt.md\')"' })) as { ok: boolean; error?: string };
       expect(refused.ok).toBe(false);
-      expect(refused.error).toMatch(/merge-lane guard/);
+      // A codex line in a bot worker's pane is re-fired only for a guarded codex launch on record.
+      expect(refused.error).toMatch(/worktask:refire: a bot's codex worker was not launched: this pane has no guarded codex launch on record/);
       expect(daemon.writes).toHaveLength(1);
     } finally {
       forgetBotWorkerSession('pty-bot');

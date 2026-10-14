@@ -111,6 +111,56 @@ describe('the codex worker launch line: an allowlist', () => {
     expect(codexWorkerWritableRoots('/r/.git', '/r/.git/')).toBeNull();
   });
 
+  it('reads back the line it built (a re-fire), and a resume of it', () => {
+    const parsed = parseCodexWorkerLine(FANOUT_LINE, CWD)!;
+    const built = buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'])!;
+    expect(parseCodexWorkerLine(built, CWD)).toEqual(parsed);
+    const id = '11111111-2222-3333-4444-555555555555';
+    const resume = built.replace(/^codex /, `codex resume ${id} `).replace(/ -- "\$\(cat .*$/, '');
+    const back = parseCodexWorkerLine(resume, CWD, { resume: true })!;
+    expect(back).toEqual({ model: 'gpt-6.1-sol', effort: 'low', resumeId: id, promptArgument: '' });
+    expect(buildCodexWorkerLaunchLine(back, CWD, ['/repo/.git'])).toBe(resume);
+    // Only a session line may resume, and only a plausible id; never another folder's -C.
+    expect(parseCodexWorkerLine(resume, CWD)).toBeNull();
+    expect(parseCodexWorkerLine(resume.replace(id, 'not-a-uuid'), CWD, { resume: true })).toBeNull();
+    expect(parseCodexWorkerLine(`${resume} --yolo`, CWD, { resume: true })).toBeNull();
+    expect(parseCodexWorkerLine(resume.replace(`-C '${CWD}'`, "-C '/elsewhere'"), CWD, { resume: true })).toBeNull();
+    expect(parseCodexWorkerLine(resume.replace("writable_roots=[\"/repo/.git\"]", "writable_roots=[\"/\",\"$HOME\"]"), CWD, { resume: true })).toBeNull();
+  });
+
+  it('reads back the tool approvals it added, and no approval of a tool a Claude worker is denied', () => {
+    const parsed = parseCodexWorkerLine(FANOUT_LINE, CWD)!;
+    const built = buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'], { toolApprovals: { ownerApproved: ['computer', 'browser-extra'] } })!;
+    expect(built).toContain(' -c mcp_servers.wmux.default_tools_approval_mode=prompt ');
+    expect(parseCodexWorkerLine(built, CWD)).toEqual(parsed);
+    // Asking for a tool is always accepted back; approving a denied one never is.
+    expect(parseCodexWorkerLine(built.replace('terminal_send={approval_mode="prompt"}', 'terminal_send={approval_mode="approve"}'), CWD)).toBeNull();
+    expect(parseCodexWorkerLine(built.replace('computer={approval_mode="prompt"}', 'computer={approval_mode="approve"}'), CWD)).toBeNull();
+    expect(parseCodexWorkerLine(built.replace('browser-extra={approval_mode="prompt"}', 'browser-extra={approval_mode="approve"}'), CWD)).toBeNull();
+    expect(parseCodexWorkerLine(built.replace('ledger_update={approval_mode="approve"}', 'ledger_update={approval_mode="approve"},ledger_update={approval_mode="approve"}'), CWD)).toBeNull();
+    expect(parseCodexWorkerLine(built.replace('default_tools_approval_mode=prompt', 'default_tools_approval_mode=approve'), CWD)).toBeNull();
+    const twice = built.replace(' -C ', ' -c mcp_servers.wmux.default_tools_approval_mode=prompt -C ');
+    expect(parseCodexWorkerLine(twice, CWD)).toBeNull();
+  });
+
+  it('reads the resume chip\'s own lines, and never a fresh launch without its prompt', () => {
+    const id = '11111111-2222-3333-4444-555555555555';
+    expect(parseCodexWorkerLine(`codex resume ${id}`, CWD, { resume: true })).toEqual({ resumeId: id, promptArgument: '' });
+    expect(parseCodexWorkerLine(`codex --model gpt-6.1-sol resume ${id}`, CWD, { resume: true })).toEqual({ model: 'gpt-6.1-sol', resumeId: id, promptArgument: '' });
+    expect(parseCodexWorkerLine(`codex resume ${id} resume ${id}`, CWD, { resume: true })).toBeNull();
+    expect(parseCodexWorkerLine(`codex ${TRUST}`, CWD, { resume: true })).toBeNull();
+    expect(parseCodexWorkerLine(`codex ${TRUST} --`, CWD, { resume: true })).toBeNull();
+  });
+
+  it('round-trips the operator\'s wmux tool level, and refuses an unterminated quote or an escape', () => {
+    const tools = `codex ${TRUST} -c "mcp_servers.wmux.args=['/a/index.js','--core']" ${PROMPT}`;
+    const parsed = parseCodexWorkerLine(tools, CWD)!;
+    const built = buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'], { mcpEntry: '/a/index.js' })!;
+    expect(parseCodexWorkerLine(built, CWD)).toEqual(parsed);
+    expect(parseCodexWorkerLine(`codex ${TRUST} -C '${CWD} ${PROMPT}`, CWD)).toBeNull();
+    expect(parseCodexWorkerLine(`codex ${TRUST} --model gpt\\x ${PROMPT}`, CWD)).toBeNull();
+  });
+
   it('names codex anywhere on a line', () => {
     expect(namesCodex('codex resume --last')).toBe(true);
     expect(namesCodex('cd /w && codex')).toBe(true);

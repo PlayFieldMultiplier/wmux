@@ -313,11 +313,11 @@ describe('pty:create applies the guard (source-level lock)', () => {
       expect(src.indexOf(line, at)).toBeGreaterThan(at);
     }
     // The session is recorded (before the daemon creates it), and forgotten with the pane.
-    expect(src.indexOf('if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId);')).toBeLessThan(src.indexOf("daemonClient.rpc('daemon.createSession'"));
-    expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId);');
+    expect(src.indexOf('if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, guardedCodexLaunch(options));')).toBeLessThan(src.indexOf("daemonClient.rpc('daemon.createSession'"));
+    expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, guardedCodexLaunch(options));');
     expect(src.split('forgetBotWorkerSession(id);').length - 1).toBe(2);
     // A resume line typed through main gets the session guard.
-    expect(src).toMatch(/IPC\.PTY_WRITE_LAUNCH[\s\S]{0,600}guardSessionLaunch\(id, text\)/);
+    expect(src).toMatch(/IPC\.PTY_WRITE_LAUNCH[\s\S]{0,600}guardBotWorkerSessionText\(id, text, 'write-launch'\)/);
   });
 
   it('the resume writers type through main, and fan-out marks a bot\'s spawn around the renderer round trip', () => {

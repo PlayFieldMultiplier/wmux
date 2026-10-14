@@ -8,8 +8,8 @@ import path from 'node:path';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir(), isPackaged: false, getAppPath: () => process.cwd() } }));
 
-import { guardCodexBotWorker, type CodexGuardRun } from '../codexWorkerGuard';
-import { beginBotWorkerSpawn, claimInflightCodexLaunch, guardedCodexCwdRefusal, isGuardedCodexCreate, withBotWorkerMergeGuard } from '../botWorkerMergeGuard';
+import { guardBotWorkerSessionText, guardCodexBotWorker, guardCodexSessionLine, type CodexGuardRun } from '../codexWorkerGuard';
+import { beginBotWorkerSpawn, claimInflightCodexLaunch, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, isGuardedCodexCreate, noteBotWorkerSession, reloadBotWorkerSessionsForTests, withBotWorkerMergeGuard } from '../botWorkerMergeGuard';
 import { CODEX_WORKER_EXCLUDE_LINE, CODEX_WORKER_RULES_PATH } from '../../../shared/codexWorkerGuard';
 import { codexTrustOverride } from '../../../shared/fanoutPreset';
 
@@ -200,6 +200,50 @@ describe('guardCodexBotWorker', () => {
     expect(out).toContain('browser-extra={approval_mode="prompt"}');
     fs.writeFileSync(path.join(home, 'config.toml'), '[mcp_servers.wmux]\ncommand = "node"\n[mcp_servers.wmux.tools."browser.odd"]\napproval_mode = "approve"\n');
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: home } }, strict, deps)).rejects.toThrow(/cannot set back to ask \(browser\.odd\)/);
+  });
+});
+
+describe('a re-fire or a resume of a guarded codex pane', () => {
+  const ID = '11111111-2222-3333-4444-555555555555';
+  posixOnly('rebuilds from main\'s record, never from the caller', async () => {
+    const out = await guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps);
+    const launch = guardedCodexLaunch(out)!;
+    expect(launch).toEqual({ agent: 'codex', cwd: wt, repoKey: 'acme/app', codexHome: process.env.CODEX_HOME || path.join(root, '.codex') });
+    // A re-fire of the line main built comes back the same.
+    expect(await guardCodexSessionLine(launch, out!.initialCommand!, deps)).toBe(out!.initialCommand);
+    // A resume keeps main's flags and pins the same folder.
+    const resume = await guardCodexSessionLine(launch, `codex resume ${ID} ${codexTrustOverride(wt, 'darwin')}`, deps);
+    expect(resume.startsWith(`codex resume ${ID} `)).toBe(true);
+    expect(resume).toContain('-s workspace-write');
+    expect(resume.endsWith(`-C '${wt}'`)).toBe(true);
+    await expect(guardCodexSessionLine(launch, `codex resume ${ID} ${codexTrustOverride(wt, 'darwin')} --yolo`, deps)).rejects.toThrow(/allows/);
+    // The resume chip's own line: no trust override of its own, a model flag first.
+    const chip = await guardCodexSessionLine(launch, `codex --model gpt-6.1-sol resume ${ID}`, deps);
+    expect(chip.startsWith(`codex resume ${ID} ${codexTrustOverride(wt, 'darwin')} -a never -s workspace-write`)).toBe(true);
+    expect(chip).toContain('--model gpt-6.1-sol');
+    // A failure that is not the guard's own still names where it happened.
+    await expect(guardCodexSessionLine(launch, `codex resume ${ID}`, { ...deps, resolveCodex: async () => { throw new Error('EACCES'); } }, 'worktask:refire'))
+      .rejects.toThrow(/^worktask:refire: a bot's codex worker was not launched: EACCES/);
+    await expect(guardCodexSessionLine(null, out!.initialCommand!, deps)).rejects.toThrow(/no guarded codex launch on record/);
+    await expect(guardCodexSessionLine({ workspaceId: 'w', at: 1 } as never, out!.initialCommand!, deps)).rejects.toThrow(/no guarded codex launch on record/);
+  });
+
+  posixOnly('routes a typed line by pane: codex through the record, claude through the merge guard, others as given', async () => {
+    const dir = path.join(root, 'data');
+    reloadBotWorkerSessionsForTests();
+    noteBotWorkerSession('pty-codex', 'ws-task', dir, { agent: 'codex', cwd: wt, repoKey: 'acme/app' });
+    noteBotWorkerSession('pty-plain', 'ws-task', dir);
+    try {
+      const typed = `codex resume ${ID} ${codexTrustOverride(wt, 'darwin')}`;
+      expect(await guardBotWorkerSessionText('pty-codex', typed, 'write-launch', { ...deps, dir })).toContain('-s workspace-write');
+      await expect(guardBotWorkerSessionText('pty-plain', typed, 'refire', { ...deps, dir })).rejects.toThrow(/^worktask:refire: .*no guarded codex launch on record/);
+      expect(await guardBotWorkerSessionText('pty-plain', 'claude --resume x', 'write-launch', { ...deps, dir })).toContain('--settings=');
+      expect(await guardBotWorkerSessionText('pty-human', typed, 'write-launch', { ...deps, dir })).toBe(typed);
+    } finally {
+      forgetBotWorkerSession('pty-codex', dir);
+      forgetBotWorkerSession('pty-plain', dir);
+      reloadBotWorkerSessionsForTests();
+    }
   });
 });
 

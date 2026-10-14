@@ -272,7 +272,23 @@ export function namesClaude(line: string): boolean {
 
 export const BOT_WORKER_SESSIONS_VERSION = 1;
 
-export interface BotWorkerSessionRecord { workspaceId: string; at: number }
+/** One bot worker session. `workspaceId` and `at` are the version-1 record
+ *  every reader knows. The rest are optional additions (no version bump: a
+ *  reader keeps what it knows, and an older one ignores them): where a codex
+ *  worker was launched and for which repository, so a re-fire or a resume of
+ *  that pane is guarded the same way (main/agents/codexWorkerGuard.ts). */
+export interface BotWorkerSessionRecord {
+  workspaceId: string;
+  at: number;
+  /** The CLI main launched there (`codex`), when it recorded one. */
+  agent?: string;
+  /** The worktree the launch was guarded in (absolute). */
+  cwd?: string;
+  /** The bot repository's key. */
+  repoKey?: string;
+  /** The CODEX_HOME the launch was checked with (an account's), when set. */
+  codexHome?: string;
+}
 
 export function botWorkerSessionsPath(dir: string): string {
   return path.join(dir, 'factory', 'bot-worker-sessions.json');
@@ -288,7 +304,15 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
     for (const [id, rec] of Object.entries(raw.sessions as Record<string, unknown>)) {
       const r = rec as Partial<BotWorkerSessionRecord> | null;
       if (!id || typeof r?.workspaceId !== 'string' || typeof r.at !== 'number') throw new Error(`a malformed record (${id})`);
-      out.set(id, { workspaceId: r.workspaceId, at: r.at });
+      out.set(id, {
+        workspaceId: r.workspaceId,
+        at: r.at,
+        // Optional additions: kept when well-formed, ignored otherwise.
+        ...(typeof r.agent === 'string' && r.agent.length <= 32 ? { agent: r.agent } : {}),
+        ...(typeof r.cwd === 'string' && r.cwd.length <= 4096 ? { cwd: r.cwd } : {}),
+        ...(typeof r.repoKey === 'string' && r.repoKey.length <= 256 ? { repoKey: r.repoKey } : {}),
+        ...(typeof r.codexHome === 'string' && r.codexHome.length <= 4096 ? { codexHome: r.codexHome } : {}),
+      });
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return { unreadable: String(err) };
