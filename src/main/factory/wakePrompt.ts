@@ -38,6 +38,12 @@ export interface WakeHandoffSummary {
   fromWorkspaceId?: string;
   /** It already has its result. */
   answered?: true;
+  /** wmux sent it on for a coordinator's relay: whose, and who follows. */
+  relay?: { lead: string; next: string[] };
+  /** The result a relay stopped at, and why. */
+  relayStopped?: string;
+  /** A relay's last result: the hops before it, oldest first. */
+  trail?: string[];
 }
 
 /** The tail of the wake's room thread. */
@@ -255,6 +261,16 @@ export function buildWakePrompt(input: WakePromptInput): string {
       const h = input.handoff;
       if (h) {
         lines.push('', `Handoff ${h.handoffId} (${h.kind}) from ${h.from}: ${h.title}`, fenceData(h.body, 'handoff'));
+        if (h.relay) {
+          lines.push(
+            '',
+            `wmux sent this on for ${h.relay.lead}'s relay: the brief and the previous bot's result are above. Do your part. `
+              + 'When it is done, send one `result` with handoff_send (no reply_to needed): wmux passes it '
+              + (h.relay.next.length > 0 ? `on to ${h.relay.next.join(', then ')}.` : `back to ${h.relay.lead}.`),
+          );
+        }
+        if (h.trail && h.trail.length > 0) lines.push('', 'The relay so far, oldest first:', fenceData(h.trail.join('\n'), 'trail'));
+        if (h.relayStopped) lines.push('', `${h.relayStopped}. This is the last result the relay produced: decide what happens next, and tell the owner when they asked for it.`);
       } else {
         lines.push('', `Handoff ${r.handoffId}. Its body could not be read; read it with your tools.`);
       }

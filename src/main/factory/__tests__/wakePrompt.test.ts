@@ -128,6 +128,20 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(done).not.toContain('waiting for input');
   });
 
+  it('a relay\'s dispatch says where the result goes; its last result shows the trail; a stop says why', () => {
+    const reason = { kind: 'handoff' as const, handoffId: 'h-f' };
+    const base = { handoffId: 'h-f', kind: 'dispatch', from: 'Lead (moa)', title: 'Ship it', body: 'brief' };
+    const mid = buildWakePrompt({ item: item(reason), profile, handoff: { ...base, relay: { lead: 'Lead (moa)', next: ['Issues (bot-00000004)'] } } });
+    expect(mid).toContain('wmux sent this on for Lead (moa)\'s relay');
+    expect(mid).toContain('wmux passes it on to Issues (bot-00000004).');
+    const last = buildWakePrompt({ item: item(reason), profile, handoff: { ...base, relay: { lead: 'Lead (moa)', next: [] } } });
+    expect(last).toContain('wmux passes it back to Lead (moa).');
+    const done = buildWakePrompt({ item: item(reason), profile, handoff: { ...base, kind: 'result', trail: ['Lead → Research: dispatch "Ship it"'] } });
+    expect(done).toContain('The relay so far, oldest first:');
+    const stopped = buildWakePrompt({ item: item(reason), profile, handoff: { ...base, kind: 'result', relayStopped: 'relay stopped: Dev is not an enabled bot of this workspace' } });
+    expect(stopped).toContain('relay stopped: Dev is not an enabled bot of this workspace. This is the last result the relay produced');
+  });
+
   it('a task wake names the handoff its tasks answer, until that handoff has its result', () => {
     const reason = { kind: 'facts' as const, factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' as const } };
     const tasks = [{ taskId: 'wtask-1', title: 'README', status: 'review_requested' as const }];

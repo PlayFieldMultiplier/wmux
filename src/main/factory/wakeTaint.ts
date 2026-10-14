@@ -13,9 +13,13 @@
 //             tainted, or a fact that cannot be found. The task ids main
 //             gives a bot's own task wakes (`task.<status>:<taskId>@<rev>`,
 //             not in the fact log) are as tainted as that task's dispatch.
-//   handoff,  the handoff's own mark: recorded when it was delivered, from
-//   mention   the sender's running wake (a send is synchronous inside the
-//             sender's turn). A handoff from the owner or the system is
+//   handoff,  the handoff's own mark: recorded when it is sent (or, failing
+//   mention   that, when it was delivered), from the sender's running wake
+//             (a send is synchronous inside the sender's turn). A dispatch
+//             wmux sends on for a relay is marked before it is stored, as
+//             tainted as the result it carries, the hop that result answers
+//             and the relay's first dispatch (an unmarked one is tainted).
+//             A handoff from the owner or the system is
 //             clean; one from a bot with no mark (delivered again after a
 //             restart, or its sender's turn already over) is tainted. A
 //             handoff a researcher-template bot sends is always tainted:
@@ -210,7 +214,9 @@ export class WakeTaint {
     let tainted: boolean;
     if (h.from.kind !== 'bot') {
       tainted = false;
-    } else if (this.alwaysTainted(h.from.botId)) {
+    } else if (h.relay === true || this.alwaysTainted(h.from.botId)) {
+      // A relay's dispatch is wmux's, in the coordinator's name: its mark
+      // is written before it is stored, never read from the coordinator's wake.
       tainted = true;
     } else {
       // The sender's turn sent it only if that turn began before it was made.
@@ -230,6 +236,39 @@ export class WakeTaint {
     } catch {
       return true;
     }
+  }
+
+  /** A bot is sending a handoff now, inside its turn: mark it from that
+   *  turn's wake. A handoff already marked keeps its mark. Never throws. */
+  markSent(handoffId: string, senderBotId: string): void {
+    if (this.marks.has(handoffId)) return;
+    let tainted = true;
+    try {
+      const running = this.ports.runningWake(senderBotId);
+      tainted = !running || this.alwaysTainted(senderBotId) || this.wakeTainted(running.item);
+    } catch {
+      tainted = true;
+    }
+    this.mark(handoffId, tainted);
+  }
+
+  /** wmux sends a relay's dispatch on: mark it before it is stored. Tainted
+   *  when the bot whose result it carries is sending from a tainted wake
+   *  (`senderBotId`, the live path) or when any of `handoffIds` (the result
+   *  on a restart, the hop it answers, the relay's first dispatch) is.
+   *  Never throws. */
+  markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): boolean {
+    let tainted = true;
+    try {
+      const sender = from.senderBotId;
+      const running = sender ? this.ports.runningWake(sender) : null;
+      tainted = (sender ? !running || this.alwaysTainted(sender) || this.wakeTainted(running.item) : false)
+        || from.handoffIds.some((id) => this.handoffTainted(id));
+    } catch {
+      tainted = true;
+    }
+    this.mark(handoffId, tainted);
+    return tainted;
   }
 
   /** A fact from the log (subscribe). Never throws. */

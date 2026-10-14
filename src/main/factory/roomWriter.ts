@@ -949,7 +949,9 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       if (p.mention === true) return null;
       return {
         workspaces: [...new Set(workspaces)], threadId, kind: 'fact',
-        title: kind === 'answer' ? `Answered → ${to}: ${title}` : `${kind || 'handoff'} → ${to}: ${title}`,
+        title: kind === 'answer' ? `Answered → ${to}: ${title}`
+          : p.relay === true ? `${kind || 'handoff'} → ${to}: ${title} (forwarded by wmux)`
+          : `${kind || 'handoff'} → ${to}: ${title}`,
         ...(kind === 'answer' ? { body: capBody(p.answer, 1000) } : {}),
         refs: baseRefs,
       };

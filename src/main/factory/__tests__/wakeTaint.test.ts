@@ -162,6 +162,20 @@ describe('WakeTaint', () => {
     expect(t.handoffTainted('ans-none')).toBe(false);
   });
 
+  it('a send is marked in the sender\'s turn, so a turn that ended before delivery does not taint it', () => {
+    const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 };
+    const t = make({ file: undefined, runningWake: () => running }, [], [handoff('h-sent', fromBot)]);
+    t.markSent('h-sent', 'bot-a');
+    running = null;
+    t.onFact(fact('x', 'handoff.received', { handoffId: 'h-sent' }));
+    expect(t.handoffTainted('h-sent')).toBe(false);
+    // With no running turn at the send, it is tainted.
+    const t2 = make({ file: undefined, runningWake: () => null }, [], [handoff('h-late', fromBot)]);
+    t2.markSent('h-late', 'bot-a');
+    expect(t2.handoffTainted('h-late')).toBe(true);
+  });
+
   it('an unreadable marks file starts empty', () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');

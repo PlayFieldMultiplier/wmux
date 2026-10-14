@@ -60,6 +60,15 @@ export interface Handoff {
    *  had not answered yet). The answer's wake answers that hop: a result sent
    *  from it, with no replyTo, is that hop's result. Main-written. */
   forHop?: string;
+  /** dispatch: the bots that take the work after the addressee, in order
+   *  (a relay). Named by a coordinator only; see HandoffSendParams.next. */
+  next?: string[];
+  /** A dispatch wmux sent on for a relay: it carries the previous bot's
+   *  result to the next bot, in the coordinator's name. Main-written. */
+  relay?: true;
+  /** A relay's result the relay could not pass on: why, as the coordinator
+   *  reads it in the wake that brings it the result. Main-written. */
+  relayStopped?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -69,7 +78,7 @@ export interface Handoff {
  *  message at most in the reference conversation). The first hops of an
  *  owner's run — bots woken by the owner's message speaking to other bots —
  *  never meet MAX_PER_RUN; they count toward it for the hops after them. */
-export const HANDOFF_LIMITS = { MAX_DEPTH: 6, MAX_PER_RUN: 32, ASK_PERSON_TTL_MS: 7 * 24 * 3600_000 } as const;
+export const HANDOFF_LIMITS = { MAX_DEPTH: 6, MAX_PER_RUN: 32, ASK_PERSON_TTL_MS: 7 * 24 * 3600_000, MAX_RELAY: 4 } as const;
 
 export const HANDOFF_RPC = { send: 'handoff.send', answer: 'handoff.answer', list: 'handoff.list' } as const;
 
@@ -96,6 +105,15 @@ export interface HandoffSendParams {
   refs?: FactRef;
   /** Idempotency key; default `wake:<wakeId>:h<n>` from the running wake. */
   clientHandoffId?: string;
+  /** dispatch, coordinator only: the bots (ids, at most
+   *  HANDOFF_LIMITS.MAX_RELAY, each an enabled bot of the sender's
+   *  workspace, none twice, never the sender or the addressee) that take
+   *  the work after the addressee, in order. The router walks the relay:
+   *  each bot's `result` goes to the coordinator's thread as a card and on
+   *  to the next bot as a dispatch wmux sends in the coordinator's name; the
+   *  coordinator is woken once, with the last result (or when the relay
+   *  stops: a refusal, a bot no longer enabled, a limit). */
+  next?: string[];
 }
 
 /** `ask.person` — a bot asks the owner; lands as a question card in the
