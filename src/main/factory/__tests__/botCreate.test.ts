@@ -76,7 +76,8 @@ describe('resolveBotRepo', () => {
     execFileSync('git', ['init', '-q'], { cwd: repo });
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/app.git'], { cwd: repo });
     const r = await resolveBotRepo(path.join(repo, 'src'));
-    expect(r).toEqual({ ok: true, repo: { repoKey: 'github.com/acme/app', repoPath: fs.realpathSync(repo) } });
+    // git prints the long form of a Windows 8.3 short name; the native realpath does too.
+    expect(r).toEqual({ ok: true, repo: { repoKey: 'github.com/acme/app', repoPath: fs.realpathSync.native(repo) } });
   });
 });
 
@@ -88,7 +89,8 @@ describe('createBotFromFolder', () => {
     const r = await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.bot).toMatchObject({ workspaceId: 'ws-1', role: 'lead', name: 'Lead', enabled: true, repo: { repoKey: 'github.com/acme/app', repoPath: '/src/app' } });
+    // The store keeps a repository path normalized (native separators).
+    expect(r.bot).toMatchObject({ workspaceId: 'ws-1', role: 'lead', name: 'Lead', enabled: true, repo: { repoKey: 'github.com/acme/app', repoPath: path.normalize('/src/app') } });
     expect(r.bot.triggers.length).toBeGreaterThan(0);
   });
 
@@ -144,14 +146,14 @@ describe('createBotFromFolder: one repository per workspace', () => {
     expect(bare.ok && bare.bot.repo).toBeUndefined();
     expect(workspaceRepo(store, 'ws-1')).toBeNull();
     expect((await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps)).ok).toBe(true);
-    expect(workspaceRepo(store, 'ws-1')).toEqual({ repoKey: 'github.com/acme/app', repoPath: '/src/app' });
+    expect(workspaceRepo(store, 'ws-1')).toEqual({ repoKey: 'github.com/acme/app', repoPath: path.normalize('/src/app') });
   });
 
   it('a later repo bot without a folder takes the workspace\'s repo, without running git', async () => {
     await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps);
     const git = vi.fn();
     const r = await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'verifier' }, { git });
-    expect(r).toMatchObject({ ok: true, bot: { role: 'verifier', repo: { repoKey: 'github.com/acme/app', repoPath: '/src/app' } } });
+    expect(r).toMatchObject({ ok: true, bot: { role: 'verifier', repo: { repoKey: 'github.com/acme/app', repoPath: path.normalize('/src/app') } } });
     expect(git).not.toHaveBeenCalled();
   });
 
@@ -195,14 +197,17 @@ describe('createBotFromFolder: one repository per workspace', () => {
 describe('suggestBotRepo', () => {
   const entries = (over: Partial<WorkspaceListEntry> = {}): (() => WorkspaceListEntry[]) =>
     () => [{ id: 'ws-1', name: 'App', activePtyId: 'pty-a', ptyIds: ['pty-a', 'pty-b'], ...over }];
-  const appGit = fakeGit(ok('/home/me/code/app\n'), ok('git@github.com:acme/app.git\n'));
-  const base = { realpath: (p: string) => p, homeDir: '/home/me' };
+  // Native absolute paths, so the home folder shortens on every platform.
+  const HOME = path.resolve('/home/me');
+  const APP = path.join(HOME, 'code', 'app');
+  const appGit = fakeGit(ok(`${APP}\n`), ok('git@github.com:acme/app.git\n'));
+  const base = { realpath: (p: string) => p, homeDir: HOME };
 
   it('a git folder with an origin: its repo, from the active pane\'s cwd main tracks', async () => {
-    const cwdOf = vi.fn((pty: string) => (pty === 'pty-a' ? '/home/me/code/app/src' : undefined));
+    const cwdOf = vi.fn((pty: string) => (pty === 'pty-a' ? path.join(APP, 'src') : undefined));
     const r = await suggestBotRepo(store, 'ws-1', { ...base, git: appGit, entries: entries(), cwdOf });
-    expect(r).toEqual({ ok: true, repoKey: 'github.com/acme/app', root: '/home/me/code/app', displayRoot: '~/code/app', inherited: false });
-    expect(appGit).toHaveBeenCalledWith(['rev-parse', '--show-toplevel'], '/home/me/code/app/src');
+    expect(r).toEqual({ ok: true, repoKey: 'github.com/acme/app', root: APP, displayRoot: path.join('~', 'code', 'app'), inherited: false });
+    expect(appGit).toHaveBeenCalledWith(['rev-parse', '--show-toplevel'], path.join(APP, 'src'));
   });
 
   it('a folder that is not a git checkout, or has no origin', async () => {
@@ -229,11 +234,11 @@ describe('suggestBotRepo', () => {
   });
 
   it('a workspace whose bot has a repo answers that repo, inherited, without reading any folder', async () => {
-    store.create({ workspaceId: 'ws-1', role: 'lead', repo: { repoKey: 'github.com/acme/app', repoPath: '/home/me/code/app' } });
+    store.create({ workspaceId: 'ws-1', role: 'lead', repo: { repoKey: 'github.com/acme/app', repoPath: APP } });
     const git = vi.fn();
     const cwdOf = vi.fn(() => '/elsewhere');
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries(), cwdOf }))
-      .toEqual({ ok: true, repoKey: 'github.com/acme/app', root: '/home/me/code/app', displayRoot: '~/code/app', inherited: true });
+      .toEqual({ ok: true, repoKey: 'github.com/acme/app', root: APP, displayRoot: path.join('~', 'code', 'app'), inherited: true });
     expect(git).not.toHaveBeenCalled();
     expect(cwdOf).not.toHaveBeenCalled();
   });
@@ -257,9 +262,9 @@ describe('suggestBotRepo', () => {
   });
 
   it('shortens only the home folder itself or paths under it', () => {
-    expect(homeShortPath('/home/me', '/home/me')).toBe('~');
-    expect(homeShortPath('/home/me/code', '/home/me')).toBe('~/code');
-    expect(homeShortPath('/home/meow/code', '/home/me')).toBe('/home/meow/code');
+    expect(homeShortPath(HOME, HOME)).toBe('~');
+    expect(homeShortPath(path.join(HOME, 'code'), HOME)).toBe(path.join('~', 'code'));
+    expect(homeShortPath(path.resolve('/home/meow/code'), HOME)).toBe(path.resolve('/home/meow/code'));
     expect(homeShortPath('/srv/app', '')).toBe('/srv/app');
   });
 });

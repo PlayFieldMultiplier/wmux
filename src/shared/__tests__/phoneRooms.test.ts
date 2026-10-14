@@ -148,7 +148,8 @@ describe('docs/phone-client-contract.md — the agent factory examples', () => {
   const examples = async (): Promise<unknown[]> => {
     const fs = await import('node:fs');
     const path = await import('node:path');
-    const doc = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'phone-client-contract.md'), 'utf8');
+    // A Windows checkout may hold the doc with CRLF line ends.
+    const doc = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'phone-client-contract.md'), 'utf8').replace(/\r\n/g, '\n');
     const start = doc.indexOf('#### The agent factory (`factory`, `rooms`, `/api/rooms`)');
     const section = doc.slice(start, doc.indexOf('\n#### ', start + 10));
     return [...section.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => JSON.parse(m[1].replace(/\[ … \]/g, '[]').replace(/…/g, 'x')));

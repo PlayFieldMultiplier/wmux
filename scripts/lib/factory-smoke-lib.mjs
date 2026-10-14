@@ -6,8 +6,23 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
+
+const SCENARIO_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'factory-scenarios');
+
+/** The scenario files under scripts/factory-scenarios, by file name. Here and
+ *  not in the runner so a test can load them without importing the runner. */
+export function loadScenarios(dir = SCENARIO_DIR) {
+  return fs.readdirSync(dir)
+    .filter((n) => n.endsWith('.json'))
+    .sort()
+    .map((n) => {
+      const sc = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
+      return { file: n, ...sc };
+    });
+}
 
 /** Sources a snapshot reads, relative to the instance's wmux data dir. */
 export const SNAPSHOT_SOURCES = {

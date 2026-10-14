@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GRADERS, gradeSnapshot } from '../factory-graders/index.mjs';
 import { evidenceComplete } from '../factory-graders/common.mjs';
-import { loadScenarios } from '../factory-smoke.mjs';
+import { loadScenarios } from '../lib/factory-smoke-lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, 'fixtures', 'factory-graders');

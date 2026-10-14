@@ -53,9 +53,9 @@ describe('onFactorySettingsChanged', () => {
     const s = new FactorySettingsStore(factorySettingsPath(dir));
     s.load();
     setFactorySettingsStore(s);
-    // A folder nothing can be written into: the write fails.
-    fs.mkdirSync(path.dirname(factorySettingsPath(dir)), { recursive: true });
-    fs.chmodSync(path.dirname(factorySettingsPath(dir)), 0o500);
+    // A file where the settings folder belongs: the write fails on every platform.
+    fs.rmSync(path.dirname(factorySettingsPath(dir)), { recursive: true, force: true });
+    fs.writeFileSync(path.dirname(factorySettingsPath(dir)), '');
     const seen: boolean[] = [];
     const off = onFactorySettingsChanged(() => seen.push(getFactorySettings().enabled));
     try {
@@ -63,7 +63,6 @@ describe('onFactorySettingsChanged', () => {
       expect(seen).toEqual([true]);
     } finally {
       off();
-      fs.chmodSync(path.dirname(factorySettingsPath(dir)), 0o700);
     }
   });
 

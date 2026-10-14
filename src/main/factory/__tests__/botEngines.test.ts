@@ -112,7 +112,8 @@ describe('bot engines', () => {
 
   it('resolveOnPath: absolute paths, PATH lookup and Windows PATHEXT', () => {
     const exists = new Set([path.join('/bin', 'hermes'), path.join('/opt', 'tool'), path.join('C:\\bin', 'hermes.CMD')]);
-    const isExec = (p: string) => exists.has(p);
+    // Normalized like the set, so a POSIX-style command matches on a Windows host too.
+    const isExec = (p: string) => exists.has(path.normalize(p));
     expect(resolveOnPath('hermes', { PATH: '/usr/bin:/bin' }, 'darwin', isExec)).toBe(path.join('/bin', 'hermes'));
     expect(resolveOnPath('/opt/tool', {}, 'darwin', isExec)).toBe('/opt/tool');
     expect(resolveOnPath('rel/tool', { PATH: '/bin' }, 'darwin', isExec)).toBeNull();

@@ -151,7 +151,8 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
 
   let repo = '';
   beforeEach(() => {
-    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reporead-adapter-')));
+    // The native realpath, as the product resolves (it expands Windows 8.3 short names).
+    repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'reporead-adapter-')));
     fs.mkdirSync(path.join(repo, 'src'));
     fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'export const a = 1;\n');
     fs.writeFileSync(path.join(repo, '.env'), 'TOKEN=dummy\n');

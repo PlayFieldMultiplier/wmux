@@ -24,7 +24,8 @@ let root = '';
 let outside = '';
 
 beforeEach(() => {
-  base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reporead-')));
+  // The native realpath, as the product resolves (it expands Windows 8.3 short names).
+  base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'reporead-')));
   root = path.join(base, 'repo');
   outside = path.join(base, 'outside');
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });

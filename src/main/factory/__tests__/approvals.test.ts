@@ -5,6 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import fsDefault from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -485,11 +486,18 @@ describe('always allow (remembered rules)', () => {
   it('always allow is one write: a failed write leaves neither the rule nor the approval', async () => {
     const r = rig();
     const a = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
-    fs.chmodSync(path.dirname(r.ports.file), 0o500);
+    // Every write into the approvals folder fails (portable: no permission bits).
+    const folder = path.dirname(r.ports.file);
+    const realWrite = fsDefault.writeFileSync;
+    const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (typeof file === 'string' && path.dirname(file) === folder) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return (realWrite as (...a: unknown[]) => void)(file, ...rest);
+    }) as typeof fsDefault.writeFileSync);
     try {
       expect(r.svc.decide({ requestId: a.requestId, decision: 'always' }, 'desktop')).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(spy).toHaveBeenCalled();
     } finally {
-      fs.chmodSync(path.dirname(r.ports.file), 0o700);
+      spy.mockRestore();
     }
     expect(r.svc.rulesList()).toEqual([]);
     expect(r.svc.get(a.requestId)?.state).toBe('pending');

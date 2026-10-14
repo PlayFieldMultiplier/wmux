@@ -43,13 +43,13 @@ import {
   buildSnapshot,
   conditionHolds,
   fillTemplate,
+  loadScenarios,
   readLiveState,
   selectCard,
 } from './lib/factory-smoke-lib.mjs';
 import { gradeSnapshot, GRADERS } from './factory-graders/index.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SCENARIO_DIR = path.join(REPO_ROOT, 'scripts', 'factory-scenarios');
 const CONTROL = path.join(REPO_ROOT, 'scripts', 'control-wmux.mjs');
 const STATE_FILE = path.join(REPO_ROOT, '.claude', 'skills', 'verify-wmux', '.run', 'state.json');
 const EVIDENCE_ROOT = path.join(REPO_ROOT, '.claude', 'skills', 'verify-wmux', 'evidence');
@@ -87,16 +87,6 @@ function parseArgs(argv) {
     }
   }
   return opts;
-}
-
-export function loadScenarios(dir = SCENARIO_DIR) {
-  return fs.readdirSync(dir)
-    .filter((n) => n.endsWith('.json'))
-    .sort()
-    .map((n) => {
-      const sc = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
-      return { file: n, ...sc };
-    });
 }
 
 // ── control-wmux ────────────────────────────────────────────────────────────

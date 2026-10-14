@@ -635,16 +635,19 @@ describe('BotRuntime', () => {
   });
 
   it('a bot\'s session follows its repository: another repository, or none, starts a fresh session', async () => {
+    // The store keeps a repository path normalized (native separators).
+    const OLD = path.normalize('/old');
+    const NEW = path.normalize('/new');
     const r = rig();
     const id = createBot(r);
-    r.store.update(id, { repo: { repoKey: 'github.com/o/old', repoPath: '/old' } });
+    r.store.update(id, { repo: { repoKey: 'github.com/o/old', repoPath: OLD } });
     r.runtime.wake(id);
     await settle();
     r.adapters[0].end();
     await settle();
-    expect(r.spawns.map((s) => s.profile.repo?.repoPath)).toEqual(['/old']);
-    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', repoPath: '/old' });
-    r.store.update(id, { repo: { repoKey: 'github.com/o/new', repoPath: '/new' } });
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath)).toEqual([OLD]);
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', repoPath: OLD });
+    r.store.update(id, { repo: { repoKey: 'github.com/o/new', repoPath: NEW } });
     r.runtime.profileChanged(id);
     expect(r.adapters[0].disposed).toBe(true);
     r.runtime.wake(id);
@@ -659,7 +662,7 @@ describe('BotRuntime', () => {
     r.runtime.wake(id);
     await settle();
     expect(r.adapters[2].started?.resumeSessionId).toBeUndefined();
-    expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual(['/old', '/new', null]);
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual([OLD, NEW, null]);
   });
 
   it('no turn starts before the modules its wake prompt reads from are up; then it runs', async () => {
