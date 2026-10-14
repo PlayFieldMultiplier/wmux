@@ -87,10 +87,10 @@ function rig(over: Partial<ApprovalPorts> = {}) {
     ...over,
   };
   const svc = new ApprovalService(ports);
-  const ownerSays = (text: string, threadId?: string, to: string[] = [DEV.id], clientPostId?: string) => {
+  const ownerSays = (text: string, threadId?: string, to: string[] = [DEV.id], clientPostId?: string, lead = false) => {
     const r = writer.post({ workspaceId: WS, kind: 'human', actor: { kind: 'human' }, title: text, refs: { botId: to[0], ...(to.length > 1 ? { botIds: to } : {}) }, ...(threadId ? { threadId: threadId as never } : {}), ...(clientPostId ? { clientPostId } : {}) });
     if (!r.ok) throw new Error('post failed');
-    svc.onFact({ id: 'f', seq: 1, kind: 'human.message', at: 1, dedupeKey: 'k', workspaceId: WS, ref: { messageId: r.card.id }, payload: { cardId: r.card.id } });
+    svc.onFact({ id: 'f', seq: 1, kind: 'human.message', at: 1, dedupeKey: 'k', workspaceId: WS, ref: { messageId: r.card.id }, payload: { cardId: r.card.id, ...(lead ? { lead: true } : {}) } });
     return r.card;
   };
   const ask = async (b: BotProfile, params: Record<string, unknown>) => {
@@ -470,6 +470,22 @@ describe('typed approval (the owner\'s own words in the thread)', () => {
     r.writer.post({ workspaceId: WS, kind: 'status', actor: { kind: 'bot', workspaceId: WS, botId: dev.id }, title: 'Press Approve when ready' });
     r.ownerSays('머지할거 머지해', 'general', [dev.id, rev.id]);
     expect(r.svc.get(a.requestId)?.state).toBe('approved');
+    expect(r.svc.get(b.requestId)?.state).toBe('approved');
+  });
+
+  it('in a room with a coordinator, words to the room (which woke only it) still approve for every bot of the room', async () => {
+    const dev = bot('bot-0000aaa1');
+    const rev = bot('bot-0000bbb2');
+    const lead = bot('bot-0000ccc3', { role: 'moa', template: 'coordinator' });
+    const r = rig({ bots: () => ({ listEnabled: () => [dev, rev, lead], get: (id) => [dev, rev, lead].find((b) => b.id === id) ?? null }) });
+    r.state.wakes.set(dev.id, { wakeId: 'w-d', attempt: 1, threadId: null, tainted: false });
+    r.state.wakes.set(rev.id, { wakeId: 'w-r', attempt: 1, threadId: null, tainted: false });
+    const a = await r.ask(dev, { action: 'merge', prNumber: 1, reason: 'x' });
+    // A 1:1 to the coordinator approves only its own requests.
+    r.ownerSays('merge it', 'general', [lead.id]);
+    expect(r.svc.get(a.requestId)?.state).toBe('pending');
+    const b = await r.ask(rev, { action: 'merge', prNumber: 2, reason: 'y' });
+    r.ownerSays('merge them', 'general', [lead.id], undefined, true);
     expect(r.svc.get(b.requestId)?.state).toBe('approved');
   });
 

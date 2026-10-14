@@ -729,8 +729,10 @@ export class ApprovalService {
   }
 
   /** A `human` card the owner wrote (via its human.message fact): typed
-   *  approval of the thread's pending requests above it. */
-  onOwnerCard(card: RoomCard): string[] {
+   *  approval of the thread's pending requests above it. `roomWide`: the
+   *  words were to the whole room, which woke only its coordinator; they
+   *  approve for every enabled bot of the room, as a room message always did. */
+  onOwnerCard(card: RoomCard, roomWide = false): string[] {
     const writer = this.ports.rooms();
     if (!writer) return [];
     // Only a card the room store holds as the owner's counts.
@@ -750,7 +752,17 @@ export class ApprovalService {
     const pending = [...this.requests.values()].filter((r) => r.state === 'pending');
     // The thread's latest cards: what sits between the requests and the words.
     const threadCards = writer.read(stored.workspaceId, { threadId: stored.threadId }).cards;
-    const ids = typedApprovalTargets(stored, pending, (id) => writer.get(stored.workspaceId, id), threadCards);
+    let message: RoomCard = stored;
+    if (roomWide) {
+      let room: string[] = [];
+      try {
+        room = (this.ports.bots()?.listEnabled() ?? []).filter((b) => b.enabled && b.workspaceId === stored.workspaceId).map((b) => b.id);
+      } catch {
+        room = [];
+      }
+      message = { ...stored, refs: { ...(stored.refs ?? {}), botIds: room } };
+    }
+    const ids = typedApprovalTargets(message, pending, (id) => writer.get(stored.workspaceId, id), threadCards);
     const done: string[] = [];
     for (const id of ids) {
       const r = this.requests.get(id);
@@ -777,7 +789,7 @@ export class ApprovalService {
       const writer = this.ports.rooms();
       if (!cardId || !ws || !writer) return;
       const card = writer.get(ws, cardId);
-      if (card) this.onOwnerCard(card);
+      if (card) this.onOwnerCard(card, f.payload?.lead === true);
     } catch (err) {
       this.log(`[factory] typed approval not read: ${String(err)}`);
     }

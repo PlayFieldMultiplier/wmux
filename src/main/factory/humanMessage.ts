@@ -274,7 +274,9 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
       workspaceId,
       ref: { botId: bot.id, messageId: `${card.id}:${bot.id}` },
       actor: { kind: 'human' },
-      payload: { text: capBody(text, HUMAN_FACT_TEXT_MAX), cardId: card.id, threadId, source },
+      // `lead`: the words were to the whole room, which its coordinator alone
+      // got (typed approval still reads them as the room's).
+      payload: { text: capBody(text, HUMAN_FACT_TEXT_MAX), cardId: card.id, threadId, source, ...(lead ? { lead: true } : {}) },
     };
     try {
       ports.factLog?.append(draft);

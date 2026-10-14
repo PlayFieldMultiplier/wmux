@@ -254,6 +254,8 @@ describe('room.post', () => {
     const lead = await handleRoomPost({ workspaceId: 'ws1', title: 'Next task', clientPostId: 'cm-lead' }, OPERATOR, s.deps);
     expect(lead).toMatchObject({ ok: true, addressees: [{ botId: bots[2].id }] });
     expect(s.wakes[2].reason).toMatchObject({ kind: 'human', lead: true });
+    // Its fact says so too (typed approval reads it as the room's words).
+    expect(s.facts.at(-1)?.payload).toMatchObject({ lead: true });
     expect((s.wakes[2].reason as { room?: true }).room).toBeUndefined();
   });
 
