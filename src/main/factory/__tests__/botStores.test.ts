@@ -48,7 +48,7 @@ afterEach(async () => {
 
 function newStore(): BotStore {
   let n = 0;
-  const s = new BotStore(botsFilePath(dir), { now, newId: () => `bot-0000000${n++}` });
+  const s = new BotStore(botsFilePath(dir), { now, newId: () => `bot-0000000${n++}`, platform: 'darwin' });
   pendingFlush.push(() => s.flush());
   return s;
 }
@@ -68,6 +68,12 @@ describe('BotStore', () => {
     expect(s.get(r.bot.id)?.workerAgent).toEqual({ agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' });
     expect(s.update(r.bot.id, { workerAgent: null })).toMatchObject({ ok: true });
     expect(s.get(r.bot.id)?.workerAgent).toBeUndefined();
+    // A Windows host refuses codex workers at save, with the reason; claude stays.
+    const win = new BotStore(botsFilePath(dir), { now, newId: () => 'bot-000000ff', platform: 'win32' });
+    const w = win.create({ workspaceId: 'ws-1', name: 'Win' });
+    if (!w.ok) throw new Error('create');
+    expect(win.update(w.bot.id, { workerAgent: { agent: 'codex' } })).toMatchObject({ ok: false, code: 'invalid_argument', message: expect.stringMatching(/not available on Windows/) });
+    expect(win.update(w.bot.id, { workerAgent: { agent: 'claude' } })).toMatchObject({ ok: true });
     // On read: a stored pick that no longer validates is dropped, the bot kept.
     const stored = { ...s.get(r.bot.id)!, workerAgent: { agent: 'grok' } };
     expect(parseBotProfile(stored)).toMatchObject({ id: r.bot.id });

@@ -18,12 +18,17 @@ export const BOT_WORKER_AGENTS: readonly string[] = ['claude', 'codex'];
 /** The default engine of a bot's workers (the bot presets' row). */
 export const DEFAULT_BOT_WORKER_AGENT = 'claude';
 
-/** A worker agent the bot store accepts, or an English reason it does not. Pure. */
-export function validateBotWorkerAgent(raw: unknown): { ok: true; value: BotWorkerAgent } | { ok: false; error: string } {
+/** A worker agent the bot store accepts, or an English reason it does not.
+ *  With `platform`, an agent whose worker guard does not run there is refused
+ *  too (a save; a read keeps a pick another host made). Pure. */
+export function validateBotWorkerAgent(raw: unknown, platform?: string): { ok: true; value: BotWorkerAgent } | { ok: false; error: string } {
   const v = validateFanoutAgentChoice(raw, { allowEffort: true });
   if (!v.ok) return { ok: false, error: `workerAgent: ${v.error}` };
   if (!BOT_WORKER_AGENTS.includes(v.choice.agent)) {
     return { ok: false, error: `workerAgent: ${v.choice.agent} has no bot-worker guard yet — use one of ${BOT_WORKER_AGENTS.join(', ')}` };
+  }
+  if (platform !== undefined && !botWorkerAgentSupported(v.choice.agent, platform)) {
+    return { ok: false, error: `workerAgent: ${botWorkerAgentLabel(v.choice.agent)} workers are not available on ${platform === 'win32' ? 'Windows' : platform} yet — their guard runs on macOS and Linux only` };
   }
   const ignored = fanoutEffortIgnored(v.choice);
   if (ignored) return { ok: false, error: `workerAgent: ${ignored}` };

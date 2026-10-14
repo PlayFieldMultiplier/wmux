@@ -332,6 +332,8 @@ export interface BotStoreOptions {
   newId?: () => string;
   /** Engine for a create that names none (factory settings). */
   defaultEngine?: () => BotEngine;
+  /** The host a worker agent is saved for (default: this one). */
+  platform?: string;
 }
 
 export function botsFilePath(wmuxDir: string): string {
@@ -345,6 +347,7 @@ export class BotStore implements BotDirectoryApi {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly defaultEngine: () => BotEngine;
+  private readonly platform: string;
   private readonly listeners = new Set<() => void>();
   /** Triage bots moved off the old default triggers by the last load. */
   private migrated: string[] = [];
@@ -353,6 +356,7 @@ export class BotStore implements BotDirectoryApi {
     this.now = opts.now ?? Date.now;
     this.newId = opts.newId ?? (() => `bot-${randomBytes(4).toString('hex')}`);
     this.defaultEngine = opts.defaultEngine ?? (() => ({ kind: 'claude-sdk' }));
+    this.platform = opts.platform ?? process.platform;
     this.persister = createFilePersister(file, () => this.snapshot());
   }
 
@@ -540,7 +544,7 @@ export class BotStore implements BotDirectoryApi {
       if (patch.workerAgent === null) {
         delete next.workerAgent;
       } else {
-        const v = validateBotWorkerAgent(patch.workerAgent);
+        const v = validateBotWorkerAgent(patch.workerAgent, this.platform);
         if (!v.ok) return refuse('invalid_argument', v.error);
         next.workerAgent = v.value;
       }
