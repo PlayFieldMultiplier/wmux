@@ -71,7 +71,18 @@ export interface RoomSlice {
    *  mount; the active workspace never changes. */
   botsWorkerPanel: BotsWorkerPanel | null;
   setBotsWorkerPanel: (panel: BotsWorkerPanel | null) => void;
+  /** When each Bots conversation was last read to its newest card, this
+   *  session (memory only; absent: BOTS_SESSION_START). A list row counts
+   *  the bot messages after it as unread; a chat opened again marks the
+   *  first of them "New". */
+  botsSeenAt: Record<string, number>;
+  /** Move a conversation's read time forward (never back). */
+  markBotsSeen: (conversationId: string, at: number) => void;
 }
+
+/** Before this session nothing counts as unread on the Bots page: the read
+ *  position is not kept across restarts. */
+export const BOTS_SESSION_START = Date.now();
 
 export interface BotsWorkerPanel {
   /** The worker's (task) workspace. */
@@ -136,6 +147,7 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
   roomPushedAt: {},
   roomActors: {},
   botsWorkerPanel: null,
+  botsSeenAt: {},
   setRoomActors: (actors) => set((s) => { s.roomActors = actors; }),
   setRoomStatus: (status) => set((s) => { s.roomStatus = status; }),
   setRoomThreads: (workspaceId, threads) => set((s) => { s.roomThreads[workspaceId] = threads; }),
@@ -175,4 +187,8 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
     return true;
   },
   setBotsWorkerPanel: (panel) => set((s) => { s.botsWorkerPanel = panel; }),
+  markBotsSeen: (conversationId, at) => {
+    if (!Number.isFinite(at) || (get().botsSeenAt[conversationId] ?? -Infinity) >= at) return;
+    set((s) => { s.botsSeenAt[conversationId] = at; });
+  },
 });

@@ -355,7 +355,11 @@ describe('Bots page', () => {
     seedRooms();
     await render(<BotsPage />);
     act(() => q('[data-bots-row="room:w1"]')!.click());
-    const line = q(`[data-room-card-id="${refusalId}"]`)!;
+    // It is a reply in the PR's thread: the thread's root says so, and the
+    // thread opens beside the chat.
+    expect(q(`[data-bots-messages] [data-room-card-id="${refusalId}"]`)).toBeNull();
+    act(() => q('[data-bots-thread-summary="pr:github.com/acme/api#1"]')!.click());
+    const line = q(`[data-bots-thread-panel] [data-room-card-id="${refusalId}"]`)!;
     expect(line.getAttribute('data-bots-bubble')).toBe('system');
     expect(line.textContent).toContain('Merge refused for #1');
     const body = line.querySelector('[data-card-body]')!;
@@ -366,7 +370,8 @@ describe('Bots page', () => {
     // Lead asked in that PR's thread: the refusal is in Lead's 1:1 too; the
     // room-wide CI fact is not.
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    expect(q(`[data-bots-messages] [data-room-card-id="${refusalId}"] [data-card-body]`)?.textContent).toContain('the author is not trusted');
+    act(() => q('[data-bots-thread-summary="pr:github.com/acme/api#1"]')!.click());
+    expect(q(`[data-bots-thread-panel] [data-room-card-id="${refusalId}"] [data-card-body]`)?.textContent).toContain('the author is not trusted');
     expect(q('[data-bots-messages] [data-room-card-id="c6"]')).toBeNull();
   });
 
@@ -444,16 +449,23 @@ describe('Bots page', () => {
     expect(q('[data-bots-page]')?.getAttribute('data-view')).toBe('list');
   });
 
-  it('a thread chip narrows the conversation to that thread and All messages brings the rest back', async () => {
+  it('a thread chip opens the thread beside the chat; the main timeline stays as it was', async () => {
     seedRooms();
     await render(<BotsPage />);
     act(() => q('[data-bots-row="room:w1"]')!.click());
-    act(() => q('[data-bots-thread-chip="pr:github.com/acme/api#1"]')!.click());
-    const shown = () => [...container.querySelectorAll('[data-bots-messages] [data-room-card-id]')].map((el) => el.getAttribute('data-room-card-id'));
-    expect(shown()).toEqual(['c4', 'c5']);
-    expect(q('[data-bots-thread-back]')?.textContent).toContain('acme/api#1');
-    act(() => q('[data-bots-thread-back]')!.click());
-    expect(shown()).toHaveLength(5);
+    const shown = (scope: string) => [...container.querySelectorAll(`${scope} [data-room-card-id]`)].map((el) => el.getAttribute('data-room-card-id'));
+    // The thread's root (the verdict) and its open question (it waits on the
+    // owner) both stay in the main timeline; the root says how many replies.
+    expect(shown('[data-bots-messages]')).toEqual(['c2', 'c3', 'c4', 'c5', 'c6']);
+    expect(q('[data-bots-thread-summary="pr:github.com/acme/api#1"]')?.textContent).toContain('1 reply');
+    act(() => q('[data-room-card-id="c4"] [data-bots-thread-chip="pr:github.com/acme/api#1"]')!.click());
+    expect(q('[data-bots-thread-panel]')?.getAttribute('data-bots-thread-panel')).toBe('pr:github.com/acme/api#1');
+    expect(shown('[data-bots-thread-panel]')).toEqual(['c4', 'c5']);
+    expect(shown('[data-bots-messages]')).toHaveLength(5);
+    // Its composer posts into the thread.
+    expect(q<HTMLTextAreaElement>('[data-bots-thread-panel] [data-testid="bots-composer-input"]')?.placeholder).toBe('Reply in thread');
+    act(() => q('[data-bots-thread-close]')!.click());
+    expect(q('[data-bots-thread-panel]')).toBeNull();
   });
 
   it('sends a 1:1 message to that bot (it is the one mention) and says who got it', async () => {
@@ -516,16 +528,17 @@ describe('Bots page', () => {
     const worker = q('[data-bots-worker="t1"]');
     expect(worker?.textContent).toContain('wtask: fix login');
     expect(worker?.getAttribute('data-worker-waiting')).toBe('true');
-    // The header names it: "1 working", the worker a toggle for the panel.
-    expect(q('[data-bots-working]')?.getAttribute('data-bots-working')).toBe('1');
+    // It sits in the working rail above the composer, not in the history.
+    expect(q('[data-bots-rail] [data-bots-worker="t1"]')).not.toBeNull();
+    expect(q('[data-bots-messages] [data-bots-worker]')).toBeNull();
     act(() => q('[data-bots-worker-open="t1"]')!.click());
     expect(useStore.getState().activeWorkspaceId).toBe('hq');
     expect(useStore.getState().appRoute).toBe('bots');
     expect(useStore.getState().botsWorkerPanel).toEqual({ workspaceId: 't1', conversationId: `bot:${LEAD}` });
     expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
-    expect(q('[data-bots-working-worker="t1"]')?.getAttribute('aria-pressed')).toBe('true');
-    // The header chip closes it again; another conversation closes it too.
-    act(() => q('[data-bots-working-worker="t1"]')!.click());
+    expect(q('[data-bots-worker-open="t1"]')?.getAttribute('aria-pressed')).toBe('true');
+    // Close closes it; another conversation closes it too.
+    act(() => q('[data-bots-worker-panel-close]')!.click());
     expect(q('[data-bots-worker-panel]')).toBeNull();
     act(() => q('[data-bots-worker-open="t1"]')!.click());
     act(() => q('[data-bots-row="room:w1"]')!.click());
@@ -664,8 +677,8 @@ describe('Bots page', () => {
       const prChip = q(`[data-room-card-id="${linked.id}"] [data-bots-thread-chip="pr:github.com/acme/api#2"]`)!;
       expect(prChip.textContent).toBe('acme/api#2');
       act(() => prChip.click());
-      expect(q(`[data-bots-messages] [data-room-card-id="${linked.id}"]`)).not.toBeNull();
-      expect(q('[data-testid="approve-pending-chip"]')?.getAttribute('data-approve-ids')).toBe('apr-0000000002');
+      expect(q(`[data-bots-thread-panel] [data-room-card-id="${linked.id}"]`)).not.toBeNull();
+      expect(q('[data-bots-thread-panel] [data-testid="approve-pending-chip"]')?.getAttribute('data-approve-ids')).toBe('apr-0000000002');
       // The asking bot's 1:1 too.
       act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
       expect(q('[data-testid="approve-pending-chip"]')?.getAttribute('data-approve-ids')).toBe('apr-0000000001 apr-0000000002');
@@ -873,6 +886,63 @@ describe('Bots page', () => {
     act(() => useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: 'hq' } } as never));
     expect(rowsSum()).toBe(0);
     expect(item.querySelector('.wmux-nav-badge')).toBeNull();
+  });
+
+  it('messages are flat rows: a run of one author within ten minutes shows its header once', async () => {
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'And the second part', at: 205 }));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const first = q('[data-room-card-id="c2"]')!;
+    const next = q(`[data-room-card-id="${cards[cards.length - 1].id}"]`)!;
+    expect(first.querySelector('[data-bots-msg-head]')?.textContent).toContain('Lead');
+    expect(next.getAttribute('data-continuation')).toBe('true');
+    expect(next.querySelector('[data-bots-msg-head]')).toBeNull();
+    // The owner's message is a flat row too, its text read as markdown.
+    expect(q('[data-bots-bubble="owner"]')?.className).toContain('wmux-bots-msg');
+    expect(q('[data-bots-day]')).not.toBeNull();
+  });
+
+  it('the working rail says who is working and for how long, and its Stop interrupts the turn only', async () => {
+    const act$ = vi.fn(async () => ({ ok: true }));
+    bots[1] = { ...bots[1], status: { ...bots[1].status!, presence: 'running', currentTurn: { wakeId: 'w-1', startedAt: Date.now() - 14_000 }, queueDepth: 2 } };
+    setFactoryBotPort({ ...port, act: act$ });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const turn = q(`[data-bots-rail] [data-bots-turn="${LEAD}"]`)!;
+    expect(turn.textContent).toContain('Lead working');
+    expect(turn.textContent).toMatch(/0:1[45]/);
+    expect(turn.textContent).toContain('2 queued');
+    await act(async () => { q<HTMLButtonElement>(`[data-bots-turn-stop="${LEAD}"]`)!.click(); });
+    expect(act$).toHaveBeenCalledWith('interrupt', LEAD);
+    // With the bots off there is no turn line and no Stop.
+    act(() => useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: 'hq' } } as never));
+    expect(q('[data-bots-turn-stop]')).toBeNull();
+  });
+
+  it('a list row counts unread bot messages in neutral, and the orange needs-you count wins', async () => {
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', VERIFIER), title: 'Fresh news', at: Date.now() + 1000 }));
+    seedRooms();
+    await render(<BotsPage />);
+    expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)?.textContent).toBe('1');
+    // Lead has a question open: its needs-you badge shows, never an unread one.
+    expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)).not.toBeNull();
+    expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-unread]`)).toBeNull();
+    // Reading the 1:1 to its end clears it.
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    expect(q(`[data-bots-row="bot:${VERIFIER}"] [data-bots-unread]`)).toBeNull();
+  });
+
+  it('an empty 1:1 opens with the bot, its job and first messages that fill the composer', async () => {
+    const NEW = 'bot-0000000f';
+    bots.push(botRow(NEW, 'lead', 'w1', 600, 'Quiet'));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${NEW}"]`)!.click());
+    expect(q(`[data-bots-intro="${NEW}"]`)?.textContent).toContain('Quiet');
+    act(() => q('[data-bots-suggestion="botsPage.chat.suggestStatus"]')!.click());
+    expect(q<HTMLTextAreaElement>('[data-testid="bots-composer-input"]')?.value).toBe('Give me a status update.');
   });
 
   it('Toggle Bots opens the Bots page and, pressed there, returns to Workspaces', () => {

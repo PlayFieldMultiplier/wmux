@@ -1,4 +1,7 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/features/sessions/ui/AgentTranscript.tsx), MIT License, Copyright (c) 2026 Nick
+import { useState } from 'react';
+import { t } from '../../i18n';
+
 // ─── Command Deck — orchestrator prose markdown (dep-free subset) ────────────
 //
 // The orchestrator's replies are model prose — headings, lists, code fences,
@@ -30,6 +33,38 @@ export interface MarkdownOptions {
    *  <img> its alt, <a> a link only when http(s)), entities decode. Never raw
    *  HTML: everything still renders as React text nodes. */
   githubHtml?: boolean;
+  /** Code blocks as the Bots chat draws them: a fill and no border (the one
+   *  boundary), a muted language label, a Copy that shows on hover or focus,
+   *  and a 320px cap that scrolls inside. Off: the plain block. */
+  richCode?: boolean;
+}
+
+/** A fenced code block with its language label and Copy (richCode). */
+function RichCodeBlock({ code, lang }: { code: string; lang: string }): React.ReactElement {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div data-brain-md-code data-brain-md-code-rich className="group relative my-1">
+      <div className="pointer-events-none absolute right-1.5 top-1 flex items-center gap-1.5">
+        {lang && <span data-brain-md-code-lang className="text-[11px] text-[var(--text-muted)]">{lang}</span>}
+        <button
+          type="button"
+          data-brain-md-code-copy
+          aria-label={t('botsPage.chat.copyCode')}
+          title={t('botsPage.chat.copyCode')}
+          onClick={() => {
+            void navigator.clipboard?.writeText(code).then(() => setCopied(true)).catch(() => undefined);
+          }}
+          onBlur={() => setCopied(false)}
+          className="pointer-events-auto h-[22px] rounded-[6px] px-1.5 text-[11px] text-[var(--text-sub)] opacity-0 hover:bg-[var(--hover-fill)] focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          {copied ? t('botsPage.chat.copied') : t('botsPage.chat.copyCode')}
+        </button>
+      </div>
+      <pre className="max-h-[320px] overflow-auto rounded-lg px-3 py-2 pr-20 font-mono text-[12px] leading-relaxed whitespace-pre bg-[color-mix(in_srgb,var(--text-main)_5%,transparent)] text-[var(--text-sub)]">
+        {code}
+      </pre>
+    </div>
+  );
 }
 
 const HTTP_URL = /^https?:\/\//i;
@@ -233,12 +268,17 @@ function renderBlocks(source: string, opts: MarkdownOptions, depth: number, budg
     // Fenced code block (an unclosed fence swallows to the end — streaming).
     if (line.trimStart().startsWith('```')) {
       const codeLines: string[] = [];
+      const lang = line.trimStart().slice(3).trim().split(/\s+/)[0]?.slice(0, 24) ?? '';
       i++;
       while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
         codeLines.push(lines[i]);
         i++;
       }
       i++; // skip the closing fence (or run past the end)
+      if (opts.richCode) {
+        out.push(<RichCodeBlock key={out.length} code={codeLines.join('\n')} lang={lang} />);
+        continue;
+      }
       out.push(
         <pre
           key={out.length}

@@ -48,7 +48,9 @@ import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine';
 import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
-import { allRoomCards, botConversationId, roomCardsByWorkspace, type Conversation } from './botsModel';
+import { allRoomCards, botConversationId, conversationCards, roomCardsByWorkspace, type Conversation } from './botsModel';
+import { unreadCount } from './botsTimeline';
+import { BOTS_SESSION_START } from '../../stores/slices/roomSlice';
 import { useBots, useBotsSync } from './useBots';
 import { botsStopPort, stopAllSummary, type BotsStopPort } from './botsStop';
 import { InlineConfirm } from './InlineConfirm';
@@ -95,11 +97,21 @@ function NeedsBadge({ count }: { count: number }) {
   return <span data-bots-needs={count} aria-hidden="true" className="wmux-bots-badge">{count > 99 ? '99+' : count}</span>;
 }
 
-function ConversationRow({ c, title, preview, selected, t, onSelect, now }: {
+/** A conversation's unread messages: a neutral count, shown only when
+ *  nothing there needs the owner (the orange count wins). */
+function UnreadBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return <span data-bots-unread={count} aria-hidden="true" className="wmux-bots-unread">{count > 99 ? '99+' : count}</span>;
+}
+
+function ConversationRow({ c, title, preview, selected, t, onSelect, now, unread = 0 }: {
   c: Conversation; title: string; preview: string; selected: boolean; t: T; onSelect: () => void; now?: number;
+  /** Bot messages after the conversation was last read (this session). */
+  unread?: number;
 }) {
   const needsText = c.needsYou > 0 ? t('sidebar.fleetNeedsYou', { count: c.needsYou }) : '';
-  const name = [title, needsText, preview].filter(Boolean).join(', ');
+  const unreadText = c.needsYou <= 0 && unread > 0 ? t('botsPage.chat.unread', { count: unread }) : '';
+  const name = [title, needsText, unreadText, preview].filter(Boolean).join(', ');
   return (
     <button
       type="button"
@@ -122,8 +134,9 @@ function ConversationRow({ c, title, preview, selected, t, onSelect, now }: {
           {c.last && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]">{formatCardTime(c.last.at, now)}</span>}
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-muted)]">{preview}</span>
+          <span className={`min-w-0 flex-1 truncate text-[12px] ${unread > 0 ? 'text-[var(--text-sub)]' : 'text-[var(--text-muted)]'}`}>{preview}</span>
           <NeedsBadge count={c.needsYou} />
+          {c.needsYou <= 0 && <UnreadBadge count={unread} />}
         </span>
       </span>
     </button>
@@ -377,11 +390,17 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   // Narrow sheets show one column: the list, or the chat with a back button.
   const [view, setView] = useState<'list' | 'chat'>('list');
 
-  const rows = useMemo(() => model.conversations.map((c) => ({
-    c,
-    title: conversationTitle(c, nameOf),
-    preview: conversationPreview(c, t, bots, actors),
-  })), [model.conversations, nameOf, t, bots, actors]);
+  const seenAt = useStore((s) => s.botsSeenAt);
+  const rows = useMemo(() => model.conversations.map((c) => {
+    const since = seenAt[c.id] ?? BOTS_SESSION_START;
+    const own = c.kind === 'bot' ? conversationCards(everyCard, c.row.bot.id) : cardsByWs.get(c.workspaceId) ?? [];
+    return {
+      c,
+      title: conversationTitle(c, nameOf),
+      preview: conversationPreview(c, t, bots, actors),
+      unread: unreadCount(own, since),
+    };
+  }), [model.conversations, nameOf, t, bots, actors, seenAt, everyCard, cardsByWs]);
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter((r) => r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)) : rows;
 
@@ -559,6 +578,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
                 selected={selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId)}
                 t={t}
                 now={now}
+                unread={r.unread}
                 onSelect={() => select(r.c.id)}
               />
             ))}
