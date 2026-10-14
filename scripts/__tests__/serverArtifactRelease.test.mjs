@@ -75,7 +75,16 @@ describe('release.yml server artifacts', () => {
     const server = job('server');
     expect(server).toMatch(/arch: x64\n\s+runner: ubuntu-22\.04\n/);
     expect(server).toMatch(/arch: arm64\n\s+runner: ubuntu-22\.04-arm\n/);
-    expect(server).toContain('scripts/build-server-artifact.mjs build');
+    expect(server).toContain('bash scripts/build-server-artifact-container.sh "$ARCH" out/server');
+  });
+
+  it('builds against glibc 2.28 in a digest-pinned image and refuses anything newer', () => {
+    const wrapper = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'build-server-artifact-container.sh'), 'utf8');
+    expect(wrapper).toContain('MAX_GLIBC=2.28\n');
+    expect(wrapper).toContain('--max-glibc "$MAX_GLIBC"');
+    for (const arch of ['x86_64', 'aarch64']) {
+      expect(wrapper).toMatch(new RegExp(`IMAGE=quay\\.io/pypa/manylinux_2_28_${arch}@sha256:[0-9a-f]{64}\\n`));
+    }
   });
 
   it('writes the manifest before every app is packaged, and checks it shipped', () => {
