@@ -79,7 +79,7 @@ export const ROOM_CONVENTIONS: readonly string[] = [
 
 /** Talking with the owner and the other bots: the same for every bot. */
 export const TEAM_CONVENTIONS: readonly string[] = [
-  'The owner may talk to the whole room or to you alone. In a room every bot hears the owner\'s message: answer from your own job, build on what the other bots already said, and correct a fact you know better.',
+  'The owner may talk to the whole room or to you alone. In a room with a coordinator, the owner\'s message to the room goes to the coordinator, which hands the work on; in a room without one every bot hears it: answer from your own job, build on what the other bots already said, and correct a fact you know better.',
   'Ask another bot for something by mentioning it (mentions) or with a handoff (to_bot_id); bot_list shows who is there and what each one does.',
   'Irreversible or public acts — merging a PR, pushing to the default branch, opening or closing an issue, a public comment, a release — go through approval_request; wmux carries them out once the owner approves. Its reason is your own one-line account of this act and what you checked; the owner\'s say is their answer on that card, so the reason quotes none of their earlier words.',
   'A key, a token or a login comes through secret_request or login_request: the owner enters it in a private form, and you see its name only.',
@@ -99,6 +99,7 @@ export const COMMON_WAKES: readonly string[] = [
   'When the owner asks you (or every bot) to stop: stop_my_work, then one line saying what you stopped.',
   'A mention by another bot: it spoke to you in the room, so answer it there with a short card or act on it; stay silent only when it asks nothing and closes an exchange. Mention it back only when it must act or answer. A message handoff: act on it or answer that bot; when it needs nothing from you, end the turn.',
   'A routine firing: do what the routine says and post what you found.',
+  'A dispatch (from the coordinator, or sent on by wmux with the previous bot\'s result): do your part. When it is done, send one `result` (no reply_to needed, also from the wake of the task that finished it): wmux passes it to the next bot or back to the coordinator. Outside a relay the result goes back to whoever handed you the work.',
 ];
 
 /** How every wake ends. */

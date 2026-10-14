@@ -127,6 +127,20 @@ describe('bot prompts (job, powers and outputs)', () => {
     }
   });
 
+  it('the coordinator leads the room\'s flow with next; no template speaks of Moa; every bot sends a relay\'s result on', () => {
+    const lead = rolePrompt(profile('coordinator'));
+    expect(lead).toMatch(/handoff_send: .*next/);
+    expect(lead).toMatch(/decide the flow/);
+    expect(lead).toMatch(/A relay's last result/);
+    for (const template of BOT_TEMPLATES) {
+      const prompt = rolePrompt(profile(template));
+      expect(prompt).not.toMatch(/\bMoa\b/);
+      expect(prompt).toMatch(/wmux passes it to the next bot or back to the coordinator/);
+    }
+    expect(rolePrompt(profile('researcher'))).toMatch(/send its `result`: the findings with their sources/);
+    expect(rolePrompt(profile('developer'))).toMatch(/once the last task of that dispatch has settled/);
+  });
+
   it('a profile without a repository leaves the repository sentence out', () => {
     expect(rolePrompt(profile('coordinator', { repo: undefined }))).not.toContain('Your repository');
   });

@@ -9,7 +9,7 @@
 // another bot's handoff body — is fenced as data, with a fence longer than
 // any backtick run inside it, so it cannot close its own block.
 
-import { botTemplate, type BotProfile } from '../../shared/bot';
+import { botTemplate, isCoordinatorBot, type BotProfile, type BotTemplate } from '../../shared/bot';
 import { effectiveJob } from './roles/templates';
 import type { Fact } from '../../shared/facts';
 import type { RoomCard, ThreadId } from '../../shared/room';
@@ -46,6 +46,29 @@ export interface WakeHandoffSummary {
   trail?: string[];
 }
 
+/** One other bot of the room as a wake lists it. */
+export interface WakeRosterEntry {
+  botId: string;
+  name: string;
+  template?: BotTemplate;
+  /** The job's first line, at most ROSTER_JOB_MAX characters. */
+  job?: string;
+}
+
+/** Longest job line a roster entry carries. */
+export const ROSTER_JOB_MAX = 80;
+
+/** A bot as the roster lists it. Pure. */
+export function rosterEntry(b: Pick<BotProfile, 'id' | 'name' | 'role' | 'job' | 'template'>): WakeRosterEntry {
+  const line = (b.job ?? '').split('\n').map((l) => l.trim()).find((l) => l.length > 0);
+  return {
+    botId: b.id,
+    name: b.name || b.role,
+    template: botTemplate(b),
+    ...(line ? { job: line.length > ROSTER_JOB_MAX ? `${line.slice(0, ROSTER_JOB_MAX - 1)}…` : line } : {}),
+  };
+}
+
 /** The tail of the wake's room thread. */
 export interface WakePromptThread {
   threadId: ThreadId;
@@ -68,8 +91,9 @@ export interface WakePromptInput {
   thread?: WakePromptThread | null;
   /** A routine wake's routine (routines.ts), when it could be read. */
   routine?: WakeRoutineSummary | null;
-  /** The other enabled bots of the bot's room, for room_post mentions. */
-  roster?: ReadonlyArray<{ botId: string; name: string }>;
+  /** The other enabled bots of the bot's room, for room_post mentions and
+   *  handoffs: name, id, template and the first line of the job. */
+  roster?: ReadonlyArray<WakeRosterEntry>;
   /** Approval requests of the bot's workspace as they stand now, newest
    *  first (wakeContext.ts): a bot never tells the owner to approve what is
    *  already decided or merged. */
@@ -320,8 +344,10 @@ export function buildWakePrompt(input: WakePromptInput): string {
       );
     }
   }
-  if (input.roster && input.roster.length > 0 && (r.kind === 'human' || r.kind === 'mention')) {
-    lines.push('', `Other bots in this room (mention them by id): ${input.roster.map((b) => `${oneLineName(b.name)} = ${b.botId}`).join('; ')}`);
+  // Who is in the room: when the owner or a bot spoke, when work was
+  // handed over, and always for the coordinator, who decides who works.
+  if (input.roster && input.roster.length > 0 && (r.kind === 'human' || r.kind === 'mention' || r.kind === 'handoff' || isCoordinatorBot(profile))) {
+    lines.push('', `Other bots in this room (mention them by id): ${input.roster.map(rosterLine).join('; ')}`);
   }
   const approvals = input.approvals ?? [];
   if (approvals.length > 0) {
@@ -396,6 +422,11 @@ function ago(at: number, now: number): string {
   if (mins < 1) return 'just now';
   if (mins < 120) return `${mins} min ago`;
   return `${Math.round(mins / 60)} h ago`;
+}
+
+function rosterLine(b: WakeRosterEntry): string {
+  const what = [b.template, b.job ? oneLineName(b.job) : ''].filter(Boolean).join(': ');
+  return `${oneLineName(b.name)}${what ? ` (${what})` : ''} = ${b.botId}`;
 }
 
 function oneLineName(name: string): string {

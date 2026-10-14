@@ -52,10 +52,12 @@ import { createFilePersister, readVersionedFile, type FilePersister } from './ve
 import {
   buildWakePrompt,
   defaultBotSystemPrompt,
+  rosterEntry,
   taskIdOfFactId,
   type WakeHandoffSummary,
   type WakePromptInput,
   type WakePromptThread,
+  type WakeRosterEntry,
   type WakeRoutineSummary,
   type WakeTaskSummary,
 } from './wakePrompt';
@@ -761,11 +763,11 @@ export class BotRuntime {
     } catch (err) {
       console.warn(`[factory] wake context for ${item.id} could not be read: ${String(err)}`);
     }
-    let roster: Array<{ botId: string; name: string }> = [];
+    let roster: WakeRosterEntry[] = [];
     try {
       roster = this.deps.store.list({ workspaceId: profile.workspaceId })
         .filter((b) => b.enabled && b.id !== profile.id)
-        .map((b) => ({ botId: b.id, name: b.name || b.role }));
+        .map((b) => rosterEntry(b));
     } catch {
       roster = [];
     }

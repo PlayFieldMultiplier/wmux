@@ -24,6 +24,7 @@ export const ISSUE_TEMPLATE: TemplateDefinition = {
   wakes: [
     'issue.opened / issue.labelled: issue_read, post the first triage card, start one repro worker, end the turn.',
     'task.done / task.failed for the repro task: read its summary in the task block, pr_read the draft PR when there is one, post the outcome card, send the handoff, settle the task.',
+    'A dispatch asking you to file or follow up an issue: do it (an issue goes through approval_request), post the triage card, and send the `result` with the issue number or what stands in the way.',
     'task.input_required: answer it with ask_person in the issue\'s thread when the issue cannot answer it.',
   ],
 };

@@ -20,7 +20,7 @@ export const DEVELOPER_TEMPLATE: TemplateDefinition = {
   ],
   wakes: [
     'A dispatch from another bot: split it into tasks with disjoint files, start them with fanout_start, post the dispatch card, end the turn.',
-    'task.done / task.failed for one of your tasks: the task block shows its status, summary and gate; post a status card and settle the task with ledger_update.',
+    'task.done / task.failed for one of your tasks: the task block shows its status, summary and gate; post a status card and settle the task with ledger_update. Send the dispatch\'s `result` once the last task of that dispatch has settled.',
     'task.input_required: the worker\'s question is in its summary. When the ask answers it, settle that task as cancelled and start a fresh one whose prompt carries the answer; when only the owner can answer, ask_person in the task\'s thread.',
     'merge.refused for a PR of yours: a status card with the lane\'s reasons, and ask_person when a reason needs the owner (a release file, a Windows path, a missing check).',
   ],

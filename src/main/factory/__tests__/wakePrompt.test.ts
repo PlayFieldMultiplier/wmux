@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { WakeItem } from '../../../shared/wake';
-import { buildWakePrompt, defaultBotSystemPrompt } from '../wakePrompt';
+import { buildWakePrompt, defaultBotSystemPrompt, rosterEntry } from '../wakePrompt';
 import { TEMPLATE_DEFINITIONS } from '../roles/templates';
 
 const profile: BotProfile = {
@@ -44,6 +44,18 @@ describe('buildWakePrompt — group rooms and routines', () => {
     const lead = buildWakePrompt({ item: item({ kind: 'human', text: 'Hi', source: 'desktop', lead: true }), profile, roster });
     expect(lead).toMatch(/you alone got this message/);
     expect(lead).not.toMatch(/every bot in it/);
+  });
+
+  it('the roster names each bot\'s template and job line; a handoff wake and every coordinator wake show it', () => {
+    const team = [rosterEntry({ id: 'bot-00000002', name: 'Dev', role: 'lead', template: 'developer', job: 'Build what the lead hands over.\nSecond line.' }),
+      rosterEntry({ id: 'bot-00000003', name: 'Scout', role: 'lead', template: 'researcher', job: 'x'.repeat(120) })];
+    expect(team[0]).toEqual({ botId: 'bot-00000002', name: 'Dev', template: 'developer', job: 'Build what the lead hands over.' });
+    expect(team[1].job).toHaveLength(80);
+    const handoff = buildWakePrompt({ item: item({ kind: 'handoff', handoffId: 'h-1' }), profile, roster: team });
+    expect(handoff).toContain('Dev (developer: Build what the lead hands over.) = bot-00000002');
+    const routine = item({ kind: 'routine', routineId: 'r-1', dueAt: 1 });
+    expect(buildWakePrompt({ item: routine, profile, roster: team })).not.toContain('Other bots in this room');
+    expect(buildWakePrompt({ item: routine, profile: { ...profile, template: 'coordinator', role: 'moa' }, roster: team })).toContain('Other bots in this room');
   });
 
   it('a mention shows who said what, fenced as data; an unreadable one points to room_read', () => {
