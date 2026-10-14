@@ -82,6 +82,19 @@ describe('isTaskReadyForReview', () => {
     expect(selectReviewQueueIds(s)).toEqual(['t1']);
   });
 
+  it('never lists a bot\'s worker: it is the Bots page\'s, as in Fleet', () => {
+    const s = {
+      ...state({
+        workspaces: [owner, workspace('t1', [leaf('a', 'p1')]), workspace('t2', [leaf('b', 'p2')])],
+        missions: { t1: mission('task-1', 'owner'), t2: mission('task-2', 'owner') },
+        status: { p1: 'complete', p2: 'complete' },
+      }),
+      fanoutOrigin: { t2: { kind: 'bot', botId: 'bot-1' } },
+    } as unknown as StoreState;
+    expect(isTaskReadyForReview(s, 't2')).toBe(false);
+    expect(selectReviewQueueIds(s)).toEqual(['t1']);
+  });
+
   it('does not list a running, awaiting or idle task', () => {
     for (const st of ['running', 'awaiting_input', 'waiting', 'error', 'idle'] as AgentStatus[]) {
       const s = state({

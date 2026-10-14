@@ -23,8 +23,8 @@ describe('useRpcBridge fleet.triage routing', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'useRpcBridge.ts'), 'utf-8');
   const block = source.match(/if \(method === 'fleet\.triage'\) \{[\s\S]*?\r?\n {2}\}\r?\n/)?.[0] ?? '';
 
-  it('returns the shared board builder, with no active-workspace fallback', () => {
-    expect(block).toContain('return buildFleetTriage(store, {');
+  it('returns the shared board builder over the board Fleet shows (no bot workers), with no active-workspace fallback', () => {
+    expect(block).toContain('return buildFleetTriage(ownerFleetState(store), {');
     // "Who needs me?" is a fleet question: an omitted workspaceId must never
     // collapse to whichever workspace happens to be on screen.
     expect(block).not.toContain('activeWorkspaceId');

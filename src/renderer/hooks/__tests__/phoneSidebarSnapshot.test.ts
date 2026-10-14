@@ -97,6 +97,14 @@ describe('buildPhoneSidebarSnapshot — workspace rows', () => {
     ]);
   });
 
+  it('leaves out a bot\'s worker and its panes, as the desktop sidebar and Fleet do', () => {
+    const a = workspace('a', [leaf('pa', [surface('sa', 'pty-a')])]);
+    const t = workspace('t', [leaf('pt', [surface('st', 'pty-t')])]);
+    const snap = buildPhoneSidebarSnapshot(state({ workspaces: [a, t], origin: { t: { kind: 'bot', botId: 'bot-1' } } }));
+    expect(snap.workspaces.map((w) => w.id)).toEqual(['a']);
+    expect(snap.panes.map((p) => p.ptyId)).toEqual(['pty-a']);
+  });
+
   it('omits a null git sync and leaves no key for an absent color', () => {
     const a = workspace('a', [leaf('pa', [surface('sa', 'pty-a')])], { metadata: { gitSync: null } });
     const [row] = buildPhoneSidebarSnapshot(state({ workspaces: [a] })).workspaces;

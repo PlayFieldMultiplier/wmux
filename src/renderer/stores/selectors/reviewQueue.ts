@@ -9,13 +9,15 @@
 //     sidebar's "Close finished tasks" uses — `paneRowsFinished`; idle never
 //     counts, a task with no agent pane is not finished).
 // It leaves the queue when an agent starts again, asks for input, or the task
-// is closed or detached.
+// is closed or detached. A bot's worker is never in it: it is the Bots page's,
+// as in Fleet and the sidebar (Sidebar/botTasks.ts).
 
 import type { PrStatus } from '../../../shared/types';
 import type { StoreState } from '../index';
 import { paneRowsFinished } from '../../components/Sidebar/sidebarTree';
 import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 import { selectWorkspaceAgentRoster } from './workspaceAgentRoster';
+import { isBotTask, selectBotTaskOwners } from '../../components/Sidebar/botTasks';
 
 export interface ReviewQueueEntry {
   /** The task's own workspace. */
@@ -42,6 +44,7 @@ export interface ReviewQueueEntry {
 export function isTaskReadyForReview(state: StoreState, workspaceId: string): boolean {
   const mission = state.missionByPaneGroup[workspaceId];
   if (!mission || mission.status !== 'open' || mission.detachedAt !== undefined) return false;
+  if (isBotTask(workspaceId, selectBotTaskOwners(state))) return false;
   return paneRowsFinished(selectWorkspaceAgentRoster(state, workspaceId).rows);
 }
 

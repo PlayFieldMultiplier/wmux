@@ -72,6 +72,7 @@ import type { MoaPendingDecision } from '../../shared/moa';
 import type { WorkLink } from '../../shared/workLink';
 import { createSidebarDropLog } from '../../shared/phoneFleetSidebar';
 import { buildFleetTriage, fleetTriageScopeError } from '../utils/fleetTriage';
+import { ownerFleetState } from '../components/Sidebar/botTasks';
 import { workspaceCloseRefusal } from '../components/Moa/moaHqGuard';
 
 // ---------------------------------------------------------------------------
@@ -1934,7 +1935,8 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const scope = typeof params.workspaceId === 'string' ? params.workspaceId : undefined;
     const scopeError = fleetTriageScopeError(store, scope);
     if (scopeError) return { error: scopeError, retryable: false };
-    return buildFleetTriage(store, {
+    // Bot workers are the Bots page's, never on the Fleet board (botTasks.ts).
+    return buildFleetTriage(ownerFleetState(store), {
       workspaceId: scope,
       includeIdle: params.includeIdle === true,
     }, Date.now());

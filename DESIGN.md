@@ -293,9 +293,10 @@ no difference). A2A-only peers stay on the Remote page.
 The agent factory's bots, read and talked to like a messenger (owner
 decision 2026-10-13). A bot has no pane of its own; its workers are agent
 panes in hidden task workspaces, and they are shown here, under their bot,
-instead of in the Workspaces sidebar. Fleet still lists every agent (a
-bot's worker "by <the bot's name>", never "by Orchestrator"), and a sidebar
-group of bot tasks is "Started by bots", never "From closed pane".
+instead of in the Workspaces sidebar. A bot's worker is listed nowhere
+else (owner decision 2026-10-14): not the sidebar (the active workspace
+included), not Fleet's board, review queue or counts, not the rail and
+status bar badges, `fleet_triage` or the phone's sidebar.
 
 - **Layout:** a 320px conversation list on `--bg-mantle` beside the chat on
   `--bg-base`, split by one `--stroke` seam. Under an 800px-wide page (an
@@ -308,9 +309,9 @@ group of bot tasks is "Started by bots", never "From closed pane".
   and clears it). One row per conversation: a 36px avatar, the 13px/500 name
   with the newest message's time, and one 12px muted preview line (the
   owner's own as "You: …", a room's prefixed with who spoke). Every
-  workspace room is a group conversation and every bot a 1:1. The HQ room is
-  pinned first (a muted "HQ" beside its name); the other rooms and the bots
-  follow by latest activity. The selected row is the `--selection` pill
+  workspace room is a group conversation and every bot a 1:1. Rooms and
+  bots follow by latest activity; nothing is pinned (the workspace an
+  earlier version made the HQ is a room like any other). The selected row is the `--selection` pill
   (10px radius), hover `--hover-fill`.
 - **Avatars:** like a team chat's: a bot's avatar is the picture the
   owner set for it, else a calm rounded-square tile with the name's
@@ -406,27 +407,41 @@ group of bot tasks is "Started by bots", never "From closed pane".
   request waits and its card is in the conversation — a room's whole view,
   the asking bot's 1:1, or a thread it sits in or links when narrowed to it — an
   "Approve N pending" chip sits above the box, whatever thread the card is in.
-- **Paused:** with the bots off the page stays — the list and every
-  conversation, live workers included, read-only (no answers; the composer
-  says why and sends nothing) — under a notice row across the page on the
-  header band's `--selection-subtle` fill: "Bots are paused", one muted
-  line, and Run bots (the primary; it writes the same setting Settings
-  does). Stop stays: it ends work still running.
+- **Bots off:** one wording for the switch everywhere — "Bots on" in
+  Settings, "Bots are off" and "Turn bots on" on the page and in the
+  composer (ko: 봇 켜기 / 봇이 꺼져 있어요). With the bots off the page
+  stays — the list and every conversation, live workers included,
+  read-only (no answers; the composer says why and sends nothing) — under
+  a notice row across the page on the header band's `--selection-subtle`
+  fill: "Bots are off", one muted line, and Turn bots on (the primary; it
+  writes the same setting Settings does). Stop stays: it ends work still
+  running. The empty page (no bot yet) shows no notice row.
 - **Add bot (2026-10-13):** a name is all a bot needs. The form: workspace,
   name (required), picture, "Start from" template chips (the composer's
   chip style; one pressed at most) that prefill the job — a chip replaces
   only its own prefill, never words the owner typed — the job (an optional
-  plain textarea) and the repository (optional: inherited, suggested, or a
-  picked folder). No role picker. The new bot greets the owner and asks
+  plain textarea) and the repository, always shown as one line — "Works on
+  owner/repo" with Change and None (inherited, suggested, or a picked
+  folder; None works on no repository), never attached silently. No role
+  picker. `+` and Add are there whether the bots are on or off; while they
+  are off Add asks once in place ("Bots are off. Adding <name> turns bots
+  on.", Turn bots on and add) instead of sending the owner to Settings. A
+  disabled Add says why in one muted line (no name, an invalid name, no
+  workspace). After Add the new bot's chat opens at once with "Starting
+  <name>…" until its greeting arrives. The new bot greets the owner and asks
   what to do, with choices, in its 1:1; its room shows, at the time it was
   added, one centred muted line, "<name> joined", with Open chat (to that
   1:1), instead of the greeting (the question main marks as the bot's
   greeting). A bot's `job_changed` card carries
   Undo (secondary).
-- **First run:** with the bots on and none added, the list holds one card
-  at its top (10px, `--line` hairline): "Add a bot to <the current
-  workspace>", one muted line and Add bot (the primary), which opens the
-  add form preset to that workspace; the new bot's chat then opens.
+- **First run (owner decision 2026-10-14):** with no bot yet the page is
+  one centred panel: "Name your first bot", one muted line (it works in
+  <the current workspace>, greets you and asks what to do), a name field
+  and Start (the primary). Start turns the bots on when they are off, adds
+  the bot to the current workspace and opens its 1:1, where its greeting
+  arrives. When the Claude engine cannot sign in the panel says why in
+  one line and offers Log in to Claude (and Check again); Start waits until
+  it can. A build that cannot tell never blocks Start.
 
 ### Fleet
 
@@ -815,11 +830,11 @@ leaves the page.
   Appearance › Sidebar.
 - **Bot workers are not listed:** a fan-out task a factory bot dispatched
   (lineage origin `{kind:'bot'}`) is the bot's worker, shown on the Bots
-  page; the sidebar's task groups, the collapsed rail and the Ctrl+N digits
-  leave it out and the header count never counts it. The one the owner is
-  in stays listed while it is active, so the row you are working in never
-  vanishes, but it is not counted and takes no Ctrl+N digit. The Tasks line
-  does not count bot workers either. Human, GUI and orchestrator tasks are
+  page only; the sidebar's task groups, the collapsed rail and the Ctrl+N
+  digits leave it out — the active one too (2026-10-14: a bot's worker
+  opens inside the Bots page) — and the header count never counts it. The
+  Tasks line, Fleet and the phone's sidebar do not count bot workers
+  either. Human, GUI and orchestrator tasks are
   unchanged.
 - The glance-board rules (attention order, pin to top, fan-out nesting, the
   changed-since-you-looked dot) are in "Sidebar rows" after the Decisions
@@ -1243,6 +1258,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
 | 2026-10-14 | Owner decision: the room dock goes — the dock opposite the sidebar, its titlebar Room toggle and the HQ room in it. The right side returns to what it held before the room dock replaced Moa's panel: nothing (Moa's panel existed only while Moa was on, 2026-10-05, and Moa is gone), with the file tree as the only opt-in column on that edge and its toggle the titlebar's last icon. Every rail page, Bots included, fills the whole sheet. Bot rooms and 1:1s are read and answered on the Bots page only. Amends the frame, Titlebar › Right, Rail and pages, the Tools panel (now File tree column) and the 2026-10-12/2026-10-13 rows | The dock showed the same rooms as the Bots page, so the owner met every conversation twice and the Bots page had to cover the dock to avoid a second copy. One place for bot conversations, and the panes keep the dock's 248–320px |
 | 2026-10-14 | Owner decision: a bot worker's terminal opens in a worker panel beside its bot's chat on the Bots page — Open and Resume no longer jump to Workspaces or change the active workspace — and a conversation with live workers shows "N working" in its header with the workers as chips that open the panel | Bot workers are hidden from the Workspaces sidebar, so a jump landed on a workspace the owner could not find again; reading or answering a worker belongs next to the bot that started it. The chips answer "what is it doing right now" without scrolling to the foot of the chat |
+| 2026-10-14 | Owner decision (Bots onboarding and registration): the empty Bots page is one centred "Name your first bot" panel whose Start turns the bots on, adds the bot to the current workspace and opens its 1:1 (Log in to Claude when the engine cannot sign in); `+` and Add work while the bots are off, after one inline confirm; the add form always shows its repository line with Change and None, a disabled Add says why, and a new bot's chat opens at once with "Starting <name>…"; one wording, Bots on / Bots are off / Turn bots on; no HQ pinning anywhere; a bot's worker is listed only on the Bots page (sidebar, active one included, Fleet, review queue, counts, `fleet_triage`, the phone). Supersedes the 2026-10-13 first-run card and pinned HQ room, and the note that Fleet lists bot workers | Registration was hard: Add hid while the bots were off, the repository attached silently, and a new bot vanished for seconds. A pre-made HQ and Moa bot appeared that the owner never made. Bot workers in the sidebar and Fleet read as the owner's own work and duplicated the Bots page |
 
 ### Desktop conversation view
 
