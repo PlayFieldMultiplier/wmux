@@ -44,6 +44,8 @@ interface Rig {
   facts: Fact[];
   wakes: Array<Parameters<FactoryRoomPorts['wakes']['enqueue']>[0]>;
   taint: WakeTaint;
+  /** Bots whose queue takes no wake. */
+  drop: Set<string>;
   /** The wake each bot runs now (its reason drives its taint). */
   running: Map<string, { wake: RunningWake; item: WakeItem; thread: ThreadId | null }>;
   run: (b: BotProfile, reason: WakeItem['reason'], extra?: Partial<RunningWake>, thread?: ThreadId | null) => void;
@@ -70,12 +72,14 @@ async function rig(bots: BotProfile[]): Promise<Rig> {
   };
   const directory = { listEnabled: () => bots.filter((b) => b.enabled), get: (id: string) => bots.find((b) => b.id === id) ?? null };
   const wakes: Rig['wakes'] = [];
+  const drop = new Set<string>();
   const running: Rig['running'] = new Map();
   const ports: Partial<FactoryRoomPorts> = {
     factLog,
     bots: directory,
     wakes: {
       enqueue(input) {
+        if (drop.has(input.botId)) return null;
         wakes.push(input);
         return { id: `w-${wakes.length}`, ...input, enqueuedAt: now, attempts: 0, state: 'queued' } as WakeItem;
       },
@@ -115,7 +119,7 @@ async function rig(bots: BotProfile[]): Promise<Rig> {
     const handoffId = reason.kind === 'handoff' ? reason.handoffId : undefined;
     running.set(b.id, { wake: { wakeId: item.id, attempt: 1, ...(handoffId ? { handoffId } : {}), ...extra }, item, thread });
   };
-  return { router, rooms, facts, wakes, taint, running, run };
+  return { router, rooms, facts, wakes, taint, drop, running, run };
 }
 
 const owner = (text = 'go'): WakeItem['reason'] => ({ kind: 'human', text, source: 'desktop', runId: 'run-c-owner', clientMessageId: 'c-owner' });
@@ -354,6 +358,77 @@ describe('taint along a relay', () => {
     });
     taint.noteDelivered('h-f');
     expect(taint.handoffTainted('h-f')).toBe(true);
+  });
+});
+
+describe('a relay that cannot reach its coordinator', () => {
+  it('a reply to a tainted hop from a clean wake is still tainted', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t, [t.dev.id]);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    const f1 = forwardOf(r, res1.handoffId)!;
+    // The developer answers the tainted forward from the owner's clean words, naming it.
+    r.run(t.dev, owner('send it'));
+    const res2 = r.router.send(binding(t.dev), { kind: 'result', replyTo: f1.id, title: 'Built', body: '' });
+    if (!res2.ok) throw new Error('refused');
+    expect(r.taint.handoffTainted(res2.handoffId)).toBe(true);
+  });
+
+  it('a stop whose wake was not taken is told on the next start', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t);
+    t.dev.enabled = false;
+    r.drop.add(t.lead.id);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    await r.router.idle();
+    expect(r.router.get(res1.handoffId)).toMatchObject({ relayStopped: expect.stringMatching(/relay stopped/) });
+    expect(r.router.get(res1.handoffId)?.relayStopTold).toBeUndefined();
+    expect(r.wakes.filter((w) => w.botId === t.lead.id)).toEqual([]);
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(again.wakes.filter((w) => w.botId === t.lead.id)).toEqual([expect.objectContaining({ reason: { kind: 'handoff', handoffId: res1.handoffId } })]);
+    expect(again.router.get(res1.handoffId)?.relayStopTold).toBe(true);
+    // Told: a later start asks no more.
+    const third = await rig(t.all);
+    await third.router.idle();
+    expect(third.wakes.filter((w) => w.botId === t.lead.id)).toEqual([]);
+  });
+
+  it('a last result the coordinator\'s queue did not take is brought to it as a stopped relay', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t, [t.dev.id]);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    r.drop.add(t.lead.id);
+    const res2 = answer(r, t.dev, forwardOf(r, res1.handoffId)!, 'Built');
+    expect(res2).toMatchObject({ ok: false, code: 'budget' });
+    if (res2.ok || !res2.handoffId) return;
+    expect(r.router.get(res2.handoffId)).toMatchObject({ status: 'refused', relayStopped: expect.stringMatching(/queue did not take/) });
+    r.drop.delete(t.lead.id);
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(again.wakes.filter((w) => w.botId === t.lead.id)).toEqual([expect.objectContaining({ reason: { kind: 'handoff', handoffId: res2.handoffId } })]);
+  });
+
+  it('a forward refused before its stop was recorded is stopped on the next start', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t, [t.dev.id]);
+    const res1 = answer(r, t.res, root, 'Findings');
+    if (!res1.ok) throw new Error('refused');
+    const f = forwardOf(r, res1.handoffId)!;
+    // As if the app stopped right after refusing the forward.
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.appendFileSync(file, `${JSON.stringify({ ...f, status: 'refused', refusal: { code: 'budget', detail: 'queue full' } })}\n`);
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(again.router.get(res1.handoffId)?.relayStopped).toMatch(/did not take the work/);
+    expect(again.wakes.filter((w) => w.botId === t.lead.id)).toEqual([expect.objectContaining({ reason: { kind: 'handoff', handoffId: res1.handoffId } })]);
   });
 });
 

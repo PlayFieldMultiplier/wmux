@@ -145,6 +145,10 @@ export const HANDOFF_STORE_LIMITS = {
   LIST_MAX: 200,
 } as const;
 
+/** How long a stopped relay's wake for its coordinator is enqueued again on
+ *  each start (the wake queue keeps a keyed wake's record as long). */
+const RELAY_STOP_RETRY_MS = 7 * 24 * 3600_000;
+
 /** The answer text of a question the owner closed without choosing. */
 export const DISMISSED_ANSWER = 'The owner closed this question without choosing an answer.';
 
@@ -210,7 +214,7 @@ export interface HandoffWakeSummary {
 
 /** What the router asks of the taint tracker (wakeTaint.ts). */
 export interface HandoffTaintPort {
-  markSent(handoffId: string, senderBotId: string): void;
+  markSent(handoffId: string, senderBotId: string, answers?: readonly string[]): void;
   markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): boolean;
 }
 
@@ -314,6 +318,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(h.kind === 'dispatch' ? relayNext(h.next) : {}),
     ...(h.kind === 'dispatch' && h.relay === true ? { relay: true as const } : {}),
     ...(typeof h.relayStopped === 'string' && oneLine(h.relayStopped, 300) ? { relayStopped: oneLine(h.relayStopped, 300) } : {}),
+    ...(h.relayStopTold === true ? { relayStopTold: true as const } : {}),
     createdAt: h.createdAt,
     updatedAt: h.updatedAt,
   };
@@ -528,12 +533,34 @@ export class HandoffRouter {
    *  brought to the coordinator); a delivered last result of a coordinator's
    *  thread with no card in General gets it. */
   private resumeRelays(): void {
+    const recent = this.now() - RELAY_STOP_RETRY_MS;
     for (const r of [...this.records.values()]) {
-      if (r.kind !== 'result' || r.status !== 'delivered' || !r.replyTo) continue;
+      if (r.kind !== 'result' || !r.replyTo) continue;
       const parent = this.records.get(r.replyTo);
-      if (!parent) continue;
+      if (!parent || !isRelayHop(parent) && r.status !== 'delivered') continue;
+      const lead = parent.from.kind === 'bot' ? safeGet(this.opts.ports().bots, parent.from.botId) : null;
+      if (r.relayStopped) {
+        // Not told yet (its wake not taken, or not on disk): ask again.
+        if (lead && !r.relayStopTold && r.updatedAt >= recent) this.wakeForStop(r.id, lead);
+        continue;
+      }
+      if (r.status === 'refused') {
+        // A relay's hop refused past a limit or by the coordinator's queue.
+        const code = r.refusal?.code;
+        if (lead && r.to.kind === 'bot' && r.to.botId === lead.id && (code === 'max_depth' || code === 'max_per_run' || code === 'budget')) {
+          this.stopRelay(r.id, lead, `its last result was refused (${code})`);
+        }
+        continue;
+      }
+      if (r.status !== 'delivered') continue;
       if ((parent.next?.length ?? 0) > 0) {
-        if (r.relayStopped || parent.from.kind !== 'bot' || this.byClientId(parent.from.botId, forwardKey(r.id))) continue;
+        if (parent.from.kind !== 'bot') continue;
+        const sent = this.byClientId(parent.from.botId, forwardKey(r.id));
+        // A forward refused before its stop was recorded: record it now.
+        if (sent) {
+          if (sent.status === 'refused' && lead) this.stopRelay(r.id, lead, `${this.partyLabel(sent.to)} did not take the work`);
+          continue;
+        }
         // A restart: no turn of the bot that sent the result is running, so
         // the dispatch takes the result's own mark.
         this.forward(r, parent, null);
@@ -772,10 +799,13 @@ export class HandoffRouter {
     const turnKey = wake ? `${wake.wakeId}#${wake.attempt}` : null;
     const inTurn = turnKey ? this.sentInTurn.get(turnKey) ?? 0 : 0;
     if (turnKey && inTurn >= HANDOFF_LIMITS.MAX_PER_RUN) {
-      return this.refuse(draft, 'max_per_run', `one turn sends at most ${HANDOFF_LIMITS.MAX_PER_RUN} handoffs`);
+      const refused = this.refuse(draft, 'max_per_run', `one turn sends at most ${HANDOFF_LIMITS.MAX_PER_RUN} handoffs`);
+      if (inRelay) this.stopRelay(draft.id, target.bot, `its turn reached the handoff limit (${HANDOFF_LIMITS.MAX_PER_RUN})`);
+      return refused;
     }
-    // Marked now, in the sender's turn, from the wake it is running.
-    this.opts.taint?.()?.markSent(draft.id, sender.botId);
+    // Marked now, in the sender's turn, from the wake it is running; a reply
+    // is also as tainted as the handoff it answers.
+    this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : []);
     // A result on a relay's hop that names bots to follow goes on to them;
     // any other is delivered (and, when it ends a coordinator's thread,
     // pointed to from General).
@@ -783,6 +813,9 @@ export class HandoffRouter {
       ? this.relayOn(draft, parent, target.bot)
       : this.deliver(draft, target.bot);
     if (result.ok && kind === 'result' && parent) this.pointToThread(draft, parent);
+    // The coordinator's queue did not take a relay's last result: it is
+    // brought to it as a stopped relay (retried on the next start).
+    if (!result.ok && inRelay && result.code === 'budget') this.stopRelay(draft.id, target.bot, 'your queue did not take its last result');
     if (turnKey && result.ok) {
       this.sentInTurn.delete(turnKey);
       this.sentInTurn.set(turnKey, inTurn + 1);
@@ -926,6 +959,15 @@ export class HandoffRouter {
   private stopRelay(resultId: string, lead: BotProfile, why: string): void {
     const result = this.records.get(resultId);
     if (!result || result.relayStopped) return;
+    // The note first, so the wake shows it; the wake is keyed by the result,
+    // so the next start enqueues it again when this one was not taken.
+    if (!this.put({ ...result, relayStopped: oneLine(`relay stopped: ${why}`, 300) })) return;
+    this.wakeForStop(result.id, lead);
+  }
+
+  private wakeForStop(resultId: string, lead: BotProfile): void {
+    const result = this.records.get(resultId);
+    if (!result) return;
     let wakeId: string | undefined;
     try {
       wakeId = this.opts.ports().wakes?.enqueue({
@@ -934,8 +976,23 @@ export class HandoffRouter {
     } catch (err) {
       this.log(`relay stop wake for ${result.id} failed`, err);
     }
-    if (!wakeId) this.log(`relay stopped at ${result.id} (${why}); ${lead.id} did not take the wake`);
-    this.put({ ...result, relayStopped: oneLine(`relay stopped: ${why}`, 300) });
+    if (!wakeId) {
+      this.log(`relay stopped at ${result.id}; ${lead.id} did not take the wake (tried again on the next start)`);
+      return;
+    }
+    // Told once the wake is on disk; until then the next start asks again.
+    const told = (): void => {
+      const now = this.records.get(resultId);
+      if (now && !now.relayStopTold) this.put({ ...now, relayStopTold: true });
+    };
+    const wakes = this.opts.ports().wakes;
+    if (wakes?.flush) {
+      const p = wakes.flush().then(told, (err: unknown) => this.log(`relay stop wake for ${resultId} not on disk`, err));
+      this.settling.add(p);
+      void p.finally(() => this.settling.delete(p));
+    } else {
+      told();
+    }
   }
 
   /** A dispatch wmux sent on could not be delivered: stop its relay at the

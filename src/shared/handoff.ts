@@ -69,6 +69,8 @@ export interface Handoff {
   /** A relay's result the relay could not pass on: why, as the coordinator
    *  reads it in the wake that brings it the result. Main-written. */
   relayStopped?: string;
+  /** The coordinator's wake for a stopped relay is on disk. Main-written. */
+  relayStopTold?: true;
   createdAt: number;
   updatedAt: number;
 }

@@ -239,13 +239,14 @@ export class WakeTaint {
   }
 
   /** A bot is sending a handoff now, inside its turn: mark it from that
-   *  turn's wake. A handoff already marked keeps its mark. Never throws. */
-  markSent(handoffId: string, senderBotId: string): void {
+   *  turn's wake, and as tainted as any handoff it answers (`answers`). A
+   *  handoff already marked keeps its mark. Never throws. */
+  markSent(handoffId: string, senderBotId: string, answers: readonly string[] = []): void {
     if (this.marks.has(handoffId)) return;
     let tainted = true;
     try {
       const running = this.ports.runningWake(senderBotId);
-      tainted = !running || this.alwaysTainted(senderBotId) || this.wakeTainted(running.item);
+      tainted = !running || this.alwaysTainted(senderBotId) || this.wakeTainted(running.item) || answers.some((id) => this.handoffTainted(id));
     } catch {
       tainted = true;
     }
