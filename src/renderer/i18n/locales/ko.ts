@@ -3764,4 +3764,7 @@ export const ko = {
   'git.secret.more': "(외 {count}건)",
   'settings.secretGuard': "커밋·푸시·PR에서 비밀번호와 키 막기",
   'settings.secretGuardDesc': "Git 페이지의 커밋·푸시·PR 만들기, 태스크 가져오기, Moa 전달에서 .env 파일, 개인 키, API 키가 들어간 변경을 올리지 않아요.",
+  'botsPage.chat.working': "{count}개 작업 중",
+  'botsPage.chat.workerPanel': "{name} 터미널",
+  'botsPage.chat.closeWorker': "워커 터미널 닫기",
 } as const;

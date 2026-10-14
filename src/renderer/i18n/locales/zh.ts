@@ -3510,4 +3510,7 @@ export const zh = {
   'git.secret.more': "(另有 {count} 处)",
   'settings.secretGuard': "在提交、推送和 PR 中拦截密码和密钥",
   'settings.secretGuardDesc': "Git 页面的提交、推送和创建 PR,采纳任务以及 Moa 交付时,拒绝包含 .env 文件、私钥或 API 密钥的更改。",
+  'botsPage.chat.working': "{count} 个工作中",
+  'botsPage.chat.workerPanel': "{name} 终端",
+  'botsPage.chat.closeWorker': "关闭工作者终端",
 } as const;

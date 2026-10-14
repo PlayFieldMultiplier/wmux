@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../../index';
 import type { RoomCard, ThreadSummary } from '../../../../shared/room';
-import { ALL_THREADS, mergeCards, orderThreads, timelineKey, upsertThread } from '../roomSlice';
+import { ALL_THREADS, mergeCards, orderThreads, selectWorkerPanelHost, timelineKey, upsertThread } from '../roomSlice';
 
 const WS = 'ws-a';
 
@@ -88,5 +88,14 @@ describe('room slice', () => {
     expect(useStore.getState().noteRoomRead(WS, 'general', 4)).toBe(false);
     expect(useStore.getState().noteRoomRead(WS, 'general', 2)).toBe(false);
     expect(useStore.getState().noteRoomRead(WS, 'general', 6)).toBe(true);
+  });
+});
+
+describe('bot worker panel host', () => {
+  it('hosts the panel\'s workspace only while Bots is the page', () => {
+    const panel = { workspaceId: 't1', conversationId: 'bot:b1' };
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: panel })).toBe('t1');
+    expect(selectWorkerPanelHost({ appRoute: 'workspaces', botsWorkerPanel: panel })).toBeNull();
+    expect(selectWorkerPanelHost({ appRoute: 'bots', botsWorkerPanel: null })).toBeNull();
   });
 });

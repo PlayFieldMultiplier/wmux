@@ -1,5 +1,5 @@
 /**
- * Rooms — renderer state for the room dock (contract: shared/room.ts).
+ * Rooms — renderer state for the Bots page's rooms (contract: shared/room.ts).
  *
  *   main RoomWriter ──ROOM_EVENT──▶ useRoomSync ──▶ this slice ──▶ Room/*
  *                  ◀──room:read / room:threads (pages by seq)──┘
@@ -64,6 +64,25 @@ export interface RoomSlice {
   selectRoomThread: (workspaceId: string, thread: TimelineThread) => void;
   /** Record a read position; false when it would not move forward. */
   noteRoomRead: (workspaceId: string, threadId: ThreadId, seq: number) => boolean;
+  /** The bot worker whose terminal shows beside a Bots conversation, or
+   *  null. While the Bots page shows it, the Workspaces viewport leaves that
+   *  workspace unmounted (selectWorkerPanelHost), so its terminal has one
+   *  mount; the active workspace never changes. */
+  botsWorkerPanel: BotsWorkerPanel | null;
+  setBotsWorkerPanel: (panel: BotsWorkerPanel | null) => void;
+}
+
+export interface BotsWorkerPanel {
+  /** The worker's (task) workspace. */
+  workspaceId: string;
+  /** The Bots conversation it was opened from (Conversation.id). */
+  conversationId: string;
+}
+
+/** The workspace the Bots page hosts in its worker panel right now (only
+ *  while Bots is the page), else null. Pure. */
+export function selectWorkerPanelHost(s: Pick<StoreState, 'appRoute' | 'botsWorkerPanel'>): string | null {
+  return s.appRoute === 'bots' ? s.botsWorkerPanel?.workspaceId ?? null : null;
 }
 
 export function timelineKey(workspaceId: string, thread: TimelineThread): string {
@@ -108,6 +127,7 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
   roomPushCount: 0,
   roomPushedAt: {},
   roomActors: {},
+  botsWorkerPanel: null,
   setRoomActors: (actors) => set((s) => { s.roomActors = actors; }),
   setRoomStatus: (status) => set((s) => { s.roomStatus = status; }),
   setRoomThreads: (workspaceId, threads) => set((s) => { s.roomThreads[workspaceId] = threads; }),
@@ -146,4 +166,5 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
     set((s) => { s.roomReadThrough[key] = seq; });
     return true;
   },
+  setBotsWorkerPanel: (panel) => set((s) => { s.botsWorkerPanel = panel; }),
 });

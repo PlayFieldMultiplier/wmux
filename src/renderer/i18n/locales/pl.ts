@@ -4228,4 +4228,7 @@ export const pl = {
   'git.secret.more': "(i jeszcze {count})",
   'settings.secretGuard': "Blokuj hasła i klucze w commitach, pushach i PR",
   'settings.secretGuardDesc': "Commit, Push i Utwórz PR na stronie Git, przejęcie zadania oraz dostarczenie przez Moa odrzucają zmianę, która dodaje plik .env, klucz prywatny lub klucz API.",
+  'botsPage.chat.working': "Pracuje: {count}",
+  'botsPage.chat.workerPanel': "Terminal: {name}",
+  'botsPage.chat.closeWorker': "Zamknij terminal workera",
 } as const;

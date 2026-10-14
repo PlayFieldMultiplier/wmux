@@ -4267,6 +4267,9 @@ export const en = {
   'git.secret.more': "(and {count} more)",
   'settings.secretGuard': "Block passwords and keys in commits, pushes and PRs",
   'settings.secretGuardDesc': "Commit, Push and Create PR on the Git page, adopting a task, and Moa's delivery refuse a change that adds a .env file, a private key or an API key.",
+  'botsPage.chat.working': "{count} working",
+  'botsPage.chat.workerPanel': "{name} terminal",
+  'botsPage.chat.closeWorker': "Close worker terminal",
 } as const;
 
 export type TranslationKey = keyof typeof en;

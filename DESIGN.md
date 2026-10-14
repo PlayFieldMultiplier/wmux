@@ -374,9 +374,23 @@ group of bot tasks is "Started by bots", never "From closed pane".
   Fleet, and still shows) — close its 1:1, and its room under the bot's
   face, as compact status bubbles while the worker's pane is open — a muted
   dot or the attention ring, the task's name, the state in words ("Worker
-  needs input", with what it waits for under it) — with Open, which jumps to the worker's pane on
-  Workspaces; a done worker that can resume offers Resume; finished
-  workers leave.
+  needs input", with what it waits for under it) — with Open; a done
+  worker that can resume offers Resume; finished workers leave. Open (and
+  a Resume that started) shows the worker's terminal in a **worker panel**
+  beside the chat, on the Bots page, and never switches the active
+  workspace (owner decision 2026-10-14): one `--stroke` seam on its chat
+  side, a 40px header (the worker's name in 13px/500 over its state in
+  words, the needs-you text while it waits; Close as a 28px icon button),
+  then the worker's panes, live and typed into in place. It takes half the
+  chat area (360–760px); under a 720px chat area it covers the chat until
+  Close. Another conversation closes it. The worker's terminal has one
+  mount: while the panel shows it, Workspaces does not. While a
+  conversation has live workers, its header carries a **"N working"** line
+  right of the name pill: the count in 12px muted, then up to three
+  workers as 24px chips (the thread chip's `--selection` fill; pressed =
+  `--selection-emphasis` while the panel shows that worker) with the
+  bubble's dot (the attention ring while it waits) and its name, "+N" for
+  the rest; a chip opens or closes the panel.
 - **Composer:** the shared composer box at the foot, "Message <name>". A 1:1
   message is addressed to that bot alone. A room's message goes to every bot
   of the room (they may answer each other), unless
@@ -1225,6 +1239,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-14 | Images and PDFs from the file tree open in a read-only preview tab in the work area, which follows the file on disk (#2150) | The editor read every file as text, so an image showed as garbage and anything over 1 MB as nothing. Agents regenerate plots and reports while you watch, and the competing viewers we checked lose the reader's zoom and page, or show stale or torn files, on exactly that rewrite; so the update keeps the position and only ever swaps in a complete file |
 | 2026-10-14 | HTML files from the file tree open rendered in the preview tab, offline by default (owner decision) | Agents produce coverage reports, charts and built docs as HTML, and reading them as source misses the point. A page from a cloned repo is untrusted code that can read the files beside it, so it runs in its own sandboxed partition with the network off until the person turns it on for that tab, and nothing it links to opens without a click |
 | 2026-10-14 | Owner decision: the room dock goes — the dock opposite the sidebar, its titlebar Room toggle and the HQ room in it. The right side returns to what it held before the room dock replaced Moa's panel: nothing (Moa's panel existed only while Moa was on, 2026-10-05, and Moa is gone), with the file tree as the only opt-in column on that edge and its toggle the titlebar's last icon. Every rail page, Bots included, fills the whole sheet. Bot rooms and 1:1s are read and answered on the Bots page only. Amends the frame, Titlebar › Right, Rail and pages, the Tools panel (now File tree column) and the 2026-10-12/2026-10-13 rows | The dock showed the same rooms as the Bots page, so the owner met every conversation twice and the Bots page had to cover the dock to avoid a second copy. One place for bot conversations, and the panes keep the dock's 248–320px |
+| 2026-10-14 | Owner decision: a bot worker's terminal opens in a worker panel beside its bot's chat on the Bots page — Open and Resume no longer jump to Workspaces or change the active workspace — and a conversation with live workers shows "N working" in its header with the workers as chips that open the panel | Bot workers are hidden from the Workspaces sidebar, so a jump landed on a workspace the owner could not find again; reading or answering a worker belongs next to the bot that started it. The chips answer "what is it doing right now" without scrolling to the foot of the chat |
 
 ### Desktop conversation view
 
