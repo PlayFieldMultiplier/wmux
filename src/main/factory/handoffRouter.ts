@@ -1011,7 +1011,9 @@ export class HandoffRouter {
     const r = item.reason;
     if (r.kind !== 'human') return Promise.resolve([]);
     const said = item.threadId ?? 'general';
-    const toMe = r.room !== true;
+    // Words to the whole room (every bot, or its coordinator for it) are
+    // not a 1:1 answer.
+    const toMe = r.room !== true && r.lead !== true;
     const text = typeof r.text === 'string' ? r.text : '';
     const asked = (h: Handoff) => h.from.kind === 'bot' && h.from.botId === botId
       && partyWorkspace(h.from) === item.workspaceId

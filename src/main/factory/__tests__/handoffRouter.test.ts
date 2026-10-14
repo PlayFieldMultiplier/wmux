@@ -944,6 +944,8 @@ describe('closing questions nobody needs to answer (A5)', () => {
     if (!greeting.ok) throw new Error('ask failed');
     now += 5;
     expect(await h.router.closeAnsweredInChat(other.id, { ...ownerWake('general', now), reason: { kind: 'human', text: 'Hi', source: 'desktop', room: true } })).toEqual([]);
+    // Nor do words to the room that only its coordinator got.
+    expect(await h.router.closeAnsweredInChat(other.id, { ...ownerWake('general', now), reason: { kind: 'human', text: 'Hi', source: 'desktop', lead: true } })).toEqual([]);
     expect(await h.router.closeAnsweredInChat(other.id, ownerWake('general', now))).toEqual([greeting.handoffId]);
     // A wake that is not the owner's words closes nothing.
     expect(await h.router.closeAnsweredInChat(lead.id, { ...ownerWake('pr:github.com/acme/app#2', now + 10), reason: { kind: 'manual', by: 'human' } })).toEqual([]);

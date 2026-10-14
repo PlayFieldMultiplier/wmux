@@ -169,15 +169,17 @@ export class WakeTaint {
    *  unmarked one from a bot is tainted. */
   handoffTainted(handoffId: string): boolean {
     const mark = this.marks.get(handoffId);
-    if (mark !== undefined) return mark;
+    if (mark === true) return true;
     let h: Handoff | null;
     try {
       h = this.ports.handoff(handoffId);
     } catch {
       return true;
     }
-    if (!h) return true;
-    return h.from.kind === 'bot';
+    if (!h) return mark ?? true;
+    // A researcher's handoff is tainted whatever mark it was given.
+    if (h.from.kind === 'bot' && this.alwaysTainted(h.from.botId)) return true;
+    return mark ?? h.from.kind === 'bot';
   }
 
   /** A handoff was delivered: mark it from its sender's running wake. Called

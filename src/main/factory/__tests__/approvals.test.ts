@@ -447,6 +447,8 @@ describe('typed approval (the owner\'s own words in the thread)', () => {
     // A reply to one approval card approves only that card's request.
     expect(typedApprovalTargets({ ...msg, replyTo: 'c1' } as never, pending as never, get, none)).toEqual(['apr-a']);
     expect(typedApprovalTargets({ ...msg, replyTo: 'c2' } as never, pending as never, get, none)).toEqual(['apr-b']);
+    // Even when the words woke another bot (a room's coordinator): the reply names the request.
+    expect(typedApprovalTargets({ ...msg, replyTo: 'c4' } as never, pending as never, get, none)).toEqual(['apr-other-bot']);
     expect(typedApprovalTargets({ ...msg, title: 'merge them and also delete the repo' } as never, pending as never, get, none)).toEqual([]);
     // Only the requests right above: the owner said something else at seq 4.
     const said = [{ seq: 4, kind: 'human', actor: { kind: 'human' }, title: 'Hi' }];

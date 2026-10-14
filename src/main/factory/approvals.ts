@@ -320,7 +320,7 @@ export function typedApprovalTargets(
   if (message.replyTo && cards(message.replyTo)?.kind !== 'approval') return [];
   // Only the bots the message was addressed to (main stamped them).
   const to = new Set([message.refs?.botId, ...(message.refs?.botIds ?? [])].filter((b): b is string => typeof b === 'string'));
-  if (to.size === 0) return [];
+  if (to.size === 0 && !message.replyTo) return [];
   // Right above the message: after the owner's previous message in the
   // thread that said something else (its words were about what came before
   // it); "merge it" said twice still means the same requests.
@@ -336,9 +336,11 @@ export function typedApprovalTargets(
   const reach = before.reduce((m, c) => Math.min(m, c.seq), Infinity);
   const above: Array<{ id: string; seq: number }> = [];
   for (const r of pending) {
-    if (r.state !== 'pending' || r.workspaceId !== message.workspaceId || r.threadId !== message.threadId || !r.cardId || !to.has(r.botId)) continue;
-    // A reply to one approval card is about that request only.
-    if (message.replyTo && r.cardId !== message.replyTo) continue;
+    if (r.state !== 'pending' || r.workspaceId !== message.workspaceId || r.threadId !== message.threadId || !r.cardId) continue;
+    // A reply to one approval card is about that request only, whoever the
+    // message woke (a room with a coordinator wakes only it); words that
+    // reply to no card approve only the addressees' requests.
+    if (message.replyTo ? r.cardId !== message.replyTo : !to.has(r.botId)) continue;
     const card = cards(r.cardId);
     if (!card || card.kind !== 'approval' || card.threadId !== message.threadId || card.seq >= message.seq || card.seq <= previousOwner) continue;
     if (before.length > 0 && card.seq < reach) continue;

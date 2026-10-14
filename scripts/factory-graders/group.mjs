@@ -43,8 +43,8 @@ export function coordinatorRoomWakesLeadOnly(snap, expect) {
       JSON.stringify(card?.refs ?? null)),
     criterion('only_the_lead_woken', human.length === 1 && human[0].botId === lead && human[0].state === 'done' && human[0].priority === 0,
       human.map((w) => `${w.botId}:${w.state}`).join(', ') || 'no wake'),
-    criterion('direct_not_room_wide', human.length === 1 && human[0].reason.room === undefined && human[0].reason.runId === runOf(msg?.id),
-      human.map((w) => `${w.reason.runId}/${w.reason.room}`).join(', ') || 'no wake'),
+    criterion('direct_not_room_wide', human.length === 1 && human[0].reason.room === undefined && human[0].reason.lead === true && human[0].reason.runId === runOf(msg?.id),
+      human.map((w) => `${w.reason.runId}/${w.reason.room}/${w.reason.lead}`).join(', ') || 'no wake'),
     criterion('one_directed_fact', facts.length === 1 && facts[0].ref?.botId === lead, `${facts.length} fact(s)`),
     criterion('lead_answered', botCards(snap, expect.lead).length === 1, `${botCards(snap, expect.lead).length} card(s)`),
   ];

@@ -197,7 +197,8 @@
      "text": "Can someone look at the login bug?",
      "source": "desktop",
      "clientMessageId": "c-mv87qpw4181507b845",
-     "runId": "run-c-mv87qpw4181507b845"
+     "runId": "run-c-mv87qpw4181507b845",
+     "lead": true
     },
     "threadId": "general",
     "priority": 0,
@@ -425,7 +426,8 @@
        "text": "Can someone look at the login bug?",
        "source": "desktop",
        "clientMessageId": "c-mv87qpw4181507b845",
-       "runId": "run-c-mv87qpw4181507b845"
+       "runId": "run-c-mv87qpw4181507b845",
+       "lead": true
       },
       "threadId": "general",
       "priority": 0,
@@ -479,6 +481,18 @@
     {
      "op": "remove",
      "path": "facts.0"
+    }
+   ]
+  },
+  {
+   "why": "the lead's wake does not say it came to the room",
+   "failing": [
+    "direct_not_room_wide"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.0.reason.lead"
     }
    ]
   }

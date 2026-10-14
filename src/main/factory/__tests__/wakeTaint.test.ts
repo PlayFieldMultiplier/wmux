@@ -138,6 +138,16 @@ describe('WakeTaint', () => {
     expect(broken.handoffTainted('h-dev')).toBe(true);
   });
 
+  it('a researcher\'s handoff marked clean before the rule existed reads tainted', () => {
+    const fromA = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), JSON.stringify({ version: 1, handoffs: { 'h-old': false, 'h-dev': false } }));
+    const t = make({ bot: (id) => (id === 'bot-a' ? { role: 'lead', template: 'researcher' } : { role: 'lead', template: 'developer' }) },
+      [], [handoff('h-old', fromA), handoff('h-dev', { kind: 'bot', workspaceId: 'ws', botId: 'bot-b' })]);
+    expect(t.handoffTainted('h-old')).toBe(true);
+    expect(t.handoffTainted('h-dev')).toBe(false);
+  });
+
   it('an unreadable marks file starts empty', () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');

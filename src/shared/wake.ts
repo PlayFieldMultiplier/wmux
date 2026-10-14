@@ -14,8 +14,10 @@ export type WakeReason =
   | { kind: 'handoff'; handoffId: string }
   /** `runId`: the run every wake of one owner message shares, so the
    *  handoffs its addressees send count against one chain (handoff.ts
-   *  HANDOFF_LIMITS). `room`: the message went to every bot of the room. */
-  | { kind: 'human'; text: string; source: 'desktop' | 'phone'; clientMessageId?: string; runId?: string; room?: true }
+   *  HANDOFF_LIMITS). `room`: the message went to every bot of the room.
+   *  `lead`: the message went to the room, which has a coordinator, so it
+   *  alone got it (humanMessage.ts). */
+  | { kind: 'human'; text: string; source: 'desktop' | 'phone'; clientMessageId?: string; runId?: string; room?: true; lead?: true }
   | { kind: 'schedule'; scheduleId: string }
   | { kind: 'manual'; by: 'human' }
   /** One firing of the bot's own routine (shared/botRoutine.ts). `dueAt`

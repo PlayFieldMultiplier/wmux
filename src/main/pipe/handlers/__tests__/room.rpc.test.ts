@@ -236,6 +236,27 @@ describe('room.post', () => {
     expect(s.writer.read('ws1').cards).toHaveLength(1);
   });
 
+  it('a room message keeps the mode it was posted with on a retry, whatever the room has become', async () => {
+    const dev = bot('ws1', 'lead');
+    const issue = bot('ws1', 'triage');
+    const bots = [dev, issue];
+    const s = setup(bots);
+    const full = new Set([issue.id]);
+    const enqueue = s.ports.wakes!.enqueue;
+    s.ports.wakes = { enqueue: (i) => (full.has(i.botId) ? null : enqueue(i)) };
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'queue_full' });
+    // A coordinator joins before the retry: the first card still went to the whole room.
+    bots.push(bot('ws1', 'moa'));
+    full.clear();
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    expect(s.wakes.map((w) => [w.botId, w.reason.kind === 'human' && w.reason.room, w.reason.kind === 'human' && w.reason.lead])).toEqual([[dev.id, true, undefined], [issue.id, true, undefined]]);
+    // A message to a room with a coordinator wakes it alone, marked as the room's lead.
+    const lead = await handleRoomPost({ workspaceId: 'ws1', title: 'Next task', clientPostId: 'cm-lead' }, OPERATOR, s.deps);
+    expect(lead).toMatchObject({ ok: true, addressees: [{ botId: bots[2].id }] });
+    expect(s.wakes[2].reason).toMatchObject({ kind: 'human', lead: true });
+    expect((s.wakes[2].reason as { room?: true }).room).toBeUndefined();
+  });
+
   it('humanAddressees: mentions win, then the phone\'s toBotId (enabled only), then the role, else the whole room', () => {
     const lead = bot('ws1', 'lead');
     const verifier = bot('ws1', 'verifier');
@@ -261,7 +282,7 @@ describe('room.post', () => {
     const offLead = bot('ws3', 'moa', { enabled: false });
     const ws3dev = bot('ws3', 'lead');
     const ports = { listEnabled: () => [far, younger, dev, lead, offLead, ws3dev] } as unknown as FactoryRoomPorts['bots'];
-    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead], room: false });
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead], room: false, lead: true });
     expect(humanAddressees(ports, 'ws1', { mentions: [dev.id] })).toEqual({ bots: [dev], room: false });
     expect(humanAddressees(ports, 'ws1', { toBotId: dev.id })).toEqual({ bots: [dev], room: false });
     // A disabled coordinator, or one in another workspace, leaves the room as it was.

@@ -40,6 +40,10 @@ describe('buildWakePrompt — group rooms and routines', () => {
     expect(text).toContain('Other bots in this room (mention them by id): Wmux Dev = bot-00000002; Wmux Issue x = bot-00000003');
     // A message to this bot alone says nothing of the room.
     expect(buildWakePrompt({ item: item({ kind: 'human', text: 'Hi', source: 'desktop' }), profile, roster })).not.toMatch(/every bot in it/);
+    // A message to a room with a coordinator reaches it alone, and says so.
+    const lead = buildWakePrompt({ item: item({ kind: 'human', text: 'Hi', source: 'desktop', lead: true }), profile, roster });
+    expect(lead).toMatch(/you alone got this message/);
+    expect(lead).not.toMatch(/every bot in it/);
   });
 
   it('a mention shows who said what, fenced as data; an unreadable one points to room_read', () => {

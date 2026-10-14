@@ -196,6 +196,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
   switch (r.kind) {
     case 'human':
       lines.push('', `Message from the owner (${r.source}):`, r.text);
+      if (r.lead) {
+        lines.push('', 'The owner wrote to the room without naming a bot. The room has you as its coordinator, so you alone got this message: answer it yourself, or hand the work to the bots that should do it.');
+      }
       if (r.room) {
         lines.push('', 'The owner wrote to the whole room: every bot in it got this message and may answer too. Say your own part. When your post speaks to another bot (answers it, asks it, offers it work), put its id in room_post mentions: a name in the text reaches nobody.');
       }

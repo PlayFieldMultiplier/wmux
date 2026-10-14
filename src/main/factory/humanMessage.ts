@@ -81,12 +81,13 @@ export function parseMentions(raw: unknown): string[] | null {
  *  the bot named by `toBotId` (the phone's bot) when it is enabled, else the
  *  `to` role's bot, else the room's oldest enabled coordinator, else every
  *  enabled bot of the room, oldest first (at most ROOM_LIMITS.MENTIONS_MAX).
- *  `room` is true for the last only. Pure over the directory. */
+ *  `room` is true for the last only, `lead` for the coordinator. Pure over
+ *  the directory. */
 export function humanAddressees(
   bots: FactoryRoomPorts['bots'] | undefined,
   workspaceId: string,
   addressing: { mentions?: readonly string[]; toBotId?: string; to?: unknown },
-): { bots: BotProfile[]; room: boolean } {
+): { bots: BotProfile[]; room: boolean; lead?: true } {
   const enabled = enabledBots(bots);
   if (addressing.mentions && addressing.mentions.length > 0) {
     const byId = new Map(enabled.map((b) => [b.id, b]));
@@ -103,7 +104,7 @@ export function humanAddressees(
   const inRoom = enabled.filter((b) => b.workspaceId === workspaceId).sort(byAge);
   // A room with a coordinator talks to it: it decides who else works.
   const lead = inRoom.find((b) => isCoordinatorBot(b));
-  if (lead) return { bots: [lead], room: false };
+  if (lead) return { bots: [lead], room: false, lead: true };
   // At most MENTIONS_MAX, the oldest: the card names every addressee
   // (refs.botIds), and a retry wakes from that list.
   return { bots: inRoom.slice(0, ROOM_LIMITS.MENTIONS_MAX), room: true };
@@ -174,7 +175,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
   const text = (typeof input.wakeText === 'string' && input.wakeText.trim()
     ? input.wakeText
     : typeof input.body === 'string' && input.body.trim() ? input.body : input.title).trim();
-  const wake = (card: RoomCard, to: BotProfile, said: string, room: boolean): string | undefined => {
+  const wake = (card: RoomCard, to: BotProfile, said: string, room: boolean, lead: boolean): string | undefined => {
     try {
       return ports.wakes?.enqueue({
         botId: to.id,
@@ -188,6 +189,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
           clientMessageId: card.id,
           runId: humanRunId(card.id),
           ...(room ? { room: true as const } : {}),
+          ...(lead ? { lead: true as const } : {}),
         },
         priority: 0,
         // Pinned to the card's thread, General included: the addressee sees
@@ -217,7 +219,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     };
   };
 
-  const { bots: to, room } = humanAddressees(ports.bots, workspaceId, { mentions: input.mentions, toBotId: input.toBotId, to: input.to });
+  const { bots: to, room, lead } = humanAddressees(ports.bots, workspaceId, { mentions: input.mentions, toBotId: input.toBotId, to: input.to });
   const botIds = to.map((b) => b.id);
   const refs: RoomCard['refs'] = { ...(input.refs ?? {}) };
   delete refs.botId;
@@ -248,11 +250,15 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     const fromCard = (card.body?.trim() ? card.body : card.title).trim();
     // The retry's whole message when the card holds its capped copy.
     const said = input.wakeText?.trim() && card.body !== undefined && capBody(input.wakeText) === card.body ? input.wakeText.trim() : fromCard;
+    // A message to the room keeps the mode it was posted with: its
+    // coordinator alone, or every bot it named.
+    const roomWide = !input.mentions?.length && input.toBotId === undefined && input.to === undefined;
+    const sentToLead = roomWide && ids.length === 1 && isCoordinatorBot(safeGet(ports, ids[0]));
     const results: HumanAddresseeResult[] = [];
     for (const id of ids) {
       const bot = safeGet(ports, id);
       if (!bot || !bot.enabled) continue;
-      const wakeId = wake(card, bot, said, room);
+      const wakeId = wake(card, bot, said, roomWide ? !sentToLead : room, roomWide ? sentToLead : lead === true);
       results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
     }
     return results.length > 0 ? answer(card, results, true) : r;
@@ -275,7 +281,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     } catch (err) {
       console.warn('[factory] rooms: human.message fact not written', err);
     }
-    const wakeId = wake(card, bot, text, room);
+    const wakeId = wake(card, bot, text, room, lead === true);
     results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
   }
   return answer(card, results, false);
