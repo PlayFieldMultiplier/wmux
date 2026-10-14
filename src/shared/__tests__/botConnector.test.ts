@@ -57,10 +57,10 @@ function lib(): Connector[] {
 
 describe('parseConnectorShape', () => {
   it('accepts a stdio and a remote connection and keeps only their own fields', () => {
-    const s = parseConnectorShape(stdio({ extra: 1 }));
+    const s = parseConnectorShape(stdio({ extra: 1 }), 'darwin');
     expect(s.ok && s.connector).toMatchObject({ name: 'files', transport: 'stdio', offFor: [] });
     expect(s.ok && 'extra' in s.connector).toBe(false);
-    expect(parseConnectorShape(remote()).ok).toBe(true);
+    expect(parseConnectorShape(remote(), 'darwin').ok).toBe(true);
   });
 
   it('refuses names that are malformed, reserved or would split a tool name two ways', () => {
@@ -123,7 +123,7 @@ describe('parseConnectorShape', () => {
   it('tools: valid names only; off-switches only on a connection for every bot', () => {
     expect(refusedField(stdio({ tools: { mode: 'all', blocked: ['bad name'] } }))).toBe('tools');
     expect(refusedField(stdio({ tools: { mode: 'some' } }))).toBe('tools');
-    const picked = parseConnectorShape(stdio({ scope: { kind: 'bots', botIds: [A] }, offFor: [B] }));
+    const picked = parseConnectorShape(stdio({ scope: { kind: 'bots', botIds: [A] }, offFor: [B] }), 'darwin');
     expect(picked.ok && picked.connector.offFor).toEqual([]);
   });
 });
