@@ -3788,8 +3788,7 @@ export const ko = {
   'botsPage.chat.closeWorker': "워커 터미널 닫기",
   'botsPage.chat.workerElsewhere': "이 워커는 브라우저나 편집기도 열고 있어서 여기로 옮기면 다시 로드돼요. 워크스페이스에 그대로 둬요.",
   'botsPage.chat.openInWorkspaces': "워크스페이스에서 열기",
-  'botsPage.chat.today': "오늘",
-  'botsPage.chat.yesterday': "어제",
+  'botsPage.chat.dateTime': "{date} {time}",
   'botsPage.chat.new': "새 메시지",
   'botsPage.chat.newCount': "새 메시지 {count}개",
   'botsPage.chat.replies': "답글 {count}개 · 마지막 {time}",
@@ -3816,4 +3815,5 @@ export const ko = {
   'botsPage.chat.copyCode': "복사",
   'botsPage.chat.copied': "복사됨",
   'botsPage.chat.unread': "읽지 않음 {count}개",
+  'botsPage.chat.add': "추가",
 } as const;

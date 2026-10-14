@@ -888,19 +888,49 @@ describe('Bots page', () => {
     expect(item.querySelector('.wmux-nav-badge')).toBeNull();
   });
 
-  it('messages are flat rows: a run of one author within ten minutes shows its header once', async () => {
-    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'And the second part', at: 205 }));
+  it('messages are bubbles in runs: in a room the name tops the run, the avatar sits beside its last bubble', async () => {
+    // Right after c2 (seq 2), before the owner's reply.
+    cards.splice(2, 0, { ...card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'And the second part', at: 205 }), seq: 2.5 });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    const first = q('[data-room-card-id="c2"]')!;
+    const next = q(`[data-room-card-id="${cards[2].id}"]`)!;
+    expect(first.querySelector('[data-bots-msg-head]')?.textContent).toBe('Lead');
+    expect(first.querySelector('.wmux-bots-bubble-bot')).not.toBeNull();
+    expect(first.getAttribute('data-run-end')).toBeNull();
+    expect(first.querySelector('[data-bot-avatar]')).toBeNull();
+    expect(next.getAttribute('data-continuation')).toBe('true');
+    expect(next.querySelector('[data-bots-msg-head]')).toBeNull();
+    expect(next.getAttribute('data-run-end')).toBe('true');
+    expect(next.querySelector('[data-bot-avatar]')).not.toBeNull();
+    // The owner's message is its own bubble on the right, read as markdown.
+    const mine = q('[data-bots-bubble="owner"]')!;
+    expect(mine.className).toContain('is-owner');
+    expect(mine.querySelector('.wmux-bots-bubble-owner')).not.toBeNull();
+    // A 1:1 needs no name above the run; the date and time divide.
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    expect(q('[data-room-card-id="c2"] [data-bots-msg-head]')).toBeNull();
+    expect(q('[data-bots-day]')?.textContent).toMatch(/\d/);
+  });
+
+  it('a PR link in a message is a chip; the composer is one pill with "+" offering first messages', async () => {
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Opened https://github.com/acme/api/pull/1 for review', at: 206 }));
     seedRooms();
     await render(<BotsPage />);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    const first = q('[data-room-card-id="c2"]')!;
-    const next = q(`[data-room-card-id="${cards[cards.length - 1].id}"]`)!;
-    expect(first.querySelector('[data-bots-msg-head]')?.textContent).toContain('Lead');
-    expect(next.getAttribute('data-continuation')).toBe('true');
-    expect(next.querySelector('[data-bots-msg-head]')).toBeNull();
-    // The owner's message is a flat row too, its text read as markdown.
-    expect(q('[data-bots-bubble="owner"]')?.className).toContain('wmux-bots-msg');
-    expect(q('[data-bots-day]')).not.toBeNull();
+    const chip = q('[data-bots-ref-chip="pr:github.com/acme/api#1"]')!;
+    expect(chip.textContent).toContain('#1');
+    // This conversation holds the PR's thread: the chip opens it beside the chat.
+    act(() => chip.click());
+    expect(q('[data-bots-thread-panel]')?.getAttribute('data-bots-thread-panel')).toBe('pr:github.com/acme/api#1');
+    act(() => q('[data-bots-thread-close]')!.click());
+    const form = q('[data-bots-chat] [data-testid="bots-composer"]')!;
+    expect(form.className).toContain('wmux-bots-composer-pill');
+    act(() => q('[data-bots-chat] [data-bots-composer-plus]')!.click());
+    act(() => q('[data-bots-composer-suggestion="botsPage.chat.suggestDo"]')!.click());
+    expect(q<HTMLTextAreaElement>('[data-bots-chat] [data-testid="bots-composer-input"]')?.value).toBe('What can you do?');
+    expect(q('[data-bots-composer-menu]')).toBeNull();
   });
 
   it('the working rail says who is working and for how long, and its Stop interrupts the turn only', async () => {

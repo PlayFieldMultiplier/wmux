@@ -4291,8 +4291,7 @@ export const en = {
   'botsPage.chat.closeWorker': "Close worker terminal",
   'botsPage.chat.workerElsewhere': "This worker also has a browser or an editor open, which would reload if it moved here. It stays on Workspaces.",
   'botsPage.chat.openInWorkspaces': "Open in Workspaces",
-  'botsPage.chat.today': "Today",
-  'botsPage.chat.yesterday': "Yesterday",
+  'botsPage.chat.dateTime': "{date} · {time}",
   'botsPage.chat.new': "New",
   'botsPage.chat.newCount': "{count} new",
   'botsPage.chat.replies': "{count} replies · last {time}",
@@ -4319,6 +4318,7 @@ export const en = {
   'botsPage.chat.copyCode': "Copy",
   'botsPage.chat.copied': "Copied",
   'botsPage.chat.unread': "{count} unread",
+  'botsPage.chat.add': "Add",
 } as const;
 
 export type TranslationKey = keyof typeof en;

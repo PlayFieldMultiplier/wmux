@@ -3534,8 +3534,7 @@ export const zh = {
   'botsPage.chat.closeWorker': "关闭工作者终端",
   'botsPage.chat.workerElsewhere': "此工作者还打开了浏览器或编辑器,移到这里会重新加载。它保留在工作区中。",
   'botsPage.chat.openInWorkspaces': "在工作区中打开",
-  'botsPage.chat.today': "今天",
-  'botsPage.chat.yesterday': "昨天",
+  'botsPage.chat.dateTime': "{date} {time}",
   'botsPage.chat.new': "新消息",
   'botsPage.chat.newCount': "{count} 条新消息",
   'botsPage.chat.replies': "{count} 条回复 · 最后 {time}",
@@ -3562,4 +3561,5 @@ export const zh = {
   'botsPage.chat.copyCode': "复制",
   'botsPage.chat.copied': "已复制",
   'botsPage.chat.unread': "{count} 条未读",
+  'botsPage.chat.add': "添加",
 } as const;

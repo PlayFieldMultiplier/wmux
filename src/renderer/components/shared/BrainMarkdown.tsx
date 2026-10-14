@@ -1,5 +1,5 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/features/sessions/ui/AgentTranscript.tsx), MIT License, Copyright (c) 2026 Nick
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { t } from '../../i18n';
 
 // ─── Command Deck — orchestrator prose markdown (dep-free subset) ────────────
@@ -37,6 +37,9 @@ export interface MarkdownOptions {
    *  boundary), a muted language label, a Copy that shows on hover or focus,
    *  and a 320px cap that scrolls inside. Off: the plain block. */
   richCode?: boolean;
+  /** Draw a link as something else (the Bots chat's PR and issue chips);
+   *  null keeps the plain link. Only with `links`. */
+  linkChip?: (url: string, label: string | null) => React.ReactNode | null;
 }
 
 /** A fenced code block with its language label and Copy (richCode). */
@@ -199,11 +202,13 @@ function renderInline(raw: string, keyPrefix: string, opts: MarkdownOptions = {}
         </em>,
       );
     } else if (opts.links && HTTP_URL.test(m)) {
-      parts.push(<ExternalLink key={`${keyPrefix}u${match.index}`} url={m}>{m}</ExternalLink>);
+      const chip = opts.linkChip?.(m, null);
+      parts.push(chip ? <Fragment key={`${keyPrefix}u${match.index}`}>{chip}</Fragment> : <ExternalLink key={`${keyPrefix}u${match.index}`} url={m}>{m}</ExternalLink>);
     } else {
       const link = m.match(/\[([^\]]+)\]\(([^)]+)\)/);
       if (link && opts.links && HTTP_URL.test(link[2].trim())) {
-        parts.push(<ExternalLink key={`${keyPrefix}l${match.index}`} url={link[2].trim()}>{link[1]}</ExternalLink>);
+        const chip = opts.linkChip?.(link[2].trim(), link[1]);
+        parts.push(chip ? <Fragment key={`${keyPrefix}l${match.index}`}>{chip}</Fragment> : <ExternalLink key={`${keyPrefix}l${match.index}`} url={link[2].trim()}>{link[1]}</ExternalLink>);
       } else if (link) {
         // Inert by convention (FileTreePanel does the same): the URL shows on
         // hover, and the deck never navigates on click.

@@ -4252,8 +4252,7 @@ export const pl = {
   'botsPage.chat.closeWorker': "Zamknij terminal workera",
   'botsPage.chat.workerElsewhere': "Ten worker ma też otwartą przeglądarkę lub edytor, które przeładowałyby się po przeniesieniu tutaj. Zostaje w Obszarach roboczych.",
   'botsPage.chat.openInWorkspaces': "Otwórz w Obszarach roboczych",
-  'botsPage.chat.today': "Dzisiaj",
-  'botsPage.chat.yesterday': "Wczoraj",
+  'botsPage.chat.dateTime': "{date} · {time}",
   'botsPage.chat.new': "Nowe",
   'botsPage.chat.newCount': "Nowe: {count}",
   'botsPage.chat.replies': "Odpowiedzi: {count} · ostatnia {time}",
@@ -4280,4 +4279,5 @@ export const pl = {
   'botsPage.chat.copyCode': "Kopiuj",
   'botsPage.chat.copied': "Skopiowano",
   'botsPage.chat.unread': "Nieprzeczytane: {count}",
+  'botsPage.chat.add': "Dodaj",
 } as const;

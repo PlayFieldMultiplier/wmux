@@ -145,9 +145,12 @@
   z-index: 2;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   pointer-events: none;
 }
+/* The pill floats centred; the narrow layout's back button stays left. */
+.wmux-bots-chat-head > .wmux-bots-back { position: absolute; left: 0; }
 .wmux-bots-chat-head > * { pointer-events: auto; }
 .wmux-bots-pill {
   display: inline-flex;
@@ -209,66 +212,77 @@
 .wmux-bots-scroll-wrap { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .wmux-bots-foot { flex-shrink: 0; }
 
-/* Messages are flat rows (owner decision 2026-10-14): a 28px gutter for the
-   author's face on a run's first row (its time on hover after that), the run
-   header, the text on the page itself. Runs sit 10px apart, a run's rows
-   touch. */
+/* Messages are bubbles in runs (owner decision 2026-10-14, the reference
+   messenger's look): a bot's on the left — its name above the run's first
+   bubble, its avatar once, beside the run's last — the owner's on the
+   right. A bubble is a soft fill with no border; runs sit 10px apart, a
+   run's bubbles 2px. */
 .wmux-bots-msg {
   display: flex;
-  gap: 10px;
+  align-items: flex-end;
+  gap: 8px;
   min-width: 0;
-  padding: 10px 8px 2px;
-  border-radius: 8px;
+  padding-top: 10px;
 }
-.wmux-bots-msg.is-continuation { padding-top: 0; }
-.wmux-bots-msg:hover { background: var(--hover-fill); }
+.wmux-bots-msg.is-continuation { padding-top: 2px; }
+.wmux-bots-msg.is-owner { justify-content: flex-end; }
 .wmux-bots-msg-gutter { width: 28px; flex-shrink: 0; }
-.wmux-bots-msg-hover-time {
-  display: block;
-  visibility: hidden;
-  font-size: 10px;
-  line-height: 21px;
-  color: var(--text-muted);
-  white-space: nowrap;
+.wmux-bots-msg-gutter:empty { height: 1px; }
+.wmux-bots-msg-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: min(36rem, 85%);
 }
-.wmux-bots-msg:hover .wmux-bots-msg-hover-time,
-.wmux-bots-msg:focus-within .wmux-bots-msg-hover-time { visibility: visible; }
-.wmux-bots-msg-main { flex: 1; min-width: 0; }
+.wmux-bots-msg.is-owner .wmux-bots-msg-main { align-items: flex-end; max-width: min(32rem, 80%); }
 .wmux-bots-msg-head {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
   min-width: 0;
+  max-width: 100%;
+  padding: 0 12px 2px;
   font-size: 12px;
-  color: var(--text-muted);
+  font-weight: var(--title-weight, 500);
 }
-.wmux-bots-msg-head > :first-child { font-size: 13px; }
+.wmux-bots-bubble {
+  max-width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 18px;
+}
+.wmux-bots-bubble-bot { background: var(--selection-subtle); }
+.wmux-bots-bubble-owner { background: color-mix(in srgb, var(--text-main) 10%, transparent); }
 .wmux-bots-prose {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-main);
   overflow-wrap: anywhere;
 }
-/* A card that waits on the owner keeps a boundary: the needs-you hairline,
-   no fill (one boundary). */
+.wmux-bots-prose > :first-child { margin-top: 0; }
+.wmux-bots-prose > :last-child { margin-bottom: 0; }
+/* A card that waits on the owner stays a distinct card inside the run: the
+   needs-you hairline, no fill (one boundary). */
 .wmux-bots-waiting {
-  margin-top: 2px;
-  padding: 8px 10px;
+  width: min(28rem, 100%);
+  padding: 8px 12px;
   border: 1px solid var(--attention-hairline);
-  border-radius: 10px;
+  border-radius: 14px;
 }
-.wmux-bots-owner-tile {
+/* A PR or issue link in a message: its mark, #N and its title. */
+.wmux-bots-ref-chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  gap: 4px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--chip-radius);
   background: var(--selection);
-  color: var(--text-sub);
   font-size: 12px;
-  font-weight: 600;
+  color: var(--text-main);
+  vertical-align: middle;
 }
+.wmux-bots-ref-chip:hover { background: var(--selection-hover); }
 .wmux-bots-thread-summary {
   display: inline-flex;
   align-items: center;
@@ -290,21 +304,11 @@
 }
 .wmux-bots-system { min-width: 0; max-width: min(640px, 100%); text-align: center; }
 
-/* A day's label: it sticks just under the pill row's fade while its day
-   scrolls. The label alone divides, on the page's own fill. */
+/* The date and time between runs: centred and muted, the label alone. */
 .wmux-bots-day {
-  position: sticky;
-  top: 60px;
-  z-index: 1;
   display: flex;
   justify-content: center;
-  padding: 12px 0 2px;
-  pointer-events: none;
-}
-.wmux-bots-day > span {
-  padding: 1px 8px;
-  border-radius: 9999px;
-  background: var(--bg-base);
+  padding: 16px 0 4px;
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -362,6 +366,56 @@
 .wmux-bots-suggestion:hover { background: var(--selection-hover); color: var(--text-main); }
 
 .wmux-bots-composer { flex-shrink: 0; padding: 4px 20px 16px; }
+/* The composer: one rounded pill — "+" on the left, the text, send on the
+   right — with its approve chip above and a room's @ chips under it. */
+.wmux-bots-composer-wrap { position: relative; display: flex; flex-direction: column; gap: 4px; }
+.wmux-bots-composer-pill {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 44px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--bg-base);
+}
+.wmux-bots-composer-pill:focus-within { border-color: var(--line-strong); }
+.wmux-bots-composer-plus,
+.wmux-bots-composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+}
+.wmux-bots-composer-plus { color: var(--text-sub); }
+.wmux-bots-composer-plus:hover:not(:disabled) { background: var(--hover-fill); color: var(--text-main); }
+.wmux-bots-composer-send { background: var(--primary-fill); color: var(--primary-ink); }
+.wmux-bots-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--primary-fill) 90%, transparent); }
+.wmux-bots-composer-send:disabled { background: var(--selection); color: var(--text-muted); }
+.wmux-bots-composer-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+  padding: 5px 4px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-main);
+  line-height: 1.4;
+  field-sizing: content;
+}
+.wmux-bots-composer-input::placeholder { color: var(--text-muted); }
+.wmux-bots-composer-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  width: min(320px, 100%);
+}
 
 /* The chat and, when one is open, a side panel beside it — a worker's
    terminal (BotsWorkerPanel) or a thread (BotsThreadPanel): one --stroke

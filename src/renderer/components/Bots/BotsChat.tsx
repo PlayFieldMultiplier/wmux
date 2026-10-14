@@ -1,15 +1,17 @@
 // ─── One Bots conversation, as a chat ────────────────────────────────────
 //
 // A 1:1 conversation is a bot's own room cards and the owner's messages to
-// it; a group is a workspace's whole room (botsModel.ts). Messages are flat
-// rows, not bubbles (owner decision 2026-10-14): left-aligned for everyone,
-// a run of one author's messages within ten minutes shows its avatar, name
-// and time once, and the rest of the run only its text (the time on hover).
-// Days are divided; consecutive system cards of one thread merge into one
-// quiet line (botsTimeline.ts). Only a card that waits on the owner — an
-// open question, plan, proposal, approval, key or login request — keeps a
-// bordered card with its answers (the room's own RoomCard / CardAnswers).
-// The column is capped at 44rem.
+// it; a group is a workspace's whole room (botsModel.ts). Messages are
+// bubbles in runs, as the reference messenger draws them (owner decision
+// 2026-10-14): a bot's on the left in soft fills — in a room its name above
+// the run's first bubble — and its avatar once, beside the run's last; the
+// owner's on the right. A run is one author's messages within ten minutes.
+// The date and time divide days and long quiets; consecutive system cards
+// of one thread merge into one quiet line (botsTimeline.ts). A card that
+// waits on the owner — an open question, plan, proposal, approval, key or
+// login request — stays a distinct card with its answers inside its run
+// (the room's own RoomCard / CardAnswers). PR and issue links are chips.
+// The column is capped at 44rem; the composer is one pill with "+".
 //
 // Threads: a non-General thread shows as its first card with "N replies ·
 // last 14:02" under it; that line (or the thread's chip) opens the thread in
@@ -42,7 +44,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { RoomCard as RoomCardData, ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import Button from '../ui/Button';
-import { renderBrainMarkdown } from '../shared/BrainMarkdown';
+import Popover from '../ui/Popover';
+import { IconPlus } from '../icons';
+import { renderBrainMarkdown, type MarkdownOptions } from '../shared/BrainMarkdown';
+import { getLocale } from '../../i18n';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
 import { useStore } from '../../stores';
 import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../Room/factoryPorts';
@@ -66,7 +71,7 @@ import BotsWorkerPanel from './BotsWorkerPanel';
 import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 import { BOTS_SESSION_START, selectWorkerPanelHost } from '../../stores/slices/roomSlice';
 import { routineScheduleText, routineStateText, useBotRoutines } from '../Schedules/BotRoutines';
-import { buildTimeline, clockTime, dayLabel, elapsed, fullTime, hasKindWord, splitThreads, threadCards, type ThreadView, type TimelineItem } from './botsTimeline';
+import { buildTimeline, clockTime, elapsed, fullTime, hasKindWord, separatorLabel, splitThreads, threadCards, type ThreadView, type TimelineItem } from './botsTimeline';
 import '../Chat/chatMono.css';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -110,8 +115,56 @@ function newClientPostId(): string {
 /** A task's title by its id, from the bots' task lists (null: unknown). */
 type TaskTitleOf = (taskId: string) => string | null;
 
+/** A pull request's or an issue's mark (12px line icon). */
+function RefIcon({ kind }: { kind: 'pr' | 'issue' }) {
+  return kind === 'pr' ? (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true" className="shrink-0">
+      <circle cx="3" cy="2.6" r="1.3" /><circle cx="3" cy="9.4" r="1.3" /><circle cx="9" cy="9.4" r="1.3" />
+      <path d="M3 3.9v4.2M9 8.1V5.2a1.8 1.8 0 0 0-1.8-1.8H5.4M6.6 2.2 5.4 3.4l1.2 1.2" />
+    </svg>
+  ) : (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true" className="shrink-0">
+      <circle cx="6" cy="6" r="4.6" /><circle cx="6" cy="6" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** A GitHub pull request or issue URL as its parts, or null. Pure. */
+export function githubRef(url: string): { repoKey: string; kind: 'pr' | 'issue'; number: number } | null {
+  const m = /^https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(pull|issues)\/(\d+)(?:[/#?].*)?$/i.exec(url.trim());
+  if (!m) return null;
+  return { repoKey: `github.com/${m[1]}/${m[2]}`, kind: m[3].toLowerCase() === 'pull' ? 'pr' : 'issue', number: Number(m[4]) };
+}
+
+/** A PR or issue link in a message, as a compact chip: its mark, `#N` and
+ *  its title when a thread of this room knows it. It opens that thread
+ *  beside the chat, else the page on GitHub. */
+function RefChip({ url, label, title, onOpen }: { url: string; label: string | null; title: string | null; onOpen: (() => void) | null }) {
+  const ref = githubRef(url)!;
+  const text = title ?? (label && label !== url ? label : null);
+  return (
+    <button
+      type="button"
+      data-bots-ref-chip={`${ref.kind}:${ref.repoKey}#${ref.number}`}
+      title={url}
+      onClick={() => { if (onOpen) onOpen(); else window.open(url, '_blank'); }}
+      className={`wmux-bots-ref-chip ${FOCUS_RING}`}
+    >
+      <RefIcon kind={ref.kind} />
+      <span className="shrink-0 font-mono">{`#${ref.number}`}</span>
+      {text && <span className="min-w-0 truncate">{text}</span>}
+    </button>
+  );
+}
+
+/** A bot's name above its run. Neutral until identity colours. */
+function botNameStyle(_botId: string): React.CSSProperties {
+  return { color: 'var(--text-sub)' };
+}
+
 /** The thread chip under a bubble (General has none): a PR or issue
- *  reference, else the thread's name in words; its id only in the tooltip. */
+ *  reference (with its mark), else the thread's name in words; its id only
+ *  in the tooltip. */
 function ThreadChip({ threadId, t, onPick, taskTitle }: { threadId: ThreadId; t: T; onPick: (id: ThreadId) => void; taskTitle?: TaskTitleOf }) {
   if (threadId === 'general') return null;
   const label = threadLabel(threadId, t, taskTitle);
@@ -122,9 +175,11 @@ function ThreadChip({ threadId, t, onPick, taskTitle }: { threadId: ThreadId; t:
       data-bots-thread-chip={threadId}
       onClick={() => onPick(threadId)}
       title={ref ? t('botsPage.showThread', { thread: label }) : `${t('botsPage.showThread', { thread: label })} · ${threadRef(threadId, t)}`}
-      className={`h-[20px] max-w-full truncate px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] ${ref ? 'font-mono' : ''} text-[11px] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] ${FOCUS_RING}`}
+      className={`inline-flex h-[20px] max-w-full items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] ${ref ? 'font-mono' : ''} text-[11px] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] ${FOCUS_RING}`}
     >
-      {label}
+      {/^pr:/.test(threadId) && <RefIcon kind="pr" />}
+      {/^issue:/.test(threadId) && <RefIcon kind="issue" />}
+      <span className="min-w-0 truncate">{label}</span>
     </button>
   );
 }
@@ -176,19 +231,15 @@ interface RowCtx {
   /** Opens a thread in the side panel. */
   onThread: (workspaceId: string, threadId: ThreadId) => void;
   onOpenBot?: (botId: string) => void;
-}
-
-/** The owner's tile in the gutter: the first letter of "You" on the
- *  selection fill (there is no owner picture). */
-function OwnerTile({ t }: { t: T }) {
-  const you = t('room.actor.you');
-  return <span aria-hidden="true" className="wmux-bots-owner-tile">{Array.from(you)[0] ?? ''}</span>;
+  /** How message text renders: links (PR and issue links as chips), rich
+   *  code blocks. */
+  markdown: MarkdownOptions;
 }
 
 /** A bot message's prose: the title and the body as one text in one colour,
  *  then the answers it waits for (a plan's Approve / Edit / Decline…), and a
  *  `job_changed` card's Undo. */
-function BotProse({ card, answers, ctx }: { card: RoomCardData; answers: boolean; ctx: RowCtx }) {
+function BotProse({ card, answers, waiting, ctx }: { card: RoomCardData; answers: boolean; waiting: boolean; ctx: RowCtx }) {
   const { t } = ctx;
   const [editing, setEditing] = useState(false);
   // The answers can leave mid-edit (the plan was answered elsewhere, a newer
@@ -198,13 +249,26 @@ function BotProse({ card, answers, ctx }: { card: RoomCardData; answers: boolean
   const shown = ownerCardText(card, ctx.botNames, ctx.idLabels);
   const title = isPlan ? planTextWithNames(shown.title, ctx.nameOf, t) : shown.title;
   const body = (isPlan ? planTextWithNames(shown.body, ctx.nameOf, t) : shown.body).trim();
+  const tone = cardTone(card);
   return (
     <>
-      <div className="wmux-bots-prose break-words">{title}</div>
+      {(hasKindWord(card) || (tone && tone.word !== 'done')) && (
+        <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]" data-bots-kind>
+          {hasKindWord(card) && (
+            <span className={card.kind === 'refusal' ? 'text-[var(--accent-red)]' : card.kind === 'budget' ? 'text-[var(--accent-yellow)]' : waiting ? 'text-[var(--attention-text)]' : undefined}>
+              {kindLabel(card.kind, t)}
+            </span>
+          )}
+          {tone && tone.word !== 'done' && (
+            <span data-card-verdict={tone.word} className={tone.tone === 'danger' ? 'text-[var(--accent-red)]' : undefined}>{t(`room.verdict.${tone.word}`)}</span>
+          )}
+        </div>
+      )}
+      <div className="wmux-bots-prose break-words">{renderBrainMarkdown(title, ctx.markdown)}</div>
       {answers && <CardAnswers card={card} workspaceId={card.workspaceId} t={t} api={ctx.api === undefined ? roomsApi() : ctx.api} onEditingChange={setEditing} readOnly={ctx.readOnly} />}
       {body && !editing && (
         <div data-card-body className="wmux-bots-prose mt-1 break-words">
-          {renderBrainMarkdown(body, { links: true, richCode: true })}
+          {renderBrainMarkdown(body, ctx.markdown)}
         </div>
       )}
       {card.kind === 'job_changed' && ctx.jobPort && <JobChangeUndo card={card} t={t} jobPort={ctx.jobPort} />}
@@ -231,10 +295,12 @@ function ThreadSummaryLine({ thread, ctx }: { thread: ThreadView; ctx: RowCtx })
   );
 }
 
-/** One message as a flat row: the gutter (the author's face on a run's
- *  first row, the time on hover after it), the run header, the text. */
-function MessageRow({ item, ctx }: { item: Extract<TimelineItem, { kind: 'message' }>; ctx: RowCtx }) {
-  const { card, continuation, waiting, thread } = item;
+/** One message in its run: a bot's on the left — its name above the run's
+ *  first bubble (in a room), its avatar once, beside the run's last bubble —
+ *  the owner's on the right. A bubble is a soft fill with no border; a card
+ *  that waits on the owner is a distinct card inside the run. */
+function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'message' }>; ctx: RowCtx; group: boolean }) {
+  const { card, continuation, runEnd, waiting, thread } = item;
   const { t } = ctx;
   const human = card.actor.kind === 'human';
   const botId = card.actor.kind === 'bot' ? card.actor.botId : '';
@@ -244,60 +310,64 @@ function MessageRow({ item, ctx }: { item: Extract<TimelineItem, { kind: 'messag
   // A bot the runtime no longer lists still gets a face: its name as the room knows it.
   const face = botRow?.bot ?? (role ? { id: botId, name, role } : null);
   // An open question is the room's own card (its own header and border,
-  // answered in place); with the bots off it reads as text.
+  // answered in place); with the bots off it reads as a bubble.
   const question = card.kind === 'question' && !ctx.readOnly;
   // An approval card always shows its request's state (answers only while
   // the bots run); a plan or proposal its answers while it waits.
   const answers = !human && ((!ctx.readOnly && waiting) || card.kind === 'approval');
-  const tone = cardTone(card);
   const line = human && card.id in ctx.sent ? deliveryLine(ctx.sent[card.id], ctx.bots, t) : null;
   const linked = linkedThread(card);
   const chip = (id: ThreadId) => <ThreadChip threadId={id} t={t} onPick={(th) => ctx.onThread(card.workspaceId, th)} taskTitle={ctx.taskTitle} />;
+  const chips = (card.threadId !== 'general' || linked || line) && (
+    <div className={`mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 ${human ? 'justify-end' : ''}`}>
+      {card.threadId !== 'general' && chip(card.threadId)}
+      {linked && chip(linked)}
+      {line && <span data-bots-delivery className="text-[11px] text-[var(--text-muted)]">{line}</span>}
+    </div>
+  );
+  if (human) {
+    return (
+      <div
+        className={`wmux-bots-msg is-owner${continuation ? ' is-continuation' : ''}`}
+        data-room-card-id={card.id}
+        data-bots-bubble="owner"
+        data-continuation={continuation ? 'true' : undefined}
+      >
+        <div className="wmux-bots-msg-main">
+          <div className="wmux-bots-bubble wmux-bots-bubble-owner wmux-bots-prose" title={fullTime(card.at)}>
+            {renderBrainMarkdown((card.body?.trim() ? card.body : card.title).trim(), ctx.markdown)}
+          </div>
+          {chips}
+          {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       className={`wmux-bots-msg${continuation ? ' is-continuation' : ''}`}
       data-room-card-id={question ? undefined : card.id}
-      data-bots-bubble={human ? 'owner' : question ? 'card' : 'bot'}
+      data-bots-bubble={question ? 'card' : 'bot'}
       data-card-kind={card.kind}
       data-continuation={continuation ? 'true' : undefined}
+      data-run-end={runEnd ? 'true' : undefined}
       data-waits-on-owner={waiting && !question ? 'true' : undefined}
     >
-      <div className="wmux-bots-msg-gutter">
-        {continuation
-          ? <span className="wmux-bots-msg-hover-time tabular-nums" title={fullTime(card.at)}>{clockTime(card.at)}</span>
-          : human ? <OwnerTile t={t} /> : face ? <BotAvatar bot={face} size={28} /> : null}
-      </div>
+      <div className="wmux-bots-msg-gutter">{runEnd && face ? <BotAvatar bot={face} size={28} /> : null}</div>
       <div className="wmux-bots-msg-main">
-        {!continuation && !question && (
+        {!continuation && group && (
           <div className="wmux-bots-msg-head" data-bots-msg-head>
-            <span className="truncate font-[var(--title-weight,500)] text-[var(--text-main)]">{name}</span>
-            {hasKindWord(card) && (
-              <span className={card.kind === 'refusal' ? 'text-[var(--accent-red)]' : card.kind === 'budget' ? 'text-[var(--accent-yellow)]' : waiting ? 'text-[var(--attention-text)]' : undefined}>
-                {kindLabel(card.kind, t)}
-              </span>
-            )}
-            {tone && tone.word !== 'done' && (
-              <span data-card-verdict={tone.word} className={tone.tone === 'danger' ? 'text-[var(--accent-red)]' : undefined}>{t(`room.verdict.${tone.word}`)}</span>
-            )}
-            <span className="tabular-nums" title={fullTime(card.at)}>{clockTime(card.at)}</span>
+            <span className="truncate" style={botNameStyle(botId)}>{name}</span>
           </div>
         )}
         {question ? (
           <RoomCard card={card} workspaceId={card.workspaceId} t={t} bots={ctx.bots} roomsBridge={ctx.api} now={ctx.now} />
-        ) : human ? (
-          <div className="wmux-bots-prose break-words">{renderBrainMarkdown((card.body?.trim() ? card.body : card.title).trim(), { links: true, richCode: true })}</div>
         ) : (
-          <div className={waiting ? 'wmux-bots-waiting' : undefined}>
-            <BotProse card={card} answers={answers} ctx={ctx} />
+          <div className={waiting ? 'wmux-bots-waiting' : 'wmux-bots-bubble wmux-bots-bubble-bot'} title={fullTime(card.at)}>
+            <BotProse card={card} answers={answers} waiting={waiting} ctx={ctx} />
           </div>
         )}
-        {(card.threadId !== 'general' || linked || line) && (
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
-            {card.threadId !== 'general' && chip(card.threadId)}
-            {linked && chip(linked)}
-            {line && <span data-bots-delivery className="text-[11px] text-[var(--text-muted)]">{line}</span>}
-          </div>
-        )}
+        {chips}
         {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
       </div>
     </div>
@@ -349,18 +419,18 @@ function SystemGroup({ cards, ctx }: { cards: RoomCardData[]; ctx: RowCtx }) {
   );
 }
 
-/** A day's label between days; it sticks under the name pill while its day
- *  scrolls. No rule: the label alone divides (one boundary). */
+/** The date and time, centred and muted, at a new day and after an hour's
+ *  quiet. No rule: the label alone divides (one boundary). */
 function DayDivider({ at, ctx }: { at: number; ctx: RowCtx }) {
   return (
     <div className="wmux-bots-day" data-bots-day role="separator">
-      <span title={fullTime(at)}>{dayLabel(at, ctx.now ?? Date.now(), ctx.t)}</span>
+      <span title={fullTime(at)}>{separatorLabel(at, ctx.now ?? Date.now(), ctx.t, getLocale())}</span>
     </div>
   );
 }
 
 /** A timeline's rows. */
-function TimelineView({ items, ctx }: { items: readonly TimelineItem[]; ctx: RowCtx }) {
+function TimelineView({ items, ctx, group = false }: { items: readonly TimelineItem[]; ctx: RowCtx; group?: boolean }) {
   return (
     <>
       {items.map((item) => {
@@ -369,7 +439,7 @@ function TimelineView({ items, ctx }: { items: readonly TimelineItem[]; ctx: Row
           case 'new': return <div key={item.key} className="wmux-bots-new" data-bots-new-divider role="separator"><span>{ctx.t('botsPage.chat.new')}</span></div>;
           case 'joined': return <JoinedLine key={item.key} row={item.row} t={ctx.t} onOpen={ctx.onOpenBot} />;
           case 'system': return <SystemGroup key={item.key} cards={item.cards} ctx={ctx} />;
-          case 'message': return <MessageRow key={item.key} item={item} ctx={ctx} />;
+          case 'message': return <MessageRow key={item.key} item={item} ctx={ctx} group={group} />;
         }
       })}
     </>
@@ -657,11 +727,11 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx, wait
         </button>
       </div>
       <div ref={scrollRef} className="wmux-bots-side-scroll" role="log" aria-label={label}>
-        <TimelineView items={rootItems} ctx={ctx} />
+        <TimelineView items={rootItems} ctx={ctx} group={conversation.kind === 'room'} />
         <p className="wmux-bots-side-count" data-bots-thread-count={replies.length}>
           {replies.length === 1 ? t('botsPage.chat.replyCountOne') : t('botsPage.chat.replyCount', { count: replies.length })}
         </p>
-        <TimelineView items={replyItems} ctx={ctx} />
+        <TimelineView items={replyItems} ctx={ctx} group={conversation.kind === 'room'} />
       </div>
       <div className="wmux-bots-composer">
         <BotsComposer
@@ -844,16 +914,81 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     }
   };
   const line = error ?? refusal;
+  // "+": what to put in the box — a suggested message, or (in a room) a bot
+  // to address. It closes on a pick, Escape or a press outside it.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!menuRef.current?.contains(target) && !plusRef.current?.contains(target)) setMenuOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setMenuOpen(false);
+      plusRef.current?.focus();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [menuOpen]);
+  const putText = (value: string) => {
+    textNow.current = value;
+    setText(value);
+    setMenuOpen(false);
+    inputRef.current?.focus();
+  };
+  const roomCandidates = conversation.kind === 'room' ? roomBots(bots, workspaceId) : [];
   return (
+    <div className="wmux-bots-composer-wrap">
+      <ApprovePendingChip ids={pendingIds} t={t} />
+      {menuOpen && (
+        <Popover ref={menuRef} role="menu" data-bots-composer-menu aria-label={t('botsPage.chat.add')} className="wmux-bots-composer-menu">
+          {SUGGESTION_KEYS.map((key) => (
+            <button key={key} type="button" role="menuitem" data-bots-composer-suggestion={key} className="ui-section-row w-full text-left text-[13px]" onClick={() => putText(t(key))}>{t(key)}</button>
+          ))}
+          {roomCandidates.map((row) => (
+            <button
+              key={row.bot.id}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={picks.picked.includes(row.bot.id)}
+              data-bots-composer-mention={row.bot.id}
+              className="ui-section-row w-full text-left text-[13px]"
+              onClick={() => { picks.toggle(row.bot.id); setMenuOpen(false); inputRef.current?.focus(); }}
+            >
+              {`@${row.bot.name}`}
+            </button>
+          ))}
+        </Popover>
+      )}
     <form
       onSubmit={(e) => void submit(e)}
       data-testid="bots-composer"
       data-channel-composer
       data-in-flight={inFlight ? 'true' : 'false'}
-      className="wmux-channel-composer wmux-chat-composer"
+      className="wmux-bots-composer-pill"
     >
-      <ApprovePendingChip ids={pendingIds} t={t} />
-      <div className="relative flex items-end gap-2">
+        <button
+          ref={plusRef}
+          type="button"
+          data-bots-composer-plus
+          aria-label={t('botsPage.chat.add')}
+          title={t('botsPage.chat.add')}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          disabled={!!refusal}
+          onClick={() => setMenuOpen((v) => !v)}
+          className={`wmux-bots-composer-plus ${FOCUS_RING}`}
+        >
+          <IconPlus size={16} />
+        </button>
         <textarea
           ref={inputRef}
           rows={1}
@@ -868,7 +1003,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
             if (error) setError(null);
           }}
           onKeyDown={onKeyDown}
-          className="wmux-chat-input wmux-channel-input text-[14px]"
+          className="wmux-bots-composer-input text-[14px]"
         />
         <button
           type="submit"
@@ -876,14 +1011,14 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           disabled={!text.trim() || inFlight || !!refusal}
           aria-label={t('room.composer.send')}
           title={t('room.composer.send')}
-          className="wmux-chat-send wmux-chat-icon-button wmux-channel-send"
+          className={`wmux-bots-composer-send ${FOCUS_RING}`}
         >
           <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <line x1="7" y1="11" x2="7" y2="3" />
             <polyline points="3.5,6.5 7,3 10.5,6.5" />
           </svg>
         </button>
-      </div>
+    </form>
       {conversation.kind === 'room' && !refusal && (
         <MentionChips candidates={roomBots(bots, workspaceId)} bots={bots} picked={picks.picked} onToggle={picks.toggle} t={t} testId="bots-composer" />
       )}
@@ -892,7 +1027,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           {line}
         </p>
       )}
-    </form>
+    </div>
   );
 }
 
@@ -1238,7 +1373,22 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     setOpenThread({ workspaceId, threadId });
   }, []);
   const shown = shownId && !openThread ? workerPanelView(shownId, workers, tasks, t) : null;
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, onThread, onOpenBot };
+  // PR and issue links become chips: titled from a thread this conversation
+  // holds, which they open beside the chat.
+  const roomThreads = useStore((s) => s.roomThreads);
+  const markdown = useMemo((): MarkdownOptions => ({
+    links: true,
+    richCode: true,
+    linkChip: (url, label) => {
+      const ref = githubRef(url);
+      if (!ref) return null;
+      const threadId = `${ref.kind}:${ref.repoKey}#${ref.number}` as ThreadId;
+      const holder = cards.find((c) => c.threadId === threadId);
+      const summary = holder ? roomThreads[holder.workspaceId]?.find((th) => th.threadId === threadId) : undefined;
+      return <RefChip url={url} label={label} title={summary?.title ?? null} onOpen={holder ? () => onThread(holder.workspaceId, threadId) : null} />;
+    },
+  }), [cards, roomThreads, onThread]);
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, onThread, onOpenBot, markdown };
   const threadShown = openThread ? threadCards(cards, openThread.workspaceId, openThread.threadId) : null;
   const empty = items.length === 0 && workers.length === 0 && tasks.length === 0;
 
@@ -1258,7 +1408,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
           disabled={conversation.kind !== 'bot'}
           className={`wmux-bots-pill ${FOCUS_RING}`}
         >
-          {conversation.kind === 'bot' ? <BotAvatar bot={conversation.row.bot} size={20} /> : <RoomAvatar bots={conversation.bots} size={20} />}
+          {conversation.kind === 'bot' ? <BotAvatar bot={conversation.row.bot} size={20} /> : <RoomAvatar bots={conversation.bots} size={20} layout="row" />}
           <span className="min-w-0 truncate text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]">{title}</span>
           {presence && <PresenceDot presence={presence} />}
           {group && <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{conversation.bots.length === 1 ? t('botsPage.botCountOne') : t('botsPage.botCount', { count: conversation.bots.length })}</span>}
@@ -1292,7 +1442,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
             {empty && conversation.kind === 'room' && (
               <p data-bots-empty-chat className="py-8 text-center text-[12px] text-[var(--text-muted)]">{t('botsPage.noMessages')}</p>
             )}
-            <TimelineView items={items} ctx={ctx} />
+            <TimelineView items={items} ctx={ctx} group={group} />
           </div>
         </div>
         {newCount > 0 && (

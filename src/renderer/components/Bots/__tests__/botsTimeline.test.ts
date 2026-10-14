@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RoomCard } from '../../../../shared/room';
 import type { RoomEntry } from '../botsModel';
-import { RUN_WINDOW_MS, buildTimeline, dayLabel, elapsed, splitThreads, threadCards, unreadCount } from '../botsTimeline';
+import { RUN_WINDOW_MS, SEPARATOR_GAP_MS, buildTimeline, elapsed, separatorLabel, splitThreads, threadCards, unreadCount } from '../botsTimeline';
 
 let seq = 0;
 function card(p: Partial<RoomCard> = {}): RoomCard {
@@ -11,7 +11,7 @@ function card(p: Partial<RoomCard> = {}): RoomCard {
 const entries = (cards: RoomCard[]): RoomEntry[] => cards.map((c) => ({ kind: 'card', card: c }));
 const T0 = new Date(2026, 9, 14, 9, 0).getTime();
 const never = () => false;
-const t = (key: string) => key;
+const t = (key: string, vars?: Record<string, string | number>) => (vars ? `${key}(${Object.values(vars).join('|')})` : key);
 
 describe('buildTimeline', () => {
   it('continues a run for one author within ten minutes, and starts one otherwise', () => {
@@ -21,16 +21,24 @@ describe('buildTimeline', () => {
     const d = card({ at: T0 + 2 * RUN_WINDOW_MS + 2, actor: { kind: 'human' }, kind: 'human' });
     const msgs = buildTimeline(entries([a, b, c, d]), { waits: never }).filter((i) => i.kind === 'message');
     expect(msgs.map((i) => i.kind === 'message' && i.continuation)).toEqual([false, true, false, false]);
+    // The run's avatar sits beside its last bubble.
+    expect(msgs.map((i) => i.kind === 'message' && i.runEnd)).toEqual([false, true, true, true]);
   });
 
-  it('a card that waits on the owner, or one with a kind word, never continues a run', () => {
+  it('a card that waits on the owner, or one with a kind word, stays inside its run', () => {
     const a = card({ at: T0 });
     const q = card({ at: T0 + 1, kind: 'question', state: 'open' });
-    const after = card({ at: T0 + 2 });
     const verdict = card({ at: T0 + 3, kind: 'verdict' });
-    const msgs = buildTimeline(entries([a, q, after, verdict]), { waits: (x) => x.id === q.id }).filter((i) => i.kind === 'message');
-    expect(msgs.map((i) => i.kind === 'message' && i.continuation)).toEqual([false, false, false, false]);
+    const msgs = buildTimeline(entries([a, q, verdict]), { waits: (x) => x.id === q.id }).filter((i) => i.kind === 'message');
+    expect(msgs.map((i) => i.kind === 'message' && i.continuation)).toEqual([false, true, true]);
     expect(msgs[1].kind === 'message' && msgs[1].waiting).toBe(true);
+  });
+
+  it('separates a new day and an hour\'s quiet with the date and time', () => {
+    const a = card({ at: T0 });
+    const b = card({ at: T0 + SEPARATOR_GAP_MS });
+    const kinds = buildTimeline(entries([a, b]), { waits: never }).map((i) => i.kind);
+    expect(kinds).toEqual(['day', 'message', 'day', 'message']);
   });
 
   it('divides days and merges consecutive system cards of one thread, never across threads', () => {
@@ -70,10 +78,11 @@ describe('splitThreads', () => {
 });
 
 describe('time and counts', () => {
-  it('labels days Today / Yesterday / a date, and elapsed time as m:ss', () => {
-    expect(dayLabel(T0, T0 + 1000, t)).toBe('botsPage.chat.today');
-    expect(dayLabel(T0 - 24 * 3600_000, T0, t)).toBe('botsPage.chat.yesterday');
-    expect(dayLabel(T0 - 5 * 24 * 3600_000, T0, t)).not.toMatch(/^botsPage/);
+  it('labels a separator with the weekday, date and time in the reader\'s language, and elapsed time as m:ss', () => {
+    expect(separatorLabel(new Date(2026, 9, 11, 20, 37).getTime(), T0, t, 'en-US')).toBe('botsPage.chat.dateTime(Sun, Oct 11|8:37 PM)');
+    // The day period's wording depends on the ICU data present (Electron's says 오후).
+    expect(separatorLabel(new Date(2026, 9, 11, 20, 37).getTime(), T0, t, 'ko')).toMatch(/^botsPage\.chat\.dateTime\(10월 11일 \(일\)\|.*8:37\)$/);
+    expect(separatorLabel(new Date(2025, 9, 11, 20, 37).getTime(), T0, t, 'en-US')).toContain('2025');
     expect(elapsed(14_000)).toBe('0:14');
     expect(elapsed(3_725_000)).toBe('1:02:05');
   });

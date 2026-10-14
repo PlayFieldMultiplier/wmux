@@ -1,15 +1,15 @@
 // ─── A Bots conversation as a flat timeline (owner decision 2026-10-14) ────
 //
-// Messages are flat rows, not bubbles. The history becomes a list of items:
-// a day divider, the session's "New" divider, a bot's "joined" line, a
-// system line (consecutive system cards of one thread merged into one), and
-// messages. A message continues the run above it — no avatar, no name, its
-// time only on hover — when the same author wrote it less than ten minutes
-// after the previous one with nothing between them. A card that waits on the
-// owner (an open question, plan, proposal, approval, key or login request)
-// keeps its bordered card, so it never continues a run nor is continued, and
-// a card with a kind word (Verdict, Report…) starts a run so its header can
-// carry the word.
+// Messages are bubbles in runs, as the reference messenger draws them: the
+// history becomes a list of items — a date and time separator, the
+// session's "New" divider, a bot's "joined" line, a system line
+// (consecutive system cards of one thread merged into one), and messages. A
+// message continues the run above it when the same author wrote it less
+// than ten minutes after the previous one with nothing between them; a run
+// shows its author's name above its first bubble and the author's avatar
+// once, beside its last (`runEnd`). A card that waits on the owner stays in
+// its run as a distinct card. A separator comes at each new day and after an
+// hour's quiet.
 //
 // Threads (owner decision 2026-10-14): a non-General thread shows in the main
 // timeline as its first card (the root), with "N replies · last 14:02" under
@@ -27,7 +27,10 @@ type T = (key: string, vars?: Record<string, string | number>) => string;
 /** A run of one author's messages holds while each follows the last by less than this. */
 export const RUN_WINDOW_MS = 10 * 60_000;
 
-/** The kinds that read as plain speech: no kind word in the run header. */
+/** A quiet this long brings a date and time separator, as a new day does. */
+export const SEPARATOR_GAP_MS = 60 * 60_000;
+
+/** The kinds that read as plain speech: no kind word in the bubble. */
 const PLAIN_KINDS: ReadonlySet<RoomCard['kind']> = new Set<RoomCard['kind']>(['opinion', 'status', 'human']);
 
 /** A thread as its root's summary line shows it. */
@@ -45,7 +48,7 @@ export type TimelineItem =
   | { kind: 'new'; key: string }
   | { kind: 'joined'; key: string; row: FactoryBotRow }
   | { kind: 'system'; key: string; cards: RoomCard[] }
-  | { kind: 'message'; key: string; card: RoomCard; continuation: boolean; waiting: boolean; thread?: ThreadView };
+  | { kind: 'message'; key: string; card: RoomCard; continuation: boolean; runEnd: boolean; waiting: boolean; thread?: ThreadView };
 
 /** The key a thread is known by: a thread id is a room's own, so a 1:1
  *  (which spans rooms) keys it with its workspace. */
@@ -116,14 +119,16 @@ export function buildTimeline(entries: readonly RoomEntry[], opts: {
 }): TimelineItem[] {
   const out: TimelineItem[] = [];
   let day = '';
+  let lastAt = -Infinity;
   let newPlaced = opts.newAfter == null;
   for (const entry of entries) {
     const at = entryAt(entry);
     const d = dayKey(at);
-    if (d !== day) {
+    if (d !== day || at - lastAt >= SEPARATOR_GAP_MS) {
       day = d;
-      out.push({ kind: 'day', key: `day:${d}`, at });
+      out.push({ kind: 'day', key: `day:${at}:${out.length}`, at });
     }
+    lastAt = Math.max(lastAt, at);
     if (!newPlaced && entry.kind === 'card' && entry.card.actor.kind !== 'human' && at > (opts.newAfter as number)) {
       newPlaced = true;
       out.push({ kind: 'new', key: 'new' });
@@ -145,12 +150,11 @@ export function buildTimeline(entries: readonly RoomEntry[], opts: {
     }
     const waiting = opts.waits(card);
     const continuation = prev?.kind === 'message'
-      && !waiting && !prev.waiting
-      && PLAIN_KINDS.has(card.kind)
       && author(prev.card) === author(card)
       && card.at - prev.card.at < RUN_WINDOW_MS;
+    if (continuation && prev.kind === 'message') prev.runEnd = false;
     const thread = opts.threads?.get(card.id);
-    out.push({ kind: 'message', key: card.id, card, continuation, waiting, ...(thread ? { thread } : {}) });
+    out.push({ kind: 'message', key: card.id, card, continuation, runEnd: true, waiting, ...(thread ? { thread } : {}) });
   }
   return out;
 }
@@ -172,18 +176,17 @@ export function fullTime(at: number): string {
   return new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-/** A day divider's label: Today, Yesterday, or the date (with the year
- *  when it is not this year's). */
-export function dayLabel(at: number, now: number, t: T): string {
-  if (dayKey(at) === dayKey(now)) return t('botsPage.chat.today');
-  const y = new Date(now);
-  y.setDate(y.getDate() - 1);
-  if (dayKey(at) === dayKey(y.getTime())) return t('botsPage.chat.yesterday');
+/** A separator's label in the reader's language: the date with its weekday
+ *  and the time ("Sun, Oct 11 · 8:37 PM", "10월 11일 (일) 오후 8:37"); the
+ *  year only when it is not this year's. */
+export function separatorLabel(at: number, now: number, t: T, locale?: string): string {
   const d = new Date(at);
-  return d.toLocaleDateString(undefined, {
+  const date = d.toLocaleDateString(locale, {
     weekday: 'short', month: 'short', day: 'numeric',
     ...(d.getFullYear() !== new Date(now).getFullYear() ? { year: 'numeric' } : {}),
   });
+  const time = d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' });
+  return t('botsPage.chat.dateTime', { date, time });
 }
 
 /** Elapsed time as m:ss (h:mm:ss past an hour). */
