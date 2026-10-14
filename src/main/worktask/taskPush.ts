@@ -32,7 +32,7 @@ import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
-import { originUrlRepoKey, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal } from './workerGit';
+import { originUrlRepoKey, workerGitEnv, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal } from './workerGit';
 
 const execFileP = promisify(execFile);
 
@@ -64,7 +64,7 @@ export type TaskPushResult =
   | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'rejected' | 'git-failed'; error: string };
 
 async function defaultGit(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  const env = { ...getExecEnv(), GIT_TERMINAL_PROMPT: '0' };
+  const env = { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0' };
   try {
     const { stdout, stderr } = await execFileP('git', args, { cwd, env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024 });
     return { code: 0, stdout: String(stdout), stderr: String(stderr) };

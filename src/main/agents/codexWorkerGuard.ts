@@ -56,7 +56,7 @@ import { locateWmuxMcpEntry } from './toolSurfaceLaunch';
 import { getBotStore } from '../factory/botStore';
 import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
 import { getWmuxDir } from '../../daemon/config';
-import { workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
+import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 
 const execFileP = promisify(execFile);
 const RUN_TIMEOUT_MS = 15_000;
@@ -206,7 +206,8 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   // Main's git in the worktree: never with a config key that runs a program
   // (worktask/workerGit.ts), no fsmonitor, no hooks.
   const safe = workerGitSafeArgs(deps.noHooksDir ?? path.join(getWmuxDir(), 'factory', 'no-hooks'));
-  const gitRun = (args: string[]) => run('git', [...safe, ...args], { cwd, env });
+  const gitEnv = workerGitEnv(env);
+  const gitRun = (args: string[]) => run('git', [...safe, ...args], { cwd, env: gitEnv });
   const pre = await workerGitPreflight(gitRun);
   if (!pre.ok) throw refuse(pre.error);
   const git = async (args: string[]): Promise<string> => {
@@ -220,6 +221,10 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   const commonDir = await git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
   const tracked = new Set((await git(['ls-files', '-z', '--', '.codex'])).split('\0').filter(Boolean));
   if (tracked.has(CODEX_WORKER_RULES_PATH)) throw refuse(`the repository tracks ${CODEX_WORKER_RULES_PATH}`);
+  // Codex reads a trusted project's .codex/config.toml over the user's config
+  // (its MCP servers and tool approvals included), and the worktree is
+  // trusted: a worker launches only without one.
+  if (fs.existsSync(path.join(cwd, '.codex', 'config.toml'))) throw refuse('the worktree has a .codex/config.toml; a bot\'s codex worker runs only on the owner\'s codex config');
   const codexDir = path.join(cwd, '.codex');
   for (const p of [codexDir, path.join(codexDir, 'rules')]) {
     if (fs.existsSync(p) && fs.lstatSync(p).isSymbolicLink()) throw refuse(`${path.relative(cwd, p)} is a symlink`);

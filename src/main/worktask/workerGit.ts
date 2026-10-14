@@ -18,6 +18,17 @@ import { git, type GitResult } from '../git/git';
 /** Runs git with `args` in the worktree; never throws. */
 export type WorkerGitRun = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
+/** Env for main's git in a worker's worktree: no variable that moves git to
+ *  another repository, index or object store, or adds config. */
+export function workerGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+)$/.test(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 /** `-c` options on every main-side git call in a worker's worktree. */
 export function workerGitSafeArgs(noHooksDir: string): string[] {
   return ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${noHooksDir}`];

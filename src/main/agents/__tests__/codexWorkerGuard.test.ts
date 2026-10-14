@@ -56,8 +56,13 @@ const PROMPT = `"$(cat '/data/.meta/x/prompt.md')"`;
 const line = () => `codex ${codexTrustOverride(wt, 'darwin')} -a never -s workspace-write ${PROMPT}`;
 const strict = { strict: true, spawns: [{ botId: 'bot-00000001' }] };
 
+// The guard runs on macOS and Linux only (it refuses on Windows, tested below
+// in 'refuses a later launch, Windows, …'); these cases drive it end to end
+// with POSIX worktree paths, symlinks and an executable stand-in.
+const posixOnly = it.skipIf(process.platform === 'win32');
+
 describe('guardCodexBotWorker', () => {
-  it('writes the rules, excludes them, proves they load and rebuilds the line', async () => {
+  posixOnly('writes the rules, excludes them, proves they load and rebuilds the line', async () => {
     const out = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps);
     const rules = fs.readFileSync(path.join(wt, CODEX_WORKER_RULES_PATH), 'utf8');
     expect(rules).toContain('["git", "push"]');
@@ -100,7 +105,7 @@ describe('guardCodexBotWorker', () => {
     await expect(guardCodexBotWorker({ initialCommand: line().replace('-a never', '--yolo'), cwd: wt }, strict, deps)).rejects.toThrow(/allows/);
   });
 
-  it('refuses a .codex folder too large to check', async () => {
+  posixOnly('refuses a .codex folder too large to check', async () => {
     fs.mkdirSync(path.join(wt, '.codex', 'many'), { recursive: true });
     for (let i = 0; i < 501; i++) fs.writeFileSync(path.join(wt, '.codex', 'many', `f${i}`), '');
     sh(wt, 'add', '.codex');
@@ -108,13 +113,13 @@ describe('guardCodexBotWorker', () => {
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps)).rejects.toThrow(/more than 500/);
   });
 
-  it('refuses untracked .codex content, a symlink, and a tracked file at the rules path', async () => {
+  posixOnly('refuses untracked .codex content, a symlink, and a tracked file at the rules path', async () => {
     fs.mkdirSync(path.join(wt, '.codex'), { recursive: true });
-    fs.writeFileSync(path.join(wt, '.codex', 'config.toml'), 'x = 1\n');
-    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps)).rejects.toThrow(/does not track.*config\.toml/);
-    // Tracked content is the owner's: allowed.
-    sh(wt, 'add', '.codex/config.toml');
-    sh(wt, 'commit', '-qm', 'cfg');
+    fs.writeFileSync(path.join(wt, '.codex', 'notes.md'), 'x\n');
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps)).rejects.toThrow(/does not track.*notes\.md/);
+    // Tracked content is the owner's: allowed (a codex config is not, below).
+    sh(wt, 'add', '.codex/notes.md');
+    sh(wt, 'commit', '-qm', 'notes');
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps)).resolves.toBeTruthy();
     fs.rmSync(path.join(wt, '.codex', 'rules'), { recursive: true, force: true });
     fs.symlinkSync(root, path.join(wt, '.codex', 'rules'));
@@ -126,7 +131,7 @@ describe('guardCodexBotWorker', () => {
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps)).rejects.toThrow(/tracks/);
   });
 
-  it('fails closed when the rules do not load, the decision is not ours, or codex is too old or missing', async () => {
+  posixOnly('fails closed when the rules do not load, the decision is not ours, or codex is too old or missing', async () => {
     canary = { decision: 'forbidden', ours: true, code: 1 };
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, deps)).rejects.toThrow(/do not load/);
     canary = { decision: 'forbidden', ours: false, code: 0 };
@@ -139,7 +144,7 @@ describe('guardCodexBotWorker', () => {
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt }, strict, { ...deps, resolveCodex: async () => null })).rejects.toThrow(/not on the pane/);
   });
 
-  it('runs no git with a config key that names a program, and pins the codex home it checked into the pane', async () => {
+  posixOnly('runs no git with a config key that names a program, and pins the codex home it checked into the pane', async () => {
     const marker = path.join(root, 'fsmonitor-ran');
     const prog = path.join(root, 'fsm.sh');
     fs.writeFileSync(prog, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
@@ -152,14 +157,27 @@ describe('guardCodexBotWorker', () => {
     expect(calls.filter((c) => c[0] === 'git').every((c) => c.slice(1, 3).join('=') === '-c=core.fsmonitor=false')).toBe(true);
   });
 
-  it('checks every rules file the session reads, the user\'s included', async () => {
+  posixOnly('refuses a worktree with a project codex config, and runs main\'s git on the worktree whatever the env names', async () => {
+    const seen: NodeJS.ProcessEnv[] = [];
+    const spy = { ...deps, run: async (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => { if (cmd === 'git') seen.push(opts.env); return run(cmd, args, opts); } };
+    await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none'), GIT_DIR: path.join(root, 'elsewhere'), GIT_INDEX_FILE: '/x' } }, strict, spy);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((e) => e.GIT_DIR === undefined && e.GIT_INDEX_FILE === undefined)).toBe(true);
+    fs.mkdirSync(path.join(wt, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(wt, '.codex', 'config.toml'), '[mcp_servers.wmux]\ndefault_tools_approval_mode = "approve"\n');
+    sh(wt, 'add', '.codex/config.toml');
+    sh(wt, 'commit', '-qm', 'project codex config');
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps)).rejects.toThrow(/\.codex\/config\.toml/);
+  });
+
+  posixOnly('checks every rules file the session reads, the user\'s included', async () => {
     fs.mkdirSync(path.join(root, '.codex', 'rules'), { recursive: true });
     fs.writeFileSync(path.join(root, '.codex', 'rules', 'default.rules'), '');
     await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, '.codex') } }, strict, deps);
     expect(calls.find((c) => c[1] === 'execpolicy')).toContain(path.join(root, '.codex', 'rules', 'default.rules'));
   });
 
-  it('sets the worker\'s wmux tool approvals only when the codex config defines the wmux server, and the owner\'s approvals never widen them', async () => {
+  posixOnly('sets the worker\'s wmux tool approvals only when the codex config defines the wmux server, and the owner\'s approvals never widen them', async () => {
     const without = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps);
     expect(without!.initialCommand).not.toContain('approval_mode');
     fs.mkdirSync(path.join(root, '.codex'), { recursive: true });
@@ -174,7 +192,7 @@ describe('guardCodexBotWorker', () => {
     for (const t of ['browser_open', 'terminal_send', 'fanout_start', 'computer']) expect(out).toContain(`${t}={approval_mode="prompt"}`);
   });
 
-  it('sets the approvals for a wmux server of any transport, and refuses a config approval it cannot set back', async () => {
+  posixOnly('sets the approvals for a wmux server of any transport, and refuses a config approval it cannot set back', async () => {
     const home = path.join(root, '.codex');
     fs.mkdirSync(home, { recursive: true });
     fs.writeFileSync(path.join(home, 'config.toml'), '[mcp_servers.wmux]\nurl = "http://127.0.0.1:9/mcp"\n[mcp_servers.wmux.tools.browser-extra]\napproval_mode = "approve"\n');

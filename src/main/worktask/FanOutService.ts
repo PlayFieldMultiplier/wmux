@@ -1305,7 +1305,10 @@ export class FanOutService {
           ? `\n\n---\n\nYour private scratch directory is ${tempDir}; TMPDIR, TMP and TEMP point there. Put temporary helpers and test output there, not anywhere else outside the project.`
           : '';
         const botBranch = ctx.requester?.kind === 'bot' && !ctx.checkout ? plan?.branch : undefined;
-        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch, ctx.agentChoice?.agent), 'utf8');
+        // The agent the note speaks to: the row's pick, else the launcher of
+        // the command line.
+        const noteAgent = ctx.agentChoice?.agent ?? launcherStem(splitModelEnvMarker(ctx.agentCmd).command.trim().split(/\s+/)[0] ?? '');
+        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch, noteAgent), 'utf8');
       }
       const stamp: WorkTaskMetaStamp = {
         taskId,
