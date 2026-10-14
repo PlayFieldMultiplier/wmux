@@ -1,0 +1,2095 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "mention-loop-bounded",
+  "run": 1,
+  "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-e1f50216",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881482769,
+    "updatedAt": 1791881482769
+   },
+   {
+    "version": 1,
+    "id": "bot-8ad68ce2",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "role": "triage",
+    "template": "issue",
+    "name": "Triage",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881482772,
+    "updatedAt": 1791881482772
+   },
+   {
+    "version": 1,
+    "id": "bot-72b8fce4",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Verifier",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881482775,
+    "updatedAt": 1791881482775
+   },
+   {
+    "version": 1,
+    "id": "bot-95812496",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "role": "maintainer",
+    "template": "custom",
+    "name": "Maintainer",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 4,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 1,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881482778,
+    "updatedAt": 1791881482778
+   },
+   {
+    "version": 1,
+    "id": "bot-a34625e6",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881488067,
+    "updatedAt": 1791881488067
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-e1f50216",
+   "triage": "bot-8ad68ce2",
+   "verifier": "bot-72b8fce4",
+   "maintainer": "bot-95812496",
+   "moa": "bot-a34625e6"
+  },
+  "injected": [
+   {
+    "label": "round-a",
+    "kind": "card",
+    "id": "c-mv6fz0zr6b756aba21",
+    "threadId": "general",
+    "at": 1791881488069
+   },
+   {
+    "label": "round-b",
+    "kind": "card",
+    "id": "c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "at": 1791881511082
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881488069,
+    "do": "post",
+    "label": "round-a",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fz0zr6b756aba21",
+      "seq": 1,
+      "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881488071,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Pass it on",
+      "body": "Start the round.",
+      "refs": {
+       "botId": "bot-e1f50216",
+       "botIds": [
+        "bot-e1f50216"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-e1f50216",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fz0zs-09732f3f",
+     "addressees": [
+      {
+       "botId": "bot-e1f50216",
+       "role": "lead",
+       "wakeId": "w-mv6fz0zs-09732f3f"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881488075,
+    "do": "waitFor",
+    "label": "fourth running",
+    "ok": true,
+    "doneAt": 1791881503644
+   },
+   {
+    "at": 1791881503644,
+    "do": "restart"
+   },
+   {
+    "at": 1791881505558,
+    "do": "waitFor",
+    "label": "quiet after restart",
+    "ok": true,
+    "doneAt": 1791881511082
+   },
+   {
+    "at": 1791881511082,
+    "do": "post",
+    "label": "round-b",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fziqz6d14574aae",
+      "seq": 6,
+      "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881511083,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Pass it on again",
+      "body": "Start another round.",
+      "refs": {
+       "botId": "bot-e1f50216",
+       "botIds": [
+        "bot-e1f50216"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-e1f50216",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fzir8-0b98df6e",
+     "addressees": [
+      {
+       "botId": "bot-e1f50216",
+       "role": "lead",
+       "wakeId": "w-mv6fzir8-0b98df6e"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881511095,
+    "do": "waitFor",
+    "label": "capped",
+    "ok": true,
+    "doneAt": 1791881537735
+   },
+   {
+    "at": 1791881537735,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881542760
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6fz0zr-06b775a36d79",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881488071,
+    "dedupeKey": "human.message:c-mv6fz0zr6b756aba21:bot-e1f50216",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "botId": "bot-e1f50216",
+     "messageId": "c-mv6fz0zr6b756aba21:bot-e1f50216"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Start the round.",
+     "cardId": "c-mv6fz0zr6b756aba21",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fz50d-37ea11e56c62",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791881493277,
+    "dedupeKey": "handoff.received:h-mv6fz50033a304508de9",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fz50033a304508de9",
+     "botId": "bot-8ad68ce2"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e1f50216"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to triage",
+     "threadId": "general",
+     "runId": "run-c-mv6fz0zr6b756aba21",
+     "depth": 1,
+     "hopsInRun": 1,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Triage (triage)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6fz903-4c5468f19d67",
+    "seq": 3,
+    "kind": "handoff.received",
+    "at": 1791881498451,
+    "dedupeKey": "handoff.received:h-mv6fz8zy096ea6be7240",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fz8zy096ea6be7240",
+     "botId": "bot-72b8fce4"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-8ad68ce2"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to verifier",
+     "threadId": "general",
+     "runId": "run-c-mv6fz0zr6b756aba21",
+     "depth": 2,
+     "hopsInRun": 2,
+     "fromLabel": "Triage (triage)",
+     "toLabel": "Verifier (verifier)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6fzczo-4458776acb53",
+    "seq": 4,
+    "kind": "handoff.received",
+    "at": 1791881503620,
+    "dedupeKey": "handoff.received:h-mv6fzczm429a8824bc0d",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fzczm429a8824bc0d",
+     "botId": "bot-95812496"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-72b8fce4"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to maintainer",
+     "threadId": "general",
+     "runId": "run-c-mv6fz0zr6b756aba21",
+     "depth": 3,
+     "hopsInRun": 3,
+     "fromLabel": "Verifier (verifier)",
+     "toLabel": "Maintainer (maintainer)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6fzejp-867049028af3",
+    "seq": 5,
+    "kind": "schedule.fired",
+    "at": 1791881505637,
+    "dedupeKey": "schedule.fired:morning:20739",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "scheduleId": "morning",
+     "botId": "bot-a34625e6"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "morning": {
+      "at": 1791881505637,
+      "windowHours": 24,
+      "trust": [],
+      "merged": [],
+      "mergedCount": 0,
+      "blocked": [],
+      "blockedCount": 0,
+      "budgetExhausted": [],
+      "rooms": [
+       {
+        "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+        "openThreads": 0,
+        "openQuestions": 0,
+        "newest": []
+       }
+      ],
+      "gardener": []
+     }
+    }
+   },
+   {
+    "id": "f-0mv6fziqz-194598dd482f",
+    "seq": 6,
+    "kind": "human.message",
+    "at": 1791881511083,
+    "dedupeKey": "human.message:c-mv6fziqz6d14574aae:bot-e1f50216",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "botId": "bot-e1f50216",
+     "messageId": "c-mv6fziqz6d14574aae:bot-e1f50216"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Start another round.",
+     "cardId": "c-mv6fziqz6d14574aae",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fziz2-7cd1fe5eeebc",
+    "seq": 7,
+    "kind": "handoff.received",
+    "at": 1791881511374,
+    "dedupeKey": "handoff.received:h-mv6fzixn1083140f00c0",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fzixn1083140f00c0",
+     "botId": "bot-8ad68ce2"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e1f50216"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to triage",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 1,
+     "hopsInRun": 1,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Triage (triage)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6fzj6h-5ff1e87255c0",
+    "seq": 8,
+    "kind": "handoff.received",
+    "at": 1791881511641,
+    "dedupeKey": "handoff.received:h-mv6fzj3p62fe43935d1c",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fzj3p62fe43935d1c",
+     "botId": "bot-72b8fce4"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-8ad68ce2"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to verifier",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 2,
+     "hopsInRun": 2,
+     "fromLabel": "Triage (triage)",
+     "toLabel": "Verifier (verifier)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6fzjbc-55cea2edea35",
+    "seq": 9,
+    "kind": "handoff.received",
+    "at": 1791881511816,
+    "dedupeKey": "handoff.received:h-mv6fzjasa3888892ad9f",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fzjasa3888892ad9f",
+     "botId": "bot-95812496"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-72b8fce4"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to maintainer",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 3,
+     "hopsInRun": 3,
+     "fromLabel": "Verifier (verifier)",
+     "toLabel": "Maintainer (maintainer)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6fzz0h-e3c6e3632a15",
+    "seq": 10,
+    "kind": "handoff.received",
+    "at": 1791881532161,
+    "dedupeKey": "handoff.received:h-mv6fzz0ecb741da220fc",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6fzz0ecb741da220fc",
+     "botId": "bot-a34625e6"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-95812496"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to moa",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 4,
+     "hopsInRun": 4,
+     "fromLabel": "Maintainer (maintainer)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6g035g-c6d1077ece4c",
+    "seq": 11,
+    "kind": "handoff.received",
+    "at": 1791881537524,
+    "dedupeKey": "handoff.received:h-mv6g035d7e9cfb403f44",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6g035d7e9cfb403f44",
+     "botId": "bot-e1f50216"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-a34625e6"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to lead",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 5,
+     "hopsInRun": 5,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6g035i-f805146999c0",
+    "seq": 12,
+    "kind": "handoff.refused",
+    "at": 1791881537526,
+    "dedupeKey": "handoff.refused:h-mv6g035ie386c8d838be",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6g035ie386c8d838be",
+     "botId": "bot-8ad68ce2"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-8ad68ce2"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to verifier",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 7,
+     "hopsInRun": 7,
+     "fromLabel": "Triage (triage)",
+     "toLabel": "Verifier (verifier)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "code": "max_depth",
+     "detail": "chain depth 7 is over 6",
+     "mention": true
+    }
+   },
+   {
+    "id": "f-0mv6g035k-a8226dbeff48",
+    "seq": 13,
+    "kind": "handoff.received",
+    "at": 1791881537528,
+    "dedupeKey": "handoff.received:h-mv6g035f330d68d5ab91",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "ref": {
+     "handoffId": "h-mv6g035f330d68d5ab91",
+     "botId": "bot-8ad68ce2"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e1f50216"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Over to triage",
+     "threadId": "general",
+     "runId": "run-c-mv6fziqz6d14574aae",
+     "depth": 6,
+     "hopsInRun": 6,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Triage (triage)",
+     "fromWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "toWorkspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "mention": true
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6fz0zs-09732f3f",
+    "botId": "bot-e1f50216",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "human",
+     "text": "Start the round.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fz0zr6b756aba21",
+     "runId": "run-c-mv6fz0zr6b756aba21"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881488072,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fz501-9fdc1a96",
+    "botId": "bot-8ad68ce2",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fz5005e22acfe3e",
+     "handoffId": "h-mv6fz50033a304508de9",
+     "fromBotId": "bot-e1f50216"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881493265,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fz8zy-60ffd519",
+    "botId": "bot-72b8fce4",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fz8zu926b2957e2",
+     "handoffId": "h-mv6fz8zy096ea6be7240",
+     "fromBotId": "bot-8ad68ce2"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881498446,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fzczm-2fea5eab",
+    "botId": "bot-95812496",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fzczm4b91a243ac",
+     "handoffId": "h-mv6fzczm429a8824bc0d",
+     "fromBotId": "bot-72b8fce4"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881503618,
+    "attempts": 1,
+    "state": "interrupted"
+   },
+   {
+    "id": "w-mv6fzir8-0b98df6e",
+    "botId": "bot-e1f50216",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "human",
+     "text": "Start another round.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fziqz6d14574aae",
+     "runId": "run-c-mv6fziqz6d14574aae"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881511092,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fzixu-207dd8e1",
+    "botId": "bot-8ad68ce2",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fzixj5a6622ec60",
+     "handoffId": "h-mv6fzixn1083140f00c0",
+     "fromBotId": "bot-e1f50216"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881511330,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fzj3w-c2d749b1",
+    "botId": "bot-72b8fce4",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fzj3g8ddb265af0",
+     "handoffId": "h-mv6fzj3p62fe43935d1c",
+     "fromBotId": "bot-8ad68ce2"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881511548,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fzjax-09bb1b2d",
+    "botId": "bot-95812496",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fzjarffb078feae",
+     "handoffId": "h-mv6fzjasa3888892ad9f",
+     "fromBotId": "bot-72b8fce4"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881511801,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fzz0e-e69fcbc9",
+    "botId": "bot-a34625e6",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fzz0d9205bde84b",
+     "handoffId": "h-mv6fzz0ecb741da220fc",
+     "fromBotId": "bot-95812496"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881532158,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g035d-7ffd9693",
+    "botId": "bot-e1f50216",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6g035c167bcb27de",
+     "handoffId": "h-mv6g035d7e9cfb403f44",
+     "fromBotId": "bot-a34625e6"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881537521,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6g035f-44386adc",
+    "botId": "bot-8ad68ce2",
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6g035f0dd6802874",
+     "handoffId": "h-mv6g035f330d68d5ab91",
+     "fromBotId": "bot-e1f50216"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881537523,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv6fz50033a304508de9",
+    "runId": "run-c-mv6fz0zr6b756aba21",
+    "threadId": "general",
+    "depth": 1,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to triage",
+     "body": "lead passes to triage.",
+     "refs": {
+      "messageId": "c-mv6fz5005e22acfe3e"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fz5005e22acfe3e:bot-8ad68ce2",
+    "createdAt": 1791881493264,
+    "updatedAt": 1791881493274
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fz8zy096ea6be7240",
+    "runId": "run-c-mv6fz0zr6b756aba21",
+    "threadId": "general",
+    "depth": 2,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fz50033a304508de9"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to verifier",
+     "body": "triage passes to verifier.",
+     "refs": {
+      "messageId": "c-mv6fz8zu926b2957e2"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fz8zu926b2957e2:bot-72b8fce4",
+    "createdAt": 1791881498446,
+    "updatedAt": 1791881498451
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fzczm429a8824bc0d",
+    "runId": "run-c-mv6fz0zr6b756aba21",
+    "threadId": "general",
+    "depth": 3,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-95812496"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fz50033a304508de9",
+      "h-mv6fz8zy096ea6be7240"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to maintainer",
+     "body": "verifier passes to maintainer.",
+     "refs": {
+      "messageId": "c-mv6fzczm4b91a243ac"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fzczm4b91a243ac:bot-95812496",
+    "createdAt": 1791881503618,
+    "updatedAt": 1791881503620
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fzixn1083140f00c0",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 1,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to triage",
+     "body": "lead passes to triage.",
+     "refs": {
+      "messageId": "c-mv6fzixj5a6622ec60"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fzixj5a6622ec60:bot-8ad68ce2",
+    "createdAt": 1791881511323,
+    "updatedAt": 1791881511373
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fzj3p62fe43935d1c",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 2,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fzixn1083140f00c0"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to verifier",
+     "body": "triage passes to verifier.",
+     "refs": {
+      "messageId": "c-mv6fzj3g8ddb265af0"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fzj3g8ddb265af0:bot-72b8fce4",
+    "createdAt": 1791881511541,
+    "updatedAt": 1791881511636
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fzjasa3888892ad9f",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 3,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-95812496"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fzixn1083140f00c0",
+      "h-mv6fzj3p62fe43935d1c"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to maintainer",
+     "body": "verifier passes to maintainer.",
+     "refs": {
+      "messageId": "c-mv6fzjarffb078feae"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fzjarffb078feae:bot-95812496",
+    "createdAt": 1791881511796,
+    "updatedAt": 1791881511816
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fzz0ecb741da220fc",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 4,
+    "hopsInRun": 4,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-95812496"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-a34625e6"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fzixn1083140f00c0",
+      "h-mv6fzj3p62fe43935d1c",
+      "h-mv6fzjasa3888892ad9f"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to moa",
+     "body": "maintainer passes to moa.",
+     "refs": {
+      "messageId": "c-mv6fzz0d9205bde84b"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fzz0d9205bde84b:bot-a34625e6",
+    "createdAt": 1791881532158,
+    "updatedAt": 1791881532161
+   },
+   {
+    "version": 1,
+    "id": "h-mv6g035d7e9cfb403f44",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 5,
+    "hopsInRun": 5,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-a34625e6"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fzixn1083140f00c0",
+      "h-mv6fzj3p62fe43935d1c",
+      "h-mv6fzjasa3888892ad9f",
+      "h-mv6fzz0ecb741da220fc"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to lead",
+     "body": "moa passes to lead.",
+     "refs": {
+      "messageId": "c-mv6g035c167bcb27de"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6g035c167bcb27de:bot-e1f50216",
+    "createdAt": 1791881537521,
+    "updatedAt": 1791881537524
+   },
+   {
+    "version": 1,
+    "id": "h-mv6g035f330d68d5ab91",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 6,
+    "hopsInRun": 6,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fzixn1083140f00c0",
+      "h-mv6fzj3p62fe43935d1c",
+      "h-mv6fzjasa3888892ad9f",
+      "h-mv6fzz0ecb741da220fc",
+      "h-mv6g035d7e9cfb403f44"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to triage",
+     "body": "lead passes to triage.",
+     "refs": {
+      "messageId": "c-mv6g035f0dd6802874"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6g035f0dd6802874:bot-8ad68ce2",
+    "createdAt": 1791881537523,
+    "updatedAt": 1791881537528
+   },
+   {
+    "version": 1,
+    "id": "h-mv6g035ie386c8d838be",
+    "runId": "run-c-mv6fziqz6d14574aae",
+    "threadId": "general",
+    "depth": 7,
+    "hopsInRun": 7,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mv6fzixn1083140f00c0",
+      "h-mv6fzj3p62fe43935d1c",
+      "h-mv6fzjasa3888892ad9f",
+      "h-mv6fzz0ecb741da220fc",
+      "h-mv6g035d7e9cfb403f44",
+      "h-mv6g035f330d68d5ab91"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Over to verifier",
+     "body": "triage passes to verifier.",
+     "refs": {
+      "messageId": "c-mv6g035i242458a0ff"
+     }
+    },
+    "status": "refused",
+    "clientHandoffId": "mention:c-mv6g035i242458a0ff:bot-72b8fce4",
+    "createdAt": 1791881537526,
+    "updatedAt": 1791881537526,
+    "refusal": {
+     "code": "max_depth",
+     "detail": "chain depth 7 is over 6"
+    }
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6fz0zr6b756aba21",
+    "seq": 1,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881488071,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Pass it on",
+    "body": "Start the round.",
+    "refs": {
+     "botId": "bot-e1f50216",
+     "botIds": [
+      "bot-e1f50216"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fz5005e22acfe3e",
+    "seq": 2,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881493264,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "title": "Over to triage",
+    "body": "lead passes to triage.",
+    "refs": {
+     "botIds": [
+      "bot-8ad68ce2"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fz0zs-09732f3f:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fz8zu926b2957e2",
+    "seq": 3,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881498442,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "title": "Over to verifier",
+    "body": "triage passes to verifier.",
+    "refs": {
+     "botIds": [
+      "bot-72b8fce4"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fz501-9fdc1a96:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fzczm4b91a243ac",
+    "seq": 4,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881503618,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "title": "Over to maintainer",
+    "body": "verifier passes to maintainer.",
+    "refs": {
+     "botIds": [
+      "bot-95812496"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fz8zy-60ffd519:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fzejo5865539cb1",
+    "seq": 5,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "fact",
+    "at": 1791881505636,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Maintainer's turn was interrupted when the app quit; it is not replayed",
+    "refs": {
+     "botId": "bot-95812496"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fziqz6d14574aae",
+    "seq": 6,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881511083,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Pass it on again",
+    "body": "Start another round.",
+    "refs": {
+     "botId": "bot-e1f50216",
+     "botIds": [
+      "bot-e1f50216"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fzixj5a6622ec60",
+    "seq": 7,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881511319,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "title": "Over to triage",
+    "body": "lead passes to triage.",
+    "refs": {
+     "botIds": [
+      "bot-8ad68ce2"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fzir8-0b98df6e:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fzj3g8ddb265af0",
+    "seq": 8,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881511532,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "title": "Over to verifier",
+    "body": "triage passes to verifier.",
+    "refs": {
+     "botIds": [
+      "bot-72b8fce4"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fzixu-207dd8e1:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fzjarffb078feae",
+    "seq": 9,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881511795,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-72b8fce4"
+    },
+    "title": "Over to maintainer",
+    "body": "verifier passes to maintainer.",
+    "refs": {
+     "botIds": [
+      "bot-95812496"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fzj3w-c2d749b1:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fzz0d9205bde84b",
+    "seq": 10,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881532157,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-95812496"
+    },
+    "title": "Over to moa",
+    "body": "maintainer passes to moa.",
+    "refs": {
+     "botIds": [
+      "bot-a34625e6"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fzjax-09bb1b2d:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g035c167bcb27de",
+    "seq": 11,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881537520,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-a34625e6"
+    },
+    "title": "Over to lead",
+    "body": "moa passes to lead.",
+    "refs": {
+     "botIds": [
+      "bot-e1f50216"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fzz0e-e69fcbc9:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g035f0dd6802874",
+    "seq": 12,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881537523,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-e1f50216"
+    },
+    "title": "Over to triage",
+    "body": "lead passes to triage.",
+    "refs": {
+     "botIds": [
+      "bot-8ad68ce2"
+     ]
+    },
+    "clientPostId": "wake:w-mv6g035d-7ffd9693:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g035i242458a0ff",
+    "seq": 13,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881537526,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+     "botId": "bot-8ad68ce2"
+    },
+    "title": "Over to verifier",
+    "body": "triage passes to verifier.",
+    "refs": {
+     "botIds": [
+      "bot-72b8fce4"
+     ]
+    },
+    "clientPostId": "wake:w-mv6g035f-44386adc:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6g035i49b3ca823d",
+    "seq": 14,
+    "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+    "threadId": "general",
+    "kind": "refusal",
+    "at": 1791881537526,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (max_depth): Over to verifier",
+    "body": "chain depth 7 is over 6",
+    "refs": {
+     "botId": "bot-8ad68ce2",
+     "handoffId": "h-mv6g035ie386c8d838be",
+     "factId": "f-0mv6g035i-f805146999c0"
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881488119,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881488121,
+     "event": "session/new",
+     "sessionId": "stub-4421f255852d",
+     "cwd": "/home/owner/.wmux-verify-f9e17bd6/factory/bots/bot-e1f50216"
+    },
+    {
+     "at": 1791881493123,
+     "event": "prompt",
+     "sessionId": "stub-4421f255852d",
+     "text": "[wake w-mv6fz0zs-09732f3f] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881493266,
+     "event": "tool",
+     "sessionId": "stub-4421f255852d",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fz5005e22acfe3e\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881493264,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-e1f50216\"\n    },\n    \"title\": \"Over to triage\",\n    \"body\": \"lead passes to triage.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-8ad68ce2\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fz0zs-09732f3f:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-8ad68ce2\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fz50033a304508de9\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1791881511122,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881511136,
+     "event": "session/load",
+     "sessionId": "stub-4421f255852d",
+     "refused": false
+    },
+    {
+     "at": 1791881511143,
+     "event": "prompt",
+     "sessionId": "stub-4421f255852d",
+     "text": "[wake w-mv6fzir8-0b98df6e] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881511332,
+     "event": "tool",
+     "sessionId": "stub-4421f255852d",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fzixj5a6622ec60\",\n    \"seq\": 7,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881511319,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-e1f50216\"\n    },\n    \"title\": \"Over to triage\",\n    \"body\": \"lead passes to triage.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-8ad68ce2\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fzir8-0b98df6e:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-8ad68ce2\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fzixn1083140f00c0\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1791881537521,
+     "event": "prompt",
+     "sessionId": "stub-4421f255852d",
+     "text": "[wake w-mv6g035d-7ffd9693] Lead (developer) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881537524,
+     "event": "tool",
+     "sessionId": "stub-4421f255852d",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g035f0dd6802874\",\n    \"seq\": 12,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881537523,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-e1f50216\"\n    },\n    \"title\": \"Over to triage\",\n    \"body\": \"lead passes to triage.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-8ad68ce2\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6g035d-7ffd9693:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-8ad68ce2\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6g035f330d68d5ab91\"\n    }\n  ]\n}"
+    }
+   ],
+   "triage": [
+    {
+     "at": 1791881493289,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881493293,
+     "event": "session/new",
+     "sessionId": "stub-29bcac407d9f",
+     "cwd": "/home/owner/.wmux-verify-f9e17bd6/factory/bots/bot-8ad68ce2"
+    },
+    {
+     "at": 1791881498300,
+     "event": "prompt",
+     "sessionId": "stub-29bcac407d9f",
+     "text": "[wake w-mv6fz501-9fdc1a96] Triage (issue) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881498447,
+     "event": "tool",
+     "sessionId": "stub-29bcac407d9f",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fz8zu926b2957e2\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881498442,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-8ad68ce2\"\n    },\n    \"title\": \"Over to verifier\",\n    \"body\": \"triage passes to verifier.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-72b8fce4\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fz501-9fdc1a96:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-72b8fce4\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fz8zy096ea6be7240\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1791881511355,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881511369,
+     "event": "session/load",
+     "sessionId": "stub-29bcac407d9f",
+     "refused": false
+    },
+    {
+     "at": 1791881511374,
+     "event": "prompt",
+     "sessionId": "stub-29bcac407d9f",
+     "text": "[wake w-mv6fzixu-207dd8e1] Triage (issue) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881511549,
+     "event": "tool",
+     "sessionId": "stub-29bcac407d9f",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fzj3g8ddb265af0\",\n    \"seq\": 8,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881511532,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-8ad68ce2\"\n    },\n    \"title\": \"Over to verifier\",\n    \"body\": \"triage passes to verifier.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-72b8fce4\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fzixu-207dd8e1:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-72b8fce4\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fzj3p62fe43935d1c\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1791881537524,
+     "event": "prompt",
+     "sessionId": "stub-29bcac407d9f",
+     "text": "[wake w-mv6g035f-44386adc] Triage (issue) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881537528,
+     "event": "tool",
+     "sessionId": "stub-29bcac407d9f",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g035i242458a0ff\",\n    \"seq\": 13,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881537526,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-8ad68ce2\"\n    },\n    \"title\": \"Over to verifier\",\n    \"body\": \"triage passes to verifier.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-72b8fce4\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6g035f-44386adc:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-72b8fce4\",\n      \"ok\": false,\n      \"code\": \"max_depth\",\n      \"message\": \"chain depth 7 is over 6\"\n    }\n  ]\n}"
+    }
+   ],
+   "verifier": [
+    {
+     "at": 1791881498474,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881498476,
+     "event": "session/new",
+     "sessionId": "stub-dbe345029047",
+     "cwd": "/home/owner/.wmux-verify-f9e17bd6/factory/bots/bot-72b8fce4"
+    },
+    {
+     "at": 1791881503481,
+     "event": "prompt",
+     "sessionId": "stub-dbe345029047",
+     "text": "[wake w-mv6fz8zy-60ffd519] Verifier (reviewer) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881503619,
+     "event": "tool",
+     "sessionId": "stub-dbe345029047",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fzczm4b91a243ac\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881503618,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-72b8fce4\"\n    },\n    \"title\": \"Over to maintainer\",\n    \"body\": \"verifier passes to maintainer.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-95812496\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fz8zy-60ffd519:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-95812496\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fzczm429a8824bc0d\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1791881511573,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881511613,
+     "event": "session/load",
+     "sessionId": "stub-dbe345029047",
+     "refused": false
+    },
+    {
+     "at": 1791881511623,
+     "event": "prompt",
+     "sessionId": "stub-dbe345029047",
+     "text": "[wake w-mv6fzj3w-c2d749b1] Verifier (reviewer) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881511803,
+     "event": "tool",
+     "sessionId": "stub-dbe345029047",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fzjarffb078feae\",\n    \"seq\": 9,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881511795,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-72b8fce4\"\n    },\n    \"title\": \"Over to maintainer\",\n    \"body\": \"verifier passes to maintainer.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-95812496\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fzj3w-c2d749b1:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-95812496\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fzjasa3888892ad9f\"\n    }\n  ]\n}"
+    }
+   ],
+   "maintainer": [
+    {
+     "at": 1791881503641,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881503642,
+     "event": "session/new",
+     "sessionId": "stub-76a68f097d36",
+     "cwd": "/home/owner/.wmux-verify-f9e17bd6/factory/bots/bot-95812496"
+    },
+    {
+     "at": 1791881511827,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881511834,
+     "event": "session/new",
+     "sessionId": "stub-b14207744b27",
+     "cwd": "/home/owner/.wmux-verify-f9e17bd6/factory/bots/bot-95812496"
+    },
+    {
+     "at": 1791881516840,
+     "event": "prompt",
+     "sessionId": "stub-b14207744b27",
+     "text": "[wake w-mv6fzjax-09bb1b2d] Maintainer (custom) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881532160,
+     "event": "tool",
+     "sessionId": "stub-b14207744b27",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fzz0d9205bde84b\",\n    \"seq\": 10,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881532157,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-95812496\"\n    },\n    \"title\": \"Over to moa\",\n    \"body\": \"maintainer passes to moa.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-a34625e6\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fzjax-09bb1b2d:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-a34625e6\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fzz0ecb741da220fc\"\n    }\n  ]\n}"
+    }
+   ],
+   "moa": [
+    {
+     "at": 1791881532205,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881532206,
+     "event": "session/new",
+     "sessionId": "stub-afb898ffc665",
+     "cwd": "/home/owner/.wmux-verify-f9e17bd6/factory/bots/bot-a34625e6"
+    },
+    {
+     "at": 1791881537210,
+     "event": "prompt",
+     "sessionId": "stub-afb898ffc665",
+     "text": "[wake w-mv6fzz0e-e69fcbc9] Moa (coordinator) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881537523,
+     "event": "tool",
+     "sessionId": "stub-afb898ffc665",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6g035c167bcb27de\",\n    \"seq\": 11,\n    \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881537520,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-6de7e8f9-1b35-4014-964c-2248aad2d6db\",\n      \"botId\": \"bot-a34625e6\"\n    },\n    \"title\": \"Over to lead\",\n    \"body\": \"moa passes to lead.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-e1f50216\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fzz0e-e69fcbc9:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-e1f50216\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6g035d7e9cfb403f44\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881482840,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791881505692,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-51-20-verify-f9e17bd6",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-51-20-verify-f9e17bd6"
+   },
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-51-44-verify-f9e17bd6",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-51-44-verify-f9e17bd6"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "no restart happened",
+   "failing": [
+    "restarted"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "launches.0"
+    }
+   ]
+  },
+  {
+   "why": "a card woke a bot twice",
+   "failing": [
+    "no_card_wakes_a_bot_twice",
+    "one_prompt_per_turn"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-dup",
+      "botId": "bot-8ad68ce2",
+      "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+      "reason": {
+       "kind": "mention",
+       "cardId": "c-mv6fz5005e22acfe3e",
+       "handoffId": "h-mv6fz50033a304508de9",
+       "fromBotId": "bot-e1f50216"
+      },
+      "threadId": "general",
+      "priority": 1,
+      "enqueuedAt": 1791881493265,
+      "attempts": 1,
+      "state": "done"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the cut turn was replayed",
+   "failing": [
+    "cut_turn_interrupted_not_replayed",
+    "no_card_wakes_a_bot_twice",
+    "one_prompt_per_turn"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-replay",
+      "botId": "bot-95812496",
+      "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+      "reason": {
+       "kind": "mention",
+       "cardId": "c-mv6fzczm4b91a243ac",
+       "handoffId": "h-mv6fzczm429a8824bc0d",
+       "fromBotId": "bot-72b8fce4"
+      },
+      "threadId": "general",
+      "priority": 1,
+      "enqueuedAt": 1791881503618,
+      "attempts": 1,
+      "state": "done"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the first round ran past the restart point",
+   "failing": [
+    "first_round_stopped_by_restart"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.0.depth",
+     "value": 5
+    }
+   ]
+  },
+  {
+   "why": "the second round skipped a depth",
+   "failing": [
+    "second_round_climbs_to_cap"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "handoffs.4"
+    }
+   ]
+  },
+  {
+   "why": "the hop past the cap was delivered",
+   "failing": [
+    "second_round_climbs_to_cap",
+    "second_round_refused_at_cap"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.9.status",
+     "value": "delivered"
+    }
+   ]
+  },
+  {
+   "why": "the refusal card repeated",
+   "failing": [
+    "refusal_card"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "cards",
+     "value": {
+      "version": 1,
+      "id": "c-dup",
+      "seq": 14,
+      "workspaceId": "ws-6de7e8f9-1b35-4014-964c-2248aad2d6db",
+      "threadId": "general",
+      "kind": "refusal",
+      "at": 1791881537526,
+      "actor": {
+       "kind": "system"
+      },
+      "title": "Handoff refused (max_depth): Over to verifier",
+      "body": "chain depth 7 is over 6",
+      "refs": {
+       "botId": "bot-8ad68ce2",
+       "handoffId": "h-mv6g035ie386c8d838be",
+       "factId": "f-0mv6g035i-f805146999c0"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "why": "a turn was prompted twice",
+   "failing": [
+    "one_prompt_per_turn"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "stub.lead",
+     "value": {
+      "at": 1,
+      "event": "prompt",
+      "text": "[wake w-again]"
+     }
+    },
+    {
+     "op": "push",
+     "path": "stub.lead",
+     "value": {
+      "at": 2,
+      "event": "prompt",
+      "text": "[wake w-again2]"
+     }
+    }
+   ]
+  }
+ ]
+}

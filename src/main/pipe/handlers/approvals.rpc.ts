@@ -45,9 +45,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { looksLikeApprovalPrompt } from '../../../daemon/approvals/approvalKeystrokes';
 import { parseTerminalPrompt } from '../../../daemon/approvals/terminalPromptParse';
-import { checkHqLane, hqResolvedBy, type HqLanePorts } from '../../deck/hqApprovalLane';
-import { getHqWorkspaceId, hqPresence, isHqApprovalPressEnabled, isMoaEnabled } from '../../deck/deckHqStore';
-import { loadWorkspaceMode } from '../../deck/deckAutonomyStore';
+import { loadWorkspaceMode, type AgentMode } from '../../deck/deckAutonomyStore';
 import { workspaceFactsSettled } from '../../workspace/workspaceFactsFeed';
 
 /** The daemon's approval list, narrowed to what target resolution needs. */
@@ -196,26 +194,6 @@ export const PRESS_REFUSAL_HINTS: Readonly<Record<string, string>> = {
     'an agent wmux did not launch — a human answers it',
   'facts-pending':
     'wmux is still handing the daemon a policy change (a mode or task just changed) — read the pane and try again in a moment',
-};
-
-/**
- * Hints for the HQ lane's own refusals (see deck/hqApprovalLane.ts). Kept apart
- * from PRESS_REFUSAL_HINTS: these are main's checks, not the daemon's.
- */
-export const HQ_REFUSAL_HINTS: Readonly<Record<string, string>> = {
-  'moa-off': 'Moa is off, so the HQ lane is closed',
-  'hq-missing': "the HQ workspace is missing, so the HQ lane is closed",
-  'hq-unknown': 'the HQ workspace has not been seen yet, so the HQ lane is closed',
-  'hq-press-off': 'the operator has not turned on HQ approval pressing (Settings → Moa)',
-  'hq-choice-key': 'the HQ lane only ever answers with the record\'s own option — omit choiceKey',
-  'task-closed': 'that worker has no open task, so it is no longer delegated',
-  'hq-lane-closed': 'the HQ lane closed while the press was queued — nothing was approved',
-  'hq-own-pane': "this is Moa's own prompt — only the human answers it",
-  'owner-ambiguous': 'that worker has more than one open owner, so the HQ cannot act for one of them',
-  'hq-approve-by-rule':
-    'the HQ does not approve another owner\'s worker: approvals that pass the rule are pressed ' +
-    'automatically and you are told afterwards; anything the rule left is with the human. You may deny.',
-  'owner-autonomy-off': "that worker's owner has autonomy off — the HQ does not answer for it, not even a deny",
 };
 
 // ─── Policy refusals escalate; raw input follows live state ────────────────
@@ -369,20 +347,11 @@ export function approvalBlockMessage(op: string, ptyId: string, record: PendingA
 export interface ApprovalsRpcDeps {
   /** Injected in tests; defaults to the main-hosted task ledger. */
   getLedger?: () => TaskLedger;
-  /** Injected in tests; defaults to the HQ store, presence and autonomy store. */
-  hq?: Omit<HqLanePorts, 'ledger'>;
+  /** The owner's LIVE autonomy mode. Injected in tests; defaults to the
+   *  autonomy store. */
+  modeOf?: (workspaceId: string) => AgentMode;
   /** Whether the daemon holds main's current facts; defaults to the publisher. */
   factsSettled?: () => boolean;
-}
-
-function defaultHqPorts(): Omit<HqLanePorts, 'ledger'> {
-  return {
-    getHq: () => getHqWorkspaceId(),
-    isMoaEnabled: () => isMoaEnabled(),
-    presence: (hq) => hqPresence(hq),
-    isOptedIn: () => isHqApprovalPressEnabled(),
-    modeOf: (ws) => loadWorkspaceMode(ws),
-  };
 }
 
 function deny(code: string, message: string): { ok: false; error: { code: string; message: string } } {
@@ -489,43 +458,6 @@ export function registerApprovalsRpc(
     const owned = ledgerOf()
       .list({ taskWorkspaceId: record.workspaceId })
       .some((e) => e.ownerWorkspaceId === callerWs);
-    // ── The HQ lane: the HQ answering a worker it does not own ──────────────
-    // Deny only, and only inside the lane's own conditions (hqApprovalLane.ts).
-    // A caller that is not the CURRENT HQ — any other brain, or the HQ before a
-    // switch — falls through to the plain not-your-task refusal.
-    const hqPorts = { ...(deps.hq ?? defaultHqPorts()), ledger: ledgerOf };
-    if (!owned && callerWs === hqPorts.getHq()) {
-      const lane = checkHqLane(
-        callerWs,
-        record,
-        { ...(parsed.choiceKey !== undefined ? { choiceKey: parsed.choiceKey } : {}), forDeny: parsed.decision === 'deny' },
-        hqPorts,
-      );
-      const hqRefusal = (reason: string) => ({
-        ok: false as const,
-        reason,
-        approvalId,
-        ptyId: targetPtyId,
-        ...(HQ_REFUSAL_HINTS[reason] ? { note: HQ_REFUSAL_HINTS[reason] } : {}),
-      });
-      if (!lane.ok) return hqRefusal(lane.reason);
-      if (parsed.decision === 'approve') return hqRefusal('hq-approve-by-rule');
-      // A deny is the safe direction everywhere else; here it still answers for
-      // an owner, and an owner with autonomy off has said nobody answers for it.
-      if (hqPorts.modeOf(lane.owner) === 'off') return hqRefusal('owner-autonomy-off');
-      const resolvedBy = hqResolvedBy(lane.hq, lane.owner);
-      console.log(`[hq-lane] HQ ${lane.hq} denies ${approvalId} on ${targetPtyId} (owner ${lane.owner})`);
-      const denied = (await dc.rpc('daemon.approvals.resolve', {
-        id: approvalId,
-        decision: 'deny',
-        resolvedBy,
-        resolver: 'automated',
-      })) as { ok?: boolean; reason?: string; pressRefusal?: string; durable?: boolean } | undefined;
-      if (denied?.ok) {
-        return { ok: true, approvalId, decision: 'deny', ptyId: targetPtyId, durable: denied.durable !== false };
-      }
-      return hqRefusal(denied?.pressRefusal ?? denied?.reason ?? 'not-found');
-    }
     if (!owned) {
       return {
         ok: false,
@@ -543,7 +475,7 @@ export function registerApprovalsRpc(
     // already holds: a mode lowered a moment ago has not necessarily reached
     // the daemon's table yet.
     if (parsed.decision === 'approve') {
-      const live = hqPorts.modeOf(callerWs);
+      const live = (deps.modeOf ?? loadWorkspaceMode)(callerWs);
       const stop = live !== 'danger' ? 'owner-not-danger' : !(deps.factsSettled ?? workspaceFactsSettled)() ? 'facts-pending' : null;
       if (stop) {
         return {

@@ -41,7 +41,8 @@ export interface MoaWakeWire {
   headers?: Record<string, string>;
 }
 
-export type MoaWakeState = 'pending' | 'accepted' | 'failed' | 'uncertain';
+/** `queued`: the agent factory took the message as a wake for its HQ bot. */
+export type MoaWakeState = 'pending' | 'accepted' | 'queued' | 'failed' | 'uncertain';
 
 export interface MoaWakeView {
   state: MoaWakeState;
@@ -71,6 +72,9 @@ function refusalWire(code: MoaWakeRefusalCode, clientMessageId: string): { wire:
     case 'duplicate':
       // Main already ran this id; the daemon lost track of how it went.
       return { wire: { status: 202, body: { state: 'uncertain', clientMessageId } }, release: false };
+    case 'factory_off':
+      // Nothing ran; only a factory send gets it, and it falls back first.
+      return { wire: fail(409, 'factory-off'), release: true };
   }
 }
 
@@ -130,6 +134,20 @@ export class MoaWakeService {
   }
 
   async wake(input: { owner: string; clientMessageId: string; text: string; deviceId?: string }): Promise<MoaWakeWire> {
+    return (await this.send(input, false)) as MoaWakeWire;
+  }
+
+  /**
+   * The agent factory's route (the desktop announced
+   * FACTORY_PHONE_MESSAGE_CAPABILITY): main queues the message for its HQ bot
+   * and answers `queued`, or `factory_off` — then the receipt is released and
+   * null comes back, so the caller takes the Moa path with the same id.
+   */
+  factoryMessage(input: { owner: string; clientMessageId: string; text: string; deviceId?: string }): Promise<MoaWakeWire | null> {
+    return this.send(input, true);
+  }
+
+  private async send(input: { owner: string; clientMessageId: string; text: string; deviceId?: string }, factory: boolean): Promise<MoaWakeWire | null> {
     const { owner, clientMessageId, text } = input;
     const desktop = this.deps.desktop();
     if (!desktop?.available || !desktop.supports(MOA_WAKE_COMMAND)) {
@@ -147,7 +165,11 @@ export class MoaWakeService {
     if (begun.kind === 'full') return { status: 409, body: { error: 'message-history-full', clientMessageId } };
     if (begun.kind !== 'new') return this.peek(owner, clientMessageId, text) ?? { status: 202, body: { state: 'uncertain', clientMessageId } };
 
-    const payload: MoaWakePayload = { clientMessageId, text, actor: owner, ...(input.deviceId ? { deviceId: input.deviceId } : {}) };
+    const payload: MoaWakePayload = {
+      clientMessageId, text, actor: owner,
+      ...(input.deviceId ? { deviceId: input.deviceId } : {}),
+      ...(factory ? { mode: 'factory' as const } : {}),
+    };
     let raw: unknown;
     try {
       raw = await desktop.request(MOA_WAKE_COMMAND, { ...payload });
@@ -165,6 +187,14 @@ export class MoaWakeService {
     }
     const result = parseMoaWakeResult(raw);
     if (!result) return this.finish(store, owner, clientMessageId, 'uncertain', { status: 202, body: { state: 'uncertain', clientMessageId } });
+    if (result.ok && result.queued) {
+      // A queued wake starts no Moa pane: nothing to wait for.
+      return this.finish(store, owner, clientMessageId, 'done', { status: 202, body: { state: 'queued', clientMessageId } });
+    }
+    if (!result.ok && result.code === 'factory_off' && factory) {
+      await store.release(owner, clientMessageId);
+      return null;
+    }
     if (result.ok) {
       const early = this.earlyFailures.get(receiptHash([owner, clientMessageId]));
       if (early) {
@@ -220,7 +250,7 @@ export class MoaWakeService {
     if (row.state === 'inFlight') return { state: 'pending' };
     const body = row.result?.body;
     if (row.state === 'uncertain' || !body) return { state: 'uncertain' };
-    const state = body.state === 'accepted' || body.state === 'failed' ? body.state : 'uncertain';
+    const state = body.state === 'accepted' || body.state === 'queued' || body.state === 'failed' ? body.state : 'uncertain';
     return { state, ...(state === 'failed' && typeof body.code === 'string' ? { code: body.code } : {}) };
   }
 

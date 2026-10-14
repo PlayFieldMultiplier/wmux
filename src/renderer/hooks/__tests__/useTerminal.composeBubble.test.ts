@@ -17,10 +17,9 @@ import { defaultBindings, resolveShortcut } from '../../../shared/keymap';
  * of encoding it, so exactly one of the two happens.
  *
  * But only for the surface that OWNS the chord. `useComposeShortcut` acts on
- * the workspace's active leaf, so a FloatingPane (Ctrl+`) or Deck
- * BrainTerminalEmbed xterm would have the key swallowed here and declined
- * there — a dead key, or a popover aimed at a different pty. Those surfaces do
- * not opt in and keep encoding 0x07.
+ * the workspace's active leaf, so a FloatingPane (Ctrl+`) xterm would have
+ * the key swallowed here and declined there — a dead key, or a popover aimed
+ * at a different pty. That surface does not opt in and keeps encoding 0x07.
  *
  * The chord predicate itself is unit-tested in
  * `terminal/__tests__/composeChord.test.ts`; jsdom cannot run xterm's custom
@@ -101,13 +100,11 @@ describe('only the active-leaf terminal owns the chord (#1280 review)', () => {
       .toMatch(/ownsComposeShortcut: true/);
   });
 
-  it('FloatingPane and BrainTerminalEmbed do NOT opt in', () => {
-    // Ctrl+` floating pane and Deck's brain embed are never the active leaf
-    // useComposeShortcut resolves, so the popover gate would decline and the
-    // key would die if the pane gate swallowed it.
+  it('FloatingPane does NOT opt in', () => {
+    // The Ctrl+` floating pane is never the active leaf useComposeShortcut
+    // resolves, so the popover gate would decline and the key would die if
+    // the pane gate swallowed it.
     expect(read('src/renderer/components/Terminal/FloatingPane.tsx'))
-      .not.toContain('ownsComposeShortcut');
-    expect(read('src/renderer/components/Deck/BrainTerminalEmbed.tsx'))
       .not.toContain('ownsComposeShortcut');
   });
 

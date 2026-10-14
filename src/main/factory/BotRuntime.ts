@@ -1,0 +1,931 @@
+// ─── Bot runtime — one engine session per live bot, turns from the queue ───
+//
+// Lifecycle per bot (design §4):
+//
+//   unknown ──(first wake)──▶ spawning ──▶ idle ◀──▶ running ──(turn end)──▶ idle
+//      └─(disabled)─▶ stopped          └─(failed ×2)─▶ parked{error}
+//   idle ──(budget)──▶ parked{budget}  (lifted by itself once the window allows)
+//   park / resume / interrupt from bot.* RPC; dispose on quit.
+//
+// Nothing spawns at start: every enabled bot is `unknown` until its first
+// queued wake runs. One turn per bot at a time and at most
+// `settings.globalConcurrentBots` bots in a turn; the wake queue is the only
+// serialiser, so a human message to a busy bot is queued, never refused.
+// The runtime only runs turns while the factory is enabled.
+//
+// A turn: the budget is checked, the item starts (one attempt more), the
+// bot's session is spawned or resumed from `sessions.json`, the wake prompt
+// is sent, and the turn is bounded by `budget.turnTimeoutMs`. A failed
+// attempt is retried once; the second failure parks the item and the bot
+// (`parked{error}`, a `bot.error` hook). A turn the owner interrupts ends
+// `interrupted` and is not replayed.
+//
+// Out of turns, the bot is parked `budget` with one `bot.budget_exhausted`
+// hook. The owner's own message still runs (counted as a turn): the budget
+// bounds what bots start — each other, routines, facts — not what the owner
+// asks. Nor does the budget drop the owner's other words: a wake carrying
+// them (an answer to a question, a dispatch the owner approved or asked for)
+// stays queued — on disk, so it survives a restart — with a `wake.held` hook
+// for the room's status card, and runs when the window allows a turn again
+// (a timer is armed for that time) or when the owner resumes the bot: resume
+// lets every held wake of that moment run even over budget. Any other wake
+// that meets the refusal (a mention, a routine, facts) is dropped `budget`.
+//
+// Switching the factory off stops spending at once: every running turn is
+// cancelled and ends `interrupted` with a `wake.interrupted` hook, as a turn
+// cut by a quit does, and every engine session is ended. Queued wakes stay
+// queued until the factory is on again.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import type { BotBinding, BotProfile, BotStatus } from '../../shared/bot';
+import type { Fact } from '../../shared/facts';
+import type { RoomCard, ThreadId } from '../../shared/room';
+import { WAKE_LIMITS, type WakeItem, type WakeReason } from '../../shared/wake';
+import type { BrainAdapter, BrainEvent } from '../deck/BrainAdapter';
+import { emitBotHook } from './botHooks';
+import type { BotEngineFactory } from './botEngines';
+import type { BotStore } from './botStore';
+import { budgetLeft, checkTurn, nextTurnAllowedAt, recordTurn, type BudgetRefusalReason } from './budget';
+import type { FactorySettings } from './factorySettings';
+import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
+import {
+  buildWakePrompt,
+  defaultBotSystemPrompt,
+  taskIdOfFactId,
+  type WakeHandoffSummary,
+  type WakePromptInput,
+  type WakePromptThread,
+  type WakeRoutineSummary,
+  type WakeTaskSummary,
+} from './wakePrompt';
+import type { WakeQueue } from './wakeQueue';
+import { redactStoredSecrets } from './secretRedaction';
+
+// ── sessions.json ───────────────────────────────────────────────────────────
+
+export const BOT_SESSIONS_VERSION = 1 as const;
+
+export interface BotSessionRecord {
+  sessionId: string;
+  /** The account the conversation runs on (null: the default login). */
+  accountId?: string | null;
+  /** The repository the conversation worked on (null: none). A session is
+   *  resumed only on the same one; a record without it predates it. */
+  repoPath?: string | null;
+  updatedAt: number;
+}
+
+export function botSessionsPath(wmuxDir: string): string {
+  return path.join(wmuxDir, 'factory', 'sessions.json');
+}
+
+/** `<wmuxDir>/factory/sessions.json`: each bot's engine session id, for resume. */
+export class BotSessionStore {
+  private sessions = new Map<string, BotSessionRecord>();
+  private readonly persister: FilePersister;
+
+  constructor(private readonly file: string) {
+    this.persister = createFilePersister(file, () => ({
+      version: BOT_SESSIONS_VERSION,
+      sessions: Object.fromEntries(this.sessions),
+    }));
+  }
+
+  /** Throws on another version; malformed entries are dropped. */
+  load(): void {
+    const raw = readVersionedFile(this.file, BOT_SESSIONS_VERSION);
+    this.sessions.clear();
+    const map = raw?.sessions && typeof raw.sessions === 'object' && !Array.isArray(raw.sessions)
+      ? (raw.sessions as Record<string, unknown>)
+      : {};
+    for (const [botId, v] of Object.entries(map)) {
+      const r = v as Record<string, unknown> | null;
+      if (!r || typeof r.sessionId !== 'string' || r.sessionId.length === 0 || r.sessionId.length > 200) continue;
+      if (!Number.isSafeInteger(r.updatedAt)) continue;
+      const accountId = typeof r.accountId === 'string' || r.accountId === null ? r.accountId : undefined;
+      const repoPath = typeof r.repoPath === 'string' || r.repoPath === null ? r.repoPath : undefined;
+      this.sessions.set(botId, {
+        sessionId: r.sessionId,
+        ...(accountId !== undefined ? { accountId } : {}),
+        ...(repoPath !== undefined ? { repoPath } : {}),
+        updatedAt: r.updatedAt as number,
+      });
+    }
+  }
+
+  get(botId: string): BotSessionRecord | null {
+    const r = this.sessions.get(botId);
+    return r ? { ...r } : null;
+  }
+
+  set(botId: string, rec: BotSessionRecord): void {
+    this.sessions.set(botId, { ...rec });
+    void this.flush().catch((err) => console.warn(`[factory] sessions.json write failed: ${String(err)}`));
+  }
+
+  delete(botId: string): void {
+    if (!this.sessions.delete(botId)) return;
+    void this.flush().catch((err) => console.warn(`[factory] sessions.json write failed: ${String(err)}`));
+  }
+
+  flush(): Promise<void> {
+    return this.persister.schedule();
+  }
+}
+
+// ── runtime ─────────────────────────────────────────────────────────────────
+
+/** The running turn of a bot, as fan-out reads it. */
+export interface BotTurn {
+  wakeId: string;
+  botId: string;
+  workspaceId: string;
+  startedAt: number;
+  /** The wake's room thread, when it has one. */
+  threadId?: ThreadId;
+}
+
+export interface BotRuntimeDeps {
+  store: BotStore;
+  queue: WakeQueue;
+  sessions: BotSessionStore;
+  settings: () => FactorySettings;
+  engines: BotEngineFactory;
+  wmuxDir: string;
+  now?: () => number;
+  /** Run `fn` soon, outside the current call stack (default setImmediate). */
+  defer?: (fn: () => void) => void;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+  /** The bot's system prompt (the roles module supplies the role's). */
+  systemPrompt?: (profile: BotProfile) => string;
+  /** Resolve fact ids to facts (the fact log), when wired. */
+  resolveFacts?: (ids: readonly string[]) => Fact[];
+  /** Resolve fan-out task ids to their ledger rows. */
+  resolveTasks?: (taskIds: readonly string[]) => WakeTaskSummary[];
+  /** Resolve a handoff (the handoff router), when wired. */
+  resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
+  /** A bot's status changed. */
+  onStatus?: (status: BotStatus) => void;
+}
+
+/** What a live session is bound to: its engine and the repository it
+ *  reads (botEngines.ts gives the adapter the root at spawn). */
+function sessionKey(profile: Pick<BotProfile, 'engine' | 'repo'>): string {
+  return JSON.stringify([profile.engine, profile.repo?.repoPath ?? null]);
+}
+
+interface LiveSession {
+  adapter: BrainAdapter;
+  /** The engine and repository it was spawned for (sessionKey): a profile
+   *  edit to another engine or repository respawns. */
+  engineKey: string;
+  /** A turn completed on it in this app run. */
+  attached: boolean;
+}
+
+interface RunningTurn {
+  item: WakeItem;
+  startedAt: number;
+  adapter: BrainAdapter | null;
+  interrupted: boolean;
+  /** Cancelled because the factory was switched off. */
+  offSwitch: boolean;
+  /** Ends the turn's wait on the engine now. */
+  stop: () => void;
+  stopped: Promise<'stop'>;
+}
+
+function runningTurn(item: WakeItem, startedAt: number): RunningTurn {
+  let stop = (): void => undefined;
+  const stopped = new Promise<'stop'>((resolve) => {
+    stop = () => resolve('stop');
+  });
+  return { item, startedAt, adapter: null, interrupted: false, offSwitch: false, stop, stopped };
+}
+
+/** What later factory modules plug into the runtime (the roles module's
+ *  system prompt, the fact log, the handoff router). Read at each use, so a
+ *  module that starts after the runtime still takes effect; a runtime dep of
+ *  the same name wins. */
+export interface BotRuntimePorts {
+  systemPrompt?: (profile: BotProfile) => string;
+  resolveFacts?: (ids: readonly string[]) => Fact[];
+  resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
+  /** The newest `n` cards of a room thread, oldest first, and whether older
+   *  ones exist (the rooms module). */
+  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number) => { cards: RoomCard[]; truncated: boolean } | null;
+  /** A routine as its wake shows it (the routines module). */
+  resolveRoutine?: (routineId: string) => WakeRoutineSummary | null;
+  /** Told when a bot is parked or resumed by hand, switched off or on, or
+   *  removed (the routines module pauses and resumes its routines). */
+  onBotLifecycle?: (botId: string, event: BotLifecycleEvent) => void;
+  /** What the room says right now (wakeContext.ts): approvals as they
+   *  stand, the other bots' replies to a room message, the language to
+   *  write in, the owner's clock. */
+  wakeContext?: (profile: BotProfile, item: WakeItem) => Partial<WakePromptInput>;
+  /** A turn finished: the bot's open questions the owner's words in it
+   *  answered close (handoffRouter.ts closeAnsweredInChat). */
+  onTurnDone?: (profile: BotProfile, item: WakeItem) => void;
+  /** Whether the modules a wake prompt reads from (rooms, handoffs,
+   *  routines) have started. Until then no turn starts, for at most
+   *  CONTEXT_WAIT_MS. Absent: ready. */
+  contextReady?: () => boolean;
+}
+
+/** Longest the runtime waits at launch for the modules its wake prompts
+ *  read from; past it, a module that failed to start holds no bot. */
+export const CONTEXT_WAIT_MS = 60_000;
+const CONTEXT_POLL_MS = 200;
+
+export type BotLifecycleEvent = 'parked' | 'resumed' | 'disabled' | 'enabled' | 'removed';
+
+/** Cards of the wake's thread a wake prompt carries. */
+export const WAKE_THREAD_TAIL_CARDS = 12;
+
+/** Longest one bot's turn on a room-wide owner message holds the next
+ *  bot's turn on the same message. */
+export const ROOM_RUN_STAGGER_MS = 20_000;
+
+/** The run of a room-wide owner message a wake answers, or null. Pure. */
+export function roomRunOf(item: Pick<WakeItem, 'reason'>): string | null {
+  const r = item.reason;
+  return r.kind === 'human' && r.room === true && r.runId ? r.runId : null;
+}
+
+let ports: BotRuntimePorts = {};
+
+/** Merge `next` into the runtime ports (undefined fields are left as they were). */
+export function setBotRuntimePorts(next: BotRuntimePorts): void {
+  ports = {
+    ...ports,
+    ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)),
+  };
+}
+
+/** Test-only. */
+export function __resetBotRuntimePortsForTesting(): void {
+  ports = {};
+}
+
+export type BotActionResult = { ok: true; status: BotStatus } | { ok: false; code: 'not_found' | 'not_running'; message: string };
+
+export function botCwd(wmuxDir: string, botId: string): string {
+  return path.join(wmuxDir, 'factory', 'bots', botId);
+}
+
+export class BotRuntime {
+  private readonly live = new Map<string, LiveSession>();
+  private readonly running = new Map<string, RunningTurn>();
+  private readonly lastError = new Map<string, { message: string; at: number }>();
+  private readonly now: () => number;
+  private readonly defer: (fn: () => void) => void;
+  private readonly setTimer: (fn: () => void, ms: number) => unknown;
+  private readonly clearTimer: (handle: unknown) => void;
+  private kickPending = false;
+  private heldTimer: unknown = null;
+  private heldAt: number | null = null;
+  private contextTimer: unknown = null;
+  private contextWaitSince: number | null = null;
+  private contextSeen = false;
+  private disposed = false;
+  /** Held wakes the owner let through by resuming their bot (this app run). */
+  private readonly released = new Set<string>();
+
+  constructor(private readonly deps: BotRuntimeDeps) {
+    this.now = deps.now ?? Date.now;
+    this.defer = deps.defer ?? ((fn) => setImmediate(fn));
+    this.setTimer = deps.setTimer ?? ((fn, ms) => {
+      const t = setTimeout(fn, ms);
+      t.unref?.();
+      return t;
+    });
+    this.clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h as NodeJS.Timeout));
+  }
+
+  // ── status ────────────────────────────────────────────────────────────────
+
+  status(botId: string): BotStatus | null {
+    const profile = this.deps.store.get(botId);
+    if (!profile) return null;
+    const run = this.running.get(botId);
+    const live = this.live.get(botId);
+    const presence: BotStatus['presence'] = !profile.enabled
+      ? 'stopped'
+      : run
+        ? 'running'
+        : profile.parked
+          ? 'parked'
+          : live?.attached
+            ? 'idle'
+            : 'unknown';
+    const left = budgetLeft(profile.budget, this.deps.store.usageOf(botId), this.now());
+    const sessionId = live?.adapter.sessionId ?? this.deps.sessions.get(botId)?.sessionId;
+    const err = this.lastError.get(botId);
+    return {
+      botId,
+      presence,
+      ...(sessionId ? { sessionId } : {}),
+      ...(run ? { currentTurn: { wakeId: run.item.id, startedAt: run.startedAt } } : {}),
+      queueDepth: this.deps.queue.depth(botId),
+      budgetLeft: { turnsHour: left.turnsHour, turnsDay: left.turnsDay, workerHoursDay: left.workerHoursDay },
+      ...(err ? { lastError: { ...err } } : {}),
+    };
+  }
+
+  private pushStatus(botId: string): void {
+    const s = this.status(botId);
+    if (!s || !this.deps.onStatus) return;
+    try {
+      this.deps.onStatus(s);
+    } catch {
+      /* a listener never breaks the runtime */
+    }
+  }
+
+  /** A wake's state, or null when the queue no longer holds it. */
+  wakeState(wakeId: string): WakeItem['state'] | null {
+    return this.deps.queue.get(wakeId)?.state ?? null;
+  }
+
+  /** The bot's running turn, or null. */
+  currentTurn(botId: string): BotTurn | null {
+    const run = this.running.get(botId);
+    if (!run) return null;
+    return {
+      wakeId: run.item.id, botId, workspaceId: run.item.workspaceId, startedAt: run.startedAt,
+      ...(run.item.threadId ? { threadId: run.item.threadId } : {}),
+    };
+  }
+
+  // ── actions ───────────────────────────────────────────────────────────────
+
+  /** Queue a wake for a bot. A text wake is the owner's message (priority 0);
+   *  without text it is a manual wake (priority 1). Null when it was dropped. */
+  wake(
+    botId: string,
+    opts: { text?: string; source?: 'desktop' | 'phone'; clientMessageId?: string; threadId?: ThreadId } = {},
+  ): WakeItem | null {
+    const profile = this.deps.store.get(botId);
+    if (!profile) return null;
+    const reason: WakeReason = opts.text !== undefined
+      ? {
+          kind: 'human',
+          text: opts.text,
+          source: opts.source ?? 'desktop',
+          ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
+        }
+      : { kind: 'manual', by: 'human' };
+    return this.deps.queue.enqueue({
+      botId,
+      workspaceId: profile.workspaceId,
+      reason,
+      priority: opts.text !== undefined ? 0 : 1,
+      ...(opts.threadId ? { threadId: opts.threadId } : {}),
+    });
+  }
+
+  /** Park a bot by hand: it takes no new turn until resumed (a running turn finishes). */
+  park(botId: string): BotActionResult {
+    if (!this.deps.store.setParked(botId, { reason: 'human', at: this.now() })) return notFound(botId);
+    this.lifecycle(botId, 'parked');
+    this.pushStatus(botId);
+    return { ok: true, status: this.status(botId) as BotStatus };
+  }
+
+  /** Lift any park; the bot's parked wakes go back to the queue, and every
+   *  queued wake carrying the owner's words may run even out of turns. */
+  resume(botId: string): BotActionResult {
+    if (!this.deps.store.setParked(botId, null)) return notFound(botId);
+    this.lastError.delete(botId);
+    this.deps.queue.unparkAll(botId);
+    for (const item of this.deps.queue.list({ botId, states: ['queued'] })) {
+      if (this.carriesOwnerWords(item)) this.released.add(item.id);
+    }
+    this.lifecycle(botId, 'resumed');
+    this.kick();
+    this.pushStatus(botId);
+    return { ok: true, status: this.status(botId) as BotStatus };
+  }
+
+  /** Stop the running turn. It ends `interrupted` and is not replayed. */
+  interrupt(botId: string): BotActionResult {
+    if (!this.deps.store.get(botId)) return notFound(botId);
+    const run = this.running.get(botId);
+    if (!run) return { ok: false, code: 'not_running', message: `bot ${botId} is not running a turn` };
+    run.interrupted = true;
+    try {
+      run.adapter?.interrupt();
+    } catch {
+      /* best effort */
+    }
+    return { ok: true, status: this.status(botId) as BotStatus };
+  }
+
+  /** A profile changed (bot.update): a disabled bot loses its session and
+   *  its queue; an engine or repository change respawns on the next turn. */
+  profileChanged(botId: string): void {
+    const profile = this.deps.store.get(botId);
+    if (!profile || !profile.enabled) {
+      this.endSession(botId);
+      this.deps.queue.dropAllFor(botId, 'bot_disabled');
+      this.forgetReleased(botId);
+      if (profile) this.lifecycle(botId, 'disabled');
+    } else {
+      this.lifecycle(botId, 'enabled');
+      const live = this.live.get(botId);
+      if (live && live.engineKey !== sessionKey(profile) && !this.running.has(botId)) this.endSession(botId);
+    }
+    this.kick();
+    this.pushStatus(botId);
+  }
+
+  /** bot.remove: end the session (its token is revoked), drop its wakes and
+   *  its saved session id, and delete the profile. The bot's folder is kept. */
+  remove(botId: string): boolean {
+    if (!this.deps.store.get(botId)) return false;
+    const run = this.running.get(botId);
+    if (run) {
+      run.interrupted = true;
+      run.adapter?.interrupt();
+    }
+    this.endSession(botId);
+    this.deps.queue.dropAllFor(botId, 'bot_disabled');
+    this.forgetReleased(botId);
+    this.deps.sessions.delete(botId);
+    this.lastError.delete(botId);
+    const removed = this.deps.store.remove(botId);
+    if (removed) this.lifecycle(botId, 'removed');
+    return removed;
+  }
+
+  private lifecycle(botId: string, event: BotLifecycleEvent): void {
+    try {
+      ports.onBotLifecycle?.(botId, event);
+    } catch (err) {
+      console.warn(`[factory] bot ${botId} ${event}: a listener failed: ${String(err)}`);
+    }
+  }
+
+  /** The factory is off: cancel every running turn and end every session. */
+  private halt(): void {
+    for (const run of this.running.values()) {
+      if (run.offSwitch) continue;
+      run.interrupted = true;
+      run.offSwitch = true;
+      try {
+        run.adapter?.interrupt();
+      } catch {
+        /* best effort */
+      }
+      run.stop();
+    }
+    for (const botId of [...this.live.keys()]) this.endSession(botId);
+  }
+
+  private endSession(botId: string): void {
+    const live = this.live.get(botId);
+    if (!live) return;
+    this.live.delete(botId);
+    try {
+      live.adapter.dispose();
+    } catch {
+      /* best effort */
+    }
+  }
+
+  // ── scheduling ────────────────────────────────────────────────────────────
+
+  /** Schedule a pass over the queue (coalesced, never re-entrant). */
+  kick(): void {
+    if (this.kickPending || this.disposed) return;
+    this.kickPending = true;
+    this.defer(() => {
+      this.kickPending = false;
+      this.pump();
+    });
+  }
+
+  private armHeldTimer(at: number): void {
+    if (this.heldAt !== null && this.heldAt <= at) return;
+    if (this.heldTimer !== null) this.clearTimer(this.heldTimer);
+    this.heldAt = at;
+    this.heldTimer = this.setTimer(() => {
+      this.heldTimer = null;
+      this.heldAt = null;
+      this.kick();
+    }, Math.max(0, at - this.now()));
+  }
+
+  private pump(): void {
+    if (this.disposed) return;
+    const settings = this.deps.settings();
+    if (!settings.enabled) {
+      this.halt();
+      return;
+    }
+    if (!this.contextReady()) return;
+    const cap = settings.globalConcurrentBots;
+    const now = this.now();
+    // Bots with work, most urgent next item first.
+    const ready: Array<{ profile: BotProfile; item: WakeItem }> = [];
+    for (const botId of this.deps.queue.botsWithQueued()) {
+      if (this.running.has(botId)) continue;
+      const profile = this.deps.store.get(botId);
+      if (!profile || !profile.enabled) {
+        this.deps.queue.dropAllFor(botId, 'bot_disabled');
+        continue;
+      }
+      if (profile.parked && profile.parked.reason !== 'budget') continue;
+      const turn = checkTurn(profile.budget, this.deps.store.usageOf(botId), now);
+      if (!turn.ok) {
+        // The owner's own message always runs (it counts as a turn): the
+        // budget bounds what the bots start, not what the owner asks.
+        const head = this.deps.queue.next(botId);
+        if (head && head.reason.kind === 'human') {
+          ready.push({ profile, item: head });
+          continue;
+        }
+        const released = this.nextReleased(botId);
+        if (released) {
+          ready.push({ profile, item: released });
+          continue;
+        }
+        if (!profile.parked) {
+          const head = this.deps.queue.next(botId);
+          if (!head) {
+            const at = this.deps.queue.nextHeldAt(botId);
+            if (at !== null) this.armHeldTimer(at);
+            continue;
+          }
+          this.outOfTurns(profile, head, turn.reason, now);
+        }
+        this.noticeHeld(profile, now);
+        continue;
+      }
+      if (profile.parked) {
+        this.deps.store.setParked(botId, null);
+        delete profile.parked;
+      }
+      const item = this.deps.queue.next(botId);
+      if (!item) {
+        const at = this.deps.queue.nextHeldAt(botId);
+        if (at !== null) this.armHeldTimer(at);
+        continue;
+      }
+      ready.push({ profile, item });
+    }
+    ready.sort((a, b) => a.item.priority - b.item.priority || a.item.enqueuedAt - b.item.enqueuedAt);
+    // The bots one room-wide owner message woke answer one after another, so
+    // each sees what the others said (wakeContext.ts); a turn that runs long
+    // stops holding the next one after ROOM_RUN_STAGGER_MS.
+    const runStarted = new Map<string, number>();
+    for (const t of this.running.values()) {
+      const id = roomRunOf(t.item);
+      if (id) runStarted.set(id, Math.max(runStarted.get(id) ?? 0, t.startedAt));
+    }
+    for (const { profile, item } of ready) {
+      if (this.running.size >= cap) break;
+      const run = roomRunOf(item);
+      const since = run ? runStarted.get(run) : undefined;
+      if (since !== undefined && now - since < ROOM_RUN_STAGGER_MS) {
+        this.armHeldTimer(since + ROOM_RUN_STAGGER_MS);
+        continue;
+      }
+      const started = this.deps.queue.start(item.id);
+      if (!started) continue;
+      if (run) runStarted.set(run, now);
+      this.deps.store.mutateUsage(profile.id, (u) => recordTurn(u, now));
+      this.running.set(profile.id, runningTurn(started, now));
+      this.pushStatus(profile.id);
+      void this.runTurn(profile, started).catch((err) => {
+        console.error(`[factory] bot ${profile.id} turn crashed: ${String(err)}`);
+      });
+    }
+  }
+
+  /** Whether the wake prompt's sources are up (BotRuntimePorts.contextReady);
+   *  once they are, or once CONTEXT_WAIT_MS passed, it stays true. While not,
+   *  a pass is retried shortly. */
+  private contextReady(): boolean {
+    const check = ports.contextReady;
+    if (!check || this.contextSeen) return true;
+    let ok = false;
+    try {
+      ok = check();
+    } catch {
+      ok = false;
+    }
+    const now = this.now();
+    this.contextWaitSince ??= now;
+    if (!ok && now - this.contextWaitSince >= CONTEXT_WAIT_MS) {
+      console.warn('[factory] bots start without every factory module running');
+      ok = true;
+    }
+    if (ok) {
+      this.contextSeen = true;
+      return true;
+    }
+    if (this.contextTimer === null) {
+      this.contextTimer = this.setTimer(() => {
+        this.contextTimer = null;
+        this.kick();
+      }, CONTEXT_POLL_MS);
+    }
+    return false;
+  }
+
+  /** Whether a wake carries the owner's words: their message, or a handoff
+   *  that does (an answer, an approved or requested dispatch). A handoff
+   *  that cannot be read counts: holding it never loses it. */
+  private carriesOwnerWords(item: WakeItem): boolean {
+    const r = item.reason;
+    if (r.kind === 'human') return true;
+    if (r.kind !== 'handoff') return false;
+    let h: WakeHandoffSummary | null = null;
+    try {
+      h = (this.deps.resolveHandoff ?? ports.resolveHandoff)?.(r.handoffId) ?? null;
+    } catch {
+      h = null;
+    }
+    return h === null || h.ownerWords === true;
+  }
+
+  /** Forget what the owner let through for a bot that is gone or off, and
+   *  every release whose wake is no longer live. */
+  private forgetReleased(botId: string): void {
+    for (const id of [...this.released]) {
+      const item = this.deps.queue.get(id);
+      if (!item || item.botId === botId || (item.state !== 'queued' && item.state !== 'running')) this.released.delete(id);
+    }
+  }
+
+  /** The bot's next queued wake the owner let through, or null. */
+  private nextReleased(botId: string): WakeItem | null {
+    const now = this.now();
+    for (const id of [...this.released]) {
+      const state = this.deps.queue.get(id)?.state;
+      if (state !== 'queued' && state !== 'running') this.released.delete(id);
+    }
+    return this.deps.queue.list({ botId, states: ['queued'] })
+      .filter((i) => this.released.has(i.id) && (i.notBefore === undefined || i.notBefore <= now))
+      .sort((a, b) => a.priority - b.priority || a.enqueuedAt - b.enqueuedAt)[0] ?? null;
+  }
+
+  /** The bot just ran out of turns at `head`: park it, report it once, and
+   *  drop `head` unless it carries the owner's words (then it waits queued). */
+  private outOfTurns(profile: BotProfile, head: WakeItem, reason: BudgetRefusalReason, now: number): void {
+    if (!this.carriesOwnerWords(head)) this.deps.queue.drop(head.id, 'budget');
+    this.deps.store.setParked(profile.id, { reason: 'budget', at: now });
+    profile.parked = { reason: 'budget', at: now };
+    emitBotHook({ type: 'bot.budget_exhausted', botId: profile.id, workspaceId: profile.workspaceId, reason, wakeId: head.id, at: now });
+    this.pushStatus(profile.id);
+  }
+
+  /** Out of turns: report each wake held for the owner (the room keeps one
+   *  card per wake) and wake up when the budget allows a turn again. */
+  private noticeHeld(profile: BotProfile, now: number): void {
+    const until = nextTurnAllowedAt(profile.budget, this.deps.store.usageOf(profile.id), now);
+    const finite = Number.isFinite(until);
+    if (finite) this.armHeldTimer(until);
+    for (const item of this.deps.queue.list({ botId: profile.id, states: ['queued'] })) {
+      if (!this.carriesOwnerWords(item)) continue;
+      emitBotHook({
+        type: 'wake.held', botId: profile.id, workspaceId: profile.workspaceId, wakeId: item.id,
+        ...(item.threadId ? { threadId: item.threadId } : {}),
+        until: finite ? until : null,
+        at: now,
+      });
+    }
+  }
+
+  private session(profile: BotProfile): { ok: true; live: LiveSession } | { ok: false; message: string } {
+    const engineKey = sessionKey(profile);
+    const cur = this.live.get(profile.id);
+    if (cur && cur.engineKey === engineKey) return { ok: true, live: cur };
+    if (cur) this.endSession(profile.id);
+    const binding: BotBinding = { workspaceId: profile.workspaceId, botId: profile.id, role: profile.role };
+    const cwd = botCwd(this.deps.wmuxDir, profile.id);
+    try {
+      fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    } catch (err) {
+      return { ok: false, message: `could not create the bot folder: ${String(err)}` };
+    }
+    let spawned: ReturnType<BotEngineFactory>;
+    try {
+      spawned = this.deps.engines({ profile, binding, cwd, wmuxDir: this.deps.wmuxDir, acpStub: this.deps.settings().acpStub === true });
+    } catch (err) {
+      return { ok: false, message: String(err) };
+    }
+    if (!spawned.ok) return { ok: false, message: spawned.message };
+    // A conversation about another repository is not resumed.
+    const prior = this.deps.sessions.get(profile.id);
+    const saved = prior && (prior.repoPath === undefined || prior.repoPath === (profile.repo?.repoPath ?? null)) ? prior : null;
+    spawned.adapter.start({
+      systemPrompt: redactStoredSecrets((this.deps.systemPrompt ?? ports.systemPrompt ?? defaultBotSystemPrompt)(profile)),
+      ...(saved ? { resumeSessionId: saved.sessionId, ...(saved.accountId !== undefined ? { resumeAccountId: saved.accountId } : {}) } : {}),
+    });
+    const live: LiveSession = { adapter: spawned.adapter, engineKey, attached: false };
+    this.live.set(profile.id, live);
+    return { ok: true, live };
+  }
+
+  private prompt(profile: BotProfile, item: WakeItem): string {
+    const r = item.reason;
+    let facts: Fact[] = [];
+    let tasks: WakeTaskSummary[] = [];
+    let handoff: WakeHandoffSummary | null = null;
+    let routine: WakeRoutineSummary | null = null;
+    let thread: WakePromptThread | null = null;
+    try {
+      if (item.threadId) {
+        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS);
+        if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated };
+      }
+      if (r.kind === 'facts') {
+        facts = (this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? [];
+        const taskIds = r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null);
+        if (taskIds.length > 0) tasks = this.deps.resolveTasks?.(taskIds) ?? [];
+      } else if (r.kind === 'handoff' || r.kind === 'mention') {
+        handoff = (this.deps.resolveHandoff ?? ports.resolveHandoff)?.(r.handoffId) ?? null;
+      } else if (r.kind === 'routine') {
+        routine = ports.resolveRoutine?.(r.routineId) ?? null;
+      }
+    } catch (err) {
+      console.warn(`[factory] wake context for ${item.id} could not be read: ${String(err)}`);
+    }
+    let roster: Array<{ botId: string; name: string }> = [];
+    try {
+      roster = this.deps.store.list({ workspaceId: profile.workspaceId })
+        .filter((b) => b.enabled && b.id !== profile.id)
+        .map((b) => ({ botId: b.id, name: b.name || b.role }));
+    } catch {
+      roster = [];
+    }
+    let extras: Partial<WakePromptInput> = {};
+    try {
+      extras = ports.wakeContext?.(profile, item) ?? {};
+    } catch (err) {
+      console.warn(`[factory] wake context for ${item.id} could not be read: ${String(err)}`);
+    }
+    return buildWakePrompt({ ...extras, item, profile, facts, tasks, handoff, thread, routine, roster });
+  }
+
+  private async runTurn(profile: BotProfile, item: WakeItem): Promise<void> {
+    const botId = profile.id;
+    const run = this.running.get(botId);
+    let outcome: 'done' | 'failed' | 'interrupted' | 'engine' = 'failed';
+    let errorMessage = '';
+    try {
+      const s = this.session(profile);
+      if (!s.ok) {
+        outcome = 'engine';
+        errorMessage = s.message;
+        return;
+      }
+      if (run) run.adapter = s.live.adapter;
+      const result = await this.drive(s.live, this.prompt(profile, item), profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped);
+      if (run?.interrupted) {
+        outcome = 'interrupted';
+      } else if (result.ok) {
+        outcome = 'done';
+        s.live.attached = true;
+        const sessionId = result.sessionId ?? s.live.adapter.sessionId;
+        if (sessionId) {
+          const accountId = s.live.adapter.conversationAccountId;
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, updatedAt: this.now() });
+        }
+      } else {
+        errorMessage = result.error;
+        // A timed-out turn may still be running in the engine: never send the
+        // retry into the same session, start a fresh one.
+        if ('timedOut' in result && result.timedOut) this.endSession(botId);
+      }
+    } catch (err) {
+      if (run?.interrupted) outcome = 'interrupted';
+      else errorMessage = String(err);
+    } finally {
+      this.settle(profile, item, outcome, errorMessage, run?.offSwitch === true);
+    }
+  }
+
+  /** Send one prompt and consume the turn, bounded by `timeoutMs`. */
+  private async drive(
+    live: LiveSession,
+    prompt: string,
+    timeoutMs: number,
+    interrupted: () => boolean,
+    stopped: Promise<'stop'> = new Promise<'stop'>(() => undefined),
+  ): Promise<{ ok: true; sessionId: string | null } | { ok: false; error: string; timedOut?: true }> {
+    // A stored bot secret never reaches a bot's prompt (secretRedaction.ts).
+    const iterator = live.adapter.send(redactStoredSecrets(prompt))[Symbol.asyncIterator]();
+    let timer: unknown = null;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = this.setTimer(() => resolve('timeout'), timeoutMs);
+    });
+    let error = '';
+    try {
+      for (;;) {
+        const next = await Promise.race([iterator.next(), timeout, stopped]);
+        if (next === 'stop') {
+          void Promise.resolve(iterator.return?.()).catch(() => undefined);
+          return { ok: false, error: 'interrupted' };
+        }
+        if (next === 'timeout') {
+          try {
+            live.adapter.interrupt();
+          } catch {
+            /* best effort */
+          }
+          void Promise.resolve(iterator.return?.()).catch(() => undefined);
+          return { ok: false, error: `the turn ran past ${Math.round(timeoutMs / 1000)}s`, timedOut: true };
+        }
+        if (next.done) break;
+        const ev: BrainEvent = next.value;
+        if (ev.type === 'turn-end') {
+          // Let the adapter's own cleanup run (its generator is parked on this yield).
+          await Promise.resolve(iterator.return?.()).catch(() => undefined);
+          return { ok: true, sessionId: ev.sessionId };
+        }
+        if (ev.type === 'error') error = ev.message;
+      }
+    } finally {
+      if (timer !== null) this.clearTimer(timer);
+    }
+    if (interrupted()) return { ok: false, error: 'interrupted' };
+    return { ok: false, error: error || 'the turn ended without a result' };
+  }
+
+  private settle(profile: BotProfile, item: WakeItem, outcome: 'done' | 'failed' | 'interrupted' | 'engine', message: string, offSwitch = false): void {
+    const botId = profile.id;
+    const at = this.now();
+    this.running.delete(botId);
+    // Quitting: the item stays `running` on disk, so the next start marks it
+    // interrupted (R8) instead of replaying it.
+    if (this.disposed) return;
+    if (outcome !== 'failed' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS) this.released.delete(item.id);
+    if (outcome === 'done') {
+      this.deps.queue.finish(item.id);
+      this.lastError.delete(botId);
+      try {
+        ports.onTurnDone?.(profile, item);
+      } catch (err) {
+        console.warn(`[factory] after the turn of ${item.id}: ${String(err)}`);
+      }
+    } else if (outcome === 'interrupted') {
+      this.deps.queue.interrupt(item.id);
+      // Cut by the off switch: reported like a turn a quit cut (R8).
+      if (offSwitch) {
+        emitBotHook({
+          type: 'wake.interrupted', botId, workspaceId: item.workspaceId, wakeId: item.id,
+          ...(item.threadId ? { threadId: item.threadId } : {}),
+          at,
+        });
+      }
+    } else {
+      this.lastError.set(botId, { message: message.slice(0, 500), at });
+      const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
+      if (!giveUp) {
+        this.deps.queue.retry(item.id);
+      } else {
+        this.deps.queue.park(item.id);
+        if (this.deps.store.get(botId)) this.deps.store.setParked(botId, { reason: 'error', at });
+        emitBotHook({ type: 'bot.error', botId, workspaceId: profile.workspaceId, message: message.slice(0, 500), wakeId: item.id, at });
+      }
+    }
+    this.pushStatus(botId);
+    this.kick();
+  }
+
+  /** On quit: interrupt running turns, end every session (revoking tokens). */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.heldTimer !== null) this.clearTimer(this.heldTimer);
+    if (this.contextTimer !== null) this.clearTimer(this.contextTimer);
+    for (const run of this.running.values()) {
+      try {
+        run.adapter?.interrupt();
+      } catch {
+        /* best effort */
+      }
+    }
+    for (const botId of [...this.live.keys()]) this.endSession(botId);
+  }
+}
+
+function notFound(botId: string): { ok: false; code: 'not_found'; message: string } {
+  return { ok: false, code: 'not_found', message: `no bot ${botId}` };
+}
+
+let current: BotRuntime | null = null;
+
+/** Set by the bot runtime module's start(). */
+export function setBotRuntime(runtime: BotRuntime | null): void {
+  current = runtime;
+}
+
+export function getBotRuntime(): BotRuntime | null {
+  return current;
+}

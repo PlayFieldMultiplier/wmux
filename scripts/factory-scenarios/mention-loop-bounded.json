@@ -1,0 +1,217 @@
+{
+  "name": "mention-loop-bounded",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Five bots in one room each pass the round to the next by a mention, forever. The first round is cut by an app restart while the fourth bot is mid-turn: its wake ends interrupted and is never replayed, and no card wakes any bot twice. The owner starts a second round: it runs to the chain cap (depth 6) and the next hop is refused with a refusal card.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Over to triage",
+                    "body": "lead passes to triage.",
+                    "mentions": [
+                      "{{bot.triage}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "triage",
+        "role": "triage",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Over to verifier",
+                    "body": "triage passes to verifier.",
+                    "mentions": [
+                      "{{bot.verifier}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Over to maintainer",
+                    "body": "verifier passes to maintainer.",
+                    "mentions": [
+                      "{{bot.maintainer}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "maintainer",
+        "role": "maintainer",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "sleep": 15000
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Over to moa",
+                    "body": "maintainer passes to moa.",
+                    "mentions": [
+                      "{{bot.moa}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Over to lead",
+                    "body": "moa passes to lead.",
+                    "mentions": [
+                      "{{bot.lead}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "round-a",
+      "post": {
+        "title": "Pass it on",
+        "body": "Start the round.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "fourth running",
+      "cond": {
+        "wakes": {
+          "bot": "maintainer",
+          "state": "running"
+        }
+      },
+      "timeoutMs": 90000,
+      "required": true
+    },
+    {
+      "do": "restart"
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet after restart",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "post",
+      "label": "round-b",
+      "post": {
+        "title": "Pass it on again",
+        "body": "Start another round.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "capped",
+      "cond": {
+        "handoffs": {
+          "status": "refused"
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs"
+    ],
+    "rounds": [
+      "round-a",
+      "round-b"
+    ],
+    "interrupted": "maintainer",
+    "maxDepth": 6
+  }
+}

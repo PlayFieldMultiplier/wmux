@@ -1,0 +1,459 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "presence-unknown",
+  "run": 1,
+  "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+  "botKeys": {
+   "lead": "bot-d7e8612b",
+   "triage": "bot-d5124cba",
+   "verifier": "bot-699c5670"
+  },
+  "injected": [
+   {
+    "label": null,
+    "kind": "card",
+    "id": "c-mv540dwcae58b9eb1f",
+    "threadId": "general",
+    "at": 1791800929882
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "at": 1791800929882
+   },
+   {
+    "do": "waitFor",
+    "label": "lead done",
+    "at": 1791800929889,
+    "doneAt": 1791800935413,
+    "ok": true
+   },
+   {
+    "do": "rpc",
+    "at": 1791800935413
+   },
+   {
+    "do": "sleep",
+    "at": 1791800935417
+   },
+   {
+    "do": "snapshotRead",
+    "label": "bots",
+    "at": 1791800936420
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [
+   {
+    "label": "bots",
+    "result": {
+     "id": "renderer-1791800936423-rk7hnf",
+     "ok": true,
+     "result": {
+      "ok": true,
+      "bots": [
+       {
+        "bot": {
+         "version": 1,
+         "id": "bot-d7e8612b",
+         "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+         "role": "lead",
+         "name": "Lead",
+         "engine": {
+          "kind": "acp",
+          "command": "<path>",
+          "args": [
+           "<path>",
+           "--script",
+           "<path>",
+           "--log",
+           "<path>"
+          ]
+         },
+         "triggers": [
+          {
+           "kind": "task.done"
+          },
+          {
+           "kind": "task.failed"
+          },
+          {
+           "kind": "task.input_required"
+          },
+          {
+           "kind": "merge.refused"
+          }
+         ],
+         "budget": {
+          "maxTurnsPerHour": 6,
+          "maxTurnsPerDay": 40,
+          "maxConcurrentWorkers": 3,
+          "maxWorkerHoursPerDay": 6,
+          "turnTimeoutMs": 600000
+         },
+         "enabled": true,
+         "createdAt": 1791800929873,
+         "updatedAt": 1791800929873
+        },
+        "status": {
+         "botId": "bot-d7e8612b",
+         "presence": "idle",
+         "sessionId": "stub-19090426d476",
+         "queueDepth": 0,
+         "budgetLeft": {
+          "turnsHour": 5,
+          "turnsDay": 39,
+          "workerHoursDay": 6
+         }
+        }
+       },
+       {
+        "bot": {
+         "version": 1,
+         "id": "bot-d5124cba",
+         "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+         "role": "triage",
+         "name": "Triage",
+         "engine": {
+          "kind": "acp",
+          "command": "<path>",
+          "args": [
+           "<path>",
+           "--script",
+           "<path>",
+           "--log",
+           "<path>"
+          ]
+         },
+         "triggers": [
+          {
+           "kind": "issue.opened"
+          },
+          {
+           "kind": "issue.labelled",
+           "filter": {
+            "labelsAny": [
+             "bug",
+             "triage"
+            ]
+           }
+          }
+         ],
+         "budget": {
+          "maxTurnsPerHour": 6,
+          "maxTurnsPerDay": 40,
+          "maxConcurrentWorkers": 1,
+          "maxWorkerHoursPerDay": 4,
+          "turnTimeoutMs": 600000
+         },
+         "enabled": true,
+         "createdAt": 1791800929876,
+         "updatedAt": 1791800929876
+        },
+        "status": {
+         "botId": "bot-d5124cba",
+         "presence": "unknown",
+         "queueDepth": 0,
+         "budgetLeft": {
+          "turnsHour": 6,
+          "turnsDay": 40,
+          "workerHoursDay": 4
+         }
+        }
+       },
+       {
+        "bot": {
+         "version": 1,
+         "id": "bot-699c5670",
+         "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+         "role": "verifier",
+         "name": "Verifier",
+         "engine": {
+          "kind": "acp",
+          "command": "<path>",
+          "args": [
+           "<path>",
+           "--script",
+           "<path>",
+           "--log",
+           "<path>"
+          ]
+         },
+         "triggers": [
+          {
+           "kind": "pr.opened",
+           "filter": {
+            "authorTrusted": true
+           },
+           "batch": {
+            "windowMs": 20000,
+            "max": 5
+           }
+          },
+          {
+           "kind": "pr.head_moved",
+           "filter": {
+            "authorTrusted": true
+           },
+           "batch": {
+            "windowMs": 20000,
+            "max": 5
+           }
+          },
+          {
+           "kind": "ci.failed",
+           "filter": {
+            "authorTrusted": true
+           }
+          }
+         ],
+         "budget": {
+          "maxTurnsPerHour": 12,
+          "maxTurnsPerDay": 80,
+          "maxConcurrentWorkers": 1,
+          "maxWorkerHoursPerDay": 6,
+          "turnTimeoutMs": 600000
+         },
+         "enabled": false,
+         "createdAt": 1791800929880,
+         "updatedAt": 1791800935415
+        },
+        "status": {
+         "botId": "bot-699c5670",
+         "presence": "stopped",
+         "queueDepth": 0,
+         "budgetLeft": {
+          "turnsHour": 12,
+          "turnsDay": 80,
+          "workerHoursDay": 6
+         }
+        }
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "facts": [
+   {
+    "id": "f-0mv540dwc-c58bacb5314a",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800929884,
+    "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+    "ref": {
+     "botId": "bot-d7e8612b",
+     "messageId": "c-mv540dwcae58b9eb1f"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "hello",
+     "cardId": "c-mv540dwcae58b9eb1f",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv540dwe-fee5078a",
+    "botId": "bot-d7e8612b",
+    "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+    "reason": {
+     "kind": "human",
+     "text": "hello",
+     "source": "desktop",
+     "clientMessageId": "c-mv540dwcae58b9eb1f"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791800929886,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-d7e8612b",
+    "role": "lead",
+    "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+    "enabled": true
+   },
+   {
+    "id": "bot-d5124cba",
+    "role": "triage",
+    "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+    "enabled": true
+   },
+   {
+    "id": "bot-699c5670",
+    "role": "verifier",
+    "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+    "enabled": false
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv540dwcae58b9eb1f",
+    "seq": 1,
+    "workspaceId": "ws-0ce1302e-58e8-4f89-8550-7b49c184ceb9",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791800929884,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "hello",
+    "refs": {
+     "botId": "bot-d7e8612b"
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800934929,
+     "event": "prompt",
+     "text": "[wake w-mv540dwe-fee5078a] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    }
+   ],
+   "triage": [],
+   "verifier": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800929626,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "a never-run bot reads stopped",
+   "failing": [
+    "triage_unknown"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "records.0.result.result.bots.1.status.presence",
+     "value": "stopped"
+    }
+   ]
+  },
+  {
+   "why": "a disabled bot reads unknown",
+   "failing": [
+    "verifier_stopped"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "records.0.result.result.bots.2.status.presence",
+     "value": "unknown"
+    }
+   ]
+  }
+ ]
+}

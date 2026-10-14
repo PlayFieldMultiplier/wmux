@@ -8,7 +8,6 @@ import {
 } from '../../workspace/workspaceClaimTrust';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
 import { getFanOutGuards, type FanOutGuards } from '../../worktask/fanoutGuards';
-import { getHqWorkspaceId } from '../../deck/deckHqStore';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -21,8 +20,6 @@ export interface WorkspaceRpcDeps {
   guards?: Pick<FanOutGuards, 'fanoutOwnerOf' | 'markTask'>;
   /** Injected in tests; defaults to the mirror/renderer resolution. */
   resolveCallerWorkspace?: (senderPtyId: string) => Promise<string | null>;
-  /** Injected in tests; defaults to the HQ store. */
-  getHqWorkspaceId?: () => string | null;
 }
 
 export function registerWorkspaceRpc(router: RpcRouter, getWindow: GetWindow, deps: WorkspaceRpcDeps = {}): void {
@@ -140,18 +137,13 @@ export function registerWorkspaceRpc(router: RpcRouter, getWindow: GetWindow, de
    * The caller is known from a commander binding or a stated senderPtyId (the
    * CLI sends its pane's WMUX_PTY_ID). Trusting a stated pty is safe here: it
    * can only add a refusal, and `force` lifts it. An unresolvable one skips
-   * the own-workspace check rather than failing the close. The HQ refusal is
-   * absolute: `force` never lifts it.
+   * the own-workspace check rather than failing the close.
    */
   router.register('workspace.close', async (params, ctx) => {
     if (typeof params['id'] !== 'string') {
       throw new Error('workspace.close: missing required param "id"');
     }
     const id = params['id'];
-    // The HQ workspace is app-owned: no CLI or MCP caller may close it.
-    if (id === (deps.getHqWorkspaceId ?? getHqWorkspaceId)()) {
-      throw new Error(`workspace.close: ${id} is the HQ workspace and cannot be closed`);
-    }
     const force = params['force'] === true;
     if (!force) {
       const senderPtyId = typeof params['senderPtyId'] === 'string' ? params['senderPtyId'].trim() : '';

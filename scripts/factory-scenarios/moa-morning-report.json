@@ -1,0 +1,22 @@
+{
+  "name": "moa-morning-report",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A schedule.fired fact wakes the HQ bot once; its report and plan land in the HQ room as exactly one report card and one open plan card whose items name their target workspace.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [ { "say": "should not run" } ] } ] } },
+      { "key": "moa", "role": "moa", "script": { "turns": [ { "steps": [
+        { "tool": "room_post", "args": { "kind": "report", "title": "Morning report", "body": "Merged: none. Blocked: none. Revert rate 0%." } },
+        { "tool": "plan_propose", "args": { "title": "Today's plan", "items": [ { "workspace_id": "{{ws}}", "title": "Fix the flaky test", "size": "S", "why": "CI went red twice." } ] } }
+      ] } ] } }
+    ]
+  },
+  "actions": [
+    { "do": "emit", "label": "morning", "fact": { "kind": "schedule.fired", "workspaceId": "{{ws}}", "ref": { "scheduleId": "morning" }, "actor": { "kind": "system" }, "payload": {} } },
+    { "do": "waitFor", "label": "moa done", "cond": { "wakes": { "bot": "moa", "state": "done" } }, "timeoutMs": 60000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 3000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "moa": "moa" }
+}

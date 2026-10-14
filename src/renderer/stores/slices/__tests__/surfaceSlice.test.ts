@@ -885,3 +885,19 @@ describe('surfaceSlice.updateRemoteSurfaceTitle (#1086/#1091)', () => {
     expect(pane.surfaces[0].titleLocked).toBe(true);
   });
 });
+
+describe('surfaceSlice.addPreviewSurface — #2150 image/PDF tab', () => {
+  it('opens a PTY-less preview tab, and switches to it instead of opening the same file twice', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+    slice.addPreviewSurface(paneId, '/repo/out/plot.png');
+    slice.addPreviewSurface(paneId, '/repo/out/report.pdf');
+    slice.addPreviewSurface(paneId, '/repo/out/plot.png');
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf');
+    expect(pane.surfaces).toHaveLength(2);
+    const plot = pane.surfaces[0];
+    expect(plot).toMatchObject({ surfaceType: 'preview', previewFilePath: '/repo/out/plot.png', title: 'plot.png', ptyId: '' });
+    expect(pane.activeSurfaceId).toBe(plot.id);
+  });
+});

@@ -1,0 +1,25 @@
+{
+  "name": "idempotent-post-retry",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A turn posts a card and then runs past its timeout; the retried attempt (a fresh session replaying the same turn) posts again without a key of its own. Main's default key is per wake, so the room keeps exactly one card and the second post answers duplicate.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "budget": { "turnTimeoutMs": 20000 },
+        "script": { "turns": [ { "steps": [
+          { "tool": "room_post", "args": { "kind": "status", "title": "Started the retry job", "body": "One card, whatever happens." } },
+          { "waitFor": { "tool": "room_read", "args": { "thread_id": "task:retry" }, "match": "release-marker", "timeoutMs": 60000, "everyMs": 1000 } },
+          { "say": "released" }
+        ] } ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "job", "post": { "threadId": "task:retry", "title": "Retry job", "body": "Run the retry job.", "to": "lead" } },
+    { "do": "waitFor", "label": "second attempt", "cond": { "stub": { "bot": "lead", "event": "tool", "tool": "room_post", "min": 2 } }, "timeoutMs": 90000, "required": true },
+    { "do": "post", "label": "release", "post": { "threadId": "task:retry", "title": "release-marker", "body": "release-marker", "to": "maintainer" } },
+    { "do": "waitFor", "label": "done", "cond": { "wakes": { "bot": "lead", "state": "done" } }, "timeoutMs": 30000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 2000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "bot": "lead", "title": "Started the retry job", "message": "job" }
+}

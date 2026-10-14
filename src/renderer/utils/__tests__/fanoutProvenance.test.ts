@@ -24,6 +24,7 @@ const en: Record<string, string> = {
   'sidebar.requester.by': 'by {name}',
   'sidebar.requester.gui': 'Started by you',
   'sidebar.requester.orchestrator': 'Orchestrator',
+  'sidebar.requester.bot': 'Bot',
   'sidebar.requester.unknown': 'Requester unknown',
   'sidebar.requester.closedPane': '{name} · closed',
 };
@@ -183,6 +184,20 @@ describe('requester origin (who asked for a task)', () => {
     expect(requesterLine(resolveTaskRequester(state, 't4'), t)).toBe('Started by you');
     expect(requesterLine(resolveTaskRequester(state, 't6'), t)).toBe('by Orchestrator');
     expect(requesterLine(resolveTaskRequester(state, 't5'), t)).toBe('Requester unknown');
+  });
+
+  it('a factory bot\'s task names the bot, never "Orchestrator"', () => {
+    const state = {
+      ...base,
+      fanoutOrigin: { t1: { kind: 'bot' as const, botId: 'bot-00000001' }, t2: { kind: 'bot' as const, botId: 'bot-00000002' } },
+      roomActors: { 'bot-00000001': { name: 'Wmux Dev' } },
+    };
+    expect(resolveTaskRequester(state, 't1')).toEqual({ kind: 'bot', name: 'Wmux Dev' });
+    expect(requesterLine(resolveTaskRequester(state, 't1'), t)).toBe('by Wmux Dev');
+    // A bot main has not listed yet reads as a bot.
+    expect(requesterLine(resolveTaskRequester(state, 't2'), t)).toBe('by Bot');
+    expect(fleetRequesterText({ ...state, workspaces: [owner, task('t1')], fanoutLineage: { t1: 'ws-owner' } }, 't1', t))
+      .toEqual({ text: 'by Wmux Dev', includesOwner: false });
   });
 
   it('fleet text folds in the owner only when the requester pane lives in the owner workspace', () => {

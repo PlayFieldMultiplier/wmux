@@ -19,18 +19,27 @@
 // human-initiated loop `paused` state — do not conflate.
 //
 // Storage: one JSON file (`deck-decisions.json`) in the wmux data dir, atomic
-// write, WMUX_DATA_SUFFIX-isolated, keyed by workspaceId (at most one active
-// decision per workspace). Read-modify-write per mutation against the CURRENT
-// file so a concurrent edit isn't clobbered by a stale in-memory copy. Never
-// throws — a torn store must never brick the wake loop.
+// write, WMUX_DATA_SUFFIX-isolated, keyed by workspaceId. Read-modify-write per
+// mutation against the CURRENT file so a concurrent edit isn't clobbered by a
+// stale in-memory copy. Never throws — a torn store must never brick the wake
+// loop.
+//
+// v2 (agent factory): a workspace holds many decisions, at most one per room
+// thread (`threadId`, shared/room.ts). The value under a workspace key is an
+// array; a v1 file's single object per workspace reads as that workspace's
+// `general` thread, and the next write stores it as v2. The workspace keys are
+// unchanged, so readers of the keys alone keep working. The original API
+// (loadWorkspaceDecision, raise*, replaceStaleDecision, resolveDecision,
+// clear*Decision, loadDeckDecisions) addresses the `general` thread and keeps
+// its one-per-workspace behaviour there. The *Thread* API addresses any
+// thread; `clearWorkspaceDecisions` removes every thread (teardown).
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicReadJSONSync, atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import type { AgentMode } from './deckAutonomyStore';
-import { readLedgerGateInput } from './taskLedgerHost';
-import { describeOpenLedgerTasksForDecision } from './stopGate';
+import { GENERAL_THREAD, parseThreadId, type ThreadId } from '../../shared/room';
 
 export type DecisionStatus = 'pending' | 'resolved';
 
@@ -64,17 +73,25 @@ export interface WorkspaceDecision {
   /** The raiser's own key for the card (the proposal's item key), stored with
    *  it so the owner can be recovered after a crash. */
   ref?: string;
+  /** The room thread the decision belongs to. Absent = `general` (v1
+   *  records, and records built by callers that predate threads); the store
+   *  always fills it on read and write. */
+  threadId?: ThreadId;
+  /** The ask_person handoff behind the card, when there is one. */
+  handoffId?: string;
 }
 
 /** `issue-proposal`: Moa's issue and PR proposals lane. `moa-handoff`: a
  *  hand-off Moa proposed (moaHandoff.ts). `moa-goal`: the approval card of a
- *  goal contract Moa proposed (moaGoalContract.ts). All main-owned: main acts
- *  on the answer, no brain ever sees or resolves the card. */
-export type DecisionOrigin = 'issue-proposal' | 'moa-handoff' | 'moa-goal';
+ *  goal contract Moa proposed (moaGoalContract.ts). `ask_person`: a bot's
+ *  question to the owner (shared/handoff.ts), answered back to the bot through
+ *  its handoff. All main-owned: main acts on the answer, no brain ever sees or
+ *  resolves the card. */
+export type DecisionOrigin = 'issue-proposal' | 'moa-handoff' | 'moa-goal' | 'ask_person';
 
 /** Origins whose cards main answers. Never set from the wire (deck.requestDecision
  *  takes no origin), never shown to a brain, never resolvable by one. */
-export const MAIN_OWNED_ORIGINS: readonly DecisionOrigin[] = ['issue-proposal', 'moa-handoff', 'moa-goal'];
+export const MAIN_OWNED_ORIGINS: readonly DecisionOrigin[] = ['issue-proposal', 'moa-handoff', 'moa-goal', 'ask_person'];
 
 export type DecisionResolvedBy = 'human' | 'brain';
 
@@ -110,10 +127,15 @@ function sanitizeOptions(raw: unknown): string[] {
 }
 
 function sanitizeDecision(raw: unknown): WorkspaceDecision | null {
-  if (!raw || typeof raw !== 'object') return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   const question = typeof o.question === 'string' ? o.question.trim() : '';
   if (!question) return null; // a decision with no question is not a decision
+  // v1 records carry no thread: they are the workspace's `general` thread. A
+  // v2 record whose thread does not parse is dropped rather than moved into
+  // a thread it never belonged to.
+  const threadId = o.threadId === undefined ? GENERAL_THREAD : parseThreadId(o.threadId);
+  if (threadId === null) return null;
   const resolution =
     typeof o.resolution === 'string' && o.resolution.trim().length > 0
       ? o.resolution.trim().slice(0, DECISION_LIMITS.MAX_RESOLUTION_CHARS)
@@ -141,10 +163,39 @@ function sanitizeDecision(raw: unknown): WorkspaceDecision | null {
       ? { origin: o.origin as DecisionOrigin }
       : {}),
     ...(typeof o.ref === 'string' && o.ref.length <= 256 ? { ref: o.ref } : {}),
+    threadId,
+    ...(typeof o.handoffId === 'string' && o.handoffId.length > 0 && o.handoffId.length <= 128
+      ? { handoffId: o.handoffId }
+      : {}),
   };
 }
 
+/** The thread a decision belongs to (`general` when it names none). */
+export function decisionThread(d: Pick<WorkspaceDecision, 'threadId'>): ThreadId {
+  return d.threadId ?? GENERAL_THREAD;
+}
+
+/** The `general` thread of every workspace (the v1 view). */
 type DecisionFile = Record<string, WorkspaceDecision>;
+/** Every thread of every workspace, as stored (v2). */
+type DecisionFileV2 = Record<string, WorkspaceDecision[]>;
+
+/** One workspace's stored value (a v1 object or a v2 array) → its decisions,
+ *  at most one per thread (the first wins). */
+function sanitizeWorkspaceEntry(raw: unknown): WorkspaceDecision[] {
+  const items = Array.isArray(raw) ? raw : [raw];
+  const out: WorkspaceDecision[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const d = sanitizeDecision(item);
+    if (!d) continue;
+    const thread = decisionThread(d);
+    if (seen.has(thread)) continue;
+    seen.add(thread);
+    out.push(d);
+  }
+  return out;
+}
 
 // Single-writer serialization. loadDeckDecisions (sync read) → compute →
 // `await atomicWriteJSON` has an async boundary, so two concurrent mutate calls
@@ -164,9 +215,10 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Load the whole map; a missing/corrupt file is an empty map (fail open — a
- *  torn store must never brick the deck). Bad keys/entries dropped. */
-export function loadDeckDecisions(dir?: string): DecisionFile {
+/** Load every thread of every workspace; a missing/corrupt file is an empty
+ *  map (fail open — a torn store must never brick the deck). Bad
+ *  keys/entries dropped. */
+export function loadAllDeckDecisions(dir?: string): DecisionFileV2 {
   let raw: unknown;
   try {
     raw = atomicReadJSONSync<unknown>(getDeckDecisionPath(dir));
@@ -174,23 +226,46 @@ export function loadDeckDecisions(dir?: string): DecisionFile {
     return {};
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const out: DecisionFile = {};
+  const out: DecisionFileV2 = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!WORKSPACE_ID_RE.test(k)) continue;
-    const d = sanitizeDecision(v);
+    const list = sanitizeWorkspaceEntry(v);
+    if (list.length > 0) out[k] = list;
+  }
+  return out;
+}
+
+/** Load the `general` thread of every workspace (the one-per-workspace view
+ *  the original callers read). */
+export function loadDeckDecisions(dir?: string): DecisionFile {
+  const out: DecisionFile = {};
+  for (const [k, list] of Object.entries(loadAllDeckDecisions(dir))) {
+    const d = list.find((x) => decisionThread(x) === GENERAL_THREAD);
     if (d) out[k] = d;
   }
   return out;
 }
 
-/** Resolve one workspace's decision, or null when none. Never throws. */
+/** Resolve one workspace's `general` decision, or null when none. Never throws. */
 export function loadWorkspaceDecision(workspaceId: string, dir?: string): WorkspaceDecision | null {
-  if (!WORKSPACE_ID_RE.test(workspaceId)) return null;
+  return loadThreadDecision(workspaceId, GENERAL_THREAD, dir);
+}
+
+/** Every decision of one workspace, all threads. Never throws. */
+export function loadWorkspaceDecisions(workspaceId: string, dir?: string): WorkspaceDecision[] {
+  if (!WORKSPACE_ID_RE.test(workspaceId)) return [];
   try {
-    return loadDeckDecisions(dir)[workspaceId] ?? null;
+    return loadAllDeckDecisions(dir)[workspaceId] ?? [];
   } catch {
-    return null;
+    return [];
   }
+}
+
+/** One thread's decision, or null when none. Never throws. */
+export function loadThreadDecision(workspaceId: string, threadId: ThreadId, dir?: string): WorkspaceDecision | null {
+  // Stored threads are canonical (parseThreadId on load); so is the lookup.
+  const thread = parseThreadId(threadId) ?? threadId;
+  return loadWorkspaceDecisions(workspaceId, dir).find((d) => decisionThread(d) === thread) ?? null;
 }
 
 /** A card raised by Moa's issue proposals lane. */
@@ -242,27 +317,60 @@ function notifyDecisionsChanged(): void {
   }
 }
 
-function mutate(
+/** Read-modify-write one workspace's whole decision list. */
+function mutateWorkspace<T>(
   workspaceId: string,
-  fn: (prev: WorkspaceDecision | null) => WorkspaceDecision | null,
+  fn: (prev: WorkspaceDecision[]) => { next: WorkspaceDecision[]; result: T },
+  fallback: T,
   dir?: string,
-): Promise<WorkspaceDecision | null> {
-  if (!WORKSPACE_ID_RE.test(workspaceId)) return Promise.resolve(null);
+): Promise<T> {
+  if (!WORKSPACE_ID_RE.test(workspaceId)) return Promise.resolve(fallback);
   // Serialized: the load + compute + write runs to completion before the next
   // mutate begins, so a concurrent raise/resolve/clear cannot read a stale
   // snapshot and clobber the other's write.
   return serialize(async () => {
-    const all = loadDeckDecisions(dir);
-    const next = fn(all[workspaceId] ?? null);
-    if (next === null) {
+    const all = loadAllDeckDecisions(dir);
+    const { next, result } = fn(all[workspaceId] ?? []);
+    if (next.length === 0) {
       delete all[workspaceId];
     } else {
       all[workspaceId] = next;
     }
     await atomicWriteJSON(getDeckDecisionPath(dir), all);
     notifyDecisionsChanged();
-    return next;
+    return result;
   });
+}
+
+/** Read-modify-write one thread's decision (null = none / remove). */
+function mutateThread(
+  workspaceId: string,
+  threadId: ThreadId,
+  fn: (prev: WorkspaceDecision | null) => WorkspaceDecision | null,
+  dir?: string,
+): Promise<WorkspaceDecision | null> {
+  const thread = parseThreadId(threadId) ?? threadId;
+  return mutateWorkspace<WorkspaceDecision | null>(
+    workspaceId,
+    (list) => {
+      const prev = list.find((d) => decisionThread(d) === thread) ?? null;
+      const computed = fn(prev);
+      const next = computed === null ? null : { ...computed, threadId: thread };
+      const rest = list.filter((d) => decisionThread(d) !== thread);
+      return { next: next ? [...rest, next] : rest, result: next };
+    },
+    null,
+    dir,
+  );
+}
+
+/** The original one-per-workspace mutation: the `general` thread. */
+function mutate(
+  workspaceId: string,
+  fn: (prev: WorkspaceDecision | null) => WorkspaceDecision | null,
+  dir?: string,
+): Promise<WorkspaceDecision | null> {
+  return mutateThread(workspaceId, GENERAL_THREAD, fn, dir);
 }
 
 /** Raise (or replace) a workspace's pending decision. Callers should reject a
@@ -287,18 +395,6 @@ export function composeDecisionContext(prefix: string, context: string): string 
   return `${head}${context.slice(0, Math.max(0, room))}`.trim();
 }
 
-/** The open-task line for a decision context (empty when the gate is off,
- *  nothing is open, or the ledger cannot be read). Never throws. */
-function ledgerDecisionPrefix(workspaceId: string): string {
-  try {
-    const gate = readLedgerGateInput(workspaceId);
-    if (!gate.enabled || !gate.openTasks || gate.openTasks.length === 0) return '';
-    return `${describeOpenLedgerTasksForDecision(gate.openTasks)}\n`;
-  } catch {
-    return '';
-  }
-}
-
 export async function raiseDecision(
   workspaceId: string,
   args: { question: string; options?: string[]; context?: string },
@@ -306,11 +402,8 @@ export async function raiseDecision(
 ): Promise<WorkspaceDecision | null> {
   const question = args.question.trim();
   if (!question) return null;
-  // Lane F: while the ledger gate is on, the human answering this decision
-  // sees what the brain still has open — prepended to the context, never to
-  // the question (which the brain wrote and the UI keys on).
   const rawContext = typeof args.context === 'string' ? args.context.trim() : '';
-  const context = composeDecisionContext(ledgerDecisionPrefix(workspaceId), rawContext);
+  const context = composeDecisionContext('', rawContext);
   return mutate(
     workspaceId,
     () => ({
@@ -320,6 +413,7 @@ export async function raiseDecision(
       context,
       status: 'pending',
       raisedAt: Date.now(),
+      threadId: GENERAL_THREAD,
     }),
     dir,
   );
@@ -356,6 +450,7 @@ export async function raiseDecisionIfFree(
         raisedAt: Date.now(),
         ...(args.origin ? { origin: args.origin } : {}),
         ...(typeof args.ref === 'string' && args.ref.length <= 256 ? { ref: args.ref } : {}),
+        threadId: GENERAL_THREAD,
       };
     },
     dir,
@@ -407,6 +502,7 @@ export async function replaceStaleDecision(
             : '',
         status: 'pending',
         raisedAt: Date.now(),
+        threadId: GENERAL_THREAD,
       };
     },
     dir,
@@ -458,10 +554,15 @@ export async function resolveDecision(
   return transitioned ? result : null;
 }
 
-/** Remove a workspace's decision entirely (called when its loop is cleared, or
- *  as a hard reset). */
+/** Remove a workspace's `general` decision (called when its loop is cleared,
+ *  or as a hard reset). Other threads are left alone. */
 export async function clearDecision(workspaceId: string, dir?: string): Promise<void> {
   await mutate(workspaceId, () => null, dir);
+}
+
+/** Remove every decision of a workspace, all threads (workspace teardown). */
+export async function clearWorkspaceDecisions(workspaceId: string, dir?: string): Promise<void> {
+  await mutateWorkspace(workspaceId, () => ({ next: [], result: undefined }), undefined, dir);
 }
 
 /** Remove a PENDING decision only while it is still exactly `expected` (same
@@ -516,6 +617,110 @@ export async function clearResolvedDecision(
       prev && prev.status === 'resolved' && (expectedId === undefined || prev.id === expectedId)
         ? null
         : prev,
+    dir,
+  );
+}
+
+// ── Thread API (v2) ─────────────────────────────────────────────────────────
+
+/**
+ * Raise a decision in one thread only while that thread has none (pending, or
+ * resolved and not consumed yet), checked inside the store's serialization.
+ * Returns the new decision, or null when the thread was taken or nothing was
+ * written.
+ */
+export async function raiseThreadDecisionIfFree(
+  workspaceId: string,
+  threadId: ThreadId,
+  args: { question: string; options?: string[]; context?: string; origin?: DecisionOrigin; ref?: string; handoffId?: string },
+  dir?: string,
+): Promise<WorkspaceDecision | null> {
+  const question = args.question.trim();
+  if (!question || parseThreadId(threadId) === null) return null;
+  if (loadThreadDecision(workspaceId, threadId, dir)) return null;
+  let raised = false;
+  const result = await mutateThread(
+    workspaceId,
+    threadId,
+    (prev) => {
+      if (prev) return prev;
+      raised = true;
+      return {
+        id: randomUUID(),
+        question: question.slice(0, DECISION_LIMITS.MAX_QUESTION_CHARS),
+        options: sanitizeOptions(args.options),
+        context: typeof args.context === 'string' ? args.context.trim().slice(0, decisionContextCap(args.origin)) : '',
+        status: 'pending',
+        raisedAt: Date.now(),
+        ...(args.origin ? { origin: args.origin } : {}),
+        ...(typeof args.ref === 'string' && args.ref.length <= 256 ? { ref: args.ref } : {}),
+        threadId,
+        ...(typeof args.handoffId === 'string' && args.handoffId.length > 0 && args.handoffId.length <= 128
+          ? { handoffId: args.handoffId }
+          : {}),
+      };
+    },
+    dir,
+  );
+  return raised ? result : null;
+}
+
+/** Resolve the pending decision with this id, in whichever thread it is. A
+ *  stale resolve (unknown id, already resolved, empty answer) is a no-op
+ *  returning null. */
+export async function resolveThreadDecision(
+  workspaceId: string,
+  id: string,
+  resolution: string,
+  opts: { resolvedBy?: DecisionResolvedBy; dismissed?: boolean } = {},
+  dir?: string,
+): Promise<WorkspaceDecision | null> {
+  const resolvedBy = opts.resolvedBy ?? 'human';
+  const dismissed = opts.dismissed === true && resolvedBy === 'human';
+  const answer = dismissed ? DISMISSED_RESOLUTION : resolution.trim();
+  if (!answer || !id) return null;
+  const cur = loadWorkspaceDecisions(workspaceId, dir).find((d) => d.id === id);
+  if (!cur || cur.status !== 'pending') return null;
+  return mutateWorkspace<WorkspaceDecision | null>(
+    workspaceId,
+    (list) => {
+      const idx = list.findIndex((d) => d.id === id && d.status === 'pending');
+      if (idx < 0) return { next: list, result: null };
+      const resolved: WorkspaceDecision = {
+        ...list[idx],
+        status: 'resolved',
+        resolution: answer.slice(0, DECISION_LIMITS.MAX_RESOLUTION_CHARS),
+        resolvedBy,
+        ...(dismissed ? { dismissed: true as const } : {}),
+        resolvedAt: Date.now(),
+      };
+      const next = [...list];
+      next[idx] = resolved;
+      return { next, result: resolved };
+    },
+    null,
+    dir,
+  );
+}
+
+/** Remove one thread's decision; with `expectedId`, only while it is still
+ *  that decision. Returns true when something was removed. */
+export async function clearThreadDecision(
+  workspaceId: string,
+  threadId: ThreadId,
+  expectedId?: string,
+  dir?: string,
+): Promise<boolean> {
+  const thread = parseThreadId(threadId) ?? threadId;
+  const cur = loadThreadDecision(workspaceId, thread, dir);
+  if (!cur || (expectedId !== undefined && cur.id !== expectedId)) return false;
+  return mutateWorkspace<boolean>(
+    workspaceId,
+    (list) => {
+      const hit = list.find((d) => decisionThread(d) === thread && (expectedId === undefined || d.id === expectedId));
+      return hit ? { next: list.filter((d) => d !== hit), result: true } : { next: list, result: false };
+    },
+    false,
     dir,
   );
 }

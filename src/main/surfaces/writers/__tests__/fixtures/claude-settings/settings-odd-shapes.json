@@ -1,0 +1,216 @@
+{
+  "noFile": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "invalidJson": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "emptyText": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "deniedNotArray": {
+    "edits": [
+      {
+        "path": [
+          "deniedMcpServers"
+        ],
+        "op": "set",
+        "value": [
+          {
+            "serverName": "x"
+          }
+        ]
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"x\" to deniedMcpServers"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:mcp-server::x"
+    ],
+    "rootKeys": [
+      "deniedMcpServers"
+    ]
+  },
+  "permissionsNotObject": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash",
+            "mcp__s__t"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"mcp__s__t\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash",
+      "claude:mcp-tool:s:t"
+    ],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "permissionsNotObjectEnable": {
+    "edits": [],
+    "fileEdits": [],
+    "affectedItemIds": [],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "denyNotArray": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "pluginsNotObject": {
+    "edits": [],
+    "fileEdits": [],
+    "affectedItemIds": [],
+    "rootKeys": [
+      "enabledPlugins"
+    ]
+  },
+  "overridesNotObject": {
+    "edits": [
+      {
+        "path": [
+          "skillOverrides"
+        ],
+        "op": "set",
+        "value": {
+          "w": "off"
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "set skillOverrides[\"w\"] = \"off\""
+      }
+    ],
+    "affectedItemIds": [
+      "claude:skill::w"
+    ],
+    "rootKeys": [
+      "skillOverrides"
+    ]
+  },
+  "pathOutsideHomeAndProject": {
+    "edits": [],
+    "fileEdits": [],
+    "affectedItemIds": []
+  }
+}

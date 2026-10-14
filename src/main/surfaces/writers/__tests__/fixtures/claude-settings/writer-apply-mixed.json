@@ -1,0 +1,80 @@
+{
+  "result": {
+    "provider": "claude",
+    "ok": false,
+    "appliedItemIds": [
+      "claude:mcp-server::p1",
+      "claude:mcp-server::p2",
+      "claude:mcp-server::p3",
+      "claude:skill::proj-skill",
+      "claude:mcp-server::u1",
+      "claude:hook::go",
+      "claude:hook::back",
+      "claude:builtin-tool::Bash"
+    ],
+    "backups": 3,
+    "error": "Some changes could not be applied."
+  },
+  "files": {
+    "<home>/.claude.json": {
+      "projects": {
+        "<project>": {
+          "disabledMcpServers": [
+            "p1"
+          ]
+        }
+      }
+    },
+    "<home>/.claude/settings.json": {
+      "hooks": {
+        "Stop": [
+          {
+            "type": "command",
+            "command": "back"
+          }
+        ]
+      },
+      "deniedMcpServers": [
+        {
+          "serverName": "u1"
+        }
+      ]
+    },
+    "<project>/.claude/settings.local.json": {
+      "skillOverrides": {
+        "proj-skill": "off"
+      }
+    },
+    "<project>/.claude/settings.json": {}
+  },
+  "store": {
+    "version": 1,
+    "intents": {
+      "claude": {
+        "claude:mcp-server::p1": false,
+        "claude:mcp-server::p2": true,
+        "claude:mcp-server::p3": true,
+        "claude:skill::proj-skill": false,
+        "claude:mcp-server::u1": false,
+        "claude:hook::go": false,
+        "claude:hook::back": true,
+        "claude:builtin-tool::Bash": true
+      }
+    },
+    "removedHooks": {
+      "claude": [
+        {
+          "id": "claude:hook::go",
+          "definition": {
+            "event": "Stop",
+            "handler": {
+              "type": "command",
+              "name": "go"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        }
+      ]
+    }
+  }
+}

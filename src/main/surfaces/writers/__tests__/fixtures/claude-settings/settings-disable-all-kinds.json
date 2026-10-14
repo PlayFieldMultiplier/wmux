@@ -1,0 +1,122 @@
+{
+  "edits": [
+    {
+      "path": [
+        "permissions"
+      ],
+      "op": "set",
+      "value": {
+        "allow": [
+          "Read"
+        ],
+        "deny": [
+          "Bash",
+          "mcp__web__search",
+          "WebFetch"
+        ]
+      }
+    },
+    {
+      "path": [
+        "deniedMcpServers"
+      ],
+      "op": "set",
+      "value": [
+        {
+          "serverName": "already-denied"
+        },
+        {
+          "serverName": "user-server"
+        }
+      ]
+    },
+    {
+      "path": [
+        "enabledPlugins"
+      ],
+      "op": "set",
+      "value": {
+        "p@m": false
+      }
+    },
+    {
+      "path": [
+        "skillOverrides"
+      ],
+      "op": "set",
+      "value": {
+        "other": "off",
+        "writer": "off"
+      }
+    },
+    {
+      "path": [
+        "includeCoAuthoredBy"
+      ],
+      "op": "set",
+      "value": false
+    },
+    {
+      "path": [
+        "disableAllHooks"
+      ],
+      "op": "set",
+      "value": true
+    }
+  ],
+  "fileEdits": [
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "add \"user-server\" to deniedMcpServers"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "add \"mcp__web__search\" to permissions.deny"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "add \"WebFetch\" to permissions.deny"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set enabledPlugins[\"p@m\"] = false"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set skillOverrides[\"writer\"] = \"off\""
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set includeCoAuthoredBy = false"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set disableAllHooks = true"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "remove hook \"Stop-command\" from Stop"
+    }
+  ],
+  "affectedItemIds": [
+    "claude:mcp-server::user-server",
+    "claude:mcp-tool:web:search",
+    "claude:builtin-tool::WebFetch",
+    "claude:plugin::p%40m",
+    "claude:skill::writer",
+    "claude:context-setting::includeCoAuthoredBy",
+    "claude:context-setting::disableAllHooks",
+    "claude:hook::Stop-command"
+  ],
+  "rootKeys": [
+    "model",
+    "permissions",
+    "deniedMcpServers",
+    "enabledPlugins",
+    "skillOverrides",
+    "includeCoAuthoredBy",
+    "disableAllHooks",
+    "cleanupPeriodDays",
+    "hooks"
+  ]
+}

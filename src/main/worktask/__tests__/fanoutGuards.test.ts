@@ -15,6 +15,7 @@ import {
   FANOUT_LIVE_TASK_CAP,
   FanOutGuards,
   promptDigest,
+  setDormantTaskWorkspaces,
   stampFanoutTaskPane,
   type FanOutAuditRecord,
 } from '../fanoutGuards';
@@ -154,6 +155,26 @@ describe('audit log', () => {
 });
 
 describe('review follow-ups', () => {
+  it('a dormant task workspace (worker reclaimed, kept open for Resume) holds no live slot', () => {
+    const dir = tmpDir();
+    const g = new FanOutGuards({ dir, now: () => 1_000_000, openWorkspaceIds: () => ['ws-a', 'ws-b', 'ws-c'], ledgerTaskOwner: () => null });
+    g.markTask('ws-a', 'ws-owner');
+    g.markTask('ws-b', 'ws-owner');
+    g.markTask('ws-c', 'ws-owner');
+    try {
+      setDormantTaskWorkspaces(() => new Set(['ws-a', 'ws-b']));
+      expect(g.liveTaskCount()).toBe(1);
+      // A source that throws counts every open task workspace (fail closed).
+      setDormantTaskWorkspaces(() => {
+        throw new Error('store unreadable');
+      });
+      expect(g.liveTaskCount()).toBe(3);
+    } finally {
+      setDormantTaskWorkspaces(null);
+    }
+    expect(g.liveTaskCount()).toBe(3);
+  });
+
   it('counts live tasks by stamped workspaces that are still open, not by ledger status', () => {
     const dir = tmpDir();
     let open: string[] | null = ['ws-a', 'ws-b', 'ws-plain'];

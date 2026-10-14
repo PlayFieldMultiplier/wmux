@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
-import { renderBrainMarkdown } from '../Deck/BrainMarkdown';
+import { renderBrainMarkdown } from '../shared/BrainMarkdown';
 import { ListFreshness } from './ListFreshness';
 import { DetailError, useDetail } from './useDetail';
 import { PrChecks, usePrChecks } from './PrChecks';

@@ -11,7 +11,7 @@ import { useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
 import { IconChevron } from '../icons';
-import { renderBrainMarkdown } from '../Deck/BrainMarkdown';
+import { renderBrainMarkdown } from '../shared/BrainMarkdown';
 import { HunkGutter, HunkLines } from '../Diff/HunkLines';
 import { DetailError, useDetail } from './useDetail';
 import { relTime } from './useGitList';

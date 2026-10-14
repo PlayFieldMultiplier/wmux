@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import {
+  BOT_TASK_WAKE_RECOVER_MS,
+  installBotFanoutWake,
   installFanoutCallerLedgerNotify,
   notifyFanoutCaller,
   shouldNotifyCaller,
@@ -146,5 +148,60 @@ describe('the input_required kind (#1919)', () => {
     // Ranked between a hard failure and a review request.
     expect(moreSevereKind('ledger.input_required', 'ledger.review_requested')).toBe('ledger.input_required');
     expect(moreSevereKind('ledger.input_required', 'ledger.failed')).toBe('ledger.failed');
+  });
+});
+
+describe('installBotFanoutWake recovery at install (review fixes, PR #2164)', () => {
+  let dir: string;
+  let now = 10 * BOT_TASK_WAKE_RECOVER_MS;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-bot-wake-recover-'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function botTask(ledger: TaskLedger, id: string, to: 'failed' | 'input_required' | 'working' | 'stopped'): Promise<void> {
+    await ledger.register({ id, taskWorkspaceId: `${id}-ws`, ownerWorkspaceId: 'ws-1', title: id, dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' }, preset: 'default' } });
+    if (to === 'working') return;
+    const rev = ledger.get(id)?.rev ?? 0;
+    const r = to === 'stopped'
+      ? await ledger.update({ id, status: 'cancelled', actor: { kind: 'system', workspaceId: 'ws-daemon' }, expectedRev: rev, summary: 'stopped by owner' })
+      : await ledger.update({ id, status: to, actor: { kind: 'worker', workspaceId: `${id}-ws` }, expectedRev: rev });
+    if (!r.ok) throw new Error(r.message);
+  }
+
+  it('wakes the bot again for a recent move whose wake may have been lost, never for an old one, an open task or the owner\'s stop', async () => {
+    const ledger = new TaskLedger({ dir, now: () => now });
+    await botTask(ledger, 'wtask-old', 'failed');
+    now += BOT_TASK_WAKE_RECOVER_MS + 1;
+    await botTask(ledger, 'wtask-new', 'failed');
+    await botTask(ledger, 'wtask-ask', 'input_required');
+    await botTask(ledger, 'wtask-run', 'working');
+    await botTask(ledger, 'wtask-stop', 'stopped');
+    const enqueue = vi.fn();
+    const off = installBotFanoutWake({ enqueue, now: () => now }, ledger);
+    const ids = enqueue.mock.calls.map((c) => c[0].reason.factIds[0]).sort();
+    expect(ids).toEqual([`task.failed:wtask-new@${ledger.get('wtask-new')?.rev}`, `task.input_required:wtask-ask@${ledger.get('wtask-ask')?.rev}`].sort());
+    off();
+  });
+});
+
+describe('installBotFanoutWake recovery and the queue (review fixes, second pass)', () => {
+  it('never offers again a wake the queue already holds', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-bot-wake-known-'));
+    try {
+      const ledger = new TaskLedger({ dir });
+      await ledger.register({ id: 'wtask-k', taskWorkspaceId: 'wtask-k-ws', ownerWorkspaceId: 'ws-1', title: 'k', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' }, preset: 'default' } });
+      const r = await ledger.update({ id: 'wtask-k', status: 'failed', actor: { kind: 'worker', workspaceId: 'wtask-k-ws' }, expectedRev: ledger.get('wtask-k')?.rev ?? 0 });
+      if (!r.ok) throw new Error(r.message);
+      const enqueue = vi.fn();
+      const wakeKnown = vi.fn(() => true);
+      installBotFanoutWake({ enqueue, wakeKnown }, ledger)();
+      expect(wakeKnown).toHaveBeenCalledWith('bot-0000000a', `task.failed:wtask-k@${ledger.get('wtask-k')?.rev}`);
+      expect(enqueue).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

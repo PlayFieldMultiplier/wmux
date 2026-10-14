@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
-import { Panel, Group, Separator } from 'react-resizable-panels';
-import type { PaneLeaf, Workspace } from '../../../shared/types';
+import { Panel, Group, Separator, type Layout } from 'react-resizable-panels';
+import type { PaneLeaf, Surface, Workspace } from '../../../shared/types';
 import { maybeDelegateExternalBrowser } from '../../utils/browserPaneActions';
 import { PRIVATE_BROWSER_PARTITION } from '../../../shared/privateBrowser';
 import { createTerminalSurface } from '../../utils/createTerminalSurface';
@@ -8,6 +8,8 @@ import { destroyRemoteSessions, destroySurfaceRemoteSession } from '../../utils/
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { MAX_PANES_PER_WORKSPACE } from '../../stores/slices/paneSlice';
 import { useIpc } from '../../hooks/useIpc';
+import { driveFocusToTerminal } from '../../hooks/useActivePaneFocus';
+import { onTerminalRegistered, terminalRegistry } from '../../hooks/useTerminal';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import TerminalComponent from '../Terminal/Terminal';
@@ -15,6 +17,7 @@ import { ChatV2Overlay, useChatSurfaceView } from '../ChatV2/ChatSurface';
 import { forgetChatV2Pane, usePaneChatV2Binding } from '../ChatV2/useChatV2';
 import BrowserPanel from '../Browser/BrowserPanel';
 import EditorPanel from '../Editor/EditorPanel';
+import PreviewPanel from '../Preview/PreviewPanel';
 import DiffPanel from '../Diff/DiffPanel';
 import RemotePaneSurface from '../Remote/RemotePaneSurface';
 import AddRemotePaneModal from '../Remote/AddRemotePaneModal';
@@ -29,7 +32,8 @@ import SurfaceTabs, {
   showsEnforcedModelBadge,
   type PaneActionsMode,
 } from './SurfaceTabs';
-import { PANE_CORNER_GUTTER } from './paneChrome';
+import { PANE_CORNER_GUTTER, paneHeaderTailGap } from './paneChrome';
+import WorkTabs from './WorkTabs';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { type ResumeBinding, agentSupportsPermissionFlag, defaultResumeSkipPermissions, normalizeResumeCwd, permissionFlagFor, resumeGrammarFor, resumePermissionFlag } from '../../../shared/agentResume';
@@ -110,45 +114,66 @@ export function composePaneClassName(opts: {
 }
 
 /**
- * Choose which terminal and which browser surface is SHOWN on each side of the
- * terminal+browser split (`SplitSurfaceView` hasBoth). Both sides are laid out
- * side by side and must stay visible, but a pane has a single `activeSurfaceId`,
- * so visibility (what renders on each side) must be decoupled from focus (which
- * side `activeSurfaceId` points at). Each side shows its active surface when the
- * active surface is on that side, otherwise its first surface — so neither side
- * ever blanks when the other is focused. (Bug: each surface gated `display` on
- * `surface.id === activeSurfaceId`, so focusing one side display:none'd the other.)
+ * A pane is a terminal column plus a work area (DESIGN.md "Pane: terminals and
+ * work area"). Terminal surfaces — local, remote and placeholders — stay on
+ * the pane tab strip and draw on the left; work surfaces draw on the right under their own
+ * tab strip. `git` / `review` surfaces are retired and belong to neither.
+ */
+export function isTerminalKindSurfaceType(surfaceType: string | undefined): boolean {
+  // A placeholder stands in for a surface a mirror cannot draw — most often a
+  // terminal slot (open elsewhere, not listed) — so it stays in the terminal
+  // column and never splits a pane on its own.
+  return isTerminalSurfaceType(surfaceType) || surfaceType === 'remote-terminal'
+    || surfaceType === 'placeholder';
+}
+
+export function isWorkSurfaceType(surfaceType: string | undefined): boolean {
+  return surfaceType === 'browser' || surfaceType === 'editor' || surfaceType === 'preview' || surfaceType === 'diff';
+}
+
+/**
+ * #2140 — whether the work area fills the pane over the terminal column.
+ * Derived in render rather than reset in an effect: the commit that activates
+ * a terminal must already show it, or the pane focus driver focuses a
+ * display:none xterm and the keystrokes go nowhere.
+ */
+export function isSplitWorkExpanded(
+  requested: boolean,
+  terminals: ReadonlyArray<{ id: string }>,
+  works: ReadonlyArray<{ id: string }>,
+  activeSurfaceId: string,
+): boolean {
+  return requested
+    && terminals.length > 0
+    && works.length > 0
+    && !terminals.some((s) => s.id === activeSurfaceId);
+}
+
+/**
+ * Choose which terminal and which work surface is SHOWN on each side of the
+ * split. Both sides stay visible, but a pane has a single `activeSurfaceId`, so
+ * visibility (what renders on each side) must be decoupled from focus (which
+ * side `activeSurfaceId` points at). Each side shows its active surface when
+ * the active surface is on that side; otherwise the terminal side shows its
+ * first surface and the work side the one last shown there (`lastWorkId`), so
+ * focusing a terminal never swaps the page or file beside it.
+ * (Bug: each surface gated `display` on `surface.id === activeSurfaceId`, so
+ * focusing one side display:none'd the other.)
  *
  * Pure so it is unit-testable without mounting the split (which pulls in xterm).
  */
 export function pickSplitShownSurfaces(
   terminals: ReadonlyArray<{ id: string }>,
-  browsers: ReadonlyArray<{ id: string }>,
+  works: ReadonlyArray<{ id: string }>,
   activeSurfaceId: string,
-): { shownTerminalId: string | undefined; shownBrowserId: string | undefined } {
+  lastWorkId?: string,
+): { shownTerminalId: string | undefined; shownWorkId: string | undefined } {
   return {
     shownTerminalId: terminals.find((s) => s.id === activeSurfaceId)?.id ?? terminals[0]?.id,
-    shownBrowserId: browsers.find((s) => s.id === activeSurfaceId)?.id ?? browsers[0]?.id,
+    shownWorkId: works.find((s) => s.id === activeSurfaceId)?.id
+      ?? works.find((s) => s.id === lastWorkId)?.id
+      ?? works[0]?.id,
   };
-}
-
-/**
- * F6 — non-PTY overlay surfaces (diff / editor) for the terminal+browser split.
- *
- * The `hasBoth` split path lays out terminals and browsers side by side but
- * consulted neither `diff` nor `editor` surfaces, so an active diff surface in
- * a mixed pane rendered nothing. This pure predicate isolates the overlay set
- * (diff + editor) so the routing is unit-testable without mounting the split
- * (which pulls in xterm + DiffPanel's rpc bridge). Order-preserving.
- */
-export function pickOverlaySurfaces<T extends { surfaceType?: string }>(
-  surfaces: ReadonlyArray<T>,
-): T[] {
-  return surfaces.filter(
-    (s) =>
-      s.surfaceType === 'diff' || s.surfaceType === 'editor' || s.surfaceType === 'remote-terminal'
-      || s.surfaceType === 'placeholder',
-  );
 }
 
 /**
@@ -672,12 +697,102 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     paneRoleName ? s.orchestratorRoleBindings[paneRoleName] : undefined,
   );
   const [paneRootRef, paneWidth] = useElementWidth<HTMLDivElement>();
+
+  // DESIGN.md "Pane: terminals and work area" — terminals keep the pane tab
+  // strip and the left column; browser, editor and diff tabs get the work area
+  // on the right, with their own strip on the same header line.
+  const splitTerminals = useMemo(
+    () => pane.surfaces.filter((s) => isTerminalKindSurfaceType(s.surfaceType)),
+    [pane.surfaces],
+  );
+  const splitWorks = useMemo(
+    () => pane.surfaces.filter((s) => isWorkSurfaceType(s.surfaceType)),
+    [pane.surfaces],
+  );
+  const splitMode = splitTerminals.length > 0 && splitWorks.length > 0;
+  // Entering or leaving the split moves the terminals to a new parent, which
+  // remounts them and drops the keyboard focus to <body>: an agent opening a
+  // browser tab while you type would swallow your next keystrokes. Note here,
+  // before the commit, which of this pane's terminals holds the focus, and
+  // hand it back once the new layout is drawn.
+  const prevSplitModeRef = useRef(splitMode);
+  const refocusPtyRef = useRef<string | null>(null);
+  if (prevSplitModeRef.current !== splitMode) {
+    prevSplitModeRef.current = splitMode;
+    const active = typeof document === 'undefined' ? null : document.activeElement;
+    refocusPtyRef.current = active
+      ? pane.surfaces.find((s) => s.ptyId && terminalRegistry.get(s.ptyId)?.element?.contains(active))?.ptyId ?? null
+      : null;
+  }
+  useEffect(() => {
+    const ptyId = refocusPtyRef.current;
+    refocusPtyRef.current = null;
+    if (!ptyId) return;
+    return driveFocusToTerminal(ptyId, {
+      getTerminal: (id) => terminalRegistry.get(id),
+      onRegistered: onTerminalRegistered,
+      raf: (cb) => requestAnimationFrame(cb),
+      caf: (handle) => cancelAnimationFrame(handle),
+    });
+  }, [splitMode]);
+  const lastWorkIdRef = useRef<string | undefined>(undefined);
+  const { shownTerminalId, shownWorkId } = pickSplitShownSurfaces(
+    splitTerminals, splitWorks, pane.activeSurfaceId, lastWorkIdRef.current,
+  );
+  useEffect(() => { lastWorkIdRef.current = shownWorkId; }, [shownWorkId]);
+  const workFocused = splitWorks.some((s) => s.id === pane.activeSurfaceId);
+  const [workExpandRequested, setWorkExpandRequested] = useState(false);
+  const workExpanded = isSplitWorkExpanded(workExpandRequested, splitTerminals, splitWorks, pane.activeSurfaceId);
+  useEffect(() => {
+    // Activating a terminal or losing a side ends the mode for good, so the
+    // next work activation does not silently re-expand.
+    if (!workExpanded) setWorkExpandRequested(false);
+  }, [workExpanded]);
+  const toggleWorkExpanded = useCallback(() => {
+    if (!workExpanded && shownWorkId) setActiveSurface(pane.id, shownWorkId, workspace.id);
+    setWorkExpandRequested(!workExpanded);
+  }, [workExpanded, shownWorkId, setActiveSurface, pane.id, workspace.id]);
+  // The header splits where the body does. The body's widths change on every
+  // separator drag, so they reach the header as CSS variables, not state —
+  // a re-render of the whole pane per pointer move would be the cost.
+  const splitHeaderRef = useRef<HTMLDivElement>(null);
+  const terminalPanelId = `${pane.id}:terminals`;
+  const workPanelId = `${pane.id}:work`;
+  const handleSplitLayout = useCallback((layout: Layout) => {
+    const el = splitHeaderRef.current;
+    if (!el) return;
+    const term = layout[terminalPanelId];
+    const work = layout[workPanelId];
+    if (term === undefined || work === undefined) return;
+    el.style.setProperty('--wmux-split-term', String(term));
+    el.style.setProperty('--wmux-split-work', String(work));
+  }, [terminalPanelId, workPanelId]);
+  const split: PaneSplit | null = splitMode
+    ? {
+        terminals: splitTerminals,
+        works: splitWorks,
+        shownTerminalId,
+        shownWorkId,
+        expanded: workExpanded,
+        terminalPanelId,
+        workPanelId,
+        onLayoutChange: handleSplitLayout,
+      }
+    : null;
+  // The terminal strip's own width decides whether the action cluster fits:
+  // in a split it is only the terminal column's share of the pane.
+  const [terminalStripRef, terminalStripWidth] = useElementWidth<HTMLDivElement>();
+  const stripWidth = terminalStripWidth ?? paneWidth;
   // What the header carries BESIDES the cluster counts against the same width,
   // so the collapse threshold has to know about it (see
   // paneHeaderExtraChromeWidth). Both of these gate on the ACTIVE surface being
   // a terminal, which is the same condition SurfaceTabs draws them under.
-  const activeSurfaceType = pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.surfaceType;
-  const hasUsageLimit = useStore((s) => !!activeSurfacePtyId && !!s.usageLimits[activeSurfacePtyId]);
+  // In a split the terminal strip's "active" tab is the terminal shown there.
+  const stripActiveSurfaceId = split ? (shownTerminalId ?? pane.activeSurfaceId) : pane.activeSurfaceId;
+  const activeSurfaceType = pane.surfaces.find((s) => s.id === stripActiveSurfaceId)?.surfaceType;
+  // Keyed on the terminal the strip shows, which is what draws the chip.
+  const stripPtyId = pane.surfaces.find((s) => s.id === stripActiveSurfaceId)?.ptyId;
+  const hasUsageLimit = useStore((s) => !!stripPtyId && !!s.usageLimits[stripPtyId]);
   const headerExtraChrome = paneHeaderExtraChromeWidth({
     chatToggle: chatViewEnabled && isTerminalSurfaceType(activeSurfaceType),
     enforcedModelBadge: showsEnforcedModelBadge({
@@ -686,12 +801,14 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     }),
     usageLimitChip: hasUsageLimit,
   });
-  const actionsMode: PaneActionsMode = paneActionsSetting && !readOnly
-    ? paneActionsMode(paneWidth, headerExtraChrome)
-    : 'none';
+  // While the work area is expanded the terminal strip sizes to its content,
+  // so its width cannot judge the cluster; it keeps the ⋮ form instead.
+  const actionsMode: PaneActionsMode = !paneActionsSetting || readOnly
+    ? 'none'
+    : split?.expanded ? 'overflow' : paneActionsMode(stripWidth, headerExtraChrome);
   // The full usage-limit chip needs room beyond the compact floor counted above.
-  const usageLimitCompact = hasUsageLimit && paneWidth != null && paneWidth > 0
-    && paneWidth < PANE_ACTIONS_MIN_PANE_WIDTH + headerExtraChrome + USAGE_LIMIT_CHIP_FULL_WIDTH;
+  const usageLimitCompact = hasUsageLimit && stripWidth != null && stripWidth > 0
+    && stripWidth < PANE_ACTIONS_MIN_PANE_WIDTH + headerExtraChrome + USAGE_LIMIT_CHIP_FULL_WIDTH;
 
   // X8 supervision. Resolve the pane's active-surface ptyId → supervision
   // slice. The ⟳ badge itself is drawn by SurfaceTabs (it belongs to the header
@@ -767,8 +884,12 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         return;
       }
       if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
-      window.electronAPI.pty.write(ptyId, `${line}\r`);
-      useStore.getState().clearResumeHint(ptyId);
+      // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
+      // A refused line keeps the pill, so the pane can still be resumed by hand.
+      window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
+        () => useStore.getState().clearResumeHint(ptyId),
+        (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
+      );
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -969,9 +1090,27 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         />
       )}
 
+      {/* One header line split where the body is: the terminal strip over the
+          terminal column, a seam continuing the body's separator, and the work
+          strip over the work area. While the work area is expanded the
+          terminal strip shrinks to its tabs and the ⋮ (a terminal tab click
+          restores the split). */}
+      <div
+        ref={splitHeaderRef}
+        className="flex min-w-0 shrink-0"
+        style={{ '--wmux-split-term': 50, '--wmux-split-work': 50 } as React.CSSProperties}
+      >
+      <div
+        ref={terminalStripRef}
+        className="min-w-0"
+        style={{ flex: !split ? '1 1 0px' : workExpanded ? '0 1 auto' : 'var(--wmux-split-term) 1 0px' }}
+      >
       <SurfaceTabs
-        surfaces={pane.surfaces}
-        activeSurfaceId={pane.activeSurfaceId}
+        surfaces={split ? splitTerminals : pane.surfaces}
+        activeSurfaceId={stripActiveSurfaceId}
+        tabAccent={!split || !workFocused}
+        paneSurfaceCount={pane.surfaces.length}
+        atPaneCorner={!split}
         workspace={workspace}
         paneId={pane.id}
         paneActive={isActive}
@@ -988,6 +1127,28 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         onSplitHorizontalRemote={handleSplitRemoteHorizontal}
         onSplitVerticalRemote={handleSplitRemoteVertical}
       />
+      </div>
+      {split && (
+        <>
+          <div aria-hidden="true" className="w-px shrink-0 self-stretch bg-[var(--border-soft)]" />
+          <WorkTabs
+            surfaces={split.works}
+            shownId={split.shownWorkId}
+            paneActive={isActive}
+            focused={workFocused}
+            expanded={workExpanded}
+            readOnly={readOnly}
+            tailGap={paneHeaderTailGap({ clusterShown: paneClusterWidth({ mode: actionsMode }) > 0 })}
+            style={{ flex: workExpanded ? '1 1 0px' : 'var(--wmux-split-work) 1 0px' }}
+            onSelect={(surfaceId) => setActiveSurface(pane.id, surfaceId, workspace.id)}
+            onClose={handleCloseSurfaceFromTab}
+            onToggleExpanded={toggleWorkExpanded}
+            workspaceId={workspace.id}
+            paneId={pane.id}
+          />
+        </>
+      )}
+      </div>
       {/* #1464 — the reboot-recovery resume pill gets its own row under the
           tab strip while the offer stands. It used to float over the pane
           top-left, covering the tab title and the first terminal row (the
@@ -1047,11 +1208,20 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
 
         // Paste WITHOUT a trailing \r. The user presses Enter to run — so bypass
         // is re-granted only by an explicit keystroke, never automatically (D6).
-        const type = (text: string) => window.electronAPI.pty.write(ptyId, text);
-        const typeAndClear = (text: string) => {
-          type(text);
-          useStore.getState().clearResumeHint(ptyId);
-        };
+        // Resolves false when main refused the line: the pill then stays as it was.
+        const type = (text: string): Promise<boolean> =>
+          window.electronAPI.pty.writeLaunch(ptyId, text, false).then(
+            () => true,
+            (err: unknown) => {
+              console.warn('[wmux:resume] the resume line was not typed', String(err));
+              return false;
+            },
+          );
+        const typeAndClear = (text: string): Promise<boolean> =>
+          type(text).then((ok) => {
+            if (ok) useStore.getState().clearResumeHint(ptyId);
+            return ok;
+          });
 
         // Assemble the exact string the next click types — with the role's
         // bound model re-asserted on the launcher-prefixed variants (mirrors the
@@ -1085,9 +1255,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
               after: plan.text,
             });
           }
-          if (plan.clearHint) typeAndClear(plan.text);
-          else type(plan.text);
-          if (plan.advanceStage) setResumeStage(1);
+          const typed = plan.clearHint ? typeAndClear(plan.text) : type(plan.text);
+          if (plan.advanceStage) void typed.then((ok) => { if (ok) setResumeStage(1); });
         };
 
         // The two-stage progressive assembly only applies to the toggle-OFF
@@ -1283,6 +1452,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
           useStore.getState().completeDeadPaneRecovery(surfaceId, ptyId);
         }}
         emptyMessage={t('pane.empty')}
+        split={split}
       />
       </ErrorBoundary>
     </div>
@@ -1339,7 +1509,22 @@ function TerminalSurface({ surface, paneId, chatViewEnabled, isActive, visible, 
   );
 }
 
-/** Renders surfaces with a resizable split when both terminals and browsers coexist */
+/** The pane body's two columns while it holds both terminals and work
+ *  surfaces. Computed by Pane, which also draws the matching header. */
+export interface PaneSplit {
+  terminals: Surface[];
+  works: Surface[];
+  shownTerminalId: string | undefined;
+  shownWorkId: string | undefined;
+  /** #2140 — the work area fills the pane; the terminal column is hidden. */
+  expanded: boolean;
+  terminalPanelId: string;
+  workPanelId: string;
+  onLayoutChange: (layout: Layout) => void;
+}
+
+/** Renders a pane's surfaces: stacked when they are all one kind, split into a
+ *  terminal column and a work area when both kinds are present. */
 function SplitSurfaceView({
   pane,
   workspaceId,
@@ -1349,6 +1534,7 @@ function SplitSurfaceView({
   onCloseSurface,
   onPtyCreated,
   emptyMessage,
+  split,
 }: {
   pane: PaneLeaf;
   /** Owning workspace id — threaded through to TerminalComponent so PTY
@@ -1360,24 +1546,10 @@ function SplitSurfaceView({
   onCloseSurface: (id: string) => void;
   onPtyCreated: (surfaceId: string, ptyId: string) => void;
   emptyMessage: string;
+  split: PaneSplit | null;
 }) {
   const chatViewEnabled = useStore((s) => s.chatViewEnabled);
-  const terminals = useMemo(
-    () => pane.surfaces.filter((s) => !s.surfaceType || s.surfaceType === 'terminal'),
-    [pane.surfaces],
-  );
-  const browsers = useMemo(
-    () => pane.surfaces.filter((s) => s.surfaceType === 'browser'),
-    [pane.surfaces],
-  );
-  // F6 — terminal·browser 어디에도 속하지 않는 비PTY 서피스(diff·editor). hasBoth
-  // 스플릿 경로가 terminals·browsers만 렌더해 이들이 누락됐다(diff가 안 뜸). active
-  // 인 것만 split 위에 오버레이로 겹쳐 렌더한다(각 패널이 display:isActive로 자기
-  // 가시성을 관리하므로 비active는 보이지 않음 — editor 기존 단독 경로는 무회귀).
-  const others = useMemo(() => pickOverlaySurfaces(pane.surfaces), [pane.surfaces]);
   const updateRemoteSurfaceTitle = useStore((s) => s.updateRemoteSurfaceTitle);
-
-  const hasBoth = terminals.length > 0 && browsers.length > 0;
 
   if (pane.surfaces.length === 0) {
     return (
@@ -1387,188 +1559,151 @@ function SplitSurfaceView({
     );
   }
 
-  // Only terminals or only browsers — no split needed
-  if (!hasBoth) {
+  // `shown` is the split's verdict for this surface's column; undefined in the
+  // stacked layout, where the active tab alone is drawn.
+  const renderSurface = (surface: PaneLeaf['surfaces'][number], shown?: boolean) => {
+    const isActive = surface.id === activeSurfaceId;
+    const drawn = shown ?? isActive;
+    if (surface.surfaceType === 'editor') {
+      return (
+        <EditorPanel
+          key={surface.id}
+          filePath={surface.editorFilePath || ''}
+          isActive={drawn}
+          surfaceId={surface.id}
+        />
+      );
+    }
+    if (surface.surfaceType === 'preview') {
+      return (
+        <PreviewPanel
+          key={surface.id}
+          filePath={surface.previewFilePath || ''}
+          isActive={drawn}
+          paneId={pane.id}
+        />
+      );
+    }
+    if (surface.surfaceType === 'browser') {
+      return (
+        <BrowserPanel
+          key={`${surface.id}:${surface.browserPartition || 'persist:wmux-default'}`}
+          surfaceId={surface.id}
+          workspaceId={workspaceId}
+          initialUrl={surface.browserUrl || 'https://google.com'}
+          partition={surface.browserPartition || 'persist:wmux-default'}
+          isActive={isActive}
+          visible={shown}
+          isWorkspaceVisible={isWorkspaceVisible}
+          isZoomHidden={isZoomHidden}
+          onClose={() => onCloseSurface(surface.id)}
+        />
+      );
+    }
+    if (surface.surfaceType === 'diff') {
+      // J2 — diff 서피스는 PTY 없음. F1: verifiedWorkspaceId는 태스크 owner(부모)
+      // ws id(task.mission.* RPC가 owner 스코프). fan-out이 diff 서피스에 실어둔
+      // diffOwnerWorkspaceId를 쓰고, 없으면(구 세션 등) 담고 있는 ws로 폴백.
+      // diffRepoPath가 있으면 워크스페이스 diff(읽기 전용, 태스크 결합 없음).
+      return (
+        <DiffPanel
+          key={surface.id}
+          source={
+            surface.diffRepoPath
+              ? { kind: 'workspace', repoPath: surface.diffRepoPath }
+              : { kind: 'task', taskId: surface.diffTaskId || '' }
+          }
+          isActive={drawn}
+          focused={isActive}
+          surfaceId={surface.id}
+          verifiedWorkspaceId={surface.diffOwnerWorkspaceId || workspaceId}
+        />
+      );
+    }
+    if (surface.surfaceType === 'placeholder') {
+      return (
+        <SurfacePlaceholder
+          key={surface.id}
+          title={surface.title}
+          isActive={drawn}
+          surfaceId={surface.id}
+        />
+      );
+    }
+    if (surface.surfaceType === 'remote-terminal') {
+      // #1086/#1091 — a remote session mirrored as an ordinary tab in a LOCAL
+      // workspace's pane. No local PTY; it shares the terminal column.
+      return (
+        <RemotePaneSurface
+          key={surface.id}
+          hostId={surface.remoteHostId || ''}
+          sessionId={surface.remoteSessionId || ''}
+          surfaceId={surface.id}
+          shell={surface.shell}
+          cwd={surface.cwd}
+          isActive={drawn}
+          onTitleChange={updateRemoteSurfaceTitle}
+          fixedFont={isShadowWorkspaceId(workspaceId)}
+        />
+      );
+    }
+    return (
+      <TerminalSurface
+        key={surface.id}
+        surface={surface}
+        paneId={pane.id}
+        chatViewEnabled={chatViewEnabled}
+        isActive={isActive}
+        visible={shown}
+        isWorkspaceVisible={isWorkspaceVisible}
+        onPtyCreated={(ptyId) => onPtyCreated(surface.id, ptyId)}
+        workspaceId={workspaceId}
+      />
+    );
+  };
+
+  if (!split) {
     return (
       <div className="flex-1 min-h-0 min-w-0 relative overflow-clip">
-        {pane.surfaces.map((surface) =>
-          surface.surfaceType === 'editor' ? (
-            <EditorPanel
-              key={surface.id}
-              filePath={surface.editorFilePath || ''}
-              isActive={surface.id === activeSurfaceId}
-              surfaceId={surface.id}
-            />
-          ) : surface.surfaceType === 'browser' ? (
-            <BrowserPanel
-              key={`${surface.id}:${surface.browserPartition || 'persist:wmux-default'}`}
-              surfaceId={surface.id}
-              workspaceId={workspaceId}
-              initialUrl={surface.browserUrl || 'https://google.com'}
-              partition={surface.browserPartition || 'persist:wmux-default'}
-              isActive={surface.id === activeSurfaceId}
-              isWorkspaceVisible={isWorkspaceVisible}
-              isZoomHidden={isZoomHidden}
-              onClose={() => onCloseSurface(surface.id)}
-            />
-          ) : surface.surfaceType === 'diff' ? (
-            // J2 — diff 서피스는 PTY 없음. F1: verifiedWorkspaceId는 태스크 owner(부모)
-            // ws id(task.mission.* RPC가 owner 스코프). fan-out이 diff 서피스에 실어둔
-            // diffOwnerWorkspaceId를 쓰고, 없으면(구 세션 등) 담고 있는 ws로 폴백.
-            // diffRepoPath가 있으면 워크스페이스 diff(읽기 전용, 태스크 결합 없음).
-            <DiffPanel
-              key={surface.id}
-              source={
-                surface.diffRepoPath
-                  ? { kind: 'workspace', repoPath: surface.diffRepoPath }
-                  : { kind: 'task', taskId: surface.diffTaskId || '' }
-              }
-              isActive={surface.id === activeSurfaceId}
-              surfaceId={surface.id}
-              verifiedWorkspaceId={surface.diffOwnerWorkspaceId || workspaceId}
-            />
-          ) : surface.surfaceType === 'placeholder' ? (
-            <SurfacePlaceholder
-              key={surface.id}
-              title={surface.title}
-              isActive={surface.id === activeSurfaceId}
-              surfaceId={surface.id}
-            />
-          ) : surface.surfaceType === 'remote-terminal' ? (
-            // #1086/#1091 — a remote session mirrored as an ordinary tab in a
-            // LOCAL workspace's pane, not a whole separate "attached remote
-            // workspace". No local PTY, so it sits outside the `terminals`
-            // group above (which is keyed on ptyId-bearing surfaces) even
-            // though it visually shares the same tab strip.
-            <RemotePaneSurface
-              key={surface.id}
-              hostId={surface.remoteHostId || ''}
-              sessionId={surface.remoteSessionId || ''}
-              surfaceId={surface.id}
-              shell={surface.shell}
-              cwd={surface.cwd}
-              isActive={surface.id === activeSurfaceId}
-              onTitleChange={updateRemoteSurfaceTitle}
-              fixedFont={isShadowWorkspaceId(workspaceId)}
-            />
-          ) : (
-            <TerminalSurface
-              key={surface.id}
-              surface={surface}
-              paneId={pane.id}
-              chatViewEnabled={chatViewEnabled}
-              isActive={surface.id === activeSurfaceId}
-              isWorkspaceVisible={isWorkspaceVisible}
-              onPtyCreated={(ptyId) => onPtyCreated(surface.id, ptyId)}
-              workspaceId={workspaceId}
-            />
-          ),
-        )}
+        {pane.surfaces.map((surface) => renderSurface(surface))}
       </div>
     );
   }
 
-  // Both terminals and browsers exist — resizable split. Both sides stay
-  // visible at once; visibility is decoupled from the pane's single
-  // activeSurfaceId (which now only drives focus), else focusing one side
-  // display:none'd the other (blank-pane bug).
-  const { shownTerminalId, shownBrowserId } = pickSplitShownSurfaces(terminals, browsers, activeSurfaceId);
-  // #517 (codex P3): when a diff/editor overlay is the ACTIVE surface it
-  // covers the whole split, so the browser underneath is not actually visible
-  // — report it occluded so lightweight mode can throttle it.
-  const overlayActive = others.some((s) => s.id === activeSurfaceId);
+  // Terminal column | work area. Both sides stay visible at once; visibility
+  // is decoupled from the pane's single activeSurfaceId (which only drives
+  // focus), else focusing one side display:none'd the other (blank-pane bug).
+  // While the work area is expanded the terminal column is only hidden: it
+  // stays mounted and is treated like a background tab (no fit, so the PTY
+  // keeps its size), and the widths come back unchanged.
+  const { expanded } = split;
   return (
     <div className="flex-1 min-h-0 min-w-0 relative overflow-clip">
-      <Group orientation="horizontal" className="h-full w-full" resizeTargetMinimumSize={{ coarse: 37, fine: 16 }}>
-        {/* Terminal panel */}
-        <Panel defaultSize={50} minSize={20}>
+      <Group
+        orientation="horizontal"
+        className={`h-full w-full${expanded ? ' [&>[data-split-terminal]]:!hidden' : ''}`}
+        resizeTargetMinimumSize={{ coarse: 37, fine: 16 }}
+        onLayoutChange={split.onLayoutChange}
+      >
+        {/* Hidden through the Group's class while expanded: the library writes
+            display:flex inline, so only an !important rule can override it. */}
+        <Panel id={split.terminalPanelId} defaultSize={50} minSize={20} data-split-terminal="">
           <div className="h-full w-full min-h-0 min-w-0 relative overflow-clip">
-            {terminals.map((surface) => (
-              <TerminalSurface
-                key={surface.id}
-                surface={surface}
-                paneId={pane.id}
-                chatViewEnabled={chatViewEnabled}
-                isActive={surface.id === activeSurfaceId}
-                visible={surface.id === shownTerminalId}
-                isWorkspaceVisible={isWorkspaceVisible}
-                onPtyCreated={(ptyId) => onPtyCreated(surface.id, ptyId)}
-                workspaceId={workspaceId}
-              />
-            ))}
+            {split.terminals.map((surface) => renderSurface(surface, !expanded && surface.id === split.shownTerminalId))}
           </div>
         </Panel>
 
-        <Separator className="w-px bg-[var(--border-soft)] hover:bg-[var(--accent-blue)] transition-colors cursor-col-resize" />
+        <Separator
+          disabled={expanded}
+          className={`w-px bg-[var(--border-soft)] hover:bg-[var(--accent-blue)] transition-colors cursor-col-resize${expanded ? ' hidden' : ''}`}
+        />
 
-        {/* Browser panel */}
-        <Panel defaultSize={50} minSize={20}>
+        <Panel id={split.workPanelId} defaultSize={50} minSize={20}>
           <div className="h-full w-full min-h-0 min-w-0 relative overflow-clip">
-            {browsers.map((surface) => (
-              <BrowserPanel
-                key={`${surface.id}:${surface.browserPartition || 'persist:wmux-default'}`}
-                surfaceId={surface.id}
-                workspaceId={workspaceId}
-                initialUrl={surface.browserUrl || 'https://google.com'}
-                partition={surface.browserPartition || 'persist:wmux-default'}
-                isActive={surface.id === activeSurfaceId}
-                visible={surface.id === shownBrowserId}
-                isWorkspaceVisible={isWorkspaceVisible}
-                isZoomHidden={isZoomHidden}
-                occluded={overlayActive}
-                onClose={() => onCloseSurface(surface.id)}
-              />
-            ))}
+            {split.works.map((surface) => renderSurface(surface, surface.id === split.shownWorkId))}
           </div>
         </Panel>
       </Group>
-      {/* F6 — active인 diff·editor 서피스를 스플릿 위에 오버레이(absolute inset-0).
-          비active는 각 패널의 display:none으로 숨으므로 겹쳐도 안전. */}
-      {others.map((surface) =>
-        surface.surfaceType === 'diff' ? (
-          <DiffPanel
-            key={surface.id}
-            source={
-              surface.diffRepoPath
-                ? { kind: 'workspace', repoPath: surface.diffRepoPath }
-                : { kind: 'task', taskId: surface.diffTaskId || '' }
-            }
-            isActive={surface.id === activeSurfaceId}
-            surfaceId={surface.id}
-            verifiedWorkspaceId={surface.diffOwnerWorkspaceId || workspaceId}
-          />
-        ) : surface.surfaceType === 'placeholder' ? (
-          <SurfacePlaceholder
-            key={surface.id}
-            title={surface.title}
-            isActive={surface.id === activeSurfaceId}
-            surfaceId={surface.id}
-          />
-        ) : surface.surfaceType === 'remote-terminal' ? (
-          // #1086/#1091, CodeRabbit round 1 — the hasBoth split previously
-          // routed remote-terminal into the editor ternary below (empty
-          // filePath, nothing rendered). Same overlay contract as Diff/Editor
-          // (absolute inset-0, isActive→display:none inside the component).
-          <RemotePaneSurface
-            key={surface.id}
-            hostId={surface.remoteHostId || ''}
-            sessionId={surface.remoteSessionId || ''}
-            surfaceId={surface.id}
-            shell={surface.shell}
-            cwd={surface.cwd}
-            isActive={surface.id === activeSurfaceId}
-            onTitleChange={updateRemoteSurfaceTitle}
-            fixedFont={isShadowWorkspaceId(workspaceId)}
-          />
-        ) : (
-          <EditorPanel
-            key={surface.id}
-            filePath={surface.editorFilePath || ''}
-            isActive={surface.id === activeSurfaceId}
-            surfaceId={surface.id}
-          />
-        ),
-      )}
     </div>
   );
 }

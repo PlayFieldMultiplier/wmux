@@ -102,6 +102,10 @@ node scripts/control-wmux.mjs stop --purge  # also delete the suffixed data this
 
 `stop` SIGTERMs the launched app PID (SIGKILL after 10 s), then stops the daemon that instance spawned (a normal quit only detaches from it): first `wmux daemon stop` over the instance's own suffixed socket, then, only if still alive, SIGTERM to the PID in `~/.wmux<suffix>/daemon.pid`. It boots out finished launchd jobs labelled `com.wmux.daemon<suffix>.*` (macOS). `--purge` removes only suffixed paths that did not exist before `launch`. Never `pkill`, `killall`, or kill by name. Evidence is never removed; `stop` lists what survived. Run `stop` after every attempt, failed ones included; the state moves to `.run/stopped-<run-id>.json`.
 
+## Record the verdict (verifying a PR)
+
+When the claim is a pull request, end with the verdict line above in your report. A pane has no tool that records a verdict: the agent factory's verifier bot records its own (`pr_verdict` in bot mode), and the factory's merge lane merges a PR only on a `pass` at exactly the head being merged.
+
 ## Helpers
 
 | Command | Purpose |

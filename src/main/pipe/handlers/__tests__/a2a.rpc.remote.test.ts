@@ -182,9 +182,9 @@ describe('a2a.task.send — Moa to another PC\'s Moa (brain link)', () => {
     expect(remote.sendTask).not.toHaveBeenCalled();
   });
 
-  it('Moa addressing a remote pane alias is refused toward the handoff card', async () => {
+  it('Moa addressing a remote pane alias is refused toward that PC\'s Moa', async () => {
     const res = await brainCall(setup(), { workspaceId: 'ws-a', to: ALIAS, message: 'x' }, asBrain('ws-a'));
-    expect(res.error).toMatch(/moa_propose_handoff/);
+    expect(res.error).toMatch(/does not send work straight to an agent[\s\S]*<PC>\/Moa alias/);
     expect(remote.sendTask).not.toHaveBeenCalled();
   });
 

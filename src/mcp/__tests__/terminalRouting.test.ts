@@ -113,6 +113,14 @@ describe('resolveTerminalRoute', () => {
     expect(spies.claimPinnedRoute).toHaveBeenCalledTimes(1);
   });
 
+  it('noClaim (a bot): an external miss never claims or reuses a pin, with or without a ptyId', async () => {
+    const pin: PinnedRoute = { ptyId: 'pty-pinned', workspaceId: 'ws-pinned' };
+    const { deps, spies } = makeDeps([{ status: 'miss' }], { getPinnedRoute: () => pin, noClaim: 'name a task pane' });
+    await expect(resolveTerminalRoute(deps)).rejects.toThrow('name a task pane');
+    await expect(resolveTerminalRoute(deps, 'pty-9')).rejects.toThrow('name a task pane');
+    expect(spies.claimPinnedRoute).not.toHaveBeenCalled();
+  });
+
   it('④b external miss, ptyId omitted, pin exists: reuses pin without claiming', async () => {
     const pin: PinnedRoute = { ptyId: 'pty-pinned', workspaceId: 'ws-pinned' };
     const { deps, spies } = makeDeps([{ status: 'miss' }], {

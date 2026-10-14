@@ -1,0 +1,203 @@
+{
+  "lastDeniedServer": {
+    "edits": [
+      {
+        "path": [
+          "deniedMcpServers"
+        ],
+        "op": "delete"
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"s\" from deniedMcpServers"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:mcp-server::s"
+    ],
+    "rootKeys": [
+      "a",
+      "z"
+    ]
+  },
+  "lastDenyEmptiesPermissions": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "delete"
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"Bash\" from permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ],
+    "rootKeys": [
+      "a",
+      "z"
+    ]
+  },
+  "lastDenyKeepsAllow": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "allow": [
+            "Read"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"mcp__s__t\" from permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:mcp-tool:s:t"
+    ],
+    "rootKeys": [
+      "permissions"
+    ]
+  },
+  "denyEmptyArrayStays": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "delete"
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"Bash\" from permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ],
+    "rootKeys": []
+  },
+  "lastOverride": {
+    "edits": [
+      {
+        "path": [
+          "skillOverrides"
+        ],
+        "op": "delete"
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "delete skillOverrides[\"writer\"]"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:skill::writer"
+    ],
+    "rootKeys": [
+      "z"
+    ]
+  },
+  "twoToolsOneFile": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "delete"
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"Bash\" from permissions.deny"
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"mcp__s__t\" from permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash",
+      "claude:mcp-tool:s:t"
+    ],
+    "rootKeys": []
+  },
+  "disableThenNewKeysAppend": {
+    "edits": [
+      {
+        "path": [
+          "skillOverrides"
+        ],
+        "op": "set",
+        "value": {
+          "x": "off"
+        }
+      },
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash"
+          ]
+        }
+      },
+      {
+        "path": [
+          "deniedMcpServers"
+        ],
+        "op": "set",
+        "value": [
+          {
+            "serverName": "m"
+          }
+        ]
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "set skillOverrides[\"x\"] = \"off\""
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"m\" to deniedMcpServers"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:skill::x",
+      "claude:builtin-tool::Bash",
+      "claude:mcp-server::m"
+    ],
+    "rootKeys": [
+      "b",
+      "a",
+      "skillOverrides",
+      "permissions",
+      "deniedMcpServers"
+    ]
+  }
+}

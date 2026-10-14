@@ -83,6 +83,7 @@ import * as fs from 'node:fs';
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import type { RpcContext } from '../../../shared/rpc';
+import { defaultBranchRefusal, noteBotRepoDefaultBranch, type DefaultBranchNote } from '../../agents/botWorkerDefaultBranch';
 import { HUMAN_WORKSPACE_ID, CHANNEL_TOPIC_MAX } from '../../../shared/channels';
 import {
   FANOUT_MAX_TASKS,
@@ -112,9 +113,30 @@ import {
   type FanoutPreset,
 } from '../../../shared/fanoutPreset';
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
-import { getMoaGoalService, type MoaGoalService } from '../../deck/moaGoalContract';
-import { goalFanoutRefusal, goalWorkerDenyRules } from '../../../shared/moaGoalWorker';
-import { goalTermsOf, type MoaGoalTerms } from '../../../shared/moaGoal';
+import type { BotBinding, BotProfile } from '../../../shared/bot';
+import { SHARED_SURFACE } from '../../../shared/botSurface';
+import { WAKE_LIMITS, botFanoutIdempotencyKey, type WakeItem } from '../../../shared/wake';
+import { getBotStore } from '../../factory/botStore';
+import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
+import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
+import { getBotRuntime } from '../../factory/BotRuntime';
+import { GENERAL_THREAD, parseThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
+import { getFactorySettings } from '../../factory/factorySettings';
+import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
+import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
+import { runningWakeTainted } from '../../factory/wakeTaint';
+import { emitBotHook } from '../../factory/botHooks';
+import { checkWorkers, recordWorkerStart, type BotUsage, type BudgetRefusalReason } from '../../factory/budget';
+import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { botFanoutPreset, botFanoutPresetList, botPresetCheckoutRefusal, composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
+import { getFactLog, type FactLog } from '../../factory/factLog';
+import { getWakeQueue } from '../../factory/wakeQueue';
+import { getVerdictedTasks } from '../../factory/verdictedTasks';
+import { isWakeStoppedByOwner } from '../../factory/factoryStop';
+import { getAgentSlots } from '../../factory/agentSlots';
+import { resumedWorkersLive } from '../../factory/workerReclaim';
+import type { LedgerEntry } from '../../../shared/ledger';
+import type { Fact } from '../../../shared/facts';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -602,76 +624,187 @@ export interface FanOutRpcDeps {
   requireApproval?: () => boolean;
   /** Injected in tests; defaults to the main-side preset store. */
   presets?: () => FanoutPreset[];
+  /** A bot caller's presets (never the operator's); injected in tests,
+   *  defaults to the built-in role presets (worktask/botFanoutPresets.ts). */
+  botPresets?: () => FanoutPreset[];
   /** Reads a WSL caller pane's distro (its daemon session's wslTarget). */
   getDaemonClient?: () => DaemonClient | null;
   /** Injected in tests; defaults to process.platform. */
   platform?: NodeJS.Platform;
-  /** Injected in tests; defaults to the Moa goal contract service
-   *  (deck/moaGoalContract.ts). Null = no goal service, today's anchor. */
-  goal?: () => FanOutGoalPort | null;
+  /** Injected in tests; defaults to the factory bot runtime. */
+  bot?: () => FanOutBotPort | null;
+  /** A bot's repository: read its default branch for the workers' push
+   *  rules (agents/botWorkerDefaultBranch). Injected in tests. */
+  botDefaultBranch?: (repoRoot: string) => Promise<DefaultBranchNote>;
 }
 
 /**
- * The approved Moa goal contract, as fan-out sees it (P2). When the commander
- * calling is the HQ and its contract is active, the fan-out runs over the
- * repository the OPERATOR approved in the goal card, not over whatever the
- * HQ's active pane happens to be in. Every task counts against the goal's
- * task budget, reserved before anything is asked or spawned.
+ * What fan-out needs from the factory for a bot caller: its profile (the repo
+ * it acts on, its budget), its running wake (fan-out keys are derived from
+ * it), its open workers and the factory-wide count, and where to record the
+ * workers it started.
  */
-export interface FanOutGoalAnchor {
-  goalId: string;
-  /** The approved repository, or null when the contract names none. */
-  repoRoot: string | null;
-  /** The worker permission mode pinned at approval. */
-  workerPermissionMode?: FanoutWorkerPermissionMode;
+export interface FanOutBotPort {
+  profile(botId: string): BotProfile | null;
+  /** The wake the bot is running now, or null between turns. */
+  currentWakeId(botId: string): string | null;
+  /** The room thread of that running wake, or null (main's wake state, read
+   *  with the wake id: the tasks the wake starts report in this thread). */
+  currentWakeThread(botId: string): ThreadId | null;
+  /** Whether that running wake carried outside text (factory/wakeTaint.ts);
+   *  true when it cannot be told. Its tasks' dispatch carries the mark. */
+  currentWakeTainted(botId: string): boolean;
+  /** Open fan-out tasks started by this bot, and by any bot. */
+  openWorkers(botId: string): { bot: number; factory: number };
+  usage(botId: string): BotUsage;
+  workersStarted(botId: string, taskIds: readonly string[]): void;
+  budgetExhausted(bot: BotBinding, reason: BudgetRefusalReason | 'factory_workers'): void;
+  /** Whether this fan-out key was accepted before (durable across restarts). */
+  fanoutKeySeen(key: string): boolean;
+  recordFanoutKey(key: string): void;
+  /** Why a bot's fan-out may not launch now (the factory is off, the bot
+   *  was disabled, removed or parked, or its wake was interrupted), or null.
+   *  Asked at the call, after approval, and before each deferred task. */
+  launchRefusal(botId: string, wakeId: string): string | null;
+  /** What became of an accepted fan-out's tasks once its start settled:
+   *  main tells the bot once per task (a `bot.notice` and a wake), and posts
+   *  a card in the bot's thread for a task that could not start
+   *  (factory/botNotices.ts noticeWorkerStarts). Absent: nobody is told. */
+  workerStartOutcome?(botId: string, outcome: BotWorkerStartOutcome): void;
 }
 
-export interface FanOutGoalPort {
-  /** The active contract for `commanderWorkspaceId` (its HQ), or null. */
-  anchor(commanderWorkspaceId: string): FanOutGoalAnchor | null;
-  reserve(n: number): { ok: true; goalId: string; terms?: MoaGoalTerms } | { ok: false; reason: string };
-  release(goalId: string, n: number): void;
-  attach(goalId: string, workspaceIds: readonly string[]): void;
-  /** The HQ's current turn was woken by another PC's Moa. Absent = no. */
-  remoteWoken?(commanderWorkspaceId: string): boolean;
-  /** With no active goal: why the HQ's running turn, which started under a
-   *  goal that has since ended or gone inert, may not fan out at all. */
-  turnRefusal?(commanderWorkspaceId: string): string | null;
+/** What an accepted bot fan-out answers: the workers are not up yet. */
+export const BOT_FANOUT_STARTING_NOTE =
+  'Accepted: the workers are starting, not started. Say they are starting, not that they started: a worker that could not start wakes you, and one that started reports through its task.';
+
+/** Fan-outs a bot may start inside one wake. */
+export const BOT_FANOUTS_PER_WAKE_MAX = 16;
+
+/** The verify tasks among `taskIds` whose verdict.recorded fact (naming the
+ *  task as its evidence) is still in the fact log. Empty when the log is not
+ *  running or cannot be scanned. The factory's verdicted-tasks file keeps
+ *  them after the fact is gone (verdictedTasks.ts). */
+export function verdictedTaskIds(taskIds: readonly string[], log: unknown = getFactLog()): Set<string> {
+  const out = new Set<string>();
+  if (taskIds.length === 0 || !log || typeof (log as Partial<FactLog>).readWhere !== 'function') return out;
+  const want = new Set(taskIds);
+  // One fact per task is enough: the scan stops once every task is found.
+  const firstVerdict = (f: Fact): boolean => {
+    const id = f.ref?.taskId;
+    if (f.kind !== 'verdict.recorded' || !id || !want.has(id) || out.has(id)) return false;
+    out.add(id);
+    return true;
+  };
+  try {
+    (log as FactLog).readWhere(0, firstVerdict, want.size);
+  } catch {
+    out.clear(); // counted as open
+  }
+  return out;
 }
 
-function defaultGoalPort(): FanOutGoalPort | null {
-  const svc = getMoaGoalService();
-  return svc ? goalPortOf(svc) : null;
+/**
+ * Open fan-out tasks started by `botId`, and by any bot. A verify task that
+ * reported done (review_requested) and whose verdict is recorded has
+ * finished its work — the verdict was the reason it ran — so it no longer
+ * holds a worker slot. Pure over its inputs.
+ */
+export function countOpenBotWorkers(
+  rows: ReadonlyArray<Pick<LedgerEntry, 'id' | 'status' | 'dispatch'>>,
+  botId: string,
+  verdicted: (taskIds: readonly string[]) => Set<string>,
+): { bot: number; factory: number } {
+  const botRows = rows.filter((e) => e.dispatch?.origin?.kind === 'bot');
+  const done = verdicted(botRows.filter((e) => e.status === 'review_requested' && e.dispatch?.preset === 'verify').map((e) => e.id));
+  let bot = 0;
+  let factory = 0;
+  for (const e of botRows) {
+    if (done.has(e.id)) continue;
+    factory++;
+    if (e.dispatch?.origin?.botId === botId) bot++;
+  }
+  return { bot, factory };
 }
 
-/** The fan-out port over a goal service. Exported for tests. */
-export function goalPortOf(svc: MoaGoalService): FanOutGoalPort {
+/** Why a bot's fan-out may not launch now, or null. Pure. With the factory
+ *  off no bot launches a worker, whatever its profile or wake say. */
+export function botLaunchRefusal(
+  factoryEnabled: boolean,
+  profile: Pick<BotProfile, 'enabled' | 'parked'> | null,
+  wakeState: WakeItem['state'] | null,
+): string | null {
+  if (!factoryEnabled) return 'the agent factory is off';
+  if (!profile || !profile.enabled) return 'the bot was removed or disabled';
+  if (profile.parked) return `the bot is parked (${profile.parked.reason})`;
+  if (wakeState === 'interrupted' || wakeState === 'dropped' || wakeState === 'parked' || wakeState === null) {
+    return `the wake that asked for it is ${wakeState ?? 'gone'}`;
+  }
+  return null;
+}
+
+/** Why a fan-out the owner's approval step stopped did not start, in plain
+ *  words. Pure. */
+export function fanoutDenialText(reason: FanOutDenyReason): string {
+  switch (reason) {
+    case 'declined': return 'the owner declined it';
+    case 'timeout': return 'nobody approved it in time';
+    case 'repo-moved': return 'the repository moved while it waited for approval';
+    case 'audit-unavailable': return 'wmux could not record the launch';
+    default: return 'wmux could not ask for approval';
+  }
+}
+
+function defaultBotPort(): FanOutBotPort | null {
+  const store = getBotStore();
+  const runtime = getBotRuntime();
+  const receipts = getBotFanoutReceipts();
+  if (!store || !runtime || !receipts) return null;
   return {
-    anchor: (ws) => {
-      const p = svc.powers();
-      if (!p.ok || p.contract.hqWorkspaceId !== ws) return null;
-      return {
-        goalId: p.contract.id,
-        repoRoot: p.contract.repoRoot,
-        ...(p.contract.workerPermissionMode ? { workerPermissionMode: p.contract.workerPermissionMode } : {}),
-      };
+    fanoutKeySeen: (key) => receipts.has(key),
+    recordFanoutKey: (key) => receipts.add(key),
+    launchRefusal: (botId, wakeId) => (isWakeStoppedByOwner(wakeId)
+      ? 'the owner stopped this bot'
+      : botLaunchRefusal(getFactorySettings().enabled, store.get(botId), runtime.wakeState(wakeId))),
+    profile: (botId) => store.get(botId),
+    currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
+    currentWakeThread: (botId) => runtime.currentTurn(botId)?.threadId ?? null,
+    currentWakeTainted: (botId) => runningWakeTainted(botId),
+    // Open bot tasks, plus resumed workers whose task row has ended.
+    openWorkers: (botId) => {
+      const open = countOpenBotWorkers(getTaskLedger().list({ openOnly: true }), botId, (ids) => {
+        const kept = getVerdictedTasks();
+        const found = verdictedTaskIds(ids.filter((id) => !kept?.has(id)));
+        for (const id of ids) if (kept?.has(id)) found.add(id);
+        return found;
+      });
+      return { bot: open.bot + resumedWorkersLive(botId), factory: open.factory + resumedWorkersLive() };
     },
-    remoteWoken: (ws) => svc.turnWokenByRemoteMoa(ws),
-    turnRefusal: (ws) => {
-      const r = svc.turnGoalRefusal(ws);
-      return r
-        ? `this turn started under goal ${r.goalId}, which grants nothing any more (${r.reason}). A goal's turn never falls back to an ordinary fan-out: report to the operator, or fan out in a later turn.`
-        : null;
+    usage: (botId) => store.usageOf(botId),
+    workersStarted: (botId, taskIds) => {
+      const now = Date.now();
+      store.mutateUsage(botId, (u) => {
+        for (const id of taskIds) recordWorkerStart(u, id, now);
+      });
     },
-    reserve: (n) => {
-      const r = svc.reserveTasks(n);
-      return r.ok ? { ok: true, goalId: r.contract.id, terms: goalTermsOf(r.contract) } : r;
+    budgetExhausted: (bot, reason) => {
+      emitBotHook({ type: 'bot.budget_exhausted', botId: bot.botId, workspaceId: bot.workspaceId, reason, at: Date.now() });
     },
-    release: (goalId, n) => svc.releaseTasks(goalId, n),
-    attach: (goalId, ids) => svc.attachTaskWorkspaces(goalId, ids),
+    workerStartOutcome: (botId, outcome) => {
+      noticeWorkerStarts({ factLog: getFactLog, wakes: getWakeQueue }, botId, outcome);
+    },
   };
 }
 
+/** `checkout` from the wire, validated (40-hex sha; fetchRef only `pull/<n>/head`). */
+function parseCheckout(raw: unknown): { sha: string; detached: true; fetchRef?: string } | { error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'checkout must be {sha, fetchRef?}' };
+  const r = raw as Record<string, unknown>;
+  if (typeof r['sha'] !== 'string' || !/^[0-9a-f]{40}$/.test(r['sha'])) return { error: 'checkout.sha must be a 40-hex commit id' };
+  if (r['fetchRef'] !== undefined && (typeof r['fetchRef'] !== 'string' || !/^pull\/[1-9][0-9]{0,8}\/head$/.test(r['fetchRef']))) {
+    return { error: 'checkout.fetchRef must be pull/<number>/head' };
+  }
+  return { sha: r['sha'], detached: true, ...(typeof r['fetchRef'] === 'string' ? { fetchRef: r['fetchRef'] } : {}) };
+}
 
 /**
  * The per-task agent selection: `preset` (operator data), `agents` (caller,
@@ -768,6 +901,8 @@ export function registerFanOutRpc(
   // of them costs almost nothing.
   const pending = new Map<string, GateState>();
   const terminal = new Map<string, Tombstone>();
+  /** Bot fan-outs accepted and not yet through their start (see the caps). */
+  const botBooked = new Map<string, { botId: string; n: number }>();
 
   /** Insertion-ordered LRU over the AWAITING keys only. */
   const claim = (key: string): void => {
@@ -846,6 +981,12 @@ export function registerFanOutRpc(
     // the stronger claim, and honouring the pty field for a commander would let
     // a brain aim a fan-out at a workspace it is not bound to.
     const commanderWorkspaceId = ctx?.commanderWorkspace ?? '';
+    // A factory bot is a commander token bound to one bot: RpcRouter put the
+    // binding on ctx, and its workspace is the commander workspace.
+    const bot: BotBinding | null = ctx?.bot && ctx.bot.workspaceId === commanderWorkspaceId ? ctx.bot : null;
+    if (ctx?.bot && !bot) {
+      return deny('NOT_AUTHORIZED', 'task.fanout.start: the bot binding does not match its workspace');
+    }
     const senderPtyId = commanderWorkspaceId
       ? ''
       : typeof params['senderPtyId'] === 'string'
@@ -899,9 +1040,11 @@ export function registerFanOutRpc(
      *  "fanout-1" would otherwise read a pane agent's result — task ids,
      *  branches, worktree paths — and see its own start silently answered as a
      *  poll. Pane callers keep the exact key space they had. */
-    const key = commanderWorkspaceId
-      ? `${callerWorkspaceId}::commander::${callerKey}`
-      : `${callerWorkspaceId}::${callerKey}`;
+    const key = bot
+      ? `${callerWorkspaceId}::bot::${bot.botId}::${callerKey}`
+      : commanderWorkspaceId
+        ? `${callerWorkspaceId}::commander::${callerKey}`
+        : `${callerWorkspaceId}::${callerKey}`;
 
     // ── Poll branch ──────────────────────────────────────────────────────
     // A repeat of a key we already know answers from bookkeeping and starts
@@ -962,6 +1105,77 @@ export function registerFanOutRpc(
           message: 'this fan-out already ran and its result is no longer retained; list your missions instead',
         },
       };
+    }
+
+    // ── A bot starts a fan-out only inside a running wake ────────────────
+    // and only under the key that wake owns (R8): a retried or replayed turn
+    // re-sends the same keys and polls what it started, never a second copy.
+    let botPort: FanOutBotPort | null = null;
+    let botProfile: BotProfile | null = null;
+    let botWakeId = '';
+    // The thread of the wake that asks: its tasks' wakes and cards go there.
+    let botWakeThread: ThreadId | undefined;
+    // Whether that wake carried outside text: its tasks are marked tainted.
+    let botWakeTainted = false;
+    // Where the bot was talking when it asked (general included): how its
+    // workers' start went is told there.
+    let botNoticeThread: ThreadId = GENERAL_THREAD;
+    if (bot) {
+      try {
+        botPort = (deps.bot ?? defaultBotPort)();
+      } catch {
+        botPort = null;
+      }
+      botProfile = botPort?.profile(bot.botId) ?? null;
+      if (!botPort || !botProfile || !botProfile.enabled) {
+        return deny('FAILED_PRECONDITION', 'task.fanout.start: this bot is not running in the factory');
+      }
+      // Accepted before this process started (the in-memory poll above did
+      // not know it): it ran, and must never run twice.
+      if (botPort.fanoutKeySeen(key)) {
+        return {
+          ok: false as const,
+          status: 'expired' as const,
+          idempotencyKey: callerKey,
+          error: { code: 'NOT_FOUND', message: 'this fan-out already ran and its result is no longer retained; check your tasks instead' },
+        };
+      }
+      const wakeId = botPort.currentWakeId(bot.botId);
+      if (!wakeId) return deny('FAILED_PRECONDITION', 'task.fanout.start: a bot fans out only during a wake');
+      const refusal = botPort.launchRefusal(bot.botId, wakeId);
+      if (refusal) return deny('FAILED_PRECONDITION', `task.fanout.start: ${refusal}`);
+      botWakeId = wakeId;
+      // Read in the same tick as the wake id, before any await: the wake can
+      // end while the worktrees are being made.
+      const wakeThread = botPort.currentWakeThread(bot.botId);
+      botWakeThread = taskOriginThread(wakeThread);
+      botNoticeThread = parseThreadId(wakeThread) ?? GENERAL_THREAD;
+      botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false;
+      const ordinal = /^wake:.+:([1-9][0-9]*)$/.exec(callerKey)?.[1];
+      if (!ordinal || Number(ordinal) > BOT_FANOUTS_PER_WAKE_MAX || callerKey !== botFanoutIdempotencyKey(wakeId, Number(ordinal))) {
+        return deny(
+          'INVALID_ARGUMENT',
+          `a bot's fan-out key is "${botFanoutIdempotencyKey(wakeId, 1)}", then ":2" and so on (at most ${BOT_FANOUTS_PER_WAKE_MAX} per wake)`,
+        );
+      }
+    }
+    let checkout: { sha: string; detached: true; fetchRef?: string } | undefined;
+    if (params['checkout'] !== undefined) {
+      if (!bot) return deny('INVALID_ARGUMENT', 'task.fanout.start accepts checkout only from a factory bot');
+      const c = parseCheckout(params['checkout']);
+      if ('error' in c) return deny('INVALID_ARGUMENT', c.error);
+      checkout = c;
+    }
+    // A bot's named secrets for its workers (factory/secretGrants.ts): names
+    // only, each stored now; the values reach each worker's process alone.
+    let secretNames: string[] | undefined;
+    if (params['secretNames'] !== undefined) {
+      if (!bot) return deny('INVALID_ARGUMENT', 'task.fanout.start accepts secretNames only from a factory bot');
+      const names = parseSecretNames(params['secretNames']);
+      if (!names) return deny('INVALID_ARGUMENT', `secretNames must be 1-${BOT_SECRET_LIMITS.NAMES_PER_FANOUT} distinct credential-shaped env names (for example NPM_TOKEN)`);
+      const missing = secretNamesRefusal(names);
+      if (missing) return deny('INVALID_ARGUMENT', missing);
+      secretNames = names;
     }
 
     // ── Fields the renderer may state but a wire caller may not ──────────
@@ -1034,19 +1248,86 @@ export function registerFanOutRpc(
     if ('error' in graph) return deny('INVALID_ARGUMENT', graph.error);
     // Titles are counted AFTER parseTasks drops empty ones, so a preset row
     // lines up with the task that actually spawns.
-    const selection = resolveAgentSelection(params, parsed.titles.length, deps.presets ?? (() => loadFanoutPresets()));
+    const selection = resolveAgentSelection(
+      params,
+      parsed.titles.length,
+      bot ? deps.botPresets ?? botFanoutPresetList : deps.presets ?? (() => loadFanoutPresets()),
+    );
     if ('error' in selection) return deny('INVALID_ARGUMENT', selection.error);
     const agentChoices = selection.kind === 'none' ? [] : selection.agents;
     const agentLabels = agentChoices.map(describeFanoutAgentChoice);
     const worktree = !(selection.kind === 'preset' && selection.preset.worktree === false);
+    // §13 rule 3: a bot fans out only with the bot presets (every bot holds
+    // all of them), always into worktrees; a detached checkout is the verify
+    // preset's alone.
+    const botPreset = bot ? (selection.kind === 'preset' ? selection.preset.name : 'default') : undefined;
+    /** The surface's spelling of the preset: what the ledger row records. */
+    let botPresetName: string | undefined;
+    /** The preset's worker prompt + the bot's prompt (bot callers only). */
+    let botWorkerPrompt: string | undefined;
+    if (bot && selection.kind !== 'preset') {
+      return deny('NOT_AUTHORIZED', `a bot fans out only through a bot preset (${SHARED_SURFACE.fanoutPresets.join(', ')}); roles and agents are refused`);
+    }
+    if (bot && params['dependsOn'] !== undefined) {
+      return deny('INVALID_ARGUMENT', 'a bot fan-out cannot use dependsOn: start the next step from a later wake');
+    }
+    if (bot && botPreset !== undefined) {
+      const allowed = SHARED_SURFACE.fanoutPresets;
+      botPresetName = allowed.find((p) => fanoutPresetKey(p) === fanoutPresetKey(botPreset));
+      if (!botPresetName) {
+        return deny('NOT_AUTHORIZED', `a bot may fan out only with ${allowed.map((p) => `preset "${p}"`).join(', ')}`);
+      }
+      if (!worktree) return deny('NOT_AUTHORIZED', 'a bot fans out only into worktrees (worktree:false is refused)');
+      // verify: a detached checkout of one commit; every other preset: none.
+      const checkoutRefusal = botPresetCheckoutRefusal(botPresetName, checkout);
+      if (checkoutRefusal) return deny('INVALID_ARGUMENT', checkoutRefusal);
+      // The preset's worker prompt goes ahead of the bot's own, and every
+      // task's effective prompt must still fit the cap.
+      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout);
+      const tooLong = parsed.taskPrompts.some((own) =>
+        Buffer.byteLength(own ? `${composed}\n\n${own}` : composed, 'utf8') > FANOUT_PROMPT_MAX_BYTES);
+      if (tooLong) return deny('INVALID_ARGUMENT', `a task prompt with the ${botPresetName} preset's worker prompt exceeds ${FANOUT_PROMPT_MAX_BYTES} bytes`);
+      botWorkerPrompt = composed;
+      if (checkout && (params['files'] !== undefined || params['dependsOn'] !== undefined)) {
+        return deny('INVALID_ARGUMENT', 'checkout cannot be combined with files or dependsOn');
+      }
+      if (!botProfile?.repo) return deny('FAILED_PRECONDITION', 'this bot has no repository to fan out in (set its repo)');
+    }
 
     // ── Global caps (live + rolling hour), reserved in this same tick ────
     // Over a cap is a refusal, never a queued prompt: with approval off by
     // default there is nobody to drain a queue, and with it on a loop would
     // bury the operator in dialogs.
+    // A bot's own worker budget, and the factory-wide worker cap, counted
+    // over open bot tasks plus bot fan-outs still being started (booked in
+    // this same tick, so two concurrent starts cannot both pass).
+    if (bot && botPort && botProfile) {
+      const open = botPort.openWorkers(bot.botId);
+      let bookedBot = 0;
+      let bookedAll = 0;
+      for (const b of botBooked.values()) {
+        bookedAll += b.n;
+        if (b.botId === bot.botId) bookedBot += b.n;
+      }
+      const n = parsed.titles.length;
+      if (open.factory + bookedAll + n > WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS) {
+        botPort.budgetExhausted(bot, 'factory_workers');
+        return deny('RESOURCE_EXHAUSTED', `the factory runs at most ${WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS} bot workers at once`);
+      }
+      const budget = checkWorkers(botProfile.budget, botPort.usage(bot.botId), open.bot + bookedBot, n, Date.now());
+      if (!budget.ok) {
+        botPort.budgetExhausted(bot, budget.reason);
+        return deny('RESOURCE_EXHAUSTED', `this bot's worker budget refuses the fan-out (${budget.reason})`);
+      }
+    }
+
     const guards = guardsOf();
     const reservation = guards.reserve(key, parsed.titles.length);
     if (!reservation.ok) return deny('RESOURCE_EXHAUSTED', reservation.message);
+    if (bot) {
+      botBooked.set(key, { botId: bot.botId, n: parsed.titles.length });
+      botPort?.recordFanoutKey(key);
+    }
 
     // ── Claim the key ────────────────────────────────────────────────────
     // Last synchronous statement of the tick that read the gate above: from
@@ -1056,134 +1337,63 @@ export function registerFanOutRpc(
     // ── Requester: resolved once, before approval / git / worktree work ──
     // A brain is the orchestrator; a pane caller is looked up now, while the
     // pane that asked is certainly still there (see resolveCallerOrigin).
-    const callerOrigin: FanoutOrigin | undefined = commanderWorkspaceId
-      ? { kind: 'orchestrator' }
-      : await resolveCallerOrigin(getWindow, senderPtyId, callerWorkspaceId);
+    const callerOrigin: FanoutOrigin | undefined = bot
+      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted }
+      : commanderWorkspaceId
+        ? { kind: 'orchestrator' }
+        : await resolveCallerOrigin(getWindow, senderPtyId, callerWorkspaceId);
 
     // ── R3: repo confinement ─────────────────────────────────────────────
     // A pane agent anchors on its OWN surface; a brain has none, so it anchors
     // on its workspace's active pane (resolved once — see the helper).
-    // P2 — under an approved Moa goal the HQ fans out over the goal's
-    // repository (the one the operator approved), re-vetted now and again
-    // after the approval. A goal fan-out is always a worktree fan-out.
-    let goalPort: FanOutGoalPort | null = null;
-    try {
-      goalPort = commanderWorkspaceId ? (deps.goal ?? defaultGoalPort)() : null;
-    } catch {
-      goalPort = null;
-    }
-    const goalAnchorOf = (): FanOutGoalAnchor | null => {
-      try {
-        return goalPort?.anchor(commanderWorkspaceId) ?? null;
-      } catch {
-        return null;
-      }
-    };
     // Read ONCE for this call: the approval decision, the preview, the audit
-    // record, every task's launch AND the goal's pinned-mode check use it.
-    const workerMode = (deps.workerPermissionMode ?? loadFanoutWorkerPermissionMode)();
-    // Under an active goal every fan-out from the HQ is a goal fan-out: it
-    // passes the goal's checks (shared/moaGoalWorker.ts goalFanoutRefusal) or
-    // it is refused. A goal never lets a fan-out run outside its profile.
-    const activeGoal = goalAnchorOf();
-    if (!activeGoal && goalPort?.turnRefusal) {
-      // P1: the goal this turn started under ended (or went inert) mid-turn.
-      // Refused outright, never run over the HQ's own pane with its own agents.
-      let why: string | null;
+    // record and every task's launch use it.
+    // A bot's workers run unattended in the preset's mode, whatever the
+    // operator's fan-out setting is.
+    const botPresetMode = bot && botPresetName ? botFanoutPreset(botPresetName)?.permissionMode : undefined;
+    const workerMode = botPresetMode ?? (deps.workerPermissionMode ?? loadFanoutWorkerPermissionMode)();
+    // A bot has no pane: it fans out in the repository its profile names,
+    // which must still be a git repository root.
+    const botRepoPath = bot ? botProfile?.repo?.repoPath ?? '' : '';
+    const deriveBotRoot = async (): Promise<{ root: string } | { code: string; message: string }> => {
+      let expected = botRepoPath;
       try {
-        why = goalPort.turnRefusal(commanderWorkspaceId);
-      } catch (err) {
-        why = `the goal this turn started under could not be read (${String(err)})`;
-      }
-      if (why) {
-        pending.delete(key);
-        guards.release(key);
-        return deny('FAILED_PRECONDITION', why);
-      }
-    }
-    if (activeGoal) {
-      let remoteWoken = true; // unreadable = refuse (fail closed)
-      try {
-        remoteWoken = goalPort?.remoteWoken?.(commanderWorkspaceId) ?? false;
+        expected = fs.realpathSync(botRepoPath);
       } catch {
-        remoteWoken = true;
+        /* compared as given */
       }
-      const why = goalFanoutRefusal({
-        goalId: activeGoal.goalId,
-        repoRoot: activeGoal.repoRoot,
-        pinnedMode: activeGoal.workerPermissionMode,
-        currentMode: workerMode,
-        worktree,
-        agents: agentChoices,
-        remoteWoken,
-      });
-      if (why) {
-        pending.delete(key);
-        guards.release(key);
-        return deny('FAILED_PRECONDITION', why);
-      }
-    }
-    const goalAnchor = activeGoal && activeGoal.repoRoot
-      ? { goalId: activeGoal.goalId, repoRoot: activeGoal.repoRoot }
-      : null;
-    const deriveGoalRoot = async (anchor: { repoRoot: string }): Promise<{ root: string } | { code: string; message: string }> => {
-      const { root } = await repoRootOf(anchor.repoRoot);
-      return root === anchor.repoRoot
+      const { root } = await repoRootOf(botRepoPath);
+      return root && root === expected
         ? { root }
-        : { code: 'FAILED_PRECONDITION', message: `the approved goal's repository is no longer a git repository root: ${anchor.repoRoot}` };
+        : { code: 'FAILED_PRECONDITION', message: `the bot's repository is not a git repository root: ${botRepoPath}` };
     };
-    const anchorPtyId = commanderWorkspaceId && !goalAnchor
+    const anchorPtyId = commanderWorkspaceId && !bot
       ? await resolveCommanderAnchorPtyId(getWindow, commanderWorkspaceId)
       : senderPtyId;
-    const preflight = goalAnchor
-      ? await deriveGoalRoot(goalAnchor)
+    const preflight = bot
+      ? await deriveBotRoot()
       : await deriveCallerRepoRoot(getWindow, callerWorkspaceId, anchorPtyId, { requireRepo: worktree, platform: deps.platform, daemonRpc });
     if (!('root' in preflight)) {
       // Nothing was started and nothing was asked, so the key must go back —
       // otherwise a transient renderer miss would brick it until eviction.
       pending.delete(key);
       guards.release(key);
+      botBooked.delete(key);
       return deny(preflight.code, preflight.message);
     }
     const callerRepoRoot = preflight.root;
-    // The goal's task budget, reserved before anything is asked or spawned and
-    // given back for every task that never got a workspace.
-    let goalReserved: { goalId: string; left: number; terms?: MoaGoalTerms } | null = null;
-    if (goalAnchor && goalPort) {
-      const r = goalPort.reserve(parsed.titles.length);
-      if (!r.ok) {
+    // A bot's workers may not push to this repository's own default branch:
+    // read it before they launch (main and master are covered regardless).
+    if (bot) {
+      const note = await (deps.botDefaultBranch ?? noteBotRepoDefaultBranch)(callerRepoRoot).catch((): DefaultBranchNote => ({ name: null, recorded: false }));
+      const refusal = defaultBranchRefusal(note);
+      if (refusal) {
         pending.delete(key);
         guards.release(key);
-        return deny('FAILED_PRECONDITION', `the approved goal does not allow this fan-out: ${r.reason}`);
+        botBooked.delete(key);
+        return deny('FAILED_PRECONDITION', refusal);
       }
-      goalReserved = { goalId: r.goalId, left: parsed.titles.length, ...(r.terms ? { terms: r.terms } : {}) };
     }
-    const releaseGoal = (n: number): void => {
-      if (!goalReserved || !goalPort || n <= 0) return;
-      const give = Math.min(n, goalReserved.left);
-      goalReserved.left -= give;
-      try {
-        goalPort.release(goalReserved.goalId, give);
-      } catch {
-        /* the budget only ever errs towards fewer tasks */
-      }
-    };
-    const deferredGoalRefusal = (anchor: { goalId: string; repoRoot: string }): string | null => {
-      const now = goalAnchorOf();
-      if (!now || now.goalId !== anchor.goalId) return `goal ${anchor.goalId} is no longer active`;
-      if (now.repoRoot !== anchor.repoRoot) return `goal ${anchor.goalId} no longer covers ${anchor.repoRoot}`;
-      let modeNow: string;
-      try {
-        modeNow = (deps.workerPermissionMode ?? loadFanoutWorkerPermissionMode)();
-      } catch {
-        return `the fan-out worker permission mode could not be read for goal ${anchor.goalId}`;
-      }
-      if (!now.workerPermissionMode || now.workerPermissionMode !== modeNow) {
-        return `the fan-out worker permission mode is ${modeNow} now, but goal ${anchor.goalId} was approved with ${now.workerPermissionMode ?? 'none'}`;
-      }
-      return null;
-    };
-
     // ── Build the request from SERVER-DERIVED values only ────────────────
     // Note what is absent: agentCmd (R1), verifiedWorkspaceId and memberId
     // (R2), repoPath (R3). The request is constructed field by field — params
@@ -1191,11 +1401,11 @@ export function registerFanOutRpc(
     // by accident.
     // Both policy reads happen ONCE: the approval decision, the preview, the
     // audit record and every task's launch all use these same values (the
-    // worker mode was read above, before the goal checks).
+    // worker mode was read above).
     const requireApproval = (deps.requireApproval ?? loadFanoutRequireApproval)();
     const req: FanOutRequest = {
       idempotencyKey: key,
-      prompt: sharedPrompt,
+      prompt: botWorkerPrompt ?? sharedPrompt,
       titles: parsed.titles,
       taskPrompts: parsed.taskPrompts,
       repoPath: callerRepoRoot,
@@ -1215,9 +1425,6 @@ export function registerFanOutRpc(
         : { worktree: false, outputFolder: fanoutPresetOutputFolder((selection as { preset: FanoutPreset }).preset) }),
       verifiedWorkspaceId: callerWorkspaceId,
       workerPermissionMode: workerMode,
-      // Under a goal every task carries the goal worker profile (deny rules,
-      // credential friction, claude only): shared/moaGoalWorker.ts.
-      ...(goalReserved ? { goalWorker: { goalId: goalReserved.goalId, ...(goalReserved.terms ? { terms: goalReserved.terms } : {}) } } : {}),
       // Who asked, for each task's lineage stamp — resolved above, the same
       // origin for every task. An unresolvable pane records no requester.
       ...(callerOrigin ? { caller: callerOrigin } : {}),
@@ -1228,6 +1435,12 @@ export function registerFanOutRpc(
       // already answered `accepted`.
       ...(params['files'] !== undefined ? { files: graph.files } : {}),
       ...(params['dependsOn'] !== undefined ? { dependsOn: graph.dependsOn } : {}),
+      ...(bot
+        ? botPresetName && selection.kind === 'preset' ? { preset: botPresetName } : {}
+        : selection.kind === 'preset' ? { preset: selection.preset.name } : {}),
+      ...(checkout ? { checkout } : {}),
+      ...(bot && botWakeThread ? { threadId: botWakeThread } : {}),
+      ...(bot && secretNames ? { secretNames } : {}),
     };
     const presetName = selection.kind === 'preset' ? selection.preset.name : undefined;
 
@@ -1245,6 +1458,19 @@ export function registerFanOutRpc(
     // lives outside the payload (the caller's terminal may `cd`), and that one
     // is re-derived and compared below. A canonical hash would restate a
     // property the closure already guarantees.
+    // A bot is told how its accepted fan-out's start went, once per task,
+    // unless it may not act on it now (stopped, parked, disabled, factory off).
+    const tellBot = (tasks: BotWorkerStartOutcome['tasks']): void => {
+      if (!bot || !botPort?.workerStartOutcome || tasks.length === 0) return;
+      try {
+        if (botPort.launchRefusal(bot.botId, botWakeId)) return;
+        botPort.workerStartOutcome(bot.botId, { workspaceId: callerWorkspaceId, threadId: botNoticeThread, key, tainted: botWakeTainted, tasks });
+      } catch (err) {
+        console.warn(`[fanout.rpc] bot fan-out ${key}: start outcome not told: ${String(err)}`);
+      }
+    };
+    const noneStarted = (reason: string, detail?: string): BotWorkerStartOutcome['tasks'] =>
+      parsed.titles.map((title, index) => ({ index, title, started: false, reason, ...(detail ? { detail } : {}) }));
     void (async () => {
       try {
         let verdict: { approved?: unknown; outcome?: unknown; roleCommands?: unknown } | null = null;
@@ -1266,7 +1492,7 @@ export function registerFanOutRpc(
                 (worktree ? '' : '\n\nno worktree: each task writes into its own folder under the wmux outputs directory') +
                 // Only when a task can actually run claude: the flags are claude-only.
                 (agentChoices.length === 0 || agentChoices.some((c) => c.agent === 'claude')
-                  ? `\n\nclaude workers launch with: ${workerLaunchFlags(workerMode, goalReserved ? goalWorkerDenyRules() : [])}`
+                  ? `\n\nclaude workers launch with: ${workerLaunchFlags(workerMode, [])}`
                   : ''),
               // The roles again, as data. The preview prints the role NAME, but
               // what a role resolves to — agent, model, extra args — lives in the
@@ -1288,8 +1514,8 @@ export function registerFanOutRpc(
             !verdict ? 'unavailable' : verdict.outcome === 'timeout' ? 'timeout' : 'declined';
           settle(key, { phase: 'denied', reason });
           guards.release(key);
-          releaseGoal(parsed.titles.length);
           console.warn(`[fanout.rpc] fan-out ${key} denied (${reason})`);
+          tellBot(noneStarted(fanoutDenialText(reason)));
           return;
         }
 
@@ -1299,18 +1525,23 @@ export function registerFanOutRpc(
         // sibling pane's if the surface reports no cwd of its own). Re-derive and
         // require the same root, or the approval was given for one repo and spent
         // on another.
-        // Under a goal: the same goal must still be active over the same repo.
-        const goalNow = goalAnchor ? goalAnchorOf() : null;
-        const atApproval = goalAnchor
-          ? goalNow && goalNow.goalId === goalAnchor.goalId && goalNow.repoRoot === goalAnchor.repoRoot
-            ? await deriveGoalRoot(goalAnchor)
-            : { code: 'FAILED_PRECONDITION', message: 'goal ended' }
+        const atApproval = bot
+          ? await deriveBotRoot()
           : await deriveCallerRepoRoot(getWindow, callerWorkspaceId, anchorPtyId, { requireRepo: worktree, platform: deps.platform, daemonRpc });
+        // A bot that was disabled, removed or parked, or whose wake was
+        // interrupted while the approval was up, launches nothing.
+        const botRefusal = bot && botPort ? botPort.launchRefusal(bot.botId, botWakeId) : null;
+        if (botRefusal) {
+          settle(key, { phase: 'denied', reason: 'unavailable' });
+          guards.release(key);
+          console.warn(`[fanout.rpc] bot fan-out ${key} not launched: ${botRefusal}`);
+          return;
+        }
         if (!('root' in atApproval) || atApproval.root !== callerRepoRoot) {
           settle(key, { phase: 'denied', reason: 'repo-moved' });
           guards.release(key);
-          releaseGoal(parsed.titles.length);
           console.warn(`[fanout.rpc] fan-out ${key} denied (repo-moved)`);
+          tellBot(noneStarted(fanoutDenialText('repo-moved')));
           return;
         }
 
@@ -1342,8 +1573,8 @@ export function registerFanOutRpc(
         } catch (err) {
           settle(key, { phase: 'denied', reason: 'audit-unavailable' });
           guards.release(key);
-          releaseGoal(parsed.titles.length);
           console.warn(`[fanout.rpc] fan-out ${key} denied (audit-unavailable): ${String(err)}`);
+          tellBot(noneStarted(fanoutDenialText('audit-unavailable')));
           return;
         }
 
@@ -1362,16 +1593,6 @@ export function registerFanOutRpc(
         // launched with (after the role rewrite and the worker flags). Written
         // once for the first wave, then once per dependent task as it launches.
         const appendLaunched = (tasks: FanOutTaskResult[], outputBatchDir?: string): void => {
-          // The goal owns the task workspaces it paid for: its follow-ups and
-          // answers (P3) are scoped to exactly these.
-          if (goalReserved && goalPort) {
-            const ids = tasks.map((t) => t.workspaceId).filter((w): w is string => typeof w === 'string' && w.length > 0);
-            try {
-              goalPort.attach(goalReserved.goalId, ids);
-            } catch {
-              /* an unattached task is simply not covered: the safe direction */
-            }
-          }
           try {
             guards.appendAudit({
               at: Date.now(),
@@ -1402,32 +1623,24 @@ export function registerFanOutRpc(
           }
         };
         let holdsDependents = false;
-        /** Dependent tasks whose goal reservation was given back. */
-        const goalReturned = new Set<number>();
+        const agentSlots = getAgentSlots();
         try {
           const result = await service.start({
             ...req,
-            // Under a goal, the task workspace joins the goal the moment it
-            // exists, before its agent's first event can wake the HQ.
-            ...(goalReserved && goalPort
+            // A bot's worker is launched only while the bot may still spend:
+            // asked again right before each pane spawns.
+            ...(bot && botPort ? { mayLaunch: () => botPort.launchRefusal(bot.botId, botWakeId) } : {}),
+            // ...and only once the factory's agent budget has a slot for it
+            // (factory/agentSlots.ts); a stop while it waits ends the wait.
+            ...(bot && botPort && agentSlots
               ? {
-                  onTaskWorkspace: (wsId: string) => {
-                    try {
-                      if (goalReserved) goalPort?.attach(goalReserved.goalId, [wsId]);
-                    } catch {
-                      /* appendLaunched attaches again */
-                    }
-                  },
+                  awaitLaunchSlot: (t: { taskId: string; title: string }) => agentSlots.acquire(
+                    { taskId: t.taskId, title: t.title, botId: bot.botId, ownerWorkspaceId: callerWorkspaceId, ...(botWakeThread ? { threadId: botWakeThread } : {}) },
+                    () => botPort.launchRefusal(bot.botId, botWakeId),
+                  ),
                 }
               : {}),
             beforeDeferredLaunch: (index) => {
-              // A dependent launches long after the approval: under a goal it
-              // launches only while that same goal is active over the same
-              // repository and the worker mode is still the one it pinned.
-              if (goalAnchor) {
-                const why = deferredGoalRefusal(goalAnchor);
-                if (why) return { ok: false, message: why };
-              }
               const r = guards.stampDeferredStart(key);
               if (r.ok) stamped.add(index);
               return r;
@@ -1437,17 +1650,38 @@ export function registerFanOutRpc(
             // before its start was never charged.
             onDeferredLaunch: (t, info) => {
               if (stamped.delete(t.index) && !t.workspaceId) guards.refundStart(key, 1);
-              // The goal reserved every task up front: one that never got a
-              // workspace (dropped, refused, failed) gives its task back, once.
-              if (!t.workspaceId && !goalReturned.has(t.index)) {
-                goalReturned.add(t.index);
-                releaseGoal(1);
-              }
               appendLaunched([t], info.outputBatchDir);
               if (info.remaining === 0) guards.settleStarted(key);
             },
           });
           holdsDependents = result.tasks.some((t) => t.pending);
+          // Every task that started or could not start (a bot fan-out has no
+          // dependents); a fan-out that failed before its tasks, all of them.
+          tellBot(result.tasks.length === 0
+            ? noneStarted(plainStartFailure(result.error ?? ''), result.error)
+            : result.tasks.filter((t) => !t.pending).map((t) => {
+                // A pane whose agent never came up (launchFailed) or whose
+                // setup failed is no started worker; a later launch failure
+                // reaches the bot as its task's failure.
+                const started = !!(t.workspaceId && t.taskId) && !t.launchFailed && !t.setupFailed;
+                return {
+                  index: t.index,
+                  title: t.title,
+                  ...(t.taskId ? { taskId: t.taskId } : {}),
+                  started,
+                  ...(started ? {} : { reason: plainStartFailure(t.error ?? ''), ...(t.error ? { detail: t.error } : {}) }),
+                };
+              }));
+          if (bot && botPort) {
+            const started = result.tasks
+              .filter((t) => t.workspaceId && t.taskId)
+              .map((t) => t.taskId as string);
+            try {
+              if (started.length > 0) botPort.workersStarted(bot.botId, started);
+            } catch {
+              /* worker-hours are best effort; the open ledger rows still count */
+            }
+          }
           // Tasks that never got a workspace (the output folder could not be
           // created, a worktree preflight failed) launched nothing, so they
           // must not keep counting against the rolling hour. Dependent tasks
@@ -1457,7 +1691,6 @@ export function registerFanOutRpc(
               ? parsed.titles.length - deferredCount
               : result.tasks.filter((t) => !t.workspaceId && !isDeferred(t.index)).length;
           if (unspawned > 0) guards.refundStart(key, unspawned);
-          releaseGoal(unspawned);
           appendLaunched(
             result.tasks.filter((t) => !isDeferred(t.index)),
             result.outputBatchDir,
@@ -1466,6 +1699,7 @@ export function registerFanOutRpc(
           // start() records a throw as a failed result rather than releasing the
           // key, so this is belt-and-braces.
           console.error(`[fanout.rpc] fan-out ${key} failed:`, err);
+          tellBot(noneStarted(plainStartFailure(String(err)), String(err)));
         } finally {
           // Whatever of it is still booked as spawning stops counting; the
           // tasks that did start are counted by their open workspaces. Tasks
@@ -1479,8 +1713,11 @@ export function registerFanOutRpc(
         // its cap reservation held until the app restarts.
         if (!terminal.has(key)) settle(key, { phase: 'denied', reason: 'unavailable' });
         guards.release(key);
-        releaseGoal(goalReserved?.left ?? 0);
         console.error(`[fanout.rpc] fan-out ${key} aborted:`, err);
+        tellBot(noneStarted(plainStartFailure(String(err)), String(err)));
+      } finally {
+        // Started tasks now count through their open ledger rows.
+        botBooked.delete(key);
       }
     })();
 
@@ -1491,7 +1728,6 @@ export function registerFanOutRpc(
       idempotencyKey: callerKey,
       taskCount: parsed.titles.length,
       repoPath: callerRepoRoot,
-      ...(goalReserved ? { goalId: goalReserved.goalId } : {}),
       // The OWNER's workspace — the caller's own, never a task's (no task has
       // a workspace yet; each task's is in the completed poll's result.tasks[]).
       // `workspaceId` is the deprecated alias kept for older callers: an agent
@@ -1499,6 +1735,9 @@ export function registerFanOutRpc(
       ownerWorkspaceId: callerWorkspaceId,
       workspaceId: callerWorkspaceId,
       ...(warnings.length > 0 ? { warnings } : {}),
+      // A bot's workers are not up yet: a later wake says whether each one
+      // started or could not start.
+      ...(bot ? { starting: true as const, note: BOT_FANOUT_STARTING_NOTE } : {}),
     };
   });
 }

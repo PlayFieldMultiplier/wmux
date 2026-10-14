@@ -43,7 +43,8 @@ export interface FirstBootQueueState {
 
   firstRunCompleted: boolean;
   onboardingCompleted: boolean;
-  /** The user is on the Fleet page — the tour starts on the first visit there. */
+  /** The user is on the Fleet page — the tour starts on the first visit
+   *  there, and the cheat sheet opens there after it. */
   onFleetPage: boolean;
 
   /** "Show keyboard shortcuts once" has not been used up (or was re-armed in Settings). */
@@ -54,7 +55,9 @@ export interface FirstBootQueueState {
  * The surface that may open now, or null. Order: the legacy auto-update
  * question (upgraders whose choice was never stored), the one-time feature
  * announcement (upgraders), the spotlight tour (first Fleet visit), and the
- * keyboard cheat sheet (once, after the tour).
+ * keyboard cheat sheet (once, after the tour, on the Fleet page: it sits in
+ * the window's corner, so it never opens by itself over the panes or a page's
+ * composer; `?` and Settings still show it anywhere).
  */
 export function nextFirstBootSurface(s: FirstBootQueueState): FirstBootSurface | null {
   if (!s.firstRunSettled || !s.sessionSettled || !s.launchChecksSettled) return null;
@@ -69,7 +72,7 @@ export function nextFirstBootSurface(s: FirstBootQueueState): FirstBootSurface |
     // is never shown either.
     return null;
   }
-  if (s.cheatSheetPending) return 'cheatSheet';
+  if (s.cheatSheetPending && s.onFleetPage) return 'cheatSheet';
   return null;
 }
 

@@ -1318,11 +1318,17 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       : new FitAddon();
     const searchAddon = new SearchAddon();
     // Smart link routing (X3): localhost URLs open in the embedded browser
-    // pane, external ones in the system browser; Ctrl/Cmd+click inverts. The
-    // ptyId identifies the owning workspace (multiview-safe reverse lookup).
+    // pane, external ones in the system browser; Ctrl/Cmd+click inverts, and
+    // Ctrl/Cmd+Shift+click opens a new browser tab (#2140). The ptyId
+    // identifies the owning workspace (multiview-safe reverse lookup).
     const activateTerminalUrl = (event: MouseEvent, uri: string) => {
+      const newTab = (event.ctrlKey || event.metaKey) && event.shiftKey;
+      // Shift also extends xterm's selection on that click. Drop it, which also
+      // cancels the debounced copy-on-select before it overwrites the clipboard.
+      if (newTab) terminal.clearSelection();
       openTerminalUrl(uri, {
         modifierHeld: event.ctrlKey || event.metaKey,
+        newTab,
         ptyId: ptyIdRef.current || undefined,
       });
     };

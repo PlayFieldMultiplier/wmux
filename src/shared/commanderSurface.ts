@@ -107,14 +107,6 @@ export const COMMANDER_TOOL_SURFACE: readonly string[] = [
   'a2a_broadcast',
   'a2a_set_skills',
   'send_message',
-  // Final-response barrier for the active human request. It can only close the
-  // commander's own durable work after server-side worker/A2A checks.
-  'deck_complete_work',
-  // Decision gate — pause-and-ask, the opposite of destructive.
-  'deck_ask_decision',
-  // WP3 — self-resolve of the brain's OWN stale decision (server-gated:
-  // auto mode + TTL elapsed + substance floor, enforced in deck.rpc.ts).
-  'deck_resolve_decision',
 ];
 
 /** Tools registered ONLY under `--commander` — never in the full or core
@@ -155,14 +147,6 @@ export const COMMANDER_ONLY_TOOLS: readonly string[] = [
   // prompts by being the pane, and the press scope only ever authorizes a press
   // into a DELEGATED task workspace — which is a thing only an orchestrator has.
   'approval_press',
-  // Moa (HQ) hands work to an agent in ANOTHER workspace. The tool only
-  // PROPOSES: main stores the body and the operator approves it with a card
-  // (or main delivers it itself in danger mode) — see shared/moaHandoff.ts.
-  'moa_propose_handoff',
-  // Moa (HQ) proposes a goal contract the operator approves once with a card
-  // (shared/moaGoal.ts), and reads or ends it. Proposing grants nothing.
-  'moa_propose_goal',
-  'moa_goal',
 ];
 
 /** Names in COMMANDER_ONLY_TOOLS that ALSO exist in full/core under a
@@ -221,13 +205,6 @@ export const COMMANDER_RPC_METHODS: ReadonlySet<string> = new Set<string>([
   'deck.completeWork',
   'deck.requestDecision',
   'deck.resolveDecision',
-  // Moa's operator-approved hand-off (moa_propose_handoff). Raises a card;
-  // nothing reaches the target pane until the operator answers it.
-  'deck.proposeHandoff',
-  // Moa's goal contract (moa_propose_goal / moa_goal). The proposal raises an
-  // operator card; reading or ending it only ever takes powers away.
-  'deck.proposeGoal',
-  'deck.goal',
   // events
   'events.poll',
   // agent-to-agent + channels + missions

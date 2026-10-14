@@ -56,7 +56,6 @@ let saved: Partial<ReturnType<typeof useStore.getState>>;
 let first: Workspace;
 let target: Workspace;
 let shadow: Workspace;
-let hq: Workspace;
 /** Streams opened and closed, in order. */
 let opened: string[];
 let closed: string[];
@@ -177,7 +176,6 @@ beforeEach(() => {
     activeRemoteKey: s.activeRemoteKey,
     paneGate: s.paneGate,
     moa: s.moa,
-    moaHqSeed: s.moaHqSeed,
   };
   first = createWorkspace('Workspace 1', 1);
   target = createWorkspace('Target', 2);
@@ -190,16 +188,13 @@ beforeEach(() => {
   // Another computer's workspace: never offered as a target.
   shadow = createWorkspace('Shadow', 3);
   shadow.id = formatShadowWorkspaceId('host-1', 'ws-on-host') ?? 'shadow';
-  // The Moa HQ: never offered either.
-  hq = createWorkspace('Moa', 4);
   act(() => useStore.setState({
-    workspaces: [first, target, shadow, hq],
+    workspaces: [first, target, shadow],
     activeWorkspaceId: first.id,
     remoteWorkspaces: [MIRROR],
     activeRemoteKey: MIRROR.key,
     paneGate: 'ready',
     moa: null,
-    moaHqSeed: hq.id,
   }));
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -314,7 +309,7 @@ describe('RemoteWorkspaceView — Open as tab (#1323 item 2)', () => {
     const shown = createRemoteSurface('host-1', 'sess-1', '', '');
     shadow.rootPane.surfaces = [shown];
     shadow.rootPane.activeSurfaceId = shown.id;
-    act(() => useStore.setState({ workspaces: [first, target, shadow, hq] }));
+    act(() => useStore.setState({ workspaces: [first, target, shadow] }));
     await mount();
     expect(cellAction().textContent).toBe('Go to tab');
     // The grid keeps its own live view alongside.

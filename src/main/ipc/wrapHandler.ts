@@ -14,6 +14,7 @@
  */
 
 import { maskInlineCredentials } from '../../shared/redactSecrets';
+import { redactStoredSecrets } from '../factory/secretRedaction';
 
 export type IpcErrorCode =
   | 'DAEMON_DISCONNECTED'
@@ -235,7 +236,8 @@ export function buildArgsSummary(args: readonly unknown[]): string | undefined {
     }
   }
   if (raw === undefined) return undefined;
-  raw = maskInlineCredentials(raw);
+  // Redacted before the cap, so the cut never keeps part of a stored value.
+  raw = redactStoredSecrets(maskInlineCredentials(raw));
   if (raw.length <= ARGS_SUMMARY_CAP) return raw;
   return raw.slice(0, ARGS_SUMMARY_CAP) + '...';
 }
@@ -313,8 +315,9 @@ export function wrapHandler<Args extends unknown[], Ret>(
         event: 'ipc_error',
         channel,
         error_code: code,
-        stack: err instanceof Error && err.stack ? maskInlineCredentials(err.stack) : undefined,
-        args_summary: summary,
+        // A stored bot secret is never logged (factory/secretRedaction.ts).
+        stack: err instanceof Error && err.stack ? redactStoredSecrets(maskInlineCredentials(err.stack)) : undefined,
+        args_summary: summary === undefined ? undefined : redactStoredSecrets(summary),
       };
       emit(entry);
 

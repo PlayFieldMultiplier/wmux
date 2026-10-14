@@ -1,0 +1,166 @@
+{
+  "name": "interleaved-worker-reports",
+  "layer": "workflow",
+  "runs": 3,
+  "model": "stub",
+  "description": "Moa dispatches to the lead; the lead fans out three default tasks; the three scripted workers report review_requested within seconds of each other. Every report reaches the lead, Moa gets exactly one result however many lead turns the reports cause, and no other bot wakes.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "delayMs": 1000
+    },
+    "bots": [
+      {
+        "key": "moa",
+        "role": "moa",
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "title": "Three small changes",
+                    "body": "Ship three small, independent changes."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "result read"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "change A",
+                      "change B",
+                      "change C"
+                    ],
+                    "prompt": "Make the small change named in the title.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "a.txt"
+                      ],
+                      [
+                        "b.txt"
+                      ],
+                      [
+                        "c.txt"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_read",
+                  "args": {},
+                  "save": {
+                    "dispatch": "\"threadId\": \"handoff:(h-[A-Za-z0-9_-]+)\""
+                  }
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Workers reported",
+                    "body": "Reports read for this wake."
+                  }
+                },
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "reply_to": "{{dispatch}}",
+                    "title": "Three changes ready",
+                    "body": "All three tasks reported review_requested."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "wake",
+      "label": "kick-moa",
+      "bot": "moa"
+    },
+    {
+      "do": "waitFor",
+      "label": "three reports",
+      "cond": {
+        "workers": {
+          "event": "ledger_update",
+          "min": 3
+        }
+      },
+      "timeoutMs": 240000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "moa woken by result",
+      "cond": {
+        "wakes": {
+          "bot": "moa",
+          "reason": "handoff",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 120000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 8000
+      },
+      "timeoutMs": 90000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs",
+      "ledger",
+      "workers"
+    ],
+    "lead": "lead",
+    "moa": "moa",
+    "tasks": 3
+  }
+}

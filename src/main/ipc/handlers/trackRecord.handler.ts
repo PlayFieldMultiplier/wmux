@@ -1,12 +1,12 @@
-// Moa's track record — the renderer's side: the weekly retro card (shown on
-// Moa's briefing) and the retro settings (Settings → Moa). The counts stay in
-// main; the renderer only ever gets the finished card, and only while Moa is on.
+// The track record — the renderer's side: the weekly retro card and the retro
+// settings. The counts stay in main; the renderer only ever gets the finished
+// card, and only while the agent factory is on.
 import type { BrowserWindow } from 'electron';
 import { ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import type { RetroCard, RetroSchedule } from '../../../shared/trackRecord';
 import { wrapHandler } from '../wrapHandler';
-import { getHqWorkspaceId, isMoaEnabled } from '../../deck/deckHqStore';
+import { getFactorySettings } from '../../factory/factorySettings';
 import { getTrackRecordStore, parseRetroSchedule, type TrackRecordStore } from '../../deck/trackRecordStore';
 
 export interface TrackRecordHandlerPorts {
@@ -15,7 +15,7 @@ export interface TrackRecordHandlerPorts {
   getHq?: () => string | null;
 }
 
-/** The retro card for a workspace's briefing, or null. Moa off, the retro
+/** The retro card for a workspace, or null. The factory off, the retro
  *  turned off, dismissed, or (with an HQ) any workspace but the HQ: null. */
 export function retroCardFor(
   workspaceId: unknown,
@@ -35,8 +35,8 @@ export function registerTrackRecordHandlers(
   ports: TrackRecordHandlerPorts = {},
 ): () => void {
   const store = ports.store ?? getTrackRecordStore();
-  const moaOn = ports.isMoaEnabled ?? (() => isMoaEnabled());
-  const hq = ports.getHq ?? (() => getHqWorkspaceId());
+  const moaOn = ports.isMoaEnabled ?? (() => getFactorySettings().enabled);
+  const hq = ports.getHq ?? (() => getFactorySettings().hqWorkspaceId);
   const changed = (): void => {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send(IPC.TRACK_RECORD_CHANGED);

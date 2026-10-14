@@ -53,8 +53,14 @@ describe('nextFirstBootSurface — ordering', () => {
   it('an upgrader with the announcement toast still up gets neither the tour nor the cheat sheet', () => {
     const toastUp = { ...idle, surfaceShowing: true };
     expect(nextFirstBootSurface({ ...toastUp, onboardingCompleted: false, onFleetPage: true })).toBeNull();
-    expect(nextFirstBootSurface({ ...toastUp, cheatSheetPending: true })).toBeNull();
-    expect(nextFirstBootSurface({ ...idle, cheatSheetPending: true })).toBe('cheatSheet');
+    expect(nextFirstBootSurface({ ...toastUp, cheatSheetPending: true, onFleetPage: true })).toBeNull();
+    expect(nextFirstBootSurface({ ...idle, cheatSheetPending: true, onFleetPage: true })).toBe('cheatSheet');
+  });
+
+  it('the cheat sheet opens by itself only on the Fleet page, never over the panes', () => {
+    // Left Fleet before it opened (a jump to a worker's pane): it waits.
+    expect(nextFirstBootSurface({ ...idle, cheatSheetPending: true, onFleetPage: false })).toBeNull();
+    expect(nextFirstBootSurface({ ...idle, cheatSheetPending: true, onFleetPage: true })).toBe('cheatSheet');
   });
 
   it('waits for the probes and the launch-time hooks check to settle', () => {
@@ -98,7 +104,7 @@ describe('nextFirstBootSurface — fresh install', () => {
 
   it('never auto-opens the cheat sheet before the tour is done', () => {
     expect(nextFirstBootSurface({ ...fresh, onFleetPage: false })).toBeNull();
-    expect(nextFirstBootSurface({ ...fresh, onboardingCompleted: true })).toBe('cheatSheet');
+    expect(nextFirstBootSurface({ ...fresh, onboardingCompleted: true, onFleetPage: true })).toBe('cheatSheet');
   });
 });
 

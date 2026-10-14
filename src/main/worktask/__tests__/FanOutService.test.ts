@@ -14,6 +14,7 @@ import {
   workerLaunchCommand,
   firstRunStuckSummary,
   WORKER_DELIVERY_PREAMBLE,
+  workerTaskIdentityNote,
 } from '../FanOutService';
 import {
   MODEL_ENV_MARKER,
@@ -31,7 +32,6 @@ import { clearFanoutPortReservationsForTest } from '../fanoutEnvironment';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, setFanOutGuardsForTests } from '../fanoutGuards';
-import { GOAL_WORKER_TOKEN_PLACEHOLDER } from '../../../shared/moaGoalWorker';
 
 let metaRoot: string;
 let lineage: FanOutGuards;
@@ -630,8 +630,9 @@ describe('§0 E2E 정상 — N=2 전부 성공', () => {
       return fs.readFileSync(promptFile!, 'utf8');
     });
     // A3: 호출자 프롬프트는 그대로 앞에 오고, 배달 계약문이 뒤에 붙는다.
-    expect(bodies[0]).toBe('SHARED CONTEXT\n\ndo login page' + WORKER_DELIVERY_PREAMBLE);
-    expect(bodies[1]).toBe('SHARED CONTEXT\n\ndo settings page' + WORKER_DELIVERY_PREAMBLE);
+    const note = (k: number) => workerTaskIdentityNote(res.tasks[k].taskId!, res.tasks[k].channelId!);
+    expect(bodies[0]).toBe('SHARED CONTEXT\n\ndo login page' + WORKER_DELIVERY_PREAMBLE + note(0));
+    expect(bodies[1]).toBe('SHARED CONTEXT\n\ndo settings page' + WORKER_DELIVERY_PREAMBLE + note(1));
   });
 
   it('공통 프롬프트가 비어도 태스크별 프롬프트만으로 스폰된다', async () => {
@@ -648,9 +649,25 @@ describe('§0 E2E 정상 — N=2 전부 성공', () => {
       return fs.readFileSync(promptFile!, 'utf8');
     });
     expect(bodies).toEqual([
-      'task A only' + WORKER_DELIVERY_PREAMBLE,
-      'task B only' + WORKER_DELIVERY_PREAMBLE,
+      'task A only' + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(res.tasks[0].taskId!, res.tasks[0].channelId!),
+      'task B only' + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(res.tasks[1].taskId!, res.tasks[1].channelId!),
     ]);
+    // The worker is told its own task id: it never has to look the task up.
+    expect(bodies[0]).toContain(`task_id\` **${res.tasks[0].taskId}**`);
+  });
+
+  it('a bot\'s worker is told the push that works: its own branch, named', async () => {
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
+    const res = await svc.start(baseReq({ prompt: 'fix', titles: ['Task A'], caller: { kind: 'bot', botId: 'bot-0a1b2c3d', tainted: false } }));
+    expect(res.ok).toBe(true);
+    const body = fs.readFileSync(renderer.spawned[0].initialCommand.match(/'([^']*prompt\.md)'/)![1], 'utf8');
+    const branch = res.tasks[0].branch!;
+    expect(branch).toBeTruthy();
+    expect(body).toContain(`Publish it with exactly \`git push -u origin ${branch}\``);
+    expect(body.endsWith(workerTaskIdentityNote(res.tasks[0].taskId!, res.tasks[0].channelId!, branch))).toBe(true);
+    // A person's fan-out keeps the note it had.
+    expect(workerTaskIdentityNote('wtask-x', 'ch-1')).not.toContain('git push');
   });
 
   it('A3: 배달 계약문이 워커 프롬프트에 실려, 유휴 후 지시가 어떻게 오는지 워커가 안다', async () => {
@@ -1400,42 +1417,5 @@ describe('per-worker private temp dir', () => {
     expect(registered).toEqual([[`task:${taskA.taskId}`, dirA], ['ws-task-1', dirB]]);
     const spawnB = renderer.spawned.find((p) => p.name.endsWith('Task B'))!;
     expect(spawnB.env).toMatchObject({ TMPDIR: dirB, TMP: dirB, TEMP: dirB });
-  });
-});
-
-describe('the goal worker profile (Moa goal fan-outs only)', () => {
-  it('every task gets the deny-rule request, the credential friction and the goal note', async () => {
-    const renderer = makeRendererFake();
-    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
-    const res = await svc.start(baseReq({ goalWorker: { goalId: 'G-abc123' } }));
-    expect(res.ok).toBe(true);
-    expect(renderer.spawned).toHaveLength(2);
-    for (const p of renderer.spawned) {
-      expect((p as { goalWorker?: boolean }).goalWorker).toBe(true);
-      expect(p.env).toMatchObject({
-        GH_TOKEN: GOAL_WORKER_TOKEN_PLACEHOLDER,
-        GITHUB_TOKEN: GOAL_WORKER_TOKEN_PLACEHOLDER,
-        GIT_CONFIG_KEY_0: 'credential.helper',
-        GIT_CONFIG_VALUE_0: '',
-        GIT_TERMINAL_PROMPT: '0',
-      });
-      // The gh config dir exists, is empty and sits outside the worktree.
-      const dir = p.env!.GH_CONFIG_DIR;
-      expect(fs.readdirSync(dir)).toEqual([]);
-      expect(dir.startsWith(path.join(metaRoot, 'meta'))).toBe(true);
-      // The prompt file says what stays with the operator.
-      expect(fs.readFileSync(path.join(path.dirname(dir), 'prompt.md'), 'utf8')).toContain('Moa goal G-abc123');
-    }
-  });
-
-  it('a fan-out outside a goal gets none of it (defaults unchanged)', async () => {
-    const renderer = makeRendererFake();
-    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
-    await svc.start(baseReq());
-    for (const p of renderer.spawned) {
-      expect(p).not.toHaveProperty('goalWorker');
-      expect(p.env?.GH_TOKEN).toBeUndefined();
-      expect(p.env?.GH_CONFIG_DIR).toBeUndefined();
-    }
   });
 });

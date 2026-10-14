@@ -28,6 +28,8 @@ export interface PtyCreateOptions {
   fanoutTaskOf?: string;
   /** Fan-out task pane: who asked, stamped on the lineage with the owner. */
   fanoutOrigin?: FanoutOrigin;
+  /** Fan-out task pane of a bot: its single-use secret grant (opaque). */
+  secretGrant?: string;
   /**
    * Workspace profile env overlay. Merged into the new PTY's environment AFTER
    * the safe-inherited baseline and BEFORE wmux identity vars are forced, so a

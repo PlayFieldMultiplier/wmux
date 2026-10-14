@@ -1,0 +1,119 @@
+{
+  "edits": [
+    {
+      "path": [
+        "deniedMcpServers"
+      ],
+      "op": "set",
+      "value": [
+        {
+          "serverName": "b"
+        },
+        "not-an-object",
+        null
+      ]
+    },
+    {
+      "path": [
+        "permissions"
+      ],
+      "op": "set",
+      "value": {
+        "deny": [
+          "WebFetch"
+        ]
+      }
+    },
+    {
+      "path": [
+        "enabledPlugins"
+      ],
+      "op": "set",
+      "value": {
+        "p@m": true,
+        "new@m": true
+      }
+    },
+    {
+      "path": [
+        "skillOverrides"
+      ],
+      "op": "delete"
+    },
+    {
+      "path": [
+        "includeCoAuthoredBy"
+      ],
+      "op": "set",
+      "value": true
+    },
+    {
+      "path": [
+        "disableAllHooks"
+      ],
+      "op": "set",
+      "value": false
+    }
+  ],
+  "fileEdits": [
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "remove \"a\" from deniedMcpServers"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "remove \"mcp__web__search\" from permissions.deny"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "remove \"Bash\" from permissions.deny"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set enabledPlugins[\"p@m\"] = true"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set enabledPlugins[\"new@m\"] = true"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "delete skillOverrides[\"writer\"]"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set includeCoAuthoredBy = true"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "set disableAllHooks = false"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "restore hook \"Stop-command\" to Stop"
+    },
+    {
+      "path": "<home>/.claude/settings.json",
+      "summary": "restore hook \"no-event\" to hooks"
+    }
+  ],
+  "affectedItemIds": [
+    "claude:mcp-server::a",
+    "claude:mcp-tool:web:search",
+    "claude:builtin-tool::Bash",
+    "claude:plugin::p%40m",
+    "claude:plugin::new%40m",
+    "claude:skill::writer",
+    "claude:context-setting::includeCoAuthoredBy",
+    "claude:context-setting::disableAllHooks",
+    "claude:hook::Stop-command",
+    "claude:hook::no-event"
+  ],
+  "rootKeys": [
+    "deniedMcpServers",
+    "permissions",
+    "enabledPlugins",
+    "includeCoAuthoredBy",
+    "disableAllHooks"
+  ]
+}

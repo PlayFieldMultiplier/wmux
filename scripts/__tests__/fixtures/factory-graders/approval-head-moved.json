@@ -1,0 +1,640 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "approval-head-moved",
+  "run": 1,
+  "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+  "botKeys": {
+   "dev": "bot-03389d57"
+  },
+  "injected": [
+   {
+    "label": "ask",
+    "kind": "card",
+    "id": "c-mv6eq062e3771eb159",
+    "threadId": "general",
+    "at": 1791879387480
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791879387449,
+    "do": "gh",
+    "op": "addPr"
+   },
+   {
+    "at": 1791879387480,
+    "do": "post",
+    "label": "ask",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6eq062e3771eb159",
+      "seq": 1,
+      "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791879387482,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Check PR 1",
+      "refs": {
+       "botId": "bot-03389d57"
+      }
+     },
+     "addressee": {
+      "botId": "bot-03389d57",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6eq063-60a6e10b"
+    }
+   },
+   {
+    "at": 1791879387486,
+    "do": "waitFor",
+    "label": "request",
+    "ok": true,
+    "doneAt": 1791879393012
+   },
+   {
+    "at": 1791879393012,
+    "do": "api",
+    "label": "list",
+    "result": {
+     "ok": true,
+     "requests": [
+      {
+       "requestId": "apr-Y5lhVZL1ZAba",
+       "action": "merge",
+       "repoKey": "github.com/acme/app",
+       "prNumber": 1,
+       "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+       "ghLogin": "octo",
+       "botId": "bot-03389d57",
+       "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+       "threadId": "general",
+       "reason": "CI is green.",
+       "tainted": false,
+       "state": "pending",
+       "createdAt": 1791879392702,
+       "updatedAt": 1791879392702,
+       "cardId": "c-mv6eq47228a5d11c50"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791879393014,
+    "do": "api",
+    "label": "approve",
+    "result": {
+     "ok": true,
+     "request": {
+      "requestId": "apr-Y5lhVZL1ZAba",
+      "action": "merge",
+      "repoKey": "github.com/acme/app",
+      "prNumber": 1,
+      "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+      "ghLogin": "octo",
+      "botId": "bot-03389d57",
+      "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+      "threadId": "general",
+      "reason": "CI is green.",
+      "tainted": false,
+      "state": "approved",
+      "createdAt": 1791879392702,
+      "updatedAt": 1791879393014,
+      "cardId": "c-mv6eq47228a5d11c50",
+      "decidedBy": "owner",
+      "decidedAt": 1791879393014,
+      "executeAfter": 1791879403014
+     }
+    }
+   },
+   {
+    "at": 1791879393016,
+    "do": "gh",
+    "op": "setPr"
+   },
+   {
+    "at": 1791879393016,
+    "do": "waitFor",
+    "label": "refused",
+    "ok": true,
+    "doneAt": 1791879403057
+   },
+   {
+    "at": 1791879403057,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791879406069
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "approvals": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {
+   "pr1Head": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+   "pr1Branch": "feature",
+   "req": "apr-Y5lhVZL1ZAba"
+  },
+  "records": [
+   {
+    "label": "approve",
+    "result": {
+     "ok": true,
+     "request": {
+      "requestId": "apr-Y5lhVZL1ZAba",
+      "action": "merge",
+      "repoKey": "github.com/acme/app",
+      "prNumber": 1,
+      "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+      "ghLogin": "octo",
+      "botId": "bot-03389d57",
+      "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+      "threadId": "general",
+      "reason": "CI is green.",
+      "tainted": false,
+      "state": "approved",
+      "createdAt": 1791879392702,
+      "updatedAt": 1791879393014,
+      "cardId": "c-mv6eq47228a5d11c50",
+      "decidedBy": "owner",
+      "decidedAt": 1791879393014,
+      "executeAfter": 1791879403014
+     }
+    }
+   }
+  ],
+  "facts": [
+   {
+    "id": "f-0mv6eq062-b32d3204508a",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791879387482,
+    "dedupeKey": "human.message:c-mv6eq062e3771eb159",
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "ref": {
+     "botId": "bot-03389d57",
+     "messageId": "c-mv6eq062e3771eb159"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Check PR 1",
+     "cardId": "c-mv6eq062e3771eb159",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6eqc6f-9845f2ff5e7c",
+    "seq": 2,
+    "kind": "merge.refused",
+    "at": 1791879403047,
+    "dedupeKey": "merge.refused:github.com/acme/app#1:1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "effectId": "effect:apr-Y5lhVZL1ZAba:pr.merge",
+     "approvedBy": "owner",
+     "reason": "head-moved"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6eq063-60a6e10b",
+    "botId": "bot-03389d57",
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "reason": {
+     "kind": "human",
+     "text": "Check PR 1",
+     "source": "desktop",
+     "clientMessageId": "c-mv6eq062e3771eb159"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791879387483,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-97a44afb",
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "role": "moa",
+    "name": "Moa",
+    "engine": {
+     "kind": "claude-sdk"
+    },
+    "triggers": [
+     {
+      "kind": "schedule.fired"
+     },
+     {
+      "kind": "bot.budget_exhausted"
+     }
+    ],
+    "budget": {
+     "maxTurnsPerDay": 60,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791879387444,
+    "updatedAt": 1791879387444
+   },
+   {
+    "version": 1,
+    "id": "bot-03389d57",
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "role": "lead",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/tmp/x",
+     "args": [
+      "/tmp/x",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 40,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/x"
+    },
+    "enabled": true,
+    "createdAt": 1791879387448,
+    "updatedAt": 1791879387448
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": [
+   {
+    "id": "effect:apr-Y5lhVZL1ZAba:pr.merge",
+    "kind": "pr.merge",
+    "decisionId": "apr-Y5lhVZL1ZAba",
+    "approvedBy": "owner",
+    "repoKey": "github.com/acme/app",
+    "repoPath": "/tmp/app",
+    "prNumber": 1,
+    "expectHead": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+    "status": "refused",
+    "attempt": 1,
+    "createdAt": 1791879403016,
+    "updatedAt": 1791879403047,
+    "startedAt": 1791879403017,
+    "reason": "head-moved"
+   }
+  ],
+  "approvals": [
+   {
+    "requestId": "apr-Y5lhVZL1ZAba",
+    "action": "merge",
+    "repoKey": "github.com/acme/app",
+    "repoPath": "/tmp/app",
+    "prNumber": 1,
+    "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+    "ghLogin": "octo",
+    "botId": "bot-03389d57",
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "threadId": "general",
+    "reason": "CI is green.",
+    "tainted": false,
+    "state": "refused",
+    "clientRequestId": "wake:w-mv6eq063-60a6e10b:a1",
+    "createdAt": 1791879392702,
+    "updatedAt": 1791879403047,
+    "cardId": "c-mv6eq47228a5d11c50",
+    "decidedBy": "owner",
+    "decidedAt": 1791879393014,
+    "executeAfter": 1791879403014,
+    "effectId": "effect:apr-Y5lhVZL1ZAba:pr.merge",
+    "refusal": "head-moved"
+   }
+  ],
+  "approvalRules": [],
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6eq062e3771eb159",
+    "seq": 1,
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791879387482,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Check PR 1",
+    "refs": {
+     "botId": "bot-03389d57"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6eq47228a5d11c50",
+    "seq": 2,
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "threadId": "general",
+    "kind": "approval",
+    "at": 1791879392702,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+     "botId": "bot-03389d57"
+    },
+    "title": "Merge PR #1 at 1bcf142?",
+    "body": "Lead asks: CI is green.",
+    "refs": {
+     "pr": 1,
+     "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+     "approvalId": "apr-Y5lhVZL1ZAba"
+    },
+    "state": "resolved",
+    "clientPostId": "approval:apr-Y5lhVZL1ZAba"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6eqc6g6668a8e76b",
+    "seq": 3,
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "refusal",
+    "at": 1791879403047,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merge refused for #1 at 1bcf142",
+    "body": "- The PR's head moved after it was checked `head-moved`",
+    "refs": {
+     "pr": 1,
+     "headSha": "1bcf142fe6739bcc4b040fa3eede7fd767516c81",
+     "factId": "f-0mv6eqc6f-9845f2ff5e7c"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6eqc6g5b8bd23c1b",
+    "seq": 4,
+    "workspaceId": "ws-46feecb4-7f32-4fa3-8618-1d0baac0d659",
+    "threadId": "general",
+    "kind": "refusal",
+    "at": 1791879403048,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Not merged: PR #1 has a new head since the request; it needs a new approval",
+    "refs": {
+     "pr": 1,
+     "approvalId": "apr-Y5lhVZL1ZAba"
+    },
+    "clientPostId": "approval-outcome:apr-Y5lhVZL1ZAba"
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791879387543,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879392670,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879392700,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879403045,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "state": "OPEN",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-10-13T08:16:27.449Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+         "build"
+        ],
+        "files": [
+         "src/index.ts"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 1,
+        "title": "feat: one",
+        "headSha": "1111111111111111111111111111111111111111",
+        "headRefName": "feature"
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  },
+  "workers": [],
+  "handoffs": null,
+  "stub": {}
+ },
+ "fail": [
+  {
+   "why": "refused for another reason",
+   "failing": [
+    "refused_head_moved"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "approvals.0.refusal",
+     "value": "identity-changed"
+    }
+   ]
+  },
+  {
+   "why": "the moved head was merged",
+   "failing": [
+    "nothing_merged"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "gh.calls",
+     "value": {
+      "at": 1,
+      "exit": 0,
+      "argv": [
+       "pr",
+       "merge",
+       "1",
+       "--repo",
+       "github.com/acme/app",
+       "--squash"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

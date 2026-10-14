@@ -52,6 +52,3 @@ export function snapshotRemainder(already: string, snapshot: string): string {
 export function streamTextDelta(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
-
-/** @deprecated Use joinStreamText. Kept so existing imports keep working. */
-export const mergeStream = joinStreamText;

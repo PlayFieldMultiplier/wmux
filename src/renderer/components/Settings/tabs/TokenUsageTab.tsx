@@ -22,13 +22,11 @@ type T = ReturnType<typeof useT>;
 export interface TokenUsageViewProps {
   bindings: OrchestratorRoleBindings;
   onApply: (next: OrchestratorRoleBindings) => void;
-  onOpenTab: (tab: 'roles' | 'moa') => void;
-  deckBrainModel: string;
-  deckBrainEffort: string;
+  onOpenTab: (tab: 'roles') => void;
   t: T;
 }
 
-export function TokenUsageView({ bindings, onApply, onOpenTab, deckBrainModel, deckBrainEffort, t }: TokenUsageViewProps) {
+export function TokenUsageView({ bindings, onApply, onOpenTab, t }: TokenUsageViewProps) {
   const [showCustom, setShowCustom] = useState(false);
   // Bumped when a saved surface profile is applied: remounts the Custom panel so it reloads the
   // inventory instead of staging changes against the state from before the apply.
@@ -113,26 +111,14 @@ export function TokenUsageView({ bindings, onApply, onOpenTab, deckBrainModel, d
         </div>
       )}
 
-      <SettingsSection id="tokendeck" title={t('settings.tokenDeck')} description={t('settings.tokenDeckDesc')}>
-        <SettingRow
-          label={t('settings.tokenDeckModel')}
-          description={[deckBrainModel || 'default', deckBrainEffort ? `· ${deckBrainEffort}` : ''].join(' ').trim()}
-        >
-          <Button variant="secondary" size="sm" onClick={() => onOpenTab('moa')}>
-            {t('settings.tokenOpenOrchestrator')}
-          </Button>
-        </SettingRow>
-      </SettingsSection>
     </div>
   );
 }
 
-export default function TokenUsageTab({ onOpenTab }: { onOpenTab: (tab: 'roles' | 'moa') => void }) {
+export default function TokenUsageTab({ onOpenTab }: { onOpenTab: (tab: 'roles') => void }) {
   const t = useT();
   const bindings = useStore((s) => s.orchestratorRoleBindings);
   const setBinding = useStore((s) => s.setOrchestratorRoleBinding);
-  const deckBrainModel = useStore((s) => s.deckBrainModel);
-  const deckBrainEffort = useStore((s) => s.deckBrainEffort);
   return (
     <TokenUsageView
       bindings={bindings}
@@ -142,8 +128,6 @@ export default function TokenUsageTab({ onOpenTab }: { onOpenTab: (tab: 'roles' 
         }
       }}
       onOpenTab={onOpenTab}
-      deckBrainModel={deckBrainModel}
-      deckBrainEffort={deckBrainEffort}
       t={t}
     />
   );

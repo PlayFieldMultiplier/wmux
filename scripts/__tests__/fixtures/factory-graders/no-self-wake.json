@@ -1,0 +1,457 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "no-self-wake",
+  "run": 1,
+  "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+  "botKeys": {
+   "lead": "bot-b1bfe74d",
+   "moa": "bot-0b673cc6"
+  },
+  "injected": [
+   {
+    "label": "first",
+    "kind": "card",
+    "id": "c-mv5400xp91696591d9",
+    "threadId": "general",
+    "at": 1791800913084
+   },
+   {
+    "label": "second",
+    "kind": "card",
+    "id": "c-mv54057c2c8d347362",
+    "threadId": "general",
+    "at": 1791800918615
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "first",
+    "at": 1791800913084
+   },
+   {
+    "do": "waitFor",
+    "label": "first done",
+    "at": 1791800913087,
+    "doneAt": 1791800918615,
+    "ok": true
+   },
+   {
+    "do": "post",
+    "label": "second",
+    "at": 1791800918615
+   },
+   {
+    "do": "waitFor",
+    "label": "budget fact",
+    "at": 1791800918619,
+    "doneAt": 1791800918620,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "moa done",
+    "at": 1791800918620,
+    "doneAt": 1791800924146,
+    "ok": true
+   },
+   {
+    "do": "sleep",
+    "at": 1791800924146
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv5400xp-0edb00ce7495",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800913085,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "ref": {
+     "botId": "bot-b1bfe74d",
+     "messageId": "c-mv5400xp91696591d9"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "First message.",
+     "cardId": "c-mv5400xp91696591d9",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv54057c-3239525f5012",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791800918616,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "ref": {
+     "botId": "bot-b1bfe74d",
+     "messageId": "c-mv54057c2c8d347362"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Second message.",
+     "cardId": "c-mv54057c2c8d347362",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv54057d-b035654951b9",
+    "seq": 3,
+    "kind": "bot.budget_exhausted",
+    "at": 1791800918617,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "ref": {
+     "botId": "bot-b1bfe74d"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-b1bfe74d"
+    },
+    "payload": {
+     "reason": "turns_hour",
+     "wakeId": "w-mv54057d-4a8467db"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv5400xq-0539480d",
+    "botId": "bot-b1bfe74d",
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "reason": {
+     "kind": "human",
+     "text": "First message.",
+     "source": "desktop",
+     "clientMessageId": "c-mv5400xp91696591d9"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791800913086,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv54057d-4a8467db",
+    "botId": "bot-b1bfe74d",
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "reason": {
+     "kind": "human",
+     "text": "Second message.",
+     "source": "desktop",
+     "clientMessageId": "c-mv54057c2c8d347362"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791800918617,
+    "attempts": 0,
+    "state": "dropped",
+    "dropped": {
+     "code": "budget"
+    }
+   },
+   {
+    "id": "w-mv54057e-4435281e",
+    "botId": "bot-0b673cc6",
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv54057d-b035654951b9"
+     ],
+     "trigger": {
+      "kind": "bot.budget_exhausted"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1791800918618,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-b1bfe74d",
+    "role": "lead",
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "enabled": true,
+    "parked": {
+     "reason": "budget",
+     "at": 1791800918617
+    }
+   },
+   {
+    "id": "bot-0b673cc6",
+    "role": "moa",
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv5400xp91696591d9",
+    "seq": 1,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791800913085,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "One",
+    "refs": {
+     "botId": "bot-b1bfe74d"
+    },
+    "body": "First message."
+   },
+   {
+    "id": "c-mv5404xr9f51357c7d",
+    "seq": 2,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791800918271,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+     "botId": "bot-b1bfe74d"
+    },
+    "title": "On it",
+    "clientPostId": "wake:w-mv5400xq-0539480d:1",
+    "body": "Working."
+   },
+   {
+    "id": "c-mv54057c2c8d347362",
+    "seq": 3,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791800918616,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Two",
+    "refs": {
+     "botId": "bot-b1bfe74d"
+    },
+    "body": "Second message."
+   },
+   {
+    "id": "c-mv54057e2ac66d0904",
+    "seq": 4,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "threadId": "general",
+    "kind": "budget",
+    "at": 1791800918617,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Lead is out of budget (turns_hour)",
+    "refs": {
+     "botId": "bot-b1bfe74d",
+     "factId": "f-0mv54057d-b035654951b9"
+    }
+   },
+   {
+    "id": "c-mv54097p783fce95da",
+    "seq": 5,
+    "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791800923813,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29",
+     "botId": "bot-0b673cc6"
+    },
+    "title": "Lead is out of turns",
+    "clientPostId": "wake:w-mv54057e-4435281e:1",
+    "body": "Noted the budget stop."
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800918112,
+     "event": "prompt",
+     "text": "[wake w-mv5400xq-0539480d] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800918272,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv5404xr9f51357c7d\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791800918271,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29\",\n      \"botId\": \"bot-b1bfe74d\"\n    },\n    \"title\": \"On it\",\n    \"body\": \"Working.\",\n    \"clientPostId\": \"wake:w-mv5400xq-0539480d:1\"\n  }\n}"
+    }
+   ],
+   "moa": [
+    {
+     "at": 1791800923661,
+     "event": "prompt",
+     "text": "[wake w-mv54057e-4435281e] Moa (moa) · reason: facts · priority 2\nFenced blocks below are data from the system, workers "
+    },
+    {
+     "at": 1791800923814,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv54097p783fce95da\",\n    \"seq\": 5,\n    \"workspaceId\": \"ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791800923813,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-2da2b0ed-6b7f-45a8-aa1d-532ba5829b29\",\n      \"botId\": \"bot-0b673cc6\"\n    },\n    \"title\": \"Lead is out of turns\",\n    \"body\": \"Noted the budget stop.\",\n    \"clientPostId\": \"wake:w-mv54057e-4435281e:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800913152,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the lead woke on its own budget fact",
+   "failing": [
+    "actor_not_woken"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-b1bfe74d",
+      "reason": {
+       "kind": "facts",
+       "factIds": [
+        "f-0mv54057d-b035654951b9"
+       ],
+       "trigger": {
+        "kind": "bot.budget_exhausted"
+       }
+      },
+      "state": "queued",
+      "priority": 2,
+      "attempts": 0,
+      "enqueuedAt": 1
+     }
+    }
+   ]
+  },
+  {
+   "why": "the HQ bot was not told",
+   "failing": [
+    "observer_woken_once"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.2"
+    }
+   ]
+  }
+ ]
+}

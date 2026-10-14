@@ -2913,6 +2913,10 @@ export function registerBrowserRpc(
     const opened = await sendToRenderer(getWindow, 'browser.open', {
       partition: wantPrivate ? PRIVATE_BROWSER_PARTITION : getActivePartition(),
       ...(url && { url }),
+      // A person's new tab (`wmux open --new`). An agent (opener key) gets its
+      // own tab through browser_tabs new; adding one to the first browser pane
+      // could land in another agent's pane.
+      ...(params['newTab'] === true && !openerKey && { newTab: true }),
       // The workspace now comes from `scopeFor` above, not straight from the
       // request. It is still dropped when absent, and the renderer then falls
       // back to the UI-active workspace — but under `mcp.mode: enforce` an

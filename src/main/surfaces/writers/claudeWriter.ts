@@ -9,12 +9,129 @@ import {
   rollbackWrittenFiles,
   SurfacesStore,
   snapshotFile,
-  type WrittenFile as RestorableFile,
+  type FileSnapshot,
+  type JsonEdit,
+  type WrittenFile,
 } from '../safeWrite';
-import type { ResolvedChange, SurfaceWriter, WriterContext } from './types';
+import type { ResolvedChange, SurfaceWriter, WriterContext, WriterDeps } from './types';
 import { buildClaudeJsonEdits, getClaudeJsonPath } from './claude/claudeJsonTarget';
 import { buildSettingsEdits, resolveSettingsPath } from './claude/settingsTarget';
 import { isPathAllowed } from './claude/pathSecurity';
+
+/** Settings changes grouped by the settings file they land in. Project MCP server disables only target ~/.claude.json. */
+function settingsChangesByPath(changes: ResolvedChange[], deps: WriterDeps): Map<string, ResolvedChange[]> {
+  const byPath = new Map<string, ResolvedChange[]>();
+  for (const c of changes) {
+    if (c.item.kind === 'mcp-server' && c.item.source === 'project' && !c.enabled) {
+      continue;
+    }
+    const targetPath = resolveSettingsPath(c.item, deps);
+    byPath.set(targetPath, [...(byPath.get(targetPath) ?? []), c]);
+  }
+  return byPath;
+}
+
+/** The files written so far in one apply, and the backups taken. */
+interface ApplyRun {
+  deps: WriterDeps;
+  backups: string[];
+  writtenFiles: WrittenFile[];
+}
+
+function writeJsonEdits(run: ApplyRun, filePath: string, edits: JsonEdit[], snapshot: FileSnapshot): void {
+  if (edits.length === 0) return;
+  const res = applyConfigEdit({
+    path: filePath,
+    kind: 'json',
+    edits,
+    backup: true,
+    snapshot,
+    now: run.deps.now(),
+  });
+  if (res.backupPath) run.backups.push(res.backupPath);
+  if (res.changed) {
+    run.writtenFiles.push({
+      path: filePath,
+      backupPath: res.backupPath,
+      preExisted: snapshot.exists,
+      postSnapshot: snapshotFile(filePath),
+    });
+  }
+}
+
+/** Writes ~/.claude.json; returns the ids it applied. */
+function applyClaudeJson(run: ApplyRun, changes: ResolvedChange[]): string[] {
+  const claudeJsonPath = getClaudeJsonPath(run.deps);
+  if (!isPathAllowed(claudeJsonPath, run.deps)) return [];
+  const snapshot = snapshotFile(claudeJsonPath);
+  const result = buildClaudeJsonEdits(run.deps, changes, snapshot.text);
+  writeJsonEdits(run, claudeJsonPath, result.edits, snapshot);
+  return result.affectedItemIds;
+}
+
+/** Writes each settings file; returns the ids applied and the restored hooks to take out of the store. */
+function applySettingsFiles(
+  run: ApplyRun,
+  changes: ResolvedChange[],
+  store: SurfacesStore,
+): { appliedIds: string[]; restoredHookIds: string[] } {
+  const appliedIds: string[] = [];
+  const restoredHookIds: string[] = [];
+  for (const [targetPath, pathChanges] of settingsChangesByPath(changes, run.deps).entries()) {
+    if (!isPathAllowed(targetPath, run.deps)) {
+      continue;
+    }
+    const snapshot = snapshotFile(targetPath);
+    const sResult = buildSettingsEdits(targetPath, run.deps, pathChanges, true, store, snapshot.text);
+    writeJsonEdits(run, targetPath, sResult.edits, snapshot);
+    appliedIds.push(...sResult.affectedItemIds);
+    for (const c of pathChanges) {
+      if (c.item.kind === 'hook' && c.enabled && sResult.affectedItemIds.includes(c.item.id)) {
+        restoredHookIds.push(c.item.id);
+      }
+    }
+  }
+  return { appliedIds, restoredHookIds };
+}
+
+/** After every file write succeeded: restored hooks leave the store, and the wanted state is recorded. */
+function recordOutcome(
+  store: SurfacesStore,
+  changes: ResolvedChange[],
+  appliedItemIds: string[],
+  restoredHookIds: string[],
+): void {
+  for (const id of new Set(restoredHookIds)) {
+    store.removedHooks.take('claude', id);
+  }
+  try {
+    store.save();
+  } catch {
+    // If the store save fails after a successful write, still report the hook as applied
+  }
+  try {
+    for (const itemId of appliedItemIds) {
+      const c = changes.find((x) => x.item.id === itemId);
+      if (c) {
+        store.recordIntent('claude', itemId, c.enabled);
+      }
+    }
+    store.save();
+  } catch {
+    // Store failure must not fail apply
+  }
+}
+
+/** The message shown for a failed apply; internal error text is never shown, except a hook the user must edit by hand. */
+function applyErrorMessage(err: unknown, rollbackFailed: boolean): string {
+  if (rollbackFailed) return 'Some files may have changed; check your Claude settings.';
+  if (err instanceof Error && err.message.includes('definition not found in store')) {
+    return 'Cannot enable hook: definition not found in store';
+  }
+  if (err instanceof Error && err.message.startsWith('More than one hook matches')) return err.message;
+  if (err instanceof ConfigChangedError) return 'The configuration changed while editing; reload and try again.';
+  return 'Applying the change failed; no file was left half-written.';
+}
 
 export function createClaudeWriter(): SurfaceWriter {
   return {
@@ -32,19 +149,7 @@ export function createClaudeWriter(): SurfaceWriter {
       }
 
       // 2. Settings files edits grouped by target path
-      const settingsChangesByPath = new Map<string, ResolvedChange[]>();
-      for (const c of changes) {
-        // Skip project MCP server disables as they only target ~/.claude.json
-        if (c.item.kind === 'mcp-server' && c.item.source === 'project' && !c.enabled) {
-          continue;
-        }
-        const targetPath = resolveSettingsPath(c.item, deps);
-        const list = settingsChangesByPath.get(targetPath) ?? [];
-        list.push(c);
-        settingsChangesByPath.set(targetPath, list);
-      }
-
-      for (const [targetPath, pathChanges] of settingsChangesByPath.entries()) {
+      for (const [targetPath, pathChanges] of settingsChangesByPath(changes, deps).entries()) {
         if (!isPathAllowed(targetPath, deps)) {
           continue;
         }
@@ -61,173 +166,36 @@ export function createClaudeWriter(): SurfaceWriter {
 
     async apply(ctx: WriterContext): Promise<SurfaceApplyResult> {
       const { deps, changes } = ctx;
-      const appliedItemIds: string[] = [];
-      const backups: string[] = [];
       const store = new SurfacesStore(deps.surfacesStorePath);
       store.load();
-
-      interface WrittenFile extends RestorableFile {
-        affectedItemIds: string[];
-      }
-      const writtenFiles: WrittenFile[] = [];
-      const hookIdsToTakeFromStore: string[] = [];
+      const run: ApplyRun = { deps, backups: [], writtenFiles: [] };
 
       try {
-        // 1. Apply to ~/.claude.json if needed
-        const claudeJsonPath = getClaudeJsonPath(deps);
-        let cjResult: { edits: any[]; fileEdits: any[]; affectedItemIds: string[] } = {
-          edits: [],
-          fileEdits: [],
-          affectedItemIds: [],
-        };
-        if (isPathAllowed(claudeJsonPath, deps)) {
-          const cjSnapshot = snapshotFile(claudeJsonPath);
-          cjResult = buildClaudeJsonEdits(deps, changes, cjSnapshot.text);
-          if (cjResult.edits.length > 0) {
-            const preExisted = cjSnapshot.exists;
-            const res = applyConfigEdit({
-              path: claudeJsonPath,
-              kind: 'json',
-              edits: cjResult.edits,
-              backup: true,
-              snapshot: cjSnapshot,
-              now: deps.now(),
-            });
-            if (res.backupPath) backups.push(res.backupPath);
-            if (res.changed) {
-              writtenFiles.push({
-                path: claudeJsonPath,
-                backupPath: res.backupPath,
-                preExisted,
-                postSnapshot: snapshotFile(claudeJsonPath),
-                affectedItemIds: [...cjResult.affectedItemIds],
-              });
-            }
-          }
-        }
-
-        // 2. Apply to settings files
-        const settingsChangesByPath = new Map<string, ResolvedChange[]>();
-        for (const c of changes) {
-          if (c.item.kind === 'mcp-server' && c.item.source === 'project' && !c.enabled) {
-            continue;
-          }
-          const targetPath = resolveSettingsPath(c.item, deps);
-          const list = settingsChangesByPath.get(targetPath) ?? [];
-          list.push(c);
-          settingsChangesByPath.set(targetPath, list);
-        }
-
-        const settingsResults: { affectedItemIds: string[] }[] = [];
-
-        for (const [targetPath, pathChanges] of settingsChangesByPath.entries()) {
-          if (!isPathAllowed(targetPath, deps)) {
-            continue;
-          }
-          const snapshot = snapshotFile(targetPath);
-          const sResult = buildSettingsEdits(targetPath, deps, pathChanges, true, store, snapshot.text);
-          settingsResults.push(sResult);
-          if (sResult.edits.length > 0) {
-            const preExisted = snapshot.exists;
-            const res = applyConfigEdit({
-              path: targetPath,
-              kind: 'json',
-              edits: sResult.edits,
-              backup: true,
-              snapshot,
-              now: deps.now(),
-            });
-            if (res.backupPath) backups.push(res.backupPath);
-            if (res.changed) {
-              writtenFiles.push({
-                path: targetPath,
-                backupPath: res.backupPath,
-                preExisted,
-                postSnapshot: snapshotFile(targetPath),
-                affectedItemIds: [...sResult.affectedItemIds],
-              });
-            }
-          }
-          for (const c of pathChanges) {
-            if (c.item.kind === 'hook' && c.enabled && sResult.affectedItemIds.includes(c.item.id)) {
-              if (!hookIdsToTakeFromStore.includes(c.item.id)) {
-                hookIdsToTakeFromStore.push(c.item.id);
-              }
-            }
-          }
-        }
-
-        // All file writes succeeded!
-        // Remove enabled hooks from store and save
-        for (const id of hookIdsToTakeFromStore) {
-          store.removedHooks.take('claude', id);
-        }
-        try {
-          store.save();
-        } catch {
-          // If the store save fails after a successful write, still report the hook as applied
-        }
-
-        // Populate appliedItemIds
-        for (const id of cjResult.affectedItemIds) {
-          if (!appliedItemIds.includes(id)) appliedItemIds.push(id);
-        }
-        for (const sRes of settingsResults) {
-          for (const id of sRes.affectedItemIds) {
-            if (!appliedItemIds.includes(id)) appliedItemIds.push(id);
-          }
-        }
-
-        // Record intent in surfacesStore for all landed items
-        try {
-          for (const itemId of appliedItemIds) {
-            const c = changes.find((x) => x.item.id === itemId);
-            if (c) {
-              store.recordIntent('claude', itemId, c.enabled);
-            }
-          }
-          store.save();
-        } catch {
-          // Store failure must not fail apply
-        }
+        const claudeJsonIds = applyClaudeJson(run, changes);
+        const settings = applySettingsFiles(run, changes, store);
+        const appliedItemIds = [...new Set([...claudeJsonIds, ...settings.appliedIds])];
+        recordOutcome(store, changes, appliedItemIds, settings.restoredHookIds);
 
         const unapplied = changes.some((c) => !appliedItemIds.includes(c.item.id));
         return {
           provider: 'claude',
           ok: !unapplied,
           appliedItemIds,
-          backups,
+          backups: run.backups,
           error: unapplied ? 'Some changes could not be applied.' : null,
         };
       } catch (err: unknown) {
-        if (err instanceof Error) {
-          if (err.message.includes('Project directory is required')) {
-            throw new Error('Project directory is required to toggle project MCP server');
-          }
+        if (err instanceof Error && err.message.includes('Project directory is required')) {
+          throw new Error('Project directory is required to toggle project MCP server');
         }
-
         // Roll back any files that were written in this apply call
-        const rollbackFailed = !rollbackWrittenFiles(writtenFiles);
-
-        const isMissingStoreDef =
-          err instanceof Error && err.message.includes('definition not found in store');
-        const isAmbiguousHook = err instanceof Error && err.message.startsWith('More than one hook matches');
-        const safeError = rollbackFailed
-          ? 'Some files may have changed; check your Claude settings.'
-          : isMissingStoreDef
-            ? 'Cannot enable hook: definition not found in store'
-            : isAmbiguousHook
-              ? (err as Error).message
-            : err instanceof ConfigChangedError
-              ? 'The configuration changed while editing; reload and try again.'
-              : 'Applying the change failed; no file was left half-written.';
-
+        const rollbackFailed = !rollbackWrittenFiles(run.writtenFiles);
         return {
           provider: 'claude',
           ok: false,
           appliedItemIds: [],
-          backups,
-          error: safeError,
+          backups: run.backups,
+          error: applyErrorMessage(err, rollbackFailed),
         };
       }
     },

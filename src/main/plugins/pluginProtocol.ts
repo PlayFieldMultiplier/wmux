@@ -13,31 +13,27 @@
 //     other origins. Bridge communication is postMessage-only.
 //
 // Scheme privileges (standard/secure/supportFetchAPI) must be registered
-// before app ready — see registerPluginSchemePrivileges, called at module
-// scope in main/index.ts.
+// before app ready — see PLUGIN_SCHEME_PRIVILEGES and registerPrivilegedSchemes.
 
-import { protocol, net } from 'electron';
+import { protocol, net, type CustomScheme } from 'electron';
 import { pathToFileURL } from 'node:url';
 import { PLUGIN_PROTOCOL_SCHEME, PLUGIN_NAME_REGEX } from '../../shared/pluginHost';
 import type { PluginHostLoader } from './PluginHostLoader';
 
 /**
- * Must run before `app.whenReady()`. Without `standard`, relative asset
- * URLs inside plugin HTML don't resolve; without `secure`, Chromium
- * treats the page as an insecure context and degrades web APIs.
+ * Without `standard`, relative asset URLs inside plugin HTML don't resolve;
+ * without `secure`, Chromium treats the page as an insecure context and
+ * degrades web APIs. Registered before app ready by registerPrivilegedSchemes
+ * (main/privilegedSchemes.ts), together with every other privileged scheme.
  */
-export function registerPluginSchemePrivileges(): void {
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: PLUGIN_PROTOCOL_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-      },
-    },
-  ]);
-}
+export const PLUGIN_SCHEME_PRIVILEGES: CustomScheme = {
+  scheme: PLUGIN_PROTOCOL_SCHEME,
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+  },
+};
 
 const PLUGIN_PAGE_CSP = [
   "default-src 'none'",

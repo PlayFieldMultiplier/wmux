@@ -34,9 +34,10 @@ async function attestBrowserCaller(): Promise<SelfContext> {
 }
 
 /**
- * wmux open <url> [--workspace <id>]
+ * wmux open <url> [--new] [--workspace <id>]
  *
  * Opens (or reuses — X3 semantics) a browser pane and navigates it to <url>.
+ * `--new` opens <url> in a new tab of that pane instead (#2140).
  * The browser opens in the workspace of the wmux pane this runs in, verified
  * by main; outside a pane the command is refused with how to run it.
  */
@@ -52,13 +53,14 @@ export async function handleOpen(args: string[], jsonMode: boolean): Promise<voi
 
   const params: Record<string, unknown> = { url };
   if (workspaceId) params.workspaceId = workspaceId;
+  if (args.includes('--new')) params.newTab = true;
 
   const response = await sendRequest('browser.open', params);
   if (jsonMode) {
     printResult(response);
   } else {
     ensureOk(response);
-    console.log(`Opened in browser pane: ${url}`);
+    console.log(params.newTab ? `Opened in a new browser tab: ${url}` : `Opened in browser pane: ${url}`);
   }
 }
 

@@ -1,0 +1,232 @@
+/* ─── The Bots page (BotsPage.tsx) ─────────────────────────────────────
+ * A conversation list beside a chat. Neutral surfaces from the fill ladder;
+ * the one colour is needs you (the badge). The owner's bubble is the user
+ * bubble's content-10% fill, a bot's the subtle fill one step below it. Under
+ * an 800px page the page is one column: the list, or the chat with a back
+ * button (data-view). */
+.wmux-bots {
+  container-type: inline-size;
+  container-name: bots;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-base);
+}
+.wmux-bots-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Paused: a notice row across the page (a header band's subtle fill, no
+   border), with Run bots on the right. */
+.wmux-bots-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 52px;
+  padding: 8px 16px;
+  background: var(--selection-subtle);
+}
+
+/* The first step with no bot: one card at the top of the list. */
+.wmux-bots-first {
+  margin: 4px 0 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.wmux-bots-list {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  flex-shrink: 0;
+  min-height: 0;
+  background: var(--bg-mantle);
+  border-right: 1px solid var(--stroke);
+}
+.wmux-bots-list-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 52px;
+  flex-shrink: 0;
+  padding: 0 10px 0 16px;
+}
+.wmux-bots-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--text-sub);
+}
+.wmux-bots-icon-button:hover { background: var(--hover-fill); color: var(--text-main); }
+.wmux-bots-icon-button.is-open { background: var(--selection-emphasis); color: var(--text-main); }
+
+.wmux-bots-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 8px 8px;
+}
+.wmux-bots-row-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px;
+  border-radius: 10px;
+  text-align: left;
+}
+.wmux-bots-row-button:hover { background: var(--hover-fill); }
+.wmux-bots-row-button.is-selected { background: var(--selection); box-shadow: var(--select-ring, none); }
+
+.wmux-bots-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--attention);
+  color: var(--attention-ink);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.wmux-bots-chat {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.wmux-bots-chat-head {
+  position: absolute;
+  top: 10px;
+  left: 16px;
+  right: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.wmux-bots-chat-head > * { pointer-events: auto; }
+.wmux-bots-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(420px, 100%);
+  height: 32px;
+  padding: 0 12px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  background: var(--bg-base);
+}
+.wmux-bots-pill:not(:disabled):hover { background: var(--hover-fill); }
+.wmux-bots-pill:disabled { cursor: default; }
+.wmux-bots-back {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  background: var(--bg-base);
+  color: var(--text-sub);
+}
+.wmux-bots-back:hover { color: var(--text-main); }
+/* The profile fits the chat: a short window scrolls it inside (16px off the
+   chat's foot), so Stop at its end stays reachable. */
+.wmux-bots-profile {
+  position: absolute;
+  top: 48px;
+  left: 16px;
+  z-index: 3;
+  width: min(360px, calc(100% - 32px));
+  max-height: calc(100% - 64px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-base);
+  box-shadow: var(--shadow-popover);
+}
+
+.wmux-bots-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 64px 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Nothing shows beside or under the name pill's row (it ends at 42px):
+     the messages are hidden there and fade in just below it. */
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 46px, #000 64px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 46px, #000 64px);
+}
+.wmux-bots-row { display: flex; min-width: 0; }
+.wmux-bots-row-bot { align-items: flex-start; gap: 8px; }
+.wmux-bots-row-bot > :last-child { max-width: min(640px, 80%); min-width: 0; }
+.wmux-bots-row-avatar { width: 24px; flex-shrink: 0; }
+.wmux-bots-row-owner { flex-direction: column; align-items: flex-end; }
+.wmux-bots-row-system {
+  justify-content: center;
+  padding: 2px 24px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wmux-bots-system { min-width: 0; max-width: min(640px, 100%); text-align: center; }
+
+.wmux-bots-bubble {
+  padding: 8px 12px;
+  border-radius: 16px;
+  overflow-wrap: anywhere;
+}
+.wmux-bots-bubble-bot { background: var(--selection-subtle); border-radius: 16px; }
+/* A plan or proposal waiting on the owner: the needs-you hairline is the
+   bubble's boundary (as an open question's). */
+.wmux-bots-bubble-waits { border: 1px solid var(--attention-hairline); }
+.wmux-bots-bubble-owner {
+  max-width: min(560px, 75%);
+  background: color-mix(in srgb, var(--text-main) 10%, transparent);
+  color: var(--text-main);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.wmux-bots-card { min-width: 0; }
+.wmux-bots-bubble-bot .wmux-bots-card,
+.wmux-bots-card.wmux-bots-bubble-bot { padding: 0; }
+
+.wmux-bots-composer { flex-shrink: 0; padding: 4px 20px 16px; }
+
+@container bots (max-width: 799px) {
+  .wmux-bots-list { width: 100%; border-right: 0; }
+  .wmux-bots[data-view='chat'] .wmux-bots-list { display: none; }
+  .wmux-bots[data-view='list'] .wmux-bots-chat { display: none; }
+  .wmux-bots-back { display: inline-flex; }
+  .wmux-bots-messages { padding-left: 12px; padding-right: 12px; }
+  .wmux-bots-composer { padding-left: 12px; padding-right: 12px; }
+  .wmux-bots-row-bot > :last-child { max-width: 88%; }
+}

@@ -10,7 +10,6 @@ import Sidebar from '../Sidebar';
 import MiniSidebar from '../MiniSidebar';
 import { useStore } from '../../../stores';
 import type { AgentStatus, Pane, Workspace } from '../../../../shared/types';
-import type { MoaState } from '../../../../shared/moa';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -203,25 +202,6 @@ describe('review fixes (#1812)', () => {
     await act(async () => {
       useStore.setState((st) => ({ workspaceSettle: { ...st.workspaceSettle, states: { c: { snoozedUntil: NOW + 3_600_000 } } } }) as never);
     });
-    expect(visibleStop().length).toBe(1);
-  });
-
-  it('keeps Moa\'s HQ row out of the tree: no treeitem, no second row stop', () => {
-    const moa: MoaState = {
-      config: { enabled: true, onboarded: true, level: 1, maxTurnsPerHour: 20, bubbles: true, reduceMotion: false, defaultReason: null },
-      hq: { workspaceId: 'moa', state: 'ok' },
-      archive: { unacked: 0, total: 0 },
-    } as MoaState;
-    seed({ a: 'idle', moa: 'idle', b: 'idle' }, { active: 'moa' });
-    act(() => useStore.setState({ moa, appRoute: 'workspaces' } as never));
-    act(() => root.render(<Sidebar />));
-    const hq = document.querySelector('[data-moa-hq-row]') as HTMLElement;
-    expect(hq).not.toBeNull();
-    expect(hq.closest('[role="tree"]')).toBeNull();
-    expect(hq.querySelector('[role="treeitem"]')).toBeNull();
-    expect(hq.querySelector('[data-sidebar-row]')).toBeNull();
-    // Its own buttons stay reachable.
-    expect([...hq.querySelectorAll<HTMLButtonElement>('[data-workspace-action]')].every((btn) => btn.tabIndex === 0)).toBe(true);
     expect(visibleStop().length).toBe(1);
   });
 

@@ -26,8 +26,6 @@ beforeEach(() => {
     workspaces: [],
     activeWorkspaceId: undefined,
     channelDockVisible: false,
-    activeDeckTab: 'channels',
-    deckLedgerFinishedExpanded: false,
     moa: null,
   });
 });
@@ -81,6 +79,23 @@ async function click(selector: string): Promise<void> {
 }
 
 describe('MissionsSection summary', () => {
+  it('does not count a bot\'s workers: they are the Bots page\'s', async () => {
+    useStore.setState({
+      workspaces: [workspace('parent'), workspace('child-1'), workspace('child-2')],
+      activeWorkspaceId: 'parent',
+      fanoutOrigin: { 'child-2': { kind: 'bot', botId: 'bot-0000000a' } },
+      missionsByWorkspace: {
+        parent: [
+          mission({ id: 't1', title: 'one', paneGroupId: 'child-1' }),
+          mission({ id: 't2', title: 'two', paneGroupId: 'child-2' }),
+        ],
+      },
+    });
+    await render();
+    expect(container.querySelector('[data-missions-summary]')?.getAttribute('data-open-count')).toBe('1');
+    act(() => useStore.setState({ fanoutOrigin: {} }));
+  });
+
   it('renders nothing when there are no tasks (no dead header)', async () => {
     await render();
     expect(container.querySelector('[data-missions-section]')).toBeNull();
@@ -166,9 +181,9 @@ describe('MissionsSection summary', () => {
     expect(container.querySelector('[data-missions-cleanup]')).not.toBeNull();
   });
 
-  // With Moa off there is no right panel: task status and fan-out work are
-  // read in Fleet, so the line opens Fleet and leaves the panel flag alone.
-  it('without Moa, opens Fleet', async () => {
+  // Task status and fan-out work are read in Fleet, so the line opens Fleet
+  // and leaves the panel flag alone.
+  it('opens Fleet', async () => {
     useStore.setState({
       workspaces: [workspace('parent'), workspace('other')],
       activeWorkspaceId: 'other',
@@ -184,47 +199,5 @@ describe('MissionsSection summary', () => {
     expect(state.appRoute).toBe('fleet');
     expect(state.activeWorkspaceId).toBe('other');
     expect(state.channelDockVisible).toBe(false);
-  });
-
-  it('with Moa running, opens its panel without switching to the owner workspace', async () => {
-    useStore.setState({
-      workspaces: [workspace('parent'), workspace('other')],
-      activeWorkspaceId: 'other',
-      missionsByWorkspace: {
-        parent: [mission({ id: 't1', title: 'one', createdAt: 5 })],
-      },
-      moa: {
-        config: { enabled: true, onboarded: true, level: 1, maxTurnsPerHour: 20, bubbles: true, reduceMotion: false, defaultReason: null },
-        hq: { workspaceId: 'ws-hq', state: 'ok' },
-        archive: { unacked: 0, total: 0 },
-      },
-    });
-    await render();
-    await click('[data-missions-summary]');
-    const state = useStore.getState();
-    // The panel is Moa's whatever is on screen: no hop to another brain.
-    expect(state.activeWorkspaceId).toBe('other');
-    expect(state.activeDeckTab).toBe('commander');
-    expect(state.channelDockVisible).toBe(true);
-  });
-
-  it('with Moa running, opens the finished disclosure when only finished tasks are left', async () => {
-    useStore.setState({
-      workspaces: [workspace('parent'), workspace('other')],
-      activeWorkspaceId: 'other',
-      missionsByWorkspace: {
-        parent: [mission({ id: 't1', title: 'one', status: 'closed', closedAt: 1 })],
-      },
-      moa: {
-        config: { enabled: true, onboarded: true, level: 1, maxTurnsPerHour: 20, bubbles: true, reduceMotion: false, defaultReason: null },
-        hq: { workspaceId: 'ws-hq', state: 'ok' },
-        archive: { unacked: 0, total: 0 },
-      },
-    });
-    await render();
-    await click('[data-missions-summary]');
-    const state = useStore.getState();
-    expect(state.activeWorkspaceId).toBe('other');
-    expect(state.deckLedgerFinishedExpanded).toBe(true);
   });
 });

@@ -1,0 +1,680 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "structured-mention-wakes-target",
+  "run": 1,
+  "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-fd129fa6",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881409983,
+    "updatedAt": 1791881409983
+   },
+   {
+    "version": 1,
+    "id": "bot-26bdf4aa",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "role": "triage",
+    "template": "issue",
+    "name": "Triage",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881409984,
+    "updatedAt": 1791881409984
+   },
+   {
+    "version": 1,
+    "id": "bot-e11148ee",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Verifier",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881409985,
+    "updatedAt": 1791881409985
+   },
+   {
+    "version": 1,
+    "id": "bot-a0df97cd",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881415075,
+    "updatedAt": 1791881415075
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-fd129fa6",
+   "triage": "bot-26bdf4aa",
+   "verifier": "bot-e11148ee",
+   "moa": "bot-a0df97cd"
+  },
+  "injected": [
+   {
+    "label": "to-lead",
+    "kind": "card",
+    "id": "c-mv6fxgo78cd3782637",
+    "threadId": "general",
+    "at": 1791881415077
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881415077,
+    "do": "post",
+    "label": "to-lead",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6fxgo78cd3782637",
+      "seq": 1,
+      "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791881415080,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Get triage on it",
+      "body": "Lead: ask triage to look.",
+      "refs": {
+       "botId": "bot-fd129fa6",
+       "botIds": [
+        "bot-fd129fa6"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-fd129fa6",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6fxgo9-56688e72",
+     "addressees": [
+      {
+       "botId": "bot-fd129fa6",
+       "role": "lead",
+       "wakeId": "w-mv6fxgo9-56688e72"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1791881415086,
+    "do": "waitFor",
+    "label": "triage done",
+    "ok": true,
+    "doneAt": 1791881425625
+   },
+   {
+    "at": 1791881425625,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881430648
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6fxgo8-c42b5fd6b62c",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791881415080,
+    "dedupeKey": "human.message:c-mv6fxgo78cd3782637:bot-fd129fa6",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "ref": {
+     "botId": "bot-fd129fa6",
+     "messageId": "c-mv6fxgo78cd3782637:bot-fd129fa6"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Lead: ask triage to look.",
+     "cardId": "c-mv6fxgo78cd3782637",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6fxkob-1ecad6664caa",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791881420267,
+    "dedupeKey": "handoff.received:h-mv6fxko7a02a4d046e7c",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "ref": {
+     "handoffId": "h-mv6fxko7a02a4d046e7c",
+     "botId": "bot-26bdf4aa"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-fd129fa6"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Triage, please look",
+     "threadId": "general",
+     "runId": "run-c-mv6fxgo78cd3782637",
+     "depth": 1,
+     "hopsInRun": 1,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Triage (triage)",
+     "fromWorkspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+     "toWorkspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+     "mention": true
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6fxgo9-56688e72",
+    "botId": "bot-fd129fa6",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "reason": {
+     "kind": "human",
+     "text": "Lead: ask triage to look.",
+     "source": "desktop",
+     "clientMessageId": "c-mv6fxgo78cd3782637",
+     "runId": "run-c-mv6fxgo78cd3782637"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1791881415081,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fxko7-bf7070db",
+    "botId": "bot-26bdf4aa",
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mv6fxko78124948cbd",
+     "handoffId": "h-mv6fxko7a02a4d046e7c",
+     "fromBotId": "bot-fd129fa6"
+    },
+    "threadId": "general",
+    "priority": 1,
+    "enqueuedAt": 1791881420263,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv6fxko7a02a4d046e7c",
+    "runId": "run-c-mv6fxgo78cd3782637",
+    "threadId": "general",
+    "depth": 1,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+     "botId": "bot-fd129fa6"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+     "botId": "bot-26bdf4aa"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Triage, please look",
+     "body": "Triage, please look; the verifier is idle.",
+     "refs": {
+      "messageId": "c-mv6fxko78124948cbd"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mv6fxko78124948cbd:bot-26bdf4aa",
+    "createdAt": 1791881420263,
+    "updatedAt": 1791881420267
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6fxgo78cd3782637",
+    "seq": 1,
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791881415080,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Get triage on it",
+    "body": "Lead: ask triage to look.",
+    "refs": {
+     "botId": "bot-fd129fa6",
+     "botIds": [
+      "bot-fd129fa6"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fxko78124948cbd",
+    "seq": 2,
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "threadId": "general",
+    "kind": "opinion",
+    "at": 1791881420263,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+     "botId": "bot-fd129fa6"
+    },
+    "title": "Triage, please look",
+    "body": "Triage, please look; the verifier is idle.",
+    "refs": {
+     "botIds": [
+      "bot-26bdf4aa"
+     ]
+    },
+    "clientPostId": "wake:w-mv6fxgo9-56688e72:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fxoni6732e3d1f7",
+    "seq": 3,
+    "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791881425423,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+     "botId": "bot-26bdf4aa"
+    },
+    "title": "Looking",
+    "body": "On it.",
+    "clientPostId": "wake:w-mv6fxko7-bf7070db:1"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791881415127,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881415129,
+     "event": "session/new",
+     "sessionId": "stub-a23c1e9d0344",
+     "cwd": "/home/owner/.wmux-verify-f99836dc/factory/bots/bot-fd129fa6"
+    },
+    {
+     "at": 1791881420131,
+     "event": "prompt",
+     "sessionId": "stub-a23c1e9d0344",
+     "text": "[wake w-mv6fxgo9-56688e72] Lead (developer) · reason: human · priority 0"
+    },
+    {
+     "at": 1791881420266,
+     "event": "tool",
+     "sessionId": "stub-a23c1e9d0344",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fxko78124948cbd\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-87511885-8c3a-44e2-a414-b0985b04df1c\",\n    \"threadId\": \"general\",\n    \"kind\": \"opinion\",\n    \"at\": 1791881420263,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-87511885-8c3a-44e2-a414-b0985b04df1c\",\n      \"botId\": \"bot-fd129fa6\"\n    },\n    \"title\": \"Triage, please look\",\n    \"body\": \"Triage, please look; the verifier is idle.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-26bdf4aa\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mv6fxgo9-56688e72:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-26bdf4aa\",\n      \"ok\": true,\n      \"handoffId\": \"h-mv6fxko7a02a4d046e7c\"\n    }\n  ]\n}"
+    }
+   ],
+   "triage": [
+    {
+     "at": 1791881420288,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881420289,
+     "event": "session/new",
+     "sessionId": "stub-42fc5ab472e2",
+     "cwd": "/home/owner/.wmux-verify-f99836dc/factory/bots/bot-26bdf4aa"
+    },
+    {
+     "at": 1791881425292,
+     "event": "prompt",
+     "sessionId": "stub-42fc5ab472e2",
+     "text": "[wake w-mv6fxko7-bf7070db] Triage (issue) · reason: mention · priority 1"
+    },
+    {
+     "at": 1791881425423,
+     "event": "tool",
+     "sessionId": "stub-42fc5ab472e2",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv6fxoni6732e3d1f7\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-87511885-8c3a-44e2-a414-b0985b04df1c\",\n    \"threadId\": \"general\",\n    \"kind\": \"status\",\n    \"at\": 1791881425423,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-87511885-8c3a-44e2-a414-b0985b04df1c\",\n      \"botId\": \"bot-26bdf4aa\"\n    },\n    \"title\": \"Looking\",\n    \"body\": \"On it.\",\n    \"clientPostId\": \"wake:w-mv6fxko7-bf7070db:1\"\n  }\n}"
+    }
+   ],
+   "verifier": [],
+   "moa": []
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881410143,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-50-08-verify-f99836dc",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-50-08-verify-f99836dc"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the speaker was woken by something else",
+   "failing": [
+    "speaker_woken_by_owner"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.0.reason",
+     "value": {
+      "kind": "manual",
+      "by": "human"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the card names no bot",
+   "failing": [
+    "card_names_target",
+    "target_woken_once_by_mention",
+    "target_answers_in_thread"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.1.refs.botIds"
+    },
+    {
+     "op": "set",
+     "path": "cards.1.id",
+     "value": "c-other"
+    },
+    {
+     "op": "set",
+     "path": "cards.1.threadId",
+     "value": "t-other"
+    }
+   ]
+  },
+  {
+   "why": "the target woke twice",
+   "failing": [
+    "target_woken_once_by_mention"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-dup",
+      "botId": "bot-26bdf4aa",
+      "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+      "reason": {
+       "kind": "mention",
+       "cardId": "c-mv6fxko78124948cbd",
+       "handoffId": "h-mv6fxko7a02a4d046e7c",
+       "fromBotId": "bot-fd129fa6"
+      },
+      "threadId": "general",
+      "priority": 1,
+      "enqueuedAt": 1791881420263,
+      "attempts": 1,
+      "state": "done"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the mention started its own run",
+   "failing": [
+    "one_message_in_owner_run"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.0.runId",
+     "value": "run-x"
+    }
+   ]
+  },
+  {
+   "why": "the target answered elsewhere",
+   "failing": [
+    "target_answers_in_thread"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.2.threadId",
+     "value": "t-x"
+    }
+   ]
+  },
+  {
+   "why": "verifier woke too",
+   "failing": [
+    "verifier_not_woken"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-e11148ee",
+      "workspaceId": "ws-87511885-8c3a-44e2-a414-b0985b04df1c",
+      "reason": {
+       "kind": "mention",
+       "cardId": "c-mv6fxko78124948cbd",
+       "handoffId": "h-mv6fxko7a02a4d046e7c",
+       "fromBotId": "bot-fd129fa6"
+      },
+      "threadId": "general",
+      "priority": 1,
+      "enqueuedAt": 1791881420263,
+      "attempts": 1,
+      "state": "done"
+     }
+    }
+   ]
+  }
+ ]
+}

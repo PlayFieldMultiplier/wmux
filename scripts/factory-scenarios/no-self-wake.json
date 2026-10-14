@@ -1,0 +1,125 @@
+{
+  "name": "no-self-wake",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A bot's own fact never wakes it. The lead (one turn per hour, and a trigger on bot.budget_exhausted) takes the owner's message, then a manual wake meets the budget refusal; the bot.budget_exhausted fact the lead is the actor of wakes the HQ bot only.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "budget": {
+          "maxTurnsPerHour": 1
+        },
+        "triggers": [
+          {
+            "kind": "task.done"
+          },
+          {
+            "kind": "bot.budget_exhausted"
+          }
+        ],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "On it",
+                    "body": "Working."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Lead is out of turns",
+                    "body": "Noted the budget stop."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "first",
+      "post": {
+        "title": "One",
+        "body": "First message.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "first done",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "wake",
+      "label": "second",
+      "bot": "lead"
+    },
+    {
+      "do": "waitFor",
+      "label": "budget fact",
+      "cond": {
+        "facts": {
+          "kind": "bot.budget_exhausted"
+        }
+      },
+      "timeoutMs": 30000
+    },
+    {
+      "do": "waitFor",
+      "label": "moa done",
+      "cond": {
+        "wakes": {
+          "bot": "moa",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "sleep",
+      "ms": 3000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes"
+    ],
+    "actor": "lead",
+    "observer": "moa",
+    "kind": "bot.budget_exhausted"
+  }
+}

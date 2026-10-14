@@ -18,7 +18,7 @@ import { registerPTYHandlers } from './handlers/pty.handler';
 // autosave overwrites the previous scrollback files on disk.
 import { registerShellHandlers } from './handlers/shell.handler';
 import { registerFontHandlers } from './handlers/fonts.handler';
-import { registerMetadataHandlers } from './handlers/metadata.handler';
+import { getCwd, registerMetadataHandlers } from './handlers/metadata.handler';
 import { startLocalContextWatch } from '../metadata/localContextWatch';
 import { registerClipboardHandlers } from './handlers/clipboard.handler';
 import { registerAgentModelsHandlers } from './handlers/agentModels.handler';
@@ -32,7 +32,7 @@ import { registerGithubHandlers } from './handlers/github.handler';
 import { registerPrReviewHandlers } from './handlers/prReview.handler';
 import { registerWorkLinkHandlers } from './handlers/workLink.handler';
 import { registerTrackRecordHandlers } from './handlers/trackRecord.handler';
-import { registerMoaDelegateHandlers } from './handlers/moaDelegate.handler';
+import { registerFactoryHandlers } from './handlers/factory.handler';
 import { registerGitShipHandlers } from './handlers/gitShip.handler';
 import { registerGhLoginHandlers } from './handlers/ghLogin.handler';
 import { registerMcpHandlers } from './handlers/mcp.handler';
@@ -49,6 +49,9 @@ import { registerAutomationHandlers } from './handlers/automation.handler';
 import { registerAccountHandlers } from './handlers/account.handler';
 import { registerAccountRotationHandlers } from './handlers/accountRotation.handler';
 import { registerAgyAccountHandlers } from './handlers/agyAccount.handler';
+import { liveFactoryState, registerRoomIpcHandlers } from './handlers/room.handler';
+import { registerApprovalIpcHandlers } from './handlers/approval.handler';
+import { createRpcInvokeHandler } from './rpcInvoke';
 import { createFlashFrameHandler } from '../window/flashFrame';
 import { applyUiZoom, winOverlayHeight } from '../window/uiZoom';
 import { IPC } from '../../shared/constants';
@@ -202,10 +205,14 @@ export function registerAllHandlers(
   const cleanupWorkLinks = registerWorkLinkHandlers(getWindow);
   // Moa's track record — the retro card and its schedule (Settings → Moa).
   const cleanupTrackRecord = registerTrackRecordHandlers(getWindow);
-  // Moa's delegate — the owner's side (renderer only; inert while it is off).
-  const cleanupMoaDelegate = registerMoaDelegateHandlers(getWindow);
+  // Agent factory bots: list, status and settings for the renderer.
+  const cleanupFactory = registerFactoryHandlers(getWindow, { cwdOf: getCwd });
   const cleanupGitShip = registerGitShipHandlers();
   const cleanupGhLogin = registerGhLoginHandlers(getWindow);
+  // Agent factory rooms: the room dock reads, posts and answers as the owner.
+  const cleanupRooms = registerRoomIpcHandlers(getWindow, { invoke: options.invokeRendererRpc, factoryState: liveFactoryState });
+  // Owner approvals of bots' requests: decided only from the main window.
+  const cleanupApprovals = registerApprovalIpcHandlers(getWindow);
   const cleanupMcp = options.mcpRegistrar
     ? registerMcpHandlers(options.mcpRegistrar, options.getMcpAuthToken ?? (() => null))
     : null;
@@ -485,32 +492,11 @@ export function registerAllHandlers(
   ipcMain.removeAllListeners(IPC.EVENTS_PUBLISH);
   ipcMain.on(IPC.EVENTS_PUBLISH, onEventsPublish);
 
-  // Renderer-initiated RPC bridge. The renderer is a trusted first-party
-  // surface (its preload is the same process the user is running) — the
-  // pipe RpcRouter's PermissionEnforcer runs on dispatch, so the
-  // capability gate is identical to what an external pipe client gets.
-  // Method/params are sanitized up front: an object-typed params is
-  // required (the router validates this too) and method must be a
-  // non-empty string. Returns the dispatch result verbatim so the
-  // renderer's bridge can project success/error the same way a pipe
-  // client would.
-  const onRpcInvoke = async (
-    _event: Electron.IpcMainInvokeEvent,
-    method: unknown,
-    params: unknown,
-  ): Promise<unknown> => {
-    if (typeof method !== 'string' || method.length === 0) {
-      return { ok: false, error: 'rpc:invoke: missing method' };
-    }
-    const safeParams =
-      params !== undefined && params !== null && typeof params === 'object'
-        ? (params as Record<string, unknown>)
-        : {};
-    if (!options.invokeRendererRpc) {
-      return { ok: false, error: 'rpc:invoke: renderer RPC bridge not wired' };
-    }
-    return options.invokeRendererRpc(method, safeParams);
-  };
+  // Renderer-initiated RPC bridge: the main window's top frame dispatches as
+  // the operator (rpcInvoke.ts); any other sender is refused. Returns the
+  // dispatch result verbatim so the renderer's bridge can project
+  // success/error the same way a pipe client would.
+  const onRpcInvoke = createRpcInvokeHandler(getWindow, () => options.invokeRendererRpc);
   // RPC_INVOKE is an ipcMain.handle() handler, NOT an .on() listener — it must
   // be cleared with removeHandler(), not removeAllListeners() (which is a no-op
   // for handle handlers). Without this, the SECOND registerAllHandlers() (on a
@@ -540,9 +526,11 @@ export function registerAllHandlers(
     cleanupPrReview();
     cleanupWorkLinks();
     cleanupTrackRecord();
-    cleanupMoaDelegate();
+    cleanupFactory();
     cleanupGitShip();
     cleanupGhLogin();
+    cleanupRooms();
+    cleanupApprovals();
     if (cleanupMcp) cleanupMcp();
     cleanupTokenUsageQuota();
     cleanupTokenUsageSurface();

@@ -15,8 +15,8 @@ interface SnapshotSource {
   surfaceAgent: Record<string, { name: string; slug?: AgentSlug }>;
   /** User pane labels (the header's source); absent in callers that have none. */
   paneLabel?: Record<string, string>;
-  /** Main's Moa state; null/absent = unknown, treated as no Moa. */
-  moa?: MoaState | null;
+  /** Main's Moa state; null/absent = no Moa. */
+  moa?: Pick<MoaState, 'hq'> & { config: { enabled: boolean } } | null;
 }
 
 /** This PC's Moa as a link end: on, with a live HQ workspace. Otherwise null. */
@@ -34,14 +34,15 @@ export function moaBrainEnd(s: SnapshotSource): { workspaceId: string; name: str
  * the shape is testable without a store.
  */
 /**
- * How sure we are about this PC's Moa. 'off' only when that is settled (Moa
- * turned off, or no HQ / HQ deleted); a state not read yet, an unreadable HQ
- * store or an HQ not in the tree right now is 'unknown', which main rides out
- * on the last known Moa instead of breaking its links.
+ * How sure we are about this PC's Moa. Moa's brain no longer runs, so no Moa
+ * state reads as 'off' (main then stops waiting on a brain link). With a
+ * state: 'off' when Moa is off or has no HQ; an unreadable HQ store or an HQ
+ * not in the tree right now is 'unknown', which main rides out on the last
+ * known Moa instead of breaking its links.
  */
 export function moaBrainState(s: SnapshotSource): 'present' | 'off' | 'unknown' {
   if (moaBrainEnd(s)) return 'present';
-  if (!s.moa) return 'unknown';
+  if (!s.moa) return 'off';
   if (!s.moa.config.enabled) return 'off';
   const hq = s.moa.hq;
   if (hq.state === 'unset' || hq.state === 'hq-missing') return 'off';

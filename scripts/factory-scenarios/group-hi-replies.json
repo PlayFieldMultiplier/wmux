@@ -1,0 +1,140 @@
+{
+  "name": "group-hi-replies",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner says Hi to the room with no bot named: every enabled bot of the room wakes once (one directed fact each, one shared run, the room flag on each wake) and each answers in General; the card records every addressee.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Hi from lead",
+                    "body": "lead here."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "triage",
+        "role": "triage",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Hi from triage",
+                    "body": "triage here."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Hi from verifier",
+                    "body": "verifier here."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Hi from moa",
+                    "body": "moa here."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "hi",
+      "post": {
+        "title": "Hi"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "all answered",
+      "cond": {
+        "wakes": {
+          "reason": "human",
+          "state": "done",
+          "min": 4
+        }
+      },
+      "timeoutMs": 90000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes"
+    ],
+    "message": "hi",
+    "bots": [
+      "lead",
+      "triage",
+      "verifier",
+      "moa"
+    ]
+  }
+}

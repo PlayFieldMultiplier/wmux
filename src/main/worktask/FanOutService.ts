@@ -26,6 +26,8 @@
  */
 
 import { ensureSecretHook } from '../git/secretHookHost';
+import { beginBotWorkerSpawn } from '../agents/botWorkerMergeGuard';
+import { mintSecretGrant, revokeSecretGrant } from '../factory/secretGrants';
 import { allowAgyTrustFor } from '../agents/agyTrust';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -55,8 +57,6 @@ import {
   type FanoutSetupSkipReason,
 } from './fanoutEnvironment';
 import { workerTempEnv } from './fanoutTempDir';
-import { goalWorkerEnv, goalWorkerPromptNote } from '../../shared/moaGoalWorker';
-import type { MoaGoalTerms } from '../../shared/moaGoal';
 import { inheritTaskAutonomy } from './taskAutonomy';
 import { getFanOutGuards, type FanOutGuards } from './fanoutGuards';
 import { loadFanoutWorkerPermissionMode } from './fanoutWorkerPolicy';
@@ -116,6 +116,37 @@ Your task has a row in the task ledger; the brain reads that row, not your prose
 - \`expected_rev\` is the rev you last read (1 right after fan-out); a stale rev is refused, so re-read and retry. Only the brain can mark \`completed\`.
 `;
 
+/**
+ * The worker's own task, appended after WORKER_DELIVERY_PREAMBLE: the ledger
+ * id it reports on, the rev the row starts at and its mission channel. Main
+ * minted all three before the prompt is written (mission.start), so the
+ * worker never has to look its task up; ledger_update also resolves the task
+ * of the caller's own workspace when `task_id` is left out.
+ */
+export function workerTaskIdentityNote(taskId: string, channelId: string, botBranch?: string): string {
+  // A bot's worker pushes only its own task branch, named: a push without a
+  // destination, to HEAD or to a default branch is refused by its deny list
+  // (shared/botWorkerGuard.ts), and a worker that guessed the form stalled.
+  const push = botBranch
+    ? `- Your branch: \`${botBranch}\`. Publish it with exactly \`git push -u origin ${botBranch}\` (name the branch). \`git push\` with no destination, \`git push origin HEAD\`, a force push and a push to the default branch are refused.
+`
+    : '';
+  return `
+- Your task: \`task_id\` **${taskId}**, \`expected_rev\` **1** right now (or leave \`task_id\` out: wmux reports on the task of your own workspace). Your mission channel: \`${channelId}\`.
+${push}`;
+}
+
+/** A launch slot (FanOutRequest.awaitLaunchSlot). */
+export type LaunchSlot =
+  | {
+      ok: true;
+      release: () => void;
+      /** The task's pane is up but no ledger row counts it: keep the slot
+       *  counted while that workspace lives instead of releasing it. */
+      hold?: (workspaceId: string) => void;
+    }
+  | { ok: false; reason: string };
+
 /** 데몬 RPC 최소 표면(테스트 주입 가능). daemonClient.rpc의 부분집합. */
 export interface FanOutDaemonPort {
   rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
@@ -156,10 +187,9 @@ export interface FanOutRendererPort {
      *  task runs on. Data, not a command — the renderer re-validates it and
      *  turns it into a RoleBinding on the same rewrite path a role uses. */
     agentChoice?: FanoutAgentChoice;
-    /** The task runs under an approved Moa goal: the renderer adds the goal
-     *  deny rules to the worker flags and refuses a launcher other than
-     *  claude (shared/moaGoalWorker.ts). */
-    goalWorker?: boolean;
+    /** A bot worker's single-use secret grant: an opaque id the renderer
+     *  hands to pty.create unchanged (it carries no name and no value). */
+    secretGrant?: string;
   }): Promise<
     | {
         workspaceId: string;
@@ -274,6 +304,17 @@ export interface FanOutRequest {
    *  spawned with the others: its worktree and agent come only once every
    *  dependency's ledger row is review_requested or completed. */
   dependsOn?: number[][];
+  /** Asked right before each task's agent pane is spawned, after its
+   *  worktree is ready: a reason refuses that task (its mission is closed,
+   *  its worktree kept as for any task that did not launch, nothing is
+   *  launched). A bot's fan-out answers from the
+   *  factory switch, so turning the factory off stops a launch in progress. */
+  mayLaunch?: () => string | null;
+  /** Awaited right before mayLaunch for each task: a launch slot under the
+   *  factory's agent budget (factory/agentSlots.ts). `ok:false` refuses the
+   *  task as mayLaunch does; `release` is called once the task's ledger row is
+   *  registered or its launch is given up. Absent = no budget. */
+  awaitLaunchSlot?: (task: { taskId: string; title: string }) => Promise<LaunchSlot>;
   /** Asked right before a dependent task spawns — the caller's cap check for
    *  a start that happens long after the fan-out was accepted. A refusal
    *  drops the task with the given message. */
@@ -282,15 +323,24 @@ export interface FanOutRequest {
    *  dropped), so the caller can record it the way it recorded the first wave.
    *  `remaining` is how many still wait; 0 means this fan-out is fully settled. */
   onDeferredLaunch?: (task: FanOutTaskResult, info: { remaining: number; outputBatchDir?: string }) => void;
-  /** Called the moment a task's workspace exists (before the result is
-   *  returned), so a caller that scopes powers to these workspaces (the Moa
-   *  goal contract) knows them before the task's first event can arrive. */
-  onTaskWorkspace?: (workspaceId: string, index: number) => void;
-  /** Set when the fan-out runs under an approved Moa goal contract: every
-   *  task gets the goal worker profile (shared/moaGoalWorker.ts) — extra deny
-   *  rules, credential friction and a prompt note — and a task whose final
-   *  launcher is not claude is refused by the renderer. */
-  goalWorker?: { goalId: string; terms?: MoaGoalTerms };
+  /** The fan-out preset the caller named, recorded on each task's ledger row. */
+  preset?: string;
+  /**
+   * Check every task out DETACHED at this commit instead of branching from
+   * origin's default branch (the verify preset: a worker gates a PR head
+   * without sitting on the PR branch). `fetchRef` (e.g. `pull/<n>/head`) is
+   * fetched from origin first. Not combinable with worktree:false, branches
+   * or dependsOn. Recorded on each task's ledger row.
+   */
+  checkout?: { sha: string; detached: true; fetchRef?: string };
+  /** A bot's fan-out: the room thread of the wake that asked (main's own wake
+   *  state). Recorded on each task's ledger row; see LedgerDispatch.threadId. */
+  threadId?: string;
+  /** A bot's fan-out: the stored secrets each worker receives as env vars
+   *  (checked by the caller). Each task spawn gets its own single-use grant
+   *  (factory/secretGrants.ts); a name no longer stored at launch time leaves
+   *  that task not launched. Ignored for any caller but a bot. */
+  secretNames?: string[];
 }
 
 /** How long a dependent task may wait before it is dropped. A dependency whose
@@ -648,6 +698,9 @@ export class FanOutService {
     const agentCmd = typeof req.agentCmd === 'string' && req.agentCmd.trim().length > 0 ? req.agentCmd.trim() : 'claude';
     const memberId = req.memberId && req.memberId.length > 0 ? req.memberId : verifiedWorkspaceId;
 
+    if (req.checkout && (req.worktree === false || req.branches?.length || graph.dependsOn.some((d) => d.length > 0))) {
+      return { ok: false, error: 'fanout:start: checkout cannot be combined with worktree:false, branches or dependsOn', tasks: [] };
+    }
     if (req.worktree === false) {
       return this.runOutputTasks(req, entries, effectivePrompts, verifiedWorkspaceId, agentCmd, memberId, graph);
     }
@@ -675,7 +728,13 @@ export class FanOutService {
     // Every task branches from the same freshly fetched ref, not from whatever
     // the owner happens to have checked out. A failure is a warning, not a
     // refusal: the tasks then branch from HEAD, as they did before.
-    const base = await this.worktrees.resolveBase(repoRoot);
+    let base: { oid?: string; warning?: string; error?: string };
+    if (req.checkout) {
+      const at = await this.worktrees.resolveCheckout(repoRoot, req.checkout.sha, req.checkout.fetchRef);
+      base = 'error' in at ? { error: at.error } : { oid: at.oid };
+    } else {
+      base = await this.worktrees.resolveBase(repoRoot);
+    }
     if (base.error) {
       return { ok: false, error: `fanout preflight failed: ${base.error}`, tasks: [] };
     }
@@ -692,7 +751,6 @@ export class FanOutService {
     // ── 태스크 순차 처리(직렬 큐가 이미 강제하지만, 스폰 부하도 직렬로) ──
     const common = (k: number) => ({
       onLaunchFailed: launchFailures.notify,
-      ...(req.onTaskWorkspace ? { onWorkspace: req.onTaskWorkspace } : {}),
       index: k,
       title: titles[k],
       prompt: effectivePrompts[k],
@@ -704,7 +762,12 @@ export class FanOutService {
       ...(entries[k].role ? { role: entries[k].role } : {}),
       ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
       ...(req.branches?.[k] ? { branch: req.branches[k] } : {}),
-      ...(req.goalWorker ? { goalWorker: req.goalWorker } : {}),
+      ...(req.preset ? { preset: req.preset } : {}),
+      ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
+      ...(req.threadId ? { threadId: req.threadId } : {}),
+      ...(req.mayLaunch ? { mayLaunch: req.mayLaunch } : {}),
+      ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
+      ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
       workerMode,
       requester,
     });
@@ -973,7 +1036,6 @@ export class FanOutService {
     const spawnAt = (k: number, done: FanOutTaskResult[]): Promise<FanOutTaskResult> =>
       this.spawnOne({
         onLaunchFailed: launchFailures.notify,
-        ...(req.onTaskWorkspace ? { onWorkspace: req.onTaskWorkspace } : {}),
         index: k,
         title: entries[k].title,
         prompt: effectivePrompts[k],
@@ -985,7 +1047,6 @@ export class FanOutService {
         output: { batchDir },
         ...(entries[k].role ? { role: entries[k].role } : {}),
         ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
-        ...(req.goalWorker ? { goalWorker: req.goalWorker } : {}),
         workerMode,
         requester,
         taskNote: taskGraphNote(k, graph, done),
@@ -1059,8 +1120,20 @@ export class FanOutService {
     };
   }
 
+  /** One task's spawn (spawnOneInSlot). An agent slot it was granted is
+   *  given back on every way out, a throw included, unless it was already
+   *  released or held. */
+  private async spawnOne(ctx: Parameters<FanOutService['spawnOneInSlot']>[0]): Promise<FanOutTaskResult> {
+    const slot = { settle: (): void => undefined };
+    try {
+      return await this.spawnOneInSlot(ctx, slot);
+    } finally {
+      slot.settle();
+    }
+  }
+
   /** 태스크 1개 스폰(①~⑤). 실패 시 태스크 단위 보상. */
-  private async spawnOne(ctx: {
+  private async spawnOneInSlot(ctx: {
     index: number;
     title: string;
     prompt: string;
@@ -1093,11 +1166,19 @@ export class FanOutService {
     taskNote?: string;
     /** #1919 — called when the launch check concludes the agent never started. */
     onLaunchFailed?: (task: FanOutTaskResult) => void;
-    /** See FanOutRequest.onTaskWorkspace. */
-    onWorkspace?: (workspaceId: string, index: number) => void;
-    /** See FanOutRequest.goalWorker. */
-    goalWorker?: { goalId: string; terms?: MoaGoalTerms };
-  }): Promise<FanOutTaskResult> {
+    /** See FanOutRequest.preset. */
+    preset?: string;
+    /** See FanOutRequest.checkout: the worktree is detached at this commit. */
+    checkout?: { sha: string };
+    /** See FanOutRequest.threadId. */
+    threadId?: string;
+    /** See FanOutRequest.mayLaunch. */
+    mayLaunch?: () => string | null;
+    /** See FanOutRequest.awaitLaunchSlot. */
+    awaitLaunchSlot?: (task: { taskId: string; title: string }) => Promise<LaunchSlot>;
+    /** See FanOutRequest.secretNames. */
+    secretNames?: string[];
+  }, slotGuard: { settle: () => void }): Promise<FanOutTaskResult> {
     const base: FanOutTaskResult = { index: ctx.index, title: ctx.title, ok: false };
     if (ctx.agentChoice) base.agent = ctx.agentChoice.agent;
 
@@ -1146,13 +1227,15 @@ export class FanOutService {
         return { ...base, error: `worktree preflight failed: ${pf.error}` };
       }
       plan = pf.plan;
-      const created = await this.worktrees.createWorktree(plan, ctx.baseOid);
+      const created = ctx.checkout
+        ? await this.worktrees.createDetachedWorktree(plan, ctx.checkout.sha)
+        : await this.worktrees.createWorktree(plan, ctx.baseOid);
       if (!created.ok) {
         await this.compensate(taskId, ctx.verifiedWorkspaceId);
         return { ...base, error: `worktree create failed: ${created.error}` };
       }
       base.worktreePath = plan.worktreePath;
-      base.branch = plan.branch;
+      if (!ctx.checkout) base.branch = plan.branch;
       cwd = plan.worktreePath;
       metaDir = plan.metaDir;
     }
@@ -1193,20 +1276,11 @@ export class FanOutService {
     };
 
     let promptPath: string | undefined;
-    // Goal worker profile: an empty gh config dir beside the task's metadata
-    // (outside the worktree). Failing to make it fails the task: the profile
-    // is part of what the operator approved, so no worker runs without it.
-    let goalGhConfigDir: string | undefined;
     try {
       fs.mkdirSync(metaDir, { recursive: true });
-      if (ctx.goalWorker) {
-        goalGhConfigDir = path.join(metaDir, 'goal-gh-config');
-        fs.mkdirSync(goalGhConfigDir, { recursive: true });
-      }
       // A declared scope or dependency is written even with no prompt: the
-      // worker must know what it may edit before it edits anything. So is a
-      // goal worker's note, which says what stays with the operator.
-      const taskNote = (ctx.taskNote ?? '') + (ctx.goalWorker ? goalWorkerPromptNote(ctx.goalWorker.goalId, ctx.goalWorker.terms) : '');
+      // worker must know what it may edit before it edits anything.
+      const taskNote = ctx.taskNote ?? '';
       if (ctx.prompt.length > 0 || taskNote.length > 0) {
         promptPath = path.join(metaDir, 'prompt.md');
         // A3: the caller's prompt verbatim, then the delivery contract (see
@@ -1223,7 +1297,8 @@ export class FanOutService {
         const tempNote = tempDir
           ? `\n\n---\n\nYour private scratch directory is ${tempDir}; TMPDIR, TMP and TEMP point there. Put temporary helpers and test output there, not anywhere else outside the project.`
           : '';
-        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE, 'utf8');
+        const botBranch = ctx.requester?.kind === 'bot' && !ctx.checkout ? plan?.branch : undefined;
+        fs.writeFileSync(promptPath, ctx.prompt + outputNote + taskNote + tempNote + WORKER_DELIVERY_PREAMBLE + workerTaskIdentityNote(taskId, channelId, botBranch), 'utf8');
       }
       const stamp: WorkTaskMetaStamp = {
         taskId,
@@ -1268,6 +1343,69 @@ export class FanOutService {
       }
     }
 
+    // A slot under the factory's agent budget: the task waits here (its
+    // worktree ready, nothing launched) until one is free.
+    let releaseSlot = (): void => undefined;
+    let holdSlot: (workspaceId: string) => void = () => releaseSlot();
+    if (ctx.awaitLaunchSlot) {
+      let slot: LaunchSlot;
+      try {
+        slot = await ctx.awaitLaunchSlot({ taskId, title: ctx.title });
+      } catch (err) {
+        slot = { ok: false, reason: `the slot wait failed: ${String(err)}` };
+      }
+      if (!slot.ok) {
+        discardTempDir();
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
+        return { ...base, error: `not launched: ${slot.reason}`, ...preserved };
+      }
+      // Released or held once; whatever is left is released on the way out.
+      let settled = false;
+      const granted = slot;
+      releaseSlot = () => {
+        if (settled) return;
+        settled = true;
+        granted.release();
+      };
+      if (granted.hold) {
+        const hold = granted.hold;
+        holdSlot = (workspaceId) => {
+          if (settled) return;
+          settled = true;
+          hold(workspaceId);
+        };
+      }
+      slotGuard.settle = () => releaseSlot();
+    }
+
+    // The caller's last word before anything is launched.
+    let refusal: string | null = null;
+    try {
+      refusal = ctx.mayLaunch?.() ?? null;
+    } catch (err) {
+      refusal = `the launch check failed: ${String(err)}`;
+    }
+    if (refusal) {
+      releaseSlot();
+      discardTempDir();
+      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
+      return { ...base, error: `not launched: ${refusal}`, ...preserved };
+    }
+
+    // A bot's named secrets: one single-use grant for this spawn, which only
+    // pty:create can resolve (factory/secretGrants.ts). No grant, no launch.
+    let secretGrant: string | null = null;
+    if (ctx.secretNames && ctx.secretNames.length > 0) {
+      const botId = ctx.requester?.kind === 'bot' ? ctx.requester.botId : undefined;
+      secretGrant = botId ? mintSecretGrant({ botId, taskId, ownerWorkspaceId: ctx.verifiedWorkspaceId, cwd, names: ctx.secretNames }) : null;
+      if (!secretGrant) {
+        releaseSlot();
+        discardTempDir();
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
+        return { ...base, error: 'not launched: a secret it names is not stored any more', ...preserved };
+      }
+    }
+
     // ③ 렌더러 spawn — 전용 워크스페이스 + 에이전트 페인. cwd=worktreePath,
     //    initialCommand=`{agentCmd} "$(cat '{promptPath}')"`(경로 쿼팅) — 프롬프트가
     //    없으면 인자 없이 agentCmd만(사람이 페인에서 직접 입력). 실제 workspaceId 회수.
@@ -1284,12 +1422,9 @@ export class FanOutService {
     // post-spawn watch below keys on the command that was actually launched.
     // A preset/agents choice names the real CLI; the command main sends still
     // starts with the default one (the renderer swaps it), so key on the choice.
-    // The goal worker's credential friction rides the PANE env only: the setup
-    // hook above ran with the plain task env and may legitimately need git.
     const paneEnv = {
       ...taskEnv,
       ...firstRunEnvForAgent(ctx.agentChoice?.agent ?? ctx.agentCmd),
-      ...(ctx.goalWorker && goalGhConfigDir ? goalWorkerEnv(goalGhConfigDir) : {}),
     };
     let workspaceId: string;
     // The renderer resolves the final launcher (a role binding may make it agy)
@@ -1297,6 +1432,11 @@ export class FanOutService {
     // this spawn is in flight (main/agents/agyTrust). Siblings that are gone are
     // pruned from agy's list on the same write.
     const releaseAgyTrust = allowAgyTrustFor(cwd, path.dirname(cwd));
+    // A bot's worker: pty:create knows it from this mark, not from the origin
+    // the renderer hands back (agents/botWorkerMergeGuard).
+    const releaseBotSpawn = ctx.requester?.kind === 'bot'
+      ? beginBotWorkerSpawn(ctx.verifiedWorkspaceId, cwd, ctx.requester.botId ? { botId: ctx.requester.botId, taskId } : undefined)
+      : () => undefined;
     try {
       const spawned = await this.renderer.spawnWorkspace({
         name: wsName,
@@ -1307,10 +1447,11 @@ export class FanOutService {
         ...(ctx.agentChoice ? { agentChoice: ctx.agentChoice } : {}),
         fanoutTaskOf: ctx.verifiedWorkspaceId,
         ...(ctx.requester ? { fanoutOrigin: ctx.requester } : {}),
+        ...(secretGrant ? { secretGrant } : {}),
         workerPermissionMode: ctx.workerMode,
-        ...(ctx.goalWorker ? { goalWorker: true } : {}),
       });
       if ('error' in spawned) {
+        releaseSlot();
         handOverTempDir(`task:${taskId}`);
         await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
         return { ...base, error: `renderer spawn failed: ${spawned.error}`, ...preserved };
@@ -1323,18 +1464,17 @@ export class FanOutService {
       if (spawned.initialCommand) base.initialCommand = spawned.initialCommand;
     } catch (err) {
       // A timeout does not prove the pane never spawned either.
+      releaseSlot();
       handOverTempDir(`task:${taskId}`);
       await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
       return { ...base, error: `renderer spawn threw: ${(err as Error).message}`, ...preserved };
     } finally {
       releaseAgyTrust();
+      releaseBotSpawn();
+      // Used by pty:create, or void now (a spawn that never reached it).
+      revokeSecretGrant(secretGrant);
     }
     base.workspaceId = workspaceId;
-    try {
-      ctx.onWorkspace?.(workspaceId, ctx.index);
-    } catch (err) {
-      console.warn(`[fanout] onTaskWorkspace threw for ${workspaceId}: ${String(err)}`);
-    }
     handOverTempDir(workspaceId);
     // The renderer already stamped the lineage before the agent launched; this
     // second write is idempotent and covers a renderer that did not. It carries
@@ -1365,7 +1505,9 @@ export class FanOutService {
         const updated = (await this.daemon.rpc('task.mission.update', {
           taskId,
           verifiedWorkspaceId: ctx.verifiedWorkspaceId,
-          ...(plan ? { branch: plan.branch, worktreePath: plan.worktreePath } : { outputDir: cwd }),
+          ...(plan
+            ? { ...(ctx.checkout ? {} : { branch: plan.branch }), worktreePath: plan.worktreePath }
+            : { outputDir: cwd }),
           paneGroupId: workspaceId,
         })) as { ok?: boolean; error?: unknown };
         if (updated?.ok) return true;
@@ -1392,6 +1534,7 @@ export class FanOutService {
     // main knows whether or not ④ committed (#1921). Best-effort: a ledger
     // write failure never fails the fan-out (the reconciler mirrors a
     // materialized task on the next look).
+    let registered = false;
     try {
       rememberMissionChannel(taskId, channelId);
       await getTaskLedger().register({
@@ -1399,10 +1542,28 @@ export class FanOutService {
         taskWorkspaceId: workspaceId,
         ownerWorkspaceId: ctx.verifiedWorkspaceId,
         title: ctx.title,
+        // How it was dispatched, from main's own request (a merge-lane verdict
+        // reads the origin, preset and checkout of its evidence task here).
+        ...(ctx.requester
+          ? {
+              dispatch: {
+                origin: { kind: ctx.requester.kind, ...(ctx.requester.botId ? { botId: ctx.requester.botId } : {}), ...(typeof ctx.requester.tainted === 'boolean' ? { tainted: ctx.requester.tainted } : {}) },
+                ...(ctx.preset ? { preset: ctx.preset } : {}),
+                ...(ctx.checkout ? { checkout: { sha: ctx.checkout.sha, detached: true as const } } : {}),
+                ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+              },
+            }
+          : {}),
       });
+      registered = true;
     } catch {
       // best-effort — see above.
     }
+    // The task now counts as an open ledger row, not as a booked slot. A row
+    // that was not written counts nothing, so the slot stays held while the
+    // worker's workspace lives.
+    if (registered) releaseSlot();
+    else holdSlot(workspaceId);
 
     // ⑤ 채널 invite — 태스크 워크스페이스를 미션 채널 멤버로(실패 비치명 §2 C3).
     // #1920: retried, and DUPLICATE_MEMBER counts as seated — a first attempt
@@ -1664,6 +1825,54 @@ export class FanOutService {
       );
     };
     this.pendingRechecks.push(run().catch(() => { /* best-effort — see above */ }));
+  }
+
+  /**
+   * Open a bot task's pane again in its worktree (the worker reclaim's
+   * resume, factory/workerReclaim.ts), on the spawn a bot's fan-out worker
+   * takes: the same renderer spawn, stamped as a task of `ownerWorkspaceId`
+   * with the bot as its origin before the pane exists, and marked as a bot's
+   * worker spawn so pty:create launches it with the worker settings or not at
+   * all. `command` is the launch line; the renderer applies the worker
+   * permission lists for `workerPermissionMode` after it. No secret grant: a
+   * grant is single-use and belongs to the task's first spawn.
+   */
+  async spawnBotTaskPane(input: {
+    ownerWorkspaceId: string;
+    botId: string;
+    taskId: string;
+    title: string;
+    cwd: string;
+    command: string;
+    workerPermissionMode: FanoutWorkerPermissionMode;
+    tainted: boolean;
+  }): Promise<{ workspaceId: string; ptyId: string } | { error: string }> {
+    const origin: FanoutOrigin = { kind: 'bot', botId: input.botId, tainted: input.tainted };
+    const releaseBotSpawn = beginBotWorkerSpawn(input.ownerWorkspaceId, input.cwd, { botId: input.botId, taskId: input.taskId });
+    let spawned: Awaited<ReturnType<FanOutRendererPort['spawnWorkspace']>>;
+    try {
+      spawned = await this.renderer.spawnWorkspace({
+        name: `wtask: ${input.title.slice(0, 32)}`,
+        cwd: input.cwd,
+        initialCommand: input.command,
+        fanoutTaskOf: input.ownerWorkspaceId,
+        fanoutOrigin: origin,
+        workerPermissionMode: input.workerPermissionMode,
+      });
+    } catch (err) {
+      return { error: `renderer spawn threw: ${(err as Error).message}` };
+    } finally {
+      releaseBotSpawn();
+    }
+    if ('error' in spawned) return { error: spawned.error };
+    if (!spawned.ptyId) return { error: 'the renderer returned no pane' };
+    // The same idempotent second stamp the fan-out writes after its spawn.
+    try {
+      (this.lineage ?? getFanOutGuards()).markTask(spawned.workspaceId, input.ownerWorkspaceId, origin);
+    } catch (err) {
+      console.warn(`[fanout] could not confirm the lineage stamp for ${spawned.workspaceId}: ${String(err)}`);
+    }
+    return { workspaceId: spawned.workspaceId, ptyId: spawned.ptyId };
   }
 
   /** Tests only: settle the deferred model re-checks this run scheduled. */

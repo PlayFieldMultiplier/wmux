@@ -1,0 +1,313 @@
+{
+  "name": "chat-stop-all",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Three bots in one room: two each start a long worker, and all three set an hourly routine. The owner says stop to the room: the one message reaches every bot, each calls stop_my_work (its workers are cancelled as stopped by the owner, its routines paused) and posts one line; no bot's turn is cut.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "delayMs": 600000
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "lead long task"
+                    ],
+                    "prompt": "Work on the change named in the title.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "lead.txt"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "tool": "routine_set",
+                  "args": {
+                    "title": "lead hourly check",
+                    "prompt": "Check your open work.",
+                    "schedule": {
+                      "kind": "interval",
+                      "every_minutes": 60
+                    }
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Started",
+                    "body": "Task and hourly check set."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "stop_my_work",
+                  "args": {},
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Stopped",
+                    "body": "My workers are stopped and my routines paused."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "triage",
+        "role": "triage",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "triage long task"
+                    ],
+                    "prompt": "Work on the change named in the title.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "triage.txt"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "tool": "routine_set",
+                  "args": {
+                    "title": "triage hourly check",
+                    "prompt": "Check your open work.",
+                    "schedule": {
+                      "kind": "interval",
+                      "every_minutes": 60
+                    }
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Started",
+                    "body": "Task and hourly check set."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "stop_my_work",
+                  "args": {},
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Stopped",
+                    "body": "My workers are stopped and my routines paused."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "routine_set",
+                  "args": {
+                    "title": "moa hourly check",
+                    "prompt": "Check your open work.",
+                    "schedule": {
+                      "kind": "interval",
+                      "every_minutes": 60
+                    }
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Started",
+                    "body": "Task and hourly check set."
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "stop_my_work",
+                  "args": {},
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Stopped",
+                    "body": "My workers are stopped and my routines paused."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "go",
+      "post": {
+        "title": "Start",
+        "body": "Each of you: start your task and set your hourly check."
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "workers",
+      "cond": {
+        "ledger": {
+          "status": "working",
+          "min": 2
+        }
+      },
+      "timeoutMs": 240000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "routines",
+      "cond": {
+        "routines": {
+          "state": "active",
+          "min": 3
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "settled",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "post",
+      "label": "stop",
+      "post": {
+        "title": "모두 정지해",
+        "body": "응 일단 모두 정지해라"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "paused",
+      "cond": {
+        "routines": {
+          "state": "paused",
+          "reason": "stop",
+          "min": 3
+        }
+      },
+      "timeoutMs": 90000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "cancelled",
+      "cond": {
+        "ledger": {
+          "status": "cancelled",
+          "min": 2
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "ledger",
+      "routines"
+    ],
+    "message": "stop",
+    "bots": [
+      "lead",
+      "triage",
+      "moa"
+    ],
+    "workers": [
+      "lead",
+      "triage"
+    ]
+  }
+}

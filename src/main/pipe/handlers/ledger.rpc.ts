@@ -10,7 +10,8 @@
 // Authorization and transition legality live in the ledger (canActorSet /
 // canTransition); this handler only shapes the wire and refuses an
 // unresolvable caller. Reads are scoped to the caller's own rows: the tasks a
-// workspace owns plus the task whose workspace it is.
+// workspace owns plus the task whose workspace it is. A worker may leave the
+// task out of an update: it is the open task of the worker's own workspace.
 
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
@@ -85,8 +86,15 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
     if (!actor) {
       return deny('NOT_AUTHORIZED', 'ledger.update: caller identity could not be resolved (no commander token, no resolvable senderPtyId)');
     }
-    const taskId = str(params.taskId);
-    if (!taskId) return deny('INVALID_ARGUMENT', 'ledger.update: taskId is required');
+    // A worker that leaves the task out reports on the task of its own
+    // workspace (resolved from its pane identity, never from params).
+    const ownTask = actor.kind === 'worker' && !ctx?.bot ? ledgerOf().findOpenByTaskWorkspace(actor.workspaceId) : null;
+    const taskId = str(params.taskId) || ownTask?.id || '';
+    if (!taskId) {
+      return actor.kind === 'worker' && !ctx?.bot
+        ? deny('NOT_FOUND', 'ledger.update: no open task belongs to your workspace')
+        : deny('INVALID_ARGUMENT', 'ledger.update: taskId is required');
+    }
     const status = str(params.status);
     if (!isLedgerStatus(status)) {
       return deny('INVALID_ARGUMENT', `ledger.update: status must be one of working, input_required, review_requested, completed, failed, cancelled (got "${status}")`);
@@ -101,6 +109,17 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
     if (params.gate !== undefined) {
       return deny('INVALID_ARGUMENT', 'ledger.update: gate results are recorded by the gate runner, not by callers; omit "gate" (use force + reason to complete without one)');
     }
+    // A factory bot moves only the tasks it started itself (the row's
+    // dispatch origin, written by main), never another bot's or a pane's
+    // task in its workspace, and never with force.
+    if (ctx?.bot) {
+      const row = ledgerOf().get(taskId);
+      const origin = row?.dispatch?.origin;
+      if (!row || origin?.kind !== 'bot' || origin.botId !== ctx.bot.botId) {
+        return deny('NOT_AUTHORIZED', 'ledger.update: a bot may update only the tasks it started');
+      }
+      if (params.force === true) return deny('NOT_AUTHORIZED', 'ledger.update: a bot cannot force a transition');
+    }
     const res = await ledgerOf().update({
       id: taskId,
       status,
@@ -111,7 +130,9 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
       ...(text(params.reason) ? { reason: text(params.reason) } : {}),
     });
     if (!res.ok) {
-      return { ...deny(res.error.toUpperCase(), `ledger.update: ${res.message}`), ...(res.entry ? { entry: res.entry } : {}) };
+      // A worker that named a task that is not its own is told which one is.
+      const hint = res.error === 'not_found' && ownTask && ownTask.id !== taskId ? ` (your task is ${ownTask.id} at rev ${ownTask.rev})` : '';
+      return { ...deny(res.error.toUpperCase(), `ledger.update: ${res.message}${hint}`), ...(res.entry ? { entry: res.entry } : {}) };
     }
     return { ok: true, entry: res.entry, ...(res.noop ? { noop: true } : {}) };
   });

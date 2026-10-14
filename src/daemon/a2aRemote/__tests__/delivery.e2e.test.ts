@@ -11,7 +11,6 @@ import { A2A_REMOTE_NOTIFY_METHOD, A2A_REMOTE_RPC } from '../../../shared/a2aRem
 import { applyTaskQueryView } from '../../../shared/a2aTaskQueryView';
 import type { DaemonConfig } from '../../types';
 import { RemoteA2aBridge } from '../../../main/a2a/RemoteA2aBridge';
-import { CommanderEventCoalescer, type CoalescerInput } from '../../../main/deck/CommanderEventCoalescer';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { A2aRemoteController } from '../controller';
@@ -668,72 +667,6 @@ describe('Moa to Moa across PCs (brain links), end to end', () => {
     expect(b.tasks.getTask(taskId)!.metadata.remote).toMatchObject({ delivered: true });
     expect(b.tasks.getTask(taskId)!.metadata.remote).not.toHaveProperty('held');
   }, 20_000);
-
-  it('a burst from A\'s Moa wakes B\'s Moa at most 3 times per 10 minutes, 5 tasks a wake, and none is lost', async () => {
-    const b = await makePc('PC-B');
-    const a = await makePc('PC-A');
-    const linkId = await moaLinked(a, b);
-    // B's coalescer on a hand-driven clock, fed the way the deck feeds it.
-    let clock = 0;
-    let timers: Array<{ fn: () => void; at: number }> = [];
-    const prompts: string[] = [];
-    const coalescer = new CommanderEventCoalescer({
-      runTurn: async (_ws, prompt) => { prompts.push(prompt); return { ok: true }; },
-      isBusy: () => false,
-      getAutonomy: () => ({ mode: 'assist', wakePolicy: 'value-filtered', summarize: true, continueInstruction: false, approvalPress: false }),
-      getLoop: () => null,
-      now: () => clock,
-      setTimeoutFn: ((fn: () => void, ms: number) => { const t = { fn, at: clock + ms }; timers.push(t); return t; }) as unknown as typeof setTimeout,
-      clearTimeoutFn: ((t: unknown) => { timers = timers.filter((x) => x !== t); }) as unknown as typeof clearTimeout,
-      debounceMs: 10,
-      maxWakesPerMin: 100,
-      wakeBudget: 100,
-      log: () => undefined,
-    });
-    const tick = async (ms: number): Promise<void> => {
-      clock += ms;
-      const due = timers.filter((t) => t.at <= clock);
-      timers = timers.filter((t) => t.at > clock);
-      for (const t of due) t.fn();
-      await new Promise((r) => setTimeout(r, 0));
-    };
-    let fed = 0;
-    let seq = 0;
-    const feed = (): void => {
-      for (const e of b.emitted.slice(fed)) {
-        if (e.type !== 'a2a.received') continue;
-        coalescer.push({
-          workspaceId: HQ_B,
-          ptyId: `a2a:${e.taskId as string}#${e.item as string}`,
-          kind: 'a2a.received',
-          source: 'a2a',
-          agent: null,
-          seq: ++seq,
-          ts: clock,
-          a2a: { taskId: e.taskId as string, from: e.from as string, to: HQ_B, state: 'submitted', remote: { host: e.host as string, item: 'task' } },
-        } satisfies CoalescerInput);
-      }
-      fed = b.emitted.length;
-    };
-
-    const sent: string[] = [];
-    for (let n = 0; n < 18; n++) sent.push(await moaSend(a, HQ_A, linkId, `job ${n}`));
-    await until(() => b.emitted.filter((e) => e.type === 'a2a.received').length === 18, 15_000);
-    feed();
-    await tick(10);
-    for (let i = 0; i < 4; i++) {
-      coalescer.notifyIdle(HQ_B);
-      await tick(0);
-    }
-    expect(prompts).toHaveLength(3); // the ceiling, though 3 more are waiting
-    await tick(10 * 60_000);
-    coalescer.notifyIdle(HQ_B);
-    await tick(0);
-    expect(prompts).toHaveLength(4);
-    const all = prompts.join('\n');
-    for (const id of sent) expect(all).toContain(id);
-    coalescer.dispose?.();
-  }, 30_000);
 
   it('receipts: the sender learns its task was handed over, then read; a sender that was away gets them once back', async () => {
     const b = await makePc('PC-B');

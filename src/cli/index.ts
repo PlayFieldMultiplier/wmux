@@ -66,7 +66,8 @@ INPUT COMMANDS
   --pane is the older spelling of --to; --active targets the UI-focused pane.
 
 BROWSER PANE
-  open <url> [--workspace <id>]     Open/reuse a browser pane at <url>
+  open <url> [--new] [--workspace <id>]
+                                    Open/reuse a browser pane at <url> (--new: in a new tab)
 
 DAEMON (headless lifecycle, no Electron/GUI required)
   daemon start                      Start the daemon if not already running

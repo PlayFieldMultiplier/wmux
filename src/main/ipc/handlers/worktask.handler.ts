@@ -32,6 +32,7 @@ import { prStatusCache } from '../../metadata/PrStatusCache';
 import { getWmuxHomeDir } from '../../../shared/constants';
 import { sanitizePtyText } from '../../../shared/types';
 import { normalizeWorktreePath } from '../../../shared/workTask';
+import { guardRefireLine } from '../../agents/botWorkerMergeGuard';
 
 const execFileAsync = promisify(execFile);
 
@@ -248,8 +249,16 @@ export function registerWorktaskHandlers(
       }
       const dc = getDaemonClient();
       if (!dc) return { ok: false as const, error: 'worktask:refire: 데몬 미연결' };
+      // A bot's worker gets its launch line with the merge-lane guard, or
+      // nothing is typed (botWorkerMergeGuard.ts).
+      let line: string;
+      try {
+        line = guardRefireLine(ptyId, initialCommand);
+      } catch (err) {
+        return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+      }
       // 정상 경로(scheduleInitialCommand.write)와 동일: sanitize + CR.
-      dc.writeToSession(ptyId, sanitizePtyText(initialCommand) + '\r');
+      dc.writeToSession(ptyId, sanitizePtyText(line) + '\r');
       return { ok: true as const };
     }),
   );

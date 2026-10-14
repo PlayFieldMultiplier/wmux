@@ -195,29 +195,4 @@ describe('DiffPanel — unwraps the rpc.invoke envelope', () => {
       }),
     );
   });
-
-  it('names Moa as the one asked while Moa runs, and the orchestrator otherwise', async () => {
-    const ask = (c: Element) => c.querySelector('[data-diff-ask]')?.getAttribute('title');
-    const before = useStore.getState().moa;
-    try {
-      useStore.setState({ moa: null });
-      let c = render();
-      await flush();
-      expect(ask(c)).toBe('Ask the orchestrator about this hunk');
-      while (mounted.length) mounted.pop()?.();
-
-      useStore.setState({
-        moa: {
-          config: { enabled: true, onboarded: true, level: 1, maxTurnsPerHour: 20, bubbles: true, reduceMotion: false, defaultReason: null },
-          hq: { workspaceId: 'ws-hq', state: 'ok' },
-          archive: { unacked: 0, total: 0 },
-        },
-      });
-      c = render();
-      await flush();
-      expect(ask(c)).toBe('Ask Moa about this hunk');
-    } finally {
-      useStore.setState({ moa: before });
-    }
-  });
 });

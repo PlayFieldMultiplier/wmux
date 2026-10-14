@@ -1,0 +1,400 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "human-queued-not-refused",
+  "run": 1,
+  "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+  "botKeys": {
+   "lead": "bot-fb70ba88"
+  },
+  "injected": [
+   {
+    "label": "first",
+    "kind": "card",
+    "id": "c-mv53s5eb02a68291bc",
+    "threadId": "task:alpha",
+    "at": 1791800545616
+   },
+   {
+    "label": "second",
+    "kind": "card",
+    "id": "c-mv53s6k7af5730e11b",
+    "threadId": "task:beta",
+    "at": 1791800547123
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "first",
+    "at": 1791800545616
+   },
+   {
+    "do": "waitFor",
+    "label": "first running",
+    "at": 1791800545622,
+    "doneAt": 1791800545622,
+    "ok": true
+   },
+   {
+    "do": "sleep",
+    "at": 1791800545622
+   },
+   {
+    "do": "post",
+    "label": "second",
+    "at": 1791800547123
+   },
+   {
+    "do": "waitFor",
+    "label": "both done",
+    "at": 1791800547130,
+    "doneAt": 1791800559195,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800559195,
+    "doneAt": 1791800561207,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53s5eb-0b2b2906b309",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800545619,
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "ref": {
+     "botId": "bot-fb70ba88",
+     "messageId": "c-mv53s5eb02a68291bc"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Start the long job.",
+     "cardId": "c-mv53s5eb02a68291bc",
+     "threadId": "task:alpha",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv53s6k7-e5916eb7fc86",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791800547127,
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "ref": {
+     "botId": "bot-fb70ba88",
+     "messageId": "c-mv53s6k7af5730e11b"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Also look at beta.",
+     "cardId": "c-mv53s6k7af5730e11b",
+     "threadId": "task:beta",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53s5ec-ff1e9abf",
+    "botId": "bot-fb70ba88",
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "reason": {
+     "kind": "human",
+     "text": "Start the long job.",
+     "source": "desktop",
+     "clientMessageId": "c-mv53s5eb02a68291bc"
+    },
+    "threadId": "task:alpha",
+    "priority": 0,
+    "enqueuedAt": 1791800545620,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53s6k8-5515ae37",
+    "botId": "bot-fb70ba88",
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "reason": {
+     "kind": "human",
+     "text": "Also look at beta.",
+     "source": "desktop",
+     "clientMessageId": "c-mv53s6k7af5730e11b"
+    },
+    "threadId": "task:beta",
+    "priority": 0,
+    "enqueuedAt": 1791800547128,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-fb70ba88",
+    "role": "lead",
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53s5eb02a68291bc",
+    "seq": 1,
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "threadId": "task:alpha",
+    "kind": "human",
+    "at": 1791800545619,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Long job",
+    "refs": {
+     "botId": "bot-fb70ba88"
+    },
+    "body": "Start the long job."
+   },
+   {
+    "id": "c-mv53s6k7af5730e11b",
+    "seq": 2,
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "threadId": "task:beta",
+    "kind": "human",
+    "at": 1791800547127,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Meanwhile",
+    "refs": {
+     "botId": "bot-fb70ba88"
+    },
+    "body": "Also look at beta."
+   },
+   {
+    "id": "c-mv53s9ele107624ed9",
+    "seq": 3,
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "threadId": "task:alpha",
+    "kind": "status",
+    "at": 1791800550813,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+     "botId": "bot-fb70ba88"
+    },
+    "title": "Busy",
+    "clientPostId": "wake:w-mv53s5ec-ff1e9abf:1",
+    "body": "Long turn started."
+   },
+   {
+    "id": "c-mv53sfl50360992b72",
+    "seq": 4,
+    "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+    "threadId": "task:beta",
+    "kind": "status",
+    "at": 1791800558825,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-4c6f75dc-77ef-414d-9223-64d0e606cab0",
+     "botId": "bot-fb70ba88"
+    },
+    "title": "Next",
+    "clientPostId": "wake:w-mv53s6k8-5515ae37:1",
+    "body": "Picked up the queued message."
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800550646,
+     "event": "prompt",
+     "text": "[wake w-mv53s5ec-ff1e9abf] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800550814,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53s9ele107624ed9\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-4c6f75dc-77ef-414d-9223-64d0e606cab0\",\n    \"threadId\": \"task:alpha\",\n    \"kind\": \"status\",\n    \"at\": 1791800550813,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-4c6f75dc-77ef-414d-9223-64d0e606cab0\",\n      \"botId\": \"bot-fb70ba88\"\n    },\n    \"title\": \"Busy\",\n    \"body\": \"Long turn started.\",\n    \"clientPostId\": \"wake:w-mv53s5ec-ff1e9abf:1\"\n  }\n}"
+    },
+    {
+     "at": 1791800558821,
+     "event": "prompt",
+     "text": "[wake w-mv53s6k8-5515ae37] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800558826,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53sfl50360992b72\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-4c6f75dc-77ef-414d-9223-64d0e606cab0\",\n    \"threadId\": \"task:beta\",\n    \"kind\": \"status\",\n    \"at\": 1791800558825,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-4c6f75dc-77ef-414d-9223-64d0e606cab0\",\n      \"botId\": \"bot-fb70ba88\"\n    },\n    \"title\": \"Next\",\n    \"body\": \"Picked up the queued message.\",\n    \"clientPostId\": \"wake:w-mv53s6k8-5515ae37:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800545641,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the second message was folded into the running turn",
+   "failing": [
+    "second_queued_during_turn",
+    "second_own_wake_in_its_thread",
+    "one_turn_per_message"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "wakes.1"
+    },
+    {
+     "op": "remove",
+     "path": "stub.lead.3"
+    },
+    {
+     "op": "remove",
+     "path": "stub.lead.2"
+    }
+   ]
+  },
+  {
+   "why": "the queued wake lost its thread",
+   "failing": [
+    "second_queued_during_turn",
+    "second_own_wake_in_its_thread"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.1.threadId",
+     "value": "general"
+    }
+   ]
+  },
+  {
+   "why": "the post was refused while the bot was busy",
+   "failing": [
+    "second_post_accepted",
+    "second_queued_during_turn",
+    "second_own_wake_in_its_thread"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "injected.1"
+    }
+   ]
+  }
+ ]
+}

@@ -19,11 +19,6 @@ import {
 import type { FleetSnapshot, FleetSnapshotPane } from '../../../../shared/workspaceMirror';
 
 vi.mock('../_bridge', () => ({ sendToRenderer: vi.fn() }));
-const hqRef = vi.hoisted(() => ({ current: null as string | null }));
-vi.mock('../../../deck/deckHqStore', async (orig) => ({
-  ...(await orig<typeof import('../../../deck/deckHqStore')>()),
-  getHqWorkspaceId: () => hqRef.current,
-}));
 
 // The gate consults the renderer-derived fleet snapshot for local workers.
 const { snapshotRef } = vi.hoisted(() => ({ snapshotRef: { current: null as FleetSnapshot | null } }));
@@ -44,8 +39,6 @@ vi.mock('../../../deck/deckWorkStore', async (orig) => {
 });
 
 import { registerDeckRpc } from '../deck.rpc';
-import { setMoaHandoffService } from '../../../deck/moaHandoff';
-import { setMoaReadRootsRefresher } from '../../../deck/moaReadGate';
 import {
   beginOrContinueDeckWork,
   recordDeckWorkA2aTask,
@@ -313,77 +306,5 @@ describe('deck.completeWork — compare-and-delete', () => {
     const surviving = loadActiveDeckWork(WS, workDirRef.current)!;
     expect(surviving.objective).toBe('second request');
     expect(surviving.id).not.toBe(firstId);
-  });
-});
-
-describe('deck.completeWork — Moa writes for the operator', () => {
-  afterEach(() => { hqRef.current = null; });
-
-  it('Moa\'s report with tool names, field names or ids is refused, to be restated plainly', async () => {
-    hqRef.current = WS;
-    beginOrContinueDeckWork(WS, 'objective', workDirRef.current, 1_000);
-    const res = await complete({ summary: 'Checked pane_list: foregroundProgram=null on daemon-0677445e', verification: 'Read hi.txt and it holds one line' });
-    expect(res).toMatchObject({ ok: false, error: 'not_plain_language' });
-    expect(res.terms).toEqual(['pane_list', 'foregroundProgram', 'daemon-0677445e']);
-    // Plain words pass, and another workspace's brain is not held to it.
-    expect(await complete({ summary: 'hi.txt now holds one line, hello world.', verification: 'I opened hi.txt and read the line.' })).toMatchObject({ ok: true });
-    hqRef.current = 'ws-other';
-    beginOrContinueDeckWork(WS, 'objective', workDirRef.current, 2_000);
-    expect(await complete({ summary: 'Checked pane_list output for the build', verification: 'pane_list shows the build pane idle' })).toMatchObject({ ok: true });
-  });
-
-  it('Moa\'s decision card with internals is refused too', async () => {
-    hqRef.current = WS;
-    const res = await router.dispatch({ id: 'd1', method: 'deck.requestDecision', params: { token, question: 'Restart ptyId daemon-0677445e?', options: ['yes', 'no'] } });
-    expect(res.ok && (res.result as Record<string, unknown>)).toMatchObject({ ok: false, error: 'not_plain_language' });
-  });
-});
-
-describe('deck.completeWork — Moa hand-off tasks', () => {
-  const statusOf = new Map<string, 'open' | 'settled'>();
-  beforeEach(() => {
-    statusOf.clear();
-    setMoaHandoffService({ handoffTaskStatus: (id: string) => statusOf.get(id) ?? null } as never);
-    beginOrContinueDeckWork(WS, 'objective', workDirRef.current, 1_000);
-    recordDeckWorkA2aTask(WS, { taskId: 'task-h', to: 'ws-seal', state: 'submitted', ts: 2_000 }, workDirRef.current);
-    // The operator's task is not in the HQ's own list.
-    taskQuery = () => ({ tasks: [] });
-  });
-  afterEach(() => setMoaHandoffService(null));
-
-  it('an open hand-off holds the work open', async () => {
-    statusOf.set('task-h', 'open');
-    expect(await complete()).toMatchObject({ ok: false, error: 'a2a_tasks_outstanding' });
-  });
-
-  it('a hand-off the operator or the worker ended (canceled, failed, completed) no longer holds it', async () => {
-    statusOf.set('task-h', 'settled');
-    expect(await complete()).toMatchObject({ ok: true });
-  });
-
-  it('finishing Moa\'s job refreshes its read roots at once', async () => {
-    const refresh = vi.fn(async () => undefined);
-    setMoaReadRootsRefresher(refresh);
-    setMoaHandoffService({ handoffTaskStatus: () => 'settled', closeMootCards: async () => 0 } as never);
-    hqRef.current = WS;
-    try {
-      expect(await complete()).toMatchObject({ ok: true });
-      expect(refresh).toHaveBeenCalledTimes(1);
-    } finally {
-      hqRef.current = null;
-      setMoaReadRootsRefresher(null);
-    }
-  });
-
-  it('finishing Moa\'s job takes down its unanswered hand-off cards', async () => {
-    const closeMootCards = vi.fn(async () => 1);
-    setMoaHandoffService({ handoffTaskStatus: () => 'settled', closeMootCards } as never);
-    hqRef.current = WS;
-    try {
-      expect(await complete()).toMatchObject({ ok: true });
-      expect(closeMootCards).toHaveBeenCalledWith(WS);
-    } finally {
-      hqRef.current = null;
-    }
   });
 });

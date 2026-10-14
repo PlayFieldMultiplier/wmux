@@ -19,7 +19,6 @@ import { createChromePresetSlice, type ChromePresetSlice } from './slices/chrome
 import { createRemoteInboxSlice, type RemoteInboxSlice } from './slices/remoteInboxSlice';
 import { createChannelsSlice, type ChannelsSlice } from './slices/channelsSlice';
 import { createWorkTaskSlice, type WorkTaskSlice } from './slices/workTaskSlice';
-import { createDeckSlice, type DeckSlice } from './slices/deckSlice';
 import { createRemoteWorkspacesSlice, type RemoteWorkspacesSlice } from './slices/remoteWorkspacesSlice';
 import { createOrphanSessionsSlice, type OrphanSessionsSlice } from './slices/orphanSessionsSlice';
 import { createSchedulesSlice, type SchedulesSlice } from './slices/schedulesSlice';
@@ -28,8 +27,9 @@ import { createWorkspaceSettleSlice, type WorkspaceSettleSlice } from './slices/
 import { createMoaSlice, type MoaSlice } from './slices/moaSlice';
 import { createA2aRemoteSlice, type A2aRemoteSlice } from './slices/a2aRemoteSlice';
 import { createPcRailSlice, type PcRailSlice } from './slices/pcRailSlice';
+import { createRoomSlice, type RoomSlice } from './slices/roomSlice';
 
-export type StoreState = WorkspaceSlice & PaneSlice & SurfaceSlice & UISlice & NotificationSlice & A2aSlice & ApprovalInboxSlice & BrowserHelpSlice & CompanySlice & ToastSlice & SearchSlice & ProjectConfigSlice & SupervisionSlice & ResumeSlice & AgentToolbarSlice & ChromePresetSlice & RemoteInboxSlice & ChannelsSlice & WorkTaskSlice & DeckSlice & RemoteWorkspacesSlice & OrphanSessionsSlice & SchedulesSlice & UsageLimitSlice & WorkspaceSettleSlice & MoaSlice & A2aRemoteSlice & PcRailSlice;
+export type StoreState = WorkspaceSlice & PaneSlice & SurfaceSlice & UISlice & NotificationSlice & A2aSlice & ApprovalInboxSlice & BrowserHelpSlice & CompanySlice & ToastSlice & SearchSlice & ProjectConfigSlice & SupervisionSlice & ResumeSlice & AgentToolbarSlice & ChromePresetSlice & RemoteInboxSlice & ChannelsSlice & WorkTaskSlice & RemoteWorkspacesSlice & OrphanSessionsSlice & SchedulesSlice & UsageLimitSlice & WorkspaceSettleSlice & MoaSlice & A2aRemoteSlice & PcRailSlice & RoomSlice;
 
 export const useStore = create<StoreState>()(
   immer((...args) => ({
@@ -52,7 +52,6 @@ export const useStore = create<StoreState>()(
     ...createRemoteInboxSlice(...args),
     ...createChannelsSlice(...args),
     ...createWorkTaskSlice(...args),
-    ...createDeckSlice(...args),
     ...createRemoteWorkspacesSlice(...args),
     ...createOrphanSessionsSlice(...args),
     ...createSchedulesSlice(...args),
@@ -61,5 +60,6 @@ export const useStore = create<StoreState>()(
     ...createMoaSlice(...args),
     ...createA2aRemoteSlice(...args),
     ...createPcRailSlice(...args),
+    ...createRoomSlice(...args),
   }))
 );

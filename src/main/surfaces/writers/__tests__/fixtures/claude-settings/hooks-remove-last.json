@@ -1,0 +1,24 @@
+{
+  "root": {
+    "other": 1
+  },
+  "store": {
+    "version": 1,
+    "intents": {},
+    "removedHooks": {
+      "claude": [
+        {
+          "id": "claude:hook::Stop-command",
+          "definition": {
+            "event": "Stop",
+            "handler": {
+              "type": "command",
+              "command": "x"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        }
+      ]
+    }
+  }
+}

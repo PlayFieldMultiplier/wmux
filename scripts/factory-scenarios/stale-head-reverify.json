@@ -1,0 +1,324 @@
+{
+  "name": "stale-head-reverify",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "After a PASS at head 1 the PR head moves. The verifier is woken again, the lane does not act on the new head until a new verdict at that head exists, and the new verdict rests on a new verify task at the new head.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "commit": true,
+      "delayMs": 1500
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "feat: add widget"
+                    ],
+                    "prompt": "Add a widget file to the repository.",
+                    "preset": "default"
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "noted"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "pr_read",
+                  "args": {
+                    "pr_number": 1
+                  },
+                  "save": {
+                    "head": "\"head(?:Sha|RefOid)\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "verify PR #1"
+                    ],
+                    "prompt": "Grade pull request #1 at its head.",
+                    "preset": "verify",
+                    "checkout": {
+                      "sha": "{{head}}",
+                      "fetch_ref": "pull/1/head"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "task": "\"taskId\": \"(wtask-[^\"]+)\"",
+                    "gateHead": "\"headSha\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "pr_verdict",
+                  "args": {
+                    "pr_number": 1,
+                    "head_sha": "{{gateHead}}",
+                    "verdict": "pass",
+                    "summary": "The recorded gate is green at this head.",
+                    "evidence": {
+                      "task_id": "{{task}}"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "pr_read",
+                  "args": {
+                    "pr_number": 1
+                  },
+                  "save": {
+                    "head": "\"head(?:Sha|RefOid)\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "verify PR #1"
+                    ],
+                    "prompt": "Grade pull request #1 at its head.",
+                    "preset": "verify",
+                    "checkout": {
+                      "sha": "{{head}}",
+                      "fetch_ref": "pull/1/head"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "task": "\"taskId\": \"(wtask-[^\"]+)\"",
+                    "gateHead": "\"headSha\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "pr_verdict",
+                  "args": {
+                    "pr_number": 1,
+                    "head_sha": "{{gateHead}}",
+                    "verdict": "pass",
+                    "summary": "The recorded gate is green at this head.",
+                    "evidence": {
+                      "task_id": "{{task}}"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "nothing to do"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "waitFor",
+      "label": "repo watch baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "ask-lead",
+      "post": {
+        "title": "Widget",
+        "body": "Please add the widget.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "worker pushed its branch",
+      "cond": {
+        "workers": {
+          "event": "commit"
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addPr",
+      "fromBranch": "wtask/",
+      "pr": {
+        "number": 1,
+        "title": "feat: add widget",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "pr.opened",
+      "cond": {
+        "facts": {
+          "kind": "pr.opened"
+        }
+      },
+      "timeoutMs": 100000
+    },
+    {
+      "do": "waitFor",
+      "label": "verdict recorded",
+      "cond": {
+        "facts": {
+          "kind": "verdict.recorded"
+        }
+      },
+      "timeoutMs": 300000
+    },
+    {
+      "do": "waitFor",
+      "label": "lane outcome",
+      "cond": {
+        "any": [
+          {
+            "facts": {
+              "kind": "merge.refused"
+            }
+          },
+          {
+            "cards": {
+              "kind": "status",
+              "threadPrefix": "pr:"
+            }
+          }
+        ]
+      },
+      "timeoutMs": 120000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet before move",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "gh",
+      "op": "moveHead",
+      "number": 1,
+      "label": "move"
+    },
+    {
+      "do": "waitFor",
+      "label": "head moved",
+      "cond": {
+        "facts": {
+          "kind": "pr.head_moved"
+        }
+      },
+      "timeoutMs": 100000
+    },
+    {
+      "do": "waitFor",
+      "label": "second verdict",
+      "cond": {
+        "facts": {
+          "kind": "verdict.recorded",
+          "min": 2
+        }
+      },
+      "timeoutMs": 300000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 90000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "ledger",
+      "verdicts",
+      "ghCalls",
+      "workers"
+    ],
+    "pr": 1,
+    "verifier": "verifier"
+  }
+}

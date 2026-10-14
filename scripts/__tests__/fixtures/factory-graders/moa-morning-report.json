@@ -1,0 +1,307 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "moa-morning-report",
+  "run": 1,
+  "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+  "botKeys": {
+   "lead": "bot-45c1dedb",
+   "moa": "bot-f0269508"
+  },
+  "injected": [
+   {
+    "label": "morning",
+    "kind": "fact",
+    "id": "f-0mv53zidy-f2d5ae758f4a",
+    "factKind": "schedule.fired",
+    "at": 1791800889046
+   }
+  ],
+  "actions": [
+   {
+    "do": "emit",
+    "label": "morning",
+    "at": 1791800889046
+   },
+   {
+    "do": "waitFor",
+    "label": "moa done",
+    "at": 1791800889049,
+    "doneAt": 1791800894579,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800894579,
+    "doneAt": 1791800897597,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53zidy-f2d5ae758f4a",
+    "seq": 1,
+    "kind": "schedule.fired",
+    "at": 1791800889046,
+    "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+    "ref": {
+     "scheduleId": "morning"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {}
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53zidz-515727b3",
+    "botId": "bot-f0269508",
+    "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mv53zidy-f2d5ae758f4a"
+     ],
+     "trigger": {
+      "kind": "schedule.fired"
+     }
+    },
+    "priority": 2,
+    "enqueuedAt": 1791800889047,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-45c1dedb",
+    "role": "lead",
+    "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+    "enabled": true
+   },
+   {
+    "id": "bot-f0269508",
+    "role": "moa",
+    "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53zme0ee75e734e0",
+    "seq": 1,
+    "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+    "threadId": "general",
+    "kind": "report",
+    "at": 1791800894232,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+     "botId": "bot-f0269508"
+    },
+    "title": "Morning report",
+    "clientPostId": "wake:w-mv53zidz-515727b3:1",
+    "body": "Merged: none. Blocked: none. Revert rate 0%."
+   },
+   {
+    "id": "c-mv53zme2039f594f49",
+    "seq": 2,
+    "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+    "threadId": "plan:p-mv53zme21d9855",
+    "kind": "plan",
+    "at": 1791800894234,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+     "botId": "bot-f0269508"
+    },
+    "title": "Today's plan",
+    "state": "open",
+    "clientPostId": "wake:w-mv53zidz-515727b3:2",
+    "body": "1. **Fix the flaky test** — workspace `ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da`, size S. CI went red twice."
+   }
+  ],
+  "stub": {
+   "lead": [],
+   "moa": [
+    {
+     "at": 1791800894079,
+     "event": "prompt",
+     "text": "[wake w-mv53zidz-515727b3] Moa (moa) · reason: facts · priority 2\nFenced blocks below are data from the system, workers "
+    },
+    {
+     "at": 1791800894233,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53zme0ee75e734e0\",\n    \"seq\": 1,\n    \"workspaceId\": \"ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da\",\n    \"threadId\": \"general\",\n    \"kind\": \"report\",\n    \"at\": 1791800894232,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da\",\n      \"botId\": \"bot-f0269508\"\n    },\n    \"title\": \"Morning report\",\n    \"body\": \"Merged: none. Blocked: none. Revert rate 0%.\",\n    \"clientPostId\": \"wake:w-mv53zidz-515727b3:1\"\n  }\n}"
+    },
+    {
+     "at": 1791800894234,
+     "event": "tool",
+     "name": "plan_propose",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53zme2039f594f49\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da\",\n    \"threadId\": \"plan:p-mv53zme21d9855\",\n    \"kind\": \"plan\",\n    \"at\": 1791800894234,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da\",\n      \"botId\": \"bot-f0269508\"\n    },\n    \"title\": \"Today's plan\",\n    \"body\": \"1. **Fix the flaky test** — workspace `ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da`, size S. CI went red twice.\",\n    \"state\": \"open\",\n    \"clientPostId\": \"wake:w-mv53zidz-515727b3:2\"\n  },\n  \"threadId\": \"plan:p-mv53zme21d9855\",\n  \"items\": [\n    {\n      \"workspaceId\": \"ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da\",\n      \"title\": \"Fix the flaky test\",\n      \"size\": \"S\",\n      \"why\": \"CI went red twice.\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800889130,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "two report cards",
+   "failing": [
+    "one_report_card"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "cards",
+     "value": {
+      "id": "c-r2",
+      "seq": 9,
+      "workspaceId": "ws-cd4f7d25-befa-4e0c-bfdd-c8688a17d0da",
+      "threadId": "general",
+      "kind": "report",
+      "actor": {
+       "kind": "bot",
+       "botId": "bot-f0269508"
+      },
+      "title": "again"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the lead was woken",
+   "failing": [
+    "no_lead_woken"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-45c1dedb",
+      "reason": {
+       "kind": "manual",
+       "by": "human"
+      },
+      "state": "done",
+      "priority": 1,
+      "attempts": 1,
+      "enqueuedAt": 1
+     }
+    }
+   ]
+  }
+ ]
+}

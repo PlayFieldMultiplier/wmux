@@ -53,8 +53,7 @@ describe('useRpcBridge — workspace.close receipt honesty (#799)', () => {
     // The guard that used to only skip the PTY dispose now also refuses the
     // call. Asserting the length check and the error return separately would
     // still pass if a rewrite left the old silent-success fall-through.
-    // The guard is the shared pre-close check (moaHqGuard), which also leaves
-    // Moa's HQ out of the count.
+    // The guard is the shared pre-close check (moaHqGuard).
     expect(block).toMatch(
       /if \(refusal === 'last-workspace'\)\s*\{[\s\S]*?return \{[\s\S]*?error:/,
     );

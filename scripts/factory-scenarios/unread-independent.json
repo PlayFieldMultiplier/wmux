@@ -1,0 +1,20 @@
+{
+  "name": "unread-independent",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Marking thread A read moves only A: thread B keeps an unknown (null) unread count, never 0, and a later card in A counts as one unread.",
+  "setup": {
+    "bots": [ { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [ { "say": "idle" } ] } ] } } ]
+  },
+  "actions": [
+    { "do": "loop", "times": 3, "actions": [ { "do": "post", "post": { "threadId": "task:alpha", "title": "alpha {{i1}}", "to": "maintainer" } } ] },
+    { "do": "loop", "times": 2, "actions": [ { "do": "post", "post": { "threadId": "task:beta", "title": "beta {{i1}}", "to": "maintainer" } } ] },
+    { "do": "snapshotRead", "label": "before", "fn": "rooms.threads", "args": ["{{ws}}"] },
+    { "do": "markRead", "threadId": "task:alpha" },
+    { "do": "snapshotRead", "label": "afterMark", "fn": "rooms.threads", "args": ["{{ws}}"] },
+    { "do": "post", "post": { "threadId": "task:alpha", "title": "alpha late", "to": "maintainer" } },
+    { "do": "snapshotRead", "label": "afterNew", "fn": "rooms.threads", "args": ["{{ws}}"] }
+  ],
+  "expect": { "requires": ["cards", "bots"], "a": "task:alpha", "b": "task:beta" }
+}

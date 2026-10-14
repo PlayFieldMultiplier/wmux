@@ -441,3 +441,30 @@ describe('TaskLedger — close, orphans, listeners', () => {
     expect(a.list({ taskWorkspaceId: 'ws-nope' })).toHaveLength(0);
   });
 });
+
+describe('rebindTaskWorkspace', () => {
+  it('moves the task to the new workspace (persisted, rev bumped, no transition): the worker there owns the row', async () => {
+    const a = open();
+    const e = await seed(a);
+    const seen: LedgerTransition[] = [];
+    a.onTransition((t) => seen.push(t));
+    const r = await a.rebindTaskWorkspace({ id: 'wtask-1', taskWorkspaceId: 'ws-new', actor: SYSTEM, expectedRev: e.rev });
+    expect(r).toMatchObject({ ok: true, entry: { taskWorkspaceId: 'ws-new', rev: e.rev + 1, status: 'working' } });
+    expect(seen).toHaveLength(0);
+    expect(a.findByTaskWorkspace('ws-task')).toBeNull();
+    const moved = await a.update({ id: 'wtask-1', status: 'review_requested', actor: { kind: 'worker', workspaceId: 'ws-new' }, expectedRev: e.rev + 1 });
+    expect(moved.ok).toBe(true);
+    await a.flush();
+    expect(open().get('wtask-1')).toMatchObject({ taskWorkspaceId: 'ws-new' });
+  });
+
+  it('only the system may move it, and only at the rev it read', async () => {
+    const a = open();
+    const e = await seed(a);
+    expect(await a.rebindTaskWorkspace({ id: 'wtask-1', taskWorkspaceId: 'ws-new', actor: WORKER, expectedRev: e.rev })).toMatchObject({ ok: false, error: 'not_authorized' });
+    expect(await a.rebindTaskWorkspace({ id: 'wtask-1', taskWorkspaceId: 'ws-new', actor: BRAIN, expectedRev: e.rev })).toMatchObject({ ok: false, error: 'not_authorized' });
+    expect(await a.rebindTaskWorkspace({ id: 'wtask-1', taskWorkspaceId: 'ws-new', actor: SYSTEM, expectedRev: e.rev + 5 })).toMatchObject({ ok: false, error: 'stale_rev' });
+    expect(await a.rebindTaskWorkspace({ id: 'wtask-x', taskWorkspaceId: 'ws-new', actor: SYSTEM, expectedRev: 1 })).toMatchObject({ ok: false, error: 'not_found' });
+    expect(a.get('wtask-1')).toMatchObject({ taskWorkspaceId: 'ws-task', rev: e.rev });
+  });
+});

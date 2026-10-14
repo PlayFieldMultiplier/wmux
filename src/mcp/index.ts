@@ -15,6 +15,11 @@ import {
 import { COMMANDER_TOOL_SURFACE, COMMANDER_ONLY_TOOLS } from '../shared/commanderSurface';
 import { CORE_TOOL_SURFACE } from '../shared/coreSurface';
 import { ROLE_TOOL_SURFACES, resolveRoleName } from '../shared/roleSurfaces';
+import { isBotRole, type BotRole } from '../shared/bot';
+import { SHARED_SURFACE } from '../shared/botSurface';
+import { installBotTools, pinToolName } from './toolModules';
+// The factory's bot tool modules register themselves on import.
+import './botModules';
 import type { RpcMethod } from '../shared/rpc';
 import { EXECUTE_SEND_CLIENT_TIMEOUT_MS } from '../shared/executeApprovalBounds';
 import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS, TERMINAL_SEND_NEW_TASK_TIMEOUT_MS } from '../shared/freshContext';
@@ -39,8 +44,6 @@ import { registerHelpTools } from './playwright/tools/help';
 import { randomUUID } from 'node:crypto';
 import { registerComputerTools } from './computer/tool';
 import { readComputerUseEnabled } from '../shared/computer/config';
-import { readMoaAskEnabled } from '../shared/moaAskSwitch';
-import { registerMoaAskTools } from './moaAsk';
 import { registerReplayTools } from './browser-replay/tool';
 import { ActionRing } from './browser-replay/actionRing';
 import { collectingServer, type CollectedTool } from './playwright/toolCollector';
@@ -51,8 +54,6 @@ import { registerExtractionTools } from './playwright/tools/extraction';
 import { registerChannelTools } from './channels';
 import { registerFanOutTools } from './fanout';
 import { registerLedgerUpdateTool, registerLedgerListTool, registerLedgerBrainUpdateTool } from './ledger';
-import { registerMoaHandoffTool } from './handoff';
-import { registerMoaGoalTools } from './goal';
 import { registerWorktaskTools } from './worktask';
 import { registerGitTools } from './git';
 import { registerPaneLifecycleTools } from './paneLifecycle';
@@ -74,7 +75,7 @@ import {
   type CodexThreadOwner,
   type McpParentClass,
 } from './codexThreadIdentity';
-import { getWmuxMcpServerInstructions, resolveMcpServerVersion } from './serverMetadata';
+import { getBotMcpServerInstructions, getWmuxMcpServerInstructions, resolveMcpServerVersion } from './serverMetadata';
 import { unlistToolsFromListing } from './listFilter';
 import { UNLISTED_TOOLS_SET } from '../shared/unlistedTools';
 import type { RegisterWmuxToolsOptions, WmuxToolProfile } from './toolCatalog';
@@ -104,6 +105,10 @@ export interface WmuxServerCtx {
   /** --role=<Role> value (from argv / shim handshake), unvalidated. Narrows the
    *  core surface to that role's tools (src/shared/roleSurfaces.ts). */
   roleSurface?: string;
+  /** --bot=<role> value (from argv), unvalidated. Bot mode: the commander
+   *  lane narrowed to that factory role's surface (shared/botSurface.ts);
+   *  `commanderToken` is then the bot token. */
+  botRole?: string;
   /** The pid identity walks start from (self pid, or the shim's pid). */
   callerPid: number;
   /** That pid's parent when already known (process.ppid); null → resolve lazily. */
@@ -208,44 +213,6 @@ const TERMINAL_SEND_KEY_SHAPE = {
     'Key name: enter, tab, ctrl+c, ctrl+d, ctrl+z, ctrl+l, escape, up, down, right, left',
   ),
   ptyId: z.string().optional().describe('Target a specific terminal by PTY ID (surface_list()) or #pane name. Omit for the active terminal.'),
-};
-
-const DECK_COMPLETE_WORK_SHAPE = {
-  summary: z
-    .string()
-    .min(8)
-    .describe('Concise final summary of the completed human request (at least 8 characters).'),
-  verification: z
-    .string()
-    .min(12)
-    .describe('Concrete verification performed and its outcome (at least 12 characters).'),
-};
-
-const DECK_ASK_DECISION_SHAPE = {
-  question: z
-    .string()
-    .describe('The decision you need the human to make, in one clear sentence.'),
-  options: z
-    .array(z.string())
-    .optional()
-    .describe('Optional discrete choices, e.g. ["approach A", "approach B"]. Omit for a free-text answer.'),
-  context: z
-    .string()
-    .optional()
-    .describe('Optional short note on what is at stake or why you cannot decide yourself.'),
-  task_id: z
-    .string()
-    .optional()
-    .describe('Optional A2A task id this decision is about; shows it on that task.'),
-};
-
-const DECK_RESOLVE_DECISION_SHAPE = {
-  id: z
-    .string()
-    .describe('The id of the pending decision to resolve (shown in the STALE re-examine block).'),
-  resolution: z
-    .string()
-    .describe('How the decision is settled — MUST state the binding rule / standing convention that resolves it. Not a bare "yes"/"done"; the server rejects an insubstantial answer.'),
 };
 
 const INCLUDE_STASHED_DESCRIBE =
@@ -747,6 +714,21 @@ function logIdentityEnvOnce(): void {
 // changes nothing else — no token, no role claim, no RPC allow lane, no
 // PermissionEnforcer difference. A core-mode process keeps exactly the
 // authority an ordinary pane agent has.
+// --bot=<role> (agent factory): a bot claims its role with its token on every
+// RPC exactly like a commander brain, so it runs the commander lane, and its
+// tools/list is then narrowed to the role's surface (below). An unknown role
+// lists no tools at all and still claims the role, so main refuses its calls.
+const BOT_ROLE: BotRole | null | undefined =
+  ctx.botRole === undefined ? undefined : isBotRole(ctx.botRole) ? ctx.botRole : null;
+if (BOT_ROLE === null) {
+  console.error(`[wmux-mcp] unknown --bot=${ctx.botRole}; registering no tools`);
+}
+if (BOT_ROLE !== undefined) {
+  if (ctx.coreMode || ctx.roleSurface !== undefined) {
+    console.error('[wmux-mcp] --bot was given with --core or --role; using the bot surface (--core/--role ignored)');
+  }
+  ctx = { ...ctx, commanderMode: true, coreMode: false, roleSurface: undefined };
+}
 const COMMANDER_MODE = ctx.commanderMode;
 // Fail closed on a contradictory launch: commander is the security role, so
 // it wins over the optimization flag and the operator is told, rather than
@@ -783,7 +765,7 @@ const server = new McpServer({
   name: 'wmux',
   version: resolveMcpServerVersion(),
 }, {
-  instructions: getWmuxMcpServerInstructions(SURFACE_PROFILE),
+  instructions: BOT_ROLE ? getBotMcpServerInstructions() : getWmuxMcpServerInstructions(SURFACE_PROFILE),
 });
 
 // ── Result-size guard, legacy lane ───────────────────────────────────────────
@@ -860,6 +842,8 @@ if (COMMANDER_MODE) {
 // tool that is deliberately absent from COMMANDER_TOOL_SURFACE (which is a
 // filter of the full surface) — see COMMANDER_ONLY_TOOLS.
 const registerToolUnfiltered = server.tool.bind(server);
+// The same for the catalog path, for the bot tool modules.
+const registerCatalogToolUnfiltered = server.registerTool.bind(server);
 const LEGACY_SURFACE: readonly string[] | null =
   SURFACE_PROFILE === 'commander'
     ? COMMANDER_TOOL_SURFACE
@@ -897,6 +881,26 @@ if (ROLE_SURFACE) {
     if (!allowed.has(name)) return undefined as unknown as ReturnType<typeof registerTool>;
     return (registerTool as (...a: unknown[]) => ReturnType<typeof registerTool>)(name, ...rest);
   }) as typeof server.registerTool;
+}
+
+// Bot surface: the outermost name filter over both registration paths. Only
+// the role's tools register; every name that does is recorded, so the bot
+// tool lane at the end can serve the rest of the surface.
+const BOT_SURFACE: ReadonlySet<string> | null =
+  BOT_ROLE === undefined ? null : BOT_ROLE === null ? new Set<string>() : SHARED_SURFACE.tools;
+const botRegistered = new Set<string>();
+if (BOT_SURFACE) {
+  const tool = server.tool.bind(server);
+  const registerTool = server.registerTool.bind(server);
+  const gate = (raw: (...a: unknown[]) => unknown) => (name: string, ...rest: unknown[]) => {
+    if (!BOT_SURFACE.has(name)) return undefined;
+    const handle = raw(name, ...rest);
+    if (handle !== undefined) botRegistered.add(name);
+    return pinToolName(handle, name);
+  };
+  (server as { tool: typeof server.tool }).tool = gate(tool as (...a: unknown[]) => unknown) as typeof server.tool;
+  (server as { registerTool: typeof server.registerTool }).registerTool =
+    gate(registerTool as (...a: unknown[]) => unknown) as typeof server.registerTool;
 }
 
 // Detect an RPC outcome that means our cached workspace identity is stale
@@ -1561,6 +1565,11 @@ async function resolveTerminalRouteBound(explicitPtyId?: string) {
         syncCallerPtyId();
         return route;
       },
+      // A bot has no terminal of its own to claim: it reads its tasks' panes by
+      // ptyId, routed by its token above.
+      ...(BOT_ROLE !== undefined
+        ? { noClaim: 'A factory bot reads a pane only by its ptyId: pass the ptyId of a task pane your fan-out started (or a pane in your workspace).' }
+        : {}),
     },
     explicitPtyId,
   );
@@ -1856,52 +1865,6 @@ server.tool(
       );
     }
     return result;
-  },
-);
-
-// === Orchestrator (Command Deck) tools ===
-
-server.tool(
-  'deck_complete_work',
-  'Finalize the current human-request work only after every delegated pane and A2A task has completed and you have verified the result. The server rejects this call while a worker is still running or awaiting input, when a tracked A2A task is not canonically completed, or when the summary/verification is insubstantial. Call this immediately before your final answer to the human; a successful call closes the durable active-work lease and stops follow-up wakes.',
-  DECK_COMPLETE_WORK_SHAPE,
-  async ({ summary, verification }) => callRpc('deck.completeWork', {
-    token: ctx.commanderToken,
-    summary,
-    verification,
-  }),
-);
-
-server.tool(
-  'deck_ask_decision',
-  'Pause your working loop and ask the human operator for a decision you should NOT make yourself — an ambiguous requirement, a risky or irreversible action, a genuine fork between approaches. First check the binding policy rules / standing conventions / your memory: a question whose answer you can already cite is not a decision for the human. Your loop STOPS and will not auto-advance until they answer; the pending decision survives a restart, so they can answer later and you resume from here. After calling this, END YOUR TURN and take no further action. Never for progress updates or questions you can resolve yourself.',
-  DECK_ASK_DECISION_SHAPE,
-  async ({ question, options, context, task_id }) => {
-    // Only the commander brain has WMUX_COMMANDER_TOKEN; a non-commander caller
-    // sends an undefined token and the RPC fail-closes ("not a live commander").
-    const params: Record<string, unknown> = {
-      token: ctx.commanderToken,
-      question,
-    };
-    if (options && options.length > 0) params.options = options;
-    if (context) params.context = context;
-    if (task_id) params.taskId = task_id;
-    return callRpc('deck.requestDecision', params);
-  },
-);
-
-server.tool(
-  'deck_resolve_decision',
-  'Resolve YOUR OWN stale pending decision — one you raised with deck_ask_decision that has blocked your loop past its TTL unanswered. ONLY when the STALE re-examine prompt says it went unanswered AND a BINDING policy rule or standing convention actually settles it: pass the decision id and a resolution STATING that basis, then act on it. This is not a way to invent an answer — the server refuses unless your workspace is in AUTO mode, the decision is genuinely stale, and the resolution is substantive. If nothing settles it, re-raise a sharper question with deck_ask_decision or keep waiting.',
-  DECK_RESOLVE_DECISION_SHAPE,
-  async ({ id, resolution }) => {
-    // Only the commander brain has WMUX_COMMANDER_TOKEN; a non-commander caller
-    // sends an undefined token and the RPC fail-closes ("not a live commander").
-    return callRpc('deck.resolveDecision', {
-      token: ctx.commanderToken,
-      id,
-      resolution,
-    });
   },
 );
 
@@ -2536,25 +2499,6 @@ registerComputerTools(server, MCP_CATALOG_OPTIONS, {
   },
 });
 
-// moa_ask / moa_ask_status — Moa's delegate (src/mcp/moaAsk.ts). Same opt-in
-// pattern as computer use: only when the owner turned the ask mode on
-// (moa-ask.json), only in the full profile, appended after every other
-// full-profile tool, so the published surface is byte-identical for everyone
-// else. Main re-checks its own config on every call.
-if (SURFACE_PROFILE === 'full' && readMoaAskEnabled()) {
-  registerMoaAskTools(server, {
-    callRpc: (method, params) => callRpc(method, params),
-    // Hit-only, like computer use: resolve the workspace first so the
-    // PID-map walk has run, then send the verified pane (never the env hint).
-    getSenderPtyId: async () => {
-      if (!verifiedPtyId()) {
-        try { await requireWorkspaceId(); } catch { /* not-attributed in main */ }
-      }
-      return verifiedPtyId();
-    },
-  });
-}
-
 // === Commander-only registration lane ===
 // Tools that exist ONLY under --commander. They bypass the manifest filter on
 // purpose (registerToolUnfiltered) and are appended AFTER every full-profile
@@ -2572,7 +2516,11 @@ if (COMMANDER_MODE) {
     if (!commanderOnly.has(name)) {
       throw new Error(`[wmux-mcp] ${name} is not listed in COMMANDER_ONLY_TOOLS`);
     }
-    return (registerToolUnfiltered as (...a: unknown[]) => ReturnType<typeof server.tool>)(name, ...rest);
+    // Bot mode: only the role's surface, recorded like the filter above.
+    if (BOT_SURFACE && !BOT_SURFACE.has(name)) return undefined as unknown as ReturnType<typeof server.tool>;
+    const handle = (registerToolUnfiltered as (...a: unknown[]) => ReturnType<typeof server.tool>)(name, ...rest);
+    if (BOT_SURFACE && handle !== undefined) botRegistered.add(name);
+    return BOT_SURFACE ? pinToolName(handle, name) : handle;
   }) as typeof server.tool;
   registerLedgerListTool(registerCommanderOnly);
   // The brain's ledger_update: the worker registration of that name was
@@ -2631,20 +2579,20 @@ if (COMMANDER_MODE) {
       return callRpc('approval.press', params);
     },
   );
+}
 
-  // Moa's operator-approved hand-off to another workspace's agent. Registered
-  // last so the commander tools/list order matches COMMANDER_ONLY_TOOLS.
-  registerMoaHandoffTool(registerCommanderOnly, {
-    callRpc,
-    getCommanderToken: () => ctx.commanderToken,
-    resolvePtyId: async (ref: string) => (await resolvePtyRef(ref, paneNameRpc)) ?? ref,
-    resolvePaneId: async (ref: string) => (await resolvePaneIdRef(ref, paneNameRpc)) ?? ref,
-  });
-  // Moa's goal contract (shared/moaGoal.ts): propose it (one operator card),
-  // read it, end it. After the hand-off tool, matching COMMANDER_ONLY_TOOLS.
-  registerMoaGoalTools(registerCommanderOnly, {
-    callRpc,
-    getCommanderToken: () => ctx.commanderToken,
+// === Bot tool lane ===
+// Bot mode only: the factory tool modules (src/mcp/toolModules.ts) register
+// their tools, and every other tool of the role's surface that nothing
+// registered gets a placeholder forwarding to its RPC, so tools/list is
+// exactly the role's surface. Full, core and commander never reach this.
+if (BOT_ROLE) {
+  installBotTools({
+    role: BOT_ROLE,
+    rawTool: registerToolUnfiltered as (name: string, ...rest: unknown[]) => unknown,
+    rawRegisterTool: registerCatalogToolUnfiltered as (name: string, ...rest: unknown[]) => unknown,
+    deps: { role: BOT_ROLE, callRpc: (method, params, timeoutMs) => callRpc(method, params, timeoutMs) },
+    registered: botRegistered,
   });
 }
 

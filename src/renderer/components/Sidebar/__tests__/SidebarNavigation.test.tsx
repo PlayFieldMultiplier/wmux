@@ -20,7 +20,7 @@ beforeEach(() => {
     commandPaletteVisible: false, fleetViewVisible: false, appRoute: 'workspaces',
     notificationPanelVisible: false, settingsPanelVisible: false, schedulesViewOpen: false,
     channelDockVisible: false, channelsTabVisible: false,
-    activeDeckTab: 'commander', channelUnread: {}, notifications: [],
+    channelUnread: {}, notifications: [],
   });
 });
 afterEach(() => {

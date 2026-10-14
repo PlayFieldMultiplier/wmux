@@ -501,6 +501,18 @@ export class GhPrReviewService {
     });
   }
 
+  /** One GraphQL read for the factory repo watch (main/factory/repoWatch.ts
+   *  owns the query and its mapping). Through the shared breaker; never
+   *  cached. A string variable is sent raw (`-f`), a number typed (`-F`). */
+  watchGraphql(repoPath: string, key: string, query: string, variables: Record<string, string | number> = {}): Promise<PrReviewRead<unknown>> {
+    return this.read(async () => {
+      const { host } = this.repo(key);
+      const vars = Object.entries(variables).flatMap(([k, v]) => [typeof v === 'number' ? '-F' : '-f', `${k}=${v}`]);
+      const out = await this.gh(host, ['api', 'graphql', '--hostname', host, '-f', `query=${query}`, ...vars], repoPath);
+      return JSON.parse(out) as unknown;
+    });
+  }
+
   /** PRs merged since `sinceIso` (newest first, at most `limit`): the lane
    *  audit's read. Never cached. */
   mergedSince(repoPath: string, key: string, sinceIso: string, limit = 50): Promise<PrReviewRead<Array<{ number: number; title: string; mergedAt: string; headRefOid: string }>>> {
@@ -570,8 +582,10 @@ export class GhPrReviewService {
    * Squash-merge with the subject and body given (an empty body stays empty:
    * no commit list, no trailers). Refused when the head is not the one shown,
    * or when the PR cannot merge now; GitHub is also told the head to expect.
+   * `authorize`, when given, is asked last, right before the merge is sent:
+   * a reason from it means nothing is written.
    */
-  merge(repoPath: string, key: string, number: number, req: PrMergeRequest): Promise<PrWriteResult> {
+  merge(repoPath: string, key: string, number: number, req: PrMergeRequest, authorize?: () => string | null): Promise<PrWriteResult> {
     return this.write(async () => {
       const state = await this.readState(repoPath, key, number);
       if (state.head.headRefOid !== req.expectHead) {
@@ -579,6 +593,8 @@ export class GhPrReviewService {
       }
       const block: MergeBlock | null = mergeBlock(state.head, state.checks);
       if (block) return { ok: false, code: 'blocked', reason: block, message: `the pull request cannot be merged now (${block})` };
+      const denied = authorize?.() ?? null;
+      if (denied) return { ok: false, code: 'invalid', message: `the merge is not authorized now (${denied})` };
       const { host } = this.repo(key);
       await this.gh(host, [
         'pr', 'merge', String(number), '--repo', key, '--squash',
@@ -587,6 +603,26 @@ export class GhPrReviewService {
       ], repoPath, true);
       this.checksCache.delete(`${key}#${number}`);
       return { ok: true, url: state.head.url };
+    });
+  }
+
+  /**
+   * Bring the PR's branch up to date with its base (a merge of the base into
+   * it, as GitHub's "Update branch" does), only while its head is still
+   * `expectHead`: checked here and sent as `expected_head_sha`, so GitHub
+   * refuses a head that moved in between. Only the merge lane calls this.
+   */
+  updateBranch(repoPath: string, key: string, number: number, expectHead: string): Promise<PrWriteResult> {
+    return this.write(async () => {
+      const refused = await this.moved(repoPath, key, number, expectHead);
+      if (refused) return refused;
+      const { host, owner, repo } = this.repo(key);
+      await this.gh(host, [
+        'api', '--hostname', host, '-X', 'PUT', `repos/${owner}/${repo}/pulls/${number}/update-branch`,
+        '-f', `expected_head_sha=${expectHead}`,
+      ], repoPath, true);
+      this.checksCache.delete(`${key}#${number}`);
+      return { ok: true };
     });
   }
 

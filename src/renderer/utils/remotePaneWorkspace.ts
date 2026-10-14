@@ -14,7 +14,6 @@ import type { Pane, Workspace } from '../../shared/types';
 import { findLeaf, getLeafPanes, type RemoteSessionRef } from '../../shared/paneUtils';
 import { isShadowWorkspaceId } from '../../shared/pcRail';
 import { findRemoteSurface } from '../stores/shadowWorkspace';
-import { moaHqId } from '../stores/slices/moaSlice';
 
 /** The session AddRemotePaneModal minted, exactly as its onCreated reports it. */
 export interface MintedRemoteSession {
@@ -96,16 +95,16 @@ export interface MirroredRemoteSession {
 }
 
 /** Structural subset of StoreState — the caller passes useStore.getState. */
-export type RemoteSessionTabStoreApi = Parameters<typeof moaHqId>[0] & {
+export interface RemoteSessionTabStoreApi {
   workspaces: readonly Workspace[];
   addRemoteSurface: RemotePaneWorkspaceStoreApi['addRemoteSurface'];
-};
+}
 
 /**
  * Add `session` as a remote-terminal tab to the active pane of `workspaceId`
  * (its first pane when the active id does not resolve). Returns the id of the
  * tab that shows the session, or null when the workspace is not one of the
- * operator's own (unknown, the Moa HQ, or another computer's shadow).
+ * operator's own (unknown, or another computer's shadow).
  *
  * A session already open as a tab is not opened twice (addRemoteSurface's
  * one-viewer rule): the tab that already shows it is returned instead.
@@ -116,7 +115,7 @@ export function openRemoteSessionAsTab(
   session: MirroredRemoteSession,
 ): string | null {
   const { hostId, sessionId, remoteWorkspaceId } = session;
-  if (isShadowWorkspaceId(workspaceId) || workspaceId === moaHqId(getState())) return null;
+  if (isShadowWorkspaceId(workspaceId)) return null;
   const ws = getState().workspaces.find((w) => w.id === workspaceId);
   if (!ws) return null;
   const pane = findLeaf(ws.rootPane, ws.activePaneId) ?? getLeafPanes(ws.rootPane)[0];

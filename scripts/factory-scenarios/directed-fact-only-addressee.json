@@ -1,0 +1,128 @@
+{
+  "name": "directed-fact-only-addressee",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "An owner message that names one bot (a structured mention) is a directed human.message fact for that bot only. The triage bot of the same room has triggers on human.message and handoff.received and still does not wake, nor does the HQ bot; the lead wakes exactly once, and the card records it as its one addressee.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Got it",
+                    "body": "Reading the message."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "triage",
+        "role": "triage",
+        "triggers": [
+          {
+            "kind": "human.message"
+          },
+          {
+            "kind": "handoff.received"
+          }
+        ],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Triage woke",
+                    "body": "This should not happen."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "moa",
+        "role": "moa",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Moa woke",
+                    "body": "This should not happen."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "to-lead",
+      "post": {
+        "title": "Plan",
+        "body": "Lead, please plan the week.",
+        "mentions": [
+          "{{bot.lead}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "lead done",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes"
+    ],
+    "addressee": "lead",
+    "bystanders": [
+      "triage",
+      "moa"
+    ],
+    "message": "to-lead"
+  }
+}

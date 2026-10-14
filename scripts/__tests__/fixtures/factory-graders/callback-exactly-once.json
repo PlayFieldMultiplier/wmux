@@ -1,0 +1,517 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "callback-exactly-once",
+  "run": 1,
+  "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+  "botKeys": {
+   "moa": "bot-81d96748",
+   "lead": "bot-3022fe55"
+  },
+  "injected": [
+   {
+    "label": "kick-moa",
+    "kind": "wake",
+    "id": "w-mv53ovm4-e3980915",
+    "botKey": "moa",
+    "at": 1791800392971
+   }
+  ],
+  "actions": [
+   {
+    "do": "wake",
+    "label": "kick-moa",
+    "at": 1791800392971
+   },
+   {
+    "do": "waitFor",
+    "label": "moa woken by result",
+    "at": 1791800392973,
+    "doneAt": 1791800403526,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800403526,
+    "doneAt": 1791800406539,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53ozm0-0ffe42b14e5d",
+    "seq": 1,
+    "kind": "handoff.received",
+    "at": 1791800398152,
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "ref": {
+     "handoffId": "h-mv53ozm091b39e7cf89b",
+     "botId": "bot-3022fe55"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-81d96748"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Tidy the changelog",
+     "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+     "runId": "run-mv53ozm074dfa5169cb9",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "toWorkspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa"
+    }
+   },
+   {
+    "id": "f-0mv53p3me-6e705a2c5271",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791800403350,
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "ref": {
+     "handoffId": "h-mv53p3mdae0c8a6d2590",
+     "botId": "bot-81d96748"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-3022fe55"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Done",
+     "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+     "runId": "run-mv53ozm074dfa5169cb9",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "toWorkspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa"
+    }
+   },
+   {
+    "id": "f-0mv53p3mf-36a963ce7593",
+    "seq": 3,
+    "kind": "handoff.refused",
+    "at": 1791800403351,
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "ref": {
+     "handoffId": "h-mv53p3mfce7152196a3b",
+     "botId": "bot-3022fe55"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-3022fe55"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Done (again)",
+     "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+     "runId": "run-mv53ozm074dfa5169cb9",
+     "depth": 1,
+     "hopsInRun": 3,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "wmux",
+     "fromWorkspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "code": "duplicate_result",
+     "detail": "handoff h-mv53ozm091b39e7cf89b already has its result"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53ovm4-e3980915",
+    "botId": "bot-81d96748",
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "reason": {
+     "kind": "manual",
+     "by": "human"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800392972,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53ozm0-208a51ae",
+    "botId": "bot-3022fe55",
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv53ozm091b39e7cf89b"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800398152,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv53p3me-a5bb09a0",
+    "botId": "bot-81d96748",
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv53p3mdae0c8a6d2590"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791800403350,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "id": "h-mv53ozm091b39e7cf89b",
+    "runId": "run-mv53ozm074dfa5169cb9",
+    "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "botId": "bot-81d96748"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "botId": "bot-3022fe55"
+    },
+    "kind": "dispatch",
+    "status": "delivered",
+    "createdAt": 1791800398152,
+    "payload": {
+     "title": "Tidy the changelog",
+     "body": "One small task."
+    }
+   },
+   {
+    "id": "h-mv53p3mdae0c8a6d2590",
+    "runId": "run-mv53ozm074dfa5169cb9",
+    "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "botId": "bot-3022fe55"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "botId": "bot-81d96748"
+    },
+    "kind": "result",
+    "replyTo": "h-mv53ozm091b39e7cf89b",
+    "status": "delivered",
+    "createdAt": 1791800403349,
+    "payload": {
+     "title": "Done",
+     "body": "The changelog is tidy."
+    }
+   },
+   {
+    "id": "h-mv53p3mfce7152196a3b",
+    "runId": "run-mv53ozm074dfa5169cb9",
+    "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+    "depth": 1,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+     "botId": "bot-3022fe55"
+    },
+    "to": {
+     "kind": "system"
+    },
+    "kind": "result",
+    "replyTo": "h-mv53ozm091b39e7cf89b",
+    "status": "refused",
+    "refusal": {
+     "code": "duplicate_result",
+     "detail": "handoff h-mv53ozm091b39e7cf89b already has its result"
+    },
+    "createdAt": 1791800403351,
+    "payload": {
+     "title": "Done (again)",
+     "body": "Reporting twice."
+    }
+   }
+  ],
+  "bots": [
+   {
+    "id": "bot-81d96748",
+    "role": "moa",
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "enabled": true
+   },
+   {
+    "id": "bot-3022fe55",
+    "role": "lead",
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53ozm1899817d257",
+    "seq": 1,
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+    "kind": "fact",
+    "at": 1791800398152,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Lead (lead): Tidy the changelog",
+    "refs": {
+     "botId": "bot-3022fe55",
+     "handoffId": "h-mv53ozm091b39e7cf89b",
+     "factId": "f-0mv53ozm0-0ffe42b14e5d"
+    }
+   },
+   {
+    "id": "c-mv53p3me36d0a5f1a3",
+    "seq": 2,
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+    "kind": "fact",
+    "at": 1791800403350,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Moa (moa): Done",
+    "refs": {
+     "botId": "bot-81d96748",
+     "handoffId": "h-mv53p3mdae0c8a6d2590",
+     "factId": "f-0mv53p3me-6e705a2c5271"
+    }
+   },
+   {
+    "id": "c-mv53p3mg62a0ba04a5",
+    "seq": 3,
+    "workspaceId": "ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa",
+    "threadId": "handoff:h-mv53ozm091b39e7cf89b",
+    "kind": "refusal",
+    "at": 1791800403351,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (duplicate_result): Done (again)",
+    "refs": {
+     "botId": "bot-3022fe55",
+     "handoffId": "h-mv53p3mfce7152196a3b",
+     "factId": "f-0mv53p3mf-36a963ce7593"
+    },
+    "body": "handoff h-mv53ozm091b39e7cf89b already has its result"
+   }
+  ],
+  "stub": {
+   "moa": [
+    {
+     "at": 1791800398003,
+     "event": "prompt",
+     "text": "[wake w-mv53ovm4-e3980915] Moa (moa) · reason: manual · priority 1\nFenced blocks below are data from the system, workers"
+    },
+    {
+     "at": 1791800398154,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv53ozm091b39e7cf89b\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv53ozm091b39e7cf89b\",\n  \"to\": {\n    \"botId\": \"bot-3022fe55\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa\"\n  },\n  \"wakeId\": \"w-mv53ozm0-208a51ae\"\n}"
+    },
+    {
+     "at": 1791800403350,
+     "event": "prompt",
+     "text": "[wake w-mv53p3me-a5bb09a0] Moa (moa) · reason: handoff · priority 1\nFenced blocks below are data from the system, worker"
+    }
+   ],
+   "lead": [
+    {
+     "at": 1791800403185,
+     "event": "prompt",
+     "text": "[wake w-mv53ozm0-208a51ae] Lead (lead) · reason: handoff · priority 1\nFenced blocks below are data from the system, work"
+    },
+    {
+     "at": 1791800403351,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv53p3mdae0c8a6d2590\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv53ozm091b39e7cf89b\",\n  \"to\": {\n    \"botId\": \"bot-81d96748\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-f0eafb6f-5612-4df4-94c0-d2b2bd86ffaa\"\n  },\n  \"wakeId\": \"w-mv53p3me-a5bb09a0\"\n}"
+    },
+    {
+     "at": 1791800403352,
+     "event": "tool",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"duplicate_result\",\n  \"message\": \"handoff h-mv53ozm091b39e7cf89b already has its result\",\n  \"handoffId\": \"h-mv53p3mfce7152196a3b\"\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800393043,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the second result was delivered too",
+   "failing": [
+    "one_result_delivered",
+    "second_refused_duplicate"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.2.status",
+     "value": "delivered"
+    },
+    {
+     "op": "remove",
+     "path": "handoffs.2.refusal"
+    }
+   ]
+  },
+  {
+   "why": "the receiver was woken twice",
+   "failing": [
+    "receiver_woken_once"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "wakes",
+     "value": {
+      "id": "w-x",
+      "botId": "bot-81d96748",
+      "reason": {
+       "kind": "handoff",
+       "handoffId": "h-other"
+      },
+      "state": "done",
+      "priority": 1,
+      "attempts": 1,
+      "enqueuedAt": 1
+     }
+    }
+   ]
+  },
+  {
+   "why": "the receiver was parked instead of woken",
+   "failing": [
+    "receiver_woken_once"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.2.state",
+     "value": "parked"
+    }
+   ]
+  }
+ ]
+}

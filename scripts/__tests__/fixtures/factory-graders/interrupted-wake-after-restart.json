@@ -1,0 +1,321 @@
+{
+ "note": "pass = a trimmed live run; the interrupted card in the wake's thread, as a live run of the fixed build writes it (the interrupted hook carries the wake's thread)",
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "interrupted-wake-after-restart",
+  "run": 1,
+  "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+  "botKeys": {
+   "lead": "bot-2d4b9716"
+  },
+  "injected": [
+   {
+    "label": "job",
+    "kind": "card",
+    "id": "c-mv53vppr0746c31b3c",
+    "threadId": "task:long",
+    "at": 1791800711919
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "job",
+    "at": 1791800711919
+   },
+   {
+    "do": "waitFor",
+    "label": "mid-turn",
+    "at": 1791800711921,
+    "doneAt": 1791800717450,
+    "ok": true
+   },
+   {
+    "do": "restart",
+    "at": 1791800717450
+   },
+   {
+    "do": "waitFor",
+    "label": "interrupted",
+    "at": 1791800719431,
+    "doneAt": 1791800719431,
+    "ok": true
+   },
+   {
+    "do": "sleep",
+    "at": 1791800719431
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   },
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53vppr-4ce865636c40",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800711919,
+    "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+    "ref": {
+     "botId": "bot-2d4b9716",
+     "messageId": "c-mv53vppr0746c31b3c"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Start the long job.",
+     "cardId": "c-mv53vppr0746c31b3c",
+     "threadId": "task:long",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53vpps-60fadda3",
+    "botId": "bot-2d4b9716",
+    "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+    "reason": {
+     "kind": "human",
+     "text": "Start the long job.",
+     "source": "desktop",
+     "clientMessageId": "c-mv53vppr0746c31b3c"
+    },
+    "threadId": "task:long",
+    "priority": 0,
+    "enqueuedAt": 1791800711920,
+    "attempts": 1,
+    "state": "interrupted"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-2d4b9716",
+    "role": "lead",
+    "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53vppr0746c31b3c",
+    "seq": 1,
+    "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+    "threadId": "task:long",
+    "kind": "human",
+    "at": 1791800711919,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Long job",
+    "refs": {
+     "botId": "bot-2d4b9716"
+    },
+    "body": "Start the long job."
+   },
+   {
+    "id": "c-mv53vtpve5ad253250",
+    "seq": 2,
+    "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+    "threadId": "task:long",
+    "kind": "status",
+    "at": 1791800717107,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+     "botId": "bot-2d4b9716"
+    },
+    "title": "Long job started",
+    "clientPostId": "wake:w-mv53vpps-60fadda3:1",
+    "body": "This turn will not finish before the restart."
+   },
+   {
+    "id": "c-mv53vvetd5992ba01f",
+    "seq": 3,
+    "workspaceId": "ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a",
+    "threadId": "task:long",
+    "kind": "fact",
+    "at": 1791800719301,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Lead's turn was interrupted when the app quit; it is not replayed",
+    "refs": {
+     "botId": "bot-2d4b9716"
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800716947,
+     "event": "prompt",
+     "text": "[wake w-mv53vpps-60fadda3] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800717108,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53vtpve5ad253250\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a\",\n    \"threadId\": \"task:long\",\n    \"kind\": \"status\",\n    \"at\": 1791800717107,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-34b80c2a-b8dc-49f7-a8e5-424ed0e9138a\",\n      \"botId\": \"bot-2d4b9716\"\n    },\n    \"title\": \"Long job started\",\n    \"body\": \"This turn will not finish before the restart.\",\n    \"clientPostId\": \"wake:w-mv53vpps-60fadda3:1\"\n  }\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800711866,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    },
+    {
+     "at": 1791800719331,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the interrupted card lands in general (the behaviour before the fix)",
+   "failing": [
+    "interrupted_card_in_thread"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.2.threadId",
+     "value": "general"
+    }
+   ]
+  },
+  {
+   "why": "the wake was replayed after the restart",
+   "failing": [
+    "wake_interrupted",
+    "not_replayed"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.0.state",
+     "value": "done"
+    },
+    {
+     "op": "push",
+     "path": "stub.lead",
+     "value": {
+      "at": 1,
+      "event": "prompt"
+     }
+    }
+   ]
+  }
+ ]
+}

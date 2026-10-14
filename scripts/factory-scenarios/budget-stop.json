@@ -1,0 +1,202 @@
+{
+  "name": "budget-stop",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A lead allowed one turn per hour. The owner's own messages always run (counted): the second runs over the cap. The owner's answer to the lead's question is held, never dropped: it stays queued (across a restart too), the bot is parked on budget, the room shows one bot.budget_exhausted fact and one 'Queued' card in that thread, and nothing retries in a loop. When the owner resumes the bot, the held answer runs once.",
+  "setup": {
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "budget": {
+          "maxTurnsPerHour": 1
+        },
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "m": "(First\\.)"
+                  }
+                },
+                {
+                  "tool": "ask_person",
+                  "args": {
+                    "title": "Which branch?",
+                    "body": "Pick one.",
+                    "options": [
+                      "main",
+                      "dev"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "On it",
+                    "body": "Working."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "first",
+      "post": {
+        "threadId": "task:budget",
+        "title": "One",
+        "body": "First.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "question",
+      "cond": {
+        "cards": {
+          "kind": "question",
+          "state": "open"
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "second",
+      "post": {
+        "title": "Two",
+        "body": "Second.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "second ran",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "reason": "human",
+          "state": "done",
+          "min": 2
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "resolve",
+      "label": "answer",
+      "card": {
+        "kind": "question",
+        "state": "open"
+      },
+      "resolution": "main"
+    },
+    {
+      "do": "waitFor",
+      "label": "budget fact",
+      "cond": {
+        "facts": {
+          "kind": "bot.budget_exhausted"
+        }
+      },
+      "timeoutMs": 30000
+    },
+    {
+      "do": "waitFor",
+      "label": "held card",
+      "cond": {
+        "cards": {
+          "kind": "budget",
+          "threadPrefix": "task:budget"
+        }
+      },
+      "timeoutMs": 30000
+    },
+    {
+      "do": "sleep",
+      "ms": 3000
+    },
+    {
+      "do": "rpc",
+      "label": "status",
+      "method": "bot.status",
+      "params": {
+        "botId": "{{bot.lead}}"
+      },
+      "save": {
+        "presence": "status.presence"
+      }
+    },
+    {
+      "do": "restart"
+    },
+    {
+      "do": "waitFor",
+      "label": "still held after restart",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "state": "queued",
+          "reason": "handoff"
+        },
+        "quietMs": 5000
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "rpc",
+      "label": "resume",
+      "method": "bot.resume",
+      "params": {
+        "botId": "{{bot.lead}}"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "held ran",
+      "cond": {
+        "wakes": {
+          "bot": "lead",
+          "reason": "handoff",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs"
+    ],
+    "bot": "lead",
+    "thread": "task:budget"
+  }
+}

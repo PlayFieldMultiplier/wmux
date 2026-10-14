@@ -1,0 +1,995 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "approval-typed-merge",
+  "run": 1,
+  "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+  "botKeys": {
+   "dev": "bot-bbc4a316"
+  },
+  "injected": [
+   {
+    "label": "ask",
+    "kind": "card",
+    "id": "c-mv6evzul5c84884091",
+    "threadId": "general",
+    "at": 1791879667002
+   },
+   {
+    "label": "go",
+    "kind": "card",
+    "id": "c-mv6ew4i397b9cd4caf",
+    "threadId": "general",
+    "at": 1791879673033
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791879666905,
+    "do": "gh",
+    "op": "addPr"
+   },
+   {
+    "at": 1791879666956,
+    "do": "gh",
+    "op": "addPr"
+   },
+   {
+    "at": 1791879667002,
+    "do": "post",
+    "label": "ask",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6evzul5c84884091",
+      "seq": 1,
+      "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791879667005,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Check the open PRs",
+      "refs": {
+       "botId": "bot-bbc4a316"
+      }
+     },
+     "addressee": {
+      "botId": "bot-bbc4a316",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6evzum-20b792de"
+    }
+   },
+   {
+    "at": 1791879667010,
+    "do": "waitFor",
+    "label": "two requests",
+    "ok": true,
+    "doneAt": 1791879673033
+   },
+   {
+    "at": 1791879673033,
+    "do": "post",
+    "label": "go",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mv6ew4i397b9cd4caf",
+      "seq": 4,
+      "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1791879673035,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "머지해",
+      "refs": {
+       "botId": "bot-bbc4a316"
+      }
+     },
+     "addressee": {
+      "botId": "bot-bbc4a316",
+      "role": "lead"
+     },
+     "wakeId": "w-mv6ew4i6-13d1bc70"
+    }
+   },
+   {
+    "at": 1791879673043,
+    "do": "waitFor",
+    "label": "both executed",
+    "ok": true,
+    "doneAt": 1791879683601
+   },
+   {
+    "at": 1791879683601,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791879686614
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "approvals": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {
+   "pr1Head": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+   "pr1Branch": "feature",
+   "pr2Head": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+   "pr2Branch": "feature"
+  },
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv6evzul-ac8bd79fcad6",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791879667005,
+    "dedupeKey": "human.message:c-mv6evzul5c84884091",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "ref": {
+     "botId": "bot-bbc4a316",
+     "messageId": "c-mv6evzul5c84884091"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Check the open PRs",
+     "cardId": "c-mv6evzul5c84884091",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6ew4i3-9787123a88d8",
+    "seq": 2,
+    "kind": "human.message",
+    "at": 1791879673035,
+    "dedupeKey": "human.message:c-mv6ew4i397b9cd4caf",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "ref": {
+     "botId": "bot-bbc4a316",
+     "messageId": "c-mv6ew4i397b9cd4caf"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "머지해",
+     "cardId": "c-mv6ew4i397b9cd4caf",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mv6ewcjt-fa0c61208ff2",
+    "seq": 3,
+    "kind": "merge.done",
+    "at": 1791879683465,
+    "dedupeKey": "merge.done:github.com/acme/app#2",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 2,
+     "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "effectId": "effect:apr-cXOcZYlfQwpC:pr.merge",
+     "approvedBy": "owner",
+     "mergeCommitOid": "c80d51ea895585c9f953f9c2f1ad6061e1c9f399"
+    }
+   },
+   {
+    "id": "f-0mv6ewcka-1f19e6ae6af1",
+    "seq": 4,
+    "kind": "merge.done",
+    "at": 1791879683482,
+    "dedupeKey": "merge.done:github.com/acme/app#1",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "effectId": "effect:apr-A5B54hVr4zl0:pr.merge",
+     "approvedBy": "owner",
+     "mergeCommitOid": "c80d51ea895585c9f953f9c2f1ad6061e1c9f399"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6evzum-20b792de",
+    "botId": "bot-bbc4a316",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "reason": {
+     "kind": "human",
+     "text": "Check the open PRs",
+     "source": "desktop",
+     "clientMessageId": "c-mv6evzul5c84884091"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791879667006,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6ew4i6-13d1bc70",
+    "botId": "bot-bbc4a316",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "reason": {
+     "kind": "human",
+     "text": "머지해",
+     "source": "desktop",
+     "clientMessageId": "c-mv6ew4i397b9cd4caf"
+    },
+    "priority": 0,
+    "enqueuedAt": 1791879673038,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-40486903",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "role": "moa",
+    "name": "Moa",
+    "engine": {
+     "kind": "claude-sdk"
+    },
+    "triggers": [
+     {
+      "kind": "schedule.fired"
+     },
+     {
+      "kind": "bot.budget_exhausted"
+     }
+    ],
+    "budget": {
+     "maxTurnsPerDay": 60,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791879666897,
+    "updatedAt": 1791879666897
+   },
+   {
+    "version": 1,
+    "id": "bot-bbc4a316",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "role": "lead",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/tmp/x",
+     "args": [
+      "/tmp/x",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 40,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/x"
+    },
+    "enabled": true,
+    "createdAt": 1791879666903,
+    "updatedAt": 1791879666903
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": [
+   {
+    "id": "effect:apr-A5B54hVr4zl0:pr.merge",
+    "kind": "pr.merge",
+    "decisionId": "apr-A5B54hVr4zl0",
+    "approvedBy": "owner",
+    "repoKey": "github.com/acme/app",
+    "repoPath": "/tmp/app",
+    "prNumber": 1,
+    "expectHead": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+    "status": "done",
+    "attempt": 1,
+    "createdAt": 1791879683037,
+    "updatedAt": 1791879683482,
+    "startedAt": 1791879683039,
+    "mergeCommitOid": "c80d51ea895585c9f953f9c2f1ad6061e1c9f399"
+   },
+   {
+    "id": "effect:apr-cXOcZYlfQwpC:pr.merge",
+    "kind": "pr.merge",
+    "decisionId": "apr-cXOcZYlfQwpC",
+    "approvedBy": "owner",
+    "repoKey": "github.com/acme/app",
+    "repoPath": "/tmp/app",
+    "prNumber": 2,
+    "expectHead": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+    "status": "done",
+    "attempt": 1,
+    "createdAt": 1791879683038,
+    "updatedAt": 1791879683465,
+    "startedAt": 1791879683040,
+    "mergeCommitOid": "c80d51ea895585c9f953f9c2f1ad6061e1c9f399"
+   }
+  ],
+  "approvals": [
+   {
+    "requestId": "apr-A5B54hVr4zl0",
+    "action": "merge",
+    "repoKey": "github.com/acme/app",
+    "repoPath": "/tmp/app",
+    "prNumber": 1,
+    "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+    "ghLogin": "octo",
+    "botId": "bot-bbc4a316",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "reason": "CI is green; ready to merge.",
+    "tainted": false,
+    "state": "executed",
+    "clientRequestId": "wake:w-mv6evzum-20b792de:a1",
+    "createdAt": 1791879672463,
+    "updatedAt": 1791879683485,
+    "cardId": "c-mv6ew428c7c1e470d9",
+    "decidedBy": "owner",
+    "decidedAt": 1791879673036,
+    "executeAfter": 1791879683036,
+    "effectId": "effect:apr-A5B54hVr4zl0:pr.merge"
+   },
+   {
+    "requestId": "apr-cXOcZYlfQwpC",
+    "action": "merge",
+    "repoKey": "github.com/acme/app",
+    "repoPath": "/tmp/app",
+    "prNumber": 2,
+    "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+    "ghLogin": "octo",
+    "botId": "bot-bbc4a316",
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "reason": "CI is green; ready to merge.",
+    "tainted": false,
+    "state": "executed",
+    "clientRequestId": "wake:w-mv6evzum-20b792de:a2",
+    "createdAt": 1791879672578,
+    "updatedAt": 1791879683469,
+    "cardId": "c-mv6ew45f8fc8751878",
+    "decidedBy": "owner",
+    "decidedAt": 1791879673037,
+    "executeAfter": 1791879683037,
+    "effectId": "effect:apr-cXOcZYlfQwpC:pr.merge"
+   }
+  ],
+  "approvalRules": [],
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6evzul5c84884091",
+    "seq": 1,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791879667005,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Check the open PRs",
+    "refs": {
+     "botId": "bot-bbc4a316"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ew428c7c1e470d9",
+    "seq": 2,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "kind": "approval",
+    "at": 1791879672464,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+     "botId": "bot-bbc4a316"
+    },
+    "title": "Merge PR #1 at 4c273d5?",
+    "body": "Lead asks: CI is green; ready to merge.",
+    "refs": {
+     "pr": 1,
+     "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+     "approvalId": "apr-A5B54hVr4zl0"
+    },
+    "state": "resolved",
+    "clientPostId": "approval:apr-A5B54hVr4zl0"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ew45f8fc8751878",
+    "seq": 3,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "kind": "approval",
+    "at": 1791879672579,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+     "botId": "bot-bbc4a316"
+    },
+    "title": "Merge PR #2 at 4c273d5?",
+    "body": "Lead asks: CI is green; ready to merge.",
+    "refs": {
+     "pr": 2,
+     "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+     "approvalId": "apr-cXOcZYlfQwpC"
+    },
+    "state": "resolved",
+    "clientPostId": "approval:apr-cXOcZYlfQwpC"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ew4i397b9cd4caf",
+    "seq": 4,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1791879673035,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "머지해",
+    "refs": {
+     "botId": "bot-bbc4a316"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ewcjy2d51559c4f",
+    "seq": 5,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "pr:github.com/acme/app#2",
+    "kind": "fact",
+    "at": 1791879683465,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merged #2 at 4c273d5",
+    "refs": {
+     "pr": 2,
+     "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+     "factId": "f-0mv6ewcjt-fa0c61208ff2"
+    },
+    "closes": true
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ewcjy46f9de2261",
+    "seq": 6,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791879683470,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merged PR #2 (approved by you)",
+    "refs": {
+     "pr": 2,
+     "approvalId": "apr-cXOcZYlfQwpC"
+    },
+    "clientPostId": "approval-outcome:apr-cXOcZYlfQwpC"
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ewcke17cfd39aa3",
+    "seq": 7,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1791879683482,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merged #1 at 4c273d5",
+    "refs": {
+     "pr": 1,
+     "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+     "factId": "f-0mv6ewcka-1f19e6ae6af1"
+    },
+    "closes": true
+   },
+   {
+    "version": 1,
+    "id": "c-mv6ewckf5d07ad9470",
+    "seq": 8,
+    "workspaceId": "ws-482606c7-05cc-4720-b324-19cbedecd917",
+    "threadId": "general",
+    "kind": "status",
+    "at": 1791879683487,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Merged PR #1 (approved by you)",
+    "refs": {
+     "pr": 1,
+     "approvalId": "apr-A5B54hVr4zl0"
+    },
+    "clientPostId": "approval-outcome:apr-A5B54hVr4zl0"
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791879666897,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879672407,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879672459,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879672520,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=2"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879672573,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683099,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=2"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683100,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683164,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683176,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683247,
+     "argv": [
+      "pr",
+      "view",
+      "2",
+      "--repo",
+      "github.com/acme/app",
+      "--json",
+      "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeable,mergeStateStatus,labels,statusCheckRollup"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683259,
+     "argv": [
+      "pr",
+      "view",
+      "1",
+      "--repo",
+      "github.com/acme/app",
+      "--json",
+      "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeable,mergeStateStatus,labels,statusCheckRollup"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683335,
+     "argv": [
+      "pr",
+      "view",
+      "2",
+      "--repo",
+      "github.com/acme/app",
+      "--json",
+      "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeable,mergeStateStatus,labels,statusCheckRollup"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683348,
+     "argv": [
+      "pr",
+      "view",
+      "1",
+      "--repo",
+      "github.com/acme/app",
+      "--json",
+      "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeable,mergeStateStatus,labels,statusCheckRollup"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683398,
+     "argv": [
+      "pr",
+      "merge",
+      "2",
+      "--repo",
+      "github.com/acme/app",
+      "--squash",
+      "--subject=feat: two (#2)",
+      "--body=",
+      "--match-head-commit=4c273d5e7bd3cfd174b1593efe03bf9dcc813042"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683420,
+     "argv": [
+      "pr",
+      "merge",
+      "1",
+      "--repo",
+      "github.com/acme/app",
+      "--squash",
+      "--subject=feat: one (#1)",
+      "--body=",
+      "--match-head-commit=4c273d5e7bd3cfd174b1593efe03bf9dcc813042"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683459,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=2"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1791879683477,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      …",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/x",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "state": "MERGED",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-10-13T08:21:06.905Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+         "build"
+        ],
+        "files": [
+         "src/index.ts"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 1,
+        "title": "feat: one",
+        "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+        "headRefName": "feature",
+        "mergedAt": "2026-10-13T08:21:23.418Z",
+        "mergeCommit": "c80d51ea895585c9f953f9c2f1ad6061e1c9f399"
+       },
+       {
+        "state": "MERGED",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-10-13T08:21:06.956Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+         "build"
+        ],
+        "files": [
+         "src/index.ts"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 2,
+        "title": "feat: two",
+        "headSha": "4c273d5e7bd3cfd174b1593efe03bf9dcc813042",
+        "headRefName": "feature",
+        "mergedAt": "2026-10-13T08:21:23.396Z",
+        "mergeCommit": "c80d51ea895585c9f953f9c2f1ad6061e1c9f399"
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  },
+  "workers": [],
+  "handoffs": null,
+  "stub": {}
+ },
+ "fail": [
+  {
+   "why": "a rule, not the owner's words, approved #1",
+   "failing": [
+    "approved_by_owner_words_1"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "approvals.0.decidedBy",
+     "value": "rule"
+    }
+   ]
+  },
+  {
+   "why": "#2 merged inside the Undo window",
+   "failing": [
+    "merged_after_undo_2"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "approvals.1.decidedAt",
+     "value": 1791879743420
+    }
+   ]
+  }
+ ]
+}

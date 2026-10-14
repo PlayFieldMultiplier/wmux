@@ -146,9 +146,7 @@ PC's Moa, never with a pane.
 
 Moa then reaches the other PC's Moa as `<PC>/Moa` (for example
 `office-pc/Moa`) with `send_message`. Moa cannot send to a remote pane's
-alias; it is told to ask that PC's Moa instead. The Moa panel lists the work
-exchanged with other PCs' Moa under **Other PCs' Moa**, with its state and
-the other PC.
+alias; it is told to ask that PC's Moa instead.
 
 When work from another PC's Moa arrives, Moa is woken with a pointer to the
 task, not its text, and reads it with `a2a_task_query`. The wake says the
@@ -179,8 +177,7 @@ The **Remote** page has a **Messages between PCs** section:
 - **Receipts.** The receiving PC reports twice: when the task reached its
   pane's agent (or its Moa), and when that side read the task by its id with
   `a2a_task_query`. The sender sees this as `remoteReceipt` (`delivered` or
-  `read`) in `a2a_task_query`, and the Moa panel shows it as "they got it" or
-  "they read it, answer pending". Receipts never change the task's state.
+  `read`) in `a2a_task_query`. Receipts never change the task's state.
 - **Held remote work.** Work is held for you, never sent to another pane on
   its own, when:
   - the pane it was meant for is gone,

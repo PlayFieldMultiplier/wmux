@@ -1,0 +1,165 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
+import type { WakeItem } from '../../../shared/wake';
+import { buildWakePrompt, defaultBotSystemPrompt } from '../wakePrompt';
+import { TEMPLATE_DEFINITIONS } from '../roles/templates';
+
+const profile: BotProfile = {
+  version: 1,
+  id: 'bot-00000001',
+  workspaceId: 'ws1',
+  role: 'lead',
+  name: 'Lead',
+  engine: { kind: 'claude-sdk' },
+  triggers: [],
+  budget: { ...DEFAULT_BOT_BUDGETS.lead },
+  enabled: true,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+describe('defaultBotSystemPrompt (before the roles module starts)', () => {
+  it('names the bot and states its powers and outputs, with no prohibitions', () => {
+    const prompt = defaultBotSystemPrompt(profile);
+    expect(prompt).toContain('You are Lead, a bot of wmux workspace ws1.');
+    expect(prompt).toMatch(/Your powers are your wmux tools/);
+    expect(prompt).toMatch(/Your outputs are cards and handoffs/);
+    expect(prompt).not.toMatch(/\b(never|don't|do not|must not|no shell|no file)\b/i);
+  });
+});
+
+describe('buildWakePrompt — group rooms and routines', () => {
+  const item = (reason: WakeItem['reason']): WakeItem => ({ id: 'w-1', botId: profile.id, workspaceId: 'ws1', reason, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running' });
+  const roster = [{ botId: 'bot-00000002', name: 'Wmux Dev' }, { botId: 'bot-00000003', name: 'Wmux; Issue=x' }];
+
+  it('a message to the room says every bot got it and lists who to mention', () => {
+    const text = buildWakePrompt({ item: item({ kind: 'human', text: 'Hi', source: 'desktop', runId: 'run-c-1', room: true }), profile, roster });
+    expect(text).toContain('Message from the owner (desktop):\nHi');
+    expect(text).toMatch(/every bot in it got this message/);
+    expect(text).toContain('put its id in room_post mentions: a name in the text reaches nobody');
+    expect(text).toContain('Other bots in this room (mention them by id): Wmux Dev = bot-00000002; Wmux Issue x = bot-00000003');
+    // A message to this bot alone says nothing of the room.
+    expect(buildWakePrompt({ item: item({ kind: 'human', text: 'Hi', source: 'desktop' }), profile, roster })).not.toMatch(/every bot in it/);
+  });
+
+  it('a mention shows who said what, fenced as data; an unreadable one points to room_read', () => {
+    const r = { kind: 'mention' as const, cardId: 'c-9', handoffId: 'h-9', fromBotId: 'bot-00000002' };
+    const text = buildWakePrompt({ item: item(r), profile, handoff: { handoffId: 'h-9', kind: 'message', from: 'Wmux Dev (lead)', title: 'Can you check #12?', body: 'CI is red ```' }, roster });
+    expect(text).toContain('Wmux Dev (lead) mentioned you in the room (card c-9): Can you check #12?');
+    // A mention is owed a reply: silence only closes an exchange; a reply
+    // without mentions is how the conversation ends (the caps stay main's).
+    expect(text).toContain('A mention is a turn in a conversation: answer that bot in the room');
+    expect(text).toContain('a reply without mentions wakes nobody');
+    expect(text).toContain('````message\nCI is red ```\n````');
+    expect(text).toContain('mention them by id');
+    expect(buildWakePrompt({ item: item(r), profile })).toContain('A bot mentioned you in card c-9. Read it with room_read.');
+  });
+
+  it('a mention from another workspace\'s room is answered by mentioning the sender, not by reply_to', () => {
+    const r = { kind: 'mention' as const, cardId: 'c-9', handoffId: 'h-9', fromBotId: 'bot-00000002' };
+    const handoff = { handoffId: 'h-9', kind: 'message', from: 'Wmux Dev (lead)', title: 'Can you check #12?', body: 'CI is red' };
+    const remote = buildWakePrompt({ item: item(r), profile, handoff: { ...handoff, fromWorkspaceId: 'ws2' } });
+    expect(remote).toContain('another workspace\'s room, which reply_to cannot reach');
+    expect(remote).toContain('room_post mentions: bot-00000002');
+    expect(remote).not.toContain('(reply_to its card)');
+    const local = buildWakePrompt({ item: item(r), profile, handoff: { ...handoff, fromWorkspaceId: 'ws1' } });
+    expect(local).toContain('(reply_to its card)');
+  });
+
+  it('a routine wake names the routine and shows what the bot wrote for it', () => {
+    const r = { kind: 'routine' as const, routineId: 'r-abcdefgh', dueAt: Date.UTC(2026, 9, 13, 9) };
+    const text = buildWakePrompt({ item: item(r), profile, routine: { routineId: 'r-abcdefgh', title: 'Check PRs', prompt: 'Read the open PRs.', schedule: 'every 1 h' } });
+    expect(text).toContain('Your routine "Check PRs" (every 1 h) is due (2026-10-13T09:00:00.000Z).');
+    expect(text).toContain('```routine\nRead the open PRs.\n```');
+    expect(text).not.toContain('mention them by id');
+    expect(buildWakePrompt({ item: item(r), profile })).toContain('list your routines with routine_list');
+  });
+});
+
+describe('buildWakePrompt (shared bot surface)', () => {
+  const item = (reason: WakeItem['reason']): WakeItem => ({
+    id: 'w-1', botId: profile.id, workspaceId: 'ws1', reason, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running',
+  });
+
+  it('labels the bot by its template and quotes its current job', () => {
+    const text = buildWakePrompt({ item: item({ kind: 'manual', by: 'human' }), profile: { ...profile, job: 'Fix flaky tests.\nReport hourly.' } });
+    expect(text).toMatch(/^\[wake w-1\] Lead \(developer\)/);
+    expect(text).toContain('Your job, as it stands now');
+    expect(text).toContain('> Fix flaky tests.\n> Report hourly.');
+    // No job written (or one just cleared): the template's default job, so a
+    // cleared job never lingers from the session's first instructions.
+    const none = buildWakePrompt({ item: item({ kind: 'manual', by: 'human' }), profile });
+    expect(none).toContain(`> ${TEMPLATE_DEFINITIONS.developer.defaultJob}`);
+    expect(none).not.toContain('Fix flaky tests.');
+  });
+
+  it('an intro wake asks for a greeting and one question with options', () => {
+    const text = buildWakePrompt({ item: item({ kind: 'intro' }), profile });
+    expect(text).toMatch(/Greet the owner/);
+    expect(text).toMatch(/ask_person question with 2 to 4 options/);
+  });
+});
+
+describe('buildWakePrompt — what the room says now', () => {
+  const item = (reason: WakeItem['reason'], threadId?: WakeItem['threadId']): WakeItem => ({ id: 'w-2', botId: profile.id, workspaceId: 'ws1', reason, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running', ...(threadId ? { threadId } : {}) });
+  const clock = { timeZone: 'Asia/Seoul', local: '2026-10-13 23:52', weekday: 'Tuesday' };
+
+  it('a notice is main\'s words in plain text; a quoted error is fenced data', () => {
+    const fact = { id: 'f-1', seq: 1, kind: 'bot.notice' as const, at: 1, dedupeKey: 'k', payload: { topic: 'worker.start_failed', title: 'Worker for "Verify" could not start: x', body: 'Nothing is running for it.', detail: 'fatal: bad ref ```' } };
+    const text = buildWakePrompt({ item: item({ kind: 'facts', factIds: ['f-1'], trigger: { kind: 'bot.notice' } }), profile, facts: [fact] });
+    expect(text).toContain('Notice from wmux: Worker for "Verify" could not start: x\nNothing is running for it.');
+    expect(text).toContain('````error\nfatal: bad ref ```\n````');
+    expect(text).not.toContain('"kind": "bot.notice"');
+  });
+
+  it('a worker waiting for input points the bot at worker_message', () => {
+    const text = buildWakePrompt({
+      item: item({ kind: 'facts', factIds: ['task.input_required:wtask-1@3'], trigger: { kind: 'task.input_required' } }),
+      profile,
+      tasks: [{ taskId: 'wtask-1', title: 'README', status: 'input_required', summary: 'push to origin HEAD was refused; which branch?' }],
+    });
+    expect(text).toContain('A worker of yours is waiting for input');
+    expect(text).toContain('worker_message');
+    const done = buildWakePrompt({ item: item({ kind: 'facts', factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' } }), profile, tasks: [{ taskId: 'wtask-1', title: 'README', status: 'review_requested' }] });
+    expect(done).not.toContain('waiting for input');
+  });
+
+  it('lists the approvals as they stand, the other bots\' replies to a room message, the language and the owner\'s clock', () => {
+    const text = buildWakePrompt({
+      item: item({ kind: 'human', text: '머지할거 머지해', source: 'desktop', runId: 'run-c', room: true }, 'general'),
+      profile,
+      approvals: [{ what: 'Merge PR #1', state: 'executed', askedBy: 'Wmux Reviewer', at: 1_000_000 - 120_000 }],
+      runReplies: [{ name: 'Wmux Dev', kind: 'status', title: 'PR #1 is ready', body: 'CI green' }, { name: 'Wmux Issue', toYou: true, kind: 'status', title: 'Reviewer, can you take #2?' }],
+      language: { name: 'Korean', source: 'owner', sample: '머지할거 머지해' },
+      clock,
+      now: 1_000_000,
+    });
+    expect(text).toContain('- Merge PR #1: done (approved and carried out); asked by Wmux Reviewer, 2 min ago');
+    expect(text).toContain('Never ask the owner to approve one that is approved, executed or denied');
+    expect(text).toContain('What the other bots already answered to this message (2):');
+    expect(text).toContain('"from": "Wmux Dev"');
+    // A reply that mentioned this bot is marked, and is to be answered.
+    expect(text).toContain('"to_you": true');
+    expect(text.match(/"to_you"/g)).toHaveLength(1);
+    expect(text).toContain('A reply marked to_you spoke to you: answer it in your post and mention its bot.');
+    expect(text).toContain('Write to the owner in the language of their latest message (Korean): «머지할거 머지해».');
+    expect(text).toContain('your job (job_set), routine titles (routine_set) and approval reasons');
+    // Earlier words are marked as a language sample, never a request.
+    const later = buildWakePrompt({ item: item({ kind: 'routine', routineId: 'r-abcdefgh', dueAt: 1 }), profile, language: { name: null, source: 'owner', sample: 'merge it', earlier: true } });
+    expect(later).toContain('(an earlier message, quoted only to show the language, not a request for this wake: «merge it»).');
+    const korean = buildWakePrompt({ item: item({ kind: 'routine', routineId: 'r-abcdefgh', dueAt: 1 }), profile, language: { name: 'Korean', source: 'owner', earlier: true } });
+    expect(korean).toContain('Write to the owner in the language of their latest message (Korean).');
+    // A thread id is for the bot's tools, not for the owner.
+    expect(text).toContain('Thread: general (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner\'s eyes).');
+    expect(text).toContain('The owner\'s local time is Tuesday 2026-10-13 23:52 (Asia/Seoul). Write times in that zone, never in UTC.');
+    // A message to one bot shows no replies block; the UI language before the owner wrote.
+    const first = buildWakePrompt({ item: item({ kind: 'intro' }), profile, runReplies: [{ name: 'x', kind: 'status', title: 'y' }], language: { name: 'Korean', source: 'ui' } });
+    expect(first).not.toContain('already answered');
+    expect(first).toContain('The owner has not written yet: write in Korean');
+  });
+
+  it('a routine due time is the owner\'s local time when the clock is known', () => {
+    const r = { kind: 'routine' as const, routineId: 'r-abcdefgh', dueAt: Date.UTC(2026, 9, 13, 9) };
+    expect(buildWakePrompt({ item: item(r), profile, clock })).toContain('is due (2026-10-13 18:00 Asia/Seoul)');
+  });
+});

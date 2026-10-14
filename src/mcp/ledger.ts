@@ -34,7 +34,7 @@ export interface LedgerToolDeps {
 }
 
 const LEDGER_UPDATE_SHAPE = {
-  task_id: z.string().min(1).describe('Your WorkTask id (wtask-…), from your fan-out prompt or mission channel.'),
+  task_id: z.string().min(1).optional().describe('Your WorkTask id (wtask-…), from your fan-out prompt. Omit it to report on the task of your own workspace.'),
   status: z
     .enum(WORKER_SETTABLE_STATUSES as [string, ...string[]])
     .describe('review_requested = done AND your own gate passed; input_required = blocked, say on what; failed = cannot finish; working = resumed.'),
@@ -81,7 +81,8 @@ export function registerLedgerUpdateTool(server: McpServer, deps: LedgerToolDeps
           // The handler refuses an unresolvable caller with its own message.
         }
       }
-      const params: Record<string, unknown> = { taskId: task_id, status, expectedRev: expected_rev };
+      const params: Record<string, unknown> = { status, expectedRev: expected_rev };
+      if (task_id !== undefined) params['taskId'] = task_id;
       if (summary !== undefined) params['summary'] = summary;
       const pty = resolveSenderPtyId();
       if (pty) params['senderPtyId'] = pty;

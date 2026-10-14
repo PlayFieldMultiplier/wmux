@@ -1,0 +1,24 @@
+{
+  "name": "interrupted-wake-after-restart",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The app quits while the lead is mid-turn. On the next start that wake is marked interrupted with a room card and is never replayed: the stub receives no second prompt.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "budget": { "turnTimeoutMs": 300000 },
+        "script": { "turns": [ { "steps": [
+          { "tool": "room_post", "args": { "kind": "status", "title": "Long job started", "body": "This turn will not finish before the restart." } },
+          { "sleep": 120000 }
+        ] } ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "job", "post": { "threadId": "task:long", "title": "Long job", "body": "Start the long job.", "to": "lead" } },
+    { "do": "waitFor", "label": "mid-turn", "cond": { "stub": { "bot": "lead", "event": "tool", "tool": "room_post" } }, "timeoutMs": 60000, "required": true },
+    { "do": "restart" },
+    { "do": "waitFor", "label": "interrupted", "cond": { "wakes": { "bot": "lead", "state": "interrupted" } }, "timeoutMs": 60000 },
+    { "do": "sleep", "ms": 10000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "bot": "lead", "message": "job", "thread": "task:long" }
+}

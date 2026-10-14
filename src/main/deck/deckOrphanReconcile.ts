@@ -1,12 +1,13 @@
-// ─── Command Deck — Startup Orphan Reconcile (WMX-06) ────────────────────────
+// ─── Command Deck — Orphan Reconcile (WMX-06) ────────────────────────────────
 //
-// Reconciles orphan Deck state at startup:
+// Reconciles orphan Deck state once at startup (deck.handler.ts arms it) and
+// on request (`deck.state.prune`, `wmux deck state --prune`):
 //   - Identifies workspaces that no longer exist in wmux (not in liveWorkspaceIds)
 //   - Archives active work records to deck-work.archive.json before teardown
 //   - Applies parked-work TTL (72 hours) so only expired orphan work is purged;
 //     parked work of a live workspace is never touched
-//   - Calls teardownWorkspaceDeckState to clean up loop state, schedules,
-//     autonomy, decisions, and commander sessions for orphan workspaces
+//   - Calls teardownWorkspaceDeckState to clean up work, autonomy and
+//     decisions for orphan workspaces
 //   - Fail-closed: does nothing if liveWorkspaceIds is null or empty
 //   - Never throws
 
@@ -17,14 +18,10 @@ import {
   isDeckWorkParked,
   archiveDeckWork,
 } from './deckWorkStore';
-import { getDeckLoopStatePath } from './deckLoopStateStore';
 import { getDeckAutonomyPath } from './deckAutonomyStore';
-import { getCommanderSessionPath } from './commanderSessionStore';
 import { getDeckDecisionPath } from './deckDecisionStore';
 import { MOA_MEMORY_DECISION_KEY } from '../../shared/moa';
-import { getDeckSchedulesPath } from './deckScheduleStore';
 import { teardownWorkspaceDeckState } from './deckWorkspaceTeardown';
-import { getHqWorkspaceId, isHqStoreCorrupt } from './deckHqStore';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { DEFAULT_MAX_SNAPSHOT_AGE_MS } from './stopGate';
 
@@ -49,14 +46,11 @@ export interface OrphanReconcileOptions {
 }
 
 /**
- * Collect every workspace ID matching WORKSPACE_ID_RE present across all six
+ * Collect every workspace ID matching WORKSPACE_ID_RE present across the
  * Deck store files, along with the list of store file names it appears in:
  *   1. deck-work.json (keys in active)
- *   2. deck-loop-state.json (keys in map)
- *   3. deck-autonomy.json (keys in map)
- *   4. deck-commander.json (session keys <id> or <id>::...)
- *   5. deck-decisions.json (keys in map)
- *   6. deck-schedules.json (workspaceId of each schedule)
+ *   2. deck-autonomy.json (keys in map)
+ *   3. deck-decisions.json (keys in map)
  */
 export function collectDeckWorkspaceFiles(dir?: string): Map<string, string[]> {
   const map = new Map<string, Set<string>>();
@@ -85,19 +79,7 @@ export function collectDeckWorkspaceFiles(dir?: string): Map<string, string[]> {
     // Missing or corrupt file is fine
   }
 
-  // 2. deck-loop-state.json
-  try {
-    const raw = atomicReadJSONSync<unknown>(getDeckLoopStatePath(dir));
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      for (const k of Object.keys(raw as Record<string, unknown>)) {
-        if (WORKSPACE_ID_RE.test(k)) addId(k, 'deck-loop-state.json');
-      }
-    }
-  } catch {
-    // Missing or corrupt file is fine
-  }
-
-  // 3. deck-autonomy.json
+  // 2. deck-autonomy.json
   try {
     const raw = atomicReadJSONSync<unknown>(getDeckAutonomyPath(dir));
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -109,46 +91,13 @@ export function collectDeckWorkspaceFiles(dir?: string): Map<string, string[]> {
     // Missing or corrupt file is fine
   }
 
-  // 4. deck-commander.json
-  try {
-    const raw = atomicReadJSONSync<unknown>(getCommanderSessionPath(dir));
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const sessions = (raw as Record<string, unknown>).sessions;
-      if (sessions && typeof sessions === 'object' && !Array.isArray(sessions)) {
-        for (const k of Object.keys(sessions as Record<string, unknown>)) {
-          const candidate = k.includes('::') ? k.split('::')[0] : k;
-          if (WORKSPACE_ID_RE.test(candidate)) addId(candidate, 'deck-commander.json');
-        }
-      }
-    }
-  } catch {
-    // Missing or corrupt file is fine
-  }
-
-  // 5. deck-decisions.json
+  // 3. deck-decisions.json
   try {
     const raw = atomicReadJSONSync<unknown>(getDeckDecisionPath(dir));
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       for (const k of Object.keys(raw as Record<string, unknown>)) {
-        // Moa's "Remember this?" card key is not a workspace (moaMemory.ts).
+        // The retired "Remember this?" card's key is not a workspace.
         if (WORKSPACE_ID_RE.test(k) && k !== MOA_MEMORY_DECISION_KEY) addId(k, 'deck-decisions.json');
-      }
-    }
-  } catch {
-    // Missing or corrupt file is fine
-  }
-
-  // 6. deck-schedules.json
-  try {
-    const raw = atomicReadJSONSync<unknown>(getDeckSchedulesPath(dir));
-    if (Array.isArray(raw)) {
-      for (const s of raw) {
-        if (s && typeof s === 'object') {
-          const wsId = (s as Record<string, unknown>).workspaceId;
-          if (typeof wsId === 'string' && WORKSPACE_ID_RE.test(wsId)) {
-            addId(wsId, 'deck-schedules.json');
-          }
-        }
       }
     }
   } catch {
@@ -163,7 +112,7 @@ export function collectDeckWorkspaceFiles(dir?: string): Map<string, string[]> {
 }
 
 /**
- * Collect every workspace ID matching WORKSPACE_ID_RE present across all six
+ * Collect every workspace ID matching WORKSPACE_ID_RE present across the
  * Deck store files.
  */
 export function collectDeckWorkspaceIds(dir?: string): Set<string> {
@@ -231,27 +180,12 @@ export async function reconcileOrphanDeckState(
       return { orphans, archived: [], tornDown: [], skippedIds: [] };
     }
 
-    // FAIL CLOSED: an unreadable deck-hq.json hides which workspace is the HQ.
-    if (isHqStoreCorrupt(dir)) {
-      const skipped = 'skipped: deck-hq.json is unreadable';
-      log(skipped);
-      return { orphans, archived: [], tornDown: [], skippedIds: orphans, skipped };
-    }
-
     const archived: string[] = [];
     const tornDown: string[] = [];
     const skippedIds: string[] = [];
     const activeWorks = loadActiveDeckWorks(dir);
-    const hq = getHqWorkspaceId(dir);
 
     for (const id of orphans) {
-      // The HQ's Deck state is never swept, even when its workspace is gone
-      // (that is the 'hq-missing' state, which fails closed).
-      if (id === hq) {
-        skippedIds.push(id);
-        log(`skipping orphan ${id}: it is the HQ workspace`);
-        continue;
-      }
       const work = activeWorks[id];
 
       if (work) {
@@ -303,13 +237,6 @@ export async function reconcileOrphanDeckState(
     log(`unexpected error during orphan reconcile: ${String(err)}`);
     return emptyReport;
   }
-}
-
-/** Whether a work link's owner still counts as live for the closed-workspace
- *  settle: listed now, or the HQ. A missing HQ is not closed — it comes back
- *  under the same id — so its links are kept, like its Deck state above. */
-export function workLinkOwnerLive(live: ReadonlySet<string>, hq: string | null): (workspaceId: string) => boolean {
-  return (workspaceId) => live.has(workspaceId) || workspaceId === hq;
 }
 
 let startupDeckReconcileDone = false;

@@ -38,6 +38,8 @@ export const PHONE_SIDEBAR_LIMITS = {
   /** One line of the request, and of the final report: agent-authored text. */
   fleetTicketRequestLine: 160,
   fleetTicketResultSummary: 240,
+  /** Agent factory bots per workspace (`PhoneSidebarWorkspace.bots`). */
+  botsPerWorkspace: 16,
   /** Upper bound for counts and ahead/behind; anything larger is not a real value. */
   count: 1_000_000,
   /**
@@ -133,7 +135,46 @@ export interface PhoneSidebarWorkspace {
    * Absent when no hand-off card is pending (or it was cut for size).
    */
   moaHandoff?: PhoneSidebarMoaHandoff;
+  /** The agent factory's bots bound to this workspace, oldest first. Only
+   *  while the factory is on; absent when the workspace has none. */
+  bots?: PhoneSidebarBot[];
+  /** Open questions (`ask_person` cards not yet answered) in this
+   *  workspace's room. Only while the factory is on, on a workspace with a
+   *  bot or a room question; absent otherwise. */
+  openQuestions?: number;
 }
+
+/** One factory bot as the phone sees it: no profile, budget or engine. */
+export interface PhoneSidebarBot {
+  /** Opaque bot id (`bot-<hex>`). */
+  id: string;
+  role: PhoneBotRole;
+  presence: PhoneBotPresence;
+  /** Wakes waiting in the bot's queue. */
+  queueDepth: number;
+}
+
+export const PHONE_BOT_ROLES = ['lead', 'triage', 'verifier', 'maintainer', 'moa'] as const;
+export type PhoneBotRole = (typeof PHONE_BOT_ROLES)[number];
+export const PHONE_BOT_PRESENCES = ['running', 'idle', 'parked', 'stopped', 'unknown'] as const;
+export type PhoneBotPresence = (typeof PHONE_BOT_PRESENCES)[number];
+
+/** The agent factory as the snapshot carries it (main fills it in). */
+export interface PhoneSidebarFactory {
+  enabled: boolean;
+  /** The HQ bot (the oldest enabled `moa` bot) while the factory is on. */
+  hqBotId?: string;
+  /** That bot's workspace: the HQ room (`/api/rooms/<id>/…`). */
+  hqWorkspaceId?: string;
+  /** That bot's engine session id, once it has one. Opaque, never a pane. */
+  hqSessionId?: string;
+}
+
+/** Why a phone message to Moa would be refused. `moa-mode-off`: the legacy
+ *  Moa's HQ agent mode is off. `factory-off`: the factory is off and no
+ *  legacy Moa is on. `no-hq-bot`: the factory is on with no enabled HQ bot. */
+export const PHONE_MOA_WAKE_BLOCKED = ['moa-mode-off', 'factory-off', 'no-hq-bot'] as const;
+export type PhoneMoaWakeBlocked = (typeof PHONE_MOA_WAKE_BLOCKED)[number];
 
 export interface PhoneSidebarMoaHandoff {
   /** The target agent's display name. */
@@ -284,16 +325,26 @@ export interface PhoneSidebarSnapshot {
    * workspace can ever be marked; the daemon stamps `role: "hq"` from it.
    */
   hqWorkspaceId?: string;
-  /** Moa is on and its HQ workspace exists. Absent otherwise. */
+  /** Moa is on and its HQ workspace exists (factory on: an HQ bot is
+   *  enabled). Absent otherwise. */
   moa?: true;
   /**
-   * Why a wake of Moa from the phone would be refused right now, though Moa is
-   * on: `'moa-mode-off'` while the HQ workspace's agent mode is off (main
-   * refuses every brain turn there). Only beside `moa`. Absent when nothing
+   * Why a wake of Moa from the phone would be refused right now. Legacy Moa:
+   * `'moa-mode-off'` while the HQ workspace's agent mode is off (main
+   * refuses every brain turn there), only beside `moa`. Factory desktops:
+   * `'no-hq-bot'` (factory on, no enabled HQ bot) or `'factory-off'` (factory
+   * off and no legacy Moa on), never beside `moa`. Absent when nothing
    * blocks a wake, when the mode could not be read, and from an older desktop
    * — all of which leave the daemon advertising `moaWake` as before.
    */
-  moaWakeBlocked?: 'moa-mode-off';
+  moaWakeBlocked?: PhoneMoaWakeBlocked;
+  /**
+   * The agent factory, from a desktop that runs one. With `enabled`, main has
+   * already rewritten `moa`, `moaWakeBlocked` and `moaDelegations` to the
+   * factory's meaning (see main/phone/PhoneFactory.ts). Absent from an older
+   * desktop or before the factory module started.
+   */
+  factory?: PhoneSidebarFactory;
   /**
    * Moa's delegated jobs, newest first: every open one plus those that ended
    * within PHONE_MOA_DELEGATION_RECENT_MS, at most `moaDelegations`. Present
@@ -542,7 +593,55 @@ function parseWorkspace(value: unknown, drop: SidebarDropReporter): PhoneSidebar
   const moaHandoff = parseMoaHandoff(value.moaHandoff);
   if (moaHandoff) row.moaHandoff = moaHandoff;
   else if (value.moaHandoff !== undefined) drop('workspace.moaHandoff');
+  if (Array.isArray(value.bots)) {
+    const bots = parseBots(value.bots, drop);
+    if (bots.length > 0) row.bots = bots;
+  } else if (value.bots !== undefined) drop('workspace.bots');
+  const openQuestions = count(value.openQuestions);
+  if (openQuestions !== undefined) row.openQuestions = openQuestions;
+  else if (value.openQuestions !== undefined) drop('workspace.openQuestions');
   return row;
+}
+
+function parseBot(value: unknown): PhoneSidebarBot | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = idString(value.id);
+  const role = (PHONE_BOT_ROLES as readonly unknown[]).includes(value.role) ? value.role as PhoneBotRole : undefined;
+  const presence = (PHONE_BOT_PRESENCES as readonly unknown[]).includes(value.presence) ? value.presence as PhoneBotPresence : undefined;
+  const queueDepth = count(value.queueDepth);
+  if (id === undefined || role === undefined || presence === undefined || queueDepth === undefined) return undefined;
+  return { id, role, presence, queueDepth };
+}
+
+function parseBots(value: unknown[], drop: SidebarDropReporter): PhoneSidebarBot[] {
+  const out: PhoneSidebarBot[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (out.length >= PHONE_SIDEBAR_LIMITS.botsPerWorkspace) { drop('workspace.bots.overLimit'); break; }
+    const bot = parseBot(raw);
+    if (!bot) { drop('workspace.bots.row'); continue; }
+    if (seen.has(bot.id)) { drop('workspace.bots.duplicate'); continue; }
+    seen.add(bot.id);
+    out.push(bot);
+  }
+  return out;
+}
+
+/** The factory block, or undefined when it is not one. An id that fails the
+ *  id rule is dropped alone; `enabled` must be a boolean. */
+function parseFactory(value: unknown, drop: SidebarDropReporter): PhoneSidebarFactory | undefined {
+  if (!isRecord(value) || typeof value.enabled !== 'boolean') return undefined;
+  const out: PhoneSidebarFactory = { enabled: value.enabled };
+  const hqBotId = idString(value.hqBotId);
+  if (hqBotId !== undefined) out.hqBotId = hqBotId;
+  else if (value.hqBotId !== undefined) drop('factory.hqBotId');
+  const hqWorkspaceId = idString(value.hqWorkspaceId);
+  if (hqWorkspaceId !== undefined) out.hqWorkspaceId = hqWorkspaceId;
+  else if (value.hqWorkspaceId !== undefined) drop('factory.hqWorkspaceId');
+  const hqSessionId = idString(value.hqSessionId);
+  if (hqSessionId !== undefined) out.hqSessionId = hqSessionId;
+  else if (value.hqSessionId !== undefined) drop('factory.hqSessionId');
+  return out;
 }
 
 /** Hundredths of a percent: split shares are whole units of 0.01. */
@@ -744,8 +843,11 @@ export function parsePhoneSidebarSnapshot(value: unknown, onDrop?: SidebarDropRe
   else if (value.hqWorkspaceId !== undefined) drop('hqWorkspaceId');
   if (value.moa === true) snapshot.moa = true;
   else if (value.moa !== undefined) drop('moa');
-  if (value.moaWakeBlocked === 'moa-mode-off') snapshot.moaWakeBlocked = 'moa-mode-off';
+  if ((PHONE_MOA_WAKE_BLOCKED as readonly unknown[]).includes(value.moaWakeBlocked)) snapshot.moaWakeBlocked = value.moaWakeBlocked as PhoneMoaWakeBlocked;
   else if (value.moaWakeBlocked !== undefined) drop('moaWakeBlocked');
+  const factory = parseFactory(value.factory, drop);
+  if (factory) snapshot.factory = factory;
+  else if (value.factory !== undefined) drop('factory');
   if (Array.isArray(value.moaDelegations)) snapshot.moaDelegations = parseMoaDelegations(value.moaDelegations, drop);
   else if (value.moaDelegations !== undefined) drop('moaDelegations');
   if (Array.isArray(value.fleetTickets)) snapshot.fleetTickets = parseFleetTickets(value.fleetTickets, drop);

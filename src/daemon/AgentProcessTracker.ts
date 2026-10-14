@@ -900,6 +900,52 @@ export class AgentProcessTracker {
     } catch { return false; }
   }
 
+  /** The session's live `expectedSlug` agent below its shell and every
+   *  process under that agent, from one fresh process table; null when no
+   *  such agent runs there. A WSL agent (a Linux pid) and an agent that is
+   *  the pane's own root are never returned: stopping either is not a stop
+   *  of the agent alone. Throws when the process table cannot be read (that
+   *  is not "nothing runs"). */
+  async agentProcessTree(sessionId: string, expectedSlug: AgentSlug): Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[] } | null> {
+    const s = this.states.get(sessionId);
+    const shellPid = this.shellPids.get(sessionId);
+    if (!s?.alive || s.wsl || shellPid === undefined || s.pid === shellPid) return null;
+    const table = await this.snapshot();
+    // The death edge, a disarm or a re-arm can land while the table is read.
+    if (this.states.get(sessionId) !== s || !s.alive || this.shellPids.get(sessionId) !== shellPid) return null;
+    const pick = selectAgentProcess(table, shellPid);
+    const root = table.find((e) => e.pid === s.pid);
+    if (!root || pick?.pid !== s.pid || pick.slug !== expectedSlug) return null;
+    const byParent = new Map<number, ProcessTreeEntry[]>();
+    for (const e of table) {
+      const list = byParent.get(e.ppid);
+      if (list) list.push(e);
+      else byParent.set(e.ppid, [e]);
+    }
+    const descendants: ProcessTreeEntry[] = [];
+    const seen = new Set<number>([root.pid, shellPid]);
+    const queue = [root.pid];
+    while (queue.length > 0) {
+      for (const child of byParent.get(queue.shift() as number) ?? []) {
+        if (seen.has(child.pid)) continue;
+        seen.add(child.pid);
+        descendants.push(child);
+        queue.push(child.pid);
+      }
+    }
+    return { root, descendants };
+  }
+
+  /** Of `entries`, the ones a fresh process table still shows as the same
+   *  process: pid, image name and command line (a reused pid is another
+   *  program, or the same program started with other arguments). Throws when
+   *  the table cannot be read. */
+  async stillRunning(entries: readonly ProcessTreeEntry[]): Promise<ProcessTreeEntry[]> {
+    if (entries.length === 0) return [];
+    const table = await this.snapshot();
+    return entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+  }
+
   /** Drop all tracking for a session (died / interrupted / killed). */
   disarm(sessionId: string): void {
     this.generation.set(sessionId, (this.generation.get(sessionId) ?? 0) + 1);

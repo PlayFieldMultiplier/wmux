@@ -1,0 +1,194 @@
+{
+  "root": {
+    "a": 1,
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "present"
+            },
+            {
+              "type": "command",
+              "command": "g"
+            }
+          ]
+        },
+        {
+          "matcher": "Bash",
+          "hooks": []
+        },
+        {
+          "matcher": "Edit",
+          "timeout": 5,
+          "hooks": [
+            {
+              "type": "command",
+              "command": "e"
+            }
+          ]
+        },
+        {
+          "type": "command",
+          "command": "falls back to PreToolUse"
+        }
+      ],
+      "Stop": [
+        {
+          "type": "command",
+          "command": "already"
+        },
+        {
+          "type": "command",
+          "command": "s"
+        },
+        {
+          "handler": [
+            "x"
+          ],
+          "command": "from the entry"
+        }
+      ],
+      "SessionStart": [
+        {
+          "type": "command",
+          "command": "falls back to the item event"
+        }
+      ],
+      "Notification": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "legacy"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "rootKeys": [
+    "a",
+    "hooks"
+  ],
+  "noHooks": {
+    "hooks": {
+      "Stop": [
+        {
+          "type": "command",
+          "command": "s"
+        }
+      ]
+    }
+  },
+  "missing": "Cannot enable hook: definition not found in store",
+  "store": {
+    "version": 1,
+    "removedHooks": {
+      "claude": [
+        {
+          "id": "claude:hook::into-group",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Bash"
+            },
+            "handler": {
+              "type": "command",
+              "command": "g"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::already-in-group",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Bash"
+            },
+            "handler": {
+              "type": "command",
+              "command": "present"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::new-group",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Edit",
+              "timeout": 5
+            },
+            "handler": {
+              "type": "command",
+              "command": "e"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::bare",
+          "definition": {
+            "event": "Stop",
+            "handler": {
+              "type": "command",
+              "command": "s"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::bare-present",
+          "definition": {
+            "event": "Stop",
+            "handler": {
+              "type": "command",
+              "command": "already"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::legacy",
+          "definition": {
+            "event": "Notification",
+            "groupMeta": {
+              "matcher": ""
+            },
+            "type": "command",
+            "command": "legacy"
+          }
+        },
+        {
+          "id": "claude:hook::no-event",
+          "definition": {
+            "handler": {
+              "type": "command",
+              "command": "falls back to the item event"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::no-event-anywhere",
+          "definition": {
+            "handler": {
+              "type": "command",
+              "command": "falls back to PreToolUse"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::array-handler",
+          "definition": {
+            "event": "Stop",
+            "handler": [
+              "x"
+            ],
+            "command": "from the entry"
+          }
+        }
+      ]
+    }
+  }
+}

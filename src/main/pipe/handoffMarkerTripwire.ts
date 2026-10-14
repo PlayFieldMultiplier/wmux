@@ -15,6 +15,6 @@ export function refuseHandoffMarker(
   const list = Array.isArray(texts) ? texts : [texts];
   if (!list.some((t) => containsHandoffMarker(t))) return null;
   return {
-    error: `${method}: this text carries the line wmux adds to operator-approved hand-offs; only the operator's hand-off may send it. To give work to another workspace's agent, Moa uses moa_propose_handoff.`,
+    error: `${method}: this text carries the line wmux adds to operator-approved hand-offs; only the operator's hand-off may send it.`,
   };
 }

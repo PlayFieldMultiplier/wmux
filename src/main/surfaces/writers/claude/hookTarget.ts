@@ -1,40 +1,23 @@
 import type { SurfaceItem } from '../../../../shared/tokenUsage/surfaceTypes';
 import { hookFingerprint } from '../../inventory/helpers';
 import { SurfacesStore } from '../../safeWrite';
+import { deepEqual } from '../../safeWrite/deepEqual';
 import type { ResolvedChange } from '../types';
 import type { ClaudeHookHandler, ClaudeMatcherGroup, ClaudeRemovedHookDefinition } from './types';
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (!deepEqual(a[i], b[i])) return false;
-    }
-    return true;
+const AMBIGUOUS_HOOK = 'More than one hook matches; edit this hook in the settings file by hand.';
+
+/** A matcher group's fields other than its handlers. */
+function groupMetaOf(group: Record<string, unknown>): Record<string, unknown> {
+  const meta: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(group)) {
+    if (k !== 'hooks') meta[k] = v;
   }
-  const objA = a as Record<string, unknown>;
-  const objB = b as Record<string, unknown>;
-  const keysA = Object.keys(objA);
-  const keysB = Object.keys(objB);
-  if (keysA.length !== keysB.length) return false;
-  for (const k of keysA) {
-    if (!Object.prototype.hasOwnProperty.call(objB, k)) return false;
-    if (!deepEqual(objA[k], objB[k])) return false;
-  }
-  return true;
+  return meta;
 }
 
-function matcherGroupsEqual(grp: Record<string, unknown>, meta: Record<string, unknown>): boolean {
-  const grpMeta: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(grp)) {
-    if (k !== 'hooks') {
-      grpMeta[k] = v;
-    }
-  }
-  return deepEqual(grpMeta, meta);
+function isMatcherGroup(entry: unknown): entry is ClaudeMatcherGroup {
+  return typeof entry === 'object' && entry !== null && Array.isArray((entry as ClaudeMatcherGroup).hooks);
 }
 
 function handlerMatchesItem(
@@ -66,225 +49,195 @@ export function applyHookChangesToRoot(
   store: SurfacesStore,
 ): void {
   const disableChanges = changes.filter((c) => !c.enabled);
-  const enableChanges = changes.filter((c) => c.enabled);
-
   if (disableChanges.length > 0) {
-    const hooksObj = root.hooks as Record<string, unknown> | undefined;
-    if (!hooksObj || typeof hooksObj !== 'object') {
-      throw new Error('Hook not found: hooks configuration missing');
-    }
+    removeHooks(root, disableChanges, targetPath, store);
+  }
+  for (const change of changes.filter((c) => c.enabled)) {
+    restoreHook(root, change, store);
+  }
+}
 
-    const matches: HookDisableMatch[] = [];
+/**
+ * Every hook is found and saved in the store before the root changes, so a hook that cannot be pinned
+ * down leaves both the settings and the store as they were.
+ */
+function removeHooks(
+  root: Record<string, unknown>,
+  changes: ResolvedChange[],
+  targetPath: string,
+  store: SurfacesStore,
+): void {
+  const hooksObj = root.hooks as Record<string, unknown> | undefined;
+  if (!hooksObj || typeof hooksObj !== 'object') {
+    throw new Error('Hook not found: hooks configuration missing');
+  }
 
-    for (const change of disableChanges) {
-      const event = change.item.hookEvent;
-      if (!event || !Array.isArray(hooksObj[event])) {
-        throw new Error('Hook not found in event configuration');
-      }
+  const matches = changes.map((change) => findHookToRemove(hooksObj, change));
+  saveRemovedHooks(matches, targetPath, store);
 
-      const eventList = hooksObj[event] as unknown[];
-      const found: HookDisableMatch[] = [];
-
-      for (let gIdx = 0; gIdx < eventList.length; gIdx++) {
-        const groupOrHandler = eventList[gIdx] as Record<string, unknown>;
-        if (groupOrHandler && Array.isArray(groupOrHandler.hooks)) {
-          const groupMeta: Record<string, unknown> = {};
-          for (const [k, v] of Object.entries(groupOrHandler)) {
-            if (k !== 'hooks') groupMeta[k] = v;
-          }
-          const hooksArray = groupOrHandler.hooks as ClaudeHookHandler[];
-          for (let hIdx = 0; hIdx < hooksArray.length; hIdx++) {
-            if (handlerMatchesItem(hooksArray[hIdx], change.item, event, groupMeta)) {
-              found.push({
-                change,
-                event,
-                groupIdx: gIdx,
-                handlerIdx: hIdx,
-                handler: hooksArray[hIdx],
-                groupMeta,
-              });
-            }
-          }
-        } else if (groupOrHandler && typeof groupOrHandler === 'object') {
-          if (handlerMatchesItem(groupOrHandler as ClaudeHookHandler, change.item, event, undefined)) {
-            found.push({
-              change,
-              event,
-              groupIdx: gIdx,
-              handlerIdx: null,
-              handler: groupOrHandler as ClaudeHookHandler,
-            });
-          }
-        }
-      }
-
-      if (found.length === 0) {
-        throw new Error('Hook not found in configuration');
-      }
-      if (found.length > 1) {
-        // Removing the first of several matches could remove a hook the user (or wmux) still needs.
-        throw new Error('More than one hook matches; edit this hook in the settings file by hand.');
-      }
-      matches.push(found[0]);
-    }
-
-    // Persist removed hooks in store before modifying config. An id that already holds a different
-    // hook must not be overwritten: that would lose the first hook's saved definition.
-    for (const match of matches) {
-      const existing = store.removedHooks.get('claude', match.change.item.id);
-      if (existing) {
-        const def = existing.definition as Record<string, unknown>;
-        const stored = def.handler && typeof def.handler === 'object'
-          ? hookFingerprint(String(def.event ?? ''), def.groupMeta as Record<string, unknown> | undefined, def.handler as Record<string, unknown>)
-          : null;
-        if (stored !== hookFingerprint(match.event, match.groupMeta, match.handler)) {
-          throw new Error('More than one hook matches; edit this hook in the settings file by hand.');
-        }
-      }
-    }
-    for (const match of matches) {
-      const definition: ClaudeRemovedHookDefinition = {
-        event: match.event,
-        groupMeta: match.groupMeta,
-        handler: match.handler,
-      };
-      store.removedHooks.add('claude', {
-        id: match.change.item.id,
-        definition,
-        originPath: targetPath,
-      });
-    }
-    store.save();
-
-    // Group matches by event and sort highest to lowest
-    const byEvent = new Map<string, HookDisableMatch[]>();
-    for (const m of matches) {
-      const list = byEvent.get(m.event) ?? [];
-      list.push(m);
-      byEvent.set(m.event, list);
-    }
-
-    for (const [event, eventMatches] of byEvent.entries()) {
-      const eventList = hooksObj[event] as unknown[];
-
-      // Phase 1: Delete handlers within each group from highest handler index to lowest
-      const byGroup = new Map<number, HookDisableMatch[]>();
-      for (const m of eventMatches) {
-        const list = byGroup.get(m.groupIdx) ?? [];
-        list.push(m);
-        byGroup.set(m.groupIdx, list);
-      }
-
-      for (const [groupIdx, groupMatches] of byGroup.entries()) {
-        const group = eventList[groupIdx] as ClaudeMatcherGroup;
-        if (group && Array.isArray(group.hooks)) {
-          // Sort handler indices descending
-          const handlerMatches = groupMatches
-            .filter((m) => m.handlerIdx !== null)
-            .sort((a, b) => (b.handlerIdx ?? 0) - (a.handlerIdx ?? 0));
-          for (const hm of handlerMatches) {
-            if (hm.handlerIdx !== null) {
-              group.hooks.splice(hm.handlerIdx, 1);
-            }
-          }
-        }
-      }
-
-      // Phase 2: Drop empty matcher groups or matched bare handlers from highest index to lowest
-      for (let gIdx = eventList.length - 1; gIdx >= 0; gIdx--) {
-        const item = eventList[gIdx] as Record<string, unknown>;
-        if (item && Array.isArray(item.hooks)) {
-          // Only a group this edit emptied; a group the user left empty stays as it was.
-          const emptiedHere = eventMatches.some((m) => m.groupIdx === gIdx && m.handlerIdx !== null);
-          if (item.hooks.length === 0 && emptiedHere) {
-            eventList.splice(gIdx, 1);
-          }
-        } else if (item && typeof item === 'object') {
-          // If this was a bare handler that was disabled
-          const wasDisabledBare = eventMatches.some(
-            (m) => m.groupIdx === gIdx && m.handlerIdx === null,
-          );
-          if (wasDisabledBare) {
-            eventList.splice(gIdx, 1);
-          }
-        }
-      }
-
-      // Phase 3: Drop event key if array becomes empty
-      if (eventList.length === 0) {
-        delete hooksObj[event];
-      }
-    }
-
-    if (Object.keys(hooksObj).length === 0) {
-      delete root.hooks;
+  const byEvent = new Map<string, HookDisableMatch[]>();
+  for (const m of matches) {
+    byEvent.set(m.event, [...(byEvent.get(m.event) ?? []), m]);
+  }
+  for (const [event, eventMatches] of byEvent.entries()) {
+    const eventList = hooksObj[event] as unknown[];
+    removeMatches(eventList, eventMatches);
+    if (eventList.length === 0) {
+      delete hooksObj[event];
     }
   }
 
-  if (enableChanges.length > 0) {
-    for (const change of enableChanges) {
-      const entry = store.removedHooks.get('claude', change.item.id);
-      if (!entry) {
-        throw new Error('Cannot enable hook: definition not found in store');
-      }
+  if (Object.keys(hooksObj).length === 0) {
+    delete root.hooks;
+  }
+}
 
-      const def = entry.definition as Record<string, unknown>;
-      let cleanHandler: ClaudeHookHandler;
-      if (def.handler && typeof def.handler === 'object' && !Array.isArray(def.handler)) {
-        cleanHandler = def.handler as ClaudeHookHandler;
-      } else {
-        const fallback: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(def)) {
-          if (k !== 'event' && k !== 'groupMeta') {
-            fallback[k] = v;
-          }
-        }
-        cleanHandler = fallback;
-      }
+function findHookToRemove(hooksObj: Record<string, unknown>, change: ResolvedChange): HookDisableMatch {
+  const event = change.item.hookEvent;
+  if (!event || !Array.isArray(hooksObj[event])) {
+    throw new Error('Hook not found in event configuration');
+  }
+  const found = (hooksObj[event] as unknown[]).flatMap((entry, groupIdx) => matchesIn(entry, groupIdx, change, event));
+  if (found.length === 0) {
+    throw new Error('Hook not found in configuration');
+  }
+  if (found.length > 1) {
+    // Removing the first of several matches could remove a hook the user (or wmux) still needs.
+    throw new Error(AMBIGUOUS_HOOK);
+  }
+  return found[0];
+}
 
-      const event = (def.event as string) || change.item.hookEvent || 'PreToolUse';
-      const groupMeta = def.groupMeta as Record<string, unknown> | undefined;
-
-      if (!root.hooks || typeof root.hooks !== 'object') {
-        root.hooks = {};
-      }
-      const hooksObj = root.hooks as Record<string, unknown>;
-      if (!Array.isArray(hooksObj[event])) {
-        hooksObj[event] = [];
-      }
-      const eventList = hooksObj[event] as unknown[];
-
-      if (groupMeta !== undefined) {
-        const matchingGroups = eventList.filter(
-          (g): g is ClaudeMatcherGroup =>
-            typeof g === 'object' &&
-            g !== null &&
-            Array.isArray((g as ClaudeMatcherGroup).hooks) &&
-            matcherGroupsEqual(g as Record<string, unknown>, groupMeta),
-        );
-        const alreadyExists = matchingGroups.some((g) =>
-          g.hooks.some((h) => deepEqual(h, cleanHandler)),
-        );
-        if (alreadyExists) {
-          continue;
-        }
-
-        if (matchingGroups.length > 0) {
-          matchingGroups[0].hooks.push(cleanHandler);
-        } else {
-          const newGroup: ClaudeMatcherGroup = {
-            ...groupMeta,
-            hooks: [cleanHandler],
-          };
-          eventList.push(newGroup);
-        }
-      } else {
-        const alreadyExists = eventList.some((h) => deepEqual(h, cleanHandler));
-        if (alreadyExists) {
-          continue;
-        }
-        eventList.push(cleanHandler);
-      }
+/** The handlers of one event entry (a matcher group or a bare handler) that are this change's hook. */
+function matchesIn(entry: unknown, groupIdx: number, change: ResolvedChange, event: string): HookDisableMatch[] {
+  const groupOrHandler = entry as Record<string, unknown>;
+  if (groupOrHandler && Array.isArray(groupOrHandler.hooks)) {
+    const groupMeta = groupMetaOf(groupOrHandler);
+    return (groupOrHandler.hooks as ClaudeHookHandler[]).flatMap((handler, handlerIdx) =>
+      handlerMatchesItem(handler, change.item, event, groupMeta)
+        ? [{ change, event, groupIdx, handlerIdx, handler, groupMeta }]
+        : [],
+    );
+  }
+  if (groupOrHandler && typeof groupOrHandler === 'object') {
+    const handler = groupOrHandler as ClaudeHookHandler;
+    if (handlerMatchesItem(handler, change.item, event, undefined)) {
+      return [{ change, event, groupIdx, handlerIdx: null, handler }];
     }
   }
+  return [];
+}
+
+/** Persists the removed hooks so they can be restored. An id that already holds a different hook is refused. */
+function saveRemovedHooks(matches: HookDisableMatch[], targetPath: string, store: SurfacesStore): void {
+  // Overwriting it would lose the first hook's saved definition.
+  if (matches.some((m) => storeHoldsOtherHook(store, m))) {
+    throw new Error(AMBIGUOUS_HOOK);
+  }
+  for (const match of matches) {
+    const definition: ClaudeRemovedHookDefinition = {
+      event: match.event,
+      groupMeta: match.groupMeta,
+      handler: match.handler,
+    };
+    store.removedHooks.add('claude', {
+      id: match.change.item.id,
+      definition,
+      originPath: targetPath,
+    });
+  }
+  store.save();
+}
+
+function storeHoldsOtherHook(store: SurfacesStore, match: HookDisableMatch): boolean {
+  const existing = store.removedHooks.get('claude', match.change.item.id);
+  if (!existing) return false;
+  const def = existing.definition as Record<string, unknown>;
+  const stored = def.handler && typeof def.handler === 'object'
+    ? hookFingerprint(String(def.event ?? ''), def.groupMeta as Record<string, unknown> | undefined, def.handler as Record<string, unknown>)
+    : null;
+  return stored !== hookFingerprint(match.event, match.groupMeta, match.handler);
+}
+
+/**
+ * Deletes the matched handlers from the highest index down, then the matcher groups this edit emptied
+ * and the matched bare handlers, also from the highest index down.
+ */
+function removeMatches(eventList: unknown[], eventMatches: HookDisableMatch[]): void {
+  const inGroups = eventMatches
+    .filter((m) => m.handlerIdx !== null)
+    .sort((a, b) => (b.handlerIdx ?? 0) - (a.handlerIdx ?? 0));
+  for (const m of inGroups) {
+    (eventList[m.groupIdx] as ClaudeMatcherGroup).hooks.splice(m.handlerIdx ?? 0, 1);
+  }
+  for (let gIdx = eventList.length - 1; gIdx >= 0; gIdx--) {
+    if (entryRemovedHere(eventList[gIdx], gIdx, eventMatches)) {
+      eventList.splice(gIdx, 1);
+    }
+  }
+}
+
+function entryRemovedHere(entry: unknown, gIdx: number, eventMatches: HookDisableMatch[]): boolean {
+  if (isMatcherGroup(entry)) {
+    // Only a group this edit emptied; a group the user left empty stays as it was.
+    return entry.hooks.length === 0 && eventMatches.some((m) => m.groupIdx === gIdx && m.handlerIdx !== null);
+  }
+  return !!entry && typeof entry === 'object' && eventMatches.some((m) => m.groupIdx === gIdx && m.handlerIdx === null);
+}
+
+/** Puts a removed hook back: into a group with the same matcher fields, a new group, or as a bare handler. */
+function restoreHook(root: Record<string, unknown>, change: ResolvedChange, store: SurfacesStore): void {
+  const entry = store.removedHooks.get('claude', change.item.id);
+  if (!entry) {
+    throw new Error('Cannot enable hook: definition not found in store');
+  }
+  const def = entry.definition as Record<string, unknown>;
+  const handler = storedHandler(def);
+  const event = (def.event as string) || change.item.hookEvent || 'PreToolUse';
+  const groupMeta = def.groupMeta as Record<string, unknown> | undefined;
+  const eventList = eventListFor(root, event);
+
+  if (groupMeta === undefined) {
+    if (!eventList.some((h) => deepEqual(h, handler))) {
+      eventList.push(handler);
+    }
+    return;
+  }
+  const groups = eventList.filter(
+    (g): g is ClaudeMatcherGroup => isMatcherGroup(g) && deepEqual(groupMetaOf(g), groupMeta),
+  );
+  if (groups.some((g) => g.hooks.some((h) => deepEqual(h, handler)))) {
+    return;
+  }
+  if (groups.length > 0) {
+    groups[0].hooks.push(handler);
+  } else {
+    eventList.push({ ...groupMeta, hooks: [handler] });
+  }
+}
+
+function storedHandler(def: Record<string, unknown>): ClaudeHookHandler {
+  if (def.handler && typeof def.handler === 'object' && !Array.isArray(def.handler)) {
+    return def.handler as ClaudeHookHandler;
+  }
+  // Older entries stored the handler's fields next to `event` and `groupMeta`.
+  const fallback: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(def)) {
+    if (k !== 'event' && k !== 'groupMeta') {
+      fallback[k] = v;
+    }
+  }
+  return fallback;
+}
+
+/** The event's handler list in `root.hooks`, created when missing. */
+function eventListFor(root: Record<string, unknown>, event: string): unknown[] {
+  if (!root.hooks || typeof root.hooks !== 'object') {
+    root.hooks = {};
+  }
+  const hooksObj = root.hooks as Record<string, unknown>;
+  if (!Array.isArray(hooksObj[event])) {
+    hooksObj[event] = [];
+  }
+  return hooksObj[event] as unknown[];
 }

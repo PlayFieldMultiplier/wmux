@@ -2,16 +2,16 @@
 //
 // The rendered half of the accessible-name contract. chromeAccessibleNames.test
 // scans the source (it reaches branches a mount never would); this one proves
-// the thing actually comes out of React with a name on it, for the two chrome
-// surfaces that mount without the Electron preload: the deck's header strip and
-// the toggle that opens it. The titlebar and the sidebar rows pull in the store,
+// the thing actually comes out of React with a name on it, for the chrome
+// surface that mounts without the Electron preload: the toggle that opens the
+// room dock. The titlebar and the sidebar rows pull in the store,
 // the preload and xterm, so they stay with the source scan.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../stores';
-import { DeckTabs } from '../Deck/DeckTabs';
+import RoomDockToggle from '../Room/RoomDockToggle';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -52,17 +52,9 @@ function accessibleName(btn: HTMLButtonElement): string {
 const isReadable = (name: string): boolean => /[\p{L}\p{N}]/u.test(name);
 
 describe('chrome accessible names — rendered', () => {
-  it('names every button in the deck header strip', () => {
+  it('names the room dock toggle', () => {
     act(() => {
-      root.render(
-        createElement(DeckTabs, {
-          active: 'commander',
-          onSelect: vi.fn(),
-          showChannels: true,
-          channelsUnread: 3,
-          t: (key: string) => key,
-        }),
-      );
+      root.render(createElement(RoomDockToggle));
     });
     const buttons = [...container.querySelectorAll('button')] as HTMLButtonElement[];
     expect(buttons.length).toBeGreaterThan(0);

@@ -1,0 +1,55 @@
+{
+  "r": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Read"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"Bash\" from permissions.deny"
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "add \"Read\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash",
+      "claude:builtin-tool::Read"
+    ]
+  },
+  "missing": {
+    "edits": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "set",
+        "value": {
+          "deny": [
+            "Bash"
+          ]
+        }
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<project>/.claude/settings.local.json",
+        "summary": "add \"Bash\" to permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:builtin-tool::Bash"
+    ]
+  }
+}

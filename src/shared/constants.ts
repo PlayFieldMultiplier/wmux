@@ -3,6 +3,9 @@ import { QUICK_LAUNCH_IPC } from './quickLaunchIpc';
 export const IPC = {
   PTY_CREATE: 'pty:create',
   PTY_WRITE: 'pty:write',
+  // A whole launch line (a resume) typed into a pane: main applies the bot
+  // worker merge guard first (main/agents/botWorkerMergeGuard.ts).
+  PTY_WRITE_LAUNCH: 'pty:write-launch',
   PTY_RESIZE: 'pty:resize',
   // #766 visibility-based size ownership. Renderer → main fire-and-forget:
   // reports whether a pane is actually on screen (workspace + tab active AND
@@ -25,7 +28,7 @@ export const IPC = {
   // Renderer-only CRUD for prompts scheduled against one concrete agent PTY.
   // The main-process runner re-verifies the agent family before bracket-paste
   // delivery, waits while a turn/approval is active, and persists across app
-  // restarts. Separate from DECK_SCHEDULES_* (workspace orchestrator turns).
+  // restarts.
   SESSION_PROMPT_SCHEDULES_LIST: 'sessionPromptSchedules:list',
   SESSION_PROMPT_SCHEDULES_CREATE: 'sessionPromptSchedules:create',
   SESSION_PROMPT_SCHEDULES_UPDATE: 'sessionPromptSchedules:update',
@@ -170,56 +173,6 @@ export const IPC = {
   // optionally delete their phone/<slug> branch.
   WORKTASK_REMOVE_PHONE: 'worktask:remove-phone',
   WORKTASK_DELETE_PHONE_BRANCH: 'worktask:delete-phone-branch',
-  // Command Deck Phase 2 — the Commander brain (an Agent-SDK orchestrator that
-  // runs in MAIN and drives the fleet via wmux MCP). Renderer-only surface, same
-  // trust basis as channelLocal/fanout (Electron process boundary, pipe-
-  // unreachable):
-  //   DECK_SEND       (invoke) renderer → main: run one brain turn. Payload
-  //                   { text, fleetContext?, model?, fullPower? }. Resolves
-  //                   with the accept/reject result ({ ok, code? }); the
-  //                   turn's content streams over DECK_STREAM, it is not the
-  //                   invoke's return value.
-  //   DECK_STREAM     (push)   main → renderer: one normalized BrainEvent per
-  //                   send (text-delta | tool-start | tool-end | turn-end |
-  //                   error). Dedicated channel — a brain stream is NOT channel
-  //                   semantics, so it never rides the channels plumbing.
-  //   DECK_INTERRUPT  (invoke) renderer → main: abort the in-flight turn.
-  //   DECK_STATUS     (invoke) renderer → main: { status, sessionId } snapshot.
-  //   DECK_FULLPOWER_SET (invoke) renderer → main: sync the full-power toggle
-  //                   (BYOB approach A). Main is the authority consulted by
-  //                   EVERY turn path (send / scheduled / event-woken), so a
-  //                   toggle change applies to autonomous turns immediately —
-  //                   not only after the next typed command. The renderer
-  //                   pushes on change and once after session hydration
-  //                   (restart restore).
-  DECK_SEND: 'deck:send',
-  DECK_STREAM: 'deck:stream',
-  DECK_INTERRUPT: 'deck:interrupt',
-  //   DECK_WAKE       (invoke) renderer → main: the dock's Wake button. The
-  //                   pty layout has no composer, so this is the human's way to
-  //                   ask for one ambient turn NOW. Rides the same ambient turn
-  //                   path as the heartbeat/scheduler (busy precheck, fleet
-  //                   slot, turn-start announce); resolves { ok, code? }.
-  DECK_WAKE: 'deck:wake',
-  DECK_STATUS: 'deck:status',
-  DECK_FULLPOWER_SET: 'deck:fullpower:set',
-  //   DECK_BRAIN_VENDOR_SET (invoke) renderer → main: sync the orchestrator
-  //                   brain vendor (BYOB M0 — 'claude' | 'hermes'). Same
-  //                   main-authority contract as DECK_FULLPOWER_SET: every
-  //                   turn path consults it, idle stale-vendor brains retire
-  //                   on change, renderer pushes on change + after hydration.
-  DECK_BRAIN_VENDOR_SET: 'deck:brainvendor:set',
-  //   DECK_MODEL_SET  (invoke) renderer → main: sync the orchestrator model
-  //                   picker. Same main-authority contract as
-  //                   DECK_FULLPOWER_SET / DECK_BRAIN_VENDOR_SET, and it
-  //                   exists for the same reason those do: the model used to
-  //                   ride ONLY on the DECK_SEND payload, so it reached main
-  //                   just when a human typed into the deck composer. The
-  //                   terminal brain has no composer (its TUI is the input
-  //                   path), which left the picker inert for that vendor, and
-  //                   automation-driven turns spawned brains on whatever model
-  //                   the last typed turn happened to leave behind.
-  DECK_MODEL_SET: 'deck:model:set',
   //   AGENT_MODELS_LIST (invoke) renderer → main: the models an agent CLI
   //                   reports (`agy models`, `codex debug models`, claude's
   //                   static list), cached in main. `{ agent, refresh? }` →
@@ -228,25 +181,11 @@ export const IPC = {
   //   AGY_TRUST_FOLDER (invoke) renderer → main: list a fan-out task folder in
   //   agy's trustedWorkspaces before agy launches there (main/agents/agyTrust).
   AGY_TRUST_FOLDER: 'agents:agy:trust-folder',
-  //   DECK_BRAIN_PTY  (send) main → renderer: the `claude-pty` brain just
-  //                   spawned its interactive TUI in daemon session <ptyId>.
-  //                   One-way and additive to DECK_STREAM (which carries only
-  //                   normalized BrainEvents) — the deck embeds that terminal
-  //                   in place of the bubble list. `ptyId: null` retires it.
-  DECK_BRAIN_PTY: 'deck:brainpty',
-  //   DECK_BRAIN_PTY_LIST (invoke) renderer → main: the CURRENT brain pty of
-  //                   every workspace. DECK_BRAIN_PTY is a one-way push, so a
-  //                   renderer reload (or a late-mounting subscriber) would
-  //                   otherwise never learn about a terminal that spawned
-  //                   before it was listening. Called once when useDeckStream
-  //                   mounts — the same hydrate-then-subscribe shape the other
-  //                   main-authoritative deck state uses.
-  DECK_BRAIN_PTY_LIST: 'deck:brainpty:list',
   //   DECK_FANOUT_CALLER (send) main → renderer: a fan-out worker's turn
-  //                   ended while its owner workspace has no brain. Carries
-  //                   the task pointer and the requester's pane/surface ids
-  //                   only (no PTY id, no worker text); the renderer types one
-  //                   fixed line into that pane if it is still there and idle.
+  //                   ended. Carries the task pointer and the requester's
+  //                   pane/surface ids only (no PTY id, no worker text); the
+  //                   renderer types one fixed line into that pane if it is
+  //                   still there and idle.
   DECK_FANOUT_CALLER: 'deck:fanout-caller',
   //   DECK_FANOUT_CALLER_SESSION (invoke) renderer → main: the verified agent
   //                   incarnation in a PTY, so a pointer is bound to the
@@ -256,181 +195,16 @@ export const IPC = {
   //                   nudge line through the delivery gate and the daemon.
   DECK_FANOUT_CALLER_SUBMIT: 'deck:fanout-caller:submit',
   //   DECK_PR_OWNER (send) main → renderer: a PR event (CI failed, checks
-  //                   passed, review comment, merge conflict) for a workspace
-  //                   with no brain. The renderer finds the one agent pane whose
-  //                   checkout is that PR and writes through
-  //                   DECK_FANOUT_CALLER_SUBMIT (main/deck/prOwnerNotify.ts).
+  //                   passed, review comment, merge conflict). The renderer
+  //                   finds the one agent pane whose checkout is that PR and
+  //                   writes through DECK_FANOUT_CALLER_SUBMIT
+  //                   (main/deck/prOwnerNotify.ts).
   DECK_PR_OWNER: 'deck:pr-owner',
-  //   DECK_SCHEDULES_* (invoke) renderer → main: CRUD over the persisted
-  //                    orchestrator schedules (P3d). Same renderer-only trust
-  //                    boundary as DECK_SEND.
-  DECK_SCHEDULES_LIST: 'deck:schedules:list',
-  DECK_SCHEDULES_CREATE: 'deck:schedules:create',
-  DECK_SCHEDULES_UPDATE: 'deck:schedules:update',
-  DECK_SCHEDULES_DELETE: 'deck:schedules:delete',
-  //   DECK_LOOP_*      (invoke) renderer → main: the one-click loop (loop
-  //                    engineering v1). START writes loop-state + autonomy caps
-  //                    + optional cadence schedule in ONE action; STOP/PAUSE are
-  //                    the fail-closed OFF contract (caps → DEFAULT, cadence
-  //                    schedule deleted/disabled). Same renderer-only trust
-  //                    boundary as DECK_SEND.
-  DECK_LOOP_GET: 'deck:loop:get',
-  DECK_LOOP_START: 'deck:loop:start',
-  DECK_LOOP_STOP: 'deck:loop:stop',
-  DECK_LOOP_PAUSE: 'deck:loop:pause',
-  DECK_LOOP_RESUME: 'deck:loop:resume',
-  //   DECK_LOOP_TASK — the HUMAN ticks a done-when checklist item. The brain
-  //   never writes `passes` (v1 posture: no self-scored done); this is the
-  //   human's pen.
-  DECK_LOOP_TASK: 'deck:loop:task',
-  //   DECK_LOOP_SKILLS — 루프 설정 모달의 스킬 픽커 재료: pane 에이전트가 쓸
-  //   수 있는 스킬/커맨드 카탈로그를 디스크(.claude/skills|commands)에서 스캔.
-  //   읽기 전용, 렌더러 전용.
-  DECK_LOOP_SKILLS: 'deck:loop:skills',
-  //   DECK_AUTOWAKE_* — the global event-push kill switch (Settings toggle).
-  //   OFF suppresses ambient wake-turns (the unrequested summaries); a
-  //   running loop still wakes. Same renderer-only trust boundary.
-  DECK_AUTOWAKE_GET: 'deck:autowake:get',
-  DECK_AUTOWAKE_SET: 'deck:autowake:set',
-  //   DECK_LEDGER_GATE_* — the `deck.ledgerGate` switch (Settings toggle).
-  //   ON holds a brain's Stop open while the task ledger still lists open
-  //   tasks it owns; OFF keeps the shipped snapshot-inferred gate. Backed by
-  //   deck-ledger-gate.json (main/deck/deckLedgerGateStore.ts). Same
-  //   renderer-only trust boundary.
-  DECK_LEDGER_GATE_GET: 'deck:ledger-gate:get',
-  DECK_LEDGER_GATE_SET: 'deck:ledger-gate:set',
-  //   DECK_FLEET_FAST_PATH_* — the `deck.fleetFastPath` switch (Settings
-  //   toggle). ON answers short read-only Fleet questions from the desktop
-  //   composer with the local Fleet board instead of a Moa turn. Backed by
-  //   deck-fleet-fast-path.json (main/deck/deckFleetFastPathStore.ts).
-  DECK_FLEET_FAST_PATH_GET: 'deck:fleet-fast-path:get',
-  DECK_FLEET_FAST_PATH_SET: 'deck:fleet-fast-path:set',
-  //   DECK_LEDGER_SUMMARY — the Deck status panel's read: the open task
-  //   ledger rows one workspace's brain owns, joined with the workspace
-  //   mirror's per-worker agent status. Read-only projection.
-  DECK_LEDGER_SUMMARY: 'deck:ledger:summary',
-  //   DECK_LEDGER_PUSH — one-way "the ledger moved" notification carrying the
-  //   owner workspace, so the panel re-reads on a transition instead of only
-  //   on its fallback timer. Carries no ledger content: the summary read is
-  //   the single projection, and a push with a payload would be a second one.
-  DECK_LEDGER_PUSH: 'deck:ledger:push',
-  //   DECK_MODE_* — the per-workspace agent mode (off/assist/auto).
-  //   Mode is the single user-facing autonomy knob; the raw caps
-  //   are derived from it. `set` with mode='off' also tears down running loops
-  //   + schedules. Same renderer-only trust boundary.
-  DECK_MODE_GET: 'deck:mode:get',
-  DECK_MODE_SET: 'deck:mode:set',
-  //   DECK_HQ_GET — the designated HQ workspace (deckHqStore.ts, main is the
-  //   source of truth): { workspaceId, state: 'unset' | 'ok' | 'hq-missing' |
-  //   'hq-unknown' | 'hq-store-corrupt' }. Read-only; no renderer setter yet.
-  DECK_HQ_GET: 'deck:hq:get',
-  //   DECK_MOA_* — the main bot's master switch (deckHqStore.ts `moaEnabled`,
-  //   default on). Off stops the whole deck runtime (brains, timers, bus and
-  //   mirror subscriptions); nothing is deleted. { enabled: boolean } both
-  //   ways; SET answers { ok: false, code: 'store_corrupt' } while the store
-  //   is unreadable.
-  DECK_MOA_GET: 'deck:moa:get',
-  DECK_MOA_SET: 'deck:moa:set',
-  //   DECK_MOA_STATE — Settings → Moa's one read: { config, hq: { workspaceId,
-  //   state }, archive: { unacked, total } }. DECK_MOA_CHANGED (send, main →
-  //   renderer, no payload) says it moved. DECK_MOA_CONFIG_SET takes a partial
-  //   { onboarded, level, maxTurnsPerHour, bubbles, reduceMotion }.
-  //   DECK_MOA_SETUP { workspaceId } makes a just-created workspace the HQ at
-  //   level 1 and turns Moa on (first run, and "Recreate Moa workspace").
-  //   With `rebind: true` and the current HQ's own id it only turns Moa on:
-  //   the lost HQ came back under its id, so its settings are kept.
-  //   DECK_MOA_ARCHIVE_LIST / _ACK: the decisions the HQ migration archived and
-  //   their one-time notice. DECK_MOA_STORE_RESET moves an unreadable
-  //   deck-hq.json aside and starts over (Moa off, no HQ).
-  DECK_MOA_STATE: 'deck:moa:state',
+  //   DECK_MOA_DECISIONS — every workspace's pending bot question, for Fleet's
+  //   tickets and the phone sidebar ({ decisions: MoaPendingDecision[] }).
+  //   DECK_MOA_CHANGED (send, main → renderer, no payload) says it moved.
   DECK_MOA_CHANGED: 'deck:moa:changed',
-  DECK_MOA_CONFIG_SET: 'deck:moa:config:set',
-  DECK_MOA_SETUP: 'deck:moa:setup',
-  DECK_MOA_ARCHIVE_LIST: 'deck:moa:archive:list',
-  DECK_MOA_ARCHIVE_ACK: 'deck:moa:archive:ack',
-  DECK_MOA_STORE_RESET: 'deck:moa:store:reset',
-  //   DECK_MOA_GOAL_END: the operator ends Moa's open goal contract
-  //   (moaGoalContract.ts) from Settings › Moa. Ending only takes powers away.
-  DECK_MOA_GOAL_END: 'deck:moa:goal:end',
-  //   DECK_MOA_GOAL_REVERT: "Revert this goal" — close the PRs Moa opened
-  //   for a completed goal (moaGoalDelivery.ts). Branches and history stay.
-  DECK_MOA_GOAL_REVERT: 'deck:moa:goal:revert',
-  //   DECK_MOA_DRAFT_ANSWER: approve or dismiss a learning-loop goal draft
-  //   (moaGoalLearning.ts). Approve proposes and approves it as a goal.
-  DECK_MOA_DRAFT_ANSWER: 'deck:moa:draft:answer',
-  //   DECK_MOA_SHADOW_STATS — the shadow judge's readout (MoaShadowStats).
-  DECK_MOA_SHADOW_STATS: 'deck:moa:shadow:stats',
-  //   DECK_MOA_MEMORY_LIST / _DELETE: what Moa remembers (saved precedents,
-  //   notes and skills, all approved by the operator) and deleting one by
-  //   { kind, name }. DECK_MOA_CHANGED also says this list moved.
-  DECK_MOA_MEMORY_LIST: 'deck:moa:memory:list',
-  DECK_MOA_MEMORY_DELETE: 'deck:moa:memory:delete',
-  //   DECK_MOA_MEMORY_CARD: the pending "Remember this?" card with the full
-  //   text Save would write, or null. DECK_MOA_MEMORY_RESOLVE { id, answer:
-  //   'save' | 'discard', fullTextShown } answers it. DECK_MOA_CHANGED says the
-  //   card moved (raised, answered, next).
-  DECK_MOA_MEMORY_CARD: 'deck:moa:memory:card',
-  DECK_MOA_MEMORY_RESOLVE: 'deck:moa:memory:resolve',
-  //   DECK_MOA_DECISIONS — every workspace's pending decision, for the right
-  //   panel's "Waiting on you" ({ decisions: MoaPendingDecision[] }); a change
-  //   rides DECK_MOA_CHANGED.
-  //   DECK_MOA_TRANSCRIPT_* — the HQ brain's Claude transcript, projected in
-  //   main by the same TranscriptProjector the phone turn view uses (the brain
-  //   pane is never a daemon transcript session). STATUS / SNAPSHOT
-  //   ({ before? }) / SUBSCRIBE / UNSUBSCRIBE (invoke); APPEND (send, main →
-  //   renderer, TranscriptAppendData).
   DECK_MOA_DECISIONS: 'deck:moa:decisions',
-  // Permission prompts of agents Moa delegated work to ({ approvals:
-  // MoaDelegatedApproval[] }), for the panel's "Waiting on you".
-  DECK_MOA_DELEGATED_APPROVALS: 'deck:moa:delegated-approvals',
-  // Answer one of those prompts in place ({ approvalId, choiceKey,
-  // promptFingerprint } → MoaApprovalAnswerResult). Main presses only a prompt
-  // it lists above, through the daemon's first-party desktop answer.
-  DECK_MOA_DELEGATED_ANSWER: 'deck:moa:delegated-answer',
-  // A delegated task's result from its A2A completion evidence ({ workspaceId,
-  // taskId } → { result: MoaTaskResult | null }), for Moa's result card.
-  DECK_MOA_TASK_RESULT: 'deck:moa:task-result',
-  // Tasks between this PC's Moa and other PCs' Moa (brain links), newest
-  // first (invoke → { tasks: MoaRemoteTask[] }). Re-read on DECK_MOA_CHANGED.
-  DECK_MOA_REMOTE_TASKS: 'deck:moa:remote-tasks',
-  //   DECK_MOA_HANDOFF_RESOLVE (invoke MoaHandoffResolveRequest): answer a
-  //   hand-off card by id (main reads the body from its own store; an edited
-  //   body is the operator's own input). DECK_MOA_HANDOFF_RECEIPTS (invoke):
-  //   recent auto hand-offs. DECK_MOA_HANDOFF_STOP (invoke { id }): interrupt
-  //   the worker and cancel an auto hand-off's task.
-  DECK_MOA_HANDOFF_RESOLVE: 'deck:moa:handoff:resolve',
-  DECK_MOA_HANDOFF_RECEIPTS: 'deck:moa:handoff:receipts',
-  DECK_MOA_HANDOFF_STOP: 'deck:moa:handoff:stop',
-  DECK_MOA_TRANSCRIPT_STATUS: 'deck:moa:transcript:status',
-  DECK_MOA_TRANSCRIPT_SNAPSHOT: 'deck:moa:transcript:snapshot',
-  DECK_MOA_TRANSCRIPT_SUBSCRIBE: 'deck:moa:transcript:subscribe',
-  DECK_MOA_TRANSCRIPT_UNSUBSCRIBE: 'deck:moa:transcript:unsubscribe',
-  DECK_MOA_TRANSCRIPT_APPEND: 'deck:moa:transcript:append',
-  //   CODEBLOCK (invoke { srcOffset, n, eventId? }): one code-block body from
-  //   the HQ brain's transcript (the daemon cannot resolve the brain pty).
-  DECK_MOA_TRANSCRIPT_CODEBLOCK: 'deck:moa:transcript:codeblock',
-  //   DECK_MOA_APPROVAL — Moa's own permission prompt (#1772): the daemon's
-  //   pending `terminal_prompt` record for the HQ brain pane, or null
-  //   ({ approval: MoaApproval | null }). DECK_MOA_APPROVAL_ANSWER
-  //   { approvalId, choiceKey, promptFingerprint } presses one of its choices
-  //   (MoaApprovalAnswerResult). Renderer-only: the daemon RPCs behind them
-  //   (daemon.moa.prompt / daemon.moa.answerPrompt) have no pipe route, MCP
-  //   tool or CLI verb.
-  DECK_MOA_APPROVAL: 'deck:moa:approval',
-  DECK_MOA_APPROVAL_ANSWER: 'deck:moa:approval:answer',
-  //   DECK_MOA_DELEGATE_* — Moa's delegate decisions (moa_ask tickets) and their
-  //   merge effects; shapes in src/shared/moaDecision.ts. Renderer-only: no
-  //   pipe RPC, MCP tool or CLI verb resolves a decision or toggles a rule.
-  //   LIST (invoke) → MoaDelegateListResult. RESOLVE (invoke MoaResolveRequest
-  //   → MoaResolveResult). AUTO_SET (invoke MoaAutoRuleSetRequest →
-  //   MoaAutoRuleSetResult): the owner's per-rule auto toggle. DECISION_EVENT
-  //   (send, main → renderer, MoaDecisionEvent) and EFFECT_EVENT (send,
-  //   MoaEffectEvent) say a record was created or changed.
-  DECK_MOA_DELEGATE_LIST: 'deck:moa:delegate:list',
-  DECK_MOA_DELEGATE_RESOLVE: 'deck:moa:delegate:resolve',
-  DECK_MOA_DELEGATE_AUTO_SET: 'deck:moa:delegate:auto:set',
-  DECK_MOA_DELEGATE_DECISION_EVENT: 'deck:moa:delegate:decision',
-  DECK_MOA_DELEGATE_EFFECT_EVENT: 'deck:moa:delegate:effect',
   //   HOOKS_BRIDGE_* — the Claude Code hook bridge (wmux setup-hooks, in-app).
   //   STATUS reports whether the wmux hook entries are installed in
   //   ~/.claude/settings.json; INSTALL performs the same idempotent install as
@@ -455,32 +229,6 @@ export const IPC = {
   //   explicit-user-trigger constraint — never auto-run at boot.
   STATUSLINE_BRIDGE_STATUS: 'statusline:bridge:status',
   STATUSLINE_BRIDGE_INSTALL: 'statusline:bridge:install',
-  //   DECK_CONVERSATION_CLEAR — the operator's `/clear` for one workspace's
-  //   orchestrator: disposes the live brain (interrupting an in-flight turn)
-  //   and drops the persisted session id, so the next turn starts a FRESH SDK
-  //   conversation. The channel transcript deliberately stays — history is
-  //   the audit trail; only the brain's context resets.
-  DECK_CONVERSATION_CLEAR: 'deck:conversation:clear',
-  //   DECK_DECISION_* — the brain-raised decision gate. The orchestrator brain
-  //   calls the deck_ask_decision MCP tool to PAUSE its loop and ask the human
-  //   a decision; GET hydrates that pending decision on mount (so it shows
-  //   after a reboot) and RESOLVE is the human's answer, which un-blocks the
-  //   loop and resumes the brain. Same renderer-only trust boundary as DECK_SEND.
-  DECK_DECISION_GET: 'deck:decision:get',
-  DECK_DECISION_RESOLVE: 'deck:decision:resolve',
-  //   DECK_BRIEFING_* — the deterministic "welcome home" briefing. GET builds a
-  //   one-shot summary of EXISTING judgment-engine state (fleet, pending
-  //   decision, loop, delta-since-last-view) as a synchronous main-process READ:
-  //   no brain turn, no globalTurnGate acquire, renders in every autonomy mode
-  //   including 'off'. GET is PURE — SEEN is the separate acknowledge the card
-  //   sends once the briefing is actually rendered expanded, and only that
-  //   advances the "what you last saw" baseline (fetching must never consume a
-  //   delta nobody read). CONFIG get/set are the Settings enabled/autoShow
-  //   toggles. Same renderer-only trust boundary as DECK_DECISION_*.
-  DECK_BRIEFING_GET: 'deck:briefing:get',
-  DECK_BRIEFING_SEEN: 'deck:briefing:seen',
-  DECK_BRIEFING_CONFIG_GET: 'deck:briefing:config:get',
-  DECK_BRIEFING_CONFIG_SET: 'deck:briefing:config:set',
   //   WORKSPACE_MIRROR_PUSH (send) renderer → main: a fire-and-forget full
   //   snapshot of the workspace tree + per-pane agent status. Feeds the
   //   main-process WorkspaceMirror so routing / hook resolution can be served
@@ -682,6 +430,27 @@ export const IPC = {
   TRACK_RECORD_SCHEDULE_GET: 'trackRecord:schedule:get',
   TRACK_RECORD_SCHEDULE_SET: 'trackRecord:schedule:set',
   TRACK_RECORD_CLEAR: 'trackRecord:clear',
+  // Agent factory bots (main/ipc/handlers/factory.handler.ts); pushes ride
+  // BOT_EVENT (shared/bot.ts).
+  FACTORY_BOT_LIST: 'factory:bot:list',
+  FACTORY_BOT_STATUS: 'factory:bot:status',
+  FACTORY_SETTINGS_GET: 'factory:settings:get',
+  FACTORY_SETTINGS_SET: 'factory:settings:set',
+  // Settings › Factory's "Add bot" (shared/botCreate.ts); main window only.
+  FACTORY_BOT_CREATE: 'factory:bot:create',
+  // A bot's picture (shared/botCreate.ts): pick = main's open dialog, set =
+  // save or clear; main window only.
+  FACTORY_BOT_PICK_AVATAR: 'factory:bot:pickAvatar',
+  FACTORY_BOT_SET_AVATAR: 'factory:bot:setAvatar',
+  // "Add bot"'s repository for a workspace (shared/botCreate.ts); main window only.
+  FACTORY_BOT_SUGGEST_REPO: 'factory:bot:suggestRepo',
+  // Stop the running work of every bot / of one bot (main/factory/
+  // factoryStop.ts): turns, gates, workers; main window only.
+  FACTORY_STOP_ALL: 'factory:stop:all',
+  FACTORY_STOP_BOT: 'factory:stop:bot',
+  // The owner resumes the stopped worker of an ended bot task
+  // (main/factory/workerReclaim.ts); main window only.
+  FACTORY_WORKER_RESUME: 'factory:worker:resume',
   TRACK_RECORD_CHANGED: 'trackRecord:changed',
   // Git page ship button: the branch's status, commit / push / create PR
   GIT_SHIP_STATUS: 'gitShip:status',
@@ -698,6 +467,15 @@ export const IPC = {
   GH_LOGIN_START: 'ghLogin:start',
   GH_LOGIN_CANCEL: 'ghLogin:cancel',
   GH_LOGIN_EVENT: 'ghLogin:event',
+  // Agent factory rooms (main/ipc/handlers/room.handler.ts), the operator's
+  // side of room.* (shared/room.ts); card pushes ride ROOM_EVENT.
+  ROOM_STATUS: 'room:status',
+  ROOM_READ: 'room:read',
+  ROOM_THREADS: 'room:threads',
+  ROOM_POST: 'room:post',
+  ROOM_RESOLVE: 'room:resolve',
+  ROOM_DECISION: 'room:decision',
+  ROOM_ACTORS: 'room:actors',
   DIALOG_PICK_FILE: 'dialog:pick-file',
   DIALOG_PICK_FOLDER: 'dialog:pick-folder',
   // File system
@@ -707,6 +485,13 @@ export const IPC = {
   FS_WATCH: 'fs:watch',
   FS_UNWATCH: 'fs:unwatch',
   FS_CHANGED: 'fs:changed',
+  // File preview (#2150): open → token for wmux-preview://, close, settled change
+  PREVIEW_OPEN: 'preview:open',
+  PREVIEW_CLOSE: 'preview:close',
+  PREVIEW_CHANGED: 'preview:changed',
+  // HTML preview: allow a page's network; an http(s) link it tried to open
+  PREVIEW_SET_NETWORK: 'preview:set-network',
+  PREVIEW_LINK: 'preview:link',
   // Scrollback persistence
   SCROLLBACK_DUMP: 'scrollback:dump',
   SCROLLBACK_LOAD: 'scrollback:load',

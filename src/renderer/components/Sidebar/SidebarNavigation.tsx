@@ -5,13 +5,13 @@ import { isOurHandoffDrag } from '../Git/handoffDrag';
 /** How long a held drag waits over Workspaces before it opens. */
 export const SPRING_LOAD_MS = 500;
 import WebToggle from '../StatusBar/WebToggle';
-import { isMoaHqWorkspace } from '../../stores/slices/moaSlice';
 import { useStore } from '../../stores';
 import { selectFleetSectionCounts } from '../../stores/selectors/fleet';
 import { selectScheduleNavSummary } from '../../stores/selectors/schedules';
 import { formatNextShort } from '../Schedules/format';
 import { useT } from '../../hooks/useT';
-import { Icon, IconClock, IconGitBranch, IconGrid, IconRemoteDevices, IconUsers } from '../icons';
+import { Icon, IconClock, IconGitBranch, IconGrid, IconRemoteDevices, IconRobot, IconUsers } from '../icons';
+import { useBots, useBotsSync } from '../Bots/useBots';
 import { selectGitRailSignal } from '../Git/gitSignal';
 import { selectRemoteNeedsYou } from '../../stores/slices/a2aRemoteSlice';
 import type { AppRoute } from '../../stores/slices/uiSlice';
@@ -21,8 +21,8 @@ import { FOCUS_RING } from '../focusRing';
 export default function SidebarNavigation({ compact = false, home = false }: {
   compact?: boolean;
   /** The rail: pages only, each swapped into the sheet — Workspaces (home),
-   *  Fleet, Schedules and Remote. The command palette is not a page: ⌘K and
-   *  the rail's More menu open it. */
+   *  Bots, Fleet, Schedules, Remote and Git. The command palette is not a
+   *  page: ⌘K and the rail's More menu open it. */
   home?: boolean;
 }) {
   const t = useT();
@@ -72,11 +72,14 @@ export default function SidebarNavigation({ compact = false, home = false }: {
   const remoteNeeds = useStore(selectRemoteNeedsYou);
   const remoteNeedsText = remoteNeeds > 0 ? t('sidebar.fleetNeedsYou', { count: remoteNeeds }) : '';
   const remoteName = remoteNeedsText ? `${t('sidebar.remote')}, ${remoteNeedsText}` : t('sidebar.remote');
-  // Moa's HQ workspace has no rail entry (its panel and the panel's terminal
-  // view are its home), but it can still be the active workspace (Settings ›
-  // Moa, the panel's "open HQ"): Workspaces then leads back to the list.
-  const moaActive = useStore((s) => route === 'workspaces' && !s.activeRemoteKey
-    && !!s.moa?.hq.workspaceId && s.activeWorkspaceId === s.moa.hq.workspaceId);
+  // Bots: the bots' questions and their workers waiting on the owner —
+  // the sum of the page's own 1:1 rows (botsModel.ts). The rail keeps the
+  // page's rooms read, so the count is live before the page is opened.
+  const botsState = useBots();
+  useBotsSync(botsState, { focus: home });
+  const botsNeeds = home ? botsState.model.needsYou : 0;
+  const botsNeedsText = botsNeeds > 0 ? t('sidebar.fleetNeedsYou', { count: botsNeeds }) : '';
+  const botsName = botsNeedsText ? `${t('botsPage.title')}, ${botsNeedsText}` : t('botsPage.title');
   // The rail navigates (a page stays put when clicked again); the in-sheet
   // list keeps its toggles.
   const go = (page: AppRoute, toggle: () => void) => () => {
@@ -92,16 +95,11 @@ export default function SidebarNavigation({ compact = false, home = false }: {
     ...(home ? [{
       id: 'home', label: t('sidebar.workspaces'), name: t('sidebar.workspaces'), active: route === 'workspaces',
       icon: <IconGrid size={16} />,
-      onClick: () => {
-        const st = useStore.getState();
-        // From Moa's workspace, Workspaces means "back to my workspaces": the
-        // HQ is not in the list, so show the first listed one.
-        if (moaActive) {
-          const back = st.workspaces.find((w) => !isMoaHqWorkspace(st, w.id));
-          if (back) st.setActiveWorkspace(back.id);
-        }
-        st.setAppRoute('workspaces');
-      },
+      onClick: () => useStore.getState().setAppRoute('workspaces'),
+    }, {
+      id: 'bots', label: t('botsPage.title'), name: botsName, active: route === 'bots',
+      icon: <IconRobot size={16} />,
+      onClick: () => useStore.getState().setAppRoute('bots'),
     }] : [search]),
     {
       id: 'fleet', label: t('fleet.title'), name: fleetName, active: fleetOpen,
@@ -167,6 +165,7 @@ export default function SidebarNavigation({ compact = false, home = false }: {
             <span className="wmux-nav-icon" aria-hidden="true">{icon}</span>
             {!compact && <span className="wmux-nav-label min-w-0 flex-1 truncate text-left">{label}</span>}
             {id === 'fleet' && <FleetCounts compact={compact} badge needsYou={fleetCounts.needsYou} needsText={needsText} runningText={runningText} />}
+            {id === 'bots' && <FleetCounts compact={compact} badge needsYou={botsNeeds} needsText={botsNeedsText} runningText="" />}
             {id === 'remote' && <FleetCounts compact={compact} badge needsYou={remoteNeeds} needsText={remoteNeedsText} runningText="" />}
             {id === 'schedules' && <FleetCounts compact={compact} needsYou={schedules.needs} needsText={schedulesNeedsText} runningText={schedulesMutedText} />}
             {id === 'git' && gitSignal && <span className="wmux-nav-count wmux-nav-alert" data-git-nav-signal aria-hidden="true" />}

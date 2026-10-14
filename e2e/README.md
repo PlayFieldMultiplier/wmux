@@ -10,10 +10,7 @@ or vitest.
   `WMUX_DATA_SUFFIX=-e2e`, so it never touches a real wmux, and it kills its
   own app, daemon and ptys afterwards (matched by `WMUX_E2E_RUN` / `HOME`).
 - **No model**: `e2e/fake-bin/claude` stands in for Claude Code. As a fan-out
-  worker it runs the scenario's shell script in its worktree. Moa's brain is
-  played by the test over the pipe RPC with a real commander token, which the
-  dev-only hook in `src/main/e2eHooks.ts` mints (unpackaged build +
-  `WMUX_E2E_HOOKS=1` only).
+  worker it runs the scenario's shell script in its worktree.
 - **Local remote**: the project is cloned from a bare repository in the sandbox.
 - **Artifacts**: screenshots go to `e2e/artifacts/` (override with
   `WMUX_E2E_ARTIFACTS`). Set `WMUX_E2E_SKIP_BUILD=1` to reuse a build and
@@ -25,7 +22,6 @@ or vitest.
 
 ## Scenarios
 
-- `goal.e2e.test.mjs` — Moa goal evidence gate (brain played over the pipe RPC).
 - `fanout-cost.e2e.test.mjs` — the fan-out cost baseline (PRD E0 R0-2). An
   ordinary agent pane fans out three tasks and follows them to
   `review_requested`. `fanout-parent.mjs` plays that parent inside the pane

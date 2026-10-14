@@ -9,10 +9,10 @@ import { selectActiveWorkspaceSummary } from '../../stores/selectors/workspacePr
 import { tokenAttrs } from '../../themes';
 import { HIT_TARGET_24 } from '../hitArea';
 import { IconGear, IconCornerUpLeft } from '../icons';
-import { selectFleetPanes, sortFleetPanes, selectFleetSectionCounts, fleetHqId, type FleetPane } from '../../stores/selectors/fleet';
+import { selectFleetPanes, sortFleetPanes, selectFleetSectionCounts, type FleetPane } from '../../stores/selectors/fleet';
 import PluginStatusBarWidgets from '../../plugins/PluginStatusBarWidgets';
 import { COMPANY_MODE_ENABLED } from '../../../shared/featureFlags';
-import MoaTitlebarButton from '../Moa/MoaTitlebarButton';
+import RoomDockToggle from '../Room/RoomDockToggle';
 import FileTreeToggle from '../Titlebar/FileTreeToggle';
 import { FOCUS_RING } from '../focusRing';
 import type { StoreState } from '../../stores';
@@ -157,8 +157,6 @@ export default function StatusBar() {
   // re-render only when a count actually changes.
   const fleetVitals = useStore(
     useShallow((s) => {
-      // Moa's HQ is the main bot, not a worker: off the vitals as off Fleet.
-      const hqId = fleetHqId(s);
       const panes = selectFleetPanes({
         workspaces: s.workspaces,
         surfaceAgentStatus: s.surfaceAgentStatus,
@@ -167,7 +165,7 @@ export default function StatusBar() {
         surfacePendingQuestion: s.surfacePendingQuestion,
         remoteWorkspaces: s.remoteWorkspaces,
         usageLimitWaiting: s.usageLimitWaiting,
-      }).filter((p) => isFleetAgentRow(p) && p.workspaceId !== hqId);
+      }).filter((p) => isFleetAgentRow(p));
       return {
         running: panes.filter((p) => p.agentStatus === 'running').length,
       };
@@ -180,7 +178,6 @@ export default function StatusBar() {
   // Jump to the most urgent pane — computed at click time (no subscription).
   const jumpToUrgent = () => {
     const s = useStore.getState();
-    const hqId = fleetHqId(s);
     const panes = sortFleetPanes(
       selectFleetPanes({
         workspaces: s.workspaces,
@@ -190,7 +187,7 @@ export default function StatusBar() {
         surfacePendingQuestion: s.surfacePendingQuestion,
         remoteWorkspaces: s.remoteWorkspaces,
         usageLimitWaiting: s.usageLimitWaiting,
-      }).filter((p) => isFleetAgentRow(p) && p.workspaceId !== hqId),
+      }).filter((p) => isFleetAgentRow(p)),
       'attention',
     );
     const target = panes[0];
@@ -333,13 +330,12 @@ export default function StatusBar() {
         <NotificationBellBadgeView unreadCount={unreadCount} onActivate={toggleNotificationPanel} />
         {/* A5: 메모리 + 시각(시계 커서 의존) — 분리된 소형 컴포넌트. */}
         <StatusClockTime />
-        {/* The titlebar's right end: the file tree toggle, then Moa's button
-            while Moa is on (the dock's only toggle), left of the Windows
-            window controls (the titlebar reserves their strip). Settings
-            lives in the rail's More menu. */}
+        {/* The titlebar's right end: the file tree toggle, then the room
+            dock's toggle, left of the Windows window controls (the titlebar
+            reserves their strip). Settings lives in the rail's More menu. */}
         <span className="flex items-center gap-1">
           <FileTreeToggle />
-          <MoaTitlebarButton />
+          <RoomDockToggle />
         </span>
       </div>
     </div>

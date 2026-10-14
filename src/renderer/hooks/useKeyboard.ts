@@ -22,7 +22,7 @@ import { OPEN_MENTION_PICKER_EVENT } from '../utils/agentMentionInsert';
 import { isChatV2Covering } from '../components/ChatV2/coverage';
 import { showWorkspaces } from '../utils/showWorkspaces';
 import { toggleFileTreePanel } from '../components/FileTree/fileTreeToggle';
-import { listedWorkspaces, moaHqId, refuseWorkspaceClose } from '../components/Moa/moaHqGuard';
+import { listedWorkspaces, refuseWorkspaceClose } from '../components/Moa/moaHqGuard';
 import { selectShortcutWorkspaces } from '../components/Sidebar/workspaceFilter';
 import {
   openMultiTask,
@@ -256,7 +256,7 @@ export function createPrefixActions(deps: PrefixActionDeps): Record<string, () =
     nextWorkspace: () => {
       const state = store.getState();
       const { activeWorkspaceId } = state;
-      const workspaces = listedWorkspaces(state.workspaces, moaHqId(state));
+      const workspaces = listedWorkspaces(state.workspaces);
       const currentIdx = workspaces.findIndex((w) => w.id === activeWorkspaceId);
       const next = workspaces[(currentIdx + 1) % workspaces.length];
       if (!next || next.id === activeWorkspaceId) return;
@@ -266,7 +266,7 @@ export function createPrefixActions(deps: PrefixActionDeps): Record<string, () =
     prevWorkspace: () => {
       const state = store.getState();
       const { activeWorkspaceId } = state;
-      const workspaces = listedWorkspaces(state.workspaces, moaHqId(state));
+      const workspaces = listedWorkspaces(state.workspaces);
       const currentIdx = workspaces.findIndex((w) => w.id === activeWorkspaceId);
       // From the HQ (not in the list), back to the last one.
       const prev = workspaces[currentIdx === -1 ? workspaces.length - 1 : (currentIdx - 1 + workspaces.length) % workspaces.length];
@@ -543,6 +543,7 @@ export function useKeyboard() {
       // S-C1 cockpit — every agent, one screen.
       toggleFleetView: () => { store.getState().toggleFleetView(); },
       toggleCompanyView: () => { store.getState().toggleCompanyView(); },
+      toggleBotsView: () => { store.getState().toggleBotsView(); },
       // Back to single view.
       clearMultiview: () => { store.getState().clearMultiview(); },
       // Browser panel in a new horizontal split. forceNew keeps the

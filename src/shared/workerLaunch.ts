@@ -197,9 +197,8 @@ const PERMISSION_FLAG_FOR_WORKER: Readonly<Record<FanoutWorkerPermissionMode, st
 
 /** The flags wmux appends for `mode`, as they appear on the line. */
 export function workerLaunchFlags(mode: FanoutWorkerPermissionMode, extraDisallowed: readonly string[] = []): string {
-  // Extra rules (the goal worker profile, shared/moaGoalWorker.ts) join the
-  // SAME quoted list: claude splits it on commas and spaces outside
-  // parentheses, so `Bash(git push*)` stays one rule.
+  // Extra rules join the SAME quoted list: claude splits it on commas and
+  // spaces outside parentheses, so `Bash(git push*)` stays one rule.
   return [
     PERMISSION_FLAG_FOR_WORKER[mode],
     `--allowedTools "${FANOUT_WORKER_ALLOWED_TOOLS.join(',')}"`,

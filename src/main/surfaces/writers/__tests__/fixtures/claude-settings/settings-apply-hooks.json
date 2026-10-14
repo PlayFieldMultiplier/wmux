@@ -1,0 +1,87 @@
+{
+  "r": {
+    "edits": [
+      {
+        "path": [
+          "hooks"
+        ],
+        "op": "set",
+        "value": {
+          "Stop": [
+            {
+              "type": "command",
+              "command": "back"
+            }
+          ]
+        }
+      },
+      {
+        "path": [
+          "permissions"
+        ],
+        "op": "delete"
+      }
+    ],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove hook \"go\" from Stop"
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "restore hook \"back\" to Stop"
+      },
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove \"Bash\" from permissions.deny"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:hook::go",
+      "claude:hook::back",
+      "claude:builtin-tool::Bash"
+    ]
+  },
+  "noStore": {
+    "edits": [],
+    "fileEdits": [
+      {
+        "path": "<home>/.claude/settings.json",
+        "summary": "remove hook \"go\" from Stop"
+      }
+    ],
+    "affectedItemIds": [
+      "claude:hook::go"
+    ]
+  },
+  "store": {
+    "version": 1,
+    "intents": {},
+    "removedHooks": {
+      "claude": [
+        {
+          "id": "claude:hook::back",
+          "definition": {
+            "event": "Stop",
+            "handler": {
+              "type": "command",
+              "command": "back"
+            }
+          }
+        },
+        {
+          "id": "claude:hook::go",
+          "definition": {
+            "event": "Stop",
+            "handler": {
+              "type": "command",
+              "command": "go",
+              "name": "go"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        }
+      ]
+    }
+  }
+}

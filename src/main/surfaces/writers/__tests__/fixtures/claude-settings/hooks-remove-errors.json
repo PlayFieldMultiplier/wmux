@@ -1,0 +1,102 @@
+{
+  "noHooks": {
+    "error": "Hook not found: hooks configuration missing",
+    "rootChanged": false,
+    "store": null
+  },
+  "hooksNotObject": {
+    "error": "Hook not found: hooks configuration missing",
+    "rootChanged": false,
+    "store": null
+  },
+  "noEvent": {
+    "error": "Hook not found in event configuration",
+    "rootChanged": false,
+    "store": null
+  },
+  "eventNotArray": {
+    "error": "Hook not found in event configuration",
+    "rootChanged": false,
+    "store": null
+  },
+  "noMatch": {
+    "error": "Hook not found in configuration",
+    "rootChanged": false,
+    "store": null
+  },
+  "twoMatches": {
+    "error": "More than one hook matches; edit this hook in the settings file by hand.",
+    "rootChanged": false,
+    "store": null
+  },
+  "secondChangeFails": {
+    "error": "Hook not found in configuration",
+    "rootChanged": false,
+    "store": null
+  },
+  "idHoldsOtherHook": {
+    "error": "More than one hook matches; edit this hook in the settings file by hand.",
+    "rootChanged": false,
+    "store": {
+      "version": 1,
+      "removedHooks": {
+        "claude": [
+          {
+            "id": "claude:hook::ok",
+            "definition": {
+              "event": "Stop",
+              "handler": {
+                "type": "command",
+                "name": "ok",
+                "command": "old"
+              }
+            },
+            "originPath": "<home>/.claude/settings.json"
+          }
+        ]
+      }
+    }
+  },
+  "idHoldsLegacyEntry": {
+    "error": "More than one hook matches; edit this hook in the settings file by hand.",
+    "rootChanged": false,
+    "store": {
+      "version": 1,
+      "removedHooks": {
+        "claude": [
+          {
+            "id": "claude:hook::ok",
+            "definition": {
+              "event": "Stop",
+              "type": "command",
+              "name": "ok"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "idHoldsSameHook": {
+    "error": null,
+    "rootChanged": true,
+    "store": {
+      "version": 1,
+      "intents": {},
+      "removedHooks": {
+        "claude": [
+          {
+            "id": "claude:hook::ok",
+            "definition": {
+              "event": "Stop",
+              "handler": {
+                "type": "command",
+                "name": "ok"
+              }
+            },
+            "originPath": "<home>/.claude/settings.json"
+          }
+        ]
+      }
+    }
+  }
+}

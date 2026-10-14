@@ -84,11 +84,9 @@ describe('openRemoteSessionAsTab (#1323 item 2)', () => {
 
   /** A store whose addRemoteSurface really adds the tab, so the returned id
    *  can be checked against what landed. */
-  function tabStore(workspaces: Workspace[], hqId: string | null = null) {
+  function tabStore(workspaces: Workspace[]) {
     const state: RemoteSessionTabStoreApi & { workspaces: Workspace[] } = {
       workspaces,
-      moa: null,
-      moaHqSeed: hqId,
       addRemoteSurface: vi.fn((paneId: string, hostId: string, sessionId: string, shell?: string, cwd?: string,
         workspaceId?: string, owned?: boolean, remoteWorkspaceId?: string) => {
         const ws = state.workspaces.find((w) => w.id === workspaceId);
@@ -143,15 +141,13 @@ describe('openRemoteSessionAsTab (#1323 item 2)', () => {
     expect((state.addRemoteSurface as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(target.rootPane.id);
   });
 
-  it('refuses another computer’s (shadow) workspace, the Moa HQ and an unknown one', () => {
+  it('refuses another computer’s (shadow) workspace and an unknown one', () => {
     const shadow = createWorkspace('Shadow', 1);
     shadow.id = formatShadowWorkspaceId('host-2', 'remote-ws') ?? '';
     expect(shadow.id).not.toBe('');
-    const hq = createWorkspace('Moa', 2);
-    const state = tabStore([shadow, hq], hq.id);
+    const state = tabStore([shadow]);
 
     expect(openRemoteSessionAsTab(() => state, shadow.id, MIRRORED)).toBeNull();
-    expect(openRemoteSessionAsTab(() => state, hq.id, MIRRORED)).toBeNull();
     expect(openRemoteSessionAsTab(() => state, 'no-such-workspace', MIRRORED)).toBeNull();
     expect(state.addRemoteSurface).not.toHaveBeenCalled();
   });

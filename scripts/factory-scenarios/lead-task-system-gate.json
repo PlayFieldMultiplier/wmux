@@ -1,0 +1,110 @@
+{
+  "name": "lead-task-system-gate",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner asks the lead for one change; the lead fans out one default task; the scripted worker reports review_requested. The task ends completed with a system gate and the lead takes one turn after it, without settling the task itself.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "delayMs": 1000
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "change A"
+                    ],
+                    "prompt": "Make the small change named in the title.",
+                    "preset": "default",
+                    "files": [
+                      [
+                        "a.txt"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "task read"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "post",
+      "label": "ask",
+      "post": {
+        "title": "Change A",
+        "body": "Make change A.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "report",
+      "cond": {
+        "workers": {
+          "event": "ledger_update",
+          "min": 1
+        }
+      },
+      "timeoutMs": 240000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "settled",
+      "cond": {
+        "ledger": {
+          "status": "completed",
+          "min": 1
+        }
+      },
+      "timeoutMs": 180000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 8000
+      },
+      "timeoutMs": 90000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "ledger",
+      "workers"
+    ],
+    "lead": "lead"
+  }
+}

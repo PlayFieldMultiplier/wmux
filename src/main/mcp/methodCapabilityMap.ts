@@ -309,13 +309,6 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // Brain self-resolve of a stale decision (WP3). Same commander-token auth +
   // server-side auto/staleness/substance gate, so no capability gate either.
   'deck.resolveDecision': { capability: null },
-  // Moa hand-off proposal. Own commander-token auth (HQ brain only) in
-  // deck.rpc.ts, and it only raises an operator card, so no capability gate.
-  'deck.proposeHandoff': { capability: null },
-  // Moa's goal contract. Own commander-token auth (HQ brain only) in
-  // deck.rpc.ts; the proposal only raises an operator card.
-  'deck.proposeGoal': { capability: null },
-  'deck.goal': { capability: null },
   // Orphan Deck state prune (`wmux deck state --prune --yes`). Runs inside the
   // app so its writes share the stores' in-process locks and caches; it
   // deletes state, so it carries the same internal gate as workspace.close.
@@ -586,12 +579,54 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'ledger.list':   { capability: 'ledger.read',  riskClass: 'a2a' },
   'ledger.update': { capability: 'ledger.write', riskClass: 'a2a' },
 
-  // --- Moa's delegate (pipe/handlers/moa.rpc.ts). Only the bundled server's
-  //     moa_ask / moa_ask_status call these (first-party lane); no plugin may
-  //     declare them. The handler stamps the asker from senderPtyId and answers
-  //     `off` while the delegate is off.
-  'moa.ask':       { capability: 'wmux.internal' },
-  'moa.askStatus': { capability: 'wmux.internal' },
+  // pr_verdict (pipe/handlers/verify.rpc.ts). Only the bundled server calls
+  // it (first-party lane); no plugin may declare it. The principal is stamped
+  // from senderPtyId or the bot token.
+  'verify.recordVerdict': { capability: 'wmux.internal' },
+
+  // --- Agent factory (main/factory/factoryHost.ts; shared/botSurface.ts) ---
+  // Reserved: no plugin may declare any of these. A bot reaches the ones on
+  // its role surface through the bot lane (its validated token), the bundled
+  // server through the first-party lane for the ones its bot tools call, the
+  // renderer through the operator lane. Handlers scope on ctx.bot.
+  'fact.poll':         { capability: 'wmux.internal' },
+  'fact.emit':         { capability: 'wmux.internal' },
+  'bot.list':          { capability: 'wmux.internal' },
+  'bot.create':        { capability: 'wmux.internal' },
+  'bot.update':        { capability: 'wmux.internal' },
+  'bot.remove':        { capability: 'wmux.internal' },
+  'bot.status':        { capability: 'wmux.internal' },
+  'bot.wake':          { capability: 'wmux.internal' },
+  'bot.park':          { capability: 'wmux.internal' },
+  'bot.resume':        { capability: 'wmux.internal' },
+  'bot.interrupt':     { capability: 'wmux.internal' },
+  'room.post':         { capability: 'wmux.internal' },
+  'room.read':         { capability: 'wmux.internal' },
+  'room.threads':      { capability: 'wmux.internal' },
+  'room.resolve':      { capability: 'wmux.internal' },
+  'handoff.send':      { capability: 'wmux.internal' },
+  'handoff.answer':    { capability: 'wmux.internal' },
+  'handoff.list':      { capability: 'wmux.internal' },
+  'ask.person':        { capability: 'wmux.internal' },
+  'pr.read':           { capability: 'wmux.internal' },
+  'issue.read':        { capability: 'wmux.internal' },
+  'ci.read':           { capability: 'wmux.internal' },
+  'verdict.read':      { capability: 'wmux.internal' },
+  'trustMetrics.read': { capability: 'wmux.internal' },
+  'plan.propose':      { capability: 'wmux.internal' },
+  'bot.setJob':          { capability: 'wmux.internal' },
+  'bot.stopMyWork':      { capability: 'wmux.internal' },
+  'bot.resumeWorker':    { capability: 'wmux.internal' },
+  'bot.workerMessage':   { capability: 'wmux.internal' },
+  'bot.questionClose':   { capability: 'wmux.internal' },
+  'routine.set':         { capability: 'wmux.internal' },
+  'routine.list':        { capability: 'wmux.internal' },
+  'routine.pause':       { capability: 'wmux.internal' },
+  'botApproval.request': { capability: 'wmux.internal' },
+  'botApproval.list':    { capability: 'wmux.internal' },
+  'botSecret.request':   { capability: 'wmux.internal' },
+  'botSecret.list':      { capability: 'wmux.internal' },
+  'botLogin.request':    { capability: 'wmux.internal' },
 
   // --- Task lifecycle (pipe/handlers/worktask.rpc.ts) ---
   // The reads answer "what did this task produce"; the writes run the task's
@@ -657,9 +692,6 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // Live Claude Code rate limits from the bundled statusline script — the same
   // internal caller class as hooks.signal.
   'usage.rateLimits': { capability: 'wmux.internal' },
-  // Moa's read gate asks which repositories it may read without a prompt.
-  // Read-only, answered from main's memory; the same internal caller class.
-  'deck.moaReadRoots': { capability: 'wmux.internal' },
 };
 
 /**

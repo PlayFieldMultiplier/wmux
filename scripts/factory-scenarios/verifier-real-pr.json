@@ -1,0 +1,132 @@
+{
+  "name": "verifier-real-pr",
+  "layer": "workflow",
+  "runs": 1,
+  "model": "real",
+  "description": "Manual, owner present: the real verifier on a bot PR of the scratch repo (the lead stays scripted so the PR is a bot task's). It fans out a real verify worker at the head and records a verdict on main's gate within five turns.",
+  "setup": {
+    "repo": true,
+    "worker": {
+      "commit": true
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "feat: add widget"
+                    ],
+                    "prompt": "Add a file widget.txt containing the word widget, commit it and report.",
+                    "preset": "default"
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "noted"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "repo": true
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "waitFor",
+      "label": "repo watch baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "ask-lead",
+      "post": {
+        "title": "Widget",
+        "body": "Please add the widget.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "lead task reported",
+      "cond": {
+        "ledger": {
+          "status": "review_requested"
+        }
+      },
+      "timeoutMs": 900000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addPr",
+      "fromBranch": "wtask/",
+      "pr": {
+        "number": 1,
+        "title": "feat: add widget",
+        "author": "octo",
+        "checks": "SUCCESS"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "verdict",
+      "cond": {
+        "facts": {
+          "kind": "verdict.recorded"
+        }
+      },
+      "timeoutMs": 1200000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 5000
+      },
+      "timeoutMs": 120000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "verdicts",
+      "ledger",
+      "ghCalls"
+    ],
+    "bot": "verifier",
+    "maxTurns": 5
+  }
+}

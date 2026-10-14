@@ -1,0 +1,109 @@
+{
+  "partial": {
+    "result": {
+      "provider": "claude",
+      "ok": false,
+      "appliedItemIds": [
+        "claude:builtin-tool::Bash"
+      ],
+      "backups": 1,
+      "error": "Some changes could not be applied."
+    },
+    "files": {
+      "<home>/.claude.json": null,
+      "<home>/.claude/settings.json": {},
+      "<project>/.claude/settings.local.json": null,
+      "<project>/.claude/settings.json": null
+    },
+    "store": {
+      "version": 1,
+      "intents": {
+        "claude": {
+          "claude:builtin-tool::Bash": true
+        }
+      },
+      "removedHooks": {}
+    }
+  },
+  "noProject": {
+    "thrown": "Project directory is required to toggle project MCP server",
+    "files": {
+      "<home>/.claude.json": null,
+      "<home>/.claude/settings.json": {},
+      "<project>/.claude/settings.local.json": null,
+      "<project>/.claude/settings.json": null
+    },
+    "store": {
+      "version": 1,
+      "intents": {
+        "claude": {
+          "claude:builtin-tool::Bash": true
+        }
+      },
+      "removedHooks": {}
+    }
+  },
+  "missingHook": {
+    "result": {
+      "provider": "claude",
+      "ok": false,
+      "appliedItemIds": [],
+      "backups": 0,
+      "error": "Cannot enable hook: definition not found in store"
+    },
+    "files": {
+      "<home>/.claude.json": null,
+      "<home>/.claude/settings.json": {},
+      "<project>/.claude/settings.local.json": null,
+      "<project>/.claude/settings.json": null
+    },
+    "store": {
+      "version": 1,
+      "intents": {
+        "claude": {
+          "claude:builtin-tool::Bash": true
+        }
+      },
+      "removedHooks": {}
+    }
+  },
+  "ambiguous": {
+    "result": {
+      "provider": "claude",
+      "ok": false,
+      "appliedItemIds": [],
+      "backups": 0,
+      "error": "More than one hook matches; edit this hook in the settings file by hand."
+    },
+    "files": {
+      "<home>/.claude.json": null,
+      "<home>/.claude/settings.json": {
+        "hooks": {
+          "Stop": [
+            {
+              "hooks": [
+                {
+                  "type": "command"
+                },
+                {
+                  "type": "command"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "<project>/.claude/settings.local.json": null,
+      "<project>/.claude/settings.json": null
+    },
+    "store": {
+      "version": 1,
+      "intents": {
+        "claude": {
+          "claude:builtin-tool::Bash": true
+        }
+      },
+      "removedHooks": {}
+    }
+  }
+}

@@ -5,6 +5,7 @@ import FleetView from '../FleetView/FleetView';
 import SchedulesView from '../Schedules/SchedulesView';
 import RemotePage from '../Remote/RemotePage';
 import GitPage from '../Git/GitPage';
+import BotsPage from '../Bots/BotsPage';
 import { PAGES_BESIDE_DOCK } from './pagesBesideDock';
 import { useT } from '../../hooks/useT';
 import { selectSelectedRemotePcName } from '../Git/thisComputerOnly';
@@ -12,7 +13,7 @@ import { selectSelectedRemotePcName } from '../Git/thisComputerOnly';
 const SettingsPanel = lazy(() => import('../Settings/SettingsPanel'));
 
 /** Rail pages that show this computer only (Remote is about the others). */
-const THIS_COMPUTER_PAGES: ReadonlySet<string> = new Set(['fleet', 'schedules', 'git']);
+const THIS_COMPUTER_PAGES: ReadonlySet<string> = new Set(['bots', 'fleet', 'schedules', 'git']);
 
 /**
  * The muted line a rail page shows while another computer is selected in the
@@ -91,11 +92,12 @@ function useInsetBesideDock(enabled: boolean, page: React.RefObject<HTMLDivEleme
  * The page the rail has swapped into the sheet, drawn over the Workspaces
  * page (sidebar, panes, dock) that stays mounted and inert underneath — so
  * PTYs, scrollback, the WebGL atlas and IME state survive the round trip and
- * no terminal is ever resized. Every page but Settings covers only the sidebar
- * and the panes: the dock stays in view and in reach beside it, inline or as
- * the narrow-window overlay. Settings covers the whole sheet; it also stays
- * mounted while inspect mode is picking colours, when it shrinks to its
- * floating bar.
+ * no terminal is ever resized. Every page but Bots and Settings covers
+ * only the sidebar and the panes: the dock stays in view and in reach beside
+ * it, inline or as the narrow-window overlay. Bots covers the whole sheet
+ * (its conversation is the page) with the dock inert underneath. Settings
+ * covers the whole sheet too; it also stays mounted while inspect mode is
+ * picking colours, when it shrinks to its floating bar.
  */
 export default function RailPage() {
   const t = useT();
@@ -137,6 +139,7 @@ export default function RailPage() {
       )}
       {/* The page's own box: Schedules fills it absolutely, the others flex. */}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {route === 'bots' && <ErrorBoundary name="BotsPage"><BotsPage /></ErrorBoundary>}
         {route === 'fleet' && <ErrorBoundary name="FleetView"><FleetView /></ErrorBoundary>}
         {route === 'schedules' && <ErrorBoundary name="SchedulesView"><SchedulesView /></ErrorBoundary>}
         {route === 'remote' && <ErrorBoundary name="RemotePage"><RemotePage /></ErrorBoundary>}

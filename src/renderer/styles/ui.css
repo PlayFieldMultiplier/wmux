@@ -960,6 +960,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-schedules-row:hover { background: var(--hover-fill); }
 .wmux-schedules-row[aria-current="true"], .wmux-schedules-row[aria-pressed="true"] { background: var(--selection); }
 .wmux-schedules-row[data-off="true"] { color: var(--text-muted); }
+.wmux-schedules-row-static:hover { background: transparent; }
 .wmux-schedules-new { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-sub); }
 .wmux-schedules-row-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; font-weight: 500; }
 .wmux-schedules-row-meta { font-size: 11px; color: var(--text-muted); }
@@ -2830,3 +2831,16 @@ button.wmux-a2a-row:hover { background: var(--hover-fill); }
 .wmux-git-guide-current { outline: 1px solid var(--primary, currentColor); border-radius: 6px; padding: 4px 6px; }
 .wmux-git-guide-items { list-style: disc; padding-left: 18px; font-size: 12px; }
 .wmux-git-approve-ready { outline: 2px solid var(--primary, currentColor); outline-offset: 1px; }
+
+/* File preview (#2150): the checkerboard behind an image shows where it is
+ * transparent. Drawn from the theme so it reads in light and dark alike. */
+.wmux-preview-checker {
+  background-color: var(--bg-base);
+  background-image: conic-gradient(
+    color-mix(in srgb, var(--text-main) 7%, transparent) 25%,
+    transparent 0 50%,
+    color-mix(in srgb, var(--text-main) 7%, transparent) 0 75%,
+    transparent 0
+  );
+  background-size: 16px 16px;
+}

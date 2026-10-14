@@ -1,0 +1,32 @@
+{
+  "name": "reply-in-wake-thread",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "An issue.opened fact wakes the triage bot; its card (posted without a thread) lands in the issue's thread, not in general.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "triage",
+        "role": "triage",
+        "repo": true,
+        "script": { "turns": [ { "steps": [
+          { "tool": "room_post", "args": { "kind": "triage", "title": "Triage: crash on start", "body": "Looked at the report; reproduction pending." } }
+        ] } ] }
+      }
+    ]
+  },
+  "actions": [
+    { "do": "emit", "label": "issue", "fact": { "kind": "issue.opened", "repoKey": "{{repoKey}}", "ref": { "issue": 7 }, "actor": { "kind": "github" }, "payload": { "author": "octo", "title": "crash on start", "labels": [] } } },
+    { "do": "waitFor", "label": "triage turn done", "cond": { "wakes": { "bot": "triage", "state": "done" } }, "timeoutMs": 90000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 2000 }, "timeoutMs": 30000 }
+  ],
+  "expect": {
+    "requires": ["facts", "cards", "bots", "wakes"],
+    "fact": "issue",
+    "bot": "triage",
+    "cardKind": "triage",
+    "thread": "issue:github.com/acme/app#7"
+  }
+}

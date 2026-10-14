@@ -117,20 +117,9 @@ blocks or fails the delivery or decision that triggered it.
   (`ClaudeWorker`) bypass the router. They record the daemon's committed
   state, or the requested state once the renderer accepted it, and nothing
   when neither committed.
-- **Decisions.** `deck_ask_decision({ task_id })` attaches the new decision to
-  that task's link when the asking brain's workspace is the link's requester
-  or owner. The reply carries `linked: true`, or `linked: false` with
-  `linkError: 'unknown_task' | 'not_your_task'`. The decision is raised either
-  way. A stale decision that is re-raised without `task_id` gets a new id, and
-  that id is kept on the old one's links. When it is re-raised with a
-  `task_id`, the new decision goes to that task. The old link stops being
-  `needs-you` as soon as the old decision is gone.
 
 What counts as Moa: a send whose router context carries a commander binding
-(`ctx.commanderWorkspace`) is recorded as `origin: 'moa'`. With an HQ
-designated (`getHqWorkspaceId()` in `deckHqStore.ts`), only the HQ runs a
-brain, so these sends are exactly the HQ's delegations. With no HQ designated,
-each workspace's own orchestrator brain counts as that workspace's Moa.
+(`ctx.commanderWorkspace`) is recorded as `origin: 'moa'`.
 
 Coming from the two lanes:
 
@@ -147,9 +136,6 @@ Coming from the two lanes:
   read for a linked branch. `prStatus` feeds the `review`/`blocked`/`done`
   part of the derivation.
 - **Fanout:** upsert with the worker's `worktree`, `agent` and task id.
-- **Moa:** the brain sees `task_id` in the `deck_ask_decision` schema, but no
-  brain prompt asks for it yet. Teaching Moa to pass it for task-bound
-  decisions belongs to the task-card lane.
 
 ## Consumers
 

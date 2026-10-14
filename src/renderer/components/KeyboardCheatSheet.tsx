@@ -297,6 +297,28 @@ export default function KeyboardCheatSheet() {
     if (cheatSheetForceShown) setCheatSheetForceShown(false);
   }, [cheatSheetForceShown, setCheatSheetForceShown]);
 
+  // It belongs to the page it was opened on: switching rail pages closes it,
+  // and so does a click anywhere outside it.
+  const appRoute = useStore((s) => s.appRoute);
+  const openedOn = useRef(appRoute);
+  useEffect(() => {
+    if (hidden) {
+      openedOn.current = appRoute;
+      return;
+    }
+    if (appRoute !== openedOn.current) onDismiss();
+  }, [appRoute, hidden, onDismiss]);
+  useEffect(() => {
+    if (hidden || (cheatSheetDismissed && !cheatSheetForceShown) || typeof document === 'undefined') return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target;
+      if (target instanceof Element && target.closest('[data-testid="keyboard-cheat-sheet"]')) return;
+      onDismiss();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [hidden, cheatSheetDismissed, cheatSheetForceShown, onDismiss]);
+
   const onDontShowAgainChange = useCallback(
     (checked: boolean) => {
       setDontShowAgain(checked);

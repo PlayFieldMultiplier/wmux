@@ -12,6 +12,7 @@ import {
 } from './quietInput';
 import type { RpcRouter } from '../RpcRouter';
 import { isHostedCaller, type RpcContext } from '../../../shared/rpc';
+import type { BotBinding } from '../../../shared/bot';
 import type { PTYManager } from '../../pty/PTYManager';
 import type { DaemonClient } from '../../DaemonClient';
 import { sendToRenderer } from './_bridge';
@@ -56,6 +57,8 @@ import {
 } from '../../workspace/ptyOwnership';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { getWorkerResumePorts, workerWorkspaceOf } from '../../factory/workerReclaim';
+import { hasRedactedSecrets, redactStoredSecrets } from '../../factory/secretRedaction';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 
 type GetWindow = () => BrowserWindow | null;
@@ -544,6 +547,40 @@ export function decideTerminalOmittedTarget(senderPtyId: string): {
   };
 }
 
+/** The renderer's row count for a read with no `tail_lines`
+ *  (renderer/utils/terminalTail.ts DEFAULT_READ_TAIL_LINES). */
+const READ_SCREEN_DEFAULT_TAIL_LINES = 300;
+/** Rows read above a bot's requested tail, so a stored secret value wrapped
+ *  across the tail's first rows is masked as a whole. */
+const SECRET_CONTEXT_ROWS = 64;
+
+/**
+ * A bot's screen read: with stored secrets, the tail is read with rows above
+ * it, masked, and only then cut to the rows asked for, so a value wrapped
+ * across the tail's top edge is masked as one value. Any other read goes to
+ * the renderer as it is (RpcRouter still masks a bot's result).
+ */
+async function readScreenFor(getWindow: GetWindow, params: Record<string, unknown>, forBot: boolean): Promise<unknown> {
+  if (!forBot || !hasRedactedSecrets() || params['full_scrollback'] === true) {
+    return sendToRenderer(getWindow, 'input.readScreen', params);
+  }
+  const rawTail = params['tail_lines'];
+  const cap = typeof rawTail === 'number' && Number.isFinite(rawTail) && rawTail > 0
+    ? Math.floor(rawTail)
+    : READ_SCREEN_DEFAULT_TAIL_LINES;
+  const read = await sendToRenderer(getWindow, 'input.readScreen', { ...params, tail_lines: cap + SECRET_CONTEXT_ROWS });
+  if (read === null || typeof read !== 'object' || Array.isArray(read)) return read;
+  const r = read as Record<string, unknown>;
+  if (typeof r['text'] !== 'string') return read;
+  const tail = redactStoredSecrets(r['text']).split('\n').slice(-cap);
+  const below = r['rowsBelowCursor'];
+  return {
+    ...r,
+    text: tail.join('\n'),
+    ...(typeof below === 'number' ? { rowsBelowCursor: Math.min(below, tail.length) } : {}),
+  };
+}
+
 /**
  * Resolves the active ptyId from the renderer when none is provided. Scoped to
  * the caller's workspace (not the globally UI-focused one) so an external caller
@@ -966,6 +1003,9 @@ export interface InputRpcDeps {
   /** Injected in tests; the daemon's open a2a tasks for a workspace (see
    *  a2aOpenTasks). Defaults to the daemon's `a2a.task.query`. */
   queryDaemonTasks?: (workspaceId: string) => Promise<unknown[] | null>;
+  /** Injected in tests; the workspaces of a bot's reclaimed workers (ended
+   *  tasks it started, factory/workerReclaim.ts), for its own reads. */
+  reclaimedWorkerWorkspaces?: (botId: string, ownerWorkspaceId: string) => string[];
 }
 
 /** Budget for one daemon state read while a fresh-context step polls. */
@@ -1006,6 +1046,10 @@ export function registerInputRpc(
   deliveryGate: (ptyId: string) => Promise<GatedSubmitRefusal | null>;
 } {
   const ledgerOf = deps.getLedger ?? getTaskLedger;
+  const reclaimedOf = deps.reclaimedWorkerWorkspaces ?? ((botId: string, owner: string): string[] =>
+    (getWorkerResumePorts()?.store.all() ?? [])
+      .filter((r) => r.botId === botId && r.ownerWorkspaceId === owner)
+      .map((r) => workerWorkspaceOf(r)));
 
   /**
    * The fresh-context step for one new-task send (#1680), against the live
@@ -1113,6 +1157,24 @@ export function registerInputRpc(
           .filter((ws) => typeof ws === 'string' && ws.length > 0),
     };
   };
+
+  /** A bot's owner lane: the open tasks of its workspace that it started
+   *  (the ledger row's dispatch origin names the bot). */
+  // Its open tasks, and the panes of ended tasks whose worker main reclaimed
+  // (a resume may run there, in the task's own or a new workspace).
+  const botTaskLane = (bot: BotBinding): TaskOwnerLane => ({
+    commanderWorkspace: bot.workspaceId,
+    openTaskWorkspacesOf: (owner) =>
+      owner !== bot.workspaceId
+        ? []
+        : [
+          ...ledgerOf()
+            .list({ ownerWorkspaceId: owner, openOnly: true })
+            .filter((e) => e.dispatch?.origin.kind === 'bot' && e.dispatch.origin.botId === bot.botId)
+            .map((e) => e.taskWorkspaceId),
+          ...reclaimedOf(bot.botId, owner),
+        ].filter((ws) => typeof ws === 'string' && ws.length > 0 && ws !== owner),
+  });
 
   /** The untrusted label, only on a pane reached through the owner lane. */
   const untrustedLabel = (access: PtyAccess): Record<string, unknown> =>
@@ -1530,7 +1592,10 @@ export function registerInputRpc(
    * the result is labeled untrusted.
    */
   router.register('input.readScreen', async (params, ctx?: RpcContext) => {
-    const p = params ?? {};
+    // A factory bot reads its own workspace and the task panes it started,
+    // nothing else: its workspace comes from its binding, never a param.
+    const bot = ctx?.bot;
+    const p = bot ? { ...(params ?? {}), workspaceId: bot.workspaceId } : params ?? {};
     const callerWs = typeof p['workspaceId'] === 'string' ? p['workspaceId'] : undefined;
 
     if (typeof p['ptyId'] === 'string' && p['ptyId'].length > 0) {
@@ -1539,24 +1604,24 @@ export function registerInputRpc(
         p['ptyId'],
         callerWs,
         'input.readScreen',
-        taskOwnerLane(p, ctx),
+        bot ? botTaskLane(bot) : taskOwnerLane(p, ctx),
       );
       if (access.lane !== 'task-owner') {
-        return sendToRenderer(getWindow, 'input.readScreen', p);
+        return readScreenFor(getWindow, p, !!bot);
       }
       // The renderer re-checks the pty against `workspaceId`, and the caller's
       // own workspace does not hold it — name the task workspace the lane
       // resolved, never a caller-supplied one.
-      const read = await sendToRenderer(getWindow, 'input.readScreen', {
+      const read = await readScreenFor(getWindow, {
         ...p,
         workspaceId: access.taskWorkspaceId,
-      });
+      }, !!bot);
       return read !== null && typeof read === 'object' && !Array.isArray(read)
         ? { ...(read as Record<string, unknown>), ...untrustedLabel(access) }
         : { value: read, ...untrustedLabel(access) };
     }
 
-    const result = await sendToRenderer(getWindow, 'input.readScreen', p);
+    const result = await readScreenFor(getWindow, p, !!bot);
     const readPtyId =
       result !== null &&
       typeof result === 'object' &&

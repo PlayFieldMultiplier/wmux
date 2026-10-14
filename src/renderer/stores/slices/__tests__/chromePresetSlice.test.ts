@@ -12,7 +12,6 @@ import {
 import { useStore } from '../../index';
 
 type TestState = ChromePreferenceValues & ChromePresetSlice & {
-  activeDeckTab: 'commander' | 'channels' | 'git';
   unrelatedPreference: string;
 };
 
@@ -20,7 +19,6 @@ function createTestStore() {
   return create<TestState>()(
     immer((...args) => ({
       ...CHROME_PRESET_VALUES.standard,
-      activeDeckTab: 'commander' as const,
       unrelatedPreference: 'keep me',
       // @ts-expect-error — this focused store supplies only the fields touched
       // by createChromePresetSlice, not the complete renderer StoreState.
@@ -42,7 +40,6 @@ function pickChromeValues(state: ChromePreferenceValues): ChromePreferenceValues
 afterEach(() => {
   useStore.setState({
     ...CHROME_PRESET_VALUES.standard,
-    activeDeckTab: 'commander',
   });
 });
 
@@ -52,7 +49,6 @@ describe('ChromePresetSlice', () => {
     store.setState({
       channelsTabVisible: true,
       channelDockVisible: true,
-      activeDeckTab: 'channels',
     });
     const subscriber = vi.fn();
     store.subscribe(subscriber);
@@ -60,7 +56,6 @@ describe('ChromePresetSlice', () => {
     store.getState().applyChromePreset('minimal');
 
     expect(pickChromeValues(store.getState())).toEqual(CHROME_PRESET_VALUES.minimal);
-    expect(store.getState().activeDeckTab).toBe('commander');
     expect(store.getState().unrelatedPreference).toBe('keep me');
     expect(subscriber).toHaveBeenCalledTimes(1);
   });
@@ -71,13 +66,11 @@ describe('ChromePresetSlice', () => {
       ...CHROME_PRESET_VALUES.minimal,
       channelsTabVisible: true,
       channelDockVisible: true,
-      activeDeckTab: 'channels',
     });
 
     store.getState().applyChromePreset('standard');
 
     expect(pickChromeValues(store.getState())).toEqual(CHROME_PRESET_VALUES.standard);
-    expect(store.getState().activeDeckTab).toBe('commander');
     expect(store.getState()).not.toHaveProperty('chromePreset');
     expect(store.getState()).not.toHaveProperty('chromePresetMode');
   });
@@ -104,7 +97,6 @@ describe('ChromePresetSlice', () => {
       sidebarVisible: true,
       channelsTabVisible: true,
       channelDockVisible: true,
-      activeDeckTab: 'channels' as const,
     };
 
     useStore.setState(startingState);
@@ -114,17 +106,11 @@ describe('ChromePresetSlice', () => {
     setters.setSidebarVisible(false);
     setters.setChannelsTabVisible(false);
     setters.setChannelDockVisible(false);
-    const expected = {
-      ...pickChromeValues(useStore.getState()),
-      activeDeckTab: useStore.getState().activeDeckTab,
-    };
+    const expected = pickChromeValues(useStore.getState());
 
     useStore.setState(startingState);
     useStore.getState().applyChromePreset('minimal');
 
-    expect({
-      ...pickChromeValues(useStore.getState()),
-      activeDeckTab: useStore.getState().activeDeckTab,
-    }).toEqual(expected);
+    expect(pickChromeValues(useStore.getState())).toEqual(expected);
   });
 });

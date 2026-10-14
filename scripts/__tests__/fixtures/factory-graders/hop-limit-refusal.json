@@ -1,0 +1,1388 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "hop-limit-refusal",
+  "run": 1,
+  "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-e01e86dc",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Moa",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881359537,
+    "updatedAt": 1791881359537
+   },
+   {
+    "version": 1,
+    "id": "bot-c97b99ee",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "enabled": true,
+    "createdAt": 1791881359541,
+    "updatedAt": 1791881359541
+   }
+  ],
+  "botKeys": {
+   "moa": "bot-e01e86dc",
+   "lead": "bot-c97b99ee"
+  },
+  "injected": [
+   {
+    "label": "kick-moa",
+    "kind": "wake",
+    "id": "w-mv6fw9tj-054c9041",
+    "botKey": "moa",
+    "at": 1791881359542
+   }
+  ],
+  "actions": [
+   {
+    "at": 1791881359542,
+    "do": "wake",
+    "label": "kick-moa",
+    "result": {
+     "ok": true,
+     "wake": {
+      "id": "w-mv6fw9tj-054c9041",
+      "botId": "bot-e01e86dc",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "reason": {
+       "kind": "manual",
+       "by": "human"
+      },
+      "priority": 1,
+      "enqueuedAt": 1791881359543,
+      "attempts": 0,
+      "state": "queued"
+     }
+    }
+   },
+   {
+    "at": 1791881359547,
+    "do": "waitFor",
+    "label": "refusal",
+    "ok": true,
+    "doneAt": 1791881370106
+   },
+   {
+    "at": 1791881370106,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1791881373130
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mv6fwdtp-305e4b4bc196",
+    "seq": 1,
+    "kind": "handoff.received",
+    "at": 1791881364733,
+    "dedupeKey": "handoff.received:h-mv6fwdtnc541ba1c17cd",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwdtnc541ba1c17cd",
+     "botId": "bot-c97b99ee"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e01e86dc"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Next step",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   },
+   {
+    "id": "f-0mv6fwhti-8046bc88fe87",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1791881369910,
+    "dedupeKey": "handoff.received:h-mv6fwhtha8cc1050cca5",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtha8cc1050cca5",
+     "botId": "bot-e01e86dc"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-c97b99ee"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Step done",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   },
+   {
+    "id": "f-0mv6fwhtl-6bea2e4acee3",
+    "seq": 3,
+    "kind": "handoff.received",
+    "at": 1791881369913,
+    "dedupeKey": "handoff.received:h-mv6fwhtj378090e460b0",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtj378090e460b0",
+     "botId": "bot-c97b99ee"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e01e86dc"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Next step",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 2,
+     "hopsInRun": 3,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   },
+   {
+    "id": "f-0mv6fwhtn-eb217ad85795",
+    "seq": 4,
+    "kind": "handoff.received",
+    "at": 1791881369915,
+    "dedupeKey": "handoff.received:h-mv6fwhtkbd226e146c1a",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtkbd226e146c1a",
+     "botId": "bot-e01e86dc"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-c97b99ee"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Step done",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 3,
+     "hopsInRun": 4,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   },
+   {
+    "id": "f-0mv6fwhto-75176355573c",
+    "seq": 5,
+    "kind": "handoff.received",
+    "at": 1791881369916,
+    "dedupeKey": "handoff.received:h-mv6fwhtlfb736dac7806",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtlfb736dac7806",
+     "botId": "bot-c97b99ee"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e01e86dc"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Next step",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 4,
+     "hopsInRun": 5,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   },
+   {
+    "id": "f-0mv6fwhto-0c8309e1e06b",
+    "seq": 6,
+    "kind": "handoff.received",
+    "at": 1791881369916,
+    "dedupeKey": "handoff.received:h-mv6fwhtm7b5baa524552",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtm7b5baa524552",
+     "botId": "bot-e01e86dc"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-c97b99ee"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Step done",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 5,
+     "hopsInRun": 6,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   },
+   {
+    "id": "f-0mv6fwhtp-1c6c113f7e8c",
+    "seq": 7,
+    "kind": "handoff.refused",
+    "at": 1791881369917,
+    "dedupeKey": "handoff.refused:h-mv6fwhtob790c18cf90f",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtob790c18cf90f",
+     "botId": "bot-c97b99ee"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-c97b99ee"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "Step done",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 7,
+     "hopsInRun": 8,
+     "fromLabel": "Lead (lead)",
+     "toLabel": "Moa (moa)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "code": "max_depth",
+     "detail": "chain depth 7 is over 6"
+    }
+   },
+   {
+    "id": "f-0mv6fwhtp-42108b7f681f",
+    "seq": 8,
+    "kind": "handoff.received",
+    "at": 1791881369917,
+    "dedupeKey": "handoff.received:h-mv6fwhtn399aa894aede",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "ref": {
+     "handoffId": "h-mv6fwhtn399aa894aede",
+     "botId": "bot-c97b99ee"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-e01e86dc"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Next step",
+     "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+     "runId": "run-mv6fwdtne6247bc1a438",
+     "depth": 6,
+     "hopsInRun": 7,
+     "fromLabel": "Moa (moa)",
+     "toLabel": "Lead (lead)",
+     "fromWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "toWorkspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv6fw9tj-054c9041",
+    "botId": "bot-e01e86dc",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "manual",
+     "by": "human"
+    },
+    "priority": 1,
+    "enqueuedAt": 1791881359543,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwdtn-8e2d5d8d",
+    "botId": "bot-c97b99ee",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwdtnc541ba1c17cd"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881364731,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwhth-77ee338d",
+    "botId": "bot-e01e86dc",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwhtha8cc1050cca5"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881369909,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwhtj-0efc73a1",
+    "botId": "bot-c97b99ee",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwhtj378090e460b0"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881369911,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwhtk-b826a0a3",
+    "botId": "bot-e01e86dc",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwhtkbd226e146c1a"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881369912,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwhtl-bd2ca096",
+    "botId": "bot-c97b99ee",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwhtlfb736dac7806"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881369913,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwhtm-1b5744d7",
+    "botId": "bot-e01e86dc",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwhtm7b5baa524552"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881369914,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mv6fwhtn-2bd92f27",
+    "botId": "bot-c97b99ee",
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mv6fwhtn399aa894aede"
+    },
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "priority": 1,
+    "enqueuedAt": 1791881369915,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mv6fwdtnc541ba1c17cd",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Next step",
+     "body": "Do the next step."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fw9tj-054c9041:h1",
+    "createdAt": 1791881364731,
+    "updatedAt": 1791881364733
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtha8cc1050cca5",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "kind": "result",
+    "replyTo": "h-mv6fwdtnc541ba1c17cd",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Step done",
+     "body": "Done; what next?"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fwdtn-8e2d5d8d:h1",
+    "createdAt": 1791881369909,
+    "updatedAt": 1791881369910
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtj378090e460b0",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 2,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd",
+      "h-mv6fwhtha8cc1050cca5"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Next step",
+     "body": "Do the next step."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fwhth-77ee338d:h1",
+    "createdAt": 1791881369911,
+    "updatedAt": 1791881369913
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtkbd226e146c1a",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 3,
+    "hopsInRun": 4,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "kind": "result",
+    "replyTo": "h-mv6fwhtj378090e460b0",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd",
+      "h-mv6fwhtha8cc1050cca5",
+      "h-mv6fwhtj378090e460b0"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Step done",
+     "body": "Done; what next?"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fwhtj-0efc73a1:h1",
+    "createdAt": 1791881369912,
+    "updatedAt": 1791881369915
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtlfb736dac7806",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 4,
+    "hopsInRun": 5,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd",
+      "h-mv6fwhtha8cc1050cca5",
+      "h-mv6fwhtj378090e460b0",
+      "h-mv6fwhtkbd226e146c1a"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Next step",
+     "body": "Do the next step."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fwhtk-b826a0a3:h1",
+    "createdAt": 1791881369913,
+    "updatedAt": 1791881369916
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtm7b5baa524552",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 5,
+    "hopsInRun": 6,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "kind": "result",
+    "replyTo": "h-mv6fwhtlfb736dac7806",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd",
+      "h-mv6fwhtha8cc1050cca5",
+      "h-mv6fwhtj378090e460b0",
+      "h-mv6fwhtkbd226e146c1a",
+      "h-mv6fwhtlfb736dac7806"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Step done",
+     "body": "Done; what next?"
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fwhtl-bd2ca096:h1",
+    "createdAt": 1791881369914,
+    "updatedAt": 1791881369916
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtn399aa894aede",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 6,
+    "hopsInRun": 7,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd",
+      "h-mv6fwhtha8cc1050cca5",
+      "h-mv6fwhtj378090e460b0",
+      "h-mv6fwhtkbd226e146c1a",
+      "h-mv6fwhtlfb736dac7806",
+      "h-mv6fwhtm7b5baa524552"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Next step",
+     "body": "Do the next step."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mv6fwhtm-1b5744d7:h1",
+    "createdAt": 1791881369915,
+    "updatedAt": 1791881369917
+   },
+   {
+    "version": 1,
+    "id": "h-mv6fwhtob790c18cf90f",
+    "runId": "run-mv6fwdtne6247bc1a438",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "depth": 7,
+    "hopsInRun": 8,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-c97b99ee"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+     "botId": "bot-e01e86dc"
+    },
+    "kind": "result",
+    "replyTo": "h-mv6fwhtn399aa894aede",
+    "attribution": {
+     "originator": {
+      "kind": "bot",
+      "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+      "botId": "bot-e01e86dc"
+     },
+     "chain": [
+      "h-mv6fwdtnc541ba1c17cd",
+      "h-mv6fwhtha8cc1050cca5",
+      "h-mv6fwhtj378090e460b0",
+      "h-mv6fwhtkbd226e146c1a",
+      "h-mv6fwhtlfb736dac7806",
+      "h-mv6fwhtm7b5baa524552",
+      "h-mv6fwhtn399aa894aede"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Step done",
+     "body": "Done; what next?"
+    },
+    "status": "refused",
+    "clientHandoffId": "wake:w-mv6fwhtn-2bd92f27:h1",
+    "createdAt": 1791881369916,
+    "updatedAt": 1791881369916,
+    "refusal": {
+     "code": "max_depth",
+     "detail": "chain depth 7 is over 6"
+    }
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mv6fwdtp8bc8f48c9d",
+    "seq": 1,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881364733,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Lead (lead): Next step",
+    "refs": {
+     "botId": "bot-c97b99ee",
+     "handoffId": "h-mv6fwdtnc541ba1c17cd",
+     "factId": "f-0mv6fwdtp-305e4b4bc196"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhti3adff77093",
+    "seq": 2,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881369910,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Moa (moa): Step done",
+    "refs": {
+     "botId": "bot-e01e86dc",
+     "handoffId": "h-mv6fwhtha8cc1050cca5",
+     "factId": "f-0mv6fwhti-8046bc88fe87"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhtle608347d27",
+    "seq": 3,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881369913,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Lead (lead): Next step",
+    "refs": {
+     "botId": "bot-c97b99ee",
+     "handoffId": "h-mv6fwhtj378090e460b0",
+     "factId": "f-0mv6fwhtl-6bea2e4acee3"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhtn51ac6e494f",
+    "seq": 4,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881369915,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Moa (moa): Step done",
+    "refs": {
+     "botId": "bot-e01e86dc",
+     "handoffId": "h-mv6fwhtkbd226e146c1a",
+     "factId": "f-0mv6fwhtn-eb217ad85795"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhto93cd06310c",
+    "seq": 5,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881369916,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Lead (lead): Next step",
+    "refs": {
+     "botId": "bot-c97b99ee",
+     "handoffId": "h-mv6fwhtlfb736dac7806",
+     "factId": "f-0mv6fwhto-75176355573c"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhto12a6168531",
+    "seq": 6,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881369916,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result → Moa (moa): Step done",
+    "refs": {
+     "botId": "bot-e01e86dc",
+     "handoffId": "h-mv6fwhtm7b5baa524552",
+     "factId": "f-0mv6fwhto-0c8309e1e06b"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhtpec0593b625",
+    "seq": 7,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "refusal",
+    "at": 1791881369917,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Handoff refused (max_depth): Step done",
+    "body": "chain depth 7 is over 6",
+    "refs": {
+     "botId": "bot-c97b99ee",
+     "handoffId": "h-mv6fwhtob790c18cf90f",
+     "factId": "f-0mv6fwhtp-1c6c113f7e8c"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mv6fwhtpb6c1dbe46a",
+    "seq": 8,
+    "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+    "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+    "kind": "fact",
+    "at": 1791881369917,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch → Lead (lead): Next step",
+    "refs": {
+     "botId": "bot-c97b99ee",
+     "handoffId": "h-mv6fwhtn399aa894aede",
+     "factId": "f-0mv6fwhtp-42108b7f681f"
+    }
+   }
+  ],
+  "stub": {
+   "moa": [
+    {
+     "at": 1791881359586,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881359587,
+     "event": "session/new",
+     "sessionId": "stub-92c9e8abb7de",
+     "cwd": "/home/owner/.wmux-verify-f9ce34ea/factory/bots/bot-e01e86dc"
+    },
+    {
+     "at": 1791881364591,
+     "event": "prompt",
+     "sessionId": "stub-92c9e8abb7de",
+     "text": "[wake w-mv6fw9tj-054c9041] Moa (coordinator) · reason: manual · priority 1"
+    },
+    {
+     "at": 1791881364732,
+     "event": "tool",
+     "sessionId": "stub-92c9e8abb7de",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwdtnc541ba1c17cd\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-c97b99ee\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwdtn-8e2d5d8d\"\n}"
+    },
+    {
+     "at": 1791881369910,
+     "event": "prompt",
+     "sessionId": "stub-92c9e8abb7de",
+     "text": "[wake w-mv6fwhth-77ee338d] Moa (coordinator) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369911,
+     "event": "tool",
+     "sessionId": "stub-92c9e8abb7de",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwhtj378090e460b0\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-c97b99ee\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwhtj-0efc73a1\"\n}"
+    },
+    {
+     "at": 1791881369912,
+     "event": "prompt",
+     "sessionId": "stub-92c9e8abb7de",
+     "text": "[wake w-mv6fwhtk-b826a0a3] Moa (coordinator) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369913,
+     "event": "tool",
+     "sessionId": "stub-92c9e8abb7de",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwhtlfb736dac7806\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-c97b99ee\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwhtl-bd2ca096\"\n}"
+    },
+    {
+     "at": 1791881369914,
+     "event": "prompt",
+     "sessionId": "stub-92c9e8abb7de",
+     "text": "[wake w-mv6fwhtm-1b5744d7] Moa (coordinator) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369915,
+     "event": "tool",
+     "sessionId": "stub-92c9e8abb7de",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwhtn399aa894aede\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-c97b99ee\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwhtn-2bd92f27\"\n}"
+    }
+   ],
+   "lead": [
+    {
+     "at": 1791881364751,
+     "event": "initialize"
+    },
+    {
+     "at": 1791881364752,
+     "event": "session/new",
+     "sessionId": "stub-a0c4aee48006",
+     "cwd": "/home/owner/.wmux-verify-f9ce34ea/factory/bots/bot-c97b99ee"
+    },
+    {
+     "at": 1791881369756,
+     "event": "prompt",
+     "sessionId": "stub-a0c4aee48006",
+     "text": "[wake w-mv6fwdtn-8e2d5d8d] Lead (developer) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369910,
+     "event": "tool",
+     "sessionId": "stub-a0c4aee48006",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwhtha8cc1050cca5\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-e01e86dc\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwhth-77ee338d\"\n}"
+    },
+    {
+     "at": 1791881369911,
+     "event": "prompt",
+     "sessionId": "stub-a0c4aee48006",
+     "text": "[wake w-mv6fwhtj-0efc73a1] Lead (developer) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369912,
+     "event": "tool",
+     "sessionId": "stub-a0c4aee48006",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwhtkbd226e146c1a\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-e01e86dc\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwhtk-b826a0a3\"\n}"
+    },
+    {
+     "at": 1791881369913,
+     "event": "prompt",
+     "sessionId": "stub-a0c4aee48006",
+     "text": "[wake w-mv6fwhtl-bd2ca096] Lead (developer) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369914,
+     "event": "tool",
+     "sessionId": "stub-a0c4aee48006",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mv6fwhtm7b5baa524552\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mv6fwdtnc541ba1c17cd\",\n  \"to\": {\n    \"botId\": \"bot-e01e86dc\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01\"\n  },\n  \"wakeId\": \"w-mv6fwhtm-1b5744d7\"\n}"
+    },
+    {
+     "at": 1791881369915,
+     "event": "prompt",
+     "sessionId": "stub-a0c4aee48006",
+     "text": "[wake w-mv6fwhtn-2bd92f27] Lead (developer) · reason: handoff · priority 1"
+    },
+    {
+     "at": 1791881369917,
+     "event": "tool",
+     "sessionId": "stub-a0c4aee48006",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"max_depth\",\n  \"message\": \"chain depth 7 is over 6\",\n  \"handoffId\": \"h-mv6fwhtob790c18cf90f\"\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791881354597,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/owner",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  },
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-13T08-49-13-verify-f9ce34ea",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-13T08-49-13-verify-f9ce34ea"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "a hop went missing mid-chain",
+   "failing": [
+    "chain_climbs_to_limit",
+    "nothing_past_limit"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "handoffs.3"
+    }
+   ]
+  },
+  {
+   "why": "the hop past the cap was delivered",
+   "failing": [
+    "chain_climbs_to_limit",
+    "refused_max_depth",
+    "refused_fact"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.7.status",
+     "value": "delivered"
+    }
+   ]
+  },
+  {
+   "why": "a hop started a new run",
+   "failing": [
+    "one_run"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.3.runId",
+     "value": "run-x"
+    }
+   ]
+  },
+  {
+   "why": "no refused fact",
+   "failing": [
+    "refused_fact"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "facts.6"
+    }
+   ]
+  },
+  {
+   "why": "no refusal card",
+   "failing": [
+    "refusal_card"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards",
+     "value": [
+      {
+       "version": 1,
+       "id": "c-mv6fwdtp8bc8f48c9d",
+       "seq": 1,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881364733,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "dispatch → Lead (lead): Next step",
+       "refs": {
+        "botId": "bot-c97b99ee",
+        "handoffId": "h-mv6fwdtnc541ba1c17cd",
+        "factId": "f-0mv6fwdtp-305e4b4bc196"
+       }
+      },
+      {
+       "version": 1,
+       "id": "c-mv6fwhti3adff77093",
+       "seq": 2,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881369910,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "result → Moa (moa): Step done",
+       "refs": {
+        "botId": "bot-e01e86dc",
+        "handoffId": "h-mv6fwhtha8cc1050cca5",
+        "factId": "f-0mv6fwhti-8046bc88fe87"
+       }
+      },
+      {
+       "version": 1,
+       "id": "c-mv6fwhtle608347d27",
+       "seq": 3,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881369913,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "dispatch → Lead (lead): Next step",
+       "refs": {
+        "botId": "bot-c97b99ee",
+        "handoffId": "h-mv6fwhtj378090e460b0",
+        "factId": "f-0mv6fwhtl-6bea2e4acee3"
+       }
+      },
+      {
+       "version": 1,
+       "id": "c-mv6fwhtn51ac6e494f",
+       "seq": 4,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881369915,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "result → Moa (moa): Step done",
+       "refs": {
+        "botId": "bot-e01e86dc",
+        "handoffId": "h-mv6fwhtkbd226e146c1a",
+        "factId": "f-0mv6fwhtn-eb217ad85795"
+       }
+      },
+      {
+       "version": 1,
+       "id": "c-mv6fwhto93cd06310c",
+       "seq": 5,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881369916,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "dispatch → Lead (lead): Next step",
+       "refs": {
+        "botId": "bot-c97b99ee",
+        "handoffId": "h-mv6fwhtlfb736dac7806",
+        "factId": "f-0mv6fwhto-75176355573c"
+       }
+      },
+      {
+       "version": 1,
+       "id": "c-mv6fwhto12a6168531",
+       "seq": 6,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881369916,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "result → Moa (moa): Step done",
+       "refs": {
+        "botId": "bot-e01e86dc",
+        "handoffId": "h-mv6fwhtm7b5baa524552",
+        "factId": "f-0mv6fwhto-0c8309e1e06b"
+       }
+      },
+      {
+       "version": 1,
+       "id": "c-mv6fwhtpb6c1dbe46a",
+       "seq": 8,
+       "workspaceId": "ws-63b2db18-b244-40c0-835b-ad9e3e4e5c01",
+       "threadId": "handoff:h-mv6fwdtnc541ba1c17cd",
+       "kind": "fact",
+       "at": 1791881369917,
+       "actor": {
+        "kind": "system"
+       },
+       "title": "dispatch → Lead (lead): Next step",
+       "refs": {
+        "botId": "bot-c97b99ee",
+        "handoffId": "h-mv6fwhtn399aa894aede",
+        "factId": "f-0mv6fwhtp-42108b7f681f"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

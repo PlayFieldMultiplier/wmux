@@ -1,0 +1,21 @@
+{
+  "name": "moa-morning-report-real",
+  "layer": "workflow",
+  "runs": 3,
+  "model": "real",
+  "description": "The morning wake on the real default engine (claude-sdk): the HQ bot reads the open issues and trust metrics of a scratch repo and posts one report and at most one plan. What the report contains comes from the moa role prompt only.",
+  "setup": {
+    "repo": true,
+    "gh": { "issues": [ { "number": 11, "title": "Login button does nothing on Safari", "author": "reporter", "labels": ["bug"], "body": "Clicking Login on Safari 18 does nothing." } ] },
+    "bots": [
+      { "key": "lead", "role": "lead", "repo": true, "script": { "turns": [ { "steps": [ { "say": "stub lead" } ] } ] } },
+      { "key": "moa", "role": "moa", "repo": true }
+    ]
+  },
+  "actions": [
+    { "do": "emit", "label": "morning", "fact": { "kind": "schedule.fired", "workspaceId": "{{ws}}", "ref": { "scheduleId": "morning" }, "actor": { "kind": "system" }, "payload": {} } },
+    { "do": "waitFor", "label": "moa done", "cond": { "wakes": { "bot": "moa", "state": ["done", "parked"] } }, "timeoutMs": 600000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 3000 }, "timeoutMs": 60000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "moa": "moa", "issuePattern": "safari|login|#11" }
+}

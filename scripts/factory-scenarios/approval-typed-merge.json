@@ -1,0 +1,146 @@
+{
+  "name": "approval-typed-merge",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A bot asks to merge two PRs (two approval cards) and the owner answers \"머지해\" in the same thread. Main reads that as approval of both, waits out the Undo window, re-reads each PR and merges it with --match-head-commit at the head the request recorded.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "dev",
+        "role": "lead",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "approval_request",
+                  "args": {
+                    "action": "merge",
+                    "pr_number": 1,
+                    "reason": "CI is green; ready to merge."
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "tool": "approval_request",
+                  "args": {
+                    "action": "merge",
+                    "pr_number": 2,
+                    "reason": "CI is green; ready to merge."
+                  },
+                  "expect": "\"ok\": true"
+                },
+                {
+                  "say": "#1 and #2 are ready; say 머지해 to merge them."
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "ok"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "gh",
+      "op": "addPr",
+      "pr": {
+        "number": 1,
+        "title": "feat: one",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "gh",
+      "op": "addPr",
+      "pr": {
+        "number": 2,
+        "title": "feat: two",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "post",
+      "label": "ask",
+      "post": {
+        "title": "Check the open PRs",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "two requests",
+      "cond": {
+        "approvals": {
+          "state": "pending",
+          "min": 2
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "go",
+      "post": {
+        "title": "머지해",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "both executed",
+      "cond": {
+        "approvals": {
+          "state": "executed",
+          "min": 2
+        }
+      },
+      "timeoutMs": 90000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "approvals",
+      "ghCalls"
+    ],
+    "bot": "dev",
+    "prs": [
+      1,
+      2
+    ],
+    "go": "go"
+  }
+}

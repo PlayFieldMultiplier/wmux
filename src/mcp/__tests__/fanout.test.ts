@@ -94,12 +94,14 @@ describe('fanout_start: tool surface', () => {
     expect(Object.keys(shapes.get('fanout_start') ?? {}).sort()).toEqual([
       'agents',
       'cancel_pending',
+      'checkout',
       'depends_on',
       'files',
       'idempotency_key',
       'preset',
       'prompt',
       'roles',
+      'secret_names',
       'task_prompts',
       'titles',
     ]);
@@ -121,6 +123,29 @@ describe('fanout_start: tool surface', () => {
 
   it('is on the first-party allowlist (or it deadlocks under enforce mode)', () => {
     expect(FIRST_PARTY_METHODS.has('task.fanout.start')).toBe(true);
+  });
+});
+
+describe('fanout_start: checkout (verifier bots)', () => {
+  it('takes one full SHA and only a pull/<n>/head fetch ref', () => {
+    const checkout = (shapes.get('fanout_start') ?? {})['checkout'] as { safeParse: (v: unknown) => { success: boolean } };
+    const sha = 'a'.repeat(40);
+    expect(checkout.safeParse({ sha }).success).toBe(true);
+    expect(checkout.safeParse({ sha, fetch_ref: 'pull/12/head' }).success).toBe(true);
+    for (const bad of [{ sha: 'HEAD' }, { sha: 'main' }, { sha: sha.slice(1) }, { sha, fetch_ref: 'refs/heads/main' },
+      { sha, fetch_ref: '+pull/1/head:x' }, { sha, detached: false }]) {
+      expect(checkout.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  it('maps checkout onto the wire as {sha, fetchRef}', async () => {
+    mockSendRpc.mockResolvedValue({ ok: true, status: 'accepted' });
+    const sha = 'b'.repeat(40);
+    await fanoutStart({ idempotency_key: 'wake:w:1', titles: ['verify'], preset: 'verify', checkout: { sha, fetch_ref: 'pull/3/head' } });
+    expect(mockSendRpc.mock.calls[0][1]).toMatchObject({ preset: 'verify', checkout: { sha, fetchRef: 'pull/3/head' } });
+    mockSendRpc.mockClear();
+    await fanoutStart({ idempotency_key: 'wake:w:2', titles: ['verify'], preset: 'verify', checkout: { sha } });
+    expect(mockSendRpc.mock.calls[0][1].checkout).toEqual({ sha });
   });
 });
 

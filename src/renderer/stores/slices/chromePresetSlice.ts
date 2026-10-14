@@ -22,11 +22,5 @@ export const createChromePresetSlice: StateCreator<
     state.sidebarVisible = values.sidebarVisible;
     state.channelsTabVisible = values.channelsTabVisible;
     state.channelDockVisible = values.channelDockVisible;
-
-    // Match setChannelsTabVisible(false): a hidden tab cannot remain the
-    // active route and unexpectedly reappear when the dock opens later.
-    if (!values.channelsTabVisible && state.activeDeckTab === 'channels') {
-      state.activeDeckTab = 'commander';
-    }
   }),
 });

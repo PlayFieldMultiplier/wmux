@@ -27,6 +27,7 @@ import { FANOUT_MAX_TASKS, FANOUT_PROMPT_MAX_BYTES } from '../shared/workTask';
 import { ORCH_ROLES } from '../shared/orchestratorRole';
 import { FANOUT_MODEL_RE } from '../shared/fanoutPreset';
 import { EFFORT_TOKEN_RE } from '../shared/agentLaunchOptions';
+import { BOT_SECRET_LIMITS } from '../shared/botSecret';
 
 /** Resolvers the parent module injects (mirrors ChannelToolDeps). */
 export interface FanOutToolDeps {
@@ -126,6 +127,20 @@ const FANOUT_START_SHAPE = {
     .optional()
     .describe('Per-task 0-based indices of tasks that must reach review_requested/completed before this one is spawned from a fresh origin commit.'),
   cancel_pending: z.boolean().optional().describe('With an existing key: drop its tasks still waiting on depends_on.'),
+  checkout: z
+    .object({
+      sha: z.string().regex(/^[0-9a-f]{40}$/),
+      fetch_ref: z.string().regex(/^pull\/[1-9][0-9]{0,8}\/head$/).optional(),
+    })
+    .strict()
+    .optional()
+    .describe('Verifier bot, preset "verify": the PR head to check out detached (fetch_ref pull/<n>/head fetches it first).'),
+  secret_names: z
+    .array(z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/))
+    .min(1)
+    .max(BOT_SECRET_LIMITS.NAMES_PER_FANOUT)
+    .optional()
+    .describe('Bot: stored secret names (secret_list) each worker gets as env vars.'),
 };
 
 /** Register the fan-out tool on the given MCP server. */
@@ -154,7 +169,7 @@ export function registerFanOutTools(server: McpServer, deps: FanOutToolDeps): vo
       'Repository and owning workspace come from your verified identity — fan-out runs in YOUR repository, the tasks are owned by you, and it is refused without that identity. A preset may skip the worktree: each task then writes into its own folder. ' +
       'An accept or the completed poll may carry `warnings` (also printed as WARNING lines): the fan-out ran, but something will stop its reports reaching you or the tasks did not start from a fresh origin commit — act on it.',
     FANOUT_START_SHAPE,
-    async ({ idempotency_key, titles, prompt, task_prompts, roles, preset, agents, files, depends_on, cancel_pending }) => {
+    async ({ idempotency_key, titles, prompt, task_prompts, roles, preset, agents, files, depends_on, cancel_pending, checkout, secret_names }) => {
       const params: Record<string, unknown> = {
         idempotencyKey: idempotency_key,
         titles,
@@ -167,6 +182,10 @@ export function registerFanOutTools(server: McpServer, deps: FanOutToolDeps): vo
       if (files !== undefined) params['files'] = files;
       if (depends_on !== undefined) params['dependsOn'] = depends_on;
       if (cancel_pending === true) params['cancelPending'] = true;
+      if (checkout !== undefined) {
+        params['checkout'] = { sha: checkout.sha, ...(checkout.fetch_ref !== undefined ? { fetchRef: checkout.fetch_ref } : {}) };
+      }
+      if (secret_names !== undefined) params['secretNames'] = secret_names;
       // The verified ptyId is the whole identity basis for this call — the
       // handler resolves it to the owning workspace and refuses without it.
       // Resolve identity FIRST: the walk that produces that ptyId is a side

@@ -2,6 +2,7 @@ import type { WslTarget } from './wslTarget';
 // === JSON-RPC Protocol Types ===
 
 import type { ResumeBinding } from './agentResume';
+import type { BotBinding } from './bot';
 
 export interface RpcRequest {
   id: string;
@@ -108,10 +109,8 @@ export const WMUX_HOOK_BRIDGE_CLIENT_NAME = 'wmux-hook-bridge';
 export const WMUX_STATUSLINE_CLIENT_NAME = 'wmux-statusline';
 
 /**
- * Stable `clientName` reported by Moa's read gate (the PreToolUse hook main
- * generates for the HQ brain, src/main/deck/moaReadGate.ts) when it asks the
- * MAIN pipe which repositories Moa may read without a prompt
- * (`deck.moaReadRoots`). Its own one-method lane, like the statusline's.
+ * The `clientName` Moa's retired read gate reported. It reaches no lane now;
+ * it stays reserved so no configuration can promote it.
  */
 export const WMUX_READ_GATE_CLIENT_NAME = 'wmux-read-gate';
 
@@ -263,6 +262,16 @@ export interface RpcContext {
    * envelope field — validation is the only writer.
    */
   commanderWorkspace?: string;
+  /**
+   * Agent factory — the bot a VALIDATED bot token is bound to. Set by
+   * RpcRouter only after commanderTrust resolved the token to a BotBinding
+   * (`commanderWorkspace` is then that binding's workspace). Its presence
+   * means the router already confined the call to the role's surface
+   * (shared/botSurface.ts); handlers that stamp a principal or grant a
+   * role-specific power read the bot and its role from here. Never set from
+   * a raw envelope field.
+   */
+  bot?: BotBinding;
   /**
    * #922 — the workspace the PLUGIN HOST derived for this caller, not one the
    * caller named. Set by RpcRouter only from the `hostedWorkspace` dispatch
@@ -448,9 +457,6 @@ export type RpcMethod =
   | 'deck.completeWork'
   | 'deck.requestDecision'
   | 'deck.resolveDecision'
-  | 'deck.proposeHandoff'
-  | 'deck.proposeGoal'
-  | 'deck.goal'
   | 'deck.state.prune'
   | 'browser.tabs'
   | 'browser.open'
@@ -607,7 +613,6 @@ export type RpcMethod =
   | 'company.provisionCeo'
   | 'hooks.signal'
   | 'usage.rateLimits'
-  | 'deck.moaReadRoots'
   | 'a2a.channel.list'
   | 'a2a.channel.get'
   | 'a2a.channel.getMessages'
@@ -664,11 +669,55 @@ export type RpcMethod =
   // task workspace); updates are authorized by the ledger's canActorSet.
   | 'ledger.list'
   | 'ledger.update'
-  // Moa's delegate (pipe/handlers/moa.rpc.ts, shared/moaAsk.ts) — an agent
-  // asks Moa instead of the owner. Async ticket + poll; the asker is stamped
-  // from senderPtyId; `off` (nothing recorded) while the delegate is off.
-  | 'moa.ask'
-  | 'moa.askStatus'
+  // A verifier's PASS/FAIL on one PR head (pipe/handlers/verify.rpc.ts,
+  // shared/prVerdict.ts); the principal is stamped from senderPtyId.
+  | 'verify.recordVerdict'
+  // Agent factory (shared/botSurface.ts FACTORY_RPC_METHODS). Registered in
+  // main by registerFactoryRpc (main/factory/factoryHost.ts), answering
+  // `not_implemented` until the owning module registers the real handler.
+  // A bot token reaches only the methods on its role surface.
+  | 'fact.poll'
+  | 'fact.emit'
+  | 'bot.list'
+  | 'bot.create'
+  | 'bot.update'
+  | 'bot.remove'
+  | 'bot.status'
+  | 'bot.wake'
+  | 'bot.park'
+  | 'bot.resume'
+  | 'bot.interrupt'
+  | 'room.post'
+  | 'room.read'
+  | 'room.threads'
+  | 'room.resolve'
+  | 'handoff.send'
+  | 'handoff.answer'
+  | 'handoff.list'
+  | 'ask.person'
+  | 'pr.read'
+  | 'issue.read'
+  | 'ci.read'
+  | 'verdict.read'
+  | 'trustMetrics.read'
+  | 'plan.propose'
+  // Agent factory, shared bot surface (shared/botSurface.ts BOT_TOOL_RPC):
+  // a bot's own job and stop, its routines (shared/botRoutine.ts), owner
+  // approvals (shared/botApproval.ts) and secrets / logins
+  // (shared/botSecret.ts). Fail-closed until each owner registers.
+  | 'bot.setJob'
+  | 'bot.stopMyWork'
+  | 'bot.resumeWorker'
+  | 'bot.workerMessage'
+  | 'bot.questionClose'
+  | 'routine.set'
+  | 'routine.list'
+  | 'routine.pause'
+  | 'botApproval.request'
+  | 'botApproval.list'
+  | 'botSecret.request'
+  | 'botSecret.list'
+  | 'botLogin.request'
   // Task lifecycle on the pipe (pipe/handlers/worktask.rpc.ts) — the half of
   // fan-out that finishes a task. Local-origin only, owner-scoped against
   // `task.mission.list`, and `task.close` / `task.pr` additionally raise a
@@ -741,9 +790,6 @@ export const ALL_RPC_METHODS = [
   'deck.completeWork',
   'deck.requestDecision',
   'deck.resolveDecision',
-  'deck.proposeHandoff',
-  'deck.proposeGoal',
-  'deck.goal',
   'deck.state.prune',
   'browser.tabs',
   'browser.open',
@@ -887,7 +933,6 @@ export const ALL_RPC_METHODS = [
   'company.provisionCeo',
   'hooks.signal',
   'usage.rateLimits',
-  'deck.moaReadRoots',
   'a2a.channel.list',
   'a2a.channel.get',
   'a2a.channel.getMessages',
@@ -920,8 +965,45 @@ export const ALL_RPC_METHODS = [
   'task.fanout.start',
   'ledger.list',
   'ledger.update',
-  'moa.ask',
-  'moa.askStatus',
+  'verify.recordVerdict',
+  'fact.poll',
+  'fact.emit',
+  'bot.list',
+  'bot.create',
+  'bot.update',
+  'bot.remove',
+  'bot.status',
+  'bot.wake',
+  'bot.park',
+  'bot.resume',
+  'bot.interrupt',
+  'room.post',
+  'room.read',
+  'room.threads',
+  'room.resolve',
+  'handoff.send',
+  'handoff.answer',
+  'handoff.list',
+  'ask.person',
+  'pr.read',
+  'issue.read',
+  'ci.read',
+  'verdict.read',
+  'trustMetrics.read',
+  'plan.propose',
+  'bot.setJob',
+  'bot.stopMyWork',
+  'bot.resumeWorker',
+  'bot.workerMessage',
+  'bot.questionClose',
+  'routine.set',
+  'routine.list',
+  'routine.pause',
+  'botApproval.request',
+  'botApproval.list',
+  'botSecret.request',
+  'botSecret.list',
+  'botLogin.request',
   'task.gate.run',
   'task.gate.cancel',
   'task.adopt',
@@ -1102,6 +1184,15 @@ export interface DaemonCreateSessionParams {
    * namespace from any supplied env, so its RPC token can never reach a child.
    */
   env?: Record<string, string>;
+  /**
+   * A bot worker's named secrets (shared/botSecret.ts sanitizeSecretEnv),
+   * resolved by main from a single-use grant just before this create. The
+   * daemon adds them to the spawned process's environment only: they are
+   * never part of the session's `env`, so they are not persisted, not
+   * returned by any session read, and not replayed by a recovery or a
+   * supervised restart. Refused for a WSL shell.
+   */
+  secretEnv?: Record<string, string>;
   cols?: number;
   rows?: number;
   agent?: { role: string; teamId: string; displayName: string };

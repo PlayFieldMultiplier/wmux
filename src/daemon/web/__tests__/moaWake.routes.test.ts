@@ -13,14 +13,35 @@ import type { MoaPaneFact } from '../moaPane';
 import { DesktopPhoneBridge } from '../../phone/DesktopPhoneBridge';
 import { AnswerReceiptStore } from '../../approvals/AnswerReceiptStore';
 import { MoaWakeService } from '../../phone/MoaWakeService';
-import { createMoaWakeHandler, type MoaWakeReport } from '../../../main/deck/moaWake';
-import type { MoaWakeRefusalCode, MoaWakeResult } from '../../../shared/moaWake';
-import type { CommanderSendResult } from '../../../main/deck/CommanderSessionManager';
+import { handlePhoneMoaWake, setFactoryPhoneMessageHandler } from '../../../main/factory/phoneMessage';
+import type { MoaWakePayload, MoaWakeRefusalCode, MoaWakeResult } from '../../../shared/moaWake';
+
+type TurnResult = { ok: boolean; code?: string };
+
+/** The desktop side of a `moa.wake` that runs a turn, as a stand-in: main no
+ *  longer runs one (it answers `moa_off`), but these routes still serve it. */
+function fakeMoaWake(ports: {
+  refuse: () => MoaWakeRefusalCode | null;
+  idle: () => boolean;
+  run: (text: string) => Promise<TurnResult>;
+}): (payload: MoaWakePayload) => MoaWakeResult {
+  const accepted = new Set<string>();
+  return (payload) => {
+    const refusal = ports.refuse();
+    if (refusal) return { ok: false, code: refusal };
+    const key = `${payload.actor}\0${payload.clientMessageId}`;
+    if (accepted.has(key)) return { ok: false, code: 'duplicate' };
+    if (!ports.idle()) return { ok: false, code: 'busy' };
+    void ports.run(payload.text);
+    accepted.add(key);
+    return { ok: true, accepted: true };
+  };
+}
 
 /**
  * `POST/GET /api/moa/messages`: the phone's message to Moa before its brain
  * runs. The daemon side is real (routes, MoaWakeService, its receipt file,
- * the desktop bridge); main is the real wake handler over fake deck ports.
+ * the desktop bridge); main's factory dispatch is real, its turn is a stand-in.
  */
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-moawake-home-'));
@@ -55,12 +76,11 @@ describe('POST/GET /api/moa/messages', () => {
   let bridge: DesktopPhoneBridge;
   let wakeService: MoaWakeService;
   let dir: string;
-  // Main: the real wake handler over a fake deck.
+  // Main: a stand-in turn behind the real dispatch.
   let refuse: MoaWakeRefusalCode | null;
   let brainBusy: boolean;
   let turns: string[];
-  let turnDone: Array<(v: CommanderSendResult) => void>;
-  let reports: MoaWakeReport[];
+  let turnDone: Array<(v: TurnResult) => void>;
   /** 'answer' = main answers; 'silent' = main never answers (timeout); 'fail-first' = its failure report lands before its accept. */
   let mainMode: 'answer' | 'silent' | 'fail-first';
   let requests: number;
@@ -76,23 +96,20 @@ describe('POST/GET /api/moa/messages', () => {
     brainBusy = false;
     turns = [];
     turnDone = [];
-    reports = [];
     mainMode = 'answer';
     requests = 0;
     audits = [];
     logs = [];
     sidebarReply = null;
     dir = fs.mkdtempSync(path.join(isolatedHome, 'wmux-dir-'));
-    const handler = createMoaWakeHandler({
+    const handler = fakeMoaWake({
       refuse: () => refuse,
-      hqWorkspaceId: () => 'ws-hq',
-      vendor: () => 'claude-pty',
       idle: () => !brainBusy,
-      run: (_ws, text) => {
-        // The manager flips to busy synchronously inside send.
+      run: (text) => {
+        // The turn flips to busy synchronously.
         brainBusy = true;
         turns.push(text);
-        return new Promise<CommanderSendResult>((resolve) => turnDone.push((v) => { brainBusy = false; resolve(v); }));
+        return new Promise<TurnResult>((resolve) => turnDone.push((v) => { brainBusy = false; resolve(v); }));
       },
     });
     bridge = new DesktopPhoneBridge((clientId, event) => {
@@ -108,8 +125,13 @@ describe('POST/GET /api/moa/messages', () => {
       if (mainMode === 'silent') return true;
       // Main handles each request as it arrives, like installPhoneBridge.
       queueMicrotask(() => {
-        const p = data.payload as { clientMessageId: string; text: string; actor: string };
-        const result: MoaWakeResult = handler(p, (r) => reports.push(r));
+        const p = data.payload as { clientMessageId: string; text: string; actor: string; mode?: 'factory' };
+        // A factory send goes through main's real dispatcher (its factory handler is the test's).
+        if (p.mode === 'factory') {
+          void handlePhoneMoaWake(p).then((result) => bridge.complete(clientId, { requestId: data.requestId, ok: true, result }));
+          return;
+        }
+        const result: MoaWakeResult = handler(p);
         // Both lines in one pipe read: the report is handled before the accept's continuation runs.
         if (mainMode === 'fail-first') void wakeService.recordFailure(p.actor, p.clientMessageId, 'spawn-failed');
         bridge.complete(clientId, { requestId: data.requestId, ok: true, result });
@@ -467,6 +489,56 @@ describe('POST/GET /api/moa/messages', () => {
       await start();
       const cfg = await config(device('d1'));
       expect('moa' in cfg || 'moaWake' in cfg || 'moaWakeBlocked' in cfg).toBe(false);
+    });
+  });
+
+  describe('the agent factory (desktop announced factory.message)', () => {
+    let factoryOn: boolean;
+    let queuedTexts: string[];
+    beforeEach(() => {
+      factoryOn = true;
+      queuedTexts = [];
+      bridge.register('main', ['moa.wake', 'factory.message']);
+      const seen = new Set<string>();
+      setFactoryPhoneMessageHandler(async (p) => {
+        if (!factoryOn) return null;
+        const key = `${p.actor}|${p.clientMessageId}`;
+        if (seen.has(key)) return { ok: false, code: 'duplicate' };
+        seen.add(key);
+        queuedTexts.push(p.text);
+        return { ok: true, accepted: true, queued: true };
+      });
+    });
+    afterEach(() => setFactoryPhoneMessageHandler(null));
+
+    it('on: the message is queued for the HQ bot even with a Moa pane up; no start window, GET says queued', async () => {
+      moa = { ...HQ };
+      await start();
+      const h = device('d1');
+      const id = freshId();
+      expect(await post(h, { clientMessageId: id, text: 'plan today' })).toMatchObject({ status: 202, body: { state: 'queued', clientMessageId: id } });
+      // A second message right after is queued too (nothing is "starting").
+      expect(await post(h, { clientMessageId: freshId(), text: 'and this' })).toMatchObject({ status: 202, body: { state: 'queued' } });
+      expect(queuedTexts).toEqual(['plan today', 'and this']);
+      expect(chat.send).not.toHaveBeenCalled();
+      expect(turns).toEqual([]);
+      expect((await receipt(h, id)).body).toMatchObject({ clientMessageId: id, state: 'queued' });
+      // The same id again replays the receipt; main is not asked twice.
+      const before = requests;
+      expect(await post(h, { clientMessageId: id, text: 'plan today' })).toMatchObject({ status: 202, body: { state: 'queued', replayed: true } });
+      expect(requests).toBe(before);
+      expect(audits).toEqual([{ deviceId: 'd1', route: 'wake' }, { deviceId: 'd1', route: 'wake' }]);
+    });
+
+    it('off: main answers factory_off, the receipt is released and the Moa path runs with the same id', async () => {
+      factoryOn = false;
+      await start();
+      const h = device('d1');
+      const id = freshId();
+      expect(await post(h, { clientMessageId: id, text: 'wake up Moa' })).toMatchObject({ status: 202, body: { state: 'accepted', clientMessageId: id } });
+      expect(turns).toEqual(['wake up Moa']);
+      expect(requests).toBe(2);
+      expect(queuedTexts).toEqual([]);
     });
   });
 

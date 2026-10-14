@@ -23,5 +23,8 @@ describe('closedGroupLabelKey', () => {
     expect(closedGroupLabelKey(['orchestrator', 'orchestrator'])).toBe('sidebar.tasks.orchestratorGroup');
     expect(closedGroupLabelKey(['pane', undefined])).toBe('sidebar.tasks.closedPaneGroup');
     expect(closedGroupLabelKey(['gui', 'pane'])).toBe('sidebar.tasks.otherGroup');
+    // A factory bot's tasks never had a pane: not "From closed pane".
+    expect(closedGroupLabelKey(['bot', 'bot'])).toBe('sidebar.tasks.botGroup');
+    expect(closedGroupLabelKey(['bot', 'pane'])).toBe('sidebar.tasks.otherGroup');
   });
 });

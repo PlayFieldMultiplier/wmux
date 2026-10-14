@@ -1,0 +1,117 @@
+{
+  "name": "cross-thread-isolation",
+  "layer": "workflow",
+  "runs": 3,
+  "model": "stub",
+  "description": "Two PRs open inside one verifier batch window. Batching never crosses threads: each PR gets its own wake carrying only its own fact, the turn's wake block names only that PR, and the verifier's card (posted without a thread) lands in that PR's thread.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "status",
+                    "title": "Looking at this pull request",
+                    "body": "Queued for a verify run."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "emit",
+      "label": "alpha",
+      "fact": {
+        "kind": "pr.opened",
+        "repoKey": "{{repoKey}}",
+        "ref": {
+          "pr": 1,
+          "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "actor": {
+          "kind": "github"
+        },
+        "payload": {
+          "author": "octo",
+          "title": "ALPHA feature"
+        }
+      }
+    },
+    {
+      "do": "emit",
+      "label": "beta",
+      "fact": {
+        "kind": "pr.opened",
+        "repoKey": "{{repoKey}}",
+        "ref": {
+          "pr": 2,
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "actor": {
+          "kind": "github"
+        },
+        "payload": {
+          "author": "octo",
+          "title": "BETA fix"
+        }
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "both wakes done",
+      "cond": {
+        "wakes": {
+          "bot": "verifier",
+          "state": "done",
+          "min": 2
+        }
+      },
+      "timeoutMs": 90000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 30000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes"
+    ],
+    "bot": "verifier",
+    "threads": {
+      "pr:github.com/acme/app#1": {
+        "label": "alpha",
+        "fact": "alpha",
+        "title": "ALPHA feature",
+        "otherTitle": "BETA fix"
+      },
+      "pr:github.com/acme/app#2": {
+        "label": "beta",
+        "fact": "beta",
+        "title": "BETA fix",
+        "otherTitle": "ALPHA feature"
+      }
+    }
+  }
+}

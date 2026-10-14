@@ -4,7 +4,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { useT } from '../../hooks/useT';
 import {
   selectFleetBoard,
-  fleetHqId,
   selectHookRunningByPtyId,
   selectUnverifiablePaneMinutes,
   fleetTargetPtyId,
@@ -44,8 +43,8 @@ import { findMission } from '../../stores/selectors/missions';
 import { fleetTitle, matchesFleetFilter, type FleetFilter } from './fleetPresentation';
 import { formatIdle, IDLE_SHOW_AFTER_MS, IDLE_TICK_MS } from '../../utils/idleTime';
 import { IconCheck, IconChevron, IconPlus } from '../icons';
-// Read-only: Moa's own readers of delegated work and pending decisions.
-import { useMoaDecisions, useWorkLinks } from '../Moa/panel/useMoaPanelData';
+// Read-only: the readers of delegated work and pending decisions.
+import { useMoaDecisions, useWorkLinks } from './useFleetSources';
 import { buildFleetTickets, loadSeenReports, openTicketFor, saveSeenReports, ticketAttention, type FleetTicket } from './fleetTickets';
 import { TicketDetail, TicketRow, ticketKey } from './TicketList';
 import FleetRequestPanel from './FleetRequestPanel';
@@ -102,9 +101,6 @@ export default function FleetView() {
   const commandRunningByPtyId = useStore((s) => s.commandRunningByPtyId);
   const agentAliveByPtyId = useStore((s) => s.agentAliveByPtyId);
   const usageLimitWaiting = useStore((s) => s.usageLimitWaiting);
-  // Moa's HQ is left off the board (it is the main bot, not a worker). Only
-  // the id is subscribed, so Moa's other state changes never re-derive it.
-  const hqId = useStore(fleetHqId);
   const hookRunningByPtyId = useStore(useShallow(selectHookRunningByPtyId));
   const unverifiableMinutes = useStore(useShallow(selectUnverifiablePaneMinutes));
   const missions = useStore((s) => s.missionByPaneGroup);
@@ -184,9 +180,7 @@ export default function FleetView() {
       commandRunningByPtyId, agentAliveByPtyId, hookRunningByPtyId, remoteWorkspaces,
       surfaceLastMessage, surfaceOutputAt: useStore.getState().surfaceOutputAt,
       unverifiablePaneMinutes: unverifiableMinutes, usageLimitWaiting,
-      // fleetHqId reads the seed while `moa` is null: hand it the id resolved above.
-      moa: null, moaHqSeed: hqId,
-    }, { now, sortMode: fleetSortMode }), [usageLimitWaiting, hqId, workspaces, surfaceAgentStatus, surfaceActivity, paneLabel, supervisionByPtyId,
+    }, { now, sortMode: fleetSortMode }), [usageLimitWaiting, workspaces, surfaceAgentStatus, surfaceActivity, paneLabel, supervisionByPtyId,
     surfaceAgent, surfacePendingQuestion, surfaceActivityAt, surfaceTurnOpenAt,
     commandRunningByPtyId, agentAliveByPtyId, hookRunningByPtyId, remoteWorkspaces, unverifiableMinutes,
     surfaceLastMessage, now, fleetSortMode]);

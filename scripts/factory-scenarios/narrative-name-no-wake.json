@@ -1,0 +1,20 @@
+{
+  "name": "narrative-name-no-wake",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "Names in text address nobody. The owner's message to the lead mentions @triage, and the lead's card says 'Verifier finished; Triage idle. @triage @verifier'; neither the triage nor the verifier bot wakes.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [ { "tool": "room_post", "args": { "kind": "status", "title": "Round-up", "body": "Verifier finished; Triage idle. @triage @verifier have a look." } } ] } ] } },
+      { "key": "triage", "role": "triage", "script": { "turns": [ { "steps": [ { "say": "woke" } ] } ] } },
+      { "key": "verifier", "role": "verifier", "script": { "turns": [ { "steps": [ { "say": "woke" } ] } ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "to-lead", "post": { "title": "Status", "body": "Lead: ask @triage and @Verifier how it went.", "to": "lead" } },
+    { "do": "waitFor", "label": "lead done", "cond": { "wakes": { "bot": "lead", "state": "done" } }, "timeoutMs": 60000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 5000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "speaker": "lead", "named": ["triage", "verifier"] }
+}

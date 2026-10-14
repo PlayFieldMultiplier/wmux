@@ -128,6 +128,9 @@ export default function BrowserToolbar({
   const [inputValue, setInputValue] = useState(currentUrl);
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // A click that focuses the address bar selects the whole URL, as browsers
+  // do: the mouseup after focus would otherwise drop the selection to a caret.
+  const keepFocusSelectionRef = useRef(false);
   const [toolbarRef, toolbarWidth] = useElementWidth<HTMLDivElement>();
   const compactPrivate = privateBadgeCompact(toolbarWidth);
 
@@ -250,6 +253,14 @@ export default function BrowserToolbar({
               setIsFocused(true);
               inputRef.current?.select();
             }}
+            onMouseDown={() => {
+              keepFocusSelectionRef.current = document.activeElement !== inputRef.current;
+            }}
+            onMouseUp={(e) => {
+              if (!keepFocusSelectionRef.current) return;
+              keepFocusSelectionRef.current = false;
+              e.preventDefault();
+            }}
             onBlur={() => {
               setIsFocused(false);
               setInputValue(currentUrl);
@@ -290,7 +301,8 @@ export default function BrowserToolbar({
           ? `${btnBase} text-[var(--accent-blue)] bg-[var(--bg-surface)] cursor-pointer`
           : btnEnabled}
         onClick={onToggleInspect}
-        title={inspecting ? 'Inspector OFF' : 'Inspector ON — click an element to copy its selector'}
+        title={inspecting ? t('browser.inspector.stop') : t('browser.inspector.start')}
+        aria-label={inspecting ? t('browser.inspector.stop') : t('browser.inspector.start')}
         tabIndex={-1}
       >
         <IconInspect />

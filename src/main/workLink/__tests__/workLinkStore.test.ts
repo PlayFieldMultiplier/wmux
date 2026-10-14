@@ -3,7 +3,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MAX_WORK_LINKS, WorkLinkStore, getWorkLinkPath } from '../workLinkStore';
-import { workLinkOwnerLive } from '../../deck/deckOrphanReconcile';
 
 let dir: string;
 let pending: Set<string>;
@@ -266,11 +265,11 @@ describe('WorkLinkStore.abandonOrphaned', () => {
     expect(a.getByTaskId('task-1')?.state).not.toBe('abandoned');
   });
 
-  it('the startup settle keeps links owned by a missing HQ (it comes back under the same id)', async () => {
+  it('abandonOrphaned keeps links owned by a workspace the predicate calls live (a missing HQ)', async () => {
     const a = make();
     await a.upsert({ origin: 'manual', a2aTaskId: 'task-hq', a2aState: 'working', owner: { workspaceId: 'ws-hq' } });
     await a.upsert({ origin: 'manual', a2aTaskId: 'task-gone', a2aState: 'working', owner: { workspaceId: 'ws-gone' } });
-    expect(await a.abandonOrphaned(workLinkOwnerLive(new Set(['ws-live']), 'ws-hq'))).toBe(1);
+    expect(await a.abandonOrphaned((ws: string) => ws === 'ws-live' || ws === 'ws-hq')).toBe(1);
     expect(a.getByTaskId('task-hq')?.state).toBe('running');
     expect(a.getByTaskId('task-gone')?.state).toBe('abandoned');
   });

@@ -29,7 +29,12 @@ import { getWmuxDir } from '../../daemon/config';
 import { loadCommanderMemory, getMemoryRootDir } from './commanderMemory';
 import { getAccountStore } from '../account/accountStore';
 import { resolveBackgroundLaunch, type BackgroundLaunch } from '../account/backgroundLaunchAccount';
-import { mintCommanderToken, revokeCommanderToken } from './commanderTrust';
+import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './commanderTrust';
+import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
+import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOutputNamesProtected } from '../factory/botRepoRead';
+import { redactStoredSecretsDeep } from '../factory/secretRedaction';
+import type { BotBinding } from '../../shared/bot';
+import { SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
 import { COMMANDER_MODE_ARG, COMMANDER_TOOL_SURFACE, COMMANDER_ONLY_TOOLS } from '../../shared/commanderSurface';
 import {
@@ -183,6 +188,16 @@ export interface ClaudeSdkAdapterDeps {
    *  Hooks are the user's own code and run outside any wmux sandbox, exactly
    *  as in their own Claude Code sessions — stated in the toggle copy. */
   fullPower?: boolean;
+  /** Agent factory bot mode. The session runs as this bot: a bot token
+   *  (mintBotToken) handed to the MCP child in a fresh 0600 file per turn
+   *  (never the environment), the MCP server in `--bot=<role>` mode, no
+   *  built-in tools at all (`tools: []`), every permission prompt denied, no
+   *  filesystem settings and no memory, and `cwd` as the session's working
+   *  directory (the bot's own empty folder). `allowedTools` should be the
+   *  role's MCP tools; `fullPower` is ignored. With `repoRoot` the session
+   *  also holds Read, Grep and Glob, each call decided by main inside that
+   *  repository (factory/botRepoRead.ts). */
+  bot?: { binding: BotBinding; cwd: string; wmuxDir?: string; repoRoot?: string };
 }
 
 // ─── Permission defaults (D2) ────────────────────────────────────────────────
@@ -260,18 +275,6 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   WMUX('a2a_broadcast'),
   WMUX('a2a_set_skills'),
   WMUX('send_message'),
-  // Close the currently-owned human request only after the server verifies that
-  // local workers and tracked A2A tasks are terminal.
-  WMUX('deck_complete_work'),
-  // Ask the human operator to settle a decision the brain should not make
-  // itself. A benign self-signal — it can ONLY pause the loop and ask, the
-  // opposite of a destructive tool — so it auto-allows like the comms tools.
-  WMUX('deck_ask_decision'),
-  // Self-resolve of the brain's OWN stale decision. Auto-allowing is safe for
-  // the same reason as deck_ask_decision: the tool itself only flips a decision
-  // record — the server RPC (deck.rpc.ts) enforces every precondition (auto
-  // mode, TTL elapsed, substance floor), so a disallowed call is refused there.
-  WMUX('deck_resolve_decision'),
   // Commander-only (never in full/core): the task ledger read. A pure read of
   // the brain's own rows, so it auto-allows like the other observe tools.
   WMUX('ledger_list'),
@@ -299,14 +302,6 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   // brain ask permission to call it would only add a prompt in front of a gate
   // that is already there, on the one path that exists to keep workers moving.
   WMUX('approval_press'),
-  // Commander-only: Moa's hand-off proposal. Auto-allowed because it delivers
-  // nothing by itself — it raises an operator card (Hand off / Edit / Cancel),
-  // and the server refuses any caller that is not the HQ brain.
-  WMUX('moa_propose_handoff'),
-  // Commander-only: Moa's goal contract. Auto-allowed for the same reason: the
-  // proposal only raises an operator card, and moa_goal reads or ends it.
-  WMUX('moa_propose_goal'),
-  WMUX('moa_goal'),
 ];
 
 // Built-in CLI tools the orchestrator must NEVER hold. `allowedTools` only
@@ -394,13 +389,6 @@ export interface CommanderSystemPromptOptions {
    * is true.
    */
   proposalsDir?: string;
-  /**
-   * The brain is Moa, the HQ: it always runs in its own workspace, so the
-   * agents it delegates to are in OTHER workspaces, where terminal_send /
-   * terminal_read are refused. Teaches the hand-off first, and the operator's
-   * language and small-talk rules.
-   */
-  moa?: boolean;
 }
 
 /** Default system prompt (identity + policy). The fleet snapshot is appended
@@ -508,25 +496,12 @@ export function buildCommanderSystemPrompt(
     '  request is not canonically completed. If rejected, continue/unblock/retry; do not',
     '  rephrase the rejection as success. For a simple question with no delegated work, give',
     '  the factual basis you checked as verification and close it through the same gate.',
-    ...(opts.moa
-      ? [
-        '- To see the agents, call pane_list / workspace_list. You run in your OWN',
-        '  workspace, so the agents you delegate to are in OTHER workspaces. Reach such an',
-        '  agent ONLY with moa_propose_handoff({ptyId, title, body}): terminal_send,',
-        '  terminal_send_key, terminal_read and send_message are refused for another',
-        '  workspace\'s pane, so never try them there. To check a result, read the file it',
-        '  changed in that pane\'s folder with Read or Grep (pane_list gives its cwd). terminal_send and',
-        '  terminal_read are for panes in your own workspace only.',
-      ]
-      : [
-        '- To see the agents, call pane_list / workspace_list. To inspect a pane, use',
-        '  terminal_read. To act, use pane_split (spawn), terminal_send (instruct), and',
-        '  the channel_* / a2a_* tools (coordinate).',
-      ]),
+    '- To see the agents, call pane_list / workspace_list. To inspect a pane, use',
+    '  terminal_read. To act, use pane_split (spawn), terminal_send (instruct), and',
+    '  the channel_* / a2a_* tools (coordinate).',
     '- FIND AN AGENT ACROSS WORKSPACES before you ask the operator about it: the agent they',
-    '  name may run in another workspace. Use pane_list\'s otherWorkspaceAgents when present,',
-    '  else workspace_list then pane_list({workspaceId}); never conclude it ended, or raise',
-    '  a decision about it, until you have looked.',
+    '  name may run in another workspace. Use workspace_list then pane_list({workspaceId});',
+    '  never conclude it ended, or raise a decision about it, until you have looked.',
     '- You are WOKEN AUTOMATICALLY when an agent finishes a turn, pauses for input,',
     '  or a tracked A2A task completes, fails, is canceled, or needs input. A',
     '  [pane-events] block opens the turn and names exactly which pane/task changed.',
@@ -560,23 +535,11 @@ export function buildCommanderSystemPrompt(
     '  and ONCE per job with the FINAL result (what changed, how it was verified), after',
     '  a successful deck_complete_work. No progress chatter: end a non-final turn with at',
     '  most one line naming what you wait on, never called complete/done.',
-    ...(opts.moa
-      ? [
-        '  You have no shell and cannot edit files: a command or an edit runs in an agent\'s',
-        '  pane through a hand-off (moa_propose_handoff). You CAN read files (Read, Grep,',
-        '  Glob) to check a result.',
-        '- REUSE BEFORE SPAWN: before you ever call pane_split, call pane_list and look',
-        '  for an agent that can take the work: one that has finished its turn. Hand the',
-        '  work THERE (moa_propose_handoff takes a pane running an agent, never a bare',
-        '  shell). Spawn a new',
-      ]
-      : [
-        '  You have no shell or file tools of your own — anything that needs one runs in a',
-        '  worker pane via terminal_send.',
-        '- REUSE BEFORE SPAWN: before you ever call pane_split, call pane_list and look',
-        '  for an existing pane that can take the work — an idle shell, or an agent that',
-        '  has finished its turn. Send the work THERE with terminal_send. Spawn a new',
-      ]),
+    '  You have no shell or file tools of your own — anything that needs one runs in a',
+    '  worker pane via terminal_send.',
+    '- REUSE BEFORE SPAWN: before you ever call pane_split, call pane_list and look',
+    '  for an existing pane that can take the work — an idle shell, or an agent that',
+    '  has finished its turn. Send the work THERE with terminal_send. Spawn a new',
     '  pane only when no existing pane is free, or the work genuinely needs to run',
     '  in parallel with everything already running. Spawning when an idle pane',
     '  exists wastes the operator\'s screen and resources.',
@@ -604,16 +567,6 @@ export function buildCommanderSystemPrompt(
     '  Its context says why you are asking: what blocks you and what each answer changes.',
     '- SPEAK THE OPERATOR\'S LANGUAGE in every card and reply: no tool names, ids or field',
     '  names. One or two sentences, plus what you need from them, if anything.',
-    ...(opts.moa
-      ? [
-        '- REPLY IN THE OPERATOR\'S LANGUAGE: every reply, card and final report is written in',
-        '  the language of the operator\'s latest message (Korean in, Korean out), even when',
-        '  wake blocks, tool results or the worker\'s words are in English. Only a hand-off',
-        '  body follows the target project\'s language rules.',
-        '- A thank-you or a greeting is not a request: answer in one short line, call no',
-        '  tools, and do not call deck_complete_work.',
-      ]
-      : []),
     '- REPLY STYLE: write like a chat message, 1-3 conversational sentences. Use a list',
     '  only when the operator asked for one or there are 3+ parallel items; no bold',
     '  headings. When you hand work off, say one line ("Handed to <agent> in',
@@ -754,13 +707,20 @@ export class ClaudeSdkAdapter implements BrainAdapter {
    *  terminal routing can grant this brain pane targeting WITHIN its own
    *  workspace (M1.5 confinement). */
   private readonly _commanderToken: string;
+  /** Bot mode (see ClaudeSdkAdapterDeps.bot). */
+  private readonly bot?: { binding: BotBinding; cwd: string; wmuxDir?: string; repoRoot?: string };
+  /** Bot mode: the current turn's token hand-off file, removed when the turn ends. */
+  private _handoff: BotTokenHandoff | null = null;
 
   constructor(deps: ClaudeSdkAdapterDeps = {}) {
     this.queryFn = deps.queryFn ?? null;
     this.mcpBundlePath =
       deps.mcpBundlePath !== undefined ? deps.mcpBundlePath : resolveMcpBundlePath();
-    this.fullPower = deps.fullPower ?? false;
-    this.allowedTools = deps.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    this.bot = deps.bot ? { ...deps.bot, binding: { ...deps.bot.binding } } : undefined;
+    this.fullPower = this.bot ? false : deps.fullPower ?? false;
+    // A bot holds exactly its role's MCP tools unless told otherwise.
+    this.allowedTools = deps.allowedTools
+      ?? (this.bot ? [...SHARED_SURFACE.tools].map(WMUX) : DEFAULT_ALLOWED_TOOLS);
     this.model = deps.model;
     this.effort = deps.effort;
     this.maxTurns = deps.maxTurns ?? DEFAULT_MAX_TURNS;
@@ -768,12 +728,16 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     // Default loader layers both partitions for THIS workspace (M1c). Bound to
     // deps.workspaceId at construction so the brain only ever sees its own
     // workspace's memory plus the shared global partition.
-    this.loadMemory = deps.loadMemory ?? (() => loadCommanderMemory({ workspaceId: deps.workspaceId }));
-    this._workspaceId = deps.workspaceId;
+    this.loadMemory = deps.loadMemory ?? (this.bot ? () => '' : () => loadCommanderMemory({ workspaceId: deps.workspaceId }));
+    this._workspaceId = this.bot ? this.bot.binding.workspaceId : deps.workspaceId;
     this._memoryRoot = deps.memoryRoot;
     // An empty binding registers an unroutable token — fail closed rather
-    // than fleet-wide when a caller forgets the workspace.
-    this._commanderToken = mintCommanderToken(deps.workspaceId ?? '');
+    // than fleet-wide when a caller forgets the workspace. A bot's token is
+    // bound to its {workspaceId, botId, role} (mintBotToken throws on a
+    // malformed binding).
+    this._commanderToken = this.bot
+      ? mintBotToken(this.bot.binding)
+      : mintCommanderToken(deps.workspaceId ?? '');
   }
 
   get sessionId(): string | null {
@@ -949,9 +913,132 @@ export class ClaudeSdkAdapter implements BrainAdapter {
         },
       };
     }
+    if (this.bot) this.applyBotOptions(options);
     // Resume threads later turns onto the same transcript.
     if (this._sessionId) options.resume = this._sessionId;
     return options;
+  }
+
+  /** Bot mode: lock the session to the role's MCP tools (see deps.bot). */
+  private applyBotOptions(options: Record<string, unknown>): void {
+    const bot = this.bot;
+    if (!bot) return;
+    // No built-in tool exists in the session (`--tools ""`); the disallow
+    // list stays as a second lock.
+    options.tools = [];
+    options.allowedTools = [...this.allowedTools];
+    options.disallowedTools = [...DISALLOWED_TOOLS, 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'];
+    options.canUseTool = async () => ({ behavior: 'deny' as const, message: 'bots act only through their wmux tools' });
+    options.settingSources = [];
+    options.cwd = bot.cwd;
+    if (bot.repoRoot) this.applyRepoRead(options, bot.repoRoot);
+    if (!this.mcpBundlePath) {
+      delete options.mcpServers;
+      return;
+    }
+    this._handoff?.dispose();
+    this._handoff = writeBotTokenHandoff(bot.binding, this._commanderToken, { dir: bot.wmuxDir });
+    options.mcpServers = {
+      wmux: {
+        type: 'stdio',
+        command: process.execPath,
+        args: [this.mcpBundlePath, ...this._handoff.mcpArgs],
+        env: {
+          ELECTRON_RUN_AS_NODE: '1',
+          ...(process.env.WMUX_DATA_SUFFIX ? { WMUX_DATA_SUFFIX: process.env.WMUX_DATA_SUFFIX } : {}),
+        },
+      },
+    };
+  }
+
+  /** Bot mode with a repository: Read, Grep and Glob, decided by main.
+   *
+   *  The session's cwd stays the bot's empty folder: claude keys transcripts
+   *  (resume) by cwd, and the repository's own claude project (the owner's
+   *  sessions and memory there) stays out of the bot's. Relative paths and
+   *  path-less searches still land in the repository, because main's
+   *  PreToolUse decision rewrites every allowed call to absolute paths under
+   *  the root. The three tools are deliberately NOT in allowedTools (an
+   *  allowed tool skips the permission path); the PreToolUse hook fires for
+   *  every call, canUseTool repeats the same decision, and the Read deny
+   *  rules keep protected files out of Grep / Glob results. */
+  private applyRepoRead(options: Record<string, unknown>, root: string): void {
+    const botId = this.bot?.binding.botId ?? '';
+    const decide = (toolName: string, input: unknown) =>
+      evaluateBotRepoRead(toolName, input && typeof input === 'object' ? (input as Record<string, unknown>) : {}, root);
+    const logDenied = (toolName: string, reason: string) =>
+      console.warn('[factory] bot repository read denied:', JSON.stringify({ botId, tool: toolName, reason }));
+    options.tools = [...BOT_REPO_READ_TOOLS];
+    options.disallowedTools = [...DISALLOWED_TOOLS, 'Write', 'WebFetch', 'WebSearch'];
+    options.settings = { permissions: { deny: botRepoReadDenyRules(root) } };
+    options.canUseTool = async (toolName: string, input: Record<string, unknown>) => {
+      try {
+        const d = decide(toolName, input);
+        if (d.ok) return { behavior: 'allow' as const, updatedInput: d.input };
+        logDenied(toolName, d.reason);
+        return { behavior: 'deny' as const, message: `wmux: ${d.reason}` };
+      } catch {
+        return { behavior: 'deny' as const, message: 'wmux: the read check failed' };
+      }
+    };
+    const preToolUse = async (hookInput: { tool_name?: string; tool_input?: unknown }) => {
+      const toolName = hookInput.tool_name ?? '';
+      // wmux MCP tools keep their own gates (allowedTools, the role surface).
+      if (toolName.startsWith('mcp__wmux__')) return {};
+      let d: ReturnType<typeof decide>;
+      try {
+        d = decide(toolName, hookInput.tool_input);
+      } catch {
+        d = { ok: false, reason: 'the read check failed' };
+      }
+      if (!d.ok) logDenied(toolName, d.reason);
+      return {
+        hookSpecificOutput: d.ok
+          ? { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: d.input }
+          : { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `wmux: ${d.reason}` },
+      };
+    };
+    const postToolUse = async (hookInput: { tool_name?: string; tool_response?: unknown }) => {
+      const toolName = hookInput.tool_name ?? '';
+      // wmux MCP results are redacted where main answers them (RpcRouter).
+      if (toolName.startsWith('mcp__wmux__')) return {};
+      // A stored bot secret never reaches the model in a read's result: the
+      // result goes on with each value replaced by its marker.
+      const redacted = (): Record<string, unknown> => {
+        let out: unknown;
+        try {
+          // A read may be a window of a file (offset/limit): pieces of a
+          // value at its edges, and lines inside one, are masked too.
+          out = redactStoredSecretsDeep(hookInput.tool_response, { edges: true });
+        } catch {
+          out = null;
+        }
+        if (out === hookInput.tool_response) return {};
+        return { hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: out ?? 'wmux: this result was withheld because it could not be checked for stored secrets.' } };
+      };
+      if (toolName !== 'Grep') return redacted();
+      let withhold = true;
+      try {
+        withhold = grepOutputNamesProtected(hookInput.tool_response, root, fs.realpathSync.native(root));
+      } catch {
+        /* fail closed */
+      }
+      if (!withhold) return redacted();
+      logDenied('Grep', 'the result named a protected file');
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          updatedToolOutput: { mode: 'content', numFiles: 0, filenames: [], content: 'wmux: this result was withheld because it included a protected file; search a narrower path or glob.', numLines: 1 },
+        },
+      };
+    };
+    options.hooks = { PreToolUse: [{ hooks: [preToolUse] }], PostToolUse: [{ hooks: [postToolUse] }] };
+  }
+
+  /** Bot mode: remove a hand-off file the MCP child did not consume. */
+  private disposeHandoff(): void {
+    this._handoff?.dispose();
+    this._handoff = null;
   }
 
   /** Prepend the one-shot context (durable memory + fleet snapshot) to the
@@ -1044,6 +1131,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
           if (exe) {
             options.pathToClaudeCodeExecutable = exe;
           } else if (app.isPackaged) {
+            this.disposeHandoff();
             yield {
               type: 'error',
               message:
@@ -1054,6 +1142,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
         }
         handle = queryFn({ prompt, options });
       } catch (err) {
+        this.disposeHandoff();
         if (resumingUnvalidated && attempt === 0) {
           this.dropSeededResume('spawn threw', err);
           continue;
@@ -1120,6 +1209,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
         }
       } finally {
         if (this._active === handle) this._active = null;
+        this.disposeHandoff();
       }
       if (!retryFresh) return;
       // Best-effort teardown of the dead attempt's subprocess before retrying.
@@ -1168,6 +1258,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     this._disposed = true;
     this.interrupt();
     this._active = null;
+    this.disposeHandoff();
     // A dead brain's token must not be replayable by a later process.
     revokeCommanderToken(this._commanderToken);
   }

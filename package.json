@@ -1,7 +1,7 @@
 {
   "name": "wmux",
   "productName": "wmux",
-  "version": "4.3.0",
+  "version": "4.3.1",
   "description": "Workspace multiplexer for AI agents — run fleets of Claude Code, Codex & Gemini in parallel on Windows & macOS, with MCP browser automation built in",
   "private": true,
   "main": ".vite/build/index.js",
@@ -128,6 +128,7 @@
     "immer": "^11.1.4",
     "koffi": "^3.1.6",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "6.3.289",
     "playwright-core": "^1.58.2",
     "qrcode-generator": "2.0.4",
     "react": "^19.2.4",

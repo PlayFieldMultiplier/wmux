@@ -1,0 +1,136 @@
+{
+  "root": {
+    "first": true,
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "b",
+              "name": "h-b"
+            }
+          ]
+        },
+        {
+          "matcher": "Left-empty-by-user",
+          "hooks": []
+        },
+        {
+          "matcher": "Write",
+          "hooks": [
+            {
+              "type": "prompt",
+              "prompt": "p"
+            }
+          ]
+        }
+      ],
+      "Notification": [
+        {
+          "type": "command",
+          "command": "n",
+          "name": "keep"
+        }
+      ]
+    },
+    "last": true
+  },
+  "rootKeys": [
+    "first",
+    "hooks",
+    "last"
+  ],
+  "store": {
+    "version": 1,
+    "intents": {},
+    "removedHooks": {
+      "claude": [
+        {
+          "id": "claude:hook::h-c",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Bash"
+            },
+            "handler": {
+              "type": "command",
+              "command": "c",
+              "name": "h-c"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        },
+        {
+          "id": "claude:hook::h-a",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Bash"
+            },
+            "handler": {
+              "type": "command",
+              "command": "a",
+              "name": "h-a"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        },
+        {
+          "id": "claude:hook::h-d",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Edit"
+            },
+            "handler": {
+              "type": "command",
+              "command": "d",
+              "name": "h-d"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        },
+        {
+          "id": "claude:hook::h-bare",
+          "definition": {
+            "event": "PreToolUse",
+            "handler": {
+              "type": "command",
+              "command": "bare",
+              "name": "h-bare"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        },
+        {
+          "id": "claude:hook::PreToolUse-command",
+          "definition": {
+            "event": "PreToolUse",
+            "groupMeta": {
+              "matcher": "Write"
+            },
+            "handler": {
+              "type": "command",
+              "command": "lint"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        },
+        {
+          "id": "claude:hook::Stop-command",
+          "definition": {
+            "event": "Stop",
+            "groupMeta": {},
+            "handler": {
+              "type": "command",
+              "command": "only"
+            }
+          },
+          "originPath": "<home>/.claude/settings.json"
+        }
+      ]
+    }
+  }
+}

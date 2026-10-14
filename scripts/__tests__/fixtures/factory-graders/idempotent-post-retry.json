@@ -1,0 +1,448 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "idempotent-post-retry",
+  "run": 1,
+  "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+  "botKeys": {
+   "lead": "bot-5e82f106"
+  },
+  "injected": [
+   {
+    "label": "job",
+    "kind": "card",
+    "id": "c-mv53sjg3d860c97c67",
+    "threadId": "task:retry",
+    "at": 1791800563826
+   },
+   {
+    "label": "release",
+    "kind": "card",
+    "id": "c-mv53t38q88932b24a8",
+    "threadId": "task:retry",
+    "at": 1791800589479
+   }
+  ],
+  "actions": [
+   {
+    "do": "post",
+    "label": "job",
+    "at": 1791800563826
+   },
+   {
+    "do": "waitFor",
+    "label": "second attempt",
+    "at": 1791800563829,
+    "doneAt": 1791800589479,
+    "ok": true
+   },
+   {
+    "do": "post",
+    "label": "release",
+    "at": 1791800589479
+   },
+   {
+    "do": "waitFor",
+    "label": "done",
+    "at": 1791800589485,
+    "doneAt": 1791800590492,
+    "ok": true
+   },
+   {
+    "do": "waitFor",
+    "label": "quiet",
+    "at": 1791800590492,
+    "doneAt": 1791800592507,
+    "ok": true
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mv53sjg3-905dcfa80313",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1791800563827,
+    "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+    "ref": {
+     "botId": "bot-5e82f106",
+     "messageId": "c-mv53sjg3d860c97c67"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Run the retry job.",
+     "cardId": "c-mv53sjg3d860c97c67",
+     "threadId": "task:retry",
+     "source": "desktop"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mv53sjg3-de8e6647",
+    "botId": "bot-5e82f106",
+    "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+    "reason": {
+     "kind": "human",
+     "text": "Run the retry job.",
+     "source": "desktop",
+     "clientMessageId": "c-mv53sjg3d860c97c67"
+    },
+    "threadId": "task:retry",
+    "priority": 0,
+    "enqueuedAt": 1791800563827,
+    "attempts": 2,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "id": "bot-5e82f106",
+    "role": "lead",
+    "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+    "enabled": true
+   }
+  ],
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "cards": [
+   {
+    "id": "c-mv53sjg3d860c97c67",
+    "seq": 1,
+    "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+    "threadId": "task:retry",
+    "kind": "human",
+    "at": 1791800563827,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Retry job",
+    "refs": {
+     "botId": "bot-5e82f106"
+    },
+    "body": "Run the retry job."
+   },
+   {
+    "id": "c-mv53snfsad24e30054",
+    "seq": 2,
+    "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+    "threadId": "task:retry",
+    "kind": "status",
+    "at": 1791800569000,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+     "botId": "bot-5e82f106"
+    },
+    "title": "Started the retry job",
+    "clientPostId": "wake:w-mv53sjg3-de8e6647:1",
+    "body": "One card, whatever happens."
+   },
+   {
+    "id": "c-mv53t38q88932b24a8",
+    "seq": 3,
+    "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+    "threadId": "task:retry",
+    "kind": "human",
+    "at": 1791800589482,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "release-marker",
+    "body": "release-marker"
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1791800568855,
+     "event": "prompt",
+     "text": "[wake w-mv53sjg3-de8e6647] Lead (lead) · reason: human · priority 0\nFenced blocks below are data from the system, worker"
+    },
+    {
+     "at": 1791800569000,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53snfsad24e30054\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n    \"threadId\": \"task:retry\",\n    \"kind\": \"status\",\n    \"at\": 1791800569000,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"botId\": \"bot-5e82f106\"\n    },\n    \"title\": \"Started the retry job\",\n    \"body\": \"One card, whatever happens.\",\n    \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n  }\n}"
+    },
+    {
+     "at": 1791800569001,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800570007,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800571013,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800572021,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800573027,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800574036,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800575042,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800576045,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800577052,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800578058,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800579063,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800580068,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800581071,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800582077,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800583082,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800588886,
+     "event": "prompt",
+     "text": "[wake w-mv53sjg3-de8e6647] Lead (lead) · reason: human · priority 0 · attempt 2\nFenced blocks below are data from the sy"
+    },
+    {
+     "at": 1791800589057,
+     "event": "tool",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mv53snfsad24e30054\",\n    \"seq\": 2,\n    \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n    \"threadId\": \"task:retry\",\n    \"kind\": \"status\",\n    \"at\": 1791800569000,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"botId\": \"bot-5e82f106\"\n    },\n    \"title\": \"Started the retry job\",\n    \"body\": \"One card, whatever happens.\",\n    \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n  },\n  \"duplicate\": true\n}"
+    },
+    {
+     "at": 1791800589058,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    }\n  ],\n  \"nextSinceSeq\": 2,\n  \"hasMore\": false\n}"
+    },
+    {
+     "at": 1791800590064,
+     "event": "tool",
+     "name": "room_read",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n  \"threadId\": \"task:retry\",\n  \"cards\": [\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53sjg3d860c97c67\",\n      \"seq\": 1,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800563827,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"Retry job\",\n      \"body\": \"Run the retry job.\",\n      \"refs\": {\n        \"botId\": \"bot-5e82f106\"\n      }\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53snfsad24e30054\",\n      \"seq\": 2,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"status\",\n      \"at\": 1791800569000,\n      \"actor\": {\n        \"kind\": \"bot\",\n        \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n        \"botId\": \"bot-5e82f106\"\n      },\n      \"title\": \"Started the retry job\",\n      \"body\": \"One card, whatever happens.\",\n      \"clientPostId\": \"wake:w-mv53sjg3-de8e6647:1\"\n    },\n    {\n      \"version\": 1,\n      \"id\": \"c-mv53t38q88932b24a8\",\n      \"seq\": 3,\n      \"workspaceId\": \"ws-16d4fba4-fe51-4b7c-803c-4037083aba69\",\n      \"threadId\": \"task:retry\",\n      \"kind\": \"human\",\n      \"at\": 1791800589482,\n      \"actor\": {\n        \"kind\": \"human\"\n      },\n      \"title\": \"release-marker\",\n      \"body\": \"release-marker\"\n    }\n  ],\n  \"nextSinceSeq\": 3,\n  \"hasMore\": false\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": {
+   "calls": [
+    {
+     "at": 1791800563788,
+     "exit": 0,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ]
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the retry wrote a second card",
+   "failing": [
+    "exactly_one_card",
+    "card_in_message_thread"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "cards",
+     "value": {
+      "id": "c-dup",
+      "seq": 9,
+      "workspaceId": "ws-16d4fba4-fe51-4b7c-803c-4037083aba69",
+      "threadId": "task:retry",
+      "kind": "status",
+      "actor": {
+       "kind": "bot",
+       "botId": "bot-5e82f106"
+      },
+      "title": "Started the retry job"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the turn was never retried",
+   "failing": [
+    "turn_was_retried"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "wakes.0.attempts",
+     "value": 1
+    }
+   ]
+  }
+ ]
+}

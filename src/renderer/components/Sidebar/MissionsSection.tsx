@@ -36,7 +36,7 @@ import { useT } from '../../hooks/useT';
 import type { WorkTask } from '../../../shared/workTask';
 import { summarizeMissions } from '../../stores/selectors/missions';
 import { FOCUS_RING } from '../focusRing';
-import { selectMoaOn } from '../Layout/moaDockGate';
+import { isBotTask } from './botTasks';
 
 /**
  * 모든 부모 캐시를 평탄화·정렬한 미션 목록(순수 함수 — 테스트 가능). open을 먼저,
@@ -81,43 +81,19 @@ function useLiveMissions(): WorkTask[] {
   // `''.split(',')` yields `['']`, which makes the empty-string id count as "alive",
   // and any id containing a comma would be split apart.
   const workspaceIds = useStore(useShallow((s) => s.workspaces.map((w) => w.id)));
+  // A bot's workers are counted on the Bots page, not here (botTasks.ts).
+  const fanoutOrigin = useStore((s) => s.fanoutOrigin);
   return useMemo(
-    () => selectLiveMissions(byWorkspace, new Set(workspaceIds)),
-    [byWorkspace, workspaceIds],
+    () => selectLiveMissions(byWorkspace, new Set(workspaceIds))
+      .filter((task) => !task.paneGroupId || !isBotTask(fanoutOrigin[task.paneGroupId])),
+    [byWorkspace, workspaceIds, fanoutOrigin],
   );
 }
 
-/**
- * Take the operator to the surface that OWNS the tasks: the workspace whose
- * ledger holds them, the deck, its Agent tab, and — for a finished-only
- * summary — the finished disclosure the closed tasks live in.
- *
- * The workspace hop is the point. The summary counts every workspace's tasks
- * while the deck panel reads one workspace's ledger, so without it "Tasks · 3
- * open" could open an empty panel. Exported for the test: the store calls ARE
- * the navigation, and the scroll is a best-effort courtesy on top.
- */
-export function openTaskLedger(wanted: WorkTask['status'] = 'open'): void {
-  const state = useStore.getState();
-  // With Moa off there is no right panel: task status and fan-out work are
-  // read in Fleet. With Moa on, its conversation and task cards are
-  // fleet-wide, so the line opens the panel where it is.
-  // The same test as the dock gate: no panel is drawn unless Moa is on.
-  if (!selectMoaOn(state)) {
-    state.setAppRoute('fleet');
-    return;
-  }
-  state.setChannelDockVisible(true);
-  state.setActiveDeckTab('commander');
-  // A finished-only line has nothing to show in the open list — it is pointing
-  // at the disclosure, so it opens it.
-  state.setDeckLedgerFinishedExpanded(wanted === 'closed');
-  if (typeof requestAnimationFrame !== 'function') return;
-  requestAnimationFrame(() => {
-    document
-      .querySelector('[data-moa-tasks], [data-deck-ledger-panel]')
-      ?.scrollIntoView({ block: 'nearest' });
-  });
+/** Take the operator to Fleet, where task status and fan-out work are read.
+ *  Exported for the test: the store call IS the navigation. */
+export function openTaskLedger(): void {
+  useStore.getState().setAppRoute('fleet');
 }
 
 function MissionsSection(): React.ReactElement | null {
@@ -128,17 +104,12 @@ function MissionsSection(): React.ReactElement | null {
   // No tasks at all, no line. See the file note: a zero row is a dead gauge,
   // and with the line gone the command palette is the way to the cleanup scan.
   if (summary.open === 0 && summary.finished === 0) return null;
-  // Open work is what the line is for; a finished-only line still says so,
-  // because the closed tasks' mission channels are reachable from the deck's
-  // finished disclosure and nowhere else.
-  const wanted: WorkTask['status'] = summary.open > 0 ? 'open' : 'closed';
-
   return (
     <div className="mb-1 flex items-center" data-missions-section>
       <button
         type="button"
         className={`min-w-0 flex-1 flex items-center gap-1.5 px-4 pt-1 pb-1 text-[12px] font-semibold uppercase tracking-[0.06em] text-[color-mix(in_srgb,var(--text-main)_70%,transparent)] hover:text-[var(--text-main)] transition-colors ${FOCUS_RING}`}
-        onClick={() => openTaskLedger(wanted)}
+        onClick={() => openTaskLedger()}
         title={t('missions.summaryTooltip')}
         data-missions-summary
         data-open-count={summary.open}

@@ -1,0 +1,819 @@
+// BotRuntime: lifecycle and presence, turn serialisation through the queue,
+// the global cap, budget refusal, retries and parking, engine refusal,
+// interrupt, timeout, resume across a restart, and R8 on quit.
+
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrainAdapter, BrainEvent, BrainStartOptions } from '../../deck/BrainAdapter';
+import { BotRuntime, BotSessionStore, CONTEXT_WAIT_MS, ROOM_RUN_STAGGER_MS, botSessionsPath, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
+import type { BotEngineFactory, BotEngineSpawnInput } from '../botEngines';
+import { BotStore, botsFilePath } from '../botStore';
+import { WakeQueue, wakeQueuePath } from '../wakeQueue';
+import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
+import { __resetBotHooksForTesting, onBotHook, type BotHookEvent } from '../botHooks';
+import { HOUR_MS } from '../budget';
+
+/** A scripted engine session: each send waits for the test to end the turn. */
+class FakeAdapter implements BrainAdapter {
+  sessionId: string | null = null;
+  started: BrainStartOptions | null = null;
+  prompts: string[] = [];
+  interrupted = 0;
+  disposed = false;
+  private ends: Array<(ev: BrainEvent[]) => void> = [];
+  constructor(private readonly mode: 'manual' | 'ok' | 'error' | 'hang' = 'manual') {}
+  start(opts: BrainStartOptions): void {
+    this.started = opts;
+    if (opts.resumeSessionId) this.sessionId = opts.resumeSessionId;
+  }
+  async *send(text: string): AsyncIterable<BrainEvent> {
+    this.prompts.push(text);
+    let events: BrainEvent[];
+    if (this.mode === 'ok') events = [{ type: 'turn-end', sessionId: 'sess-1' }];
+    else if (this.mode === 'error') events = [{ type: 'error', message: 'boom' }];
+    else if (this.mode === 'hang') events = await new Promise<BrainEvent[]>(() => undefined);
+    else events = await new Promise<BrainEvent[]>((resolve) => this.ends.push(resolve));
+    for (const ev of events) {
+      if (ev.type === 'turn-end' && ev.sessionId) this.sessionId = ev.sessionId;
+      yield ev;
+    }
+  }
+  /** End the oldest pending turn. */
+  end(events: BrainEvent[] = [{ type: 'turn-end', sessionId: 'sess-1' }]): void {
+    this.ends.shift()?.(events);
+  }
+  interrupt(): void {
+    this.interrupted++;
+    this.end([]);
+  }
+  dispose(): void {
+    this.disposed = true;
+  }
+}
+
+let dir = '';
+let clock = 10 * HOUR_MS;
+let settings: FactorySettings;
+let hooks: BotHookEvent[];
+const flushers: Array<() => Promise<void>> = [];
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp2-runtime-'));
+  clock = 10 * HOUR_MS;
+  settings = { ...DEFAULT_FACTORY_SETTINGS, enabled: true, trustedAuthors: [], morning: { hour: 9, weekdays: [] } };
+  __resetBotHooksForTesting();
+  __resetBotRuntimePortsForTesting();
+  hooks = [];
+  onBotHook((e) => hooks.push(e));
+});
+
+afterEach(async () => {
+  await Promise.all(flushers.splice(0).map((f) => f().catch(() => undefined)));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
+async function settle(n = 6): Promise<void> {
+  for (let i = 0; i < n; i++) await tick();
+}
+
+interface Rig {
+  runtime: BotRuntime;
+  store: BotStore;
+  queue: WakeQueue;
+  sessions: BotSessionStore;
+  adapters: FakeAdapter[];
+  spawns: BotEngineSpawnInput[];
+}
+
+function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }> } = {}): Rig {
+  const store = new BotStore(botsFilePath(dir), { now: () => clock });
+  const sessions = new BotSessionStore(botSessionsPath(dir));
+  let runtime: BotRuntime | null = null;
+  const queue = new WakeQueue(wakeQueuePath(dir), {
+    now: () => clock,
+    isBotEnabled: (id) => store.get(id)?.enabled === true,
+    onChange: () => runtime?.kick(),
+  });
+  if (opts.load) {
+    store.load();
+    sessions.load();
+    queue.load();
+  }
+  const adapters: FakeAdapter[] = [];
+  const spawns: BotEngineSpawnInput[] = [];
+  const timers = opts.timers;
+  runtime = new BotRuntime({
+    store,
+    queue,
+    sessions,
+    settings: () => settings,
+    wmuxDir: dir,
+    now: () => clock,
+    ...(timers ? {
+      setTimer: (fn: () => void, ms: number) => { timers.push({ fn, at: clock + ms }); return timers.length; },
+      clearTimer: () => undefined,
+    } : {}),
+    engines: opts.engines ?? ((input) => {
+      spawns.push(input);
+      const a = new FakeAdapter(opts.mode ?? 'manual');
+      adapters.push(a);
+      return { ok: true, adapter: a };
+    }),
+  });
+  flushers.push(() => store.flush(), () => queue.flush(), () => sessions.flush());
+  return { runtime, store, queue, sessions, adapters, spawns };
+}
+
+function must<T>(v: T | null | undefined): T {
+  if (v === null || v === undefined) throw new Error('expected a value');
+  return v;
+}
+
+function createBot(r: Rig, role: 'verifier' | 'lead' | 'maintainer' = 'verifier', ws = 'ws-1', budget?: Record<string, number>): string {
+  const res = r.store.create({ workspaceId: ws, role, ...(budget ? { budget } : {}) });
+  if (!res.ok) throw new Error(res.message);
+  return res.bot.id;
+}
+
+describe('BotRuntime', () => {
+  it('a bot is unknown until its first turn, runs one turn, then is idle with its session saved', async () => {
+    const r = rig();
+    const id = createBot(r);
+    expect(r.runtime.status(id)?.presence).toBe('unknown');
+    expect(r.spawns).toHaveLength(0); // nothing spawns without a wake
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    expect(r.runtime.status(id)).toMatchObject({ presence: 'running', queueDepth: 0 });
+    expect(r.runtime.currentTurn(id)?.wakeId).toBeTruthy();
+    expect(r.spawns[0]).toMatchObject({ binding: { workspaceId: 'ws-1', botId: id, role: 'verifier' }, cwd: path.join(dir, 'factory', 'bots', id) });
+    expect(fs.existsSync(path.join(dir, 'factory', 'bots', id))).toBe(true);
+    expect(r.adapters[0].prompts[0]).toContain('Message from the owner (desktop):\nhello');
+    r.adapters[0].end();
+    await settle();
+    expect(r.runtime.status(id)).toMatchObject({ presence: 'idle', sessionId: 'sess-1' });
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    expect(r.queue.list({ botId: id })[0].state).toBe('done');
+  });
+
+  it('queues a human message while the bot is busy and runs it next on the same session', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.runtime.wake(id, { text: 'second' })).not.toBeNull();
+    await settle();
+    expect(r.runtime.status(id)?.queueDepth).toBe(1);
+    expect(r.adapters[0].prompts).toHaveLength(1);
+    r.adapters[0].end();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    expect(r.adapters[0].prompts[1]).toContain('second');
+  });
+
+  it('runs at most globalConcurrentBots bots at once', async () => {
+    settings.globalConcurrentBots = 1;
+    const r = rig();
+    const a = createBot(r, 'verifier');
+    const b = createBot(r, 'lead');
+    r.runtime.wake(a);
+    r.runtime.wake(b);
+    await settle();
+    expect([r.runtime.status(a)?.presence, r.runtime.status(b)?.presence].filter((p) => p === 'running')).toHaveLength(1);
+    r.adapters[0].end();
+    await settle();
+    expect(r.adapters).toHaveLength(2);
+    expect(r.runtime.status(b)?.presence === 'running' || r.runtime.status(a)?.presence === 'running').toBe(true);
+  });
+
+  it('does nothing while the factory is off', async () => {
+    settings.enabled = false;
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.spawns).toHaveLength(0);
+    expect(r.runtime.status(id)?.queueDepth).toBe(1);
+  });
+
+  it('switching the factory off cancels the running turn (interrupted, hooked like a quit), ends every session, and starts nothing', async () => {
+    const r = rig({ mode: 'hang' });
+    const a = createBot(r, 'verifier');
+    const b = createBot(r, 'lead');
+    const running = r.runtime.wake(a);
+    await settle();
+    expect(r.runtime.status(a)?.presence).toBe('running');
+    const queued = r.runtime.wake(a, { text: 'next' });
+    settings.enabled = false;
+    r.runtime.kick();
+    await settle();
+    // The engine never answered: the turn ends anyway, without a retry.
+    expect(r.queue.get(running!.id)?.state).toBe('interrupted');
+    expect(r.adapters[0]).toMatchObject({ interrupted: 1, disposed: true });
+    expect(hooks).toContainEqual(expect.objectContaining({ type: 'wake.interrupted', botId: a, wakeId: running!.id }));
+    expect(r.runtime.status(a)?.presence).not.toBe('running');
+    // Nothing new runs while off; queued wakes wait.
+    r.runtime.wake(b);
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    expect(r.queue.get(queued!.id)?.state).toBe('queued');
+    // On again: the queue runs on a fresh session.
+    settings.enabled = true;
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters.length).toBeGreaterThan(1);
+  });
+
+  it('an owner interrupt is not reported as a cut turn', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    r.runtime.interrupt(id);
+    await settle();
+    expect(hooks.some((h) => h.type === 'wake.interrupted')).toBe(false);
+  });
+
+  it('budget refusal drops the wake, parks the bot and emits a hook; the park lifts when the window slides', async () => {
+    const r = rig({ mode: 'ok' });
+    const id = createBot(r, 'maintainer', 'ws-1', { maxTurnsPerHour: 2 }); // 2 turns / hour
+    r.runtime.wake(id);
+    await settle();
+    r.runtime.wake(id);
+    await settle();
+    r.runtime.wake(id);
+    await settle();
+    expect(r.queue.list({ botId: id, states: ['dropped'] })[0].dropped).toEqual({ code: 'budget' });
+    expect(r.store.get(id)?.parked?.reason).toBe('budget');
+    expect(r.runtime.status(id)?.presence).toBe('parked');
+    expect(hooks).toContainEqual(expect.objectContaining({ type: 'bot.budget_exhausted', botId: id, reason: 'turns_hour' }));
+    clock += HOUR_MS + 1;
+    r.runtime.wake(id);
+    await settle();
+    expect(r.store.get(id)?.parked).toBeUndefined();
+    expect(r.adapters[0].prompts).toHaveLength(3);
+  });
+
+  describe('out of turns, the owner\'s words are held, never dropped', () => {
+    /** A lead the owner capped at 2 turns / hour (not a legacy default, so a
+     *  reload keeps it) that used both turns of this hour. */
+    async function spent(r: Rig, ws = 'ws-1'): Promise<string> {
+      const id = createBot(r, 'lead', ws, { maxTurnsPerHour: 2 });
+      r.runtime.wake(id);
+      await settle(10);
+      r.runtime.wake(id);
+      await settle(10);
+      expect(r.store.usageOf(id).turns).toHaveLength(2);
+      return id;
+    }
+    const budgetHooks = (id: string) => hooks.filter((h) => h.type === 'bot.budget_exhausted' && h.botId === id);
+    const heldHooks = (wakeId: string) => hooks.filter((h) => h.type === 'wake.held' && h.wakeId === wakeId);
+
+    /** The owner's answer to a question (a handoff carrying owner words). */
+    function answers(...ids: string[]): void {
+      setBotRuntimePorts({
+        resolveHandoff: (hid) => (ids.includes(hid) ? { handoffId: hid, kind: 'answer', from: 'the owner', title: 't', body: `answer ${hid}`, ownerWords: true } : null),
+      });
+    }
+
+    it('the owner\'s own message runs even out of turns, counted, and nothing parks', async () => {
+      const r = rig({ mode: 'ok' });
+      const id = await spent(r);
+      const msg = must(r.runtime.wake(id, { text: 'stop everything' }));
+      await settle(10);
+      expect(r.queue.get(msg.id)?.state).toBe('done');
+      expect(r.adapters[0].prompts.at(-1)).toContain('stop everything');
+      expect(r.store.usageOf(id).turns).toHaveLength(3);
+      expect(r.store.get(id)?.parked).toBeUndefined();
+      expect(budgetHooks(id)).toHaveLength(0);
+      // A bot's own wake still meets the refusal.
+      const manual = must(r.runtime.wake(id));
+      await settle();
+      expect(r.queue.get(manual.id)).toMatchObject({ state: 'dropped', dropped: { code: 'budget' } });
+    });
+
+    it('an answer waits queued with a held report; the bot parks once; it runs when the window allows a turn', async () => {
+      answers('h-answer');
+      const timers: Array<{ fn: () => void; at: number }> = [];
+      const r = rig({ mode: 'ok', timers });
+      const first = clock;
+      const id = await spent(r);
+      const msg = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'handoff', handoffId: 'h-answer' }, priority: 1, threadId: 'issue:github.com/acme/app#3' }));
+      r.runtime.kick();
+      await settle();
+      expect(r.queue.get(msg.id)).toMatchObject({ state: 'queued' });
+      expect(r.queue.get(msg.id)?.dropped).toBeUndefined();
+      expect(r.store.get(id)?.parked?.reason).toBe('budget');
+      expect(budgetHooks(id)).toHaveLength(1);
+      expect(heldHooks(msg.id)[0]).toMatchObject({ botId: id, workspaceId: 'ws-1', threadId: 'issue:github.com/acme/app#3', until: first + HOUR_MS });
+      // More passes report it again (the room keeps one card) but never drop it or re-park.
+      r.runtime.kick();
+      await settle();
+      expect(budgetHooks(id)).toHaveLength(1);
+      expect(r.adapters[0].prompts).toHaveLength(2);
+      // The runtime wakes itself when the hour frees a turn.
+      const timer = timers.find((t) => t.at === first + HOUR_MS);
+      clock = first + HOUR_MS;
+      must(timer).fn();
+      await settle();
+      expect(r.adapters[0].prompts).toHaveLength(3);
+      expect(r.adapters[0].prompts[2]).toContain('answer h-answer');
+      expect(r.queue.get(msg.id)?.state).toBe('done');
+      expect(r.store.get(id)?.parked).toBeUndefined();
+    });
+
+    it('a manual or fact wake meeting the refusal is still dropped `budget`', async () => {
+      const r = rig({ mode: 'ok' });
+      const id = await spent(r);
+      const manual = must(r.runtime.wake(id));
+      await settle();
+      expect(r.queue.get(manual.id)).toMatchObject({ state: 'dropped', dropped: { code: 'budget' } });
+      expect(heldHooks(manual.id)).toHaveLength(0);
+    });
+
+    it('handoffs: an answer, an owner-backed dispatch and an unreadable one are held; a bot result is dropped', async () => {
+      const summaries: Record<string, { kind: string; ownerWords?: boolean } | null> = {
+        'h-answer': { kind: 'answer', ownerWords: true },
+        'h-dispatch': { kind: 'dispatch', ownerWords: true },
+        'h-result': { kind: 'result' },
+        'h-gone': null,
+      };
+      setBotRuntimePorts({
+        resolveHandoff: (hid) => {
+          const s = summaries[hid];
+          return s ? { handoffId: hid, from: 'x', title: 't', body: 'b', ...s } : null;
+        },
+      });
+      const r = rig({ mode: 'ok' });
+      for (const [n, handoffId] of Object.keys(summaries).entries()) {
+        const id = await spent(r, `ws-${n + 1}`);
+        const item = must(r.queue.enqueue({ botId: id, workspaceId: `ws-${n + 1}`, reason: { kind: 'handoff', handoffId }, priority: 1 }));
+        await settle();
+        const held = handoffId !== 'h-result';
+        expect(r.queue.get(item.id)?.state, handoffId).toBe(held ? 'queued' : 'dropped');
+        expect(heldHooks(item.id).length > 0, handoffId).toBe(held);
+      }
+    });
+
+    it('resume lets the held owner words run over budget; other wakes still meet the refusal', async () => {
+      answers('h-one', 'h-two');
+      const r = rig({ mode: 'ok' });
+      const id = await spent(r);
+      const msg = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'handoff', handoffId: 'h-one' }, priority: 1 }));
+      r.runtime.kick();
+      await settle();
+      expect(r.store.get(id)?.parked?.reason).toBe('budget');
+      const manual = must(r.runtime.wake(id));
+      await settle();
+      expect(r.queue.get(manual.id)?.state).toBe('queued'); // parked: nothing is judged until a pass may run
+      expect(r.runtime.resume(id).ok).toBe(true);
+      await settle(10);
+      expect(r.queue.get(msg.id)?.state).toBe('done');
+      expect(r.adapters[0].prompts.at(-1)).toContain('answer h-one');
+      expect(r.store.usageOf(id).turns).toHaveLength(3);
+      // The resume did not lift the budget for anything else.
+      expect(r.queue.get(manual.id)).toMatchObject({ state: 'dropped', dropped: { code: 'budget' } });
+      expect(r.store.get(id)?.parked?.reason).toBe('budget');
+      // An answer after the resume waits again.
+      const later = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'handoff', handoffId: 'h-two' }, priority: 1 }));
+      r.runtime.kick();
+      await settle();
+      expect(r.queue.get(later.id)?.state).toBe('queued');
+      expect(r.adapters[0].prompts).toHaveLength(3);
+    });
+
+    it('what a resume let through is forgotten when the bot is turned off or removed', async () => {
+      const r = rig({ mode: 'ok' });
+      settings.enabled = false;
+      const id = createBot(r, 'maintainer', 'ws-1', { maxTurnsPerHour: 2 });
+      must(r.runtime.wake(id, { text: 'one' }));
+      r.runtime.resume(id);
+      const released = (r.runtime as unknown as { released: Set<string> }).released;
+      expect(released.size).toBe(1);
+      r.store.update(id, { enabled: false });
+      r.runtime.profileChanged(id);
+      expect(released.size).toBe(0);
+      r.store.update(id, { enabled: true });
+      must(r.runtime.wake(id, { text: 'two' }));
+      r.runtime.resume(id);
+      expect(released.size).toBe(1);
+      r.runtime.remove(id);
+      expect(released.size).toBe(0);
+    });
+
+    it('a held answer survives a restart and is still held, not replayed or dropped', async () => {
+      answers('h-restart');
+      const r = rig({ mode: 'ok' });
+      const id = await spent(r);
+      const msg = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'handoff', handoffId: 'h-restart' }, priority: 1 }));
+      r.runtime.kick();
+      await settle();
+      r.runtime.dispose();
+      await Promise.all([r.store.flush(), r.queue.flush(), r.sessions.flush()]);
+      hooks = [];
+      const again = rig({ mode: 'ok', load: true });
+      again.runtime.kick();
+      await settle();
+      expect(again.queue.get(msg.id)?.state).toBe('queued');
+      expect(again.store.get(id)?.parked?.reason).toBe('budget');
+      expect(heldHooks(msg.id)).toHaveLength(1);
+      expect(again.adapters).toHaveLength(0);
+      clock += HOUR_MS;
+      again.runtime.kick();
+      await settle();
+      expect(again.queue.get(msg.id)?.state).toBe('done');
+    });
+  });
+
+  it('a mention and a routine wake show what woke the bot, with the room\'s other bots to mention', async () => {
+    setBotRuntimePorts({
+      resolveHandoff: (hid) => (hid === 'h-m' ? { handoffId: 'h-m', kind: 'message', from: 'Dev (lead)', title: 'Look at #4', body: 'red CI' } : null),
+      resolveRoutine: (rid) => (rid === 'r-abcdefgh' ? { routineId: rid, title: 'Check PRs', prompt: 'Read the PRs.', schedule: 'every 1 h' } : null),
+    });
+    const r = rig({ mode: 'ok' });
+    const id = createBot(r, 'verifier');
+    const dev = createBot(r, 'lead');
+    createBot(r, 'lead', 'ws-2');
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'mention', cardId: 'c-1', handoffId: 'h-m', fromBotId: dev }, priority: 1 });
+    await settle(10);
+    expect(r.adapters[0].prompts[0]).toContain('Dev (lead) mentioned you in the room (card c-1): Look at #4');
+    expect(r.adapters[0].prompts[0]).toContain(`Other bots in this room (mention them by id): ${r.store.get(dev)?.name} = ${dev}`);
+    expect(r.adapters[0].prompts[0]).not.toContain(id + ';');
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'routine', routineId: 'r-abcdefgh', dueAt: clock }, priority: 2 });
+    await settle(10);
+    expect(r.adapters[0].prompts[1]).toContain('Your routine "Check PRs" (every 1 h) is due');
+    // A mention counts against the budget like any bot wake.
+    expect(r.store.usageOf(id).turns).toHaveLength(2);
+  });
+
+  it('tells the routines port about parks, resumes, off switches and removal', async () => {
+    const events: Array<[string, string]> = [];
+    setBotRuntimePorts({ onBotLifecycle: (botId, event) => events.push([botId, event]) });
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.park(id);
+    r.runtime.resume(id);
+    r.store.update(id, { enabled: false });
+    r.runtime.profileChanged(id);
+    r.store.update(id, { enabled: true });
+    r.runtime.profileChanged(id);
+    r.runtime.remove(id);
+    expect(events).toEqual([[id, 'parked'], [id, 'resumed'], [id, 'disabled'], [id, 'enabled'], [id, 'removed']]);
+    // A listener that throws never breaks the runtime.
+    setBotRuntimePorts({ onBotLifecycle: () => { throw new Error('x'); } });
+    const other = createBot(r);
+    expect(r.runtime.park(other).ok).toBe(true);
+  });
+
+  it('retries a failed turn once, then parks the item and the bot with a bot.error hook', async () => {
+    const r = rig({ mode: 'error' });
+    const id = createBot(r);
+    const item = r.runtime.wake(id);
+    await settle(10);
+    expect(r.adapters[0].prompts).toHaveLength(2);
+    expect(r.queue.get(item!.id)).toMatchObject({ state: 'parked', attempts: 2 });
+    expect(r.runtime.status(id)).toMatchObject({ presence: 'parked', lastError: { message: 'boom' } });
+    expect(hooks).toContainEqual(expect.objectContaining({ type: 'bot.error', botId: id, wakeId: item!.id }));
+    // resume puts the parked wake back with fresh attempts
+    r.runtime.resume(id);
+    await settle(10);
+    expect(r.adapters[0].prompts).toHaveLength(4);
+  });
+
+  it('an engine refusal parks the bot at once (no retry loop)', async () => {
+    const r = rig({ engines: () => ({ ok: false, code: 'engine_unavailable', message: 'claude-pty is not available' }) });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle(10);
+    expect(r.store.get(id)?.parked?.reason).toBe('error');
+    expect(r.runtime.status(id)?.lastError?.message).toMatch(/claude-pty/);
+    expect(hooks.filter((h) => h.type === 'bot.error')).toHaveLength(1);
+  });
+
+  it('interrupt ends the turn as interrupted, never replayed', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const item = r.runtime.wake(id);
+    await settle();
+    expect(r.runtime.interrupt(id).ok).toBe(true);
+    await settle();
+    expect(r.queue.get(item!.id)?.state).toBe('interrupted');
+    expect(r.runtime.status(id)?.presence).not.toBe('running');
+    expect(r.runtime.interrupt(id)).toMatchObject({ ok: false, code: 'not_running' });
+  });
+
+  it('a turn past turnTimeoutMs is interrupted and counts as a failed attempt', async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const store = new BotStore(botsFilePath(dir), { now: () => clock });
+    const queue = new WakeQueue(wakeQueuePath(dir), { now: () => clock });
+    const sessions = new BotSessionStore(botSessionsPath(dir));
+    flushers.push(() => store.flush(), () => queue.flush());
+    const adapter = new FakeAdapter('hang');
+    const runtime = new BotRuntime({
+      store, queue, sessions, settings: () => settings, wmuxDir: dir, now: () => clock,
+      engines: () => ({ ok: true, adapter }),
+      setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimer: () => undefined,
+    });
+    const res = store.create({ workspaceId: 'ws-1', role: 'verifier', budget: { turnTimeoutMs: 60_000 } });
+    if (!res.ok) throw new Error('create');
+    const item = runtime.wake(res.bot.id);
+    runtime.kick();
+    await settle();
+    const t = timers.find((x) => x.ms === 60_000);
+    expect(t).toBeTruthy();
+    t?.fn();
+    await settle();
+    expect(adapter.interrupted).toBe(1);
+    // The failed attempt is retried at once: attempt 2 is running.
+    expect(queue.get(item!.id)).toMatchObject({ state: 'running', attempts: 2 });
+    expect(runtime.status(res.bot.id)?.lastError?.message).toMatch(/ran past 60s/);
+  });
+
+  it('resumes the saved session after a restart; a turn running at quit comes back interrupted (R8)', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    const running = r.runtime.wake(id, { text: 'in flight' });
+    await settle();
+    expect(r.queue.get(running!.id)?.state).toBe('running');
+    r.runtime.dispose();
+    expect(r.adapters[0].disposed).toBe(true);
+    await Promise.all([r.store.flush(), r.queue.flush(), r.sessions.flush()]);
+
+    const again = rig({ load: true });
+    expect(again.queue.get(running!.id)?.state).toBe('interrupted');
+    expect(hooks).toContainEqual(expect.objectContaining({ type: 'wake.interrupted', wakeId: running!.id }));
+    expect(again.runtime.status(id)?.presence).toBe('unknown');
+    again.runtime.wake(id);
+    await settle();
+    expect(again.adapters[0].started?.resumeSessionId).toBe('sess-1');
+  });
+
+  it('a wake enqueued from inside a queue change starts exactly one turn', async () => {
+    const r = rig();
+    const id = createBot(r);
+    let reentered = false;
+    onBotHook(() => undefined);
+    const origKick = r.runtime.kick.bind(r.runtime);
+    r.runtime.kick = () => {
+      if (!reentered) {
+        reentered = true;
+        r.runtime.wake(id, { text: 'nested' });
+      }
+      origKick();
+    };
+    r.runtime.wake(id, { text: 'outer' });
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    expect(r.adapters[0].prompts).toHaveLength(1);
+    expect(r.runtime.status(id)?.queueDepth).toBe(1);
+  });
+
+  it('disabling a bot ends its session and drops its queue', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'handoff', handoffId: 'h-1' }, priority: 1 });
+    settings.enabled = false;
+    r.store.update(id, { enabled: false });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.runtime.status(id)?.presence).toBe('stopped');
+    expect(r.queue.depth(id)).toBe(0);
+  });
+
+  it('ports set after start (role prompt, fact resolver) reach the next spawn and wake', async () => {
+    const r = rig();
+    const id = createBot(r);
+    setBotRuntimePorts({
+      systemPrompt: (p) => `ROLE PROMPT ${p.role}`,
+      resolveFacts: (ids) => ids.map((fid) => ({ id: fid, seq: 1, kind: 'pr.opened' as const, at: 0, dedupeKey: fid, payload: { title: 'PR TITLE' } })),
+    });
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f-1'], trigger: { kind: 'pr.opened' } }, priority: 2 });
+    await settle();
+    expect(r.adapters[0].started?.systemPrompt).toBe('ROLE PROMPT verifier');
+    expect(r.adapters[0].prompts[0]).toContain('PR TITLE');
+  });
+
+  it('a threaded wake carries the last cards of its thread through the readThreadTail port', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const asked: unknown[] = [];
+    setBotRuntimePorts({
+      readThreadTail: (ws, thread, n) => {
+        asked.push([ws, thread, n]);
+        return { cards: [{ version: 1, id: 'c1', seq: 1, workspaceId: ws, threadId: thread, kind: 'human', at: 0, actor: { kind: 'human' }, title: 'EARLIER NOTE' }], truncated: false };
+      },
+    });
+    r.runtime.wake(id, { text: 'follow up', threadId: 'issue:o/r#4' });
+    await settle();
+    expect(asked).toEqual([['ws-1', 'issue:github.com/o/r#4', 12]]);
+    expect(r.adapters[0].prompts[0]).toContain('EARLIER NOTE');
+  });
+
+  it('presence: a session ended for an engine change reads unknown, not idle or stopped', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.runtime.status(id)?.presence).toBe('idle');
+    r.store.update(id, { engine: { kind: 'acp', command: 'hermes', args: ['acp'] } });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.runtime.status(id)?.presence).toBe('unknown');
+  });
+
+  it('a bot\'s session follows its repository: another repository, or none, starts a fresh session', async () => {
+    // The store keeps a repository path normalized (native separators).
+    const OLD = path.normalize('/old');
+    const NEW = path.normalize('/new');
+    const r = rig();
+    const id = createBot(r);
+    r.store.update(id, { repo: { repoKey: 'github.com/o/old', repoPath: OLD } });
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath)).toEqual([OLD]);
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', repoPath: OLD });
+    r.store.update(id, { repo: { repoKey: 'github.com/o/new', repoPath: NEW } });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[0].disposed).toBe(true);
+    r.runtime.wake(id);
+    await settle();
+    // The conversation about /old is not resumed on /new.
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-2' }]);
+    await settle();
+    r.store.update(id, { repo: null });
+    r.runtime.profileChanged(id);
+    expect(r.adapters[1].disposed).toBe(true);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBeUndefined();
+    expect(r.spawns.map((s) => s.profile.repo?.repoPath ?? null)).toEqual([OLD, NEW, null]);
+  });
+
+  it('no turn starts before the modules its wake prompt reads from are up; then it runs', async () => {
+    let up = false;
+    setBotRuntimePorts({ contextReady: () => up });
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    expect(timers).toHaveLength(1);
+    up = true;
+    timers[0].fn();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    expect(r.adapters[0].prompts).toHaveLength(1);
+  });
+
+  it('a module that never starts holds the bots for CONTEXT_WAIT_MS at most', async () => {
+    setBotRuntimePorts({ contextReady: () => false });
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    clock += CONTEXT_WAIT_MS;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    timers[timers.length - 1].fn();
+    await settle();
+    expect(r.adapters).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('a timed-out turn ends its session: the retry runs on a fresh one', async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const store = new BotStore(botsFilePath(dir), { now: () => clock });
+    const queue = new WakeQueue(wakeQueuePath(dir), { now: () => clock });
+    const sessions = new BotSessionStore(botSessionsPath(dir));
+    flushers.push(() => store.flush(), () => queue.flush());
+    const adapters: FakeAdapter[] = [];
+    const runtime = new BotRuntime({
+      store, queue, sessions, settings: () => settings, wmuxDir: dir, now: () => clock,
+      engines: () => {
+        const a = new FakeAdapter('hang');
+        adapters.push(a);
+        return { ok: true, adapter: a };
+      },
+      setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimer: () => undefined,
+    });
+    const res = store.create({ workspaceId: 'ws-1', role: 'verifier', budget: { turnTimeoutMs: 60_000 } });
+    if (!res.ok) throw new Error('create');
+    runtime.wake(res.bot.id);
+    runtime.kick();
+    await settle();
+    timers.find((x) => x.ms === 60_000)?.fn();
+    await settle();
+    expect(adapters).toHaveLength(2);
+    expect(adapters[0].disposed).toBe(true);
+    expect(adapters[1].prompts).toHaveLength(1);
+  });
+
+  it('a completed turn lets the adapter finish its own cleanup', async () => {
+    let cleaned = 0;
+    const r = rig({
+      engines: () => ({
+        ok: true,
+        adapter: {
+          sessionId: null,
+          start: () => undefined,
+          async *send() {
+            try {
+              yield { type: 'turn-end', sessionId: 's' } as BrainEvent;
+            } finally {
+              cleaned++;
+            }
+          },
+          interrupt: () => undefined,
+          dispose: () => undefined,
+        },
+      }),
+    });
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    expect(cleaned).toBe(1);
+  });
+});
+
+describe('room-wide owner messages, wake context and turn ends', () => {
+  const roomWake = (r: Rig, botId: string, runId = 'run-c-1') => r.queue.enqueue({
+    botId, workspaceId: 'ws-1', reason: { kind: 'human', text: 'Hi', source: 'desktop', runId, room: true, clientMessageId: `cp-${botId}` }, priority: 0, threadId: 'general',
+  });
+
+  it('the bots one room-wide message woke answer one after another; a slow turn holds the next only ROOM_RUN_STAGGER_MS', async () => {
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    settings = { ...settings, globalConcurrentBots: 10 };
+    const r = rig({ timers });
+    const a = createBot(r, 'lead');
+    const b = createBot(r, 'lead');
+    const c = createBot(r, 'lead');
+    roomWake(r, a);
+    roomWake(r, b);
+    // Another message's run is not held by this one.
+    roomWake(r, c, 'run-c-2');
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters).toHaveLength(2);
+    expect(r.runtime.currentTurn(a)).not.toBeNull();
+    expect(r.runtime.currentTurn(b)).toBeNull();
+    expect(r.runtime.currentTurn(c)).not.toBeNull();
+    // a answers: b starts and sees it (its prompt is built now).
+    r.adapters[0].end();
+    await settle();
+    expect(r.runtime.currentTurn(b)).not.toBeNull();
+    // A slow turn: past the stagger the next one starts anyway.
+    const d = createBot(r, 'lead');
+    const e = createBot(r, 'lead');
+    roomWake(r, d, 'run-c-3');
+    roomWake(r, e, 'run-c-3');
+    r.runtime.kick();
+    await settle();
+    expect(r.runtime.currentTurn(d)).not.toBeNull();
+    expect(r.runtime.currentTurn(e)).toBeNull();
+    clock += ROOM_RUN_STAGGER_MS;
+    for (const t of timers.splice(0)) if (t.at <= clock) t.fn();
+    await settle();
+    expect(r.runtime.currentTurn(e)).not.toBeNull();
+    expect(roomRunOf({ reason: { kind: 'human', text: 'x', source: 'desktop', runId: 'r' } })).toBeNull();
+  });
+
+  it('the wake context port feeds the prompt, and a finished turn is reported once', async () => {
+    const r = rig({ mode: 'ok' });
+    const done: string[] = [];
+    setBotRuntimePorts({
+      wakeContext: () => ({ clock: { timeZone: 'Asia/Seoul', local: '2026-10-13 23:52', weekday: 'Tuesday' } }),
+      onTurnDone: (_p, item) => done.push(item.id),
+    });
+    const id = createBot(r, 'lead');
+    const item = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'manual', by: 'human' }, priority: 0 }));
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters[0].prompts[0]).toContain('The owner\'s local time is Tuesday 2026-10-13 23:52 (Asia/Seoul).');
+    expect(done).toEqual([item.id]);
+    // A context that throws leaves the prompt as it was.
+    setBotRuntimePorts({ wakeContext: () => { throw new Error('rooms down'); } });
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'manual', by: 'human' }, priority: 0 });
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters[0].prompts[1]).toContain('The owner woke you by hand.');
+  });
+});

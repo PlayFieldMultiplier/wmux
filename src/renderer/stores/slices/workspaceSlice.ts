@@ -2,7 +2,6 @@ import { isPhoneWorkspaceId, PHONE_WORKSPACE_REQUEST_LIMIT } from '../../../shar
 import type { StateCreator } from 'zustand';
 import { sanitizeClaudeEffort } from '../../../shared/claudeModels';
 import type { StoreState } from '../index';
-import { isMoaHqWorkspace } from './moaSlice';
 import { createWorkspace, clonePaneTreeFresh, assignPaneOrdinals, generateId, BUILTIN_TEMPLATES, DEFAULT_PREFIX_CONFIG, buildDefaultCustomKeybindings, upgradeDefaultKeybindingsForPlatform, TERMINAL_STATES, NOTIFICATION_CATEGORIES, type ArchivedWorkspace, type Pane, type PaneLeaf, type SessionData, type StashedPane, type Workspace, type WorkspaceMetadata, type WorkspaceProfile } from '../../../shared/types';
 import { normalizeWorkspaceProfile } from '../../../shared/workspaceProfile';
 import { overridesFromDisabledCombos, sanitizeShortcutOverrides } from '../../../shared/keymap';
@@ -493,8 +492,6 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       if (!ws || get().workspaces.length <= 1) return;
       // A shadow is another computer's workspace: there is nothing here to archive.
       if (isShadowWorkspaceId(id)) return;
-      // Moa's HQ is app-owned: it is never archived (the UI disables it too).
-      if (isMoaHqWorkspace(get(), id)) return;
       const color = normalizeWorkspaceColor(ws.color);
       const snapshot: ArchivedWorkspace = {
         id: generateId('arch'),
@@ -635,15 +632,11 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       // R2: decide whether the removal will actually happen ahead of the
       // transaction — the same condition as the in-set() guards (last-workspace
       // protection, nonexistent id).
-      // Moa's HQ is app-owned and never removed here (the UI disables Close
-      // for it; main refuses workspace.close for it). It also does not count
-      // toward the last-workspace guard: the operator must keep one of theirs.
-      if (isMoaHqWorkspace(get(), id)) return;
       // Shadows are another computer's workspaces: they never count as one of
       // the operator's, and closing one is never refused by this guard.
       const removingShadow = isShadowWorkspaceId(id);
       const visibleCount = (ws: readonly Workspace[]): number =>
-        ws.filter((w) => !isMoaHqWorkspace(get(), w.id) && !isShadowWorkspaceId(w.id)).length;
+        ws.filter((w) => !isShadowWorkspaceId(w.id)).length;
       const willRemove =
         (removingShadow || visibleCount(get().workspaces) > 1) && get().workspaces.some((w: Workspace) => w.id === id);
       set((state: StoreState) => {
@@ -1778,7 +1771,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         {
           for (const s of pane.surfaces) {
             // 유틸 surface(git·review)는 pty 없음 — 명시적으로 제외해 방어.
-            if (s.ptyId === ptyId && s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
+            if (s.ptyId === ptyId && s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
               const previousOffer = state.deadPaneRecoveryOfferByPtyId?.[ptyId];
               if ((recovery || previousOffer) && state.pendingDeadPaneRecoveryBySurfaceId) {
                 state.pendingDeadPaneRecoveryBySurfaceId[s.id] = mergeDeadPaneRecovery(
@@ -1817,7 +1810,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       const clearLeafPtyIds = (pane: PaneLeaf) => {
         for (const s of pane.surfaces) {
           // 유틸 surface(git·review)는 pty 없음 — 명시적으로 제외해 방어.
-          if (s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
+          if (s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
             s.ptyId = '';
           }
         }

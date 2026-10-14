@@ -1,0 +1,661 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BotBinding, BotProfile, BotRole } from '../../../../shared/bot';
+import type { Fact, FactDraft } from '../../../../shared/facts';
+import type { RpcContext } from '../../../../shared/rpc';
+import type { WakeItem } from '../../../../shared/wake';
+import { loadThreadDecision } from '../../../deck/deckDecisionStore';
+import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, setHandoffRouter } from '../../../factory/handoffRouter';
+import { RoomWriter, type FactoryRoomPorts } from '../../../factory/roomWriter';
+import { humanAddressees, humanCardIdOfRun, humanRunId } from '../../../factory/humanMessage';
+import { botSeesFact } from '../../../factory/triggerEngine';
+import {
+  createRoomModule,
+  handleRoomPost,
+  handleRoomRead,
+  handleRoomResolve,
+  handleRoomThreads,
+  humanAddressee,
+  onRoomCardResolved,
+  resolutionCorrection,
+  type RoomHandlerDeps,
+} from '../room.rpc';
+import { handleAskPerson, handleHandoffAnswer, handleHandoffList, handleHandoffSend, handleQuestionClose } from '../handoff.rpc';
+
+let dir = '';
+let botN = 0;
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-wp5-roomrpc-'));
+});
+
+afterEach(() => {
+  setHandoffRouter(null);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+});
+
+function bot(ws: string, role: BotRole, extra: Partial<BotProfile> = {}): BotProfile {
+  botN += 1;
+  return {
+    version: 1, id: `bot-${botN.toString(16).padStart(8, '0')}`, workspaceId: ws, role, name: role, engine: { kind: 'claude-sdk' }, triggers: [],
+    budget: { maxTurnsPerHour: 1, maxTurnsPerDay: 1, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 1, turnTimeoutMs: 1 },
+    enabled: true, createdAt: botN, updatedAt: botN, ...extra,
+  };
+}
+
+const asBot = (b: BotProfile): RpcContext => ({ origin: 'local', bot: { workspaceId: b.workspaceId, botId: b.id, role: b.role } as BotBinding });
+const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
+const WIRE: RpcContext = { origin: 'local', externalWire: true };
+
+function setup(bots: BotProfile[]) {
+  const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), log: () => undefined });
+  const facts: Fact[] = [];
+  const wakes: Array<Parameters<FactoryRoomPorts['wakes']['enqueue']>[0]> = [];
+  const wake: { thread: string | null; id: { wakeId: string; attempt: number; handoffId?: string } | null } = { thread: null, id: null };
+  const ports: Partial<FactoryRoomPorts> = {
+    factLog: {
+      append: (d: FactDraft) => {
+        const f = { ...d, id: `f-${facts.length + 1}`, seq: facts.length + 1, dedupeKey: String(facts.length) } as Fact;
+        facts.push(f);
+        return f;
+      },
+      subscribe: () => () => undefined,
+      readSince: () => ({ facts: [], cursor: null }),
+    },
+    // Like the wake queue: a human message's clientMessageId is queued once per bot.
+    wakes: {
+      enqueue: (i) => {
+        const key = i.reason.kind === 'human' ? i.reason.clientMessageId : undefined;
+        const prior = key ? wakes.findIndex((w) => w.botId === i.botId && w.reason.kind === 'human' && w.reason.clientMessageId === key) : -1;
+        if (prior >= 0) return { id: `w-${prior + 1}`, ...wakes[prior] } as WakeItem;
+        wakes.push(i);
+        return { id: `w-${wakes.length}`, ...i } as WakeItem;
+      },
+    },
+    bots: { listEnabled: () => bots.filter((b) => b.enabled), get: (id) => bots.find((b) => b.id === id) ?? null },
+    currentWakeThread: () => wake.thread as never,
+    currentWake: () => wake.id,
+  };
+  const deps: RoomHandlerDeps = { writer: () => writer, ports: () => ports, wmuxDir: () => dir };
+  return { writer, facts, wakes, wake, ports, deps };
+}
+
+describe('room.post', () => {
+  it('refuses a caller that is neither a bot nor the operator', async () => {
+    const s = setup([]);
+    expect(await handleRoomPost({ kind: 'status', title: 'x' }, WIRE, s.deps)).toMatchObject({ ok: false, code: 'not_bot' });
+    expect(await handleRoomPost({ kind: 'status', title: 'x' }, undefined, s.deps)).toMatchObject({ ok: false, code: 'not_bot' });
+    expect(s.writer.read('ws1').cards).toEqual([]);
+  });
+
+  it('answers not_started before the room module started', async () => {
+    const s = setup([]);
+    expect(await handleRoomPost({ kind: 'status', title: 'x' }, OPERATOR, { ...s.deps, writer: () => null })).toMatchObject({ ok: false, code: 'not_started' });
+  });
+
+  it('a bot posts only its output kinds, into its own room, as itself', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const r = await handleRoomPost({ kind: 'status', title: 'Working on #3', workspaceId: 'ws1' }, asBot(lead), s.deps) as { ok: true; card: { actor: unknown; workspaceId: string; threadId: string } };
+    expect(r).toMatchObject({ ok: true, card: { workspaceId: 'ws1', threadId: 'general', actor: { kind: 'bot', workspaceId: 'ws1', botId: lead.id } } });
+    for (const kind of ['human', 'question', 'fact', 'refusal', 'budget']) {
+      expect(await handleRoomPost({ kind, title: 'x' }, asBot(lead), s.deps), kind).toMatchObject({ ok: false, code: 'card_kind' });
+    }
+    expect(await handleRoomPost({ kind: 'status', title: 'x', workspaceId: 'ws2' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'cross_workspace' });
+    const moa = bot('hq', 'moa');
+    expect(await handleRoomPost({ kind: 'opinion', title: 'x', workspaceId: 'ws1' }, asBot(moa), s.deps)).toMatchObject({ ok: false, code: 'cross_workspace' });
+    expect(s.writer.read('ws2').cards).toEqual([]);
+  });
+
+  it('a bot post without a thread lands in its running wake\'s thread; a retried turn writes nothing twice', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    s.wake.thread = 'issue:github.com/acme/app#7';
+    s.wake.id = { wakeId: 'w-room-1', attempt: 1 };
+    const a = await handleRoomPost({ kind: 'triage', title: 'repro' }, asBot(lead), s.deps);
+    expect(a).toMatchObject({ ok: true, card: { threadId: 'issue:github.com/acme/app#7', clientPostId: 'wake:w-room-1:1' } });
+    s.wake.id = { wakeId: 'w-room-1', attempt: 2 };
+    const again = await handleRoomPost({ kind: 'triage', title: 'repro' }, asBot(lead), s.deps);
+    expect(again).toMatchObject({ ok: true, duplicate: true });
+    expect(s.writer.read('ws1').cards).toHaveLength(1);
+    expect(await handleRoomPost({ kind: 'status', title: 'g', threadId: 'general' }, asBot(lead), s.deps)).toMatchObject({ card: { threadId: 'general' } });
+  });
+
+  it('naming a bot in a card wakes nobody', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const s = setup([lead, verifier]);
+    await handleRoomPost({ kind: 'status', title: '@verifier please check', body: '@lead @moa Verifier finished' }, asBot(lead), s.deps);
+    expect(s.wakes).toEqual([]);
+    // Addressed to the lead, a named verifier is just text.
+    await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title: '@verifier look at this', to: 'lead' }, OPERATOR, s.deps);
+    expect(s.wakes.map((w) => w.botId)).toEqual([lead.id]);
+    // To the room, the text does not narrow it: every bot of the room is woken.
+    await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title: '@verifier only you' }, OPERATOR, s.deps);
+    expect(s.wakes.map((w) => w.botId)).toEqual([lead.id, lead.id, verifier.id]);
+    expect(s.facts.map((f) => f.kind)).toEqual(['human.message', 'human.message', 'human.message']);
+  });
+
+  it('the owner posts to the room: one card, a directed fact and a priority-0 wake per bot of the room, one run', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const moa = bot('hq', 'moa');
+    const s = setup([lead, verifier, moa]);
+    const r = await handleRoomPost({ workspaceId: 'ws1', title: 'Please look at #5', clientPostId: 'cm-1' }, OPERATOR, s.deps) as { card: { id: string; refs?: Record<string, unknown> } };
+    expect(r).toMatchObject({
+      ok: true,
+      card: { kind: 'human', actor: { kind: 'human' } },
+      addressee: { botId: lead.id, role: 'lead' },
+      addressees: [{ botId: lead.id, role: 'lead', wakeId: 'w-1' }, { botId: verifier.id, role: 'verifier', wakeId: 'w-2' }],
+    });
+    expect(r.card.refs).toEqual({ botIds: [lead.id, verifier.id] });
+    expect(s.facts).toHaveLength(2);
+    const f = s.facts[0];
+    expect(f).toMatchObject({ kind: 'human.message', workspaceId: 'ws1', ref: { botId: lead.id, messageId: `${r.card.id}:${lead.id}` }, actor: { kind: 'human' }, payload: { cardId: r.card.id } });
+    expect(botSeesFact(lead, f)).toBe(true);
+    expect(botSeesFact(verifier, f)).toBe(false);
+    const runId = `run-${r.card.id}`;
+    expect(s.wakes).toEqual([lead, verifier].map((b) => ({
+      botId: b.id, workspaceId: 'ws1',
+      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: r.card.id, runId, room: true },
+      priority: 0, threadId: 'general', overCap: true,
+    })));
+    // Same client id: the same card, no second fact or wake.
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Please look at #5', clientPostId: 'cm-1' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    expect(s.wakes).toHaveLength(2);
+    expect(s.facts).toHaveLength(2);
+    // `to` addresses another role; moa is the HQ bot wherever it lives.
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'check', to: 'verifier' }, OPERATOR, s.deps)).toMatchObject({ addressee: { botId: verifier.id } });
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'opinion?', to: 'moa' }, OPERATOR, s.deps)).toMatchObject({ addressee: { botId: moa.id } });
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'x', to: 'boss' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'x', kind: 'status' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'card_kind' });
+    expect(await handleRoomPost({ title: 'x' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+  });
+
+  it('the owner hears "sent" once the wakes are on disk; a failed write is a retryable refusal', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    let fail = true;
+    let flushed = 0;
+    const wakes = s.ports.wakes as FactoryRoomPorts['wakes'];
+    s.ports.wakes = { enqueue: (i) => wakes.enqueue(i), flush: async () => { flushed++; if (fail) throw new Error('disk full'); } };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const first = await handleRoomPost({ workspaceId: 'ws1', title: 'Ship it', clientPostId: 'cm-9' }, OPERATOR, s.deps);
+    warn.mockRestore();
+    expect(first).toMatchObject({ ok: false, code: 'write_failed', card: { kind: 'human' } });
+    fail = false;
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Ship it', clientPostId: 'cm-9' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    expect(flushed).toBe(2);
+    expect(s.wakes).toHaveLength(1);
+    expect(s.writer.read('ws1').cards).toHaveLength(1);
+  });
+
+  it('the owner\'s mentions wake only those bots, in any workspace; one mention is a 1:1 (refs.botId)', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const moa = bot('hq', 'moa');
+    const off = bot('ws1', 'triage', { enabled: false });
+    const s = setup([lead, verifier, moa, off]);
+    const one = await handleRoomPost({ workspaceId: 'ws1', title: 'you only', mentions: [verifier.id] }, OPERATOR, s.deps) as { card: { refs?: Record<string, unknown> } };
+    expect(one).toMatchObject({ ok: true, addressee: { botId: verifier.id }, addressees: [{ botId: verifier.id }] });
+    expect(one.card.refs).toEqual({ botIds: [verifier.id], botId: verifier.id });
+    expect(s.wakes.map((w) => [w.botId, w.reason.kind === 'human' && w.reason.room])).toEqual([[verifier.id, undefined]]);
+    // Several, across workspaces; a disabled or unknown bot is left out.
+    const two = await handleRoomPost({ workspaceId: 'ws1', title: 'you two', mentions: [moa.id, off.id, 'bot-0badf00d', lead.id] }, OPERATOR, s.deps) as { card: { refs?: Record<string, unknown> } };
+    expect(two.card.refs).toEqual({ botIds: [moa.id, lead.id] });
+    expect(s.wakes.slice(1).map((w) => [w.botId, w.workspaceId])).toEqual([[moa.id, 'hq'], [lead.id, 'ws1']]);
+    // A forged addressee in refs is never kept.
+    const forged = await handleRoomPost({ workspaceId: 'ws1', title: 'x', mentions: [lead.id], refs: { botIds: [verifier.id], botId: verifier.id } }, OPERATOR, s.deps) as { card: { refs?: Record<string, unknown> } };
+    expect(forged.card.refs).toEqual({ botIds: [lead.id], botId: lead.id });
+    // Malformed mentions are refused before anything is written.
+    for (const mentions of ['bot-00000001', ['nope'], Array.from({ length: 17 }, (_, i) => `bot-${String(i).padStart(8, '0')}`)]) {
+      expect(await handleRoomPost({ workspaceId: 'ws1', title: 'bad', mentions }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    }
+  });
+
+  it('a partly full queue answers queue_full per addressee; the same clientPostId queues only the missing wake', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const s = setup([lead, verifier]);
+    const full = new Set([verifier.id]);
+    const enqueue = s.ports.wakes!.enqueue;
+    s.ports.wakes = { enqueue: (i) => (full.has(i.botId) ? null : enqueue(i)) };
+    const r = await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-full' }, OPERATOR, s.deps);
+    expect(r).toMatchObject({ ok: false, code: 'queue_full', addressees: [{ botId: lead.id, wakeId: 'w-1' }, { botId: verifier.id }] });
+    expect((r as { addressees: Array<{ wakeId?: string }> }).addressees[1].wakeId).toBeUndefined();
+    full.clear();
+    const retry = await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-full' }, OPERATOR, s.deps);
+    expect(retry).toMatchObject({ ok: true, duplicate: true, addressees: [{ botId: lead.id, wakeId: 'w-1' }, { botId: verifier.id, wakeId: 'w-2' }] });
+    expect(s.wakes.map((w) => w.botId)).toEqual([lead.id, verifier.id]);
+    expect(s.writer.read('ws1').cards).toHaveLength(1);
+  });
+
+  it('humanAddressees: mentions win, then the phone\'s toBotId (enabled only), then the role, else the whole room', () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const off = bot('ws1', 'triage', { enabled: false });
+    const ports = { listEnabled: () => [lead, verifier, off] } as unknown as FactoryRoomPorts['bots'];
+    expect(humanAddressees(ports, 'ws1', { mentions: [verifier.id], toBotId: lead.id })).toEqual({ bots: [verifier], room: false });
+    expect(humanAddressees(ports, 'ws1', { toBotId: verifier.id, to: 'lead' })).toEqual({ bots: [verifier], room: false });
+    expect(humanAddressees(ports, 'ws1', { toBotId: off.id })).toEqual({ bots: [], room: false });
+    expect(humanAddressees(ports, 'ws1', { to: 'lead' })).toEqual({ bots: [lead], room: false });
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead, verifier], room: true });
+    // A room message reaches at most MENTIONS_MAX bots, the oldest: the card
+    // can name them all, so a retry reaches the same ones.
+    const many = Array.from({ length: 17 }, () => bot('ws3', 'lead'));
+    const room = humanAddressees({ listEnabled: () => [...many].reverse() } as unknown as FactoryRoomPorts['bots'], 'ws3', {});
+    expect(room.bots.map((b) => b.id)).toEqual(many.slice(0, 16).map((b) => b.id));
+  });
+
+  it('a bot card\'s mentions are settled by main and routed through the handoff router, once per card', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const far = bot('ws2', 'triage');
+    const off = bot('ws1', 'maintainer', { enabled: false });
+    const s = setup([lead, verifier, far, off]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    setHandoffRouter(router);
+    s.wake.id = { wakeId: 'w-ment-1', attempt: 1 };
+    const r = await handleRoomPost({ kind: 'opinion', title: 'thoughts?', mentions: [verifier.id, lead.id, far.id, off.id], refs: { botIds: [off.id] } }, asBot(lead), s.deps) as {
+      card: { id: string; refs?: Record<string, unknown> }; mentions: Array<{ botId: string; ok: boolean }>; droppedMentions: unknown;
+    };
+    expect(r.card.refs).toEqual({ botIds: [verifier.id, far.id] });
+    expect(r.mentions.map((m) => [m.botId, m.ok])).toEqual([[verifier.id, true], [far.id, true]]);
+    expect(r.droppedMentions).toEqual([{ botId: lead.id, reason: 'self' }, { botId: off.id, reason: 'not_enabled' }]);
+    expect(s.wakes.map((w) => [w.botId, w.reason.kind, w.reason.kind === 'mention' ? w.reason.cardId : null])).toEqual([[verifier.id, 'mention', r.card.id], [far.id, 'mention', r.card.id]]);
+    // The retried turn posts the same card: nobody is woken twice.
+    s.wake.id = { wakeId: 'w-ment-1', attempt: 2 };
+    const again = await handleRoomPost({ kind: 'opinion', title: 'thoughts?', mentions: [verifier.id] }, asBot(lead), s.deps);
+    expect(again).toMatchObject({ ok: true, duplicate: true, mentions: [{ ok: true, duplicate: true }, { ok: true, duplicate: true }] });
+    expect(s.wakes).toHaveLength(2);
+    // A repeat past the retry window routes nothing.
+    vi.useFakeTimers({ now: Date.now() + 25 * 3_600_000, toFake: ['Date'] });
+    s.wake.id = { wakeId: 'w-ment-1', attempt: 3 };
+    try {
+      const late = await handleRoomPost({ kind: 'opinion', title: 'thoughts?', mentions: [verifier.id] }, asBot(lead), s.deps) as Record<string, unknown>;
+      expect(late).toMatchObject({ ok: true, duplicate: true });
+      expect(late.mentions).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(s.wakes).toHaveLength(2);
+    expect(await handleRoomPost({ kind: 'opinion', title: 'x', mentions: 'all' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    router.dispose();
+  });
+
+  it('with no bot to address, the card is written and nothing is directed', async () => {
+    const s = setup([]);
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'hello' }, OPERATOR, s.deps)).toMatchObject({ ok: true, addressee: null });
+    expect(s.facts).toEqual([]);
+    expect(s.wakes).toEqual([]);
+  });
+
+  it('humanAddressee: lead first, else the HQ bot of this room', () => {
+    const moa = bot('hq', 'moa');
+    const dirOf = (bots: BotProfile[]) => ({ listEnabled: () => bots, get: () => null });
+    expect(humanAddressee(dirOf([moa]), 'hq', undefined)).toMatchObject({ bot: { id: moa.id }, role: 'moa' });
+    expect(humanAddressee(dirOf([moa]), 'ws1', undefined)).toEqual({ bot: null, role: null });
+  });
+});
+
+describe('a bot\'s reply links the owner message its wake answers', () => {
+  type Card = { id: string; threadId: string; replyTo?: string };
+  /** Each bot runs the wake given here, as main's runningWakeOf derives it
+   *  from the wake item (its id, and the owner card its run names). */
+  function rig(bots: BotProfile[]) {
+    const s = setup(bots);
+    const running = new Map<string, { wakeId: string; attempt: number; ownerCardId?: string; thread: string | null }>();
+    s.ports.currentWake = (botId) => running.get(botId) ?? null;
+    s.ports.currentWakeThread = (botId) => (running.get(botId)?.thread ?? null) as never;
+    /** Run the n-th queued wake (1-based) for its bot. */
+    const run = (n: number) => {
+      const w = s.wakes[n - 1];
+      const ownerCardId = w.reason.kind === 'human' ? humanCardIdOfRun(w.reason.runId) : null;
+      running.set(w.botId, { wakeId: `w-${n}`, attempt: 1, thread: w.threadId ?? null, ...(ownerCardId ? { ownerCardId } : {}) });
+    };
+    const owner = async (title: string, extra: Record<string, unknown> = {}) =>
+      ((await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title, ...extra }, OPERATOR, s.deps)) as { card: Card }).card;
+    const reply = async (b: BotProfile, extra: Record<string, unknown> = {}) =>
+      ((await handleRoomPost({ kind: 'status', title: 'on it', ...extra }, asBot(b), s.deps)) as { ok: boolean; card: Card });
+    return { ...s, running, run, owner, reply };
+  }
+
+  it('a run names its owner card and nothing else does', () => {
+    expect(humanCardIdOfRun(humanRunId('c-abc'))).toBe('c-abc');
+    for (const v of [undefined, '', 'run-', 'h-1', 42]) expect(humanCardIdOfRun(v)).toBeNull();
+  });
+
+  it('one bot: its cards answer the owner message; an explicit replyTo and another thread stay as given', async () => {
+    const lead = bot('ws1', 'lead');
+    const r = rig([lead]);
+    const m = await r.owner('fix the login', { mentions: [lead.id] });
+    r.run(1);
+    expect((await r.reply(lead)).card).toMatchObject({ threadId: 'general', replyTo: m.id });
+    const own = (await r.reply(lead, { title: 'first' })).card;
+    expect((await r.reply(lead, { title: 'second', replyTo: own.id })).card.replyTo).toBe(own.id);
+    // A card in another thread answers nothing by default, and is still posted.
+    const elsewhere = await r.reply(lead, { threadId: 'task:t-9' });
+    expect(elsewhere.ok).toBe(true);
+    expect(elsewhere.card.replyTo).toBeUndefined();
+    // A wake no owner message started links nothing.
+    r.running.set(lead.id, { wakeId: 'w-h', attempt: 1, thread: 'general' });
+    expect((await r.reply(lead, { title: 'handoff work' })).card.replyTo).toBeUndefined();
+  });
+
+  it('two owner messages back to back: each wake\'s cards answer its own message', async () => {
+    const lead = bot('ws1', 'lead');
+    const r = rig([lead]);
+    const m1 = await r.owner('first ask', { mentions: [lead.id] });
+    const m2 = await r.owner('second ask', { mentions: [lead.id] });
+    r.run(1);
+    expect((await r.reply(lead, { title: 'about the first' })).card.replyTo).toBe(m1.id);
+    r.run(2);
+    expect((await r.reply(lead, { title: 'about the second' })).card.replyTo).toBe(m2.id);
+  });
+
+  it('a group room: every bot\'s card answers the one owner message', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const r = rig([lead, verifier]);
+    const m = await r.owner('status, everyone?');
+    expect(r.wakes.map((w) => w.botId)).toEqual([lead.id, verifier.id]);
+    r.run(1);
+    r.run(2);
+    const a = (await r.reply(lead)).card;
+    const b = (await r.reply(verifier)).card;
+    expect([a.replyTo, b.replyTo]).toEqual([m.id, m.id]);
+  });
+});
+
+describe('a question a bot asks about an owner message answers it, raised now or after a restart', () => {
+  it('the question card replies to the owner card, also when it was queued and the router restarted', async () => {
+    const lead = bot('ws1', 'lead');
+    const verifier = bot('ws1', 'verifier');
+    const s = setup([lead, verifier]);
+    const m = ((await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title: 'should we ship?' }, OPERATOR, s.deps)) as { card: { id: string } }).card;
+    s.ports.currentWake = () => ({ wakeId: 'w-q', attempt: 1, ownerCardId: m.id });
+    s.ports.currentWakeThread = () => 'general' as never;
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    const router = new HandoffRouter({ file, decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    const first = await handleAskPerson({ title: 'Ship now?' }, asBot(lead), { router: () => router }) as { ok: boolean; decisionId?: string };
+    // The thread holds the lead's open question: the verifier's waits.
+    const second = await handleAskPerson({ title: 'Run the slow suite first?' }, asBot(verifier), { router: () => router }) as { ok: boolean; status: string };
+    expect([first.ok, !!first.decisionId, second.status]).toEqual([true, true, 'queued']);
+    const questions = () => s.writer.read('ws1').cards.filter((c) => c.kind === 'question');
+    expect(questions().map((c) => [c.title, c.replyTo])).toEqual([['Ship now?', m.id]]);
+    // The lead's question closes; a new router (an app restart) raises the
+    // queued one from its stored record.
+    const q = questions()[0];
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => router })).toMatchObject({ ok: true });
+    expect(questions()).toHaveLength(1);
+    s.ports.currentWake = () => null;
+    const restarted = new HandoffRouter({ file, decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await restarted.start();
+    expect(questions().map((c) => [c.title, c.replyTo])).toEqual([['Ship now?', m.id], ['Run the slow suite first?', m.id]]);
+  });
+});
+
+describe('one PR is one thread however the caller spells it', () => {
+  it('posts, reads, read positions, handoffs and questions all use the canonical thread', async () => {
+    const lead = bot('ws1', 'lead');
+    const moa = bot('hq', 'moa');
+    const s = setup([lead, moa]);
+    const canonical = 'pr:github.com/acme/app#12';
+    s.writer.append({ workspaceId: 'ws1', threadId: canonical, kind: 'fact', actor: { kind: 'system' }, title: 'merged' });
+    // The owner names the thread with another spelling: the card, the fact and the wake use the canonical one.
+    const human = await handleRoomPost({ workspaceId: 'ws1', threadId: 'pr:Acme/App#12', title: 'note' }, OPERATOR, s.deps);
+    expect(human).toMatchObject({ ok: true, card: { threadId: canonical } });
+    expect(s.facts[0].payload).toMatchObject({ threadId: canonical });
+    expect(s.wakes[0]).toMatchObject({ threadId: canonical });
+    // A bot naming it either way.
+    expect(await handleRoomPost({ kind: 'status', title: 'b', threadId: 'pr:GitHub.com/Acme/App#12' }, asBot(lead), s.deps)).toMatchObject({ card: { threadId: canonical } });
+    expect(s.writer.threads('ws1').filter((t) => t.threadId.startsWith('pr:')).map((t) => t.threadId)).toEqual([canonical]);
+    expect(handleRoomRead({ workspaceId: 'ws1', threadId: 'pr:acme/app#12' }, OPERATOR, s.deps)).toMatchObject({ ok: true, threadId: canonical, cards: [{}, {}, {}] });
+    handleRoomRead({ workspaceId: 'ws1', threadId: 'pr:Acme/App#12', markThroughSeq: 3 }, OPERATOR, s.deps);
+    expect(s.writer.summary('ws1', canonical).unread).toBe(0);
+    // Handoffs and questions store the canonical thread too.
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    const deps = { router: () => router };
+    expect(handleHandoffSend({ kind: 'dispatch', toWorkspaceId: 'ws1', title: 'go', body: '', threadId: 'pr:Acme/App#12' }, asBot(moa), deps)).toMatchObject({ ok: true, threadId: canonical });
+    const ask = await handleAskPerson({ title: 'order?', threadId: 'pr:Acme/App#12' }, asBot(lead), deps);
+    expect(ask).toMatchObject({ ok: true, threadId: canonical });
+    expect(loadThreadDecision('ws1', canonical, dir)).toMatchObject({ question: 'order?' });
+    // question_close: a bot's own question only; never the owner's call.
+    const q = s.writer.read('ws1').cards.find((c) => c.kind === 'question')!;
+    expect(await handleQuestionClose({ cardId: q.id }, OPERATOR, deps)).toMatchObject({ ok: false, code: 'bot_only' });
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(moa), deps)).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => null })).toMatchObject({ ok: false, code: 'not_started' });
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), deps)).toMatchObject({ ok: true });
+    expect(loadThreadDecision('ws1', canonical, dir)).toBeNull();
+  });
+});
+
+describe('room.read / room.threads', () => {
+  it('a bot reads its own room; only a Coordinator (Moa) reads another; the operator reads any', async () => {
+    const lead = bot('ws1', 'lead');
+    const moa = bot('hq', 'moa');
+    const s = setup([lead, moa]);
+    s.writer.append({ workspaceId: 'ws2', kind: 'status', actor: { kind: 'system' }, title: 'elsewhere' });
+    expect(handleRoomRead({}, asBot(lead), s.deps)).toMatchObject({ ok: true, workspaceId: 'ws1', cards: [] });
+    expect(handleRoomRead({ workspaceId: 'ws2' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'cross_workspace' });
+    expect(handleRoomRead({ workspaceId: 'ws2' }, asBot(moa), s.deps)).toMatchObject({ ok: true, cards: [{ title: 'elsewhere' }] });
+    expect(handleRoomRead({ workspaceId: 'ws2' }, OPERATOR, s.deps)).toMatchObject({ ok: true, nextSinceSeq: 1, hasMore: false });
+    expect(handleRoomRead({}, WIRE, s.deps)).toMatchObject({ ok: false, code: 'not_bot' });
+  });
+
+  it('the cross-workspace read follows the live template, not the role tag', async () => {
+    const coordinator = { ...bot('ws1', 'lead'), template: 'coordinator' as const };
+    const demoted = { ...bot('hq', 'moa'), template: 'developer' as const };
+    const s = setup([coordinator, demoted]);
+    s.writer.append({ workspaceId: 'ws2', kind: 'status', actor: { kind: 'system' }, title: 'elsewhere' });
+    expect(handleRoomRead({ workspaceId: 'ws2' }, asBot(coordinator), s.deps)).toMatchObject({ ok: true, cards: [{ title: 'elsewhere' }] });
+    expect(handleRoomRead({ workspaceId: 'ws2' }, asBot(demoted), s.deps)).toMatchObject({ ok: false, code: 'cross_workspace' });
+  });
+
+  it('the operator records a read position; a bot cannot', () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    s.writer.append({ workspaceId: 'ws1', threadId: 'task:t', kind: 'status', actor: { kind: 'system' }, title: 'a' });
+    expect(handleRoomRead({ markThroughSeq: 1, threadId: 'task:t' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(handleRoomRead({ workspaceId: 'ws1', markThroughSeq: 1 }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    handleRoomRead({ workspaceId: 'ws1', threadId: 'task:t', markThroughSeq: 1 }, OPERATOR, s.deps);
+    expect(s.writer.summary('ws1', 'task:t').unread).toBe(0);
+  });
+
+  it('room.threads is the operator\'s', () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    expect(handleRoomThreads({ workspaceId: 'ws1' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(handleRoomThreads({ workspaceId: 'ws1' }, OPERATOR, s.deps)).toMatchObject({ ok: true, threads: [{ threadId: 'general' }] });
+  });
+});
+
+describe('room.resolve', () => {
+  it('answering a question card resolves its decision and wakes the bot that asked', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    setHandoffRouter(router);
+    const ask = await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:t9' }, asBot(lead), { router: () => router }) as { decisionId: string };
+    const card = s.writer.read('ws1').cards.find((c) => c.kind === 'question')!;
+    expect(await handleRoomResolve({ workspaceId: 'ws1', cardId: card.id, resolution: 'Yes' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'operator_only' });
+    const r = await handleRoomResolve({ workspaceId: 'ws1', cardId: card.id, resolution: 'Yes' }, OPERATOR, s.deps);
+    expect(r).toMatchObject({ ok: true, card: { state: 'resolved' } });
+    expect(loadThreadDecision('ws1', 'task:t9', dir)).toBeNull();
+    expect(ask.decisionId).toBeTruthy();
+    expect(s.wakes.at(-1)).toMatchObject({ botId: lead.id, reason: { kind: 'handoff' }, priority: 1 });
+    expect(await handleRoomResolve({ workspaceId: 'ws1', cardId: card.id, resolution: 'Yes' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'not_pending' });
+    router.dispose();
+  });
+
+  it('closing a proposal tells the listeners and records the resolution', async () => {
+    const moa = bot('hq', 'moa');
+    const s = setup([moa]);
+    const posted = await handleRoomPost({ kind: 'proposal', title: 'Add a lint rule' }, asBot(moa), s.deps) as { card: { id: string; state: string } };
+    expect(posted.card.state).toBe('open');
+    const seen: string[] = [];
+    const off = onRoomCardResolved((ev) => seen.push(ev.resolution));
+    expect(await handleRoomResolve({ workspaceId: 'hq', cardId: posted.card.id, resolution: 'Approve' }, OPERATOR, s.deps)).toMatchObject({ ok: true, card: { state: 'resolved' } });
+    off();
+    expect(seen).toEqual(['Approve']);
+    expect(s.writer.read('hq').cards.at(-1)).toMatchObject({ kind: 'fact', title: 'Resolved: Add a lint rule', body: 'Approve' });
+    expect(await handleRoomResolve({ workspaceId: 'hq', cardId: 'c-none', resolution: 'x' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'not_found' });
+  });
+});
+
+describe('human.correction from the owner\'s answers', () => {
+  const corrections = (facts: Fact[]) => facts.filter((f) => f.kind === 'human.correction');
+
+  it('declining a bot\'s plan records a plan-declined correction for that bot and card', async () => {
+    const moa = bot('hq', 'moa');
+    const s = setup([moa]);
+    const posted = await handleRoomPost({ kind: 'plan', title: 'Today', threadId: 'plan:p1' }, asBot(moa), s.deps) as { card: { id: string } };
+    expect(await handleRoomResolve({ workspaceId: 'hq', cardId: posted.card.id, resolution: 'decline' }, OPERATOR, s.deps)).toMatchObject({ ok: true });
+    expect(corrections(s.facts)).toEqual([expect.objectContaining({
+      kind: 'human.correction',
+      workspaceId: 'hq',
+      actor: { kind: 'human' },
+      ref: { botId: moa.id, messageId: posted.card.id },
+      payload: { category: 'plan-declined', cardKind: 'plan', botRole: 'moa', threadId: 'plan:p1' },
+    })]);
+  });
+
+  it('an edited plan is plan-edited with the revision as its note; an approval records nothing', async () => {
+    const moa = bot('hq', 'moa');
+    const s = setup([moa]);
+    const a = await handleRoomPost({ kind: 'plan', title: 'A', threadId: 'plan:a' }, asBot(moa), s.deps) as { card: { id: string } };
+    const b = await handleRoomPost({ kind: 'plan', title: 'B', threadId: 'plan:b' }, asBot(moa), s.deps) as { card: { id: string } };
+    await handleRoomResolve({ workspaceId: 'hq', cardId: a.card.id, resolution: 'edit:\n1. Lead only\n2. Skip the phone' }, OPERATOR, s.deps);
+    await handleRoomResolve({ workspaceId: 'hq', cardId: b.card.id, resolution: 'approve' }, OPERATOR, s.deps);
+    const c = corrections(s.facts);
+    expect(c).toHaveLength(1);
+    expect(c[0]).toMatchObject({ ref: { messageId: a.card.id }, payload: { category: 'plan-edited', note: '1. Lead only 2. Skip the phone' } });
+  });
+
+  it('a declined proposal is proposal-declined', async () => {
+    const moa = bot('hq', 'moa');
+    const s = setup([moa]);
+    const p = await handleRoomPost({ kind: 'proposal', title: 'Lint rule' }, asBot(moa), s.deps) as { card: { id: string } };
+    await handleRoomResolve({ workspaceId: 'hq', cardId: p.card.id, resolution: 'Decline' }, OPERATOR, s.deps);
+    expect(corrections(s.facts)[0]).toMatchObject({ payload: { category: 'proposal-declined', cardKind: 'proposal' } });
+  });
+
+  it('without a fact log, or when it throws, the resolve still succeeds', async () => {
+    const moa = bot('hq', 'moa');
+    const s = setup([moa]);
+    const a = await handleRoomPost({ kind: 'plan', title: 'A' }, asBot(moa), s.deps) as { card: { id: string } };
+    const b = await handleRoomPost({ kind: 'plan', title: 'B' }, asBot(moa), s.deps) as { card: { id: string } };
+    const noLog: RoomHandlerDeps = { ...s.deps, ports: () => ({ ...s.ports, factLog: undefined }) };
+    expect(await handleRoomResolve({ workspaceId: 'hq', cardId: a.card.id, resolution: 'decline' }, OPERATOR, noLog)).toMatchObject({ ok: true, card: { state: 'resolved' } });
+    const throwing: RoomHandlerDeps = { ...s.deps, ports: () => ({ ...s.ports, factLog: { ...s.ports.factLog!, append: () => { throw new Error('disk full'); } } }) };
+    expect(await handleRoomResolve({ workspaceId: 'hq', cardId: b.card.id, resolution: 'decline' }, OPERATOR, throwing)).toMatchObject({ ok: true, card: { state: 'resolved' } });
+    expect(corrections(s.facts)).toEqual([]);
+  });
+
+  it('resolutionCorrection: only a bot\'s plan or proposal, never an approval', () => {
+    const base = { version: 1 as const, id: 'c1', seq: 1, workspaceId: 'hq', threadId: 'general' as const, at: 1, title: 't' };
+    const botActor = { kind: 'bot' as const, workspaceId: 'hq', botId: 'bot-1' };
+    expect(resolutionCorrection({ ...base, kind: 'plan', actor: { kind: 'human' } }, 'decline')).toBeNull();
+    expect(resolutionCorrection({ ...base, kind: 'status', actor: botActor }, 'decline')).toBeNull();
+    expect(resolutionCorrection({ ...base, kind: 'plan', actor: botActor }, 'Approve')).toBeNull();
+    expect(resolutionCorrection({ ...base, kind: 'proposal', actor: botActor }, 'please narrow it')).toMatchObject({ category: 'proposal-edited', note: 'please narrow it' });
+  });
+
+  it('answering a bot question with any offered option records nothing; an answer outside the options is a question-override', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    setHandoffRouter(router);
+    await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:a', options: ['Merge now', 'Wait'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Ship?', body: '', threadId: 'task:b', options: ['Ship', 'Hold'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Which?', body: '', threadId: 'task:d', options: ['A', 'B'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Name?', body: '', threadId: 'task:c' }, asBot(lead), { router: () => router });
+    const q = (thread: string) => s.writer.read('ws1').cards.find((c) => c.kind === 'question' && c.threadId === thread)!;
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:a').id, resolution: ' merge  NOW ' }, OPERATOR, s.deps);
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:b').id, resolution: 'Hold until Monday' }, OPERATOR, s.deps);
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:c').id, resolution: 'wmux' }, OPERATOR, s.deps);
+    // The second option is a choice the bot offered, not an override.
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:d').id, resolution: 'B' }, OPERATOR, s.deps);
+    expect(corrections(s.facts)).toEqual([expect.objectContaining({
+      workspaceId: 'ws1',
+      ref: { botId: lead.id, messageId: q('task:b').id },
+      payload: { category: 'question-override', cardKind: 'question', botRole: 'lead', threadId: 'task:b', note: 'Hold until Monday' },
+    })]);
+    router.dispose();
+  });
+
+  it('an override answered through handoff.answer (the phone path) is recorded too; a dismissal is not', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    setHandoffRouter(router);
+    const ask = await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:a', options: ['Merge now', 'Wait'] }, asBot(lead), { router: () => router }) as { handoffId: string };
+    expect(await handleHandoffAnswer({ handoffId: ask.handoffId, answer: 'Wait for CI' }, OPERATOR, { router: () => router })).toMatchObject({ ok: true });
+    // 'Wait for CI' is none of the offered options.
+    expect(corrections(s.facts)).toEqual([expect.objectContaining({ payload: expect.objectContaining({ category: 'question-override', note: 'Wait for CI' }) })]);
+    router.dispose();
+  });
+});
+
+describe('handoff.* / ask.person auth', () => {
+  it('send and ask are a bot\'s; answer and list are the operator\'s; nobody else', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    const deps = { router: () => router };
+    for (const ctx of [WIRE, undefined]) {
+      expect(handleHandoffSend({ kind: 'result', title: 'x', body: '' }, ctx, deps)).toMatchObject({ code: 'not_bot' });
+      expect(await handleAskPerson({ title: 'x' }, ctx, deps)).toMatchObject({ code: 'not_bot' });
+      expect(await handleHandoffAnswer({ handoffId: 'h', answer: 'a' }, ctx, deps)).toMatchObject({ code: 'not_bot' });
+      expect(handleHandoffList({}, ctx, deps)).toMatchObject({ code: 'not_bot' });
+    }
+    expect(handleHandoffSend({ kind: 'result', title: 'x', body: '' }, OPERATOR, deps)).toMatchObject({ code: 'bot_only' });
+    expect(await handleAskPerson({ title: 'x' }, OPERATOR, deps)).toMatchObject({ code: 'bot_only' });
+    expect(await handleHandoffAnswer({ handoffId: 'h', answer: 'a' }, asBot(lead), deps)).toMatchObject({ code: 'operator_only' });
+    expect(handleHandoffList({}, asBot(lead), deps)).toMatchObject({ code: 'operator_only' });
+    expect(handleHandoffList({}, OPERATOR, deps)).toMatchObject({ ok: true, handoffs: [] });
+    expect(handleHandoffSend({ kind: 'result', title: 'x', body: '' }, asBot(lead), { router: () => null })).toMatchObject({ code: 'not_started' });
+    // ask_person is on every role's surface.
+    for (const role of ['lead', 'triage', 'verifier', 'maintainer', 'moa'] as BotRole[]) {
+      const b = bot(`ws-${role}`, role);
+      expect(await handleAskPerson({ title: `from ${role}` }, asBot(b), deps), role).toMatchObject({ ok: true });
+    }
+  });
+});
+
+describe('the room module closes questions whose subject ended (A5)', () => {
+  it('a card that closes its thread closes that thread\'s open questions', () => {
+    const lead = bot('ws1', 'lead', { repo: { repoKey: 'github.com/acme/app', repoPath: '/repo' } });
+    const subs: Array<(f: Fact) => void> = [];
+    const closeThreadQuestions = vi.fn(async () => []);
+    setHandoffRouter({ closeThreadQuestions } as unknown as HandoffRouter);
+    const mod = createRoomModule({ wmuxDir: () => dir, getMainWindow: () => null }, () => ({
+      factLog: { append: () => null, subscribe: (fn: (f: Fact) => void) => { subs.push(fn); return () => undefined; }, readSince: () => ({ facts: [], cursor: null }) },
+      bots: { listEnabled: () => [lead], get: (id: string) => (id === lead.id ? lead : null) },
+    }) as Partial<FactoryRoomPorts>);
+    mod.start?.();
+    try {
+      const fact = (kind: Fact['kind'], pr: number): Fact => ({ id: `f-${kind}-${pr}`, seq: pr, kind, at: 1, dedupeKey: `${kind}:${pr}`, repoKey: 'github.com/acme/app', ref: { pr, headSha: 'abcdef1' }, payload: {} });
+      for (const fn of subs) fn(fact('pr.merged', 3));
+      expect(closeThreadQuestions).toHaveBeenCalledWith('ws1', 'pr:github.com/acme/app#3');
+      closeThreadQuestions.mockClear();
+      // A card that does not close its thread closes nothing.
+      for (const fn of subs) fn(fact('verdict.recorded', 4));
+      expect(closeThreadQuestions).not.toHaveBeenCalled();
+    } finally {
+      void mod.dispose?.();
+      setHandoffRouter(null);
+    }
+  });
+});

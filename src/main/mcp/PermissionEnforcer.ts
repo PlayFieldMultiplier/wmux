@@ -64,10 +64,10 @@ import {
 } from './permissionGrammar';
 import { FIRST_PARTY_METHODS, isFirstPartyClient } from './firstParty';
 import { COMMANDER_RPC_METHODS } from '../../shared/commanderSurface';
+import { botSurfaceRefusal } from '../../shared/botSurface';
 import { WMUX_CLI_METHODS, isInternalCliClient } from './internalCli';
 import { HOOK_BRIDGE_METHODS, isHookBridgeClient } from './hookBridge';
 import { STATUSLINE_PUSH_METHODS, isStatuslinePushClient } from './statuslinePush';
-import { READ_GATE_METHODS, isReadGateClient } from './readGateLane';
 import { isLocalExternalWireContext } from './rpcProvenance';
 
 export type EnforcerOutcome =
@@ -208,6 +208,15 @@ export function check(input: EnforcerInput): EnforcerOutcome {
     return { kind: 'allow' };
   }
 
+  // Bot lane (agent factory). ctx.bot is set ONLY by RpcRouter after the
+  // token resolved to a BotBinding, and the router has already refused every
+  // method off the role's surface — so this allows exactly that surface,
+  // whatever clientName the bot's agent host reports. Same ordering reason as
+  // the commander lane above.
+  if (input.ctx.bot && botSurfaceRefusal(input.ctx.bot.role, input.method) === null) {
+    return { kind: 'allow' };
+  }
+
   // Grandfather lane CLOSED (#1111 Stage 3; announced close date 2026-09-30).
   // A caller that sends no clientName envelope used to be allowed here —
   // before the capability gate below ever ran, which is what made the lane a
@@ -344,18 +353,6 @@ export function check(input: EnforcerInput): EnforcerOutcome {
     !input.trustLookupFailed &&
     input.trust?.status !== 'denied' &&
     STATUSLINE_PUSH_METHODS.has(input.method)
-  ) {
-    return { kind: 'allow' };
-  }
-
-  // Moa's read gate asks main for its read roots: `deck.moaReadRoots` only,
-  // read-only. Its own set and name (readGateLane.ts). Same four guards.
-  if (
-    isLocalExternalWireContext(input.ctx) &&
-    isReadGateClient(input.ctx.clientName) &&
-    !input.trustLookupFailed &&
-    input.trust?.status !== 'denied' &&
-    READ_GATE_METHODS.has(input.method)
   ) {
     return { kind: 'allow' };
   }

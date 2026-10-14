@@ -1,0 +1,22 @@
+{
+  "name": "presence-unknown",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A bot that exists but has not run a turn in this app run reads 'unknown', not offline; a bot that ran a turn reads 'idle'; only a disabled bot reads 'stopped'.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "script": { "turns": [ { "steps": [ { "say": "hi" } ] } ] } },
+      { "key": "triage", "role": "triage", "script": { "turns": [ { "steps": [ { "say": "hi" } ] } ] } },
+      { "key": "verifier", "role": "verifier", "script": { "turns": [ { "steps": [ { "say": "hi" } ] } ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "post": { "title": "hello", "to": "lead" } },
+    { "do": "waitFor", "label": "lead done", "cond": { "wakes": { "bot": "lead", "state": "done" } }, "timeoutMs": 60000 },
+    { "do": "rpc", "method": "bot.update", "params": { "botId": "{{bot.verifier}}", "patch": { "enabled": false } } },
+    { "do": "sleep", "ms": 1000 },
+    { "do": "snapshotRead", "label": "bots", "fn": "rpc.invoke", "args": ["bot.list", {}] }
+  ],
+  "expect": { "requires": ["bots"], "record": "bots", "presence": { "lead": "idle", "triage": "unknown", "verifier": "stopped" } }
+}

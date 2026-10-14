@@ -44,9 +44,6 @@ const CHROME_FILES = [
   'Sidebar/RemoteWorkspaceItem.tsx',
   'Sidebar/AttachRemoteModal.tsx',
   'Pane/SurfaceTabs.tsx',
-  'Deck/DeckTabs.tsx',
-  'Moa/MoaTitlebarButton.tsx',
-  'Moa/MoaBubble.tsx',
   'StatusBar/PhoneConnectWizard.tsx',
 ];
 

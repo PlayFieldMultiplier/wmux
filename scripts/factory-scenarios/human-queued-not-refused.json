@@ -1,0 +1,28 @@
+{
+  "name": "human-queued-not-refused",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "While the lead runs a long turn, the owner posts in another thread. The post is accepted at once, its wake waits (priority 0) and runs after the turn, pinned to the thread it was posted in.",
+  "setup": {
+    "bots": [
+      { "key": "lead", "role": "lead", "budget": { "turnTimeoutMs": 120000 },
+        "script": { "turns": [
+          { "steps": [
+            { "tool": "room_post", "args": { "kind": "status", "title": "Busy", "body": "Long turn started." } },
+            { "sleep": 8000 }
+          ] },
+          { "steps": [ { "tool": "room_post", "args": { "kind": "status", "title": "Next", "body": "Picked up the queued message." } } ] }
+        ] } }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "first", "post": { "threadId": "task:alpha", "title": "Long job", "body": "Start the long job.", "to": "lead" } },
+    { "do": "waitFor", "label": "first running", "cond": { "wakes": { "bot": "lead", "state": "running" } }, "timeoutMs": 30000, "required": true },
+    { "do": "sleep", "ms": 1500 },
+    { "do": "post", "label": "second", "post": { "threadId": "task:beta", "title": "Meanwhile", "body": "Also look at beta.", "to": "lead" } },
+    { "do": "waitFor", "label": "both done", "cond": { "wakes": { "bot": "lead", "state": "done", "min": 2 } }, "timeoutMs": 60000 },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 2000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes"], "bot": "lead", "first": "first", "queued": ["second"], "threads": { "first": "task:alpha", "second": "task:beta" } }
+}

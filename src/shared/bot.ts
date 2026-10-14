@@ -1,0 +1,321 @@
+// ─── Bots — long-lived agent sessions bound to one workspace ───────────────
+//
+// A bot is one agent session bound to one workspace: a name, an optional
+// picture and an optional job (free text the owner or the bot itself writes,
+// part of its system prompt). Every bot holds the same powers
+// (shared/botSurface.ts SHARED_SURFACE); a bot made from the Coordinator
+// template may also read other workspaces' rooms and facts. Any number of
+// bots, of any template, may share a workspace. It never holds a shell. Its
+// identity on the pipe is a main-minted token bound to a BotBinding
+// (main/deck/commanderTrust.ts `mintBotToken`), carried in the existing
+// `commanderToken` envelope field; RpcRouter resolves it onto
+// `RpcContext.bot`.
+//
+// The bundled MCP server runs a bot's tools in bot mode: `--bot=<role>` plus
+// `--bot-token-file=<path>` (the token is handed over in a file main writes
+// for that one spawn, not in the environment — see
+// main/factory/botTokenHandoff.ts and src/mcp/botTokenHandoff.ts).
+
+import type { FactFilter, FactKind } from './facts';
+
+/** The legacy role tag. Kept in bots.json v1, on the token binding and on
+ *  the phone wire as a label; it grants nothing. Powers come from
+ *  SHARED_SURFACE (botSurface.ts) and, for the Coordinator, the template. */
+export type BotRole = 'lead' | 'triage' | 'verifier' | 'maintainer' | 'moa';
+// 'merge' is NOT a bot: it is the lane + executor (model-free).
+
+export const BOT_ROLES: readonly BotRole[] = ['lead', 'triage', 'verifier', 'maintainer', 'moa'];
+
+export function isBotRole(value: unknown): value is BotRole {
+  return typeof value === 'string' && (BOT_ROLES as readonly string[]).includes(value);
+}
+
+// ── Templates and jobs ──────────────────────────────────────────────────────
+
+/** A starting point for a new bot: it prefills the job text and picks the
+ *  default triggers. `coordinator` is the one template that also grants a
+ *  power — reading other workspaces' rooms and facts
+ *  (botSurface.ts COORDINATOR_READ_EXTENSION). */
+export type BotTemplate = 'coordinator' | 'developer' | 'reviewer' | 'issue' | 'researcher' | 'custom';
+
+export const BOT_TEMPLATES: readonly BotTemplate[] = ['coordinator', 'developer', 'reviewer', 'issue', 'researcher', 'custom'];
+
+export function isBotTemplate(value: unknown): value is BotTemplate {
+  return typeof value === 'string' && (BOT_TEMPLATES as readonly string[]).includes(value);
+}
+
+/** The legacy role a new bot of a template is stored with (bots.json v1 keeps
+ *  `role`; the default triggers and budget are still keyed by it). */
+export const TEMPLATE_LEGACY_ROLE: Readonly<Record<BotTemplate, BotRole>> = {
+  coordinator: 'moa',
+  developer: 'lead',
+  reviewer: 'verifier',
+  issue: 'triage',
+  researcher: 'lead',
+  custom: 'lead',
+};
+
+/** The template a profile stored before templates existed takes from its role. */
+export function templateOfRole(role: BotRole): BotTemplate {
+  switch (role) {
+    case 'moa': return 'coordinator';
+    case 'lead': return 'developer';
+    case 'verifier': return 'reviewer';
+    case 'triage': return 'issue';
+    case 'maintainer': return 'custom';
+  }
+}
+
+/** A profile's template: its own, else the one its legacy role maps to. Every
+ *  template check goes through this, never through `role`. */
+export function botTemplate(profile: { template?: BotTemplate; role: BotRole }): BotTemplate {
+  return profile.template ?? templateOfRole(profile.role);
+}
+
+/** The bot may read other workspaces' rooms and facts (the Coordinator). A
+ *  missing profile is not one. Pure. */
+export function isCoordinatorBot(profile: { template?: BotTemplate; role: BotRole } | null | undefined): boolean {
+  return !!profile && botTemplate(profile) === 'coordinator';
+}
+
+/** Longest job text, in UTF-16 units after trimming. */
+export const BOT_JOB_MAX = 2000;
+
+/** A job the bot store accepts: trimmed, 1..BOT_JOB_MAX long, no control
+ *  characters other than newline and tab. Undefined otherwise. An empty job
+ *  is expressed by leaving the field out, never by ''. */
+export function normalizeBotJob(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const job = raw.replace(/\r\n?/g, '\n').trim();
+  if (job.length === 0 || job.length > BOT_JOB_MAX) return undefined;
+  return /[\p{Cc}\u2028\u2029]/u.test(job.replace(/[\n\t]/g, ' ')) ? undefined : job;
+}
+
+/** The agent behind a bot. v1 default is `claude-sdk`; `claude-pty` stays as a
+ *  billing hedge; `acp` runs any ACP command and is opt-in. */
+export type BotEngine =
+  | { kind: 'claude-sdk'; model?: string; effort?: string }
+  | { kind: 'claude-pty'; model?: string }
+  | { kind: 'acp'; command: string; args: string[] };
+
+export const DEFAULT_BOT_ENGINE: BotEngine = { kind: 'claude-sdk' };
+
+export interface BotBudget {
+  /** Turns per rolling hour. Absent = no hourly cap (never 0: a stored 0 is
+   *  read as absent and refused on write). */
+  maxTurnsPerHour?: number;
+  maxTurnsPerDay: number;
+  maxConcurrentWorkers: number;
+  maxWorkerHoursPerDay: number;
+  turnTimeoutMs: number;
+}
+
+/** Default budget per legacy role (a new bot's role follows its template,
+ *  TEMPLATE_LEGACY_ROLE). No hourly cap: a group conversation takes many
+ *  turns in an hour; the day cap (generous: a busy group room runs a bot
+ *  some sixty turns in three hours) bounds the spend. Every bot may start
+ *  workers (the Coordinator included). */
+export const DEFAULT_BOT_BUDGETS: Readonly<Record<BotRole, BotBudget>> = {
+  lead:       { maxTurnsPerDay: 200, maxConcurrentWorkers: 3, maxWorkerHoursPerDay: 6, turnTimeoutMs: 600_000 },
+  triage:     { maxTurnsPerDay: 200, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 4, turnTimeoutMs: 600_000 },
+  verifier:   { maxTurnsPerDay: 200, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 6, turnTimeoutMs: 600_000 },
+  maintainer: { maxTurnsPerDay: 4,   maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 1, turnTimeoutMs: 600_000 },
+  moa:        { maxTurnsPerDay: 200, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 4, turnTimeoutMs: 600_000 },
+};
+
+export interface BotTrigger {
+  kind: FactKind;
+  filter?: FactFilter;
+  /** Coalesce up to `max` matching facts within `windowMs` into one wake. */
+  batch?: { windowMs: number; max: number };
+}
+
+export interface BotProfile {
+  version: 1;
+  /** 'bot-' + 8 hex, stable across restarts. */
+  id: string;
+  workspaceId: string;
+  /** Legacy tag (see BotRole); identity, never updated. */
+  role: BotRole;
+  /** The template the bot was made from. Absent only on a profile written
+   *  before templates; the store fills it from `role` on read (botTemplate). */
+  template?: BotTemplate;
+  /** Display name, e.g. "Wmux Dev". */
+  name: string;
+  /** What the bot does, in the owner's words (normalizeBotJob). Part of its
+   *  system prompt. Written by the owner (profile, bot.update) or by the bot
+   *  itself (job_set → bot.setJob, during a wake on the owner's words). */
+  job?: string;
+  engine: BotEngine;
+  triggers: BotTrigger[];
+  budget: BotBudget;
+  /** The repo the bot acts on (fan-out needs it: a bot has no pane cwd). */
+  repo?: { repoKey: string; repoPath: string };
+  /** The owner's picture for the bot: a `data:image/png;base64,` URL of a
+   *  square PNG at most BOT_AVATAR_PX wide, written only by main. Absent =
+   *  the UI draws the name's initials. */
+  avatar?: string;
+  enabled: boolean;
+  parked?: { reason: 'budget' | 'error' | 'human'; at: number };
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const BOT_ID_RE = /^bot-[0-9a-f]{8}$/;
+
+/** Edge of the stored avatar PNG, in pixels. */
+export const BOT_AVATAR_PX = 128;
+
+/** Longest bot name, in UTF-16 units after trimming. */
+export const BOT_NAME_MAX = 64;
+
+/** A name the bot store accepts on create / update: trimmed, 1..BOT_NAME_MAX
+ *  long, no control or line-separator characters. Undefined otherwise. */
+export function normalizeBotName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const name = raw.trim();
+  if (name.length === 0 || name.length > BOT_NAME_MAX) return undefined;
+  return /[\p{Cc}\u2028\u2029]/u.test(name) ? undefined : name;
+}
+
+/** What a bot token resolves to. */
+export interface BotBinding { workspaceId: string; botId: string; role: BotRole; }
+
+const BINDING_WORKSPACE_RE = /^[A-Za-z0-9._-]{1,80}$/;
+
+/** A well-formed binding (non-empty workspace, bot id shape, known role). */
+export function isBotBinding(value: unknown): value is BotBinding {
+  if (!value || typeof value !== 'object') return false;
+  const b = value as Record<string, unknown>;
+  return typeof b.workspaceId === 'string'
+    && BINDING_WORKSPACE_RE.test(b.workspaceId)
+    && typeof b.botId === 'string'
+    && BOT_ID_RE.test(b.botId)
+    && isBotRole(b.role);
+}
+
+export type BotPresence = 'running' | 'idle' | 'parked' | 'stopped' | 'unknown';
+// 'unknown' = the profile exists but the runtime has not restored or pinged
+// the session yet. unknown ≠ offline: the queue keeps accepting wakes.
+
+export interface BotStatus {
+  botId: string;
+  presence: BotPresence;
+  sessionId?: string;
+  currentTurn?: { wakeId: string; startedAt: number };
+  queueDepth: number;
+  /** turnsHour is null when the bot has no hourly cap. */
+  budgetLeft: { turnsHour: number | null; turnsDay: number; workerHoursDay: number };
+  lastError?: { message: string; at: number };
+}
+
+export const BOT_RPC = {
+  list: 'bot.list', create: 'bot.create', update: 'bot.update', remove: 'bot.remove',
+  status: 'bot.status', wake: 'bot.wake', park: 'bot.park', resume: 'bot.resume', interrupt: 'bot.interrupt',
+  /** `job_set`: the bot's own job (BotSetJobParams). Also the operator's. */
+  setJob: 'bot.setJob',
+  /** `stop_my_work`: stop the calling bot's own workers and pause its
+   *  routines (factoryStop.ts primitives for that bot); the stop lands after
+   *  the current turn. A bot only ever stops itself. */
+  stopMyWork: 'bot.stopMyWork',
+  /** `worker_resume`: relaunch the stopped worker of an ended task the
+   *  calling bot started, with the same conversation in the same folder
+   *  (main/factory/workerReclaim.ts), optionally with a message for it. */
+  resumeWorker: 'bot.resumeWorker',
+  /** `worker_message`: deliver text to the live worker of an open task the
+   *  calling bot started (BotWorkerMessageParams), through the gated pane
+   *  delivery the report nudge uses (it waits while someone types there).
+   *  Refused when the worker's agent is not running; rate-limited per task. */
+  workerMessage: 'bot.workerMessage',
+  /** `question_close`: close one of the calling bot's own open question
+   *  cards (BotQuestionCloseParams) once it no longer needs an answer. */
+  questionClose: 'bot.questionClose',
+} as const;
+
+/** `bot.workerMessage` params. */
+export interface BotWorkerMessageParams {
+  /** An open task (`wtask-…`) the calling bot started. */
+  taskId: string;
+  /** What the worker should read, 1..BOT_WORKER_MESSAGE_LIMITS.TEXT_MAX. */
+  text: string;
+}
+
+/** `bot.workerMessage` result: `delivered` once the text reached the
+ *  worker's prompt; `held` when the gated delivery gave up (someone kept
+ *  typing, the pane stayed busy) and nothing was typed. */
+export type BotWorkerMessageResult =
+  | { ok: true; status: 'delivered'; taskId: string }
+  | { ok: false; code: 'held' | 'not_found' | 'not_running' | 'rate_limited' | 'invalid_argument' | 'factory_off' | 'not_now' | 'not_started' | 'not_authorized'; message: string };
+
+export const BOT_WORKER_MESSAGE_LIMITS = {
+  TEXT_MAX: 4000,
+  /** Shortest gap between two messages to one task's worker. */
+  MIN_GAP_MS: 30_000,
+  /** Messages one task's worker may get in a rolling hour. */
+  PER_HOUR: 10,
+} as const;
+
+/** `bot.questionClose` params: one of the caller's own open `question`
+ *  cards, in its own workspace's room. */
+export interface BotQuestionCloseParams {
+  cardId: string;
+}
+
+/** `bot.setJob` — set or clear a job. A bot may set only its own (botId
+ *  omitted or its own), and only while it runs a wake whose reason is the
+ *  owner's words (`human`); main posts a `job_changed` card (room.ts
+ *  RoomCard.jobChange) the owner can undo. The operator may set any bot's. */
+export interface BotSetJobParams {
+  botId?: string;
+  /** The new job (normalizeBotJob), or null to clear it. */
+  job: string | null;
+}
+
+/** main → renderer push on BOT_EVENT. The renderer re-reads what changed;
+ *  the payload carries no secret value and no picture.
+ *  - `bot.status`: one bot's runtime status;
+ *  - `bots-changed`: profiles (or their tasks) changed;
+ *  - `approvals-changed`: the pending approval requests or the
+ *    remembered rules changed (shared/botApproval.ts);
+ *  - `routines-changed`: a bot's routines changed (shared/botRoutine.ts);
+ *  - `secrets-changed`: the stored secret names or their use changed
+ *    (shared/botSecret.ts). */
+export type BotEventPayload =
+  | { type: 'bot.status'; status: BotStatus }
+  | { type: 'bots-changed' }
+  | { type: 'approvals-changed'; workspaceId?: string }
+  | { type: 'routines-changed'; botId?: string }
+  | { type: 'secrets-changed' };
+
+export const BOT_EVENT = 'bot.event';
+
+// ── MCP bot mode (argv) ─────────────────────────────────────────────────────
+
+/** `--bot=<role>`: the bundled MCP server runs in bot mode — it registers the
+ *  shared bot surface and claims the bot role on every RPC. An argv flag,
+ *  never an env var. */
+export const BOT_MODE_ARG_PREFIX = '--bot=';
+/** `--bot-token-file=<path>`: where the bot token is read from (once). */
+export const BOT_TOKEN_FILE_ARG_PREFIX = '--bot-token-file=';
+
+function lastArg(argv: readonly string[], prefix: string): string | undefined {
+  const hit = [...argv].reverse().find((a) => a.startsWith(prefix));
+  return hit === undefined ? undefined : hit.slice(prefix.length);
+}
+
+/** The raw `--bot=` value (last one wins), or undefined. Unvalidated, so the
+ *  server can report an unknown role itself. */
+export function botArgValue(argv: readonly string[]): string | undefined {
+  return lastArg(argv, BOT_MODE_ARG_PREFIX);
+}
+
+/** The `--bot-token-file=` path (last one wins), or undefined. */
+export function botTokenFileArgValue(argv: readonly string[]): string | undefined {
+  return lastArg(argv, BOT_TOKEN_FILE_ARG_PREFIX);
+}
+
+/** The MCP server args (after the bundle path) for one bot spawn. The role
+ *  is the legacy tag; every bot server lists the same shared surface. */
+export function botMcpArgs(role: BotRole, tokenFile: string): string[] {
+  return [`${BOT_MODE_ARG_PREFIX}${role}`, `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`];
+}
