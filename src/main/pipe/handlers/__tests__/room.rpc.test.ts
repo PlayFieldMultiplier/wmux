@@ -99,6 +99,13 @@ describe('room.post', () => {
     expect(await handleRoomPost({ kind: 'status', title: 'x' }, OPERATOR, { ...s.deps, writer: () => null })).toMatchObject({ ok: false, code: 'not_started' });
   });
 
+  it('a post cannot set the owner\'s request a thread answers (main\'s ref only)', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const r = await handleRoomPost({ kind: 'status', title: 'x', workspaceId: 'ws1', refs: { requestCardId: 'c-1', pr: 3 } }, asBot(lead), s.deps) as { ok: true; card: { refs?: Record<string, unknown> } };
+    expect(r.card.refs).toEqual({ pr: 3 });
+  });
+
   it('a bot posts only its output kinds, into its own room, as itself', async () => {
     const lead = bot('ws1', 'lead');
     const s = setup([lead]);

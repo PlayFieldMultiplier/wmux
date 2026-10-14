@@ -140,8 +140,9 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
   if (p.replyTo !== undefined && (typeof p.replyTo !== 'string' || !p.replyTo)) return refusal('invalid', 'replyTo is not a card id');
   const ports = deps.ports();
   const refs = sanitizeRefs(p.refs);
-  // Whom a card is for is main's to settle (mentions below), never a ref.
-  if (refs) delete refs.botIds;
+  // Whom a card is for is main's to settle (mentions below), never a ref;
+  // nor is the request a thread answers (main links it on the opening hop).
+  if (refs) { delete refs.botIds; delete refs.requestCardId; }
   const mentions = p.mentions === undefined ? undefined : parseMentions(p.mentions);
   if (mentions === null) return refusal('invalid', `mentions must be at most ${ROOM_LIMITS.MENTIONS_MAX} bot ids`);
 

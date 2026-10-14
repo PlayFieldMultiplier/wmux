@@ -397,6 +397,14 @@ export interface HandoffRouterOptions {
   log?: (msg: string, err?: unknown) => void;
 }
 
+/** A bot's refs: sanitized, without the ones only main sets (the owner's
+ *  request a thread answers). */
+function callerRefs(value: unknown): ReturnType<typeof sanitizeRefs> {
+  const refs = sanitizeRefs(value);
+  if (refs) delete refs.requestCardId;
+  return refs && Object.keys(refs).length > 0 ? refs : undefined;
+}
+
 export class HandoffRouter {
   private readonly records = new Map<string, Handoff>();
   private lines = 0;
@@ -681,7 +689,7 @@ export class HandoffRouter {
       kind,
       title,
       body: params.body,
-      refs: sanitizeRefs(params.refs) as FactRef | undefined,
+      refs: callerRefs(params.refs) as FactRef | undefined,
       namedThread,
       ...(params.replyTo !== undefined ? { replyTo: params.replyTo } : {}),
       ...(params.toWorkspaceId !== undefined ? { toWorkspaceId: params.toWorkspaceId } : {}),
@@ -1317,7 +1325,7 @@ export class HandoffRouter {
       const options = sanitizeOptions(params.options);
       // A question asked in a wake about one task is about that task (the
       // owner's view counts it once with the task's own needs-input).
-      const named = sanitizeRefs(params.refs);
+      const named = callerRefs(params.refs);
       const refs = asking?.taskId && !named?.taskId ? { ...(named ?? {}), taskId: asking.taskId } : named;
       // Asked while the bot holds a hop it has not answered: the answer's
       // wake answers that hop.

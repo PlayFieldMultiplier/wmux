@@ -1031,6 +1031,18 @@ describe('closing questions nobody needs to answer (A5)', () => {
     expect(open(h)).toEqual(['Ship it?']);
   });
 
+  it('a bot cannot set the owner\'s request a thread answers (main\'s ref only)', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const q = await h.router.askPerson(binding(lead), { title: 'Which?', body: '', refs: { requestCardId: 'c-1', taskId: 'wtask-1' } as never });
+    const d = h.router.send(binding(lead), { kind: 'message', toBotId: other.id, title: 'hi', body: '', refs: { requestCardId: 'c-1' } as never });
+    if (!q.ok || !d.ok) throw new Error('refused');
+    expect(h.router.get(q.handoffId)!.payload.refs).toEqual({ taskId: 'wtask-1' });
+    expect(h.router.get(d.handoffId)!.payload.refs).toBeUndefined();
+    expect(h.rooms.read('ws1').cards.some((c) => c.refs?.requestCardId)).toBe(false);
+  });
+
   it('a thread whose subject ended closes its open questions', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);

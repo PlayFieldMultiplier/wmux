@@ -49,9 +49,11 @@ export function requestTitles(cards: readonly RoomCard[]): Map<ThreadId, string>
   const out = new Map<ThreadId, string>();
   for (const c of cards) {
     const id = c.refs?.requestCardId;
-    if (!id || out.has(c.threadId) || !c.threadId.startsWith('handoff:')) continue;
+    // Only main's line for the hop that opened this very thread names it.
+    if (!id || out.has(c.threadId) || c.actor.kind !== 'system' || c.threadId !== `handoff:${c.refs?.handoffId}`) continue;
     const request = byId.get(id);
-    const line = request?.kind === 'human' ? request.title.split('\n')[0].trim() : '';
+    const own = request?.kind === 'human' && request.threadId === 'general' && request.workspaceId === c.workspaceId;
+    const line = own ? request.title.split('\n')[0].trim() : '';
     if (line) out.set(c.threadId, line);
   }
   return out;

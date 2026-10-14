@@ -29,7 +29,12 @@ describe('threadLabel', () => {
       card({ id: 'c-hop', threadId: 'handoff:h-1', title: 'dispatch → Research: Ship it', refs: { handoffId: 'h-1', requestCardId: 'c-owner' } }),
       // A link to a card that is not the owner's names nothing.
       card({ id: 'c-bot', actor: bot, title: 'I did it' }),
-      card({ id: 'c-hop2', threadId: 'handoff:h-2', title: 'dispatch → Research: Other', refs: { requestCardId: 'c-bot' } }),
+      card({ id: 'c-hop2', threadId: 'handoff:h-2', title: 'dispatch → Research: Other', refs: { handoffId: 'h-2', requestCardId: 'c-bot' } }),
+      // A bot's card cannot name a thread, nor can another room's request or another thread's hop.
+      card({ id: 'c-other', workspaceId: 'w2', kind: 'human', actor: { kind: 'human' }, title: 'Room two words' }),
+      card({ id: 'c-forged', threadId: 'handoff:h-3', actor: bot, title: 'x', refs: { handoffId: 'h-3', requestCardId: 'c-owner' } }),
+      card({ id: 'c-far', threadId: 'handoff:h-4', title: 'x', refs: { handoffId: 'h-4', requestCardId: 'c-other' } }),
+      card({ id: 'c-moved', threadId: 'handoff:h-5', title: 'x', refs: { handoffId: 'h-9', requestCardId: 'c-owner' } }),
     ];
     const titles = requestTitles(cards);
     expect([...titles]).toEqual([['handoff:h-1', 'Add a --version flag to calc.py']]);
