@@ -948,11 +948,18 @@ describe('Bots page', () => {
     await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-confirm"]')!.click(); });
     expect(settings.set).toHaveBeenCalledWith({ planConsent: expect.objectContaining({ version: 1 }) });
     expect(dialog()).toBeNull();
-    // Opened again without consent: Turn bots off turns them off.
-    act(() => root.unmount());
-    root = createRoot(container);
+    // Opened again without consent: Escape decides later (nothing written), Turn bots off turns them off.
+    const reopen = async () => {
+      act(() => root.unmount());
+      root = createRoot(container);
+      await render(<BotsPage settings={settings} />);
+    };
     settings.set.mockClear();
-    await render(<BotsPage settings={settings} />);
+    await reopen();
+    act(() => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(dialog()).toBeNull();
+    expect(settings.set).not.toHaveBeenCalled();
+    await reopen();
     await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-cancel"]')!.click(); });
     expect(settings.set).toHaveBeenCalledWith({ enabled: false });
     // Bots off: Turn bots on asks; Cancel leaves them off and writes nothing.
