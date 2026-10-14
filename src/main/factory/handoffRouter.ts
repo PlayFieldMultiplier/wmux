@@ -1000,10 +1000,13 @@ export class HandoffRouter {
    *  those words in the thread they were said in, and — when the words were
    *  for this bot alone (its 1:1), not the whole room — those in a thread of
    *  their own, were answered in chat. A question with options closes only
-   *  when the words are one of its options (isSameAnswer): that option
-   *  becomes its answer, as if picked on the card. Other words ("Hi") leave
-   *  it open, and the bot that judges it answered closes it itself
-   *  (question_close). Returns the handoff ids closed or answered. */
+   *  when the words are one of its options (isSameAnswer) and it is the one
+   *  such question: that option is stored as its answer, already delivered
+   *  (the bot read the words in the turn that just ended, so no second wake),
+   *  and the card reads answered. Other words ("Hi"), or words that match
+   *  several questions ("Yes"), leave them open; the bot that judges a
+   *  question answered closes it itself (question_close). Returns the
+   *  handoff ids closed or answered. */
   closeAnsweredInChat(botId: string, item: Pick<WakeItem, 'reason' | 'threadId' | 'workspaceId' | 'enqueuedAt'>): Promise<string[]> {
     const r = item.reason;
     if (r.kind !== 'human') return Promise.resolve([]);
@@ -1016,17 +1019,15 @@ export class HandoffRouter {
       && (h.threadId === said || (toMe && h.threadId === `handoff:${h.id}`));
     return this.serial(async () => {
       const answered: string[] = [];
+      const picks: { h: Handoff; option: string }[] = [];
       for (const h of [...this.records.values()]) {
         const options = h.payload.options ?? [];
         if (!isOpenAsk(h) || options.length === 0 || !asked(h) || h.status !== 'delivered') continue;
         const option = options.find((o) => isSameAnswer(text, o));
-        const ws = partyWorkspace(h.from);
         const d = this.decisionOf(h);
-        if (!option || !ws || !d || (d.status ?? 'pending') !== 'pending') continue;
-        // The store's change notice settles it (reconcile): the answer
-        // handoff, the card closed as answered.
-        if (await this.opts.decisions.resolve(ws, d.id, option).catch(() => null)) answered.push(h.id);
+        if (option && d && (d.status ?? 'pending') === 'pending') picks.push({ h, option });
       }
+      if (picks.length === 1 && (await this.answerFromChat(picks[0].h, picks[0].option))) answered.push(picks[0].h.id);
       const closed = await this.closeWhere((h) => asked(h) && !h.payload.options?.length);
       return [...answered, ...closed];
     });
@@ -1231,6 +1232,22 @@ export class HandoffRouter {
     const bot = ask.from.kind === 'bot' ? safeGet(this.opts.ports().bots, ask.from.botId) : null;
     if (!bot || !bot.enabled) this.refuse(reply, 'no_addressee', 'the bot that asked is not enabled');
     else this.deliver(reply, bot);
+    return true;
+  }
+
+  /** The owner picked an option in chat: its answer is stored as delivered
+   *  (the bot already read the words), the question closes as answered and
+   *  its decision is cleared — the question first, so the clear does not
+   *  read as a question closed unanswered. */
+  private async answerFromChat(ask: Handoff, option: string): Promise<boolean> {
+    if (this.storedAnswer(ask.id)) return false;
+    const ws = partyWorkspace(ask.from);
+    const d = this.decisionOf(ask);
+    if (!ws || !d) return false;
+    if (!this.put({ ...this.answerFor(ask, option, false), status: 'delivered' })) return false;
+    if (!this.put({ ...ask, status: 'answered' })) return false;
+    this.closeQuestionCard(ask);
+    await this.opts.decisions.clear(ws, ask.threadId, d.id).catch(() => false);
     return true;
   }
 

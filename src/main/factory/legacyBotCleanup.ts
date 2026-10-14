@@ -14,7 +14,8 @@
 // when any of these names it:
 //   - a `human` card in any room (factory/rooms/*.jsonl) addressed to it
 //     (refs.botIds / refs.botId);
-//   - a question, plan or proposal card it wrote that was resolved;
+//   - a question, plan, proposal, approval, login or secret request card it
+//     wrote that was resolved;
 //   - the owner's resolution of a card (a human `fact` card with
 //     refs.handoffId) whose handoff the bot sent;
 //   - a handoff from the owner to it (an answer picked from a question's
@@ -47,8 +48,9 @@ import { HANDOFFS_FILENAME } from './handoffRouter';
 import type { FactoryMigrationContext } from './migrate';
 
 const LEGACY_NAMES: Readonly<Record<string, string>> = { moa: 'Moa', lead: 'Lead' };
-/** A bot's cards the owner answers: resolved, the owner dealt with the bot. */
-const ANSWERED_KINDS: ReadonlySet<string> = new Set(['question', 'plan', 'proposal']);
+/** A bot's cards the owner answers: resolved, the owner dealt with the bot
+ *  (a resolved one closed some other way only keeps a bot, the safe side). */
+const ANSWERED_KINDS: ReadonlySet<string> = new Set(['question', 'plan', 'proposal', 'approval', 'login_request', 'secret_request']);
 
 const isBotId = (id: unknown): id is string => typeof id === 'string' && BOT_ID_RE.test(id);
 

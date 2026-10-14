@@ -65,16 +65,21 @@ export function botClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string
  *  account's), or cleared when there is none. `shell` is the shell the tab
  *  runs (Windows: the native one main picked; elsewhere undefined = the
  *  user's POSIX shell). Pure. */
-export function claudeLoginLine(platform: NodeJS.Platform, shell: string | undefined, configDir?: string): string {
+export function claudeLoginLine(platform: NodeJS.Platform, shell: string | undefined, configDir?: string): string | null {
   if (platform === 'win32') {
     const base = (shell ?? '').split(/[\\/]/).pop()?.toLowerCase() ?? '';
-    if (base.startsWith('cmd')) return `set "CLAUDE_CONFIG_DIR=${configDir ?? ''}" & ${CLAUDE_LOGIN_COMMAND}`;
+    if (base.startsWith('cmd')) {
+      // cmd cannot quote `"` or `%` inside `set "…"`: such a folder is not typed.
+      if (configDir && /["%\r\n]/.test(configDir)) return null;
+      return `set "CLAUDE_CONFIG_DIR=${configDir ?? ''}" & ${CLAUDE_LOGIN_COMMAND}`;
+    }
     if (base.startsWith('pwsh') || base.startsWith('powershell') || base === '') {
       return configDir
-        ? `$env:CLAUDE_CONFIG_DIR='${configDir.replace(/'/g, "''")}'; ${CLAUDE_LOGIN_COMMAND}`
+        ? (/[\r\n\0]/.test(configDir) ? null : `$env:CLAUDE_CONFIG_DIR='${configDir.replace(/['\u2018\u2019\u201a\u201b]/g, (q) => q + q)}'; ${CLAUDE_LOGIN_COMMAND}`)
         : `$env:CLAUDE_CONFIG_DIR=$null; ${CLAUDE_LOGIN_COMMAND}`;
     }
   }
+  if (configDir && /[\r\n\0]/.test(configDir)) return null;
   return configDir
     ? `CLAUDE_CONFIG_DIR='${configDir.replace(/'/g, `'\\''`)}' ${CLAUDE_LOGIN_COMMAND}`
     : `env -u CLAUDE_CONFIG_DIR ${CLAUDE_LOGIN_COMMAND}`;
@@ -104,9 +109,11 @@ export function startEngineLogin(deps: EngineLoginDeps): Promise<void> {
 
 async function open(deps: EngineLoginDeps): Promise<void> {
   const shell = deps.platform === 'win32' ? deps.windowsShell() : undefined;
+  const line = claudeLoginLine(deps.platform, shell, deps.configDir);
+  if (line === null) throw new Error(`wmux cannot type the sign-in for the Claude folder ${deps.configDir ?? ''} in this shell. Run \`claude auth login\` with CLAUDE_CONFIG_DIR set to it.`);
   let r: Awaited<ReturnType<EngineLoginDeps['openTab']>>;
   try {
-    r = await deps.openTab(shell, claudeLoginLine(deps.platform, shell, deps.configDir));
+    r = await deps.openTab(shell, line);
   } catch {
     throw new Error('wmux could not open a terminal for the Claude sign-in. Run `claude auth login` in a terminal.');
   }

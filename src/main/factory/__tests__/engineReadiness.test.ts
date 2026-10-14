@@ -63,9 +63,21 @@ describe('startEngineLogin', () => {
     expect(claudeLoginLine('darwin', undefined, dir)).toBe(`CLAUDE_CONFIG_DIR='/Users/o'\\''brien/claude cfg' claude auth login`);
     expect(claudeLoginLine('win32', 'pwsh.exe', "C:\\o'b\\cfg")).toBe("$env:CLAUDE_CONFIG_DIR='C:\\o''b\\cfg'; claude auth login");
     expect(claudeLoginLine('win32', 'cmd.exe', 'C:\\cfg')).toBe('set "CLAUDE_CONFIG_DIR=C:\\cfg" & claude auth login');
+    // cmd cannot quote " or %; a newline ends any shell's line: not typed.
+    expect(claudeLoginLine('win32', 'cmd.exe', 'C:\\a" & calc & rem "')).toBeNull();
+    expect(claudeLoginLine('win32', 'cmd.exe', 'C:\\%USERPROFILE%')).toBeNull();
+    expect(claudeLoginLine('darwin', undefined, '/x\nrm -rf ~')).toBeNull();
+    // PowerShell doubles every single-quote form it accepts, keeping the folder's own characters.
+    expect(claudeLoginLine('win32', 'pwsh.exe', 'C:\\a\u2019b')).toBe("$env:CLAUDE_CONFIG_DIR='C:\\a\u2019\u2019b'; claude auth login");
     expect(botClaudeConfigDir({ CLAUDE_CONFIG_DIR: '/x/cfg' })).toBe('/x/cfg');
     expect(botClaudeConfigDir({ CLAUDE_CONFIG_DIR: '  ' })).toBeUndefined();
     expect(botClaudeConfigDir({})).toBeUndefined();
+  });
+
+  it('a folder the shell cannot quote opens no tab and says how to sign in by hand', async () => {
+    const d = deps({ platform: 'win32', windowsShell: () => 'cmd.exe' });
+    await expect(startEngineLogin({ ...d, configDir: 'C:\\%X%' })).rejects.toThrow('CLAUDE_CONFIG_DIR');
+    expect(d.openTab).not.toHaveBeenCalled();
   });
 
   it('startEngineLogin types the folder it was given', async () => {

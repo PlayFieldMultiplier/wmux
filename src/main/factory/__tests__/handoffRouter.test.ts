@@ -972,8 +972,23 @@ describe('closing questions nobody needs to answer (A5)', () => {
     await h.router.reconcile();
     expect(h.router.get(pick.handoffId)!.status).toBe('answered');
     const answer = h.router.list({ workspaceId: 'ws1' }).find((x) => x.kind === 'answer')!;
-    expect(answer).toMatchObject({ from: { kind: 'human' }, to: { kind: 'bot', botId: lead.id }, replyTo: pick.handoffId, payload: { body: 'Issues' } });
+    // Stored as delivered: the bot read the words in the turn that ended; no second wake.
+    expect(answer).toMatchObject({ from: { kind: 'human' }, to: { kind: 'bot', botId: lead.id }, replyTo: pick.handoffId, payload: { body: 'Issues' }, status: 'delivered' });
+    expect(h.wakes).toEqual([]);
     expect(open(h)).toEqual([]);
+    expect(h.rooms.read('ws1').cards.some((c) => c.title.startsWith('Question closed'))).toBe(false);
+  });
+
+  it('words that are an option of several open questions answer none of them', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const a = await h.router.askPerson(binding(lead), { title: 'Ship it?', body: '', options: ['Yes', 'No'] });
+    const b = await h.router.askPerson(binding(lead), { title: 'Delete it?', body: '', options: ['Yes', 'No'] });
+    if (!a.ok || !b.ok) throw new Error('asks failed');
+    now += 5;
+    const said = { ...ownerWake('general', now), reason: { kind: 'human' as const, text: 'Yes', source: 'desktop' as const } };
+    expect(await h.router.closeAnsweredInChat(lead.id, said)).toEqual([]);
+    expect(open(h).sort()).toEqual(['Delete it?', 'Ship it?']);
   });
 
   it('a greeting question is marked, and closes once the bot has a job', async () => {
