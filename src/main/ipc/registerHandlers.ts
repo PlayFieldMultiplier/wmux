@@ -208,7 +208,11 @@ export function registerAllHandlers(
   // Moa's track record — the retro card and its schedule (Settings → Moa).
   const cleanupTrackRecord = registerTrackRecordHandlers(getWindow);
   // Agent factory bots: list, status and settings for the renderer.
-  const cleanupFactory = registerFactoryHandlers(getWindow, { cwdOf: getCwd });
+  const cleanupFactory = registerFactoryHandlers(
+    getWindow,
+    { cwdOf: getCwd },
+    daemonClient ? (id, data) => daemonClient.writeToSession(id, data) : (id, data) => ptyManager.write(id, data),
+  );
   const cleanupGitShip = registerGitShipHandlers();
   const cleanupGhLogin = registerGhLoginHandlers(getWindow);
   // Agent factory rooms: the room dock reads, posts and answers as the owner.

@@ -34,7 +34,8 @@ import { getFactorySettingsStore } from '../../factory/factorySettings';
 export interface RoomFactoryState {
   /** The factory is switched on (Settings › Factory). */
   enabled: boolean;
-  /** The HQ workspace (Moa's room), or null. */
+  /** Always null: no workspace is special any more (owner decision,
+   *  2026-10-14). Kept so an older renderer reading it sees "no HQ". */
   hqWorkspaceId: string | null;
 }
 
@@ -77,18 +78,15 @@ export type RoomPostResponse =
 
 const OFF: RoomFactoryState = { enabled: false, hqWorkspaceId: null };
 
-/** `enabled` and `hqWorkspaceId` from `<wmuxDir>/factory/settings.json`
- *  (version 1). Anything unreadable reads as off. */
+/** `enabled` from `<wmuxDir>/factory/settings.json` (version 1); anything
+ *  unreadable reads as off. The file's hqWorkspaceId is not used. */
 export function readFactoryStateFile(wmuxDir: string): RoomFactoryState {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(wmuxDir, 'factory', 'settings.json'), 'utf8')) as unknown;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return OFF;
     const r = raw as Record<string, unknown>;
     if (r.version !== 1) return OFF;
-    return {
-      enabled: r.enabled === true,
-      hqWorkspaceId: isRoomWorkspaceId(r.hqWorkspaceId) ? r.hqWorkspaceId : null,
-    };
+    return { enabled: r.enabled === true, hqWorkspaceId: null };
   } catch {
     return OFF;
   }
@@ -100,7 +98,7 @@ export function liveFactoryState(wmuxDir: () => string = getWmuxDir): RoomFactor
   const store = getFactorySettingsStore();
   if (!store) return readFactoryStateFile(wmuxDir());
   const s = store.get();
-  return { enabled: s.enabled, hqWorkspaceId: s.hqWorkspaceId };
+  return { enabled: s.enabled, hqWorkspaceId: null };
 }
 
 function obj(raw: unknown): Record<string, unknown> {

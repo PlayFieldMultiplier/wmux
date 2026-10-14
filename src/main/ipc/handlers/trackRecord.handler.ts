@@ -12,19 +12,17 @@ import { getTrackRecordStore, parseRetroSchedule, type TrackRecordStore } from '
 export interface TrackRecordHandlerPorts {
   store?: TrackRecordStore;
   isMoaEnabled?: () => boolean;
-  getHq?: () => string | null;
 }
 
 /** The retro card for a workspace, or null. The factory off, the retro
- *  turned off, dismissed, or (with an HQ) any workspace but the HQ: null. */
+ *  turned off or dismissed: null. No workspace is special (the HQ setting is
+ *  no longer used, owner decision 2026-10-14). */
 export function retroCardFor(
   workspaceId: unknown,
   store: TrackRecordStore,
   moaOn: boolean,
-  hq: string | null,
 ): RetroCard | null {
   if (!moaOn || typeof workspaceId !== 'string') return null;
-  if (hq !== null && workspaceId !== hq) return null;
   const { retro } = store.read();
   if (!retro.schedule.enabled || !retro.card || retro.dismissed) return null;
   return retro.card;
@@ -36,7 +34,6 @@ export function registerTrackRecordHandlers(
 ): () => void {
   const store = ports.store ?? getTrackRecordStore();
   const moaOn = ports.isMoaEnabled ?? (() => getFactorySettings().enabled);
-  const hq = ports.getHq ?? (() => getFactorySettings().hqWorkspaceId);
   const changed = (): void => {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send(IPC.TRACK_RECORD_CHANGED);
@@ -54,7 +51,7 @@ export function registerTrackRecordHandlers(
     IPC.TRACK_RECORD_RETRO_GET,
     wrapHandler(IPC.TRACK_RECORD_RETRO_GET, (_e: Electron.IpcMainInvokeEvent, req: unknown): { card: RetroCard | null } => {
       const workspaceId = req && typeof req === 'object' ? (req as { workspaceId?: unknown }).workspaceId : undefined;
-      return { card: retroCardFor(workspaceId, store, moaOn(), hq()) };
+      return { card: retroCardFor(workspaceId, store, moaOn()) };
     }),
   );
 

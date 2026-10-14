@@ -651,7 +651,7 @@ const electronAPI = {
   fanout: {
     start: (req: Record<string, unknown>) => ipcRenderer.invoke(IPC.FANOUT_START, req),
     lineage: (workspaceIds: string[]) =>
-      ipcRenderer.invoke(IPC.FANOUT_LINEAGE, workspaceIds) as Promise<Record<string, { owner: string; at: number; origin?: import('../shared/fanoutOrigin').FanoutOrigin }>>,
+      ipcRenderer.invoke(IPC.FANOUT_LINEAGE, workspaceIds) as Promise<Record<string, import('../shared/fanoutOrigin').FanoutLineageEntry>>,
     recentAudit: (limit: number) =>
       ipcRenderer.invoke(IPC.FANOUT_AUDIT_RECENT, limit) as Promise<
         import('../main/worktask/fanoutGuards').FanOutAuditRecord[]
@@ -1199,6 +1199,13 @@ const electronAPI = {
     // The owner resumes the stopped worker of an ended bot task.
     resumeWorker: (taskId: string) =>
       ipcRenderer.invoke(IPC.FACTORY_WORKER_RESUME, { taskId }) as Promise<import('../main/factory/workerReclaim').WorkerResumeResult>,
+    // Can the default bot engine (Claude) run here? Checked without a model turn.
+    factoryEngineReadiness: () =>
+      ipcRenderer.invoke(IPC.FACTORY_ENGINE_READINESS) as Promise<import('../shared/factoryEngine').FactoryEngineReadiness>,
+    // Start the Claude sign-in (`claude auth login` in a terminal tab of the
+    // active workspace); rejects when no tab could be opened. Poll
+    // factoryEngineReadiness to see it land.
+    factoryEngineLogin: () => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN) as Promise<void>,
     // Every bot's routines, read-only (routine.list as the operator).
     listRoutines: async (): Promise<import('../shared/botRoutine').BotRoutine[]> => {
       const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, 'routine.list', {})) as { ok?: unknown; result?: { ok?: unknown; routines?: unknown } } | null;

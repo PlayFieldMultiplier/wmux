@@ -34,6 +34,14 @@ import type { BotTaskView } from '../../../shared/botTask';
 import { botTaskViews, getBotTaskSources, type BotTaskSources } from '../../factory/botTasks';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
 import { getWorkerResumePorts, resumeWorker, type WorkerResumePorts, type WorkerResumeResult } from '../../factory/workerReclaim';
+import { engineReadiness, startEngineLogin, type EngineLoginDeps, type EngineReadinessDeps } from '../../factory/engineReadiness';
+import type { FactoryEngineReadiness } from '../../../shared/factoryEngine';
+import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
+import { loadClaudeCredential } from '../../claude/claudeCredential';
+import { sendToRenderer } from '../../pipe/handlers/_bridge';
+import { scheduleInitialCommand } from './scheduleInitialCommand';
+import { sanitizePtyText } from '../../../shared/types';
+import { ShellDetector } from '../../../shared/ShellDetector';
 
 export interface FactoryBotRow {
   bot: BotProfile;
@@ -110,6 +118,54 @@ export function factoryWorkerResumeHandler(
     const p = ports();
     if (!p) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
     return resumeWorker(p, raw, { kind: 'owner' });
+  };
+}
+
+const DEFAULT_READINESS_DEPS: EngineReadinessDeps = {
+  claudeExecutable: resolveClaudeExecutable,
+  credential: async () => {
+    // The folder the bot engine's claude reads (it inherits main's env).
+    const r = await loadClaudeCredential(process.env.CLAUDE_CONFIG_DIR || undefined);
+    return r.ok ? { ok: true } : { ok: false, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) };
+  },
+};
+
+/** FACTORY_ENGINE_READINESS: main window only (any other sender reads as
+ *  unknown, never as ready). */
+export function factoryEngineReadinessHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: EngineReadinessDeps = DEFAULT_READINESS_DEPS,
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<FactoryEngineReadiness> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) return { ready: false, reason: 'unknown', message: 'only the main window may ask' };
+    return engineReadiness(deps);
+  };
+}
+
+/** How main types into a PTY it did not create (daemon session or local PTY). */
+export type PtyLineWriter = (ptyId: string, data: string) => boolean | void;
+
+/** FACTORY_ENGINE_LOGIN: open the Claude sign-in tab; main window only. */
+export function factoryEngineLoginHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: Omit<EngineLoginDeps, 'platform'> & { platform?: NodeJS.Platform },
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<void> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may start the Claude sign-in');
+    await startEngineLogin({ ...deps, platform: deps.platform ?? process.platform });
+  };
+}
+
+function defaultEngineLoginDeps(getWindow: () => BrowserWindow | null, write: PtyLineWriter): Omit<EngineLoginDeps, 'platform'> {
+  return {
+    openTab: async (shell) =>
+      (await sendToRenderer(getWindow, 'surface.new', shell ? { shell } : {}, { timeoutMs: 15_000 })) as { ptyId?: unknown; error?: unknown } | null,
+    // Typed once the shell has had time to start (the profile startup
+    // command's fallback timing); retried while the session is not writable.
+    typeLine: (ptyId, line) => {
+      scheduleInitialCommand(line, { write: (cmd) => write(ptyId, sanitizePtyText(cmd) + '\r') });
+    },
+    windowsShell: () => new ShellDetector().getDefault(),
   };
 }
 
@@ -224,6 +280,7 @@ export function factorySettingsSetHandler(
 export function registerFactoryHandlers(
   getWindow: () => BrowserWindow | null,
   suggestDeps: Pick<BotRepoSuggestDeps, 'cwdOf'> = {},
+  writeToPty?: PtyLineWriter,
 ): () => void {
   const channels = [
     IPC.FACTORY_BOT_LIST,
@@ -237,6 +294,8 @@ export function registerFactoryHandlers(
     IPC.FACTORY_STOP_ALL,
     IPC.FACTORY_STOP_BOT,
     IPC.FACTORY_WORKER_RESUME,
+    IPC.FACTORY_ENGINE_READINESS,
+    IPC.FACTORY_ENGINE_LOGIN,
   ];
   for (const c of channels) ipcMain.removeHandler(c);
 
@@ -275,6 +334,11 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_STOP_BOT, wrapHandler(IPC.FACTORY_STOP_BOT, factoryStopHandler(getWindow, 'bot')));
 
   ipcMain.handle(IPC.FACTORY_WORKER_RESUME, wrapHandler(IPC.FACTORY_WORKER_RESUME, factoryWorkerResumeHandler(getWindow)));
+
+  ipcMain.handle(IPC.FACTORY_ENGINE_READINESS, wrapHandler(IPC.FACTORY_ENGINE_READINESS, factoryEngineReadinessHandler(getWindow)));
+
+  const loginWrite: PtyLineWriter = writeToPty ?? (() => false);
+  ipcMain.handle(IPC.FACTORY_ENGINE_LOGIN, wrapHandler(IPC.FACTORY_ENGINE_LOGIN, factoryEngineLoginHandler(getWindow, defaultEngineLoginDeps(getWindow, loginWrite))));
 
   return () => {
     for (const c of channels) ipcMain.removeHandler(c);

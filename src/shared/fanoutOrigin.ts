@@ -38,6 +38,16 @@ export interface FanoutOrigin {
   tainted?: boolean;
 }
 
+/** One task workspace's durable stamp as FANOUT_LINEAGE answers it. `botId`
+ *  names the bot whose worker it is (the bot origin, from the stamp or, when
+ *  the stamp lacks it, from the task ledger's dispatch record). */
+export interface FanoutLineageEntry {
+  owner: string;
+  at: number;
+  origin?: FanoutOrigin;
+  botId?: string;
+}
+
 const ID_MAX = 128;
 const LABEL_MAX = 200;
 
