@@ -8,14 +8,18 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CODEX_WORKER_JUSTIFICATION_PREFIX,
+  CODEX_WORKER_APPROVED_TOOLS,
+  CODEX_WORKER_REFUSED_TOOLS,
   buildCodexWorkerLaunchLine,
   buildCodexWorkerRules,
+  codexWorkerToolApprovals,
   codexVersionAtLeastFloor,
   namesCodex,
   parseCodexVersion,
   parseCodexWorkerLine,
 } from '../codexWorkerGuard';
 import { codexTrustOverride } from '../fanoutPreset';
+import { FANOUT_WORKER_DISALLOWED_TOOLS } from '../workerLaunch';
 
 const CWD = '/data/worktrees/abc/feat-x-1234';
 const PROMPT = `"$(cat '/data/worktrees/.meta/feat-x-1234/prompt.md')"`;
@@ -69,6 +73,20 @@ describe('the codex worker launch line: an allowlist', () => {
     );
     expect(buildCodexWorkerLaunchLine(parsed, CWD, [])).toBeNull();
     expect(buildCodexWorkerLaunchLine(parsed, CWD, ['/a$b'])).toBeNull();
+  });
+
+  it('approves exactly the wmux tools a Claude bot worker may call, and asks for every other', () => {
+    const claudeDenied = (t: string) => FANOUT_WORKER_DISALLOWED_TOOLS.some((r) => (r.endsWith('*') ? `mcp__wmux__${t}`.startsWith(r.slice(0, -1)) : r === `mcp__wmux__${t}`));
+    expect(CODEX_WORKER_APPROVED_TOOLS.some(claudeDenied)).toBe(false);
+    expect(CODEX_WORKER_REFUSED_TOOLS.every(claudeDenied)).toBe(true);
+    for (const t of ['channel_post', 'ledger_update', 'task_push', 'a2a_whoami']) expect(CODEX_WORKER_APPROVED_TOOLS).toContain(t);
+    for (const t of ['browser_open', 'browser_hover', 'terminal_send', 'send_message', 'fanout_start', 'pane_split']) expect(CODEX_WORKER_REFUSED_TOOLS).toContain(t);
+    const [ask, table] = codexWorkerToolApprovals(['browser_open', 'computer', 'ledger_update', 'bad name']);
+    expect(ask).toBe('-c mcp_servers.wmux.default_tools_approval_mode=prompt');
+    expect(table).toContain('computer={approval_mode="prompt"}');
+    expect(table).toContain('ledger_update={approval_mode="approve"}');
+    expect(table).not.toContain('bad name');
+    expect(table.match(/browser_open=/g)).toHaveLength(1);
   });
 
   it('names codex anywhere on a line', () => {

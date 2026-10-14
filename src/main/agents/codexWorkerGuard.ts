@@ -42,12 +42,13 @@ import {
   buildCodexWorkerLaunchLine,
   buildCodexWorkerRules,
   codexVersionAtLeastFloor,
+  isCodexToolKey,
   parseCodexVersion,
   launchesCodex,
   parseCodexWorkerLine,
   CODEX_WORKER_MIN_VERSION,
 } from '../../shared/codexWorkerGuard';
-import { codexHasWmuxServer } from '../../shared/mcpRegistration';
+import { codexDefinesWmuxServer, codexWmuxApprovedTools } from '../../shared/mcpRegistration';
 import { resolveOnPath } from '../factory/botEngines';
 import { getBotStore } from '../factory/botStore';
 import { claimInflightCodexLaunch, markGuardedCodexCreate } from './botWorkerMergeGuard';
@@ -246,8 +247,15 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   }
 
   // 1. The line main launches.
+  // The wmux tool approvals: only when the config defines the server (an
+  // override of an undefined one stops codex), and never past a tool the
+  // config approves under a name the line cannot set back to ask.
+  const configPath = path.join(codexHome, 'config.toml');
+  const ownerApproved = codexWmuxApprovedTools(configPath);
+  const unwritable = ownerApproved.filter((t) => !isCodexToolKey(t));
+  if (unwritable.length > 0) throw refuse(`the codex config approves wmux tools a launch cannot set back to ask (${unwritable.slice(0, 3).join(', ')})`);
   const line = buildCodexWorkerLaunchLine(parsed, cwd, [...new Set([gitDir, commonDir])], {
-    approveWorkerTools: codexHasWmuxServer(path.join(codexHome, 'config.toml')),
+    ...(codexDefinesWmuxServer(configPath) ? { toolApprovals: { ownerApproved } } : {}),
   });
   if (!line) throw refuse('a worktree path cannot be written into the launch line');
   const out = { ...options, initialCommand: line };

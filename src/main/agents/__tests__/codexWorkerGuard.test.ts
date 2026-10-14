@@ -146,15 +146,29 @@ describe('guardCodexBotWorker', () => {
     expect(calls.find((c) => c[1] === 'execpolicy')).toContain(path.join(root, '.codex', 'rules', 'default.rules'));
   });
 
-  it('approves the worker\'s wmux tools only when the codex config defines the wmux server', async () => {
+  it('sets the worker\'s wmux tool approvals only when the codex config defines the wmux server, and the owner\'s approvals never widen them', async () => {
     const without = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, 'none') } }, strict, deps);
     expect(without!.initialCommand).not.toContain('approval_mode');
     fs.mkdirSync(path.join(root, '.codex'), { recursive: true });
-    fs.writeFileSync(path.join(root, '.codex', 'config.toml'), '[mcp_servers.wmux]\ncommand = "node"\nargs = ["/x/index.js"]\n');
-    const withServer = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, '.codex') } }, strict, deps);
-    expect(withServer!.initialCommand).toContain('-c mcp_servers.wmux.tools.ledger_update.approval_mode=approve');
-    expect(withServer!.initialCommand).toContain('-c mcp_servers.wmux.tools.task_push.approval_mode=approve');
-    expect(withServer!.initialCommand).not.toMatch(/tools\.(?:terminal_send|channel_post|fanout_start|browser_[a-z_]+)\./);
+    fs.writeFileSync(path.join(root, '.codex', 'config.toml'), [
+      '[mcp_servers.wmux]', 'command = "node"', 'args = ["/x/index.js"]', 'default_tools_approval_mode = "approve"',
+      '[mcp_servers.wmux.tools.browser_open]', 'approval_mode = "approve"',
+      '[mcp_servers.wmux.tools.computer]', 'approval_mode = "approve"', '',
+    ].join('\n'));
+    const out = (await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: path.join(root, '.codex') } }, strict, deps))!.initialCommand;
+    expect(out).toContain(' -c mcp_servers.wmux.default_tools_approval_mode=prompt ');
+    for (const t of ['ledger_update', 'task_push', 'channel_post']) expect(out).toContain(`${t}={approval_mode="approve"}`);
+    for (const t of ['browser_open', 'terminal_send', 'fanout_start', 'computer']) expect(out).toContain(`${t}={approval_mode="prompt"}`);
+  });
+
+  it('sets the approvals for a wmux server of any transport, and refuses a config approval it cannot set back', async () => {
+    const home = path.join(root, '.codex');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'config.toml'), '[mcp_servers.wmux]\nurl = "http://127.0.0.1:9/mcp"\n[mcp_servers.wmux.tools.browser-extra]\napproval_mode = "approve"\n');
+    const out = (await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: home } }, strict, deps))!.initialCommand;
+    expect(out).toContain('browser-extra={approval_mode="prompt"}');
+    fs.writeFileSync(path.join(home, 'config.toml'), '[mcp_servers.wmux]\ncommand = "node"\n[mcp_servers.wmux.tools."browser.odd"]\napproval_mode = "approve"\n');
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env: { CODEX_HOME: home } }, strict, deps)).rejects.toThrow(/cannot set back to ask \(browser\.odd\)/);
   });
 });
 
