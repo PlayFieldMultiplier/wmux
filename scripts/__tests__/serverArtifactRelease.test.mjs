@@ -79,7 +79,7 @@ describe('release.yml server artifacts', () => {
   });
 
   it('builds against glibc 2.28 in a digest-pinned image and refuses anything newer', () => {
-    const wrapper = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'build-server-artifact-container.sh'), 'utf8');
+    const wrapper = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'build-server-artifact-container.sh'), 'utf8').replace(/\r\n/g, '\n');
     expect(wrapper).toContain('MAX_GLIBC=2.28\n');
     expect(wrapper).toContain('--max-glibc "$MAX_GLIBC"');
     for (const arch of ['x86_64', 'aarch64']) {
