@@ -153,11 +153,12 @@ export function claimInflightCodexLaunch(ownerWorkspaceId: string, cwd: string):
 /** The creates whose codex line codexWorkerGuard built, with the line and the
  *  folder it checked (main's own memory, per options object: a renderer cannot
  *  put an entry here, and an entry goes with its create). */
-const guardedCodexCreates = new WeakMap<object, { line: string; cwd: string; repoKey?: string; codexHome?: string }>();
+const guardedCodexCreates = new WeakMap<object, { line: string; cwd: string; repoKey?: string; codexHome?: string; connectors: string }>();
 
-/** codexWorkerGuard: record a create it built. */
-export function markGuardedCodexCreate(options: object, line: string, cwd: string, repoKey?: string, codexHome?: string): void {
-  guardedCodexCreates.set(options, { line, cwd: path.resolve(cwd), ...(repoKey ? { repoKey } : {}), ...(codexHome ? { codexHome } : {}) });
+/** codexWorkerGuard: record a create it built, with the connections its line
+ *  carries. */
+export function markGuardedCodexCreate(options: object, line: string, cwd: string, repoKey?: string, codexHome?: string, connectors: readonly Connector[] = []): void {
+  guardedCodexCreates.set(options, { line, cwd: path.resolve(cwd), ...(repoKey ? { repoKey } : {}), ...(codexHome ? { codexHome } : {}), connectors: JSON.stringify(connectors) });
 }
 
 /** pty:create: what the session record keeps of a guarded codex create. */
@@ -166,10 +167,11 @@ export function guardedCodexLaunch(options: object | undefined): { agent: string
   return g ? { agent: 'codex', cwd: g.cwd, ...(g.repoKey ? { repoKey: g.repoKey } : {}), ...(g.codexHome ? { codexHome: g.codexHome } : {}) } : undefined;
 }
 
-/** Did the codex guard build this create's line? */
-export function isGuardedCodexCreate(options: { initialCommand?: string } | undefined): boolean {
+/** Did the codex guard build this create's line (with exactly these
+ *  connections, when given)? */
+export function isGuardedCodexCreate(options: { initialCommand?: string } | undefined, connectors?: readonly Connector[]): boolean {
   const g = options ? guardedCodexCreates.get(options) : undefined;
-  return !!g && g.line === options?.initialCommand;
+  return !!g && g.line === options?.initialCommand && (connectors === undefined || g.connectors === JSON.stringify(connectors));
 }
 
 /**
@@ -248,11 +250,10 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
     if (options.exec !== undefined) throw guardError('PTY_CREATE', 'an exec unit has no launch line to guard');
     if (!options.initialCommand) throw guardError('PTY_CREATE', 'no launch line');
     // A codex worker's line is rebuilt by its own guard (codexWorkerGuard.ts),
-    // which ran first; any other codex line is refused. A codex worker takes
-    // no connections yet.
+    // which ran first, with the task's connections; any other codex line is
+    // refused.
     if (launchesCodex(options.initialCommand)) {
-      if (connectors.length > 0) throw guardError('PTY_CREATE', 'a codex worker takes no connections');
-      if (isGuardedCodexCreate(options)) return options;
+      if (isGuardedCodexCreate(options, connectors)) return options;
       throw guardError('PTY_CREATE', 'a codex launch line the codex worker guard did not build');
     }
   } else if (options.initialCommand && namesCodex(options.initialCommand)) {
@@ -281,7 +282,9 @@ export function guardedLaunchOf(options: object | undefined): { launch?: BotWork
 
 /** The connections the in-flight fan-out spawn of this create carries: one
  *  set, or the create is refused when its in-flight spawns disagree. */
-function taskConnectors(worker: BotWorkerCreate): Connector[] {
+/** The connections a create's in-flight spawns agree on ([] for any other
+ *  create); throws when they disagree. */
+export function taskConnectors(worker: { strict: boolean; spawns?: Array<{ connectors?: Connector[] }> }): Connector[] {
   if (!worker.strict || !worker.spawns || worker.spawns.length === 0) return [];
   const sets = worker.spawns.map((s) => s.connectors ?? []);
   const key = (cs: Connector[]) => JSON.stringify(cs);
@@ -354,13 +357,7 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
  *  empty npm user config. They hold names and paths only. */
 export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[]): BotWorkerLaunchFiles {
   const factory = path.join(dir, 'factory');
-  const runDir = (c: Connector) => path.join(factory, 'connector-run', c.id);
-  const npmrc = (c: Connector) => path.join(runDir(c), 'npmrc');
-  for (const c of connectors) {
-    if (c.transport !== 'stdio') continue;
-    fs.mkdirSync(runDir(c), { recursive: true, mode: 0o700 });
-    if (!fs.existsSync(npmrc(c))) fs.writeFileSync(npmrc(c), '', { mode: 0o600 });
-  }
+  const { runDir, npmrc } = prepareConnectorRunDirs(dir, connectors);
   const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc }), null, 2)}\n`;
   const settings = `${JSON.stringify(buildWorkerSettings(connectors), null, 2)}\n`;
   return {
@@ -368,6 +365,19 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
     mcpConfigFile: writeContentFile(path.join(factory, 'worker-mcp'), mcp),
     level,
   };
+}
+
+/** Each stdio connection's run folder under `<dir>/factory/connector-run/`
+ *  (0700, outside every worktree) with its empty npm user config (0600). */
+export function prepareConnectorRunDirs(dir: string, connectors: readonly Connector[]): { runDir: (c: Connector) => string; npmrc: (c: Connector) => string } {
+  const runDir = (c: Connector) => path.join(dir, 'factory', 'connector-run', c.id);
+  const npmrc = (c: Connector) => path.join(runDir(c), 'npmrc');
+  for (const c of connectors) {
+    if (c.transport !== 'stdio') continue;
+    fs.mkdirSync(runDir(c), { recursive: true, mode: 0o700 });
+    if (!fs.existsSync(npmrc(c))) fs.writeFileSync(npmrc(c), '', { mode: 0o600 });
+  }
+  return { runDir, npmrc };
 }
 
 function writeContentFile(folder: string, content: string): string {

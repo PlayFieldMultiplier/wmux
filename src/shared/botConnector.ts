@@ -97,7 +97,7 @@ export const CONNECTOR_IPC = {
 } as const;
 
 /** The worker CLIs a task's connections are wired for. */
-export const CONNECTOR_WORKER_AGENTS: ReadonlySet<string> = new Set(['claude']);
+export const CONNECTOR_WORKER_AGENTS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
 export const CONNECTOR_ID_RE = /^con-[0-9a-f]{8}$/;
 /** Lower-case words joined by single hyphens: no `_`, so a tool name

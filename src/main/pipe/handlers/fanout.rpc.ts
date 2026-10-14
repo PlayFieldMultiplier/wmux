@@ -120,6 +120,7 @@ import { getBotStore } from '../../factory/botStore';
 import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
 import { getConnectorStore, isConnectionKey, type ConnectorStore } from '../../factory/connectorStore';
 import { CONNECTOR_LIMITS, CONNECTOR_NAME_RE, CONNECTOR_WORKER_AGENTS, type Connector } from '../../../shared/botConnector';
+import { codexConnectorRefusal } from '../../../shared/codexWorkerGuard';
 import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
 import { getBotRuntime } from '../../factory/BotRuntime';
 import { GENERAL_THREAD, parseThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
@@ -140,6 +141,9 @@ import { getAgentSlots } from '../../factory/agentSlots';
 import { resumedWorkersLive } from '../../factory/workerReclaim';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { Fact } from '../../../shared/facts';
+
+/** Per worker CLI: why a connection cannot reach its workers, or null. */
+const CONNECTOR_AGENT_REFUSAL: Readonly<Record<string, (c: Connector) => string | null>> = { codex: codexConnectorRefusal };
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -1327,7 +1331,11 @@ export function registerFanOutRpc(
       return deny('INVALID_ARGUMENT', 'a bot fan-out cannot use dependsOn: start the next step from a later wake');
     }
     if (connectors && agentChoices.some((c) => !CONNECTOR_WORKER_AGENTS.has(c.agent))) {
-      return deny('FAILED_PRECONDITION', 'connections reach Claude workers only for now; start the task without connectors');
+      return deny('FAILED_PRECONDITION', `connections reach ${[...CONNECTOR_WORKER_AGENTS].join(' and ')} workers only; start the task without connectors`);
+    }
+    if (connectors) {
+      const why = agentChoices.flatMap((a) => connectors!.map((c) => CONNECTOR_AGENT_REFUSAL[a.agent]?.(c) ?? null)).find((r) => r !== null);
+      if (why) return deny('FAILED_PRECONDITION', `${why}; start the task without that connection`);
     }
     if (bot && botPreset !== undefined) {
       const allowed = SHARED_SURFACE.fanoutPresets;

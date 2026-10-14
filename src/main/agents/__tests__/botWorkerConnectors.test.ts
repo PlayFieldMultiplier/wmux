@@ -151,7 +151,7 @@ describe('the guard with connections', () => {
     }
   });
 
-  it('refuses a create whose in-flight spawns disagree on connections, and a task with connections in a WSL shell or for codex', () => {
+  it('refuses a create whose in-flight spawns disagree on connections, a task with connections in a WSL shell, and a codex line the codex guard did not build', () => {
     const a = beginBotWorkerSpawn('ws-owner', '/w/task', { botId: 'bot-0000000a', taskId: 't-1', connectors: [con()] });
     const b = beginBotWorkerSpawn('ws-owner', '/w/task', { botId: 'bot-0000000a', taskId: 't-2' });
     try {
@@ -166,9 +166,9 @@ describe('the guard with connections', () => {
     try {
       const opts = { initialCommand: LINE, fanoutTaskOf: 'ws-owner', cwd: '/w/task', workspaceId: 'ws-task' };
       expect(() => withBotWorkerMergeGuard(opts, botWorkerForCreate(opts, { dir, isBotTaskWorkspace: () => false }), deps(), { wsl: true })).toThrow(/WSL/);
-      // A codex worker takes no connections, whatever built its line.
+      // A codex line takes connections only as the codex guard built it with them.
       const codex = { ...opts, initialCommand: `codex --dangerously-bypass-approvals-and-sandbox "$(cat '/w/.wtask/prompt.md')"` };
-      expect(() => withBotWorkerMergeGuard(codex, botWorkerForCreate(codex, { dir, isBotTaskWorkspace: () => false }), deps())).toThrow(/codex worker takes no connections/);
+      expect(() => withBotWorkerMergeGuard(codex, botWorkerForCreate(codex, { dir, isBotTaskWorkspace: () => false }), deps())).toThrow(/did not build/);
     } finally {
       c();
     }

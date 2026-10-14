@@ -12,6 +12,8 @@ import {
   CODEX_WORKER_REFUSED_TOOLS,
   buildCodexWorkerLaunchLine,
   buildCodexWorkerRules,
+  codexConnectorRefusal,
+  codexWorkerMcpWords,
   codexWorkerToolApprovals,
   codexWorkerWritableRoots,
   codexVersionAtLeastFloor,
@@ -21,6 +23,7 @@ import {
 } from '../codexWorkerGuard';
 import { codexTrustOverride } from '../fanoutPreset';
 import { FANOUT_WORKER_DISALLOWED_TOOLS } from '../workerLaunch';
+import type { Connector } from '../botConnector';
 
 const CWD = '/data/worktrees/abc/feat-x-1234';
 const PROMPT = `"$(cat '/data/worktrees/.meta/feat-x-1234/prompt.md')"`;
@@ -178,6 +181,69 @@ describe('the codex worker launch line: an allowlist', () => {
     expect(codexVersionAtLeastFloor([0, 163, 0])).toBe(true);
     expect(codexVersionAtLeastFloor([0, 162, 0])).toBe(false);
     expect(codexVersionAtLeastFloor([0, 99, 9])).toBe(false);
+  });
+});
+
+describe('the codex worker\'s MCP servers: wmux and its task\'s connections', () => {
+  const con = (over: Partial<Connector> = {}): Connector => ({
+    id: 'con-0000000a', name: 'gh', transport: 'http',
+    remote: { url: 'https://api.example.com/mcp/readonly?x=1&y=2', headers: { 'X-MCP-Readonly': 'true' } },
+    secrets: [{ secret: 'GH_MCP_TOKEN', as: 'header', header: 'Authorization', scheme: 'bearer' }],
+    tools: { mode: 'all', blocked: ['merge_pull_request'] },
+    scope: { kind: 'all' }, offFor: [], enabled: true, createdAt: 1, updatedAt: 1, ...over,
+  });
+  const files = con({
+    id: 'con-0000000b', name: 'files', transport: 'stdio', remote: undefined,
+    stdio: { command: '/usr/local/bin/npx', args: ['-y', 'pkg@1.0.0', '/data'], env: { LOG_LEVEL: 'info' } },
+    secrets: [{ secret: 'FILES_API_TOKEN', as: 'env' }],
+    tools: { mode: 'listed', allowed: ['read_file'] },
+  });
+  const input = (connectors: Connector[], ownerServers: string[] = ['wmux', 'node_repl', 'openaiDeveloperDocs']) => ({
+    ownerServers, connectors, runDir: (c: Connector) => `/d/factory/connector-run/${c.id}`, npmrc: (c: Connector) => `/d/factory/connector-run/${c.id}/npmrc`,
+  });
+
+  it('turns apps, plugins and every owner server but wmux off, and writes each connection as one table naming its keys only', () => {
+    const words = codexWorkerMcpWords(input([con(), files]))!;
+    expect(words.slice(0, 4)).toEqual([
+      '-c features.apps=false', '-c features.plugins=false',
+      '-c mcp_servers.node_repl.enabled=false', '-c mcp_servers.openaiDeveloperDocs.enabled=false',
+    ]);
+    expect(words[4]).toBe(`-c 'mcp_servers.gh={"url"="https://api.example.com/mcp/readonly?x=1&y=2","http_headers"={"X-MCP-Readonly"="true"},`
+      + `"bearer_token_env_var"="GH_MCP_TOKEN","default_tools_approval_mode"="approve","disabled_tools"=["merge_pull_request"]}'`);
+    expect(words[5]).toBe(`-c 'mcp_servers.files={"command"="/usr/bin/env","args"=["-C","/d/factory/connector-run/con-0000000b","/usr/local/bin/npx","-y","pkg@1.0.0","/data"],`
+      + `"env"={"LOG_LEVEL"="info","npm_config_userconfig"="/d/factory/connector-run/con-0000000b/npmrc","npm_config_registry"="https://registry.npmjs.org/"},`
+      + `"env_vars"=["FILES_API_TOKEN"],"default_tools_approval_mode"="approve","enabled_tools"=["read_file"]}'`);
+    // A raw header key goes by name too.
+    const raw = codexWorkerMcpWords(input([con({ secrets: [{ secret: 'GH_MCP_TOKEN', as: 'header', header: 'X-Api-Key', scheme: 'raw' }] })]))!;
+    expect(raw[4]).toContain('"env_http_headers"={"X-Api-Key"="GH_MCP_TOKEN"}');
+    expect(raw[4]).not.toContain('bearer_token_env_var');
+    expect(codexWorkerMcpWords(input([], []))).toEqual(['-c features.apps=false', '-c features.plugins=false']);
+  });
+
+  it('refuses what it cannot write: an owner server named like a connection or not by a bare key, SSE, Bearer outside Authorization, a quote', () => {
+    expect(codexWorkerMcpWords(input([con()], ['gh']))).toBeNull();
+    expect(codexWorkerMcpWords(input([], ['my server']))).toBeNull();
+    expect(codexWorkerMcpWords(input([con({ transport: 'sse' })]))).toBeNull();
+    expect(codexConnectorRefusal(con({ transport: 'sse' }))).toMatch(/SSE/);
+    const elsewhere = con({ secrets: [{ secret: 'GH_MCP_TOKEN', as: 'header', header: 'X-Api-Key', scheme: 'bearer' }] });
+    expect(codexConnectorRefusal(elsewhere)).toMatch(/Authorization/);
+    expect(codexWorkerMcpWords(input([elsewhere]))).toBeNull();
+    expect(codexWorkerMcpWords(input([con({ remote: { url: "https://x.dev/it's", headers: {} } })]))).toBeNull();
+    expect(codexWorkerMcpWords(input([con({ remote: { url: 'https://x.dev/a\\b', headers: {} } })]))).toBeNull();
+    expect(codexConnectorRefusal(con())).toBeNull();
+  });
+
+  it('a re-fire reads back the words it added and rebuilds them from its own records; it never takes a wmux table', () => {
+    const parsed = parseCodexWorkerLine(FANOUT_LINE, CWD)!;
+    const mcpWords = codexWorkerMcpWords(input([con(), files]))!;
+    const built = buildCodexWorkerLaunchLine(parsed, CWD, ['/repo/.git'], { mcpWords })!;
+    expect(built).toContain(` ${mcpWords.join(' ')} -C '${CWD}' -- `);
+    expect(parseCodexWorkerLine(built, CWD)).toEqual(parsed);
+    expect(buildCodexWorkerLaunchLine(parseCodexWorkerLine(built, CWD)!, CWD, ['/repo/.git'], { mcpWords })).toBe(built);
+    const twice = built.replace(mcpWords[4], `${mcpWords[4]} ${mcpWords[4]}`);
+    expect(parseCodexWorkerLine(twice, CWD)).toBeNull();
+    const wmux = built.replace(mcpWords[4], `-c 'mcp_servers.wmux={"command"="/bin/sh"}'`);
+    expect(parseCodexWorkerLine(wmux, CWD)).toBeNull();
   });
 });
 

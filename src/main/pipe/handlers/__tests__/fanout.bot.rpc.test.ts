@@ -251,7 +251,7 @@ describe('task.fanout.start — bot origin', () => {
       await lib.flush();
     });
 
-    it('refuses a name outside its set, one switched off for it, a missing key, a pane caller, Windows and a non-Claude worker', async () => {
+    it('refuses a name outside its set, one switched off for it, a missing key, a pane caller, Windows and a worker other than claude or codex', async () => {
       const lib = library(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-conn-')));
       const r = rig('lead', {}, { connectors: () => lib, platform: 'darwin' });
       expect(errorOf(await call(r, ['nope'])).message).toMatch(/not one of your connections: nope/);
@@ -262,9 +262,23 @@ describe('task.fanout.start — bot origin', () => {
       expect(errorOf(brain).message).toMatch(/connectors only from a factory bot/);
       const win = rig('lead', {}, { connectors: () => lib, platform: 'win32' });
       expect(errorOf(await call(win, ['shared'])).message).toMatch(/Windows/);
-      const codex = rig('lead', {}, { connectors: () => lib, platform: 'darwin', presets: [{ name: 'repro', items: [{ agent: 'codex' }], worktree: true }] });
-      expect(errorOf(await call(codex, ['shared'])).message).toMatch(/Claude workers only/);
+      const gemini = rig('lead', {}, { connectors: () => lib, platform: 'darwin', presets: [{ name: 'repro', items: [{ agent: 'gemini' }], worktree: true }] });
+      expect(errorOf(await call(gemini, ['shared'])).message).toMatch(/claude and codex workers only/);
       expect(r.start).not.toHaveBeenCalled();
+      expect(gemini.start).not.toHaveBeenCalled();
+      await lib.flush();
+    });
+
+    it('a codex worker takes connections, but not an SSE one (codexConnectorRefusal)', async () => {
+      const lib = library(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-conn-')));
+      const remote = { remote: { url: 'https://x.dev/mcp', headers: {} }, tools: { mode: 'all' as const, blocked: [] }, enabled: true, scope: { kind: 'all' as const } };
+      lib.save({ ...remote, name: 'streamed', transport: 'sse', secrets: [] });
+      const codex = rig('lead', {}, { connectors: () => lib, platform: 'darwin', presets: [{ name: 'repro', items: [{ agent: 'codex' }], worktree: true }] });
+      expect(errorOf(await call(codex, ['streamed'])).message).toMatch(/do not connect to SSE servers/);
+      expect(codex.start).not.toHaveBeenCalled();
+      expect(await call(codex, ['shared'])).toMatchObject({ ok: true });
+      await codex.flush();
+      expect((codex.start.mock.calls[0][0] as FanOutRequest).connectors?.map((c) => c.name)).toEqual(['shared']);
       await lib.flush();
     });
   });

@@ -10,7 +10,10 @@
 // Before a line is handed on, main:
 //
 //   1. checks the line against the allowlist and rebuilds it with its own
-//      sandbox, approval, writable roots and network (POSIX hosts only);
+//      sandbox, approval, writable roots and network (POSIX hosts only), and
+//      its MCP servers: wmux and the task's connections, with every other
+//      server of the owner's codex config, the apps and the plugins off
+//      (shared/codexWorkerGuard.ts codexWorkerMcpWords);
 //   2. checks the worktree's `.codex/`: no symlink on the way to the rules
 //      file, and no file the repository does not track other than ours (a
 //      project config, hook or rules file there would load with ours);
@@ -45,7 +48,9 @@ import {
   CODEX_WORKER_RULES_PATH,
   buildCodexWorkerLaunchLine,
   buildCodexWorkerRules,
+  codexConnectorRefusal,
   codexVersionAtLeastFloor,
+  codexWorkerMcpWords,
   codexWorkerWritableRoots,
   isCodexToolKey,
   parseCodexVersion,
@@ -54,11 +59,14 @@ import {
   parseCodexWorkerLine,
   CODEX_WORKER_MIN_VERSION,
 } from '../../shared/codexWorkerGuard';
-import { codexDefinesWmuxServer, codexWmuxApprovedTools } from '../../shared/mcpRegistration';
+import { codexDefinesWmuxServer, codexMcpServerNames, codexWmuxApprovedTools } from '../../shared/mcpRegistration';
+import type { Connector } from '../../shared/botConnector';
+import { getConnectorStore } from '../factory/connectorStore';
+import { getTaskLedger } from '../deck/taskLedgerHost';
 import { resolveOnPath } from '../factory/botEngines';
 import { locateWmuxMcpEntry } from './toolSurfaceLaunch';
 import { getBotStore } from '../factory/botStore';
-import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guardSessionLaunch, isBotWorkerSession, markGuardedCodexCreate } from './botWorkerMergeGuard';
+import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guardSessionLaunch, isBotWorkerSession, markGuardedCodexCreate, prepareConnectorRunDirs, taskConnectors } from './botWorkerMergeGuard';
 import { getWmuxDir } from '../../daemon/config';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 
@@ -86,6 +94,11 @@ export interface CodexWorkerGuardDeps {
   /** The wmux MCP bundle main registers (a line's wmux tool level is
    *  rewritten with it, never taken from the line). */
   mcpEntry?: () => string | null;
+  /** The instance data dir (default: getWmuxDir()): connections' run folders. */
+  dir?: string;
+  /** A re-fire's or resume's connections (default: the task's, from the
+   *  ledger, still this bot's in the library). */
+  sessionConnectors?: (record: { workspaceId?: string }) => Connector[];
 }
 
 /** The MCP bundle this app registers (packaged stable copy or dev dist). */
@@ -98,7 +111,7 @@ function currentMcpEntry(): string | null {
 }
 
 /** What pty:create knows about this create (botWorkerMergeGuard's record). */
-export interface CodexGuardWorker { strict: boolean; spawns?: { botId: string }[] }
+export interface CodexGuardWorker { strict: boolean; spawns?: { botId: string; connectors?: Connector[] }[] }
 
 /** The pty:create options this stage reads. */
 interface CodexGuardOptions { initialCommand?: string; cwd?: string; env?: Record<string, string>; fanoutTaskOf?: unknown }
@@ -205,11 +218,12 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
   if (!parsed) throw refuse('the launch line is not one the guard allows');
   const botIds = worker.spawns.map((s) => s.botId);
   const repoKey = (deps.repoKey ?? ((ids: readonly string[]) => (ids.length > 0 ? getBotStore()?.get(ids[0])?.repo?.repoKey : undefined)))(botIds);
-  const { line, codexHome } = await guardedCodexLine(parsed, cwd, repoKey, options.env, deps);
+  const connectors = taskConnectors(worker);
+  const { line, codexHome } = await guardedCodexLine(parsed, cwd, repoKey, options.env, deps, connectors);
   // The session reads the rules and the config main checked: the codex home
   // goes into the pane's env, and into the record a resume rebuilds from.
   const out = { ...options, initialCommand: line, env: { ...(options.env ?? {}), CODEX_HOME: codexHome } };
-  markGuardedCodexCreate(out, line, cwd, repoKey, codexHome);
+  markGuardedCodexCreate(out, line, cwd, repoKey, codexHome, connectors);
   return out;
 }
 
@@ -221,7 +235,7 @@ export async function guardCodexBotWorker<T extends CodexGuardOptions>(
  * and the rules rewritten and proven again, and the line is rebuilt.
  */
 export async function guardCodexSessionLine(
-  record: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string } | null,
+  record: { workspaceId?: string; agent?: string; cwd?: string; repoKey?: string; codexHome?: string } | null,
   line: string,
   deps: CodexWorkerGuardDeps = {},
   where = 'pty:write-launch',
@@ -233,7 +247,8 @@ export async function guardCodexSessionLine(
   const parsed = parseCodexWorkerLine(line, record.cwd, { resume: true });
   if (!parsed) throw refuse('the launch line is not one the guard allows', where);
   try {
-    return (await guardedCodexLine(parsed, record.cwd, record.repoKey, record.codexHome ? { CODEX_HOME: record.codexHome } : undefined, deps)).line;
+    const connectors = (deps.sessionConnectors ?? ledgerTaskConnectors)(record);
+    return (await guardedCodexLine(parsed, record.cwd, record.repoKey, record.codexHome ? { CODEX_HOME: record.codexHome } : undefined, deps, connectors)).line;
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
     throw message.startsWith('PTY_CREATE:') ? new Error(message.replace(/^PTY_CREATE:/, `${where}:`)) : refuse(message, where);
@@ -259,6 +274,18 @@ export async function guardBotWorkerSessionText(
   return kind === 'refire' ? guardRefireLine(sessionId, text, deps.dir ? { dir: deps.dir } : {}) : guardSessionLaunch(sessionId, text, deps.dir ? { dir: deps.dir } : {});
 }
 
+/** A re-fire's or resume's connections: the ones the task was started with
+ *  (its ledger row) that are still this bot's in the library; one gone or
+ *  out of scope since is left out, as a factory resume leaves it out. */
+function ledgerTaskConnectors(record: { workspaceId?: string }): Connector[] {
+  if (!record.workspaceId) return [];
+  const dispatch = getTaskLedger().findByTaskWorkspace(record.workspaceId)?.dispatch;
+  const named = dispatch?.connectors ?? [];
+  const botId = dispatch?.origin.kind === 'bot' ? dispatch.origin.botId : undefined;
+  if (named.length === 0 || !botId) return [];
+  return (getConnectorStore()?.forBot(botId) ?? []).filter((c) => named.includes(c.name));
+}
+
 /** Steps 2-4 and the rebuilt line (see the file header). Throws on any refusal. */
 async function guardedCodexLine(
   parsed: NonNullable<ReturnType<typeof parseCodexWorkerLine>>,
@@ -266,7 +293,12 @@ async function guardedCodexLine(
   repoKey: string | undefined,
   createEnv: Record<string, string> | undefined,
   deps: CodexWorkerGuardDeps,
+  connectors: readonly Connector[] = [],
 ): Promise<{ line: string; codexHome: string }> {
+  for (const c of connectors) {
+    const why = codexConnectorRefusal(c);
+    if (why) throw refuse(why);
+  }
   if ((deps.platform ?? process.platform) === 'win32') throw refuse('the codex worker guard is not available on Windows yet');
   const run = deps.run ?? defaultRun;
   // The pane's environment as far as main knows it: the login shell's PATH,
@@ -354,9 +386,27 @@ async function guardedCodexLine(
   if (unwritable.length > 0) throw refuse(`the codex config approves wmux tools a launch cannot set back to ask (${unwritable.slice(0, 3).join(', ')})`);
   const roots = codexWorkerWritableRoots(gitDir, commonDir);
   if (!roots) throw refuse('the worker\'s folder is not a linked git worktree');
+  // The worker's MCP servers: wmux and the task's connections, every other
+  // server of the owner's config off (an override of a server the config
+  // does not define stops codex, so the names come from that config).
+  const ownerServers = codexMcpServerNames(configPath);
+  if (ownerServers === null) throw refuse('the codex config could not be read, so its MCP servers could not be turned off');
+  const clash = connectors.find((c) => ownerServers.includes(c.name));
+  if (clash) throw refuse(`the codex config has its own server named ${clash.name}, the name of a connection`);
+  const unnamed = ownerServers.filter((n) => n !== 'wmux' && !/^[A-Za-z0-9_-]{1,64}$/.test(n));
+  if (unnamed.length > 0) throw refuse(`the codex config has a server a launch cannot turn off by name (${unnamed[0].slice(0, 64)})`);
+  let mcpWords: string[] | null;
+  try {
+    const { runDir, npmrc } = prepareConnectorRunDirs(deps.dir ?? getWmuxDir(), connectors);
+    mcpWords = codexWorkerMcpWords({ ownerServers, connectors, runDir, npmrc });
+  } catch (err) {
+    throw refuse(`a connection's run folder could not be made: ${String(err)}`);
+  }
+  if (!mcpWords) throw refuse('a connection cannot be written into the launch line (a quote or backslash in its settings)');
   const line = buildCodexWorkerLaunchLine(parsed, cwd, roots, {
     ...(codexDefinesWmuxServer(configPath) ? { toolApprovals: { ownerApproved } } : {}),
     ...(parsed.wmuxTools ? { mcpEntry: (deps.mcpEntry ?? currentMcpEntry)() ?? undefined } : {}),
+    mcpWords,
   });
   if (!line) throw refuse('a worktree path cannot be written into the launch line');
   return { line, codexHome };

@@ -250,6 +250,60 @@ describe('a re-fire or a resume of a guarded codex pane', () => {
   });
 });
 
+describe('a codex worker\'s MCP servers', () => {
+  const gh = {
+    id: 'con-0000000a', name: 'gh', transport: 'http' as const,
+    remote: { url: 'https://api.example.com/mcp/readonly', headers: {} },
+    secrets: [{ secret: 'GH_MCP_TOKEN', as: 'header' as const, header: 'Authorization', scheme: 'bearer' as const }],
+    tools: { mode: 'listed' as const, allowed: ['get_me'] },
+    scope: { kind: 'all' as const }, offFor: [], enabled: true, createdAt: 1, updatedAt: 1,
+  };
+  const files = {
+    ...gh, id: 'con-0000000b', name: 'files', transport: 'stdio' as const, remote: undefined,
+    stdio: { command: '/usr/local/bin/npx', args: ['-y', 'pkg@1.0.0'], env: {} }, secrets: [],
+  };
+  const home = () => {
+    const h = path.join(root, 'codex-home');
+    fs.mkdirSync(h, { recursive: true });
+    fs.writeFileSync(path.join(h, 'config.toml'), '[mcp_servers.wmux]\ncommand = "node"\n\n[mcp_servers.node_repl]\ncommand = "node"\n');
+    return h;
+  };
+
+  posixOnly('every launch turns the owner\'s other servers, apps and plugins off; a task\'s connections are added and recorded', async () => {
+    const env = { CODEX_HOME: home() };
+    const dir = path.join(root, 'data');
+    const plain = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, strict, { ...deps, dir });
+    expect(plain!.initialCommand).toContain('-c features.apps=false -c features.plugins=false -c mcp_servers.node_repl.enabled=false -C ');
+    expect(plain!.initialCommand).not.toContain('mcp_servers.wmux.enabled=false');
+    const withConn = { strict: true, spawns: [{ botId: 'bot-00000001', taskId: 'wtask-1', connectors: [gh, files] }] };
+    const out = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, withConn, { ...deps, dir });
+    expect(out!.initialCommand).toContain(`-c 'mcp_servers.gh={"url"="https://api.example.com/mcp/readonly"`);
+    expect(out!.initialCommand).toContain(`"args"=["-C","${path.join(dir, 'factory', 'connector-run', files.id)}","/usr/local/bin/npx"`);
+    expect(fs.statSync(path.join(dir, 'factory', 'connector-run', files.id, 'npmrc')).mode & 0o777).toBe(0o600);
+    // The merge guard lets it through only with the connections it was built with.
+    expect(withBotWorkerMergeGuard(out, { workspaceId: 'ws', ...withConn })).toBe(out);
+    expect(() => withBotWorkerMergeGuard(plain, { workspaceId: 'ws', ...withConn })).toThrow(/did not build/);
+    // A re-fire rebuilds the connections the task still has.
+    const launch = guardedCodexLaunch(out)!;
+    expect(await guardCodexSessionLine({ ...launch, workspaceId: 'ws' }, out!.initialCommand!, { ...deps, dir, sessionConnectors: () => [gh, files] })).toBe(out!.initialCommand);
+    const without = await guardCodexSessionLine({ ...launch, workspaceId: 'ws' }, out!.initialCommand!, { ...deps, dir, sessionConnectors: () => [] });
+    expect(without).toBe(plain!.initialCommand);
+  });
+
+  posixOnly('refuses a connection named like an owner server, an SSE one, and a config it cannot read', async () => {
+    const h = home();
+    const env = { CODEX_HOME: h };
+    const clash = { strict: true, spawns: [{ botId: 'bot-00000001', connectors: [{ ...gh, name: 'node_repl' }] }] };
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, clash, deps)).rejects.toThrow(/its own server named node_repl/);
+    const sse = { strict: true, spawns: [{ botId: 'bot-00000001', connectors: [{ ...gh, transport: 'sse' as const }] }] };
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, sse, deps)).rejects.toThrow(/SSE/);
+    fs.writeFileSync(path.join(h, 'config.toml'), '[mcp_servers.x\n');
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, strict, deps)).rejects.toThrow(/could not be read/);
+    fs.writeFileSync(path.join(h, 'config.toml'), '[mcp_servers."my server"]\ncommand = "x"\n');
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, strict, deps)).rejects.toThrow(/cannot turn off by name/);
+  });
+});
+
 describe('the in-flight spawn launches codex once', () => {
   it('claims once per spawn, and not without one', () => {
     expect(claimInflightCodexLaunch('ws-owner', '/w/one')).toBe(false);
