@@ -1103,12 +1103,22 @@ describe('the team lead and a chain that outlives a worker', () => {
     const d = h.router.send(binding(lead), { kind: 'dispatch', toBotId: dev.id, title: 'Build it', body: '' });
     if (!d.ok) throw new Error('dispatch failed');
     // The developer's task wake carries the dispatch its task recorded (runningWakeOf).
-    h.wake.id = { wakeId: 'w-task', attempt: 1, handoffId: d.handoffId };
+    h.wake.id = { wakeId: 'w-task', attempt: 1, handoffId: d.handoffId, reasonKind: 'facts' } as Harness['wake']['id'];
     const r = h.router.send(binding(dev), { kind: 'result', title: 'Built', body: 'done' });
     expect(r).toMatchObject({ ok: true, to: { botId: lead.id } });
     if (!r.ok) return;
     expect(h.router.get(r.handoffId)).toMatchObject({ replyTo: d.handoffId, runId: 'run-c-1', depth: 1, attribution: { originator: { kind: 'human' }, chain: [d.handoffId] } });
     expect(h.router.summarize(d.handoffId)).toMatchObject({ answered: true });
+    // A later task wake of the same dispatch: its result goes to the lead in
+    // the same chain, never refused as a second answer.
+    h.wake.id = { wakeId: 'w-task-2', attempt: 1, handoffId: d.handoffId, reasonKind: 'facts' } as Harness['wake']['id'];
+    const later = h.router.send(binding(dev), { kind: 'result', title: 'Also tidied', body: '' });
+    expect(later).toMatchObject({ ok: true, to: { botId: lead.id } });
+    if (later.ok) expect(h.router.get(later.handoffId)).toMatchObject({ runId: 'run-c-1', depth: 1 });
+    if (later.ok) expect(h.router.get(later.handoffId)?.replyTo).toBeUndefined();
+    // The handoff wake itself still answers only once.
+    h.wake.id = { wakeId: 'w-hop', attempt: 1, handoffId: d.handoffId, reasonKind: 'handoff' } as Harness['wake']['id'];
+    expect(h.router.send(binding(dev), { kind: 'result', title: 'again', body: '' })).toMatchObject({ ok: false, code: 'duplicate_result' });
   });
 
   it('a question asked mid-hop: the answer\'s wake still answers that hop', async () => {
