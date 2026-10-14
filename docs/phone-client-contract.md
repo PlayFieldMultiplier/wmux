@@ -4246,7 +4246,15 @@ arrival order (`seq`, increasing; never sort by `at`).
   rather than by order: when the owner sends two messages in a row, or
   several bots answer one message in a group room, each reply names the
   message it answers. A card from a turn no owner message started (a fact, a
-  handoff, a scheduled routine run) has none.
+  handoff, a scheduled routine run) has none, with one exception: the
+  **thread pointer** below.
+- **Thread pointer** — when a coordinator's work said in `general` ran in a
+  thread of its own (`handoff:<id>`), main writes one `fact` card in
+  `general` once that work's last result is in, or once its relay stopped:
+  `actor: {kind:"system"}`, title `Finished: <title>` or `Stopped: <title>`,
+  no body, `refs.threadId` (the work's thread, to open), `refs.handoffId`
+  (the result it is about) and `replyTo` (the owner's `human` card that
+  asked, when that card is in `general`). One per result.
 
 Both routes are read-only and need `--allow-transcript` (card text is
 bot-authored), checked before anything else; no input grant. Every answer is
