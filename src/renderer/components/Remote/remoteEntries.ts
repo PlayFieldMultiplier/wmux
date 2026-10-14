@@ -93,8 +93,9 @@ export function buildRemoteEntries(src: RemoteSources): RemoteEntry[] {
     }));
   const hosts: RemoteEntry[] = (src.hosts ?? []).map((h) => {
     const status = src.hostStatus[h.id];
-    let address = h.origin;
-    try { address = new URL(h.origin).host; } catch { /* keep the stored origin */ }
+    // An SSH host's stored origin (wmux-ssh://<id>) is no address: name its ssh destination.
+    let address = h.ssh?.alias ?? h.origin;
+    if (!h.ssh) try { address = new URL(h.origin).host; } catch { /* keep the stored origin */ }
     return {
       key: `host:${h.id}`,
       id: h.id,

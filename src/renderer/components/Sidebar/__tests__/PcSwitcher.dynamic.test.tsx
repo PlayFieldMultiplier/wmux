@@ -74,7 +74,7 @@ describe('PcSwitcherTitle', () => {
   it('selects a computer from the dropdown', () => {
     act(() => root.render(<PcSwitcherTitle title="Workspaces" />));
     act(() => q('[data-pc-switcher]')!.click());
-    expect(menuKeys()).toEqual(['pc-local', 'pc-h1', 'pc-manage-h1']);
+    expect(menuKeys()).toEqual(['pc-local', 'pc-h1', 'pc-manage-h1', 'pc-add-ssh']);
     expect(q('[data-pane-menu-action="pc-h1"] [data-pane-menu-detail]')?.textContent).toBe('Online · 1 need you');
     act(() => q('[data-pane-menu-action="pc-h1"]')!.click());
     expect(useStore.getState().pcRail.activePcId).toBe('h1');
@@ -88,7 +88,7 @@ describe('PcSwitcherTitle', () => {
     expect(menuKeys()).toEqual(['mute', 'remote-page', 'pair-again']);
     expect(q('[data-pc-access]')?.textContent).toContain('View only');
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-    expect(menuKeys()).toEqual(['pc-local', 'pc-h1', 'pc-manage-h1']);
+    expect(menuKeys()).toEqual(['pc-local', 'pc-h1', 'pc-manage-h1', 'pc-add-ssh']);
   });
 });
 
@@ -104,6 +104,6 @@ describe('PcSwitcherRailItem', () => {
     act(() => root.render(<PcSwitcherRailItem />));
     expect(q('[data-pc-switcher-rail]')?.textContent).toBe('OM');
     act(() => q('[data-pc-switcher-rail]')!.click());
-    expect(menuKeys()).toEqual(['pc-local', 'pc-h1', 'pc-manage-h1']);
+    expect(menuKeys()).toEqual(['pc-local', 'pc-h1', 'pc-manage-h1', 'pc-add-ssh']);
   });
 });

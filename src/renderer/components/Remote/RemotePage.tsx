@@ -25,6 +25,9 @@ import { A2aLinkRequestRow, A2aLinkRow, type LocalNames } from './A2aLinksPanel'
 import { A2aHeldRow, A2aIdentityRow, heldPeer } from './A2aDeliveryPanel';
 import A2aLinkDialog from './A2aLinkDialog';
 import RemoteConnectDialog, { type ConnectTab } from './RemoteConnectDialog';
+import AddSshPcDialog from './AddSshPcDialog';
+import SshHostCheckDialog from './SshHostCheckDialog';
+import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../../../shared/remoteHosts';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
 
 /** How often the page re-reads the roster, the hosts and the server state. */
@@ -111,6 +114,9 @@ export default function RemotePage() {
   const [hostStatus, setHostStatus] = useState<Record<string, RemoteHostStatus>>({});
   const [peers, setPeers] = useState<LanLinkPeerSummary[] | null>(null);
   const [connect, setConnect] = useState<{ tab?: ConnectTab } | null>(null);
+  const [addSsh, setAddSsh] = useState(false);
+  const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
+  const [sshStates, setSshStates] = useState<Record<string, SshTunnelState>>({});
   const [linkDialog, setLinkDialog] = useState<{ hostId: string; moa?: boolean } | null>(null);
   const [exposure, setExposure] = useState<{ hostId: string; name: string } | null>(null);
   const [confirming, setConfirming] = useState<Confirm>(null);
@@ -146,6 +152,7 @@ export default function RemotePage() {
       setDevicesError(Boolean(v.error));
     }, () => { if (mounted.current) setDevicesError(true); }));
     if (api?.remote?.hostsList) reads.push(api.remote.hostsList().then((v) => { if (mounted.current) setHosts(v); }, () => undefined));
+    if (api?.remote?.sshStates) reads.push(api.remote.sshStates().then((v) => { if (mounted.current) setSshStates(v); }, () => undefined));
     if (api?.remote?.hostsStatus) reads.push(api.remote.hostsStatus().then((v) => { if (mounted.current) setHostStatus(v); }, () => undefined));
     if (api?.lanlink?.peersList) reads.push(api.lanlink.peersList().then((v) => { if (mounted.current) setPeers(v.peers); }, () => undefined));
     await Promise.all(reads);
@@ -478,15 +485,34 @@ export default function RemotePage() {
       h.viewing && h.viewing.length > 0 ? t('remotePage.openHere', { names: h.viewing.join(', ') }) : '',
       h.access === 'input' ? t('remotePage.canType') : h.access === 'view' ? t('remotePage.viewOnly') : '',
     ].filter(Boolean).join(' · ');
+    // An SSH host whose identity changed sends nothing until someone looks.
+    const sshState = sshStates[h.id];
+    const identityChanged = sshNeedsPerson(sshState);
     return [
       <li key={h.key} className="wmux-remote-row" data-remote-entry="host" data-live={h.live ? 'true' : undefined}>
         <span className="wmux-remote-ic" aria-hidden="true"><IconServer size={16} /></span>
         <span className="wmux-remote-nm"><span className="truncate">{h.name}</span></span>
-        <span className="wmux-remote-meta">{meta}</span>
+        <span className="wmux-remote-meta">
+          {identityChanged && <span style={{ color: 'var(--attention-text)' }} data-ssh-identity-changed>{t(sshNeedsIdentityCheck(sshState) ? 'remoteSsh.identityChanged' : 'remoteSsh.needsCheck')} · </span>}
+          {meta}
+        </span>
         {statusCell(word, h.live, null)}
         <span className="wmux-remote-acts">
-          {status === 'needs-repair' ? (
-            <Button size="sm" variant="secondary" onClick={() => useStore.getState().requestRemoteRepair(h.id)}>{t('remote.hubPairAgain')}</Button>
+          {identityChanged ? (
+            <Button size="sm" variant="secondary" onClick={() => setCheckSsh({ id: h.id, label: h.name })} data-ssh-check={h.id}>
+              {t('pcSwitcher.checkSsh')}
+            </Button>
+          ) : status === 'needs-repair' ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => (hosts?.some((x) => x.id === h.id && x.ssh)
+                // An SSH host pairs again over ssh, not with a pasted code.
+                ? setCheckSsh({ id: h.id, label: h.name })
+                : useStore.getState().requestRemoteRepair(h.id))}
+            >
+              {t('remote.hubPairAgain')}
+            </Button>
           ) : !isConfirming('entry', h.key) && (
             <Button size="sm" variant="secondary" aria-expanded={open} onClick={() => void toggleHost(h.id)} data-remote-open={h.id}>
               {t('remotePage.open')}
@@ -771,8 +797,11 @@ export default function RemotePage() {
           onA2aStatus={setA2aStatus}
           onClose={() => { setConnect(null); void refresh(); }}
           onLinkPane={(hostId) => { setConnect(null); setLinkDialog({ hostId }); }}
+          onAddOverSsh={() => { setConnect(null); setAddSsh(true); }}
         />
       )}
+      {addSsh && <AddSshPcDialog onClose={() => { setAddSsh(false); void refresh(); }} />}
+      {checkSsh && <SshHostCheckDialog hostId={checkSsh.id} label={checkSsh.label} onClose={() => { setCheckSsh(null); void refresh(); }} />}
       {linkDialog && (
         <A2aLinkDialog
           initialHostId={linkDialog.hostId}
