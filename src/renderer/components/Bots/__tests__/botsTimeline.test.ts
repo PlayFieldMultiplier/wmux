@@ -75,6 +75,23 @@ describe('splitThreads', () => {
     const link = card({ refs: { threadId: 'pr:x#1' } });
     expect(threadCards([root, reply, general, link], 'w1', 'pr:x#1').map((c) => c.id)).toEqual([root.id, reply.id, link.id]);
   });
+
+  it('shows a task thread\'s newest bot reply in the main timeline, marked, and a system root carries its summary', () => {
+    const start = card({ threadId: 'task:t1', at: T0, actor: { kind: 'system' }, kind: 'fact', title: 'Task started' });
+    const first = card({ threadId: 'task:t1', at: T0 + 1 });
+    const done = card({ threadId: 'task:t1', at: T0 + 2, actor: { kind: 'system' }, kind: 'fact', title: 'Task done' });
+    const answer = card({ threadId: 'task:t1', at: T0 + 3, title: 'Here is what I found' });
+    const owner = card({ threadId: 'task:t1', at: T0 + 4, actor: { kind: 'human' }, kind: 'human' });
+    const { main, threads, surfaced } = splitThreads([start, first, done, answer, owner], never);
+    // Only the newest bot reply: an earlier one and the owner's stay in the panel.
+    expect(main.map((c) => c.id)).toEqual([start.id, answer.id]);
+    expect([...surfaced]).toEqual([answer.id]);
+    const items = buildTimeline(entries(main), { waits: never, threads, surfaced });
+    const system = items.find((i) => i.kind === 'system');
+    expect(system?.kind === 'system' && system.thread?.replies).toBe(4);
+    const msg = items.find((i) => i.kind === 'message');
+    expect(msg?.kind === 'message' && msg.inThread).toBe(true);
+  });
 });
 
 describe('time and counts', () => {

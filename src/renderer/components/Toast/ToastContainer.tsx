@@ -126,12 +126,16 @@ function ToastItem({
 export default function ToastContainer() {
   const t = useT();
   const toasts = useStore((s) => s.toasts);
+  // The Bots page keeps its composer and working rail at the bottom right:
+  // toasts drop from under the titlebar there instead of covering them.
+  const top = useStore((s) => s.appRoute === 'bots');
 
   if (toasts.length === 0) return null;
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-[var(--z-toast)] flex flex-col gap-2 pointer-events-none"
+      data-toast-edge={top ? 'top' : 'bottom'}
+      className={`fixed ${top ? 'top-[52px]' : 'bottom-4'} right-4 z-[var(--z-toast)] flex flex-col gap-2 pointer-events-none`}
       aria-label={t('toast.notifications')}
     >
       {/* `toast`, not `t` — the translator is in scope here now, and shadowing

@@ -57,7 +57,7 @@ import { CardAnswers, useWorkspaceNames } from '../Room/CardAnswers';
 import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botPresence } from '../Room/BotChips';
-import { MentionChips, deliveryLine, roomBots, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
+import { MentionChips, deliveryLine, deliveryQueued, roomBots, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, threadLabel, threadRef, type IdLabels } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, normalizeBotJob } from '../../../shared/bot';
 import { templateJob } from '../Settings/FactoryTab';
@@ -240,8 +240,13 @@ interface RowCtx {
   idLabels: IdLabels;
   /** The delivery line of each message sent from here. */
   sent: Readonly<Record<string, SentTo[] | null>>;
+  /** The messages whose bot has been seen taking them up: their line stays
+   *  "Sent" while the bot runs later turns. */
+  started: ReadonlySet<string>;
   /** Opens a thread in the side panel. */
   onThread: (workspaceId: string, threadId: ThreadId) => void;
+  /** The thread a side panel shows: its rows name no chip for it. */
+  hideThread?: ThreadId;
   onOpenBot?: (botId: string) => void;
   /** How message text renders: links (PR and issue links as chips), rich
    *  code blocks. */
@@ -312,7 +317,7 @@ function ThreadSummaryLine({ thread, ctx }: { thread: ThreadView; ctx: RowCtx })
  *  the owner's on the right. A bubble is a soft fill with no border; a card
  *  that waits on the owner is a distinct card inside the run. */
 function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'message' }>; ctx: RowCtx; group: boolean }) {
-  const { card, continuation, runEnd, waiting, thread } = item;
+  const { card, continuation, runEnd, waiting, thread, inThread } = item;
   const { t } = ctx;
   const human = card.actor.kind === 'human';
   const botId = card.actor.kind === 'bot' ? card.actor.botId : '';
@@ -327,13 +332,20 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
   // An approval card always shows its request's state (answers only while
   // the bots run); a plan or proposal its answers while it waits.
   const answers = !human && ((!ctx.readOnly && waiting) || card.kind === 'approval');
-  const line = human && card.id in ctx.sent ? deliveryLine(ctx.sent[card.id], ctx.bots, t) : null;
+  const line = human && card.id in ctx.sent ? deliveryLine(ctx.sent[card.id], ctx.bots, t, ctx.started.has(card.id)) : null;
   const linked = linkedThread(card);
   const chip = (id: ThreadId) => <ThreadChip threadId={id} t={t} onPick={(th) => ctx.onThread(card.workspaceId, th)} taskTitle={ctx.taskTitle} />;
-  const chips = (card.threadId !== 'general' || linked || line) && (
+  // A thread's root names its thread only when the name says something (a
+  // PR, an issue, a task's title): a bare "Request" under a question card
+  // leads nowhere its summary line does not.
+  const named = isRefThread(card.threadId) || (/^task:/.test(card.threadId) && !!ctx.taskTitle(card.threadId.slice(5)));
+  const own = card.threadId !== 'general' && card.threadId !== ctx.hideThread && !(thread && !named);
+  const link = linked && linked !== ctx.hideThread ? linked : null;
+  const chips = (own || link || line) && (
     <div className={`mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 ${human ? 'justify-end' : ''}`}>
-      {card.threadId !== 'general' && chip(card.threadId)}
-      {linked && chip(linked)}
+      {own && inThread && <span data-bots-in-thread className="text-[11px] text-[var(--text-muted)]">{t('botsPage.chat.inThread')}</span>}
+      {own && chip(card.threadId)}
+      {link && chip(link)}
       {line && <span data-bots-delivery className="text-[11px] text-[var(--text-muted)]">{line}</span>}
     </div>
   );
@@ -392,14 +404,23 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
 /** Consecutive system cards of one thread: one line naming each (a
  *  refusal's or a budget's word kept in its colour) and how many, which
  *  opens into the cards themselves. A lone card is its own line. */
-function SystemGroup({ cards, ctx }: { cards: RoomCardData[]; ctx: RowCtx }) {
+function SystemGroup({ cards, thread, ctx }: { cards: RoomCardData[]; thread?: ThreadView; ctx: RowCtx }) {
   const [open, setOpen] = useState(false);
   const { t } = ctx;
   const onThread = (th: ThreadId) => ctx.onThread(cards[0].workspaceId, th);
+  // A task's start roots its thread: its replies open from here, and the
+  // line names no chip the summary already opens.
+  const summary = thread && thread.replies > 0 ? (
+    <div className="wmux-bots-row wmux-bots-row-system">
+      <ThreadSummaryLine thread={thread} ctx={ctx} />
+    </div>
+  ) : null;
+  const hide = summary ? thread!.threadId : ctx.hideThread;
   if (cards.length === 1 || open) {
     return (
       <div data-bots-system-group={cards.length > 1 ? cards.length : undefined}>
-        {cards.map((c) => <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} />)}
+        {cards.map((c) => <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} hideThread={hide} />)}
+        {summary}
         {open && (
           <div className="wmux-bots-row wmux-bots-row-system">
             <button type="button" data-bots-system-fold aria-expanded onClick={() => setOpen(false)} className={`text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)] ${FOCUS_RING}`}>{t('room.showLess')}</button>
@@ -430,6 +451,7 @@ function SystemGroup({ cards, ctx }: { cards: RoomCardData[]; ctx: RowCtx }) {
         }).slice(0, 3)}
         <span className="shrink-0 tabular-nums">{` · ${t('botsPage.chat.events', { count: cards.length })} · ${clockTime(last.at)}`}</span>
       </button>
+      {summary}
     </div>
   );
 }
@@ -453,7 +475,7 @@ function TimelineView({ items, ctx, group = false }: { items: readonly TimelineI
           case 'day': return <DayDivider key={item.key} at={item.at} ctx={ctx} />;
           case 'new': return <div key={item.key} className="wmux-bots-new" data-bots-new-divider role="separator"><span>{ctx.t('botsPage.chat.new')}</span></div>;
           case 'joined': return <JoinedLine key={item.key} row={item.row} t={ctx.t} onOpen={ctx.onOpenBot} />;
-          case 'system': return <SystemGroup key={item.key} cards={item.cards} ctx={ctx} />;
+          case 'system': return <SystemGroup key={item.key} cards={item.cards} thread={item.thread} ctx={ctx} />;
           case 'message': return <MessageRow key={item.key} item={item} ctx={ctx} group={group} />;
         }
       })}
@@ -700,7 +722,7 @@ function ChatIntro({ row, t, onPick, readOnly }: { row: FactoryBotRow; t: T; onP
 /** A thread beside the chat: its root, how many replies, the replies as a
  *  timeline, and a composer that posts into the thread. The main timeline
  *  stays where it was. */
-function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx, waits, bots, api, readOnly, onClose, onSent }: {
+function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: parentCtx, waits, bots, api, readOnly, onClose, onSent }: {
   conversation: Conversation;
   /** The thread's cards (and those linking it), in order; the approve chip
    *  counts theirs. */
@@ -715,6 +737,7 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx, wait
   onClose: () => void;
   onSent: (cardId: string, to: SentTo[] | null) => void;
 }) {
+  const ctx = { ...parentCtx, hideThread: threadId };
   const { t } = ctx;
   const label = threadLabel(threadId, t, ctx.taskTitle);
   const [root, ...replies] = cards;
@@ -770,15 +793,19 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx, wait
  *  result, a task's end, an error), as a centred line with its body folded
  *  to two lines under Show more (by height: a markdown list does not
  *  line-clamp). */
-function SystemLine({ card, t, onThread, now, botNames = [], taskTitle }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf }) {
+function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, hideThread }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; hideThread?: ThreadId }) {
   const [expanded, setExpanded] = useState(false);
   const { title, body } = ownerCardText(card, botNames);
   const foldable = body.length > SYSTEM_FOLD_CHARS || body.includes('\n');
   const word = card.kind === 'refusal' || card.kind === 'budget' ? kindLabel(card.kind, t) : null;
+  const chip = card.threadId !== 'general' && card.threadId !== hideThread;
+  // One alignment per line: a bare line is centred; one with evidence under
+  // it reads left, header and chip with it.
+  const align = body ? 'justify-start' : 'justify-center';
   return (
-    <div className="wmux-bots-row wmux-bots-row-system" data-room-card-id={card.id} data-bots-bubble="system" data-card-kind={card.kind}>
-      <div className="wmux-bots-system">
-        <div className="flex min-w-0 items-baseline justify-center gap-1">
+    <div className="wmux-bots-row wmux-bots-row-system" data-room-card-id={card.id} data-bots-bubble="system" data-card-kind={card.kind} data-system-align={body ? 'start' : 'center'}>
+      <div className={`wmux-bots-system${body ? ' is-detailed' : ''}`}>
+        <div className={`flex min-w-0 items-baseline ${align} gap-1`}>
           {word && <span className={card.kind === 'refusal' ? 'shrink-0 text-[var(--accent-red)]' : 'shrink-0 text-[var(--accent-yellow)]'}>{word}</span>}
           <span className="min-w-0 break-words text-[var(--text-sub)]">{title}</span>
           <span className="shrink-0 tabular-nums" title={fullTime(card.at)}>· {clockTime(card.at)}</span>
@@ -788,14 +815,14 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle }: { card
             {renderBrainMarkdown(body, { links: true, richCode: true })}
           </div>
         )}
-        {(foldable || card.threadId !== 'general') && (
-          <div className="mt-0.5 flex items-center justify-center gap-2">
+        {(foldable || chip) && (
+          <div className={`mt-0.5 flex items-center ${align} gap-2`}>
             {foldable && (
               <button type="button" data-card-more aria-expanded={expanded} onClick={() => setExpanded((v) => !v)} className={`text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)] ${FOCUS_RING}`}>
                 {expanded ? t('room.showLess') : t('room.showMore')}
               </button>
             )}
-            <ThreadChip threadId={card.threadId} t={t} onPick={onThread} taskTitle={taskTitle} />
+            {chip && <ThreadChip threadId={card.threadId} t={t} onPick={onThread} taskTitle={taskTitle} />}
           </div>
         )}
       </div>
@@ -992,8 +1019,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
             <button
               key={row.bot.id}
               type="button"
-              role="menuitemcheckbox"
-              aria-checked={picks.picked.includes(row.bot.id)}
+              role="menuitem"
               data-bots-composer-mention={row.bot.id}
               className="ui-section-row w-full text-left text-[13px]"
               onClick={() => { picks.toggle(row.bot.id); setMenuOpen(false); inputRef.current?.focus(); }}
@@ -1275,6 +1301,11 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
 }): React.ReactElement {
   const [profileOpen, setProfileOpen] = useState(false);
   const [sent, setSent] = useState<Record<string, SentTo[] | null>>({});
+  const [started, setStarted] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    const taken = Object.keys(sent).filter((id) => !started.has(id) && !deliveryQueued(sent[id], bots));
+    if (taken.length > 0) setStarted((cur) => new Set([...cur, ...taken]));
+  }, [sent, bots, started]);
   const [openThread, setOpenThread] = useState<{ workspaceId: string; threadId: ThreadId } | null>(null);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const actors = useStore((s) => s.roomActors);
@@ -1298,7 +1329,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   // last read to its end, as it stood when the chat opened.
   const conversationId = conversation.id;
   const [seenBefore] = useState(() => useStore.getState().botsSeenAt[conversationId] ?? BOTS_SESSION_START);
-  const { main, threads } = useMemo(() => splitThreads(cards, waits), [cards, waits]);
+  const { main, threads, surfaced } = useMemo(() => splitThreads(cards, waits), [cards, waits]);
   // In a room a bot's greeting is its "joined" line (its 1:1 keeps it).
   const items = useMemo(() => {
     let entries: RoomEntry[];
@@ -1309,8 +1340,8 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       for (const c of roomCards) if (greetings.has(c.id) && c.actor.kind === 'bot') greeted.add(c.actor.botId);
       entries = roomEntries(main.filter((c) => !greetings.has(c.id)), conversation.bots, greeted);
     }
-    return buildTimeline(entries, { waits, threads, newAfter: seenBefore });
-  }, [main, threads, roomCards, conversation, waits, seenBefore]);
+    return buildTimeline(entries, { waits, threads, surfaced, newAfter: seenBefore });
+  }, [main, threads, surfaced, roomCards, conversation, waits, seenBefore]);
   const botNames = useMemo(() => bots.map((b) => b.bot.name), [bots]);
   const taskTitle = useMemo(() => {
     const byId = new Map<string, string>();
@@ -1440,7 +1471,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       return <RefChip url={url} label={label} title={summary?.title ?? null} onOpen={holder ? () => onThread(holder.workspaceId, threadId) : null} />;
     },
   }), [cards, roomThreads, onThread, pattern, bots]);
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, onThread, onOpenBot, markdown };
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, idLabels, sent, started, onThread, onOpenBot, markdown };
   const threadShown = openThread ? threadCards(cards, openThread.workspaceId, openThread.threadId) : null;
   const empty = items.length === 0 && workers.length === 0 && tasks.length === 0;
 

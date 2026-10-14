@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../../stores';
 import { BOT_NAME_MAX, DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../../shared/bot';
 import type { FactoryBotAvatarPickResult, FactoryBotCreateRequest } from '../../../../shared/botCreate';
-import BotAvatar, { BOT_AVATAR_SHAPES, BOT_IDENTITY_HUES, botAvatarShape, botIdentityColor, botInitials } from '../BotAvatar';
+import BotAvatar, { BOT_AVATAR_SHAPES, BOT_IDENTITY_HUES, botAvatarShape, botIdentityColor, botInitials, identityHueIndexes, noteBotIdentities } from '../BotAvatar';
 import { BotChips } from '../BotChips';
 import { RoomCard } from '../RoomCard';
 import type { RoomCard as RoomCardData } from '../../../../shared/room';
@@ -110,6 +110,21 @@ describe('bot identity', () => {
     // Mixed toward the look's text colour, so it reads on light and dark looks.
     expect(botIdentityColor(ids[0])).toContain('var(--text-main)');
   });
+
+  it('two listed bots whose ids share a colour are told apart: the older keeps it', () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `bot-clash-${i}`);
+    const first = ids[0];
+    const twin = ids.slice(1).find((id) => botIdentityColor(id) === botIdentityColor(first))!;
+    expect(twin).toBeDefined();
+    const own = botIdentityColor(first);
+    const at = identityHueIndexes([{ id: twin, createdAt: 2 }, { id: first, createdAt: 1 }]);
+    expect(at.get(first)).not.toBe(at.get(twin));
+    noteBotIdentities([{ id: twin, createdAt: 2 }, { id: first, createdAt: 1 }]);
+    expect(botIdentityColor(first)).toBe(own);
+    expect(botIdentityColor(twin)).not.toBe(own);
+    // Eight bots, eight colours.
+    expect(new Set(identityHueIndexes(ids.slice(0, 8).map((id, i) => ({ id, createdAt: i }))).values()).size).toBe(8);
+  });
 });
 
 describe('BotAvatar', () => {
@@ -158,8 +173,9 @@ describe('Add bot: name and picture', () => {
     const name = container.querySelector<HTMLInputElement>('[data-testid="factory-add-bot-name"]')!;
     expect(name.placeholder).toBe('settings.factory.addBotNamePlaceholder');
     expect(name.maxLength).toBe(BOT_NAME_MAX);
-    // No picture yet: the preview is the bot's mark.
-    expect(container.querySelector('[data-testid="factory-picture-preview"] [data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('face');
+    // No picture yet: a neutral face — the bot's colour and shape come from
+    // the id main gives it, which the form cannot know.
+    expect(container.querySelector('[data-testid="factory-picture-preview"] [data-bot-avatar]')?.getAttribute('data-bot-avatar')).toBe('placeholder');
     await act(async () => typeInto(name, '  Ada Lovelace '));
     expect(container.querySelector('[data-testid="factory-picture-remove"]')).toBeNull();
     await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="factory-picture-choose"]')!.click());

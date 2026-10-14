@@ -23,6 +23,7 @@ import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../R
 import { useFactoryBots } from '../Room/useFactoryBots';
 import { buildBots, botsRooms, EMPTY_BOTS, latestThreadOf, roomCardsByWorkspace, type BotsModel } from './botsModel';
 import { selectBotTaskOwners } from '../Sidebar/botTasks';
+import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 
 const NO_CLASSES: Record<string, FleetAttentionClass> = {};
 
@@ -64,7 +65,8 @@ export function useBots(port?: FactoryBotPort): BotsState {
   const on = !!status?.enabled;
   const model = useMemo(() => {
     if (!status) return EMPTY_BOTS;
-    const byId = new Map(names.map((w) => [w.id, w.name]));
+    // A worker's task workspace reads without its `wtask: ` prefix.
+    const byId = new Map(names.map((w) => [w.id, displayWorkspaceName(w.name, true)]));
     return buildBots({
       bots,
       cards: roomCardsByWorkspace(timelines),

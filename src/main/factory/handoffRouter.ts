@@ -999,7 +999,10 @@ export class HandoffRouter {
   /** A bot finished a turn on the owner's words: its questions asked before
    *  those words in the thread they were said in, and — when the words were
    *  for this bot alone (its 1:1), not the whole room — those in a thread of
-   *  their own, were answered in chat. Returns the handoff ids closed. */
+   *  their own, were answered in chat. A question with options stays open:
+   *  words like "Hi" do not pick one, and the bot that judges its question
+   *  answered closes it itself (question_close). Returns the handoff ids
+   *  closed. */
   closeAnsweredInChat(botId: string, item: Pick<WakeItem, 'reason' | 'threadId' | 'workspaceId' | 'enqueuedAt'>): Promise<string[]> {
     const r = item.reason;
     if (r.kind !== 'human') return Promise.resolve([]);
@@ -1008,6 +1011,7 @@ export class HandoffRouter {
     return this.serial(() => this.closeWhere((h) => h.from.kind === 'bot' && h.from.botId === botId
       && partyWorkspace(h.from) === item.workspaceId
       && h.createdAt < item.enqueuedAt
+      && !h.payload.options?.length
       && (h.threadId === said || (toMe && h.threadId === `handoff:${h.id}`))));
   }
 

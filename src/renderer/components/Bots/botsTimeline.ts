@@ -13,9 +13,11 @@
 //
 // Threads (owner decision 2026-10-14): a non-General thread shows in the main
 // timeline as its first card (the root), with "N replies · last 14:02" under
-// it that opens the thread in a side panel. Its other cards live in that
-// panel, except a card that waits on the owner, which always shows in the
-// main timeline too.
+// it that opens the thread in a side panel — a system root (a task's start)
+// as much as a message. Its other cards live in that panel, except a card
+// that waits on the owner, which always shows in the main timeline too, and
+// the bot's newest reply in it, which shows there marked with its thread: the
+// owner reads a finished task's answer without opening the thread.
 //
 // Pure; times are local.
 import type { RoomCard, ThreadId } from '../../../shared/room';
@@ -47,8 +49,8 @@ export type TimelineItem =
   | { kind: 'day'; key: string; at: number }
   | { kind: 'new'; key: string }
   | { kind: 'joined'; key: string; row: FactoryBotRow }
-  | { kind: 'system'; key: string; cards: RoomCard[] }
-  | { kind: 'message'; key: string; card: RoomCard; continuation: boolean; runEnd: boolean; waiting: boolean; thread?: ThreadView };
+  | { kind: 'system'; key: string; cards: RoomCard[]; thread?: ThreadView }
+  | { kind: 'message'; key: string; card: RoomCard; continuation: boolean; runEnd: boolean; waiting: boolean; thread?: ThreadView; inThread?: boolean };
 
 /** The key a thread is known by: a thread id is a room's own, so a 1:1
  *  (which spans rooms) keys it with its workspace. */
@@ -57,12 +59,20 @@ export function threadKey(workspaceId: string, threadId: ThreadId): string {
 }
 
 /** The main timeline's cards and the threads behind them: General cards,
- *  each thread's root (first card) with its summary, and any thread card
- *  that waits on the owner. */
-export function splitThreads(cards: readonly RoomCard[], waits: (card: RoomCard) => boolean): { main: RoomCard[]; threads: Map<string, ThreadView> } {
+ *  each thread's root (first card) with its summary, any thread card that
+ *  waits on the owner, and each thread's newest bot reply (`surfaced`). */
+export function splitThreads(cards: readonly RoomCard[], waits: (card: RoomCard) => boolean): { main: RoomCard[]; threads: Map<string, ThreadView>; surfaced: Set<string> } {
   const main: RoomCard[] = [];
   const byKey = new Map<string, ThreadView>();
   const rootOf = new Map<string, string>();
+  const lastBotReply = new Map<string, string>();
+  for (const card of cards) {
+    if (card.threadId === 'general') continue;
+    const key = threadKey(card.workspaceId, card.threadId);
+    if (!rootOf.has(key)) rootOf.set(key, card.id);
+    else if (card.actor.kind === 'bot') lastBotReply.set(key, card.id);
+  }
+  const surfaced = new Set(lastBotReply.values());
   for (const card of cards) {
     if (card.threadId === 'general') {
       main.push(card);
@@ -72,17 +82,16 @@ export function splitThreads(cards: readonly RoomCard[], waits: (card: RoomCard)
     const view = byKey.get(key);
     if (!view) {
       byKey.set(key, { workspaceId: card.workspaceId, threadId: card.threadId, replies: 0, lastAt: card.at });
-      rootOf.set(key, card.id);
       main.push(card);
       continue;
     }
     view.replies += 1;
     view.lastAt = Math.max(view.lastAt, card.at);
-    if (waits(card)) main.push(card);
+    if (waits(card) || surfaced.has(card.id)) main.push(card);
   }
   const threads = new Map<string, ThreadView>();
   for (const [key, view] of byKey) threads.set(rootOf.get(key)!, view);
-  return { main, threads };
+  return { main, threads, surfaced };
 }
 
 /** A thread's own cards, and the cards elsewhere that link it (an approval
@@ -115,6 +124,8 @@ function entryAt(entry: RoomEntry): number {
 export function buildTimeline(entries: readonly RoomEntry[], opts: {
   waits: (card: RoomCard) => boolean;
   threads?: ReadonlyMap<string, ThreadView>;
+  /** Thread replies shown in the main timeline (splitThreads). */
+  surfaced?: ReadonlySet<string>;
   newAfter?: number | null;
 }): TimelineItem[] {
   const out: TimelineItem[] = [];
@@ -140,11 +151,13 @@ export function buildTimeline(entries: readonly RoomEntry[], opts: {
     const card = entry.card;
     const prev = out[out.length - 1];
     if (card.actor.kind === 'system') {
+      const thread = opts.threads?.get(card.id);
       if (prev?.kind === 'system' && prev.cards[0].threadId === card.threadId && prev.cards[0].workspaceId === card.workspaceId) {
         prev.cards.push(card);
         prev.key = `system:${prev.cards[0].id}`;
+        if (thread) prev.thread = thread;
       } else {
-        out.push({ kind: 'system', key: `system:${card.id}`, cards: [card] });
+        out.push({ kind: 'system', key: `system:${card.id}`, cards: [card], ...(thread ? { thread } : {}) });
       }
       continue;
     }
@@ -154,7 +167,11 @@ export function buildTimeline(entries: readonly RoomEntry[], opts: {
       && card.at - prev.card.at < RUN_WINDOW_MS;
     if (continuation && prev.kind === 'message') prev.runEnd = false;
     const thread = opts.threads?.get(card.id);
-    out.push({ kind: 'message', key: card.id, card, continuation, runEnd: true, waiting, ...(thread ? { thread } : {}) });
+    out.push({
+      kind: 'message', key: card.id, card, continuation, runEnd: true, waiting,
+      ...(thread ? { thread } : {}),
+      ...(opts.surfaced?.has(card.id) ? { inThread: true } : {}),
+    });
   }
   return out;
 }

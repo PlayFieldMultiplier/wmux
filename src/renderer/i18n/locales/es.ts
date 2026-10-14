@@ -657,5 +657,5 @@ export const es = {
   'git.secret.scanFailed': "wmux no pudo leer este cambio para comprobar si contiene contraseñas o claves, así que no se subió. Inténtalo de nuevo; si sigue fallando, puedes desactivar esta comprobación en Ajustes › General.",
   'git.secret.more': "(y {count} más)",
   'settings.secretGuard': "Bloquear contraseñas y claves en commits, pushes y PR",
-  'settings.secretGuardDesc': "Commit, Push y Crear PR en la página Git, adoptar una tarea y la entrega de Moa rechazan un cambio que añade un archivo .env, una clave privada o una clave de API.",
+  'settings.secretGuardDesc': "Commit, Push y Crear PR en la página Git, y adoptar una tarea, rechazan un cambio que añade un archivo .env, una clave privada o una clave de API.",
 } as const;

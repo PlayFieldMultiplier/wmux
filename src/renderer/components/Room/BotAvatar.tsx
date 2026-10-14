@@ -53,9 +53,53 @@ function idHash(botId: string): number {
   return h;
 }
 
-/** A bot's identity colour, as CSS (the same id, the same colour). */
+/** Each bot's colour among `bots`: oldest first (then by id), a bot keeps
+ *  its id's colour unless an older bot holds it, then takes the next one
+ *  fewest bots hold — two bots of a room never share one while the palette
+ *  lasts. Pure. */
+export function identityHueIndexes(bots: readonly Pick<BotProfile, 'id' | 'createdAt'>[]): Map<string, number> {
+  const n = BOT_IDENTITY_HUES.length;
+  const order = [...bots].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const used = new Array<number>(n).fill(0);
+  const out = new Map<string, number>();
+  for (const b of order) {
+    if (out.has(b.id)) continue;
+    const home = idHash(b.id) % n;
+    const least = Math.min(...used);
+    let pick = home;
+    for (let k = 0; k < n; k++) {
+      const i = (home + k) % n;
+      if (used[i] === least) { pick = i; break; }
+    }
+    used[pick] += 1;
+    out.set(b.id, pick);
+  }
+  return out;
+}
+
+// Every bot this window has listed, kept after a bot is removed so no other
+// bot's colour moves.
+const roster = new Map<string, number>();
+let assigned: Map<string, number> | null = null;
+
+/** Records listed bots, so their colours are told apart (useFactoryBots). */
+export function noteBotIdentities(bots: readonly Pick<BotProfile, 'id' | 'createdAt'>[]): void {
+  for (const b of bots) {
+    if (roster.has(b.id)) continue;
+    roster.set(b.id, b.createdAt);
+    assigned = null;
+  }
+}
+
+function hueIndex(botId: string): number {
+  if (!roster.has(botId)) return idHash(botId) % BOT_IDENTITY_HUES.length;
+  assigned ??= identityHueIndexes([...roster].map(([id, createdAt]) => ({ id, createdAt })));
+  return assigned.get(botId)!;
+}
+
+/** A bot's identity colour, as CSS (the same bot, the same colour). */
 export function botIdentityColor(botId: string): string {
-  const hue = BOT_IDENTITY_HUES[idHash(botId) % BOT_IDENTITY_HUES.length];
+  const hue = BOT_IDENTITY_HUES[hueIndex(botId)];
   return `color-mix(in oklab, ${hue} 72%, var(--text-main))`;
 }
 
@@ -82,9 +126,12 @@ export interface BotAvatarProps {
   alt?: string;
   /** Kept for callers that pass a translator; the mark has no words. */
   t?: T;
+  /** A bot not made yet (the add form): its colour and shape come from the
+   *  id main gives it, so the face shows in a neutral circle. */
+  placeholder?: boolean;
 }
 
-export default function BotAvatar({ bot, size, className, alt }: BotAvatarProps): React.ReactElement {
+export default function BotAvatar({ bot, size, className, alt, placeholder = false }: BotAvatarProps): React.ReactElement {
   const radius = Math.max(3, Math.round(size * 0.22));
   const a11y = alt ? { role: 'img', 'aria-label': alt } : { 'aria-hidden': true as const };
   const box = { width: size, height: size, borderRadius: radius };
@@ -96,17 +143,17 @@ export default function BotAvatar({ bot, size, className, alt }: BotAvatarProps)
     );
   }
   // No picture: the bot's own colour and shape with a small friendly face.
-  const shape = botAvatarShape(bot.id);
+  const shape = placeholder ? 'circle' : botAvatarShape(bot.id);
   return (
     <span
       {...a11y}
-      data-bot-avatar="face"
+      data-bot-avatar={placeholder ? 'placeholder' : 'face'}
       data-avatar-shape={shape}
       className={`inline-flex shrink-0 ${className ?? ''}`}
       style={{ width: size, height: size }}
     >
       <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-        <g style={{ fill: botIdentityColor(bot.id) }}><ShapePath shape={shape} /></g>
+        <g style={{ fill: placeholder ? 'var(--text-muted)' : botIdentityColor(bot.id) }}><ShapePath shape={shape} /></g>
         <g style={{ fill: 'var(--bg-base)', stroke: 'var(--bg-base)' }}>
           <circle cx="9" cy="10.5" r="1.5" stroke="none" />
           <circle cx="15" cy="10.5" r="1.5" stroke="none" />

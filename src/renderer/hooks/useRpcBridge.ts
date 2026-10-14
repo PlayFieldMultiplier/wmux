@@ -1387,7 +1387,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     });
     if (verdict.outcome === 'auto') {
       useStore.getState().pushToast({
-        message: t('fanout.autoRunToast', { count: taskCount, repo: repoPath }),
+        message: taskCount === 1
+          ? t('fanout.autoRunToastOne', { repo: repoPath })
+          : t('fanout.autoRunToast', { count: taskCount, repo: repoPath }),
         level: 'info',
       });
     }

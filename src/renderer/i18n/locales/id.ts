@@ -656,5 +656,5 @@ export const id = {
   'git.secret.scanFailed': "wmux tidak dapat membaca perubahan ini untuk memeriksa kata sandi dan kunci, jadi tidak diunggah. Coba lagi; jika terus gagal, pemeriksaan ini bisa dimatikan di Pengaturan › Umum.",
   'git.secret.more': "(dan {count} lainnya)",
   'settings.secretGuard': "Blokir kata sandi dan kunci di commit, push, dan PR",
-  'settings.secretGuardDesc': "Commit, Push, dan Buat PR di halaman Git, mengadopsi tugas, serta pengiriman Moa menolak perubahan yang menambahkan file .env, kunci privat, atau kunci API.",
+  'settings.secretGuardDesc': "Commit, Push, dan Buat PR di halaman Git, serta mengadopsi tugas, menolak perubahan yang menambahkan file .env, kunci privat, atau kunci API.",
 } as const;

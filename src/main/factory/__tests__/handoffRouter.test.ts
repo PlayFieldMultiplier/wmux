@@ -950,6 +950,17 @@ describe('closing questions nobody needs to answer (A5)', () => {
     expect(h.wakes).toEqual([]);
   });
 
+  it('chat words do not close a question with options: its choices stay on the card', async () => {
+    const lead = bot('ws1', 'lead');
+    const h = await harness([lead]);
+    const pick = await h.router.askPerson(binding(lead), { title: 'Where should I start?', body: '', options: ['Repo', 'Issues'] });
+    if (!pick.ok) throw new Error('ask failed');
+    now += 5;
+    expect(await h.router.closeAnsweredInChat(lead.id, ownerWake('general', now))).toEqual([]);
+    expect(h.router.get(pick.handoffId)!.status).toBe('delivered');
+    expect(open(h)).toEqual(['Where should I start?']);
+  });
+
   it('a greeting question is marked, and closes once the bot has a job', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);

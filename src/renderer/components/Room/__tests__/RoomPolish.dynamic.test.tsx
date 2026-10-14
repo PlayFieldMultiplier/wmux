@@ -130,6 +130,8 @@ describe('composer: the real bot it queued for', () => {
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [lead], t)).toBe('room.composer.queuedFor(name=Ada)');
     const runningMine = { ...lead, status: running('bot-lead', 'w-mine') };
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [runningMine], t)).toBe('room.composer.sentTo(name=Ada)');
+    // Taken up once, a later turn of the bot does not re-queue the message.
+    expect(deliveryLine([{ botId: 'bot-lead', role: 'lead', wakeId: 'w-mine' }], [lead], t, true)).toBe('room.composer.sentTo(name=Ada)');
     expect(deliveryLine([{ botId: 'bot-moa', role: 'moa' }], [lead, moa], t)).toBe('room.composer.sentTo(name=Moa HQ)');
     expect(deliveryLine([{ botId: 'bot-lead', role: 'lead' }, { botId: 'bot-moa', role: 'moa' }], [lead, moa], t)).toBe('room.composer.sentTo(name=Ada, Moa HQ)');
     const four = ['a', 'b', 'c', 'd'].map((x) => ({ botId: `bot-${x}`, role: 'lead' as const }));

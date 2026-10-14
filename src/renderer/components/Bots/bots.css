@@ -303,6 +303,8 @@
   color: var(--text-muted);
 }
 .wmux-bots-system { min-width: 0; max-width: min(640px, 100%); text-align: center; }
+/* A line with evidence under it reads left, header, body and chip alike. */
+.wmux-bots-system.is-detailed { width: min(640px, 100%); text-align: left; }
 
 /* The date and time between runs: centred and muted, the label alone. */
 .wmux-bots-day {

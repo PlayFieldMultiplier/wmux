@@ -157,7 +157,8 @@ describe('Bots page', () => {
     expect(container.querySelectorAll('[data-bots-needs]')).toHaveLength(0);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     // The worker shows; the question shows without answers; nothing can be sent.
-    expect(q('[data-bots-worker="t1"]')?.textContent).toContain('wtask: fix login');
+    expect(q('[data-bots-worker="t1"]')?.textContent).toContain('fix login');
+    expect(q('[data-bots-worker="t1"]')?.textContent).not.toContain('wtask:');
     expect(container.querySelector('[data-testid="room-card"]')).toBeNull();
     expect(q('[data-room-card-id="c5"]')?.textContent).toContain('Merge #1 now?');
     expect(q<HTMLButtonElement>('[data-testid="bots-composer-send"]')!.disabled).toBe(true);
@@ -526,7 +527,8 @@ describe('Bots page', () => {
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('2');
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     const worker = q('[data-bots-worker="t1"]');
-    expect(worker?.textContent).toContain('wtask: fix login');
+    expect(worker?.textContent).toContain('fix login');
+    expect(worker?.textContent).not.toContain('wtask:');
     expect(worker?.getAttribute('data-worker-waiting')).toBe('true');
     // It sits in the working rail above the composer, not in the history.
     expect(q('[data-bots-rail] [data-bots-worker="t1"]')).not.toBeNull();
@@ -643,7 +645,8 @@ describe('Bots page', () => {
     const taskChip = q('[data-bots-thread-chip="task:wtask-abc-00000001"]')!;
     expect(taskChip.textContent).toBe('README title');
     expect(taskChip.getAttribute('title')).toContain('wtask-abc-00000001');
-    expect(q('[data-bots-thread-chip="handoff:h-0000000002"]')?.textContent).toBe('Request');
+    // A thread's root names no bare "Request": the name leads nowhere.
+    expect(q('[data-bots-thread-chip="handoff:h-0000000002"]')).toBeNull();
     // A bot citing the task id shows the task's title instead.
     expect(container.textContent).toContain('Task README title is running.');
     expect(container.textContent).not.toContain('Task wtask-abc-00000001');

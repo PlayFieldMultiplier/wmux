@@ -82,8 +82,10 @@ export function avatarPickError(r: FactoryBotAvatarPickResult, t: T): string | n
 
 /** Choose / preview / remove a picture. `avatar` is the picture shown now
  *  (a preview or the saved one). */
-function PicturePicker({ bot, avatar, port, t, busy, onPicked, onRemove, onError, chooseLabel, removeLabel }: {
+function PicturePicker({ bot, avatar, port, t, busy, onPicked, onRemove, onError, chooseLabel, removeLabel, unmade = false }: {
   bot: { id: string; name: string; role: BotRole };
+  /** The bot is not made yet: no colour or shape to promise. */
+  unmade?: boolean;
   avatar: string | undefined;
   port: FactoryBotPort;
   t: T;
@@ -107,7 +109,7 @@ function PicturePicker({ bot, avatar, port, t, busy, onPicked, onRemove, onError
   return (
     <div className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
       <span className="w-[120px] shrink-0">{t('settings.factory.picture')}</span>
-      <span data-testid="factory-picture-preview" className="inline-flex"><BotAvatar bot={{ ...bot, avatar }} size={32} t={t} /></span>
+      <span data-testid="factory-picture-preview" className="inline-flex"><BotAvatar bot={{ ...bot, avatar }} size={32} t={t} placeholder={unmade} /></span>
       <Button size="sm" variant="secondary" data-testid="factory-picture-choose" onClick={() => void pick()} disabled={busy}>
         {chooseLabel}
       </Button>
@@ -519,6 +521,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
       {port.pickAvatar && (
         <PicturePicker
           bot={{ id: `new-${workspaceId}`, name: typedName ?? '', role: TEMPLATE_LEGACY_ROLE[template ?? 'custom'] }}
+          unmade
           avatar={avatar}
           port={port}
           t={t}

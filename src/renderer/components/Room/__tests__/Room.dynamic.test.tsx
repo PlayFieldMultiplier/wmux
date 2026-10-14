@@ -154,6 +154,28 @@ describe('RoomComposer', () => {
     expect(container.querySelector('[data-testid="room-composer-status"]')?.textContent).toBe('room.composer.queuedFor(name=Lead)');
   });
 
+  it('once the bot takes the message up, a later turn does not flip it back to queued', async () => {
+    const at = (wakeId: string): FactoryBotRow => ({
+      bot: bot('bot-00000001', { name: 'Lead' }),
+      status: { botId: 'bot-00000001', presence: 'running', currentTurn: { wakeId, startedAt: 1 }, queueDepth: 1, budgetLeft: { turnsHour: 1, turnsDay: 1, workerHoursDay: 1 } },
+    });
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true, card: card(9), addressee: { botId: 'bot-00000001', role: 'lead' }, wakeId: 'w-me' })) });
+    const el = (row: FactoryBotRow) => createElement(RoomComposer, { workspaceId: WS, threadId: 'general', bots: [row], t, api: api as unknown as RoomsApi });
+    await render(el(at('w-before')));
+    const input = container.querySelector<HTMLTextAreaElement>('[data-testid="room-composer-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'hi');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="room-composer-send"]')!.click());
+    const status = () => container.querySelector('[data-testid="room-composer-status"]')?.textContent;
+    expect(status()).toBe('room.composer.queuedFor(name=Lead)');
+    await render(el(at('w-me')));
+    expect(status()).toBe('room.composer.sentTo(name=Lead)');
+    await render(el(at('w-after')));
+    expect(status()).toBe('room.composer.sentTo(name=Lead)');
+  });
+
   it('keeps text typed while a send is in flight', async () => {
     let release!: () => void;
     const api = fakeApi({ post: vi.fn(() => new Promise((r) => { release = () => r({ ok: true, card: card(9), addressee: null }); })) });

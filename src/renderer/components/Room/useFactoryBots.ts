@@ -3,6 +3,7 @@
 // the list stays empty.
 import { useEffect, useState } from 'react';
 import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from './factoryPorts';
+import { noteBotIdentities } from './BotAvatar';
 
 const EMPTY: FactoryBotRow[] = [];
 
@@ -19,7 +20,11 @@ export function useFactoryBots(workspaceId: string | null, port?: FactoryBotPort
     const load = () => {
       const mine = ++seq;
       p.list(workspaceId ?? undefined).then(
-        (next) => { if (live && mine === seq) setRows(next); },
+        (next) => {
+          if (!live || mine !== seq) return;
+          noteBotIdentities(next.map((r) => r.bot));
+          setRows(next);
+        },
         () => undefined,
       );
     };
