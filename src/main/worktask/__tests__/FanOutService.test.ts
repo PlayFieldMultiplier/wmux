@@ -656,7 +656,7 @@ describe('§0 E2E 정상 — N=2 전부 성공', () => {
     expect(bodies[0]).toContain(`task_id\` **${res.tasks[0].taskId}**`);
   });
 
-  it('a bot\'s worker is told the push that works: its own branch, named', async () => {
+  it('a bot\'s worker is told how its branch is published: task_push, not git push', async () => {
     const renderer = makeRendererFake();
     const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
     const res = await svc.start(baseReq({ prompt: 'fix', titles: ['Task A'], caller: { kind: 'bot', botId: 'bot-0a1b2c3d', tainted: false } }));
@@ -664,10 +664,11 @@ describe('§0 E2E 정상 — N=2 전부 성공', () => {
     const body = fs.readFileSync(renderer.spawned[0].initialCommand.match(/'([^']*prompt\.md)'/)![1], 'utf8');
     const branch = res.tasks[0].branch!;
     expect(branch).toBeTruthy();
-    expect(body).toContain(`Publish it with exactly \`git push -u origin ${branch}\``);
+    expect(body).toContain('publish it with the `task_push` tool');
+    expect(body).toContain(`gh pr create --head ${branch}`);
     expect(body.endsWith(workerTaskIdentityNote(res.tasks[0].taskId!, res.tasks[0].channelId!, branch))).toBe(true);
     // A person's fan-out keeps the note it had.
-    expect(workerTaskIdentityNote('wtask-x', 'ch-1')).not.toContain('git push');
+    expect(workerTaskIdentityNote('wtask-x', 'ch-1')).not.toContain('task_push');
   });
 
   it('A3: 배달 계약문이 워커 프롬프트에 실려, 유휴 후 지시가 어떻게 오는지 워커가 안다', async () => {

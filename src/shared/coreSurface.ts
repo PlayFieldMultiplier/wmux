@@ -74,6 +74,7 @@ export const CORE_TOOL_SURFACE: readonly string[] = [
   'channel_mission_list',
   'fanout_start',
   'ledger_update',
+  'task_push',
   // Scheduled runs: draft-only propose + redacted reads.
   'automation_propose',
   'automation_list',

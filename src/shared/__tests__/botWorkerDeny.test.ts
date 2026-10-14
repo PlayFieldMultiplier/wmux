@@ -29,22 +29,17 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(310);
+    expect(BOT_WORKER_DENY.length).toBe(275);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('e30b71f7e4df3c237e1803685459a8cbc85f395df1b0d0b9494aa869fc347f36');
+      .toBe('b5241f5a40ec02fb13a83c4b90451243e88144f3c336fd894ec376edac77492c');
   });
 
-  it('a `:*` that does not end a rule appears only in the delete-refspec rule, a wildcard with a literal colon', () => {
-    const { deny } = buildBotWorkerSettings(['develop']).permissions as { deny: string[] };
-    expect(deny.filter((r) => r.includes(':*') && !r.endsWith(':*)'))).toEqual(['Bash(git*push* :**)']);
-    expect(denied('git push origin :feature')).toBe(true);
-    expect(denied('git push -q origin :wtask/x')).toBe(true);
-    expect(denied('git push origin wtask/x')).toBe(false);
+  it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
+    expect(BOT_WORKER_DENY.filter((r) => r.includes(':*') && !r.endsWith(':*)'))).toEqual([]);
   });
 
   it('no rule ends in `:*` after another `*`, which Claude Code would match literally', () => {
-    const { deny } = buildBotWorkerSettings(['develop']).permissions as { deny: string[] };
-    expect(deny.filter((r) => /\*.*:\*\)$/.test(r))).toEqual([]);
+    expect(BOT_WORKER_DENY.filter((r) => /\*.*:\*\)$/.test(r))).toEqual([]);
   });
 
   it.each([
@@ -97,14 +92,20 @@ describe('bot worker deny rules', () => {
     'git push origin HEAD',
     'git push -u origin HEAD',
     'git config remote.origin.push refs/heads/*:refs/heads/develop',
-    'git config push.default upstream',
-    'git config branch.wtask/a.merge refs/heads/develop',
+    'git config remote.origin.pushurl git@example.com:o/other.git',
+    'git config remote.origin.url git@example.com:o/other.git',
+    'git remote set-url --push origin git@example.com:o/other.git',
+    'git remote set-url origin git@example.com:o/other.git',
+    'git -C /w remote set-url origin git@example.com:o/other.git',
+    'git config url.git@example.com:o/other.git.pushInsteadOf git@github.com:o/r.git',
+    // Every push is main's (task.push): the worker's own, in any form.
+    'git push origin wtask/fix-main-menu',
+    'git push -u origin wtask/a',
+    'git push origin HEAD:wtask/a',
+    'git -C /w push origin wtask/a',
+    'git --git-dir=/w/.git push origin wtask/a',
     'git -c push.default=upstream push origin',
     'git -c remote.origin.push=HEAD:develop push origin wtask/a',
-    'git branch --set-upstream-to=origin/develop',
-    'git branch wtask/a -u origin/develop',
-    // Collateral of the no-destination rule: `git stash` (no "push") still works.
-    'git stash push',
     // gh's global options before the group, between the group and the verb, or both.
     'gh -R o/r pr merge 3 --squash',
     'gh --repo o/r pr merge 3',
@@ -125,9 +126,6 @@ describe('bot worker deny rules', () => {
   });
 
   it.each([
-    'git push origin wtask/fix-main-menu',
-    'git push -u origin wtask/a',
-    'git push origin wtask/maintenance',
     'gh pr create --title x --body y',
     'gh pr view 3 --json headRefOid',
     'gh pr checks 3',
@@ -138,11 +136,15 @@ describe('bot worker deny rules', () => {
     'gh release list',
     'gh release download v1.0.0',
     'gh api repos/o/r/contents/POST.md',
-    'git push -u origin wtask/feature',
-    'git push origin HEAD:wtask/a',
     'git config user.name bot',
     'git branch -a',
     'git stash',
+    'git stash push',
+    'git commit -m "push the fix"',
+    'git log --grep push',
+    'git config push.default upstream',
+    'git remote get-url origin',
+    'git remote -v',
     'gh -R o/r pr view 3 --json mergeable',
     'gh pr -R o/r view 3 --json mergeable,mergeStateStatus',
     'gh -R o/r pr checks 3',
@@ -159,35 +161,21 @@ describe('a repository\'s own default branch', () => {
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-default-branch-')); });
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
-  const rulesOf = (doc: Record<string, unknown>) => (doc as { permissions: { deny: string[] } }).permissions.deny;
 
-  it('a recorded default branch gets the push rules main and master have', () => {
-    const rules = rulesOf(buildBotWorkerSettings(['develop']));
-    for (const cmd of ['git push origin develop', 'git push origin HEAD:develop', 'git push origin wtask/a:refs/heads/develop', 'git push origin develop --tags']) {
-      expect(denied(cmd, rules)).toBe(true);
-      expect(denied(cmd)).toBe(false);
-    }
-    expect(denied('git push origin wtask/develop-docs', rules)).toBe(false);
-    expect(denied('git push -u origin wtask/a', rules)).toBe(false);
-    expect(rulesOf(buildBotWorkerSettings(['main', 'master']))).toEqual([...BOT_WORKER_DENY]);
-  });
-
-  it('only a plain ref name can become a rule', () => {
+  it('only a plain ref name can be recorded', () => {
     for (const ok of ['develop', 'trunk', 'release/2.x', 'v1.0', '_trunk', 'dévelop', '개발', 'x'.repeat(255)]) expect(isDenyableBranchName(ok)).toBe(true);
     for (const bad of ['', '*', 'dev*', 'a b', 'x)', '-f', '.x', 'a..b', 'a/', 'a.lock', 'a@{1}', 'a:b', 'a~1', 'a$b', 'x'.repeat(256), 42]) expect(isDenyableBranchName(bad)).toBe(false);
-    expect(rulesOf(buildBotWorkerSettings(['dev*', 'x) Bash(*']))).toEqual([...BOT_WORKER_DENY]);
   });
 
-  it('main records it once; the settings main and the daemon write carry it; an unreadable file means main/master only', () => {
+  it('main records it once (for its own push); the worker settings never depend on it; an unreadable file means main/master only', () => {
     expect(recordBotWorkerDefaultBranch(dir, 'develop')).toBe(true);
     expect(recordBotWorkerDefaultBranch(dir, 'develop')).toBe(true);
     expect(recordBotWorkerDefaultBranch(dir, 'main')).toBe(true);
     expect(recordBotWorkerDefaultBranch(dir, 'dev*')).toBe(false);
     expect(readBotWorkerDefaultBranches(dir)).toEqual(['develop']);
     const settings = JSON.parse(fs.readFileSync(writeBotWorkerSettings(dir), 'utf8'));
-    expect(denied('git push origin develop', rulesOf(settings))).toBe(true);
+    expect(settings).toEqual(buildBotWorkerSettings());
     fs.writeFileSync(botWorkerDefaultBranchesPath(dir), '{nope');
     expect(readBotWorkerDefaultBranches(dir)).toEqual([]);
-    expect(rulesOf(JSON.parse(fs.readFileSync(writeBotWorkerSettings(dir), 'utf8')))).toEqual([...BOT_WORKER_DENY]);
   });
 });

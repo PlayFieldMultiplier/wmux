@@ -3,7 +3,7 @@
   "profiles": {
     "full": {
       "maxListBytes": 80000,
-      "wireResultSha256": "650a3bef40d35f07eb8a51a237ce4fde14c27b8785b24b1970b8548218110f98",
+      "wireResultSha256": "bed1613dc438bf882e28c70a461f04287e4343b6fc2cec84f2541ab729b92376",
       "instructionSha256": "6e09a08a7038bb08f49484e3a98020ef6a35efebbebc39d33f9a514b71e7c7c1",
       "toolNames": [
         "browser_open",
@@ -72,6 +72,7 @@
         "channel_mission_list",
         "fanout_start",
         "ledger_update",
+        "task_push",
         "automation_propose",
         "automation_list",
         "automation_runs",
@@ -88,7 +89,7 @@
     },
     "core": {
       "maxListBytes": 49000,
-      "wireResultSha256": "b148bac17f6d5f30c739df34d3b82dc7b82c8e1a889883187b88544356b0dce3",
+      "wireResultSha256": "9b323de2b3a9d445769dd4d133ae3b6316858b01a7438d71d9b4bc143975eaa2",
       "instructionSha256": "4a87aa8208502b84c23fd41c6c2594b91c7e368ad187f14d4905164448548f4a",
       "toolNames": [
         "terminal_read",
@@ -125,6 +126,7 @@
         "channel_mission_list",
         "fanout_start",
         "ledger_update",
+        "task_push",
         "automation_propose",
         "automation_list",
         "automation_runs",

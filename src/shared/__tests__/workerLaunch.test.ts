@@ -153,6 +153,7 @@ describe('applyWorkerPermissionFlags', () => {
   it('allows only reporting tools and denies the ones that reach other agents', () => {
     expect(FANOUT_WORKER_ALLOWED_TOOLS).toEqual([
       'mcp__wmux__ledger_update',
+      'mcp__wmux__task_push',
       'mcp__wmux__channel_read',
       'mcp__wmux__channel_unread',
       'mcp__wmux__channel_ack',

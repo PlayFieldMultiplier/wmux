@@ -35,6 +35,7 @@ export const ROLE_TOOL_SURFACES: Readonly<Record<OrchRole, readonly string[]>> =
   ],
   Builder: [
     'ledger_update',
+    'task_push',
     'channel_read',
     'channel_unread',
     'channel_ack',

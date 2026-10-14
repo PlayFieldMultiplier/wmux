@@ -641,6 +641,9 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'task.adopt':       { capability: 'task.write', riskClass: 'a2a' },
   'task.close':       { capability: 'task.write', riskClass: 'a2a' },
   'task.pr':          { capability: 'task.write', riskClass: 'a2a' },
+  // A worker publishing its own task branch (pipe/handlers/taskPush.rpc.ts):
+  // the caller's pane decides the task, main decides branch and remote.
+  'task.push':        { capability: 'task.write', riskClass: 'a2a' },
   'task.git.status':  { capability: 'task.read',  riskClass: 'a2a' },
   'task.git.log':     { capability: 'task.read',  riskClass: 'a2a' },
   'task.gh.prView':   { capability: 'task.read',  riskClass: 'a2a' },

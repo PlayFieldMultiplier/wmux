@@ -112,6 +112,7 @@ import { createFanOutService } from './worktask/createFanOutService';
 import { getWorkerTempDirSweeper, liveTempDirsFromSessions } from './worktask/fanoutTempDir';
 import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
+import { registerTaskPushRpc } from './pipe/handlers/taskPush.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
 import { registerFactoryRpc } from './factory/factoryHost';
 import { getFactorySettings, onFactorySettingsChanged } from './factory/factorySettings';
@@ -1186,6 +1187,15 @@ registerGitHandoffHandlers({
 });
 registerFanOutRpc(rpcRouter, fanOutService, () => mainWindow, { getDaemonClient: () => daemonClient });
 registerLedgerRpc(rpcRouter, () => mainWindow);
+registerTaskPushRpc(rpcRouter, {
+  getWindow: () => mainWindow,
+  daemon: {
+    rpc: async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+      if (!daemonClient) throw new Error('Daemon not connected');
+      return daemonClient.rpc(method as RpcMethod, params);
+    },
+  },
+});
 // pr_verdict: a verifier's PASS/FAIL on one PR head, read by the merge lane.
 registerVerifyRpc(rpcRouter, {
   resolvePtyWorkspace: (ptyId) => resolvePtyOwnerWorkspace(() => mainWindow, ptyId),

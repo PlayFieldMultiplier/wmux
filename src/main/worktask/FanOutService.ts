@@ -124,11 +124,10 @@ Your task has a row in the task ledger; the brain reads that row, not your prose
  * of the caller's own workspace when `task_id` is left out.
  */
 export function workerTaskIdentityNote(taskId: string, channelId: string, botBranch?: string): string {
-  // A bot's worker pushes only its own task branch, named: a push without a
-  // destination, to HEAD or to a default branch is refused by its deny list
-  // (shared/botWorkerGuard.ts), and a worker that guessed the form stalled.
+  // A bot's worker cannot run `git push` (its deny list refuses every form,
+  // shared/botWorkerGuard.ts): main pushes its task branch (task_push).
   const push = botBranch
-    ? `- Your branch: \`${botBranch}\`. Publish it with exactly \`git push -u origin ${botBranch}\` (name the branch). \`git push\` with no destination, \`git push origin HEAD\`, a force push and a push to the default branch are refused.
+    ? `- Your branch: \`${botBranch}\`. Commit, then publish it with the \`task_push\` tool (wmux pushes this branch to origin, fast-forward only); \`git push\` itself is refused. Open the pull request with \`gh pr create --head ${botBranch}\`.
 `
     : '';
   return `

@@ -333,6 +333,9 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   // authz) and ledger_list (commander-only tool, also in the commander lane).
   'ledger.list',
   'ledger.update',
+  // task_push (every profile): a worker publishes its own task branch; the
+  // handler resolves task, branch and remote from the caller's pane.
+  'task.push',
   // pr_verdict (the verifier bot's tool).
   'verify.recordVerdict',
   // Agent factory bot tools (shared/botSurface.ts BOT_TOOL_RPC), registered
