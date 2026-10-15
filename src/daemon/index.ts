@@ -6688,8 +6688,8 @@ function wireEvents(
     // work, and letting it rebut would silently kill a real completion
     // alarm (the same class of false-negative the resize-redraw guard in
     // DaemonPTYBridge already protects the detector dedup from). The bridge
-    // no longer emits a passive burst inside the resize-redraw window at all
-    // (it would light the status dot), so the flag is a backstop here.
+    // emits a passive burst inside the resize-redraw window only for a cycle
+    // a hook's running edge armed in a still-open turn, flagged.
     // #919 — compute canonical identity ONCE for this burst and use it for
     // both feeds below. Leaving either on the raw screen name would re-assert
     // the detector's sticky label on every output burst, undoing whatever the

@@ -518,6 +518,66 @@ describe('DaemonPTYBridge turn priority', () => {
       expect(idle).toEqual([]);
     });
 
+    it('a hook running edge just before a resize still reports running', () => {
+      const payloads: Array<{ sessionId: string; likelyRepaint?: boolean }> = [];
+      bridge.on('active', (e: { sessionId: string; likelyRepaint?: boolean }) => payloads.push(e));
+
+      bridge.noteAgentStatus('running', true);
+      bridge.noteResize();
+      feed('tick');
+      for (let i = 0; i < 10; i++) {
+        vi.advanceTimersByTime(1_000);
+        feed('tick');
+      }
+      expect(payloads).toEqual([{ sessionId: 'sess-1', agentName: undefined, likelyRepaint: true }]);
+      expect(idle).toEqual([]);
+    });
+
+    // A turn left open without a settle is not a hook-armed cycle: its reveal
+    // repaint must not light the pane running again.
+    function reveal(): Array<{ sessionId: string; likelyRepaint?: boolean }> {
+      const payloads: Array<{ sessionId: string; likelyRepaint?: boolean }> = [];
+      bridge.on('active', (e: { sessionId: string; likelyRepaint?: boolean }) => payloads.push(e));
+      vi.advanceTimersByTime(PAST_GUARDS_MS);
+      bridge.noteResize();
+      feed(BIG);
+      return payloads;
+    }
+
+    it('a submitted prompt that never settled does not report its reveal repaint', () => {
+      bridge.noteInput('do it\r');
+      feed(BIG);
+      expect(active).toEqual(['sess-1']);
+      expect(reveal()).toEqual([]);
+    });
+
+    it('a boot paint that never settled does not report its reveal repaint', () => {
+      feed(BIG);
+      expect(active).toEqual(['sess-1']);
+      expect(reveal()).toEqual([]);
+    });
+
+    it('a hook edge inside an already active cycle does not carry over to a reveal', () => {
+      feed(BIG);
+      bridge.noteAgentStatus('running', true);
+      vi.advanceTimersByTime(5_000);
+      expect(idle).toEqual(['sess-1']);
+      expect(reveal()).toEqual([]);
+    });
+
+    it('a hook-armed cycle whose turn the transcript closed does not report a reveal', () => {
+      bridge.noteAgentStatus('running', true);
+      vi.advanceTimersByTime(100);
+      bridge.noteTranscriptTurnEnd(Date.now());
+      expect(reveal()).toEqual([]);
+    });
+
+    it('a hook-armed cycle whose agent ended does not report a reveal', () => {
+      bridge.noteAgentStatus('running', true);
+      bridge.noteAgentEnded();
+      expect(reveal()).toEqual([]);
+    });
+
     it('never flags a burst started by submitted input', () => {
       const payloads: Array<{ sessionId: string; likelyRepaint?: boolean }> = [];
       bridge.on('active', (e: { sessionId: string; likelyRepaint?: boolean }) => payloads.push(e));
