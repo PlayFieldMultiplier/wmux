@@ -203,7 +203,9 @@ commands, sidebar links, toast and notification jumps, schedule deep links —
 navigates through it.
 
 - **Pages, in order:** Workspaces (home: the sidebar and the panes)
-  · Bots · Fleet · Schedules · Remote · Git. Settings is a page too,
+  · Bots · Fleet · Schedules · Remote · Git. Bots is listed only while the
+  bots are on (Settings › Bots); off, its shortcut and palette command open
+  Settings › Bots instead. Settings is a page too,
   opened from the rail's More menu or ⌘,.
 - **The rail's foot** holds one `⋯` **More** button (named "More",
   `aria-haspopup="menu"`). Its menu, beside the rail and level with the
@@ -535,15 +537,18 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   request waits and its card is in the conversation — a room's whole view,
   or the asking bot's 1:1 — an "Approve N pending" chip sits above the box,
   whatever thread the card is in.
-- **Bots off:** one wording for the switch everywhere — "Bots on" in
-  Settings, "Bots are off" and "Turn bots on" on the page and in the
-  composer (ko: 봇 켜기 / 봇이 꺼져 있어요). With the bots off the page
-  stays — the list and every conversation, live workers included,
-  read-only (no answers; the composer says why and sends nothing) — under
-  a notice row across the page on the header band's `--selection-subtle`
-  fill: "Bots are off", one muted line, and Turn bots on (the primary; it
-  writes the same setting Settings does). Stop stays: it ends work still
-  running. The empty page (no bot yet) shows no notice row.
+- **Bots off (owner decision 2026-10-15):** the page and its rail item
+  exist only while the bots are on. They are turned on in Settings › Bots
+  (the "Bots on" switch, whose description says it adds Bots to the
+  sidebar); the rail item appears at once and Settings stays open. Turned
+  off while the page is open (in Settings, or Turn bots off in the plan
+  consent), the page leaves for Workspaces and the item goes. One wording
+  for the switch everywhere — "Bots on" in Settings, "Bots are off" and
+  "Turn bots on" (ko: 봇 켜기 / 봇이 꺼져 있어요). Should the page still
+  meet the bots off for a moment, it is read-only (the composer says why
+  and sends nothing) under a notice row on the header band's
+  `--selection-subtle` fill: "Bots are off", one muted line, and Turn bots
+  on (the primary; it writes the same setting Settings does).
 - **Add bot (2026-10-13):** a name is all a bot needs. The form: workspace,
   name (required), picture, "Start from" template chips (the composer's
   chip style; one pressed at most) that prefill the job — a chip replaces
@@ -551,9 +556,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   plain textarea) and the repository, always shown as one line — "Works on
   owner/repo" with Change and None (inherited, suggested, or a picked
   folder; None works on no repository), never attached silently. No role
-  picker. `+` and Add are there whether the bots are on or off; while they
-  are off Add asks once in place ("Bots are off. Adding <name> turns bots
-  on.", Turn bots on and add) instead of sending the owner to Settings. A
+  picker. In Settings › Bots, Add is there whether the bots are on or off;
+  while they are off it asks once in place ("Bots are off. Adding <name>
+  turns bots on.", Turn bots on and add). A
   disabled Add says why in one muted line (no name, an invalid name, no
   workspace). After Add the new bot's chat opens at once with "Starting
   <name>…" until its greeting arrives. The new bot greets the owner and asks
@@ -570,9 +575,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
 - **First run (owner decision 2026-10-14):** with no bot yet the page is
   one centred panel: "Name your first bot", one muted line (it works in
   <the current workspace>, greets you and asks what to do), a name field
-  and Start (the primary). Start turns the bots on when they are off, adds
-  the bot to the current workspace and opens its 1:1, where its greeting
-  arrives. When the Claude engine cannot sign in the panel says why in
+  and Start (the primary). The page is reached with the bots on, so Start
+  adds the bot to the current workspace and opens its 1:1, where its
+  greeting arrives. When the Claude engine cannot sign in the panel says why in
   one line and offers Log in to Claude (and Check again); Start waits until
   it can. A build that cannot tell never blocks Start. Beside Start, a
   secondary **Add a team (lead + 4 roles)** does the same for the five-bot
@@ -1418,6 +1423,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-15 | Owner decision (bot connections): MCP servers for bots' workers live in one library, Settings › Bots › Connections (one row each: name, purpose, who gets it, Key missing in the needs-you text, on/off, Edit, Remove asked in place), scoped to every bot by default or to the bots picked; a bot's profile lists the ones that apply to it with a per-bot off switch for every-bot ones. Amends the profile's item list only | Grok-Bot-style connectors without a per-bot settings page: defined once, the owner sees every connection in one place, and a bot's profile answers what its workers can reach |
 | 2026-10-15 | Owner decision (dogfood of 4.5.0): in a room, an `@Name` of one of its bots anywhere in the message addresses that bot (with any chips picked), and typing `@` suggests the room's bots. Amends the Composer's "an `@name` inside a sentence is plain text" | The owner typed `@대장` in the workspace room and the message did not reach that bot: a mention that works only at the very start of the message reads as broken |
 | 2026-10-15 | Owner decision (dogfood of 4.5.0, recommended option): a bot's 1:1 and its workspace room are separate conversations. The 1:1 is its own thread of the room (`dm:<botId>`): the owner's messages there, the bot's answers, its greeting and the work it starts there (a coordinator's request thread); the room never shows them, and a bot's room posts never show in its 1:1. The room is listed once the workspace has two or more bots; a lone bot has only its 1:1, which also keeps what it says in the room. Cards from before 1:1 threads keep the old 1:1 filter. Amends List and System lines | The 1:1 was a filter of the room, so the coordinator's greeting showed in both and every 1:1 message showed in the room: the owner read them as mirrors, and a room appeared for a single bot on its own |
+| 2026-10-15 | Owner decision: the Bots rail item is listed only while the bots are on; they are turned on in Settings › Bots, whose switch description says so, and the item appears at once without leaving Settings. Turning them off while the Bots page is open returns to Workspaces; the Toggle Bots shortcut and the palette's Open Bots open Settings › Bots while they are off. The first-run panel is reached only with the bots on. Amends Rail and pages, Bots off, Add bot and First run | A Bots item on the rail from the first launch advertised a feature the owner had not chosen, and opened a page that could do nothing until the bots were on. Settings stays open after the switch because Settings › Bots has its own add form and the plan and connection settings the owner may be setting up |
 
 ### Desktop conversation view
 

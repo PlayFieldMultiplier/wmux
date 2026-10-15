@@ -1770,7 +1770,7 @@ export const en = {
   'settings.factory.notInstalled': "Bots aren't installed in this build, so these settings are off.",
   'settings.factory.notStarted': "Bots haven't started yet. Try again in a moment.",
   'settings.factory.enabled': "Bots on",
-  'settings.factory.enabledDesc': "Bots start working in each workspace's room, waking on new events and on your messages.",
+  'settings.factory.enabledDesc': "Turn on to add Bots to the sidebar. Bots start working in each workspace's room, waking on new events and on your messages.",
   'settings.factory.hq': "HQ workspace",
   'settings.factory.hqDesc': "Moa's room: plans, the morning report and every bot.",
   'settings.factory.hqNone': "None",

@@ -1748,7 +1748,7 @@ export const pl = {
   'settings.factory.notInstalled': "Ta wersja nie zawiera botów, więc te ustawienia są wyłączone.",
   'settings.factory.notStarted': "Boty jeszcze się nie uruchomiły. Spróbuj za chwilę.",
   'settings.factory.enabled': "Uruchom boty",
-  'settings.factory.enabledDesc': "Boty zaczynają pracować w pokoju każdego obszaru roboczego i budzą się na nowe zdarzenia oraz Twoje wiadomości.",
+  'settings.factory.enabledDesc': "Włącz, aby dodać Boty do paska bocznego. Boty zaczynają pracować w pokoju każdego obszaru roboczego i budzą się na nowe zdarzenia oraz Twoje wiadomości.",
   'settings.factory.hq': "Obszar roboczy HQ",
   'settings.factory.hqDesc': "Pokój Moa: plany, poranny raport i wszystkie boty.",
   'settings.factory.hqNone': "Brak",

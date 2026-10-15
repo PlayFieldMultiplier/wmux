@@ -187,8 +187,9 @@ function engineLine(r: ReturnType<typeof useEngineReadiness>['readiness'], t: T)
 }
 
 /** The first screen, with no bot yet: name a bot and Start (DESIGN.md ›
- *  Bots › First run). Start turns the bots on when they are off, then adds
- *  the bot to the current workspace. */
+ *  Bots › First run). The page is reached with the bots on; Start adds the
+ *  bot to the current workspace (turning the bots on first only if they went
+ *  off meanwhile). */
 function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine, onStarted }: {
   t: T;
   workspace: { id: string; name: string } | null;
@@ -418,6 +419,12 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   // Settings): opening the page asks again.
   useEffect(() => { void refreshRoomStatus(); }, []);
   const { model, status, bots, on, listed } = botsState;
+  // The page is there only while the bots are on: turned off (here or in
+  // Settings), it leaves for Workspaces, as its rail item goes.
+  const known = !!status;
+  useEffect(() => {
+    if (known && !on) showWorkspaces(useStore.getState());
+  }, [known, on]);
   const names = useStore(useShallow(selectWorkspaceIdName));
   const actors = useStore((s) => s.roomActors);
   const timelines = useStore((s) => s.roomTimelines);
@@ -545,8 +552,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   };
 
   let body: React.ReactNode = null;
-  // No bot yet (the list read): the first screen, whether or not the bots
-  // are on — Start turns them on.
+  // No bot yet (the list read): the first screen.
   const firstRun = !!status && listed && bots.length === 0 && !pending && canCreate && !onAddBot;
   if (firstRun) {
     body = (

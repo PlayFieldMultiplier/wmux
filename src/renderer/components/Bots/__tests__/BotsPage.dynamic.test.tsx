@@ -1174,7 +1174,7 @@ describe('Bots page', () => {
     expect(item.getAttribute('aria-current')).toBe('page');
   });
 
-  it('an open plan joins the rail badge, still the sum of the page\'s rows; paused, both are clear', async () => {
+  it('an open plan joins the rail badge, still the sum of the page\'s rows; off, both are clear and the rail item goes', async () => {
     cards.push(card({ workspaceId: 'hq', actor: by('hq', MOA), kind: 'plan', state: 'open', threadId: 'plan:p-1', at: 500 }));
     seedRooms();
     act(() => useStore.setState({ appRoute: 'workspaces', sidebarVisible: true, readOnly: false, schedulesAvailable: true } as never));
@@ -1185,7 +1185,19 @@ describe('Bots page', () => {
     expect(item.querySelector('.wmux-nav-badge')?.textContent).toBe('2');
     act(() => useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: 'hq' } } as never));
     expect(rowsSum()).toBe(0);
-    expect(item.querySelector('.wmux-nav-badge')).toBeNull();
+    expect(q('[data-sidebar-nav="bots"]')).toBeNull();
+  });
+
+  it('turned off while the page is open, it leaves for Workspaces and the rail item goes', async () => {
+    seedRooms();
+    act(() => useStore.setState({ sidebarVisible: true, readOnly: false, schedulesAvailable: true } as never));
+    await render(<><MiniSidebar rail collapsed /><BotsPage /></>);
+    // The mount's status re-read (on) has settled: the page stays.
+    expect(useStore.getState().appRoute).toBe('bots');
+    expect(q('[data-sidebar-nav="bots"]')?.getAttribute('aria-current')).toBe('page');
+    act(() => useStore.setState({ roomStatus: { running: true, enabled: false, hqWorkspaceId: 'hq' } } as never));
+    expect(useStore.getState().appRoute).toBe('workspaces');
+    expect(q('[data-sidebar-nav="bots"]')).toBeNull();
   });
 
   it('messages are bubbles in runs: in a room the name tops the run, the avatar sits beside its last bubble', async () => {

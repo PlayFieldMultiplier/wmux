@@ -933,6 +933,9 @@ export interface UISlice {
   companyViewVisible: boolean;
   toggleCompanyView: () => void;
   toggleBotsView: () => void;
+  /** The Bots page while the bots are on; otherwise Settings › Bots, where
+   *  they are turned on (the page has no rail item while they are off). */
+  openBotsPage: () => void;
   setCompanyViewVisible: (visible: boolean) => void;
 
   messageFeedVisible: boolean;
@@ -2194,7 +2197,12 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   // Opens the Bots rail page and, pressed there, returns to Workspaces.
   toggleBotsView: () => {
     if (get().appRoute === 'bots') set((state) => { leaveAppRoute(state, 'bots'); });
-    else get().setAppRoute('bots');
+    else get().openBotsPage();
+  },
+  openBotsPage: () => {
+    if (get().roomStatus?.enabled) get().setAppRoute('bots');
+    // Settings › Bots (FACTORY_SETTINGS_TAB in components/Bots/botsAddBot.ts).
+    else get().openSettingsTab('factory');
   },
   setCompanyViewVisible: (visible) => set((state) => { state.companyViewVisible = visible; }),
 

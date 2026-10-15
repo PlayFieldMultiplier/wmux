@@ -1290,7 +1290,7 @@ export const ko = {
   'settings.factory.notInstalled': "이 빌드에는 봇 기능이 없어서 이 설정은 꺼져 있어요.",
   'settings.factory.notStarted': "봇이 아직 시작되지 않았어요. 잠시 후 다시 시도해 주세요.",
   'settings.factory.enabled': "봇 켜기",
-  'settings.factory.enabledDesc': "봇이 각 워크스페이스의 룸에서 일하기 시작해요. 새 이벤트와 내 메시지에 깨어나요.",
+  'settings.factory.enabledDesc': "켜면 사이드바에 봇이 나타나요. 봇이 각 워크스페이스의 룸에서 일하기 시작해요. 새 이벤트와 내 메시지에 깨어나요.",
   'settings.factory.hq': "HQ 워크스페이스",
   'settings.factory.hqDesc': "Moa의 룸: 계획, 아침 보고, 모든 봇.",
   'settings.factory.hqNone': "없음",

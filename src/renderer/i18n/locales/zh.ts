@@ -1869,7 +1869,7 @@ export const zh = {
   'settings.factory.notInstalled': "此版本未安装机器人功能，因此这些设置不可用。",
   'settings.factory.notStarted': "机器人尚未启动，请稍后再试。",
   'settings.factory.enabled': "运行机器人",
-  'settings.factory.enabledDesc': "机器人开始在各工作区的房间中工作，遇到新事件或你的消息时醒来。",
+  'settings.factory.enabledDesc': "开启后，机器人会出现在侧边栏中。机器人开始在各工作区的房间中工作，遇到新事件或你的消息时醒来。",
   'settings.factory.hq': "HQ 工作区",
   'settings.factory.hqDesc': "Moa 的房间：计划、晨报和所有机器人。",
   'settings.factory.hqNone': "无",
