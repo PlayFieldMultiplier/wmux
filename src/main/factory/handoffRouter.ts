@@ -1284,6 +1284,8 @@ export class HandoffRouter {
         ...(h.relay ? { relay: true } : {}),
         // The hop that opens a thread for the owner's request: that request's card names it.
         ...(kind === 'handoff.received' ? this.requestCardOf(h) : {}),
+        // ... and the 1:1 it was said in, when it was (its card links that 1:1).
+        ...(kind === 'handoff.received' && h.openedIn ? { openedIn: h.openedIn } : {}),
       },
     };
     const ports = this.opts.ports();

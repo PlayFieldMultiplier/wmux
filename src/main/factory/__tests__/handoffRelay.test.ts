@@ -526,7 +526,7 @@ describe('the General card that points at a coordinator\'s thread', () => {
     await r.router.idle();
     const root = r.router.get(d.handoffId)!;
     expect(root).toMatchObject({ threadId: `handoff:${d.handoffId}`, opensThread: true, openedIn: dm });
-    expect(r.rooms.read('ws1', { threadId: root.threadId }).cards[0].refs?.requestCardId).toBe(request.id);
+    expect(r.rooms.read('ws1', { threadId: root.threadId }).cards[0].refs).toMatchObject({ requestCardId: request.id, threadId: dm });
     const res = answer(r, t.dev, root, 'Added');
     if (!res.ok) throw new Error('refused');
     await r.router.idle();

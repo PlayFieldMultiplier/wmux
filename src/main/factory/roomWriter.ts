@@ -36,6 +36,7 @@ import type { WakeReason } from '../../shared/wake';
 import {
   GENERAL_THREAD,
   ROOM_LIMITS,
+  dmThreadBot,
   parseThreadId,
   issueThreadId,
   prThreadId,
@@ -947,13 +948,19 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       // A room mention is the card that said it: its delivery adds no line.
       // A refused one shows above.
       if (p.mention === true) return null;
+      const openedIn = parseThreadId(p.openedIn);
       return {
         workspaces: [...new Set(workspaces)], threadId, kind: 'fact',
         title: kind === 'answer' ? `Answered → ${to}: ${title}`
           : p.relay === true ? `${kind || 'handoff'} → ${to}: ${title} (forwarded by wmux)`
           : `${kind || 'handoff'} → ${to}: ${title}`,
         ...(kind === 'answer' ? { body: capBody(p.answer, 1000) } : {}),
-        refs: { ...baseRefs, ...(str(p.requestCardId) ? { requestCardId: str(p.requestCardId) } : {}) },
+        refs: {
+          ...baseRefs,
+          ...(str(p.requestCardId) ? { requestCardId: str(p.requestCardId) } : {}),
+          // A thread opened from a coordinator's 1:1: the opening hop links it.
+          ...(openedIn && dmThreadBot(openedIn) ? { threadId: openedIn } : {}),
+        },
       };
     }
     case 'task.done':
