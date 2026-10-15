@@ -731,6 +731,7 @@ export function builtinToCustom(themeId: BuiltinThemeId): CustomThemeColors {
   return {
     ...ui,
     xtermPaletteId: BUILTIN_XTERM_PALETTE[themeId],
+    ...(XTERM_ON_THEME_BASE.has(themeId) ? { xtermOverrides: { background: ui.bgBase } } : {}),
   };
 }
 

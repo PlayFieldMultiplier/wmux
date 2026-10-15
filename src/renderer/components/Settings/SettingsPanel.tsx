@@ -5314,7 +5314,11 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const searchHits = useMemo(
-    () => matchSettings(searchQuery, t, SETTINGS_CATALOG),
+    () => matchSettings(
+      searchQuery,
+      t,
+      SETTINGS_CATALOG.filter((entry) => !entry.platform || entry.platform === window.electronAPI?.platform),
+    ),
     [searchQuery, t],
   );
   const searching = searchQuery.trim().length > 0;

@@ -1690,8 +1690,9 @@ const electronAPI = {
       ipcRenderer.send(IPC.WINDOW_SET_TITLEBAR_OVERLAY, opts);
     },
     // macOS window glass: match the app's appearance to the theme so the
-    // material behind the window has the theme's tone. Main validates it.
-    setAppearance: (appearance: 'dark' | 'light') => {
+    // material behind the window has the theme's tone, or 'system' with glass
+    // off. Main validates it.
+    setAppearance: (appearance: 'dark' | 'light' | 'system') => {
       ipcRenderer.send(IPC.WINDOW_SET_APPEARANCE, appearance);
     },
     // Whole-interface zoom (#822): push the persisted factor to main, which

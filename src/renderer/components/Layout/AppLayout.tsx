@@ -2077,7 +2077,7 @@ export default function AppLayout() {
       <ErrorBoundary name="SidebarRail">
         <MiniSidebar rail collapsed={!sidebarVisible} />
       </ErrorBoundary>
-      <div className={`wmux-shell-body relative flex flex-1 min-h-0 min-w-0 ${sidebarPosition === 'right' ? 'flex-row-reverse' : ''}`}>
+      <div className={`wmux-shell-body relative flex flex-1 min-h-0 min-w-0 ${sidebarPosition === 'right' ? 'flex-row-reverse' : ''}`} data-sidebar={sidebarVisible ? 'shown' : 'hidden'}>
       {/* The Workspaces page. Another rail page covers it (RailPage) while it
           stays mounted, full size and inert, so no PTY is resized or lost. */}
       <div className="contents" inert={appRoute !== 'workspaces' && !inspectModeActive} data-workspaces-page>

@@ -94,7 +94,8 @@ and `--sheet-edge`. A new knob is added to `ThemeStyle`, emitted by
 **Terminal content owns its palette.** Each look has its own opaque
 terminal palette (`BUILTIN_XTERM_PALETTE`); diffs are green and errors red
 in the terminal whatever the chrome accent. A theme that borrows another
-theme's palette (Stars & Stripes, Red Dynasty, Nightowl) keeps its ANSI
+theme's palette with a visibly different background (Stars & Stripes, Red
+Dynasty, Nightowl) keeps its ANSI
 colours but puts the terminal on its own `--bg-base`, so the terminal never
 reads as a second, differently tinted panel.
 
@@ -111,13 +112,15 @@ reads as a second, differently tinted panel.
 │l │           │                                                     │ │
 │48│           │  [agent bar — overlay, on approach]                 │ │
 │  │╰───────────────────────────────────────────────────────────────────┤
-└──┴── sheet flush with the window's right and bottom edges ───────────┘
+└──┴── sheet flush with the window's edges on macOS (8px elsewhere) ───┘
 ```
 
 - **Frame:** the titlebar row and the 48px rail, painted `--frame-bg` — a
-  step darker than the sheet in the dark looks, a soft grey in Paper. The
-  sheet has no margin: it meets the window's right and bottom edges, its
-  rounded corners kept.
+  step darker than the sheet in the dark looks, a soft grey in Paper. On
+  macOS, whose windows have rounded corners, the sheet has no margin: it
+  meets the window's edges, its own rounded corners kept. Windows and Linux
+  keep an 8px margin (`--sheet-inset`) on the sides away from the rail and
+  the bottom, so no frame notch shows in a square window corner.
 - **Sheet:** one rounded panel (`--sheet-radius` 12px) flush under the
   titlebar, holding the sidebar and the panes (and the file tree column
   when it is shown). Nothing docks opposite the sidebar (the Bots page's
@@ -127,7 +130,8 @@ reads as a second, differently tinted panel.
   else. Inside, the sidebar keeps its mantle tone; the pane column rounds
   off where it meets the sidebar (`--sheet-radius` on its two inner
   corners) with a 1px `--sheet-edge` hairline along the curve, and that
-  line is the one seam.
+  line is the one seam. With the sidebar hidden the pane column drops both,
+  leaving the sheet's own edge as the only boundary.
 - **Native fullscreen** (any platform): the sheet drops its margins and
   radius. The rail stays.
 - **Terminal geometry is untouched** by the frame: margin changes, a sidebar
@@ -148,7 +152,11 @@ reads as a second, differently tinted panel.
   material; light themes, whose material is milkier, about 14% / 3%.
   Windows and Linux are opaque. The page fades through
   `color-mix(… 0%, transparent)`, never the `transparent` keyword (which
-  interpolates through black).
+  interpolates through black). `data-glass` carries the material's
+  appearance (`dark` or `light`), which is how the light tuning applies to
+  any light theme, custom ones included. With glass Off the app returns to
+  the system appearance, and glass is only installed once the saved theme
+  and level are loaded, so a launch never flips the appearance twice.
 - `BrowserWindow.backgroundColor` follows the default look so the first
   frame never flashes white; no native menu bar is visible
   (`autoHideMenuBar`; accelerators keep working).

@@ -1184,11 +1184,11 @@ html[data-glass]:is([data-theme="stars-and-stripes"], [data-theme="red-dynasty"]
 }
 /* The light material is milkier than the dark one, so a light look paints
  * less over it to read as see-through as a dark look does. */
-html[data-glass]:is([data-theme="paper"], [data-theme="mono-light"], [data-theme="hinomaru"], [data-theme="taegeuk"]) {
+html[data-glass="light"] {
   --glass-frame: 10%;
   --glass-sheet: 4%;
 }
-html[data-glass]:is([data-theme="paper"], [data-theme="mono-light"], [data-theme="hinomaru"], [data-theme="taegeuk"])[data-glass-level="clear"] {
+html[data-glass="light"][data-glass-level="clear"] {
   --glass-frame: 0%;
   --glass-sheet: 3%;
 }

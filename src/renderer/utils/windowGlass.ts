@@ -49,13 +49,18 @@ function sync(root: HTMLElement, systemDark: boolean, lastAppearance: { value: s
   const platform = window.electronAPI?.platform;
   const bgBase = style.getPropertyValue('--bg-base');
   const appearance = themeAppearance(bgBase);
-  if (platform === 'darwin' && appearance && appearance !== lastAppearance.value) {
-    lastAppearance.value = appearance;
-    window.electronAPI?.window?.setAppearance?.(appearance);
-  }
   const level = resolveWindowGlass(root.getAttribute('data-glass-level'));
+  // With glass off the app goes back to the system appearance: overriding it
+  // is app-wide (native menus, the in-app browser's prefers-color-scheme),
+  // so it is only worth it while the material shows.
+  const wanted = level === 'off' ? 'system' : appearance;
+  if (platform === 'darwin' && wanted && wanted !== lastAppearance.value) {
+    lastAppearance.value = wanted;
+    window.electronAPI?.window?.setAppearance?.(wanted);
+  }
   const on = shouldUseGlass(platform, bgBase, style.getPropertyValue('--theme-glass') || '1', systemDark, level);
-  if (on) root.setAttribute('data-glass', '');
+  // The value is the material's appearance, so CSS can tune a light material.
+  if (on && appearance) root.setAttribute('data-glass', appearance);
   else root.removeAttribute('data-glass');
 }
 

@@ -408,7 +408,7 @@ export function registerAllHandlers(
   // in-app browser's prefers-color-scheme follow the theme too.
   const onSetAppearance = (_event: Electron.IpcMainEvent, appearance: unknown): void => {
     if (process.platform !== 'darwin') return;
-    if (appearance !== 'dark' && appearance !== 'light') return;
+    if (appearance !== 'dark' && appearance !== 'light' && appearance !== 'system') return;
     if (nativeTheme.themeSource !== appearance) nativeTheme.themeSource = appearance;
   };
   ipcMain.removeAllListeners(IPC.WINDOW_SET_APPEARANCE);
