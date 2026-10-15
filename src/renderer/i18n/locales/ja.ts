@@ -585,9 +585,6 @@ export const ja = {
 
   // ─── エージェントツールバー: fan-out / broadcast ボタン ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — 現在のワークスペースのすべてのターミナルペインに同じテキストを送信（隔離なし）',
-  'toolbar.broadcastPrompt': 'Broadcast — 現在のワークスペースのすべてのターミナルペインに送信',
 
   // ─── Fan-out ダイアログ（プロンプト1個 → N個の隔離タスク）───
   'fanout.title': 'Fan-out — プロンプト1個 → N個の隔離タスク',

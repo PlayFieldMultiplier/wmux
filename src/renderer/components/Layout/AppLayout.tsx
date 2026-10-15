@@ -502,7 +502,6 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     agentToolbarEnabled: state.agentToolbarEnabled,
     agentToolbarPinned: state.agentToolbarPinned,
     agentToolbarSnippets: state.toolbarSnippets.length > 0 ? state.toolbarSnippets : undefined,
-    agentToolbarNewCommand: state.newConversationCommand,
   };
 }
 

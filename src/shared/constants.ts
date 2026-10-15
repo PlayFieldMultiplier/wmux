@@ -486,7 +486,6 @@ export const IPC = {
   ROOM_RESOLVE: 'room:resolve',
   ROOM_DECISION: 'room:decision',
   ROOM_ACTORS: 'room:actors',
-  DIALOG_PICK_FILE: 'dialog:pick-file',
   DIALOG_PICK_FOLDER: 'dialog:pick-folder',
   // File system
   FS_READ_DIR: 'fs:read-dir',

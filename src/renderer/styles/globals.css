@@ -1005,9 +1005,9 @@ select option {
   container-type: inline-size;
   container-name: wmux-toolbar;
 }
-/* Two-stage collapse: secondary labels (Attach·Files·Snippets) drop first at
+/* Two-stage collapse: secondary labels (Files·Snippets) drop first at
  * 860px, then all labels drop to icon-only at 720px — the widths where the
- * full row (incl. New conversation and the pin) stops fitting. The buttons
+ * full row (incl. Multi Task and the pin) stops fitting. The buttons
  * keep their title tooltips at every stage, so nothing becomes undiscoverable. */
 @container wmux-toolbar (max-width: 860px) {
   .wmux-toolbar-label-secondary {

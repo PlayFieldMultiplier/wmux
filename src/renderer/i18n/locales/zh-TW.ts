@@ -540,9 +540,6 @@ export const zhTW = {
 
   // ─── 代理工具列: fan-out / broadcast 按鈕 ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — 向目前工作區的每個終端機面板傳送相同文字（無隔離）',
-  'toolbar.broadcastPrompt': 'Broadcast — 傳送到目前工作區的每個終端機面板',
   'toolbar.schedule': '排程',
   'toolbar.scheduleTooltip': '管理這個 session 的排程提示',
   'sessionSchedule.title': 'Session 排程',

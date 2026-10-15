@@ -80,9 +80,10 @@ import { BOT_EVENT } from '../../shared/bot';
 import type { LedgerEntry } from '../../shared/ledger';
 import { git } from '../git/git';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
-import { isPidAlive, stopSessionsInDir } from '../worktask/stopSessionsInDir';
+import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../worktask/stopSessionsInDir';
+import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { originDefaultRef, taskFolderFromMissions, worktreeFromMissions } from './verifyPreset';
-import { completeCheckedTask, completeResearchTask, installTaskGate } from './taskGate';
+import { completeCheckedTask, completeResearchTask, gateCardNoted, installTaskGate } from './taskGate';
 import { TaskBranchCache, setBotTaskSources } from './botTasks';
 import { installLateStopSweep, setFactoryStopPorts, type FactoryStopPorts } from './factoryStop';
 import { getRoutineStore } from './routines';
@@ -431,19 +432,40 @@ export function daemonRpc(client: () => Daemon | null): ((method: string, params
   return c ? (method, params) => c.rpc(method as never, params as Record<string, unknown> | undefined) : null;
 }
 
-/** Stop the processes of a bot task's worker: the daemon sessions started in
- *  its worktree (a research task's scratch folder), as a task close stops
- *  them (the folder is kept). */
-export async function stopTaskWorker(entry: LedgerEntry, client: () => Daemon | null): Promise<number> {
+/** Stop the processes of a bot task's worker: the daemon sessions of its
+ *  workspace started in its worktree (a research task's scratch folder), the
+ *  folder kept. Each pane's agent and everything below it first (the daemon's
+ *  session.stopAgent: asked to exit, killed after a grace, checked gone),
+ *  then the pane itself, checked gone (stopSessionsInDir). `workspacePtys`:
+ *  the panes a workspace owns, null when the workspace tree is not known (a
+ *  session started in the folder then counts). A pane in another workspace,
+ *  such as a terminal the owner opened in the folder, is never touched.
+ *  How many sessions were confirmed stopped; throws when one was not. */
+export async function stopTaskWorker(
+  entry: LedgerEntry,
+  client: () => Daemon | null,
+  workspacePtys?: (workspaceId: string) => readonly string[] | null,
+): Promise<number> {
   const rpc = daemonRpc(client);
   if (!rpc) throw new Error('the daemon is not connected');
   const worktree = await taskFolderFromMissions(rpc, entry);
   if (!worktree) throw new Error('the task worktree is not known');
+  const own = workspacePtys?.(entry.taskWorkspaceId) ?? null;
+  const listSessions = async (): Promise<Array<{ id: string; pid?: number; spawnCwd?: string }>> => {
+    const sessions = await rpc('daemon.listSessions', {});
+    const all = Array.isArray(sessions) ? (sessions as Array<{ id: string; pid?: number; spawnCwd?: string }>) : [];
+    return own ? all.filter((x) => own.includes(x.id)) : all;
+  };
+  for (const id of await sessionsStartedIn([worktree], { listSessions })) {
+    const r = (await rpc('session.stopAgent', { sessionId: id })) as { ok?: boolean; code?: string } | null;
+    // Gone already, or a pane whose agent the daemon cannot stop this way
+    // (WSL, an exec unit): the pane's own stop below ends it.
+    if (r?.ok !== true && r?.code !== 'no_session' && r?.code !== 'unsupported') {
+      throw new Error(`the agent in ${id} was not stopped (${r?.code ?? 'no answer'})`);
+    }
+  }
   const stopped = await stopSessionsInDir(worktree, {
-    listSessions: async () => {
-      const sessions = await rpc('daemon.listSessions', {});
-      return Array.isArray(sessions) ? sessions : [];
-    },
+    listSessions,
     destroySession: async (id) => {
       await rpc('daemon.destroySession', { id });
     },
@@ -453,6 +475,15 @@ export async function stopTaskWorker(entry: LedgerEntry, client: () => Daemon | 
   });
   if (stopped.length > 0) console.log(`[factory] stopped ${stopped.length} session(s) of task ${entry.id}`);
   return stopped.length;
+}
+
+/** The panes (daemon sessions) a workspace owns, stashed ones included; []
+ *  for a workspace that is not open; null while the tree is not known. */
+function taskWorkspacePtys(workspaceId: string): readonly string[] | null {
+  const entries = getWorkspaceMirror().getEntries();
+  if (!entries) return null;
+  const e = entries.find((x) => x.id === workspaceId);
+  return e && Array.isArray(e.ptyIds) ? e.ptyIds : [];
 }
 
 /** The PR facts in the fact log's window, oldest first. */
@@ -476,11 +507,6 @@ function uiLocaleNow(): string {
   } catch {
     return 'en';
   }
-}
-
-/** A system card in a room thread (best effort). */
-function systemNote(workspaceId: string, threadId: ThreadId, title: string, body: string): void {
-  getRoomWriter()?.append({ workspaceId, threadId, kind: 'fact', actor: { kind: 'system' }, title, body });
 }
 
 // ── Module ─────────────────────────────────────────────────────────────────
@@ -629,7 +655,15 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
             if (!q) console.info(`[factory] wake queue not running; ${input.botId} was not woken`);
             return q?.enqueue(input) ?? null;
           },
-          note: systemNote,
+          note: (workspaceId, threadId, title, body, key) => {
+            const writer = getRoomWriter();
+            if (!writer || gateCardNoted((ws, m) => writer.find(ws, m), workspaceId, threadId, key)) return;
+            writer.append({ workspaceId, threadId, kind: 'fact', actor: { kind: 'system' }, title, body }, { clientPostId: key });
+          },
+          noted: (workspaceId, threadId, key) => {
+            const writer = getRoomWriter();
+            return gateCardNoted(writer ? (ws, m) => writer.find(ws, m) : null, workspaceId, threadId, key);
+          },
         }));
       });
       offTasks.push(() => clearImmediate(gateTimer));
@@ -662,7 +696,8 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         botIds: () => getBotStore()?.list({}).map((b) => b.id) ?? [],
         ledger,
         gates: getSharedTaskGateRunner,
-        stopWorker: (entry) => stopTaskWorker(entry, daemon),
+        stopWorker: (entry) => stopTaskWorker(entry, daemon, taskWorkspacePtys),
+        isOff: () => !settings().enabled,
         pauseRoutines: (botId) => getRoutineStore()?.pauseFor(botId, 'stop') ?? 0,
         stopResumed: async (botId) => {
           const p = getWorkerResumePorts();

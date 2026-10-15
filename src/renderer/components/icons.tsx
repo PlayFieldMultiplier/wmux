@@ -254,15 +254,6 @@ export function IconClock({ size = 14 }: { size?: number }) {
   );
 }
 
-/** Paperclip — attach file. Replaces the ＋ glyph on the toolbar attach button. */
-export function IconPaperclip({ size = 14 }: { size?: number }) {
-  return (
-    <Icon size={size}>
-      <path d="M10.7 6.2 L6 10.9 a2.4 2.4 0 0 1 -3.4 -3.4 L7.6 2.5 a1.6 1.6 0 0 1 2.3 2.3 L5.2 9.6 a0.8 0.8 0 0 1 -1.2 -1.2 L8.3 4" />
-    </Icon>
-  );
-}
-
 /** Folder — file explorer. Replaces the 📁 emoji. */
 export function IconFolder({ size = 14 }: { size?: number }) {
   return (
@@ -283,20 +274,6 @@ export function IconFile({ size = 14 }: { size?: number }) {
     <Icon size={size}>
       <path d="M3.5 1.8 H8.2 L10.8 4.4 V12.2 H3.5 Z" />
       <polyline points="8.2,1.8 8.2,4.4 10.8,4.4" />
-    </Icon>
-  );
-}
-
-/** File tree — a folder with two entries hanging off it: the file tree
- *  column's titlebar toggle. */
-export function IconFileTree({ size = 14 }: { size?: number }) {
-  return (
-    <Icon size={size}>
-      <path d="M1.8 2 H4 L4.8 3 H7 V5.4 H1.8 Z" />
-      <path d="M3.4 5.4 V11 H6.4" />
-      <line x1="3.4" y1="8.2" x2="6.4" y2="8.2" />
-      <rect x="7.2" y="6.9" width="5" height="2.6" rx="0.6" />
-      <rect x="7.2" y="9.7" width="5" height="2.6" rx="0.6" />
     </Icon>
   );
 }

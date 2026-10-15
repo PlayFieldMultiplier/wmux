@@ -536,9 +536,6 @@ export const vi = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — cùng một văn bản tới mọi khung terminal trong không gian làm việc hiện tại (không cô lập)',
-  'toolbar.broadcastPrompt': 'Broadcast — gửi tới mọi khung terminal trong không gian làm việc hiện tại',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ───
   'fanout.title': 'Fan-out — 1 prompt → N tác vụ cô lập',

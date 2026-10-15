@@ -538,9 +538,6 @@ export const ar = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — نفس النص إلى كل جزء طرفية في مساحة العمل الحالية (بدون عزل)',
-  'toolbar.broadcastPrompt': 'Broadcast — إرسال إلى كل جزء طرفية في مساحة العمل الحالية',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ───
   'fanout.title': 'Fan-out — مطالبة واحدة ← N مهمة معزولة',

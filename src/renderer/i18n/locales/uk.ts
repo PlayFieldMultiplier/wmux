@@ -542,9 +542,6 @@ export const uk = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — той самий текст у кожну панель термінала в поточному робочому просторі (без ізоляції)',
-  'toolbar.broadcastPrompt': 'Broadcast — надіслати в кожну панель термінала в поточному робочому просторі',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ───
   'fanout.title': 'Fan-out — 1 промпт → N ізольованих задач',

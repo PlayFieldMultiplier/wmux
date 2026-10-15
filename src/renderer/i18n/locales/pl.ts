@@ -375,10 +375,9 @@ export const pl = {
   'filetree.noDirectory': 'Brak katalogu',
   'filetree.noCwd': 'Brak katalogu roboczego',
   'filetree.refresh': 'Odśwież',
+  'filetree.toggleHide': 'Ukryj drzewo plików',
   'filetree.empty': 'Pusty lub niedostępny',
   'filetree.noCwdDetected': 'Nie wykryto katalogu roboczego',
-  'filetree.toggleShow': 'Pokaż drzewo plików',
-  'filetree.toggleHide': 'Ukryj drzewo plików',
   'filetree.resize': 'Zmień szerokość drzewa plików (dwuklik przywraca domyślną)',
   'filetree.menu.open': 'Otwórz',
   'filetree.menu.insertPath': 'Wstaw ścieżkę do terminala',
@@ -3147,7 +3146,6 @@ export const pl = {
   'claudeIntegration.usage.status.read-error': 'Błąd odczytu poświadczeń',
 
   // Agent toolbar
-  'toolbar.attach': 'Załącz',
   'toolbar.fileExplorer': 'Pliki',
   'toolbar.schedule': 'Harmonogram',
   'toolbar.scheduleTooltip': 'Zarządzaj zaplanowanymi poleceniami dla tej sesji',
@@ -3195,12 +3193,10 @@ export const pl = {
   'toolbar.attachFiles': 'Załącz pliki…',
   'toolbar.insertPath': 'Wstaw ścieżkę…',
   'toolbar.newConversation': 'Nowa rozmowa',
-  'toolbar.newConversationConfirm': 'Potwierdź nową rozmowę',
   'toolbar.addSnippetEmpty': 'Dodaj fragment…',
   'toolbar.fanOutStartAgents': 'Uruchom agentów',
   'toolbar.fanOutMultiTask': 'Multi Task',
   'toolbar.new': 'Nowy',
-  'toolbar.newChat': 'Nowy czat',
   'toolbar.pin': 'Trzymaj pasek narzędzi otwarty',
   'toolbar.unpin': 'Ukryj pasek narzędzi, dopóki wskaźnik nie zbliży się do dolnej krawędzi',
   'toolbar.send': 'Wyślij',
@@ -3208,14 +3204,12 @@ export const pl = {
   'toolbar.close': 'Zamknij',
   'toolbar.richPlaceholder': 'Napisz lub wklej prompt. Enter dla nowej linii. Wyślij wkleja go do agenta.',
   'toolbar.noTerminal': 'Brak zogniskowanego terminala',
-  'toolbar.noWorkingDir': 'Brak katalogu roboczego.',
   'toolbar.addSnippet': 'Dodaj fragment',
   'toolbar.snippetLabel': 'Etykieta',
   'toolbar.snippetText': 'Tekst promptu',
   'settings.agentToolbar': 'Pasek narzędzi agenta',
   'settings.agentToolbarShow': 'Pasek narzędzi agenta',
-  'settings.agentToolbarShowDesc': 'Pokaż tworzenie, załączanie i Multi Task. Ctrl+G zawsze działa.',
-  'settings.agentToolbarNewCommand': 'Polecenie nowej rozmowy',
+  'settings.agentToolbarShowDesc': 'Pokaż pliki, fragmenty, tworzenie, harmonogram i Multi Task. Ctrl+G zawsze działa.',
 
   // Channels (a2a.channel.* RPC UI surface)
   'channels.taskCommentPlaceholder': 'Dodaj komentarz do tego zadania…',
@@ -3706,15 +3700,6 @@ export const pl = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ──────────────────────────
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — ten sam tekst do każdego panelu terminala w bieżącym obszarze roboczym (bez izolacji)',
-  'toolbar.broadcastPrompt': 'Broadcast — wyślij do każdego panelu terminala w bieżącym obszarze roboczym',
-  'toolbar.broadcastTitle': 'Broadcast do terminali',
-  'toolbar.broadcastTargets': '{n} terminali',
-  'toolbar.broadcastPlaceholder': 'Wpisz raz — zostanie wysłane do każdego panelu terminala w tym obszarze roboczym…',
-  'toolbar.broadcastSend': 'Wyślij',
-  'toolbar.broadcastSending': 'Wysyłanie…',
-  'toolbar.broadcastResult': '{ok} wysłano · {fail} nieudanych',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ────────────────────────
   'fanout.title': 'Multi Task — N równoległych izolowanych zadań',

@@ -537,9 +537,6 @@ export const hi = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — वर्तमान कार्यक्षेत्र के हर टर्मिनल पैनल में वही टेक्स्ट (कोई पृथक्करण नहीं)',
-  'toolbar.broadcastPrompt': 'Broadcast — वर्तमान कार्यक्षेत्र के हर टर्मिनल पैनल में भेजें',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ───
   'fanout.title': 'Fan-out — 1 प्रॉम्प्ट → N पृथक टास्क',

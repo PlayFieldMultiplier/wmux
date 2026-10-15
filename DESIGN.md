@@ -178,9 +178,9 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   More menu lists it so it stays discoverable.
 - **Right:** Fleet vitals as appearing chips (`N running`, `N need you`; only
   when nonzero, and dropped while Fleet is the page), the account usage when
-  it matters, then the **file tree toggle** (a bare icon like the sidebar's,
-  ⌘⇧E / Ctrl+Shift+E), the bar's last icon (see File tree column). There
-  is no room or bot panel toggle: bot conversations live on the Bots page.
+  it matters. The file tree toggle is not here: it is the agent bar's Files
+  button (see File tree column). There is no room or bot panel toggle: bot
+  conversations live on the Bots page.
   Settings is not here: it lives in the rail's More menu (and ⌘,).
 - **Windows:** the native window controls sit at the right edge in the
   `titleBarOverlay` strip, drawn in the colour the frame actually paints
@@ -1029,11 +1029,12 @@ worker's terminal or a thread opens in the page's own body, right of the
 chat (owner decision 2026-10-14, layout A).
 
 **File tree column.** The one opt-in column on that edge, beside the
-panes. Its titlebar
-toggle (or ⌘⇧E / Ctrl+Shift+E, or the palette) shows it; open state and
+panes. The agent bar's
+Files button (or ⌘⇧E / Ctrl+Shift+E, or the palette) shows it; open state and
 width (200–480px, drag the inner seam) persist. It is Workspaces-page
-chrome: a rail page covers it with the panes, and the toggle pressed from a
-rail page brings Workspaces forward. It lists the focused pane's folder, or
+chrome: a rail page covers it with the panes, and the shortcut or palette
+used from a rail page brings Workspaces forward. Its header ends in a close
+button, so it can be hidden while the agent bar is off. It lists the focused pane's folder, or
 that folder's git repository root when it is inside one. One seam on its
 pane side, a 40px header on the pane tab strip's line, 24px rows with a chevron
 and a line icon; a selected row is a `--selection` fill. Click opens a file
@@ -1252,7 +1253,7 @@ always neutral (the fill ladder).
 - **Chips** (composer pickers, Schedules composer, model, and, outside
   Moa's panel, the orchestrator mode): 26px, `--chip-radius`, no border, `--selection` fill,
   `--selection-hover` on hover, a chevron that turns when open. AI-directed
-  actions (fan-out, broadcast) stay neutral at rest.
+  actions (fan-out) stay neutral at rest.
 - **Composer:** one box with a `--line` hairline (`--line-strong` focused)
   and no fill; input on top, a toolbar row under it with chips and a solid
   26px send. The chat, channel and orchestrator composers share it. Moa's
@@ -1267,7 +1268,9 @@ always neutral (the fill ladder).
 - No emoji glyphs in chrome; status marks are icons, not text glyphs.
 - **Agent verbs** stay one workspace-spanning bar overlaid on the grid's
   bottom edge and revealed on approach (2026-08-18); it takes no layout row,
-  so no PTY is resized when it appears.
+  so no PTY is resized when it appears. It holds Files (the file tree
+  column's toggle) · Snippets · Rich Input · Schedule, then Multi Task and the
+  pin (2026-10-15); a verb that duplicates another home does not get a button.
 
 ### Dialogs & forms
 
@@ -1484,6 +1487,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-15 | Owner decision (modelled on the reference messenger the owner uses): group chats are the owner's. No workspace has a room by itself and no bot makes one; `+` › New group chat takes a name and two or more bots of one workspace (they share its repository and room), and a group's pill renames it, changes its bots or deletes it (its messages stay saved). A group lives in its own thread (`group:<id>`) with the work started from it. A group message goes to every bot in it unless bots are picked in the recipients control above the composer ("To: everyone ▾", a checkbox per bot; a typed `@Name` ticks its bot; the picks reset after each send); the coordinator-only routing of an untagged room message is gone. Nobody greets first in a group and no "joined" line is drawn: a bot new to the group introduces itself in its first answer. Add team makes the bots only, then offers Make a group chat with this team. A room the owner had written in became a group named after its workspace, reading on in General. Amends List, Avatars, Needs you, Chat, Composer, Add bot and First run, and the same day's 1:1-and-room row; supersedes the same day's coordinator-only routing and its "To <lead>" line | The owner asked how they would even know who the coordinator is: a hidden rule that sent untagged room messages to one bot read as the room ignoring the rest, and a room that appeared on its own for every team was not a conversation the owner had chosen |
 | 2026-10-15 | Owner decision: the Bots rail item is listed only while the bots are on; they are turned on in Settings › Bots, whose switch description says so, and the item appears at once without leaving Settings. Turning them off while the Bots page is open returns to Workspaces; the Toggle Bots shortcut and the palette's Open Bots open Settings › Bots while they are off. The first-run panel is reached only with the bots on. Amends Rail and pages, Bots off, Add bot and First run | A Bots item on the rail from the first launch advertised a feature the owner had not chosen, and opened a page that could do nothing until the bots were on. Settings stays open after the switch because Settings › Bots has its own add form and the plan and connection settings the owner may be setting up |
 | 2026-10-15 | Owner decision: settings type and spacing were too large and loud. Settings gets its own calmer scale: regular-weight 14px row labels over quiet 12px descriptions, a 22px/500 page title, 12px nav group labels and 13px section headings in `--text-sub`, the selected nav row in the look's own selection treatment instead of a fixed accent edge, hover on `--hover-fill`, a 30×18 switch with a 24px-tall hit area, a narrower 6px select and a 680px column. Scoped to the Settings page's own rows; the shared Field recipe, dialogs, popovers and listboxes are unchanged | Bold 13px labels over 11px descriptions made every row shout at the same volume, and a fixed accent edge on the nav added a second mark for one selection. Weight and size carry the hierarchy now, with the secondary colour kept at body contrast, so a long settings page reads calmly |
+| 2026-10-15 | Owner decision: the agent bar drops Attach, Broadcast and New chat, and its Files button now toggles the file tree column (its own path-picker popover is gone); the titlebar's file tree icon is removed | The owner barely used them, and each duplicated a better home: dropping a file on a terminal or the tree's Insert path covers Attach, Multi Task covers fan-out work without pasting into plain shells, typing `/clear` covers New chat, and two file browsers (a popover and the column) plus two toggles for one column was one too many |
 
 ### Desktop conversation view
 
