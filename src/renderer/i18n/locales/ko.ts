@@ -2573,6 +2573,7 @@ export const ko = {
   'settings.contrast.surface.bgBase': '기본',
   'settings.contrast.surface.bgSurface': '표면',
   'settings.contrast.surface.bgMantle': '맨틀',
+  'settings.theme.more': '기타 테마',
   'settings.theme.basedOn': '커스텀 ({preset} 기반)',
   'settings.theme.resetToPreset': '프리셋으로 초기화…',
   'settings.theme.tokenOverridden': '프리셋에서 변경됨',

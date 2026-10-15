@@ -155,6 +155,9 @@ button.settings-kbd:hover { color: var(--text-main); background: var(--surface-f
 }
 .settings-theme-card:hover { border-color: color-mix(in srgb, var(--text-main) 24%, transparent); }
 .settings-theme-card[aria-checked="true"] { border-color: color-mix(in srgb, var(--text-main) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-main) 60%, transparent); }
+/* The second theme group's heading: the section-heading style, set apart
+ * from the looks above it. */
+.settings-theme-more { margin-top: 12px; }
 
 /* Search jump: rows have no border of their own, so the flash is a tint. */
 .settings-flash { background: color-mix(in srgb, var(--accent-blue) 10%, transparent) !important; }

@@ -1328,6 +1328,10 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
   open Factory, the agent factory's tab).
 - **Theme picker:** visual cards whose thumbnails show the look's face,
   chip shape and selection style; selected by a neutral outline + check.
+  wmux's own looks (Tint, Zinc, Graphite, Paper, Amber Line) come first;
+  every other built-in theme and Custom follow under a "More themes"
+  heading in the section-heading style, each group in its usual order, all
+  in one radio group and never collapsed.
 - **Type scale** (2026-10-15, calmer than the chrome scale). Quietness
   comes from weight and size, not a dimmer colour: descriptions, notes,
   inactive nav labels and every heading below the page title are

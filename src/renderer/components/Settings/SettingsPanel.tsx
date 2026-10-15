@@ -3653,6 +3653,46 @@ function TabAppearance() {
   // user has ever customized → fall back to the default custom theme.
   const customThemeColors = useStore((s) => s.customThemeColors) ?? DEFAULT_CUSTOM_THEME;
 
+  // wmux's own looks (the ones with a THEME_STYLES entry) lead the grid; every
+  // other built-in theme and Custom follow under a second heading, each group
+  // in THEME_OPTIONS order.
+  const lookOptions = THEME_OPTIONS.filter(({ value }) => value in THEME_STYLES);
+  const moreOptions = THEME_OPTIONS.filter(({ value }) => !(value in THEME_STYLES));
+  const renderThemeCard = ({ value, label }: (typeof THEME_OPTIONS)[number]) => {
+    const selected = currentTheme === value;
+    const palette = value === 'custom'
+      ? deriveFullPalette(customThemeColors)
+      : deriveBuiltinPalette(value as BuiltinThemeId);
+    return (
+      <button
+        key={value}
+        type="button"
+        onClick={() => setTheme(value)}
+        role="radio"
+        aria-checked={selected}
+        aria-label={label}
+        className={`settings-theme-card ${FOCUS_RING}`}
+      >
+        <ThemeThumbnail palette={palette} look={value === 'custom' ? undefined : THEME_STYLES[value as BuiltinThemeId]} />
+        <div
+          className="flex items-center justify-between gap-1 px-2.5 py-1.5"
+          style={{
+            backgroundColor: palette.bgMantle,
+            color: selected ? palette.textMain : palette.textSub,
+            fontFamily: value === 'custom' ? undefined : THEME_STYLES[value as BuiltinThemeId]?.uiFont,
+          }}
+        >
+          <span className="text-[13px] truncate">{label}</span>
+          {selected && (
+            <span className="shrink-0 inline-flex" style={{ color: palette.textMain }} aria-hidden="true">
+              <IconCheck size={12} />
+            </span>
+          )}
+        </div>
+      </button>
+    );
+  };
+
   return (
     <div className="settings-page">
       {/* Theme — visual cards on the surface radii and hairlines. Selection is
@@ -3661,41 +3701,14 @@ function TabAppearance() {
         <div className="settings-section-head">
           <h3 className="ui-group-label settings-section-title">{t('settings.theme')}</h3>
         </div>
-        <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label={t('settings.theme')}>
-          {THEME_OPTIONS.map(({ value, label }) => {
-            const selected = currentTheme === value;
-            const palette = value === 'custom'
-              ? deriveFullPalette(customThemeColors)
-              : deriveBuiltinPalette(value as BuiltinThemeId);
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setTheme(value)}
-                role="radio"
-                aria-checked={selected}
-                aria-label={label}
-                className={`settings-theme-card ${FOCUS_RING}`}
-              >
-                <ThemeThumbnail palette={palette} look={value === 'custom' ? undefined : THEME_STYLES[value as BuiltinThemeId]} />
-                <div
-                  className="flex items-center justify-between gap-1 px-2.5 py-1.5"
-                  style={{
-                    backgroundColor: palette.bgMantle,
-                    color: selected ? palette.textMain : palette.textSub,
-                    fontFamily: value === 'custom' ? undefined : THEME_STYLES[value as BuiltinThemeId]?.uiFont,
-                  }}
-                >
-                  <span className="text-[13px] truncate">{label}</span>
-                  {selected && (
-                    <span className="shrink-0 inline-flex" style={{ color: palette.textMain }} aria-hidden="true">
-                      <IconCheck size={12} />
-                    </span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
+        <div className="flex flex-col gap-3" role="radiogroup" aria-label={t('settings.theme')}>
+          <div className="grid grid-cols-3 gap-3" data-theme-group="looks">
+            {lookOptions.map(renderThemeCard)}
+          </div>
+          <h4 className="ui-group-label settings-section-title settings-theme-more">{t('settings.theme.more')}</h4>
+          <div className="grid grid-cols-3 gap-3" data-theme-group="more">
+            {moreOptions.map(renderThemeCard)}
+          </div>
         </div>
       </section>
 

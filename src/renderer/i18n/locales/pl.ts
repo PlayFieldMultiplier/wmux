@@ -1282,6 +1282,7 @@ export const pl = {
   'settings.updateAvailable': 'Dostępna aktualizacja',
   'settings.close': 'Zamknij',
   'settings.theme': 'Motyw',
+  'settings.theme.more': 'Więcej motywów',
   'settings.escToCancel': 'ESC, aby anulować',
   // Settings — MCP server status (wmux mcp check mirror)
   'settings.mcpServers': 'Serwery MCP',

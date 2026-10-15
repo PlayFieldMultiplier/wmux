@@ -499,6 +499,7 @@ export const zh = {
   'settings.updateAvailable': '有可用更新',
   'settings.close': '关闭',
   'settings.theme': '主题',
+  'settings.theme.more': '更多主题',
   'settings.escToCancel': '按 ESC 取消',
   // Settings — MCP server status (wmux mcp check mirror)
   'settings.mcpServers': 'MCP 服务器',
