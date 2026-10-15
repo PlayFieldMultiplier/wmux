@@ -82,6 +82,9 @@ export interface BotWorkerGuardDeps {
   /** A recorded session's connections now (default: its task's, from the
    *  ledger, that are still its bot's in the library). */
   sessionConnectors?: (workspaceId: string) => Connector[];
+  /** A re-fire's or resume's other folders the line may start in (the pane's
+   *  live and spawn folders), checked with the recorded one. */
+  folders?: readonly string[];
 }
 
 /** pty.handler points the guard at the app's MCP bundle and the owner's
@@ -178,22 +181,42 @@ export function isGuardedCodexCreate(options: { initialCommand?: string } | unde
 }
 
 /**
- * pty:create, once the folder is resolved: a guarded codex or claude create
- * starts in the folder it was checked in, or not at all (never a recovery
- * folder or the home fallback). Null when it may start, and for every other
- * create.
+ * pty:create, once the folder is resolved: a guarded codex create starts in
+ * the folder it was checked in, or not at all (never a recovery folder or the
+ * home fallback). Null when it may start, and for every other create.
  */
 export function guardedCodexCwdRefusal(
   options: { initialCommand?: string } | undefined,
   resolution: { source: string; safeCwd?: string | null },
 ): string | null {
   const g = options ? guardedCodexCreates.get(options) : undefined;
-  const moved = (cwd: string) => resolution.source !== 'requested' || !resolution.safeCwd || path.resolve(resolution.safeCwd) !== cwd;
-  if (g) return moved(g.cwd) ? 'PTY_CREATE: a bot\'s codex worker starts only in the folder its rules were written into' : null;
-  // A claude worker starts in the folder whose project settings were checked.
-  const c = options ? launchOfCreate.get(options) : undefined;
-  if (c?.cwd && moved(c.cwd)) return 'PTY_CREATE: a bot\'s claude worker starts only in the folder its settings were checked in';
+  if (!g) return null;
+  if (cwdMoved(g.cwd, resolution)) return 'PTY_CREATE: a bot\'s codex worker starts only in the folder its rules were written into';
   return null;
+}
+
+function cwdMoved(cwd: string, resolution: { source: string; safeCwd?: string | null }): boolean {
+  return resolution.source !== 'requested' || !resolution.safeCwd || path.resolve(resolution.safeCwd) !== cwd;
+}
+
+/** pty:create, once the folder is resolved: a guarded claude create (its
+ *  staged launch, guardedLaunchOf) starts in the folder whose project
+ *  settings were checked, or not at all. */
+export function guardedClaudeCwdRefusal(
+  launch: { launch?: unknown; cwd?: string },
+  resolution: { source: string; safeCwd?: string | null },
+): string | null {
+  if (!launch.launch || !launch.cwd) return null;
+  return cwdMoved(launch.cwd, resolution) ? 'PTY_CREATE: a bot\'s claude worker starts only in the folder its settings were checked in' : null;
+}
+
+/** The folders a line typed into pane `sessionId` may start in: its live and
+ *  spawn folders, from the daemon. Throws when they cannot be read. */
+export async function paneLaunchFolders(sessionId: string, rpc: (method: string, params: Record<string, unknown>) => Promise<unknown>): Promise<string[]> {
+  const sessions = await rpc('daemon.listSessions', {}) as Array<{ id?: unknown; cwd?: unknown; spawnCwd?: unknown }>;
+  const s = Array.isArray(sessions) ? sessions.find((x) => x?.id === sessionId) : undefined;
+  if (!s) throw guardError('pty:write-launch', 'the pane\'s folder could not be read');
+  return [s.cwd, s.spawnCwd].filter((f): f is string => typeof f === 'string' && f.length > 0);
 }
 
 function ledgerSaysBot(workspaceId: string): boolean {
@@ -324,7 +347,7 @@ function guardError(where: string, why: string): Error {
  *  folder whose project settings are checked first. */
 type LaunchPlan =
   | { kind: 'legacy' }
-  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string };
+  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string; folders?: readonly string[]; strayKeys?: readonly string[] };
 
 function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): { line: string; files?: BotWorkerLaunchFiles } {
   const dir = deps.dir ?? getWmuxDir();
@@ -339,13 +362,13 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
     if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker settings');
     return { line: guarded };
   }
-  const unsafe = workerProjectSettingsRefusal(plan.cwd);
+  const unsafe = [plan.cwd, ...(plan.folders ?? [])].map(workerProjectSettingsRefusal).find((r) => r !== null);
   if (unsafe) throw guardError(where, `the worker's folder has Claude settings a bot's worker does not start with (${unsafe})`);
   const entry = (deps.mcpEntry ?? defaultMcpEntry)();
   if (!entry) throw guardError(where, 'the wmux MCP bundle was not found, so the worker could not report');
   let files: BotWorkerLaunchFiles;
   try {
-    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors);
+    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors, plan.strayKeys);
   } catch (err) {
     throw guardError(where, `the worker's MCP and rules files could not be written: ${String(err)}`);
   }
@@ -357,7 +380,7 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
 /** A worker launch's two files under `<dir>/factory/` (0600, folders 0700),
  *  named by their content, and each stdio connection's run folder with its
  *  empty npm user config. They hold names and paths only. */
-export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[]): BotWorkerLaunchFiles {
+export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[], strayKeys: readonly string[] = []): BotWorkerLaunchFiles {
   const factory = path.join(dir, 'factory');
   const runDir = (c: Connector) => path.join(factory, 'connector-run', c.id);
   const npmrc = (c: Connector) => path.join(runDir(c), 'npmrc');
@@ -366,12 +389,14 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
     fs.mkdirSync(runDir(c), { recursive: true, mode: 0o700 });
     if (!fs.existsSync(npmrc(c))) fs.writeFileSync(npmrc(c), '', { mode: 0o600 });
   }
-  const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc }), null, 2)}\n`;
+  const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc, strayKeys }), null, 2)}\n`;
+  const connectionKeys = [...new Set([...connectors.flatMap((c) => c.secrets.map((s) => s.secret)), ...strayKeys])];
   const settings = `${JSON.stringify(buildWorkerSettings(connectors), null, 2)}\n`;
   return {
     settingsFile: writeContentFile(path.join(factory, 'worker-settings'), settings),
     mcpConfigFile: writeContentFile(path.join(factory, 'worker-mcp'), mcp),
     level,
+    ...(connectionKeys.length > 0 ? { connectionKeys } : {}),
   };
 }
 
@@ -531,6 +556,9 @@ function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps
     connectors: rec.launch ? (deps.sessionConnectors ?? ledgerTaskConnectors)(rec.workspaceId) : [],
     level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()),
     cwd: rec.cwd,
+    ...(deps.folders ? { folders: deps.folders } : {}),
+    // The first launch's keys are still in the pane's environment.
+    ...(rec.launch?.connectionKeys ? { strayKeys: rec.launch.connectionKeys } : {}),
   };
 }
 

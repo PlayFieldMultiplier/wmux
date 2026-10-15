@@ -33,6 +33,7 @@ import { getWmuxHomeDir } from '../../../shared/constants';
 import { sanitizePtyText } from '../../../shared/types';
 import { normalizeWorktreePath } from '../../../shared/workTask';
 import { guardBotWorkerSessionText } from '../../agents/codexWorkerGuard';
+import { isBotWorkerSession, paneLaunchFolders } from '../../agents/botWorkerMergeGuard';
 
 const execFileAsync = promisify(execFile);
 
@@ -253,7 +254,8 @@ export function registerWorktaskHandlers(
       // nothing is typed (botWorkerMergeGuard.ts).
       let line: string;
       try {
-        line = await guardBotWorkerSessionText(ptyId, initialCommand, 'refire');
+        const folders = isBotWorkerSession(ptyId) ? await paneLaunchFolders(ptyId, (m, p) => dc.rpc(m, p)) : undefined;
+        line = await guardBotWorkerSessionText(ptyId, initialCommand, 'refire', folders ? { folders } : {});
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
       }

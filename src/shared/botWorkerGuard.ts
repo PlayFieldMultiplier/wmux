@@ -347,7 +347,14 @@ export const BOT_WORKER_SESSIONS_VERSION = 1;
 /** The files a session's claude launches carry (shared/botWorkerMcp.ts),
  *  so a re-fire or a resume reads the same servers and rules as the first
  *  launch. */
-export interface BotWorkerLaunchFiles { settingsFile: string; mcpConfigFile: string; level: 'core' | 'full' }
+export interface BotWorkerLaunchFiles {
+  settingsFile: string;
+  mcpConfigFile: string;
+  level: 'core' | 'full';
+  /** The connection keys the launch's environment was given (names), kept
+   *  out of every other connection's server on a re-fire or resume. */
+  connectionKeys?: string[];
+}
 
 /** One bot worker session. `workspaceId` and `at` are the version-1 record
  *  every reader knows. The rest are optional additions (no version bump: a
@@ -378,7 +385,9 @@ export function isWorkerLaunchFiles(raw: unknown, dir: string): raw is BotWorker
   const r = raw as Record<string, unknown>;
   const inside = (p: unknown, sub: string): boolean => typeof p === 'string' && isQuotable(p)
     && path.dirname(p) === path.join(dir, 'factory', sub) && /^[0-9a-f]{12}\.json$/.test(path.basename(p));
-  return inside(r.settingsFile, 'worker-settings') && inside(r.mcpConfigFile, 'worker-mcp') && (r.level === 'core' || r.level === 'full');
+  const keys = r.connectionKeys === undefined
+    || (Array.isArray(r.connectionKeys) && r.connectionKeys.length <= 32 && r.connectionKeys.every((k) => typeof k === 'string' && /^[A-Z_][A-Z0-9_]{0,63}$/.test(k)));
+  return inside(r.settingsFile, 'worker-settings') && inside(r.mcpConfigFile, 'worker-mcp') && (r.level === 'core' || r.level === 'full') && keys;
 }
 
 export function botWorkerSessionsPath(dir: string): string {
@@ -397,7 +406,9 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
       if (!id || typeof r?.workspaceId !== 'string' || typeof r.at !== 'number') throw new Error(`a malformed record (${id})`);
       // Launch files that are not main's own are not used (the launch is then
       // guarded as a record without them).
-      const launch = isWorkerLaunchFiles(r.launch, dir) ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level } : undefined;
+      const launch = isWorkerLaunchFiles(r.launch, dir)
+        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}) }
+        : undefined;
       out.set(id, {
         workspaceId: r.workspaceId,
         at: r.at,

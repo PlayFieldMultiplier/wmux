@@ -62,6 +62,9 @@ export interface WorkerMcpInput {
   runDir: (c: Connector) => string;
   /** The empty npm user config in that folder. */
   npmrc: (c: Connector) => string;
+  /** Other connection keys the worker's environment may hold (a re-fire's
+   *  first launch had them): kept out of every stdio server too. */
+  strayKeys?: readonly string[];
 }
 
 /** The `--mcp-config` document. Pure. */
@@ -73,7 +76,7 @@ export function buildWorkerMcpConfig(input: WorkerMcpInput): { mcpServers: Recor
   for (const c of input.connectors) {
     if (c.transport === 'stdio' && c.stdio) {
       // The other connections' keys are taken out of its environment.
-      const others = [...new Set(input.connectors.filter((o) => o !== c).flatMap(keysOf))].filter((k) => !keysOf(c).includes(k));
+      const others = [...new Set([...input.connectors.filter((o) => o !== c).flatMap(keysOf), ...(input.strayKeys ?? [])])].filter((k) => !keysOf(c).includes(k));
       servers[c.name] = {
         type: 'stdio',
         command: '/usr/bin/env',

@@ -251,12 +251,13 @@ export async function guardBotWorkerSessionText(
   sessionId: string,
   text: string,
   kind: 'refire' | 'write-launch',
-  deps: CodexWorkerGuardDeps & { dir?: string } = {},
+  deps: CodexWorkerGuardDeps & { dir?: string; folders?: readonly string[] } = {},
 ): Promise<string> {
   if (namesCodex(text) && isBotWorkerSession(sessionId, deps.dir)) {
     return guardCodexSessionLine(botWorkerSessionRecord(sessionId, deps.dir), text, deps, kind === 'refire' ? 'worktask:refire' : 'pty:write-launch');
   }
-  return kind === 'refire' ? guardRefireLine(sessionId, text, deps.dir ? { dir: deps.dir } : {}) : guardSessionLaunch(sessionId, text, deps.dir ? { dir: deps.dir } : {});
+  const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}) };
+  return kind === 'refire' ? guardRefireLine(sessionId, text, guardDeps) : guardSessionLaunch(sessionId, text, guardDeps);
 }
 
 /** Steps 2-4 and the rebuilt line (see the file header). Throws on any refusal. */

@@ -19,7 +19,7 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, noteBotWorkerSession, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
 import { namesClaude } from '../../../shared/botWorkerGuard';
 import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
@@ -506,8 +506,8 @@ export function registerPTYHandlers(
       // both modes pick the same default.
       const shell = options?.shell || (process.platform === 'win32' ? new ShellDetector().getDefault() : (process.env.SHELL || '/bin/bash'));
       const cwdResolution = resolvePtyCreateCwdForShell(options?.cwd, options?.recoveryCwds, shell);
-      // A bot's codex worker starts in the folder its rules were written into.
-      const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution);
+      // A bot's worker starts in the folder its rules or settings were checked in.
+      const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution) ?? guardedClaudeCwdRefusal(staged.launch, cwdResolution);
       if (codexCwdRefusal) throw new Error(codexCwdRefusal);
       if (secretEnv) {
         const refusal = secretCreateCwdRefusal(grantedCwd, cwdResolution);
@@ -794,8 +794,8 @@ export function registerPTYHandlers(
       const shell = options?.shell
         || (process.platform === 'win32' ? new ShellDetector().getDefault() : (process.env.SHELL || '/bin/bash'));
       const cwdResolution = resolvePtyCreateCwdForShell(options?.cwd, options?.recoveryCwds, shell);
-      // A bot's codex worker starts in the folder its rules were written into.
-      const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution);
+      // A bot's worker starts in the folder its rules or settings were checked in.
+      const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution) ?? guardedClaudeCwdRefusal(staged.launch, cwdResolution);
       if (codexCwdRefusal) throw new Error(codexCwdRefusal);
       const safeCwd = cwdResolution.safeCwd;
       const effectiveCwd = safeCwd ?? undefined;
@@ -942,7 +942,10 @@ export function registerPTYHandlers(
     if (typeof id !== 'string' || typeof text !== 'string' || text.length > PTY_WRITE_BACKSTOP) {
       throw new Error('PTY_WRITE_LAUNCH: an id and a line are required');
     }
-    const line = sanitizePtyText(await guardBotWorkerSessionText(id, text, 'write-launch')) + (submit === true ? '\r' : '');
+    // A bot's worker pane: the folders the line may start in are checked too.
+    const dc = useDaemon ? daemonClient : null;
+    const folders = dc && isBotWorkerSession(id) ? await paneLaunchFolders(id, (m, p) => dc.rpc(m, p)) : undefined;
+    const line = sanitizePtyText(await guardBotWorkerSessionText(id, text, 'write-launch', folders ? { folders } : {})) + (submit === true ? '\r' : '');
     if (useDaemon && daemonClient) {
       if (!daemonClient.writeToSession(id, line)) throw new Error('PTY_WRITE_LAUNCH: the session is not live');
     } else {

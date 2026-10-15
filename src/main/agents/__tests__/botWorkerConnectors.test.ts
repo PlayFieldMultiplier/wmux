@@ -12,6 +12,7 @@ import {
   beginBotWorkerSpawn,
   botWorkerForCreate,
   guardRefireLine,
+  guardedClaudeCwdRefusal,
   guardSessionLaunch,
   guardedLaunchOf,
   noteBotWorkerSession,
@@ -146,7 +147,7 @@ describe('the guard with connections', () => {
         if (process.platform !== 'win32') expect(fs.statSync(f).mode & 0o777).toBe(0o600);
       }
       expect(fs.existsSync(path.join(dir, 'factory', 'connector-run', 'con-0000000b', 'npmrc'))).toBe(true);
-      expect(guardedLaunchOf(guarded)).toEqual({ launch: { settingsFile: w.settings, mcpConfigFile: w.mcp, level: 'full' }, cwd: path.resolve('/w/task') });
+      expect(guardedLaunchOf(guarded)).toEqual({ launch: { settingsFile: w.settings, mcpConfigFile: w.mcp, level: 'full', connectionKeys: ['GH_MCP_TOKEN', 'FILES_API_TOKEN'] }, cwd: path.resolve('/w/task') });
     } finally {
       release();
     }
@@ -213,6 +214,25 @@ describe('the session record carries the launch', () => {
     expect(servers(guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [con(), files] }))).toEqual(['wmux', 'gh', 'files']);
     expect(servers(guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [con()] }))).toEqual(['wmux', 'gh']);
     expect(servers(guardSessionLaunch('pty-c', 'claude --resume 11111111-2222-3333-4444-555555555555', { ...deps(), sessionConnectors: () => [] }))).toEqual(['wmux']);
+    // The first launch's keys are still in the pane: a dropped connection's
+    // key stays out of the remaining stdio server.
+    const left = readJson(wordsOf(guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [files] })).mcp).mcpServers.files;
+    expect(left.args.slice(0, 4)).toEqual(['-C', path.join(dir, 'factory', 'connector-run', files.id), '-u', 'GH_MCP_TOKEN']);
+    // A folder the pane is in now is checked too.
+    const moved = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-conn-moved-'));
+    fs.mkdirSync(path.join(moved, '.claude'));
+    fs.writeFileSync(path.join(moved, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
+    expect(() => guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [], folders: [moved] })).toThrow(/Claude settings/);
+    fs.rmSync(moved, { recursive: true, force: true });
+  });
+
+  it('a guarded claude create starts only in the folder it was checked in', () => {
+    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;
+    const launch = guardedLaunchOf(guarded);
+    expect(guardedClaudeCwdRefusal(launch, { source: 'requested', safeCwd: dir })).toBeNull();
+    expect(guardedClaudeCwdRefusal(launch, { source: 'recovery-cwd', safeCwd: dir })).toMatch(/only in the folder/);
+    expect(guardedClaudeCwdRefusal(launch, { source: 'requested', safeCwd: os.tmpdir() })).toMatch(/only in the folder/);
+    expect(guardedClaudeCwdRefusal({}, { source: 'fallback' })).toBeNull();
   });
 
   it('refuses a worker folder whose Claude project settings run a program or set the environment', () => {
