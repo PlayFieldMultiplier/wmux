@@ -944,7 +944,11 @@ export function registerPTYHandlers(
     }
     // A bot's worker pane: the folders the line may start in are checked too.
     const dc = useDaemon ? daemonClient : null;
-    const folders = dc && isBotWorkerSession(id) ? await paneLaunchFolders(id, (m, p) => dc.rpc(m, p)) : undefined;
+    const botPane = isBotWorkerSession(id);
+    // Without the daemon the pane's folder is not known: a bot worker's
+    // claude is not started again there.
+    if (botPane && !dc && namesClaude(text)) throw new Error('PTY_WRITE_LAUNCH: a bot worker\'s claude starts again only with the wmux daemon');
+    const folders = dc && botPane ? await paneLaunchFolders(id, (m, p) => dc.rpc(m, p)) : undefined;
     const line = sanitizePtyText(await guardBotWorkerSessionText(id, text, 'write-launch', folders ? { folders } : {})) + (submit === true ? '\r' : '');
     if (useDaemon && daemonClient) {
       if (!daemonClient.writeToSession(id, line)) throw new Error('PTY_WRITE_LAUNCH: the session is not live');
