@@ -538,9 +538,6 @@ export const de = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — derselbe Text an jeden Terminalbereich im aktuellen Arbeitsbereich (keine Isolierung)',
-  'toolbar.broadcastPrompt': 'Broadcast — an jeden Terminalbereich im aktuellen Arbeitsbereich senden',
 
   // ─── Fan-out dialog (1 prompt → N isolierte Tasks) ───
   'fanout.title': 'Fan-out — 1 Prompt → N isolierte Tasks',

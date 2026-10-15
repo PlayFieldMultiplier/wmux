@@ -14,9 +14,8 @@ The file tree is a column beside the panes that lists the focused pane's folder 
 
 ## How to get to it (user POV)
 
-- Titlebar button "Show file tree" (right end).
+- The agent bar's "Files" button (`data-toolbar-action="file-tree"`); the column's own header has a close button (`data-file-tree-close`).
 - Shortcut ⇧⌘E (Ctrl+Shift+E); palette "Toggle File Tree".
-- Not to be confused with the agent toolbar "Files" popover (`data-testid="file-explorer"`), which inserts a path into the terminal instead of opening a viewer.
 
 ## Driving it with control-wmux
 

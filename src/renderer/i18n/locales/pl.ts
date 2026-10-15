@@ -375,6 +375,7 @@ export const pl = {
   'filetree.noDirectory': 'Brak katalogu',
   'filetree.noCwd': 'Brak katalogu roboczego',
   'filetree.refresh': 'Odśwież',
+  'filetree.toggleHide': 'Ukryj drzewo plików',
   'filetree.empty': 'Pusty lub niedostępny',
   'filetree.noCwdDetected': 'Nie wykryto katalogu roboczego',
   'filetree.resize': 'Zmień szerokość drzewa plików (dwuklik przywraca domyślną)',
@@ -3698,7 +3699,6 @@ export const pl = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ──────────────────────────
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcastPrompt': 'Broadcast — wyślij do każdego panelu terminala w bieżącym obszarze roboczym',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ────────────────────────
   'fanout.title': 'Multi Task — N równoległych izolowanych zadań',

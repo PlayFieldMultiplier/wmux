@@ -541,9 +541,6 @@ export const bs = {
 
   // ─── Agent toolbar: fan-out / broadcast dugmad ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — isti tekst u svaki terminalski panel u trenutnom radnom prostoru (bez izolacije)',
-  'toolbar.broadcastPrompt': 'Broadcast — pošalji u svaki terminalski panel u trenutnom radnom prostoru',
 
   // ─── Fan-out dijalog (1 prompt → N izolovanih zadataka) ───
   'fanout.title': 'Fan-out — 1 prompt → N izolovanih zadataka',

@@ -542,9 +542,6 @@ export const tr = {
 
   // ─── Aracı araç çubuğu: fan-out / broadcast düğmeleri ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — geçerli çalışma alanındaki her terminal bölmesine aynı metin (izolasyon yok)',
-  'toolbar.broadcastPrompt': 'Broadcast — geçerli çalışma alanındaki her terminal bölmesine gönder',
 
   // ─── Fan-out iletişim kutusu (1 prompt → N izole görev) ───
   'fanout.title': 'Fan-out — 1 prompt → N izole görev',

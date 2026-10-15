@@ -540,9 +540,6 @@ export const da = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — samme tekst til hvert terminalpanel i det aktuelle arbejdsområde (ingen isolering)',
-  'toolbar.broadcastPrompt': 'Broadcast — send til hvert terminalpanel i det aktuelle arbejdsområde',
 
   // ─── Fan-out-dialog (1 prompt → N isolerede opgaver) ───
   'fanout.title': 'Fan-out — 1 prompt → N isolerede opgaver',

@@ -169,6 +169,7 @@ export const zh = {
   'filetree.noDirectory': '无目录',
   'filetree.noCwd': '无 CWD',
   'filetree.refresh': '刷新',
+  'filetree.toggleHide': '隐藏文件树',
   'filetree.empty': '为空或不可用',
   'filetree.noCwdDetected': '未检测到工作目录',
   'filetree.resize': '调整文件树宽度（双击恢复默认）',
@@ -983,7 +984,6 @@ export const zh = {
 
   // ─── 智能体工具栏: fan-out / broadcast 按钮 ───
   'toolbar.fanOut': '多任务',
-  'toolbar.broadcastPrompt': '广播 — 发送到当前工作区的每个终端面板',
 
   // ─── Fan-out 对话框（1 个提示 → N 个隔离任务）───
   'fanout.title': 'Fan-out — 1 个提示 → N 个隔离任务',

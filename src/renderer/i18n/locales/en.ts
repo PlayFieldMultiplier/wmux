@@ -383,6 +383,7 @@ export const en = {
   'filetree.noDirectory': 'No directory',
   'filetree.noCwd': 'No CWD',
   'filetree.refresh': 'Refresh',
+  'filetree.toggleHide': 'Hide file tree',
   'filetree.empty': 'Empty or not available',
   'filetree.noCwdDetected': 'No working directory detected',
   'filetree.resize': 'Resize file tree (double-click to reset)',
@@ -3735,7 +3736,6 @@ export const en = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ──────────────────────────
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcastPrompt': 'Broadcast — send to every terminal pane in the current workspace',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ────────────────────────
   'fanout.title': 'Multi Task — N parallel isolated tasks',

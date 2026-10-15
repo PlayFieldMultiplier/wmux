@@ -542,9 +542,6 @@ export const ms = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — teks yang sama ke setiap panel terminal dalam ruang kerja semasa (tanpa pengasingan)',
-  'toolbar.broadcastPrompt': 'Broadcast — hantar ke setiap panel terminal dalam ruang kerja semasa',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ───
   'fanout.title': 'Fan-out — 1 prompt → N tugas terasing',

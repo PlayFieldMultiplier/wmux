@@ -108,12 +108,21 @@ describe('AgentToolbar — fan-out entry', () => {
   it('Files toggles the file tree column and is pressed only while the column is on screen', () => {
     mount();
     const files = () => container.querySelector('[data-toolbar-action="file-tree"]') as HTMLButtonElement;
+    expect(files().getAttribute('aria-label')).toBeTruthy();
     expect(files().getAttribute('aria-pressed')).toBe('false');
     act(() => { files().click(); });
     expect(useStore.getState().fileTreeVisible).toBe(true);
     expect(files().getAttribute('aria-pressed')).toBe('true');
     act(() => useStore.setState({ appRoute: 'git' }));
     expect(files().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('Files closes an open Multi Task dialog, like every other opener', () => {
+    mount();
+    act(() => { fanoutButton().dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(document.querySelector('[data-testid="fanout-dialog"]')).not.toBeNull();
+    act(() => { (container.querySelector('[data-toolbar-action="file-tree"]') as HTMLButtonElement).click(); });
+    expect(document.querySelector('[data-testid="fanout-dialog"]')).toBeNull();
   });
 
   it('toggles the FanOutDialog open and closed on click', () => {

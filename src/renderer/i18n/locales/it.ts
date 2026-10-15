@@ -541,9 +541,6 @@ export const it = {
 
   // ─── Barra degli strumenti agente: pulsanti fan-out / broadcast ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': "Broadcast — lo stesso testo a ogni pannello di terminale dell'area di lavoro attuale (senza isolamento)",
-  'toolbar.broadcastPrompt': "Broadcast — invia a ogni pannello di terminale dell'area di lavoro attuale",
 
   // ─── Finestra Fan-out (1 prompt → N attività isolate) ───
   'fanout.title': 'Fan-out — 1 prompt → N attività isolate',

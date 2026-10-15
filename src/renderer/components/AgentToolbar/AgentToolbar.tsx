@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../../stores';
 import { selectActiveWorkspace } from '../../stores/selectors/workspaceProjections';
 import { useT } from '../../hooks/useT';
 import { focusedTerminalPtyId } from '../../utils/focusedSurface';
-import { displayCombo, effectiveBindings } from '../../../shared/keymap';
+import { effectiveBindings } from '../../../shared/keymap';
+import { shortcutLabel } from '../../utils/shortcutLabel';
 import { toggleFileTreePanel } from '../FileTree/fileTreeToggle';
 import RichInput from './RichInput';
 import SnippetsMenu from './SnippetsMenu';
@@ -83,12 +84,9 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
   }, [ptyId, popover, setPopover]);
 
   const platform = window.electronAPI?.platform ?? 'linux';
-  const comboFor = (action: string) => {
-    const combo = effectiveBindings(platform, shortcutOverrides).find((b) => b.action === action)?.combo;
-    return combo ? displayCombo(combo, platform) : null;
-  };
+  const bindings = useMemo(() => effectiveBindings(platform, shortcutOverrides), [platform, shortcutOverrides]);
   const withCombo = (label: string, action: string) => {
-    const combo = comboFor(action);
+    const combo = shortcutLabel(platform, bindings.find((b) => b.action === action)?.combo);
     return combo ? `${label} (${combo})` : label;
   };
 
@@ -190,8 +188,13 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
           file tree column, whose rows insert or drag paths into a pane. */}
       <button
         className={`${btn} ${fileTreeOnScreen ? active : idle}`}
-        onClick={() => { setPopover(null); toggleFileTreePanel(useStore.getState()); }}
+        onClick={() => {
+          if (fanOutOpen) closeFanOut();
+          setPopover(null);
+          toggleFileTreePanel(useStore.getState());
+        }}
         title={withCombo(t('toolbar.fileExplorer'), 'toggleFileTree')}
+        aria-label={t('toolbar.fileExplorer')}
         aria-pressed={fileTreeOnScreen}
         aria-controls="wmux-file-tree"
         data-toolbar-action="file-tree"

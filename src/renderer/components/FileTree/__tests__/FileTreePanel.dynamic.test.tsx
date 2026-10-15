@@ -107,6 +107,16 @@ describe('isAtOrUnder', () => {
 });
 
 describe('FileTreePanel', () => {
+  it('hides itself from its own close button', async () => {
+    act(() => useStore.setState({ fileTreeVisible: true }));
+    act(() => root.render(createElement(FileTreePanel, { position: 'right' })));
+    await flush();
+    const close = container.querySelector('[data-file-tree-close]') as HTMLButtonElement;
+    expect(close.getAttribute('aria-label')).toBeTruthy();
+    act(() => { close.click(); });
+    expect(useStore.getState().fileTreeVisible).toBe(false);
+  });
+
   it("lists the focused pane's folder outside a repository", async () => {
     act(() => root.render(createElement(FileTreePanel, { position: 'right' })));
     await flush();

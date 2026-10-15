@@ -542,9 +542,6 @@ export const ptBR = {
 
   // ─── Barra de ferramentas do agente: botões fan-out / broadcast ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — o mesmo texto para cada painel de terminal do espaço de trabalho atual (sem isolamento)',
-  'toolbar.broadcastPrompt': 'Broadcast — enviar para cada painel de terminal do espaço de trabalho atual',
 
   // ─── Diálogo Fan-out (1 prompt → N tarefas isoladas) ───
   'fanout.title': 'Fan-out — 1 prompt → N tarefas isoladas',

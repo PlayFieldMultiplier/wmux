@@ -536,9 +536,6 @@ export const th = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — ข้อความเดียวกันไปยังทุกพาเนลเทอร์มินัลในพื้นที่ทำงานปัจจุบัน (ไม่มีการแยก)',
-  'toolbar.broadcastPrompt': 'Broadcast — ส่งไปยังทุกพาเนลเทอร์มินัลในพื้นที่ทำงานปัจจุบัน',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ───
   'fanout.title': 'Fan-out — 1 พรอมต์ → N งานที่แยกจากกัน',

@@ -1032,8 +1032,9 @@ chat (owner decision 2026-10-14, layout A).
 panes. The agent bar's
 Files button (or ⌘⇧E / Ctrl+Shift+E, or the palette) shows it; open state and
 width (200–480px, drag the inner seam) persist. It is Workspaces-page
-chrome: a rail page covers it with the panes, and the toggle pressed from a
-rail page brings Workspaces forward. It lists the focused pane's folder, or
+chrome: a rail page covers it with the panes, and the shortcut or palette
+used from a rail page brings Workspaces forward. Its header ends in a close
+button, so it can be hidden while the agent bar is off. It lists the focused pane's folder, or
 that folder's git repository root when it is inside one. One seam on its
 pane side, a 40px header on the pane tab strip's line, 24px rows with a chevron
 and a line icon; a selected row is a `--selection` fill. Click opens a file
@@ -1251,7 +1252,7 @@ always neutral (the fill ladder).
 - **Chips** (composer pickers, Schedules composer, model, and, outside
   Moa's panel, the orchestrator mode): 26px, `--chip-radius`, no border, `--selection` fill,
   `--selection-hover` on hover, a chevron that turns when open. AI-directed
-  actions (fan-out, broadcast) stay neutral at rest.
+  actions (fan-out) stay neutral at rest.
 - **Composer:** one box with a `--line` hairline (`--line-strong` focused)
   and no fill; input on top, a toolbar row under it with chips and a solid
   26px send. The chat, channel and orchestrator composers share it. Moa's

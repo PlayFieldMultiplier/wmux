@@ -541,9 +541,6 @@ export const fr = {
 
   // ─── Barre d'outils agent : boutons fan-out / broadcast ───
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': "Broadcast — même texte envoyé à chaque panneau de terminal de l'espace de travail actuel (sans isolation)",
-  'toolbar.broadcastPrompt': "Broadcast — envoyer à chaque panneau de terminal de l'espace de travail actuel",
 
   // ─── Dialogue Fan-out (1 prompt → N tâches isolées) ───
   'fanout.title': 'Fan-out — 1 prompt → N tâches isolées',

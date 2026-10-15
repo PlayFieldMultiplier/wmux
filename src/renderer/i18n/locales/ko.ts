@@ -404,6 +404,7 @@ export const ko = {
   'filetree.noDirectory': '디렉터리 없음',
   'filetree.noCwd': '작업 디렉터리 없음',
   'filetree.refresh': '새로 고침',
+  'filetree.toggleHide': '파일 트리 숨기기',
   'filetree.empty': '비어 있거나 읽을 수 없음',
   'filetree.noCwdDetected': '작업 디렉터리를 찾지 못했습니다',
   'filetree.resize': '파일 트리 크기 조절 (더블클릭하면 기본값)',
@@ -3222,7 +3223,6 @@ export const ko = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ──────────────────────────
   'toolbar.fanOut': '병렬 작업',
-  'toolbar.broadcastPrompt': 'broadcast — 현재 워크스페이스의 모든 터미널 페인에 전송',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ────────────────────────
   'fanout.title': '병렬 작업 — N개 격리 태스크 동시 실행',
