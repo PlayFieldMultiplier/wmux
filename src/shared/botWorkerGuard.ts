@@ -299,6 +299,47 @@ export function namesClaude(line: string): boolean {
     || CLAUDE_LAUNCHER_ANYWHERE.test(line);
 }
 
+// ── The worker folder's own Claude settings ──────────────────────────────────
+//
+// A worker's claude still reads its folder's project settings
+// (`.claude/settings.json`, `.claude/settings.local.json`): `--setting-sources
+// user` would leave them out, but it also leaves out the repository's
+// CLAUDE.md (measured on claude 2.1.300), which a worker needs. So a launch
+// goes ahead only when those files set nothing that runs a program or sets
+// the worker's environment, the way a codex worker launches only without a
+// project `.codex/config.toml`.
+
+/** Project settings keys that run a program or set the environment. */
+export const WORKER_PROJECT_SETTINGS_REFUSED: readonly string[] = [
+  'hooks', 'env', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper',
+  'statusLine', 'fileSuggestion', 'enabledPlugins', 'extraKnownMarketplaces',
+];
+
+/** Why a claude worker cannot launch in `cwd` because of its project
+ *  settings, or null. A file that cannot be read or parsed counts. */
+export function workerProjectSettingsRefusal(cwd: string): string | null {
+  for (const name of ['settings.json', 'settings.local.json']) {
+    const file = path.join(cwd, '.claude', name);
+    let text: string;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR') continue;
+      return `.claude/${name} could not be read`;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return `.claude/${name} is not valid JSON`;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return `.claude/${name} is not a settings object`;
+    const set = WORKER_PROJECT_SETTINGS_REFUSED.filter((k) => k in (parsed as Record<string, unknown>));
+    if (set.length > 0) return `.claude/${name} sets ${set.join(', ')}`;
+  }
+  return null;
+}
+
 // ── factory/bot-worker-sessions.json ─────────────────────────────────────────
 
 export const BOT_WORKER_SESSIONS_VERSION = 1;

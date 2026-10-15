@@ -234,7 +234,7 @@ describe('a re-fire or a resume of a guarded codex pane', () => {
     const dir = path.join(root, 'data');
     reloadBotWorkerSessionsForTests();
     noteBotWorkerSession('pty-codex', 'ws-task', dir, { agent: 'codex', cwd: wt, repoKey: 'acme/app' });
-    noteBotWorkerSession('pty-plain', 'ws-task', dir);
+    noteBotWorkerSession('pty-plain', 'ws-task', dir, { cwd: wt });
     setWorkerMcpResolvers({ entry: () => '/opt/wmux/mcp/index.js', registeredLevel: () => null });
     try {
       const typed = `codex resume ${ID} ${codexTrustOverride(wt, 'darwin')}`;

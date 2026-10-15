@@ -37,6 +37,7 @@ import {
   namesClaude,
   readBotWorkerSessions,
   spliceSettingsFlag,
+  workerProjectSettingsRefusal,
   writeBotWorkerSettings,
   type BotWorkerLaunchFiles,
   type BotWorkerSessionRecord,
@@ -51,6 +52,7 @@ import {
 } from '../../shared/botWorkerMcp';
 import type { Connector } from '../../shared/botConnector';
 import { getTaskLedger } from '../deck/taskLedgerHost';
+import { getConnectorStore } from '../factory/connectorStore';
 import { launchesCodex, namesCodex } from '../../shared/codexWorkerGuard';
 
 // The pure parts live in shared/ (the daemon guards a phone's launches too).
@@ -77,6 +79,9 @@ export interface BotWorkerGuardDeps {
   mcpEntry?: () => string | null;
   /** The level of the owner's registered claude wmux server, if any. */
   registeredLevel?: () => string | null;
+  /** A recorded session's connections now (default: its task's, from the
+   *  ledger, that are still its bot's in the library). */
+  sessionConnectors?: (workspaceId: string) => Connector[];
 }
 
 /** pty.handler points the guard at the app's MCP bundle and the owner's
@@ -173,19 +178,21 @@ export function isGuardedCodexCreate(options: { initialCommand?: string } | unde
 }
 
 /**
- * pty:create, once the folder is resolved: a guarded codex create starts in
- * the folder it was checked in, or not at all (never a recovery folder or the
- * home fallback). Null when it may start, and for every other create.
+ * pty:create, once the folder is resolved: a guarded codex or claude create
+ * starts in the folder it was checked in, or not at all (never a recovery
+ * folder or the home fallback). Null when it may start, and for every other
+ * create.
  */
 export function guardedCodexCwdRefusal(
   options: { initialCommand?: string } | undefined,
   resolution: { source: string; safeCwd?: string | null },
 ): string | null {
   const g = options ? guardedCodexCreates.get(options) : undefined;
-  if (!g) return null;
-  if (resolution.source !== 'requested' || !resolution.safeCwd || path.resolve(resolution.safeCwd) !== g.cwd) {
-    return 'PTY_CREATE: a bot\'s codex worker starts only in the folder its rules were written into';
-  }
+  const moved = (cwd: string) => resolution.source !== 'requested' || !resolution.safeCwd || path.resolve(resolution.safeCwd) !== cwd;
+  if (g) return moved(g.cwd) ? 'PTY_CREATE: a bot\'s codex worker starts only in the folder its rules were written into' : null;
+  // A claude worker starts in the folder whose project settings were checked.
+  const c = options ? launchOfCreate.get(options) : undefined;
+  if (c?.cwd && moved(c.cwd)) return 'PTY_CREATE: a bot\'s claude worker starts only in the folder its settings were checked in';
   return null;
 }
 
@@ -233,7 +240,7 @@ export function botWorkerForCreate(
  * workspace gets a claude launch line guarded the same way, and anything else
  * (a plain shell, no line) unchanged.
  */
-export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exec?: unknown }>(
+export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exec?: unknown; cwd?: unknown }>(
   options: T | undefined,
   worker: BotWorkerCreate | null,
   deps: BotWorkerGuardDeps = {},
@@ -261,21 +268,24 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
     return options;
   }
   if (launch.wsl && connectors.length > 0) throw guardError('PTY_CREATE', 'a task with connections does not run in a WSL shell');
+  const cwd = typeof options.cwd === 'string' && options.cwd ? path.resolve(options.cwd) : '';
+  if (!launch.wsl && !cwd) throw guardError('PTY_CREATE', 'no folder to check the worker\'s settings in');
   const plan: LaunchPlan = launch.wsl
     ? { kind: 'legacy' }
-    : { kind: 'strict', connectors, level: workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)()) };
+    : { kind: 'strict', connectors, level: workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)()), cwd };
   const guarded = guardLaunchLine('PTY_CREATE', options.initialCommand, deps, plan);
   const next = guarded.line === options.initialCommand ? { ...options } : { ...options, initialCommand: guarded.line };
-  launchOfCreate.set(next, { ...(guarded.files ? { launch: guarded.files } : {}), ...(launch.wsl ? { wsl: true } : {}) });
+  launchOfCreate.set(next, { ...(guarded.files ? { launch: guarded.files, cwd } : {}), ...(launch.wsl ? { wsl: true } : {}) });
   return next;
 }
 
 /** What a guarded create's launch carried (per options object), for its
  *  session record. */
-const launchOfCreate = new WeakMap<object, { launch?: BotWorkerLaunchFiles; wsl?: boolean }>();
+const launchOfCreate = new WeakMap<object, { launch?: BotWorkerLaunchFiles; cwd?: string; wsl?: boolean }>();
 
-/** pty:create, when it records the session: the guarded launch's files. */
-export function guardedLaunchOf(options: object | undefined): { launch?: BotWorkerLaunchFiles; wsl?: boolean } {
+/** pty:create, when it records the session: the guarded launch's files and
+ *  the folder it was checked in. */
+export function guardedLaunchOf(options: object | undefined): { launch?: BotWorkerLaunchFiles; cwd?: string; wsl?: boolean } {
   return (options && launchOfCreate.get(options)) || {};
 }
 
@@ -310,12 +320,11 @@ function guardError(where: string, why: string): Error {
 }
 
 /** How a launch is guarded: the worker settings file alone (a WSL shell, as
- *  before connections), new per-launch files, or the files a session's
- *  record names. */
+ *  before connections), or per-launch files for these connections, in a
+ *  folder whose project settings are checked first. */
 type LaunchPlan =
   | { kind: 'legacy' }
-  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel }
-  | { kind: 'recorded'; files: BotWorkerLaunchFiles };
+  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string };
 
 function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): { line: string; files?: BotWorkerLaunchFiles } {
   const dir = deps.dir ?? getWmuxDir();
@@ -330,19 +339,15 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
     if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker settings');
     return { line: guarded };
   }
+  const unsafe = workerProjectSettingsRefusal(plan.cwd);
+  if (unsafe) throw guardError(where, `the worker's folder has Claude settings a bot's worker does not start with (${unsafe})`);
+  const entry = (deps.mcpEntry ?? defaultMcpEntry)();
+  if (!entry) throw guardError(where, 'the wmux MCP bundle was not found, so the worker could not report');
   let files: BotWorkerLaunchFiles;
-  if (plan.kind === 'recorded' && fs.existsSync(plan.files.settingsFile) && fs.existsSync(plan.files.mcpConfigFile)) {
-    files = plan.files;
-  } else {
-    const entry = (deps.mcpEntry ?? defaultMcpEntry)();
-    if (!entry) throw guardError(where, 'the wmux MCP bundle was not found, so the worker could not report');
-    const connectors = plan.kind === 'strict' ? plan.connectors : [];
-    const level = plan.kind === 'strict' ? plan.level : plan.files.level;
-    try {
-      files = writeWorkerLaunchFiles(dir, entry, level, connectors);
-    } catch (err) {
-      throw guardError(where, `the worker's MCP and rules files could not be written: ${String(err)}`);
-    }
+  try {
+    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors);
+  } catch (err) {
+    throw guardError(where, `the worker's MCP and rules files could not be written: ${String(err)}`);
   }
   const guarded = spliceWorkerLaunch(line, files.settingsFile, files.mcpConfigFile);
   if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker\'s MCP config and rules');
@@ -445,7 +450,8 @@ export function noteBotWorkerSession(
   next.set(sessionId, {
     workspaceId,
     at: Date.now(),
-    ...(launch.agent && launch.cwd ? { agent: launch.agent, cwd: launch.cwd, ...(launch.repoKey ? { repoKey: launch.repoKey } : {}), ...(launch.codexHome ? { codexHome: launch.codexHome } : {}) } : {}),
+    ...(launch.cwd ? { cwd: launch.cwd } : {}),
+    ...(launch.agent && launch.cwd ? { agent: launch.agent, ...(launch.repoKey ? { repoKey: launch.repoKey } : {}), ...(launch.codexHome ? { codexHome: launch.codexHome } : {}) } : {}),
     ...(launch.launch ? { launch: launch.launch } : {}),
     ...(launch.wsl ? { wsl: true } : {}),
   });
@@ -508,18 +514,35 @@ export function reloadBotWorkerSessionsForTests(): void {
 export function guardRefireLine(sessionId: string, line: string, deps: BotWorkerGuardDeps = {}): string {
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return line;
   if (namesCodex(line)) throw guardError('worktask:refire', 'codex is not re-fired in a bot\'s worker pane');
-  return guardLaunchLine('worktask:refire', line, deps, recordedPlan(sessionId, deps)).line;
+  return guardLaunchLine('worktask:refire', line, deps, recordedPlan('worktask:refire', sessionId, deps)).line;
 }
 
-/** A recorded session's launch: its own files; the worker settings alone
- *  in a WSL shell; a record written before the files gets wmux-only files
- *  at the level the owner registered (or every session, while the record
- *  is unreadable). */
-function recordedPlan(sessionId: string, deps: BotWorkerGuardDeps): LaunchPlan {
+/** A recorded session's launch: the worker settings alone in a WSL shell;
+ *  otherwise new files for the folder it was launched in, at its recorded
+ *  wmux level (the owner's registered one for a record without files), with
+ *  the task's connections that are still its bot's now. A session with no
+ *  folder on record (or a record that cannot be read) is refused. */
+function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps): LaunchPlan {
   const rec = loadSessions(deps.dir ?? getWmuxDir()).get(sessionId);
   if (rec?.wsl) return { kind: 'legacy' };
-  if (rec?.launch) return { kind: 'recorded', files: rec.launch };
-  return { kind: 'strict', connectors: [], level: workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()) };
+  if (!rec?.cwd) throw guardError(where, 'the session has no folder on record to check the worker\'s settings in');
+  return {
+    kind: 'strict',
+    connectors: rec.launch ? (deps.sessionConnectors ?? ledgerTaskConnectors)(rec.workspaceId) : [],
+    level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()),
+    cwd: rec.cwd,
+  };
+}
+
+/** A task's connections now: the ones it was started with (its ledger row)
+ *  that are still its bot's in the library; one turned off, out of scope or
+ *  gone since is left out. */
+export function ledgerTaskConnectors(workspaceId: string): Connector[] {
+  const dispatch = getTaskLedger().findByTaskWorkspace(workspaceId)?.dispatch;
+  const named = dispatch?.connectors ?? [];
+  const botId = dispatch?.origin.kind === 'bot' ? dispatch.origin.botId : undefined;
+  if (named.length === 0 || !botId) return [];
+  return (getConnectorStore()?.forBot(botId) ?? []).filter((c) => named.includes(c.name));
 }
 
 /**
@@ -532,7 +555,7 @@ export function guardSessionLaunch(sessionId: string, text: string, deps: BotWor
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return text;
   if (namesCodex(text)) throw guardError('pty:write-launch', 'codex is not started again in a bot\'s worker pane');
   if (!namesClaude(text)) return text;
-  return guardLaunchLine('pty:write-launch', text, deps, recordedPlan(sessionId, deps)).line;
+  return guardLaunchLine('pty:write-launch', text, deps, recordedPlan('pty:write-launch', sessionId, deps)).line;
 }
 
 /** Startup: remove per-launch files no session record names and older than

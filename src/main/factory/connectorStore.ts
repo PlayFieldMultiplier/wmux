@@ -249,6 +249,15 @@ export function setConnectorStore(next: ConnectorStore | null): void {
 /** A key name a connection owns: one a connection in the library uses, or
  *  one entered for a connection. Such a key reaches a worker only through
  *  its connection, never as a plain `secretNames` entry. */
+/** The given connections as the library holds them now for `botId`: each
+ *  one still on, still in its scope and not switched off for it (its current
+ *  version); the rest are left out. No library → none. */
+export function connectorsStillForBot(botId: string, connectors: readonly Pick<Connector, 'name'>[], store: () => ConnectorStore | null = getConnectorStore): Connector[] {
+  const names = connectors.map((c) => c.name);
+  if (names.length === 0) return [];
+  return (store()?.forBot(botId) ?? []).filter((c) => names.includes(c.name));
+}
+
 export function isConnectionKey(name: string, deps: { connectors?: () => ConnectorStore | null; secretMarked?: (name: string) => boolean } = {}): boolean {
   if ((deps.connectors ?? getConnectorStore)()?.secretNames().has(name)) return true;
   return (deps.secretMarked ?? ((n: string) => getSecretStore()?.isConnectorKey(n) ?? false))(name);

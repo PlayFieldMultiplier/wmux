@@ -115,7 +115,7 @@ describe('worktask:refire (§3·F2 — 원래 initialCommand 재전송)', () => 
     dispose = registerWorktaskHandlers(() => daemon.client);
     const wt = seedWorktree('task-bot', true);
     reloadBotWorkerSessionsForTests();
-    noteBotWorkerSession('pty-bot', 'ws-task');
+    noteBotWorkerSession('pty-bot', 'ws-task', undefined, { cwd: wt });
     setWorkerMcpResolvers({ entry: () => '/opt/wmux/mcp/index.js', registeredLevel: () => null });
     // The app restarts between the spawn and the re-fire: only the durable record knows the pane.
     reloadBotWorkerSessionsForTests();
