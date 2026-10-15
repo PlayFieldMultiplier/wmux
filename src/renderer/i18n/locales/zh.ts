@@ -3659,6 +3659,7 @@ export const zh = {
   'botsPage.chat.copied': "已复制",
   'botsPage.chat.unread': "{count} 条未读",
   'botsPage.chat.add': "添加",
+  'botsPage.chat.mentionList': "可提及的机器人",
   'settings.factory.addTeam': "添加团队",
   'settings.factory.addTeamHint': "向此工作区添加 {names}。你与 {lead} 对话，由它分派工作。",
   'settings.factory.addTeamTurnsOn': "机器人已关闭。添加团队会打开机器人。",

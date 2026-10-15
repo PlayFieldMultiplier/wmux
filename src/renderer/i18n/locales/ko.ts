@@ -3913,6 +3913,7 @@ export const ko = {
   'botsPage.chat.copied': "복사됨",
   'botsPage.chat.unread': "읽지 않음 {count}개",
   'botsPage.chat.add': "추가",
+  'botsPage.chat.mentionList': "멘션할 봇",
   'botsPage.profile.workersRunOn': "워커 실행 엔진",
   'botsPage.profile.workersDefault': "기본값 ({name})",
   'botsPage.profile.workersNotInstalled': "{name} (설치 안 됨)",

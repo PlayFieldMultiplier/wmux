@@ -4377,6 +4377,7 @@ export const pl = {
   'botsPage.chat.copied': "Skopiowano",
   'botsPage.chat.unread': "Nieprzeczytane: {count}",
   'botsPage.chat.add': "Dodaj",
+  'botsPage.chat.mentionList': "Boty do wspomnienia",
   'botsPage.profile.workersRunOn': "Workery działają na",
   'botsPage.profile.workersDefault': "Domyślnie ({name})",
   'botsPage.profile.workersNotInstalled': "{name} (niezainstalowany)",

@@ -469,6 +469,8 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* The `@` suggestion being pointed at (the caret stays in the box). */
+.wmux-bots-composer-menu [role="option"][aria-selected="true"] { background: var(--surface-fill-hover); }
 
 /* The chat and, when one is open, a side panel beside it — a worker's
    terminal (BotsWorkerPanel) or a thread (BotsThreadPanel): one --stroke

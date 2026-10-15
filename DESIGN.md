@@ -518,9 +518,12 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   bots are picked: a row of `@name` chips under the box (the room's bots,
   26px, the selection fills; pressed = `--selection-emphasis`), with a muted
   "To everyone here" ("To <lead>" in a room with a coordinator) while none
-  is picked; starting the message with `@` and
-  a bot's name (or a run of them, `@A @B …`) picks those chips, and an
-  `@name` inside a sentence is plain text that addresses nobody. A bot that
+  is picked; an `@` and a room bot's name anywhere in the message addresses
+  that bot too (its chip shows pressed), and an `@` naming no bot of the
+  room is plain text (owner decision 2026-10-15). Typing `@` and the start
+  of a name lists the room's bots that match in a popover over the box
+  (the "+" menu's place and rows, the caret staying in the box): the
+  arrows move, Enter, Tab or a click puts `@Name ` in, Escape closes. A bot that
   is off says so under the box and sends nothing. While a bot's approval
   request waits and its card is in the conversation — a room's whole view,
   or the asking bot's 1:1 — an "Approve N pending" chip sits above the box,
@@ -1406,6 +1409,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-14 | Owner decision: + creates a workspace on a granted remote PC. With a paired computer selected, the sidebar header and the collapsed rail show `+` only when that host advertises workspace-create-grant and this desktop holds the grant (added over SSH); it opens a shell there and the new workspace in its list. Hosts without the grant keep no `+`. Amends the collapsed sidebar's "no new-workspace button" | The smoke showed a server added over SSH could only get a first workspace through a local pane's right-click "— remote". The grant already lets this desktop create there, and a `+` that made a local workspace instead would misstate which computer the work runs on |
 | 2026-10-15 | Orchestrator decision (team workflow track): in a room with an enabled coordinator, an owner message that names no bot goes to the coordinator alone, and the composer's muted line says "To <lead>"; Add team in the add form makes the five-bot team (lead first) in one action, a ghost button with no new chrome | The owner talks to the team's lead, who decides who works on each request; a room-wide wake of every bot would start five parallel answers to one request |
 | 2026-10-15 | Owner decision (bot connections): MCP servers for bots' workers live in one library, Settings › Bots › Connections (one row each: name, purpose, who gets it, Key missing in the needs-you text, on/off, Edit, Remove asked in place), scoped to every bot by default or to the bots picked; a bot's profile lists the ones that apply to it with a per-bot off switch for every-bot ones. Amends the profile's item list only | Grok-Bot-style connectors without a per-bot settings page: defined once, the owner sees every connection in one place, and a bot's profile answers what its workers can reach |
+| 2026-10-15 | Owner decision (dogfood of 4.5.0): in a room, an `@Name` of one of its bots anywhere in the message addresses that bot (with any chips picked), and typing `@` suggests the room's bots. Amends the Composer's "an `@name` inside a sentence is plain text" | The owner typed `@대장` in the workspace room and the message did not reach that bot: a mention that works only at the very start of the message reads as broken |
 
 ### Desktop conversation view
 

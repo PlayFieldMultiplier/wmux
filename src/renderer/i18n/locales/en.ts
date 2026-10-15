@@ -4416,6 +4416,7 @@ export const en = {
   'botsPage.chat.copied': "Copied",
   'botsPage.chat.unread': "{count} unread",
   'botsPage.chat.add': "Add",
+  'botsPage.chat.mentionList': "Bots to mention",
   'botsPage.profile.workersRunOn': "Workers run on",
   'botsPage.profile.workersDefault': "Default ({name})",
   'botsPage.profile.workersNotInstalled': "{name} (not installed)",

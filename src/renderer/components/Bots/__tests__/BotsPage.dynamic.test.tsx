@@ -571,6 +571,40 @@ describe('Bots page', () => {
     expect(posted[1]).toMatchObject({ workspaceId: 'w1', mentions: [LEAD] });
   });
 
+  it('in a room, @ suggests its bots: Enter puts the name in, and a typed @Name anywhere addresses that bot', async () => {
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    const input = q<HTMLTextAreaElement>('[data-testid="bots-composer-input"]')!;
+    const typeText = async (value: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, value);
+        input.setSelectionRange(value.length, value.length);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    await typeText('please @V');
+    const options = () => [...container.querySelectorAll('[data-bots-mention-option]')].map((el) => el.getAttribute('data-bots-mention-option'));
+    expect(options()).toEqual([VERIFIER]);
+    // A key pressed while the IME composes is the IME's.
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true })); });
+    expect(input.value).toBe('please @V');
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(input.value).toBe('please @Verifier ');
+    expect(options()).toEqual([]);
+    expect(posted).toHaveLength(0);
+    await typeText('please @Verifier check #1');
+    expect(q(`[data-testid="bots-composer-bot"][data-bot-id="${VERIFIER}"]`)?.getAttribute('aria-pressed')).toBe('true');
+    await act(async () => { q('[data-testid="bots-composer-send"]')!.click(); });
+    expect(posted[0]).toMatchObject({ workspaceId: 'w1', title: 'please @Verifier check #1', mentions: [VERIFIER] });
+    // Escape closes the list without touching the text.
+    await typeText('@L');
+    expect(options()).toEqual([LEAD]);
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(options()).toEqual([]);
+    expect(input.value).toBe('@L');
+  });
+
   it('a live worker is a row under its bot in the list; a click shows its terminal beside the chat, never switching workspace', async () => {
     seedRooms();
     // t1 is running.
@@ -1241,6 +1275,29 @@ describe('BotsChat helpers', () => {
     expect(mentionPattern([' '])).toBeNull();
     // An email address is not a mention.
     expect([...'write to user@Ada.com'.matchAll(re)]).toHaveLength(0);
+  });
+
+  it('textMentions: every typed @Name of a room bot, Korean names and particles, the longest name first, unknown names ignored', async () => {
+    const { textMentions, mentionQuery, mentionSuggestions } = await import('../BotsChat');
+    const lead = botRow('bot-00000011', 'lead', 'w1', 1, '대장');
+    const dev = botRow('bot-00000012', 'maintainer', 'w1', 2, '대장 보좌');
+    const ada = botRow('bot-00000013', 'verifier', 'w1', 3, 'Ada');
+    const room = [lead, dev, ada];
+    // Mid-sentence, with a particle glued to a Korean name.
+    expect(textMentions('이거 @대장이 봐줘', room)).toEqual([lead.bot.id]);
+    expect(textMentions('@대장 해줘', room)).toEqual([lead.bot.id]);
+    // Two bots, in the order typed; the longer name wins over the one it starts with.
+    expect(textMentions('@Ada 그리고 @대장 보좌 확인', room)).toEqual([ada.bot.id, dev.bot.id]);
+    expect(textMentions('@대장 @대장 보좌 @대장', room)).toEqual([lead.bot.id, dev.bot.id]);
+    // A Latin name ends at a word boundary; an unknown name and an address are plain text.
+    expect(textMentions('@Adam and @foo, mail me@Ada.dev', room)).toEqual([]);
+    expect(textMentions('ask @ada.', room)).toEqual([ada.bot.id]);
+    // The `@` being typed before the caret, and what it suggests.
+    expect(mentionQuery('hi @대', 5)).toEqual({ at: 3, query: '대' });
+    expect(mentionQuery('me@Ad', 5)).toBeNull();
+    expect(mentionQuery('@Ada done', 9)).toBeNull();
+    expect(mentionSuggestions(room, '대장').map((r) => r.bot.id)).toEqual([lead.bot.id, dev.bot.id]);
+    expect(mentionSuggestions(room, 'a').map((r) => r.bot.id)).toEqual([ada.bot.id]);
   });
 
   it('githubRef: a PR or issue URL in any case is the canonical repo key', async () => {

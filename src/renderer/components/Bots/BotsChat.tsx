@@ -39,7 +39,9 @@
 // Sending: a 1:1 message is a room post in the bot's workspace that mentions
 // that one bot (main wakes it alone). A group message goes to the whole room
 // — main wakes every bot of the workspace — unless bots are picked: the chip
-// row under the box, or a leading `@name`.
+// row under the box, or an `@Name` of a room bot anywhere in the text
+// (resolved here at send; main reads only the field). Typing `@` in a room
+// suggests its bots.
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { RoomCard as RoomCardData, ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
@@ -181,6 +183,57 @@ export function mentionPattern(names: readonly string[]): RegExp | null {
   if (list.length === 0) return null;
   const escaped = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   return new RegExp(`(?<![\\p{L}\\p{N}_.@])@(${escaped.join('|')})(?![\\p{L}\\p{N}_])`, 'gu');
+}
+
+/** What may not stand right before an `@` that names a bot (an address
+ *  such as `me@host` is no mention). */
+const BEFORE_MENTION = /[\p{L}\p{N}_.@]/u;
+const LATIN_WORD = /[A-Za-z0-9_]/;
+
+/** The bots among `candidates` named by an `@Name` anywhere in the text,
+ *  in the order typed, each once (owner, 2026-10-15: a typed `@Name`
+ *  addresses that bot wherever it stands). A longer name wins over one it
+ *  starts with ("@Ada Lovelace" is not "@Ada"); case does not matter. A
+ *  Latin name ends at a non-word character; a name ending in another script
+ *  may run straight into the next word (a Korean particle: "@대장이").
+ *  An `@` naming no candidate is plain text. Pure. */
+export function textMentions(text: string, candidates: readonly FactoryBotRow[]): string[] {
+  if (!text.includes('@')) return [];
+  const lower = text.toLowerCase();
+  const named = candidates
+    .map((r) => ({ id: r.bot.id, name: r.bot.name.trim().toLowerCase() }))
+    .filter((r) => r.name)
+    .sort((a, b) => b.name.length - a.name.length);
+  const out: string[] = [];
+  for (let at = lower.indexOf('@'); at >= 0; at = lower.indexOf('@', at + 1)) {
+    if (at > 0 && BEFORE_MENTION.test(text.charAt(at - 1))) continue;
+    for (const r of named) {
+      if (!lower.startsWith(r.name, at + 1)) continue;
+      const next = lower.charAt(at + 1 + r.name.length);
+      if (next && LATIN_WORD.test(r.name.charAt(r.name.length - 1)) && LATIN_WORD.test(next)) continue;
+      if (!out.includes(r.id)) out.push(r.id);
+      break;
+    }
+  }
+  return out;
+}
+
+/** The `@` being typed right before the caret — its index and the letters
+ *  after it — or null when the caret is not in one. Pure. */
+export function mentionQuery(text: string, caret: number): { at: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const m = /@([^\s@]{0,40})$/u.exec(before);
+  if (!m) return null;
+  const at = before.length - m[0].length;
+  if (at > 0 && BEFORE_MENTION.test(before.charAt(at - 1))) return null;
+  return { at, query: m[1] };
+}
+
+/** The bots a `@query` suggests: those whose name starts with it, in the
+ *  room's order. Pure. */
+export function mentionSuggestions(candidates: readonly FactoryBotRow[], query: string): FactoryBotRow[] {
+  const q = query.toLowerCase();
+  return candidates.filter((r) => r.bot.name.trim() && r.bot.name.trim().toLowerCase().startsWith(q));
 }
 
 /** The thread chip under a bubble (General has none): a PR or issue
@@ -982,7 +1035,14 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   const pendingIds = useMemo(() => (readOnly ? [] : pendingForChip(approvals, cards, scopeBot ? { botId: scopeBot } : { workspaceId })
     .map((r) => r.requestId)), [approvals, cards, readOnly, scopeBot, workspaceId]);
   const picks = useMentionPicks(bots, workspaceId);
-  const mentions: string[] = conversation.kind === 'bot' ? [conversation.row.bot.id] : picks.picked;
+  const roomCandidates = useMemo(() => (conversation.kind === 'room' ? roomBots(bots, workspaceId) : []), [conversation.kind, bots, workspaceId]);
+  // A room message goes to the chips picked and every room bot named by an
+  // `@Name` anywhere in the text (main reads the field, never the text).
+  const typed = useMemo(() => textMentions(text, roomCandidates), [text, roomCandidates]);
+  const mentions: string[] = useMemo(
+    () => (conversation.kind === 'bot' ? [conversation.row.bot.id] : [...new Set([...picks.picked, ...typed])]),
+    [conversation, picks.picked, typed],
+  );
   const refusal = readOnly ? t('botsPage.pausedComposer') : conversation.kind === 'bot' ? oneToOneRefusal(conversation.row, t) : null;
 
   const submit = useCallback(async (e?: FormEvent) => {
@@ -1021,8 +1081,62 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     }
   }, [api, inFlight, refusal, text, workspaceId, threadId, mentions, picks, t, onSent]);
 
+  // `@` suggestions: typing `@` and the start of a name in a room lists the
+  // room's bots that match; Enter or Tab (or a click) puts `@Name ` in its
+  // place, the arrows move, Escape closes. Focus stays in the box.
+  const [caret, setCaret] = useState(0);
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const pendingCaret = useRef<number | null>(null);
+  const query = conversation.kind === 'room' && !readOnly ? mentionQuery(text, caret) : null;
+  const suggestions = query && query.at !== dismissedAt ? mentionSuggestions(roomCandidates, query.query) : [];
+  const suggesting = suggestions.length > 0;
+  const activeIndex = Math.min(active, Math.max(0, suggestions.length - 1));
+  useEffect(() => { setActive(0); }, [query?.at, query?.query]);
+  useEffect(() => {
+    const el = inputRef.current;
+    if (pendingCaret.current === null || !el) return;
+    el.setSelectionRange(pendingCaret.current, pendingCaret.current);
+    pendingCaret.current = null;
+  }, [text]);
+  const insertMention = (row: FactoryBotRow) => {
+    if (!query) return;
+    const name = `@${row.bot.name.trim()} `;
+    const next = text.slice(0, query.at) + name + text.slice(caret);
+    const at = query.at + name.length;
+    pendingCaret.current = at;
+    textNow.current = next;
+    setText(next);
+    setCaret(at);
+    picks.onText(next);
+    inputRef.current?.focus();
+  };
+  const listId = `bots-mention-list-${workspaceId}-${threadId}`;
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // Never while the IME composes (a Korean syllable is still being built).
+    if (e.nativeEvent.isComposing) return;
+    if (suggesting) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = suggestions.length;
+        setActive((activeIndex + (e.key === 'ArrowDown' ? 1 : n - 1)) % n);
+        return;
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+        insertMention(suggestions[activeIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (query) setDismissedAt(query.at);
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
       void submit();
@@ -1079,10 +1193,29 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     setMenuOpen(false);
     inputRef.current?.focus();
   };
-  const roomCandidates = conversation.kind === 'room' ? roomBots(bots, workspaceId) : [];
   return (
     <div className="wmux-bots-composer-wrap">
       <ApprovePendingChip ids={pendingIds} t={t} />
+      {suggesting && !menuOpen && (
+        <Popover id={listId} role="listbox" data-bots-mention-list aria-label={t('botsPage.chat.mentionList')} className="wmux-bots-composer-menu">
+          {suggestions.map((row, i) => (
+            <div
+              key={row.bot.id}
+              id={`${listId}-${row.bot.id}`}
+              role="option"
+              aria-selected={i === activeIndex}
+              data-bots-mention-option={row.bot.id}
+              className="ui-section-row w-full cursor-default text-left text-[13px]"
+              // Keeps the caret in the box: the press never takes focus.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertMention(row)}
+            >
+              <BotAvatar bot={row.bot} size={20} />
+              <span className="min-w-0 truncate">{`@${row.bot.name}`}</span>
+            </div>
+          ))}
+        </Popover>
+      )}
       {menuOpen && (
         <Popover ref={menuRef} role="menu" data-bots-composer-menu aria-label={t('botsPage.chat.add')} className="wmux-bots-composer-menu">
           {SUGGESTION_KEYS.map((key) => (
@@ -1131,12 +1264,21 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           data-testid="bots-composer-input"
           aria-label={placeholder}
           placeholder={placeholder}
+          role={conversation.kind === 'room' ? 'combobox' : undefined}
+          aria-autocomplete={conversation.kind === 'room' ? 'list' : undefined}
+          aria-expanded={conversation.kind === 'room' ? suggesting : undefined}
+          aria-controls={suggesting ? listId : undefined}
+          aria-activedescendant={suggesting ? `${listId}-${suggestions[activeIndex].bot.id}` : undefined}
           onChange={(e) => {
             textNow.current = e.target.value;
             setText(e.target.value);
+            setCaret(e.target.selectionStart ?? e.target.value.length);
             if (conversation.kind === 'room') picks.onText(e.target.value);
             if (error) setError(null);
           }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onBlur={() => setDismissedAt(query?.at ?? null)}
+          onFocus={() => setDismissedAt(null)}
           onKeyDown={onKeyDown}
           className="wmux-bots-composer-input text-[14px]"
         />
@@ -1155,7 +1297,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
         </button>
     </form>
       {conversation.kind === 'room' && !refusal && (
-        <MentionChips candidates={roomBots(bots, workspaceId)} bots={bots} picked={picks.picked} onToggle={picks.toggle} t={t} testId="bots-composer" />
+        <MentionChips candidates={roomCandidates} bots={bots} picked={mentions} onToggle={picks.toggle} t={t} testId="bots-composer" />
       )}
       {line && (
         <p role={error ? 'alert' : 'status'} data-testid="bots-composer-status" className={`text-[11px] ${error ? 'text-[var(--accent-red)]' : 'text-[var(--text-muted)]'}`}>
