@@ -12,6 +12,7 @@ import {
   beginBotWorkerSpawn,
   botWorkerForCreate,
   guardRefireLine,
+  guardedClaudeCwdRefusal,
   guardSessionLaunch,
   guardedLaunchOf,
   noteBotWorkerSession,
@@ -19,7 +20,7 @@ import {
   reloadBotWorkerSessionsForTests,
   withBotWorkerMergeGuard,
 } from '../botWorkerMergeGuard';
-import { BOT_WORKER_DENY, botWorkerSessionsPath, botWorkerSettingsPath, readBotWorkerSessions, spliceSettingsFlag } from '../../../shared/botWorkerGuard';
+import { BOT_WORKER_DENY, botWorkerSessionsPath, botWorkerSettingsPath, readBotWorkerSessions, spliceSettingsFlag, workerProjectSettingsRefusal } from '../../../shared/botWorkerGuard';
 import { buildWorkerMcpConfig, buildWorkerSettings, spliceWorkerLaunch, workerWmuxLevel } from '../../../shared/botWorkerMcp';
 import { guardBotWorkerLaunch } from '../../../daemon/chat/botWorkerLaunchGuard';
 import type { Connector } from '../../../shared/botConnector';
@@ -74,7 +75,8 @@ describe('the per-launch documents (pure)', () => {
     expect(doc.mcpServers.files).toEqual({
       type: 'stdio',
       command: '/usr/bin/env',
-      args: ['-C', '/d/run/con-0000000b', '/usr/local/bin/npx', '-y', 'pkg@1.0.0', '/data'],
+      // The other connection's key is taken out of its environment.
+      args: ['-C', '/d/run/con-0000000b', '-u', 'GH_MCP_TOKEN', '/usr/local/bin/npx', '-y', 'pkg@1.0.0', '/data'],
       env: { LOG_LEVEL: 'info', npm_config_userconfig: '/d/run/con-0000000b/npmrc', npm_config_registry: 'https://registry.npmjs.org/' },
     });
     expect(Object.keys(doc.mcpServers)).toEqual(['wmux', 'gh', 'files']);
@@ -145,7 +147,7 @@ describe('the guard with connections', () => {
         if (process.platform !== 'win32') expect(fs.statSync(f).mode & 0o777).toBe(0o600);
       }
       expect(fs.existsSync(path.join(dir, 'factory', 'connector-run', 'con-0000000b', 'npmrc'))).toBe(true);
-      expect(guardedLaunchOf(guarded)).toEqual({ launch: { settingsFile: w.settings, mcpConfigFile: w.mcp, level: 'full' } });
+      expect(guardedLaunchOf(guarded)).toEqual({ launch: { settingsFile: w.settings, mcpConfigFile: w.mcp, level: 'full', connectionKeys: ['GH_MCP_TOKEN', 'FILES_API_TOKEN'] }, cwd: path.resolve('/w/task') });
     } finally {
       release();
     }
@@ -176,16 +178,16 @@ describe('the guard with connections', () => {
 
   it('a role binding\'s level reaches the wmux entry (raised to core); without one, the owner\'s registered level', () => {
     const strict = { workspaceId: 'ws-task', strict: false };
-    const role = withBotWorkerMergeGuard({ initialCommand: LINE }, strict, deps(), { level: 'role' })!;
+    const role = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, deps(), { level: 'role' })!;
     expect(readJson(wordsOf(role.initialCommand!).mcp).mcpServers.wmux.args).toEqual([ENTRY, '--core']);
-    const registered = withBotWorkerMergeGuard({ initialCommand: LINE }, strict, { ...deps(), registeredLevel: () => 'core' })!;
+    const registered = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, { ...deps(), registeredLevel: () => 'core' })!;
     expect(readJson(wordsOf(registered.initialCommand!).mcp).mcpServers.wmux.args).toEqual([ENTRY, '--core']);
   });
 });
 
 describe('the session record carries the launch', () => {
   it('re-fire and resume reuse the recorded files; a WSL session keeps the settings file alone', () => {
-    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE }, { workspaceId: 'ws-task', strict: false }, deps())!;
+    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;
     noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(guarded));
     noteBotWorkerSession('pty-wsl', 'ws-task', dir, { wsl: true });
     reloadBotWorkerSessionsForTests();
@@ -193,6 +195,65 @@ describe('the session record carries the launch', () => {
     expect(wordsOf(guardRefireLine('pty-1', LINE, deps()))).toEqual(w);
     expect(wordsOf(guardSessionLaunch('pty-1', 'claude --resume 11111111-2222-3333-4444-555555555555', deps()))).toEqual(w);
     expect(guardRefireLine('pty-wsl', LINE, deps())).toBe(`claude --settings="${botWorkerSettingsPath(dir)}" --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);
+    // A session with no folder on record is not re-fired.
+    noteBotWorkerSession('pty-nofolder', 'ws-task', dir);
+    expect(() => guardRefireLine('pty-nofolder', LINE, deps())).toThrow(/no folder on record/);
+  });
+
+  it('a re-fire or resume carries the task\'s connections that are still the bot\'s, and leaves out the rest', () => {
+    const release = beginBotWorkerSpawn('ws-owner', dir, { botId: 'bot-0000000a', taskId: 't-1', connectors: [con(), files] });
+    let guarded;
+    try {
+      const opts = { initialCommand: LINE, fanoutTaskOf: 'ws-owner', cwd: dir, workspaceId: 'ws-task' };
+      guarded = withBotWorkerMergeGuard(opts, botWorkerForCreate(opts, { dir, isBotTaskWorkspace: () => false }), deps())!;
+    } finally {
+      release();
+    }
+    noteBotWorkerSession('pty-c', 'ws-task', dir, guardedLaunchOf(guarded));
+    const servers = (line: string) => Object.keys(readJson(wordsOf(line).mcp).mcpServers);
+    expect(servers(guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [con(), files] }))).toEqual(['wmux', 'gh', 'files']);
+    expect(servers(guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [con()] }))).toEqual(['wmux', 'gh']);
+    expect(servers(guardSessionLaunch('pty-c', 'claude --resume 11111111-2222-3333-4444-555555555555', { ...deps(), sessionConnectors: () => [] }))).toEqual(['wmux']);
+    // The first launch's keys are still in the pane: a dropped connection's
+    // key stays out of the remaining stdio server.
+    const left = readJson(wordsOf(guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [files] })).mcp).mcpServers.files;
+    expect(left.args.slice(0, 4)).toEqual(['-C', path.join(dir, 'factory', 'connector-run', files.id), '-u', 'GH_MCP_TOKEN']);
+    // A folder the pane is in now is checked too.
+    const moved = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-conn-moved-'));
+    fs.mkdirSync(path.join(moved, '.claude'));
+    fs.writeFileSync(path.join(moved, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
+    expect(() => guardRefireLine('pty-c', LINE, { ...deps(), sessionConnectors: () => [], folders: [moved] })).toThrow(/Claude settings/);
+    fs.rmSync(moved, { recursive: true, force: true });
+  });
+
+  it('a guarded claude create starts only in the folder it was checked in', () => {
+    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;
+    const launch = guardedLaunchOf(guarded);
+    expect(guardedClaudeCwdRefusal(launch, { source: 'requested', safeCwd: dir })).toBeNull();
+    expect(guardedClaudeCwdRefusal(launch, { source: 'recovery-cwd', safeCwd: dir })).toMatch(/only in the folder/);
+    expect(guardedClaudeCwdRefusal(launch, { source: 'requested', safeCwd: os.tmpdir() })).toMatch(/only in the folder/);
+    expect(guardedClaudeCwdRefusal({}, { source: 'fallback' })).toBeNull();
+  });
+
+  it('refuses a worker folder whose Claude project settings run a program or set the environment', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-conn-proj-'));
+    try {
+      fs.mkdirSync(path.join(repo, '.claude'));
+      fs.writeFileSync(path.join(repo, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }));
+      const ok = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: repo }, { workspaceId: 'ws-task', strict: false }, deps())!;
+      noteBotWorkerSession('pty-p', 'ws-task', dir, guardedLaunchOf(ok));
+      for (const [name, body] of [['settings.json', { hooks: { SessionStart: [] } }], ['settings.local.json', { env: { X: '1' } }], ['settings.json', '{not json']] as const) {
+        fs.writeFileSync(path.join(repo, '.claude', name), typeof body === 'string' ? body : JSON.stringify(body));
+        expect(workerProjectSettingsRefusal(repo), name).not.toBeNull();
+        expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, cwd: repo }, { workspaceId: 'ws-task', strict: false }, deps()), name).toThrow(/Claude settings/);
+        expect(() => guardRefireLine('pty-p', LINE, deps()), name).toThrow(/Claude settings/);
+        expect(guardBotWorkerLaunch('pty-p', 'claude', 'claude', dir), name).toBeNull();
+        fs.unlinkSync(path.join(repo, '.claude', name));
+      }
+      expect(() => withBotWorkerMergeGuard({ initialCommand: LINE }, { workspaceId: 'ws-task', strict: false }, deps())).toThrow(/no folder/);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it('round-trips through the file; launch files outside main\'s folders are not used; an old record is read as before', () => {
@@ -209,7 +270,7 @@ describe('the session record carries the launch', () => {
 
 describe('the daemon\'s phone launch', () => {
   it('splices a session\'s recorded files with strict; a WSL record gets the settings file alone; any other record nothing', () => {
-    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE }, { workspaceId: 'ws-task', strict: false }, deps())!;
+    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;
     noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(guarded));
     noteBotWorkerSession('pty-old', 'ws-task', dir);
     noteBotWorkerSession('pty-wsl', 'ws-task', dir, { wsl: true });
@@ -217,8 +278,26 @@ describe('the daemon\'s phone launch', () => {
     expect(guardBotWorkerLaunch('pty-1', "claude -- 'hi'", 'claude', dir)).toBe(`claude --settings="${w.settings}" --mcp-config="${w.mcp}" --strict-mcp-config -- 'hi'`);
     expect(guardBotWorkerLaunch('pty-old', 'claude', 'claude', dir)).toBeNull();
     expect(guardBotWorkerLaunch('pty-wsl', 'claude', 'claude', dir)).toBe(`claude --settings="${botWorkerSettingsPath(dir)}"`);
+    // A folder the line may start in is checked too.
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-conn-phone-'));
+    fs.mkdirSync(path.join(other, '.claude'));
+    fs.writeFileSync(path.join(other, '.claude', 'settings.local.json'), JSON.stringify({ hooks: {} }));
+    expect(guardBotWorkerLaunch('pty-1', 'claude', 'claude', dir, [other])).toBeNull();
+    fs.rmSync(other, { recursive: true, force: true });
     fs.unlinkSync(w.mcp);
     expect(guardBotWorkerLaunch('pty-1', 'claude', 'claude', dir)).toBeNull();
+  });
+
+  it('a recorded launch with connections starts only from main', () => {
+    const release = beginBotWorkerSpawn('ws-owner', dir, { botId: 'bot-0000000a', taskId: 't-1', connectors: [con()] });
+    try {
+      const opts = { initialCommand: LINE, fanoutTaskOf: 'ws-owner', cwd: dir, workspaceId: 'ws-task' };
+      const guarded = withBotWorkerMergeGuard(opts, botWorkerForCreate(opts, { dir, isBotTaskWorkspace: () => false }), deps())!;
+      noteBotWorkerSession('pty-c', 'ws-task', dir, guardedLaunchOf(guarded));
+    } finally {
+      release();
+    }
+    expect(guardBotWorkerLaunch('pty-c', 'claude', 'claude', dir)).toBeNull();
   });
 });
 
@@ -258,7 +337,7 @@ describe('the grant carries a connection\'s keys to its own launch only', () => 
 
 describe('startup prune', () => {
   it('removes old files no session names, keeps named and fresh ones', () => {
-    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE }, { workspaceId: 'ws-task', strict: false }, deps())!;
+    const guarded = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;
     noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(guarded));
     const stale = path.join(dir, 'factory', 'worker-mcp', 'cccccccccccc.json');
     const fresh = path.join(dir, 'factory', 'worker-mcp', 'dddddddddddd.json');

@@ -14,6 +14,7 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, setFanOutGuardsForTests } from '../fanoutGuards';
 import { setSecretGrantSource } from '../../factory/secretGrants';
+import { ConnectorStore, setConnectorStore } from '../../factory/connectorStore';
 
 const SHA = 'b'.repeat(40);
 let root: string;
@@ -229,5 +230,36 @@ describe('FanOutService — detached checkout + dispatch record', () => {
     expect(r.spawn).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
     expect(hold).not.toHaveBeenCalled();
+  });
+
+  it('a queued task launches with its connections as the library holds them then: one turned off meanwhile is left out', async () => {
+    const r = rig();
+    const lib = new ConnectorStore(path.join(root, 'connectors.json'), { botIds: () => new Set([base.caller.botId]) });
+    lib.load();
+    const remote = { transport: 'http' as const, remote: { url: 'https://x.dev/mcp', headers: {} }, secrets: [], tools: { mode: 'all' as const, blocked: [] }, enabled: true, scope: { kind: 'all' as const } };
+    const kept = lib.save({ ...remote, name: 'kept' });
+    const dropped = lib.save({ ...remote, name: 'dropped' });
+    if (!kept.ok || !dropped.ok) throw new Error('library');
+    setConnectorStore(lib);
+    try {
+      await r.svc.start({
+        ...base,
+        checkout: { sha: SHA, detached: true },
+        connectors: [kept.connector, dropped.connector],
+        // While the task waits for its slot, the owner switches one off for the bot.
+        awaitLaunchSlot: async () => {
+          lib.setOffForBot(dropped.connector.id, base.caller.botId, true);
+          return { ok: true, release: vi.fn(), hold: vi.fn() };
+        },
+      });
+      const row = ledger.list().find((e) => e.dispatch?.origin?.botId === base.caller.botId);
+      expect(row?.dispatch?.connectors).toEqual(['kept']);
+      const prompt = fs.readFileSync(path.join(root, 'meta', row!.id.slice(-8), 'prompt.md'), 'utf8');
+      expect(prompt).toContain('Connections: kept (tools mcp__kept__*)');
+      expect(prompt).not.toContain('dropped');
+    } finally {
+      setConnectorStore(null);
+      await lib.flush();
+    }
   });
 });

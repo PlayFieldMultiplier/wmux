@@ -208,13 +208,13 @@ describe('which creates are a bot\'s workers: main\'s records, never the rendere
   it('a later pane in a bot\'s task workspace (the ledger) guards a claude line and leaves a shell alone', () => {
     const worker = botWorkerForCreate({ workspaceId: 'ws-task', cwd: '/w' }, BOT_WS);
     expect(worker).toEqual({ workspaceId: 'ws-task', strict: false });
-    const resume = withBotWorkerMergeGuard({ initialCommand: 'claude --resume 11111111-2222-3333-4444-555555555555' }, worker, { dir, ...mcp() })!;
+    const resume = withBotWorkerMergeGuard({ initialCommand: 'claude --resume 11111111-2222-3333-4444-555555555555', cwd: dir }, worker, { dir, ...mcp() })!;
     expect(resume.initialCommand).toMatch(/^claude --settings="[^"]+" --mcp-config="[^"]+" --strict-mcp-config --resume/);
     const shell = {};
     expect(withBotWorkerMergeGuard(shell, worker, { dir, ...mcp() })).toBe(shell);
     // Codex runs in a bot's worker pane only as the fan-out's own first launch.
-    expect(() => withBotWorkerMergeGuard({ initialCommand: 'codex resume --last' }, worker, { dir, ...mcp() })).toThrow(/only as the fan-out's own first launch/);
-    expect(() => withBotWorkerMergeGuard({ initialCommand: 'cd /w && claude --resume x' }, worker, { dir, ...mcp() })).toThrow(/cannot carry/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: 'codex resume --last', cwd: dir }, worker, { dir, ...mcp() })).toThrow(/only as the fan-out's own first launch/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: 'cd /w && claude --resume x', cwd: dir }, worker, { dir, ...mcp() })).toThrow(/cannot carry/);
     expect(botWorkerForCreate({ workspaceId: 'ws-elsewhere' }, BOT_WS)).toBeNull();
   });
 
@@ -236,16 +236,16 @@ describe('which creates are a bot\'s workers: main\'s records, never the rendere
   it('fails closed: no worker without the guard', () => {
     const strict = { workspaceId: 'ws-task', strict: true };
     const failing = { dir, writeSettings: () => { throw new Error('EACCES'); } };
-    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE }, strict, failing, { wsl: true })).toThrow(/merge-lane guard.*could not be written.*EACCES/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, failing, { wsl: true })).toThrow(/merge-lane guard.*could not be written.*EACCES/);
     // Without the wmux bundle a worker could not report: it does not start.
-    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE }, strict, { dir, mcpEntry: () => null })).toThrow(/MCP bundle was not found/);
-    expect(() => withBotWorkerMergeGuard({ initialCommand: 'codex --yolo' }, strict, { dir, ...mcp() })).toThrow(/codex worker guard did not build/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, { dir, mcpEntry: () => null })).toThrow(/MCP bundle was not found/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: 'codex --yolo', cwd: dir }, strict, { dir, ...mcp() })).toThrow(/codex worker guard did not build/);
     for (const foreign of [`claude --settings="/tmp/x.json"`, `claude --mcp-config=/tmp/m.json`, 'claude --strict-mcp-config', `claude --mcp-config={"mcpServers":{}}`]) {
-      expect(() => withBotWorkerMergeGuard({ initialCommand: foreign }, strict, { dir, ...mcp() }), foreign).toThrow(/cannot carry/);
+      expect(() => withBotWorkerMergeGuard({ initialCommand: foreign, cwd: dir }, strict, { dir, ...mcp() }), foreign).toThrow(/cannot carry/);
     }
     expect(() => withBotWorkerMergeGuard({}, strict, { dir, ...mcp() })).toThrow(/no launch line/);
-    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, exec: 'claude' }, strict, { dir, ...mcp() })).toThrow(/exec unit/);
-    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE }, strict, { dir: path.join(dir, 'a$b'), ...mcp() })).toThrow(/cannot carry/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, exec: 'claude', cwd: dir }, strict, { dir, ...mcp() })).toThrow(/exec unit/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, { dir: path.join(dir, 'a$b'), ...mcp() })).toThrow(/cannot carry/);
     // An unreadable ledger is not read as "not a bot".
     expect(() => botWorkerForCreate({ workspaceId: 'ws-task' }, { dir, isBotTaskWorkspace: () => { throw new Error('torn'); } })).toThrow(/ledger could not be read/);
   });
@@ -253,7 +253,7 @@ describe('which creates are a bot\'s workers: main\'s records, never the rendere
 
 describe('bot worker sessions survive a restart', () => {
   it('a re-fire after a restart is guarded from the recorded session, and refused when it cannot be', () => {
-    noteBotWorkerSession('daemon-bot1', 'ws-task', dir);
+    noteBotWorkerSession('daemon-bot1', 'ws-task', dir, { cwd: dir });
     expect(JSON.parse(fs.readFileSync(botWorkerSessionsPath(dir), 'utf8')).sessions['daemon-bot1'].workspaceId).toBe('ws-task');
     reloadBotWorkerSessionsForTests(); // the app restarts: nothing in memory
     expect(isBotWorkerSession('daemon-bot1', dir)).toBe(true);
@@ -265,7 +265,7 @@ describe('bot worker sessions survive a restart', () => {
   });
 
   it('a resume typed into a bot worker\'s pane after a restart is guarded; a staged suffix and other panes pass', () => {
-    noteBotWorkerSession('daemon-bot2', 'ws-task', dir);
+    noteBotWorkerSession('daemon-bot2', 'ws-task', dir, { cwd: dir });
     reloadBotWorkerSessionsForTests();
     const resume = 'claude --resume 11111111-2222-3333-4444-555555555555';
     const typed = guardSessionLaunch('daemon-bot2', resume, { dir, ...mcp() });
@@ -289,13 +289,14 @@ describe('bot worker sessions survive a restart', () => {
     expect(botWorkerForCreate({ workspaceId: 'ws-other' }, { dir, isBotTaskWorkspace: () => false })).toBeNull();
   });
 
-  it('an unreadable record guards every pane and records nothing over it', () => {
+  it('an unreadable record guards every pane (a re-fire is refused) and records nothing over it', () => {
     for (const bad of ['{not json', JSON.stringify({ version: 2, sessions: {} }), JSON.stringify({ version: 1, sessions: { 'daemon-x': { at: 1 } } })]) {
       fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
       fs.writeFileSync(botWorkerSessionsPath(dir), bad);
       reloadBotWorkerSessionsForTests();
       expect(isBotWorkerSession('daemon-anyone', dir)).toBe(true);
-      expect(guardRefireLine('daemon-anyone', LINE, { dir, ...mcp() })).toContain('--strict-mcp-config');
+      // No folder on record to check: nothing is re-fired.
+      expect(() => guardRefireLine('daemon-anyone', LINE, { dir, ...mcp() })).toThrow(/no folder on record/);
       expect(() => guardSessionLaunch('daemon-anyone', 'codex resume && claude', { dir })).toThrow(/codex is not started again/);
       expect(() => guardRefireLine('daemon-anyone', 'codex "$(cat \'/p\')"', { dir })).toThrow(/codex is not re-fired/);
       expect(botWorkerForCreate({ workspaceId: 'ws-any' }, { dir, isBotTaskWorkspace: () => false })).toEqual({ workspaceId: 'ws-any', strict: false });
@@ -346,7 +347,7 @@ describe('pty:create applies the guard (source-level lock)', () => {
     expect(src).toContain('launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded) }');
     expect(src.split('forgetBotWorkerSession(id);').length - 1).toBe(2);
     // A resume line typed through main gets the session guard.
-    expect(src).toMatch(/IPC\.PTY_WRITE_LAUNCH[\s\S]{0,600}guardBotWorkerSessionText\(id, text, 'write-launch'\)/);
+    expect(src).toMatch(/IPC\.PTY_WRITE_LAUNCH[\s\S]{0,1200}guardBotWorkerSessionText\(id, text, 'write-launch', folders/);
   });
 
   it('the resume writers type through main, and fan-out marks a bot\'s spawn around the renderer round trip', () => {

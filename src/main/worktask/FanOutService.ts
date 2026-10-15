@@ -29,6 +29,7 @@ import { botWorkerAgentPromptNote } from '../../shared/codexWorkerGuard';
 import { ensureSecretHook } from '../git/secretHookHost';
 import { beginBotWorkerSpawn } from '../agents/botWorkerMergeGuard';
 import { mintSecretGrant, revokeSecretGrant } from '../factory/secretGrants';
+import { connectorsStillForBot } from '../factory/connectorStore';
 import { allowAgyTrustFor } from '../agents/agyTrust';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -1418,7 +1419,21 @@ export class FanOutService {
     // A bot's named secrets: one single-use grant for this spawn, which only
     // pty:create can resolve (factory/secretGrants.ts). No grant, no launch.
     let secretGrant: string | null = null;
-    const connectors = ctx.requester?.kind === 'bot' ? ctx.connectors ?? [] : [];
+    // The task's connections as the library holds them now: a task that
+    // waited for its slot launches without one the owner turned off, moved
+    // out of the bot's scope or removed since it was accepted.
+    const accepted = ctx.requester?.kind === 'bot' ? ctx.connectors ?? [] : [];
+    const connectors = accepted.length > 0 && ctx.requester?.botId ? connectorsStillForBot(ctx.requester.botId, accepted) : [];
+    if (connectors.length < accepted.length && promptPath) {
+      const botBranch = ctx.requester?.kind === 'bot' && !ctx.checkout ? plan?.branch : undefined;
+      const noteAgent = ctx.agentChoice?.agent ?? launcherStem(splitModelEnvMarker(ctx.agentCmd).command.trim().split(/\s+/)[0] ?? '');
+      try {
+        const text = fs.readFileSync(promptPath, 'utf8');
+        fs.writeFileSync(promptPath, text.replace(workerTaskIdentityNote(taskId, channelId, botBranch, noteAgent, accepted), workerTaskIdentityNote(taskId, channelId, botBranch, noteAgent, connectors)), 'utf8');
+      } catch (err) {
+        console.warn(`[fanout] ${taskId}: the prompt's connections line could not be updated: ${String(err)}`);
+      }
+    }
     const connectorKeys = [...new Set(connectors.flatMap((c) => c.secrets.map((s) => s.secret)))];
     if ((ctx.secretNames && ctx.secretNames.length > 0) || connectorKeys.length > 0) {
       const botId = ctx.requester?.kind === 'bot' ? ctx.requester.botId : undefined;

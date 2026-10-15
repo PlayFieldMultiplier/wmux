@@ -33,6 +33,7 @@ function makeDaemon(
 ) {
   const writes: Array<{ sessionId: string; data: string }> = [];
   const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const sessions: Array<{ id: string; cwd?: string; spawnCwd?: string }> = [];
   const client = {
     rpc: async (method: string, params: Record<string, unknown>) => {
       rpcCalls.push({ method, params });
@@ -41,6 +42,7 @@ function makeDaemon(
         return { ok: true, tasks: tasks.filter((t) => t.owner === vws) };
       }
       if (method === 'task.mission.close') return { ok: true, taskId: params.taskId, archivePending: false };
+      if (method === 'daemon.listSessions') return sessions;
       return { ok: true };
     },
     writeToSession: (sessionId: string, data: string | Buffer) => {
@@ -48,7 +50,7 @@ function makeDaemon(
       return true;
     },
   };
-  return { client: client as unknown as DaemonClient, writes, rpcCalls };
+  return { client: client as unknown as DaemonClient, writes, rpcCalls, sessions };
 }
 
 let base: string;
@@ -115,7 +117,8 @@ describe('worktask:refire (§3·F2 — 원래 initialCommand 재전송)', () => 
     dispose = registerWorktaskHandlers(() => daemon.client);
     const wt = seedWorktree('task-bot', true);
     reloadBotWorkerSessionsForTests();
-    noteBotWorkerSession('pty-bot', 'ws-task');
+    noteBotWorkerSession('pty-bot', 'ws-task', undefined, { cwd: wt });
+    daemon.sessions.push({ id: 'pty-bot', cwd: wt, spawnCwd: wt });
     setWorkerMcpResolvers({ entry: () => '/opt/wmux/mcp/index.js', registeredLevel: () => null });
     // The app restarts between the spawn and the re-fire: only the durable record knows the pane.
     reloadBotWorkerSessionsForTests();

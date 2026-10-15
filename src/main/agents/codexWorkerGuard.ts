@@ -61,12 +61,11 @@ import {
 } from '../../shared/codexWorkerGuard';
 import { codexDefinesWmuxServer, codexMcpServerNames, codexWmuxApprovedTools } from '../../shared/mcpRegistration';
 import type { Connector } from '../../shared/botConnector';
-import { getConnectorStore } from '../factory/connectorStore';
-import { getTaskLedger } from '../deck/taskLedgerHost';
+
 import { resolveOnPath } from '../factory/botEngines';
 import { locateWmuxMcpEntry } from './toolSurfaceLaunch';
 import { getBotStore } from '../factory/botStore';
-import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guardSessionLaunch, isBotWorkerSession, markGuardedCodexCreate, prepareConnectorRunDirs, taskConnectors } from './botWorkerMergeGuard';
+import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guardSessionLaunch, isBotWorkerSession, ledgerTaskConnectors, markGuardedCodexCreate, prepareConnectorRunDirs, taskConnectors } from './botWorkerMergeGuard';
 import { getWmuxDir } from '../../daemon/config';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 
@@ -250,7 +249,7 @@ export async function guardCodexSessionLine(
   const parsed = parseCodexWorkerLine(line, record.cwd, { resume: true });
   if (!parsed) throw refuse('the launch line is not one the guard allows', where);
   try {
-    const connectors = (deps.sessionConnectors ?? ledgerTaskConnectors)(record);
+    const connectors = (deps.sessionConnectors ?? sessionTaskConnectors)(record);
     return (await guardedCodexLine(parsed, record.cwd, record.repoKey, record.codexHome ? { CODEX_HOME: record.codexHome } : undefined, deps, connectors)).line;
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
@@ -269,24 +268,19 @@ export async function guardBotWorkerSessionText(
   sessionId: string,
   text: string,
   kind: 'refire' | 'write-launch',
-  deps: CodexWorkerGuardDeps & { dir?: string } = {},
+  deps: CodexWorkerGuardDeps & { dir?: string; folders?: readonly string[] } = {},
 ): Promise<string> {
   if (namesCodex(text) && isBotWorkerSession(sessionId, deps.dir)) {
     return guardCodexSessionLine(botWorkerSessionRecord(sessionId, deps.dir), text, deps, kind === 'refire' ? 'worktask:refire' : 'pty:write-launch');
   }
-  return kind === 'refire' ? guardRefireLine(sessionId, text, deps.dir ? { dir: deps.dir } : {}) : guardSessionLaunch(sessionId, text, deps.dir ? { dir: deps.dir } : {});
+  const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}) };
+  return kind === 'refire' ? guardRefireLine(sessionId, text, guardDeps) : guardSessionLaunch(sessionId, text, guardDeps);
 }
 
-/** A re-fire's or resume's connections: the ones the task was started with
- *  (its ledger row) that are still this bot's in the library; one gone or
- *  out of scope since is left out, as a factory resume leaves it out. */
-function ledgerTaskConnectors(record: { workspaceId?: string }): Connector[] {
-  if (!record.workspaceId) return [];
-  const dispatch = getTaskLedger().findByTaskWorkspace(record.workspaceId)?.dispatch;
-  const named = dispatch?.connectors ?? [];
-  const botId = dispatch?.origin.kind === 'bot' ? dispatch.origin.botId : undefined;
-  if (named.length === 0 || !botId) return [];
-  return (getConnectorStore()?.forBot(botId) ?? []).filter((c) => named.includes(c.name));
+/** A re-fire's or resume's connections: its task's that are still its
+ *  bot's (botWorkerMergeGuard ledgerTaskConnectors). */
+function sessionTaskConnectors(record: { workspaceId?: string }): Connector[] {
+  return record.workspaceId ? ledgerTaskConnectors(record.workspaceId) : [];
 }
 
 /** Steps 2-4 and the rebuilt line (see the file header). Throws on any refusal. */

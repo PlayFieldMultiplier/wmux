@@ -136,7 +136,7 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
   resumeTakesPrompt?(agent: TerminalLaunchAgent): boolean;
   /** The launch line for a pane, guarded when it is a bot's fan-out worker
    *  (default guardBotWorkerLaunch); null: type nothing. */
-  botWorkerLaunch?(id: string, line: string, head: string): string | null;
+  botWorkerLaunch?(id: string, line: string, head: string, folders?: readonly string[]): string | null;
   relays: {
     retire(id: string): Promise<void>;
     prepare(id: string, pane: P): Promise<LaunchRelay>;
@@ -1773,7 +1773,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       }
       // A bot's fan-out worker merges only through the merge lane: its claude
       // line carries the worker settings, or nothing is typed.
-      const guarded = (deps.botWorkerLaunch ?? guardBotWorkerLaunch)(id, command, head);
+      const folders = [bound?.cwd, pane.meta.cwd, pane.meta.spawnCwd].filter((f): f is string => typeof f === 'string' && f.length > 0);
+      const guarded = (deps.botWorkerLaunch ?? ((i: string, l: string, h: string, f?: readonly string[]) => guardBotWorkerLaunch(i, l, h, undefined, f)))(id, command, head, folders);
       if (guarded === null) return fail('launch-unsupported');
       command = guarded;
       if (agent === 'codex' && boundShell !== 'pwsh') {

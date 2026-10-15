@@ -16,7 +16,8 @@
 //  - a stdio entry's `cwd` key is ignored (the server starts in the worker's
 //    folder), so a stdio connection runs as `/usr/bin/env -C <run dir> <its
 //    absolute command>`: nothing in the worker's checkout (an `.npmrc`, a
-//    `node_modules/.bin`, a relative PATH entry) is looked up;
+//    `node_modules/.bin`, a relative PATH entry) is looked up, and `-u` takes
+//    the other connections' keys out of its environment;
 //  - `${NAME}` is filled in in `env` and `headers`;
 //  - a bare `mcp__<name>` allow covers every tool of a server (default and
 //    auto modes); a `mcp__<name>__<tool>` deny holds under bypass;
@@ -61,6 +62,9 @@ export interface WorkerMcpInput {
   runDir: (c: Connector) => string;
   /** The empty npm user config in that folder. */
   npmrc: (c: Connector) => string;
+  /** Other connection keys the worker's environment may hold (a re-fire's
+   *  first launch had them): kept out of every stdio server too. */
+  strayKeys?: readonly string[];
 }
 
 /** The `--mcp-config` document. Pure. */
@@ -68,12 +72,15 @@ export function buildWorkerMcpConfig(input: WorkerMcpInput): { mcpServers: Recor
   const servers: Record<string, unknown> = {
     wmux: { type: 'stdio', command: 'node', args: input.level === 'core' ? [input.entry, '--core'] : [input.entry] },
   };
+  const keysOf = (c: Connector) => c.secrets.map((s) => s.secret);
   for (const c of input.connectors) {
     if (c.transport === 'stdio' && c.stdio) {
+      // The other connections' keys are taken out of its environment.
+      const others = [...new Set([...input.connectors.filter((o) => o !== c).flatMap(keysOf), ...(input.strayKeys ?? [])])].filter((k) => !keysOf(c).includes(k));
       servers[c.name] = {
         type: 'stdio',
         command: '/usr/bin/env',
-        args: ['-C', input.runDir(c), c.stdio.command, ...c.stdio.args],
+        args: ['-C', input.runDir(c), ...others.flatMap((k) => ['-u', k]), c.stdio.command, ...c.stdio.args],
         env: { ...c.stdio.env, npm_config_userconfig: input.npmrc(c), npm_config_registry: CONNECTOR_NPM_REGISTRY },
       };
     } else if (c.remote) {
