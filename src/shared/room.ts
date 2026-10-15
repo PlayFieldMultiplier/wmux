@@ -182,6 +182,12 @@ export interface ThreadSummary {
   /** Cards after the reader's read position; null when no position is
    *  known for this thread (unknown, not zero). */
   unread: number | null;
+  /** The first card's time (absent: no card). */
+  firstAt?: number;
+  /** The bot whose 1:1 this thread is (`dm:<botId>`), or whose 1:1 started
+   *  it (a coordinator's request thread: main's card links the 1:1 or sits
+   *  in it pointing here). Absent: the room's own thread. */
+  dmBotId?: string;
 }
 
 export const ROOM_RPC = { post: 'room.post', read: 'room.read', threads: 'room.threads', resolve: 'room.resolve' } as const;

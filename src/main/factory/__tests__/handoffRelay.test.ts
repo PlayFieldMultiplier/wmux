@@ -533,6 +533,22 @@ describe('the General card that points at a coordinator\'s thread', () => {
     expect(r.rooms.read('ws1', { threadId: dm }).cards.filter((c) => c.refs?.threadId === root.threadId))
       .toEqual([expect.objectContaining({ title: 'Finished: Add the flag', replyTo: request.id })]);
     expect(pointers(r, root.threadId)).toEqual([]);
+    // The room's thread list says whose 1:1 each of these is (a page of
+    // cards that misses the opening hop still knows), and when the 1:1 began.
+    const summaries = r.rooms.threads('ws1');
+    expect(summaries.find((th) => th.threadId === root.threadId)?.dmBotId).toBe(t.lead.id);
+    expect(summaries.find((th) => th.threadId === dm)).toMatchObject({ dmBotId: t.lead.id, firstAt: request.at });
+    expect(summaries.find((th) => th.threadId === 'general')?.dmBotId).toBeUndefined();
+    // A dispatch from the 1:1 that is refused links the 1:1 too.
+    t.iss.enabled = false;
+    r.run(t.lead, owner(), { runId: `run-${request.id}` }, dm);
+    const refused = r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.iss.id, title: 'File it', body: 'b' });
+    r.running.delete(t.lead.id);
+    expect(refused.ok).toBe(false);
+    await r.router.idle();
+    const refusedThread = r.rooms.read('ws1').cards.find((c) => c.kind === 'refusal' && c.title.includes('File it'));
+    expect(refusedThread?.refs?.threadId).toBe(dm);
+    t.iss.enabled = true;
     // The 1:1 it was opened from survives a restart.
     const again = await rig(t.all);
     await again.router.idle();

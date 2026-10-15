@@ -554,6 +554,7 @@ describe('Bots page', () => {
     cards.push(
       card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', threadId: `dm:${LEAD}`, refs: { botId: LEAD }, title: 'Private ask', at: 700 }),
       card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: `dm:${LEAD}`, title: 'Private answer', at: 710 }),
+      card({ workspaceId: 'w1', actor: by('w1', VERIFIER), threadId: `dm:${LEAD}`, title: 'Private check', at: 715 }),
       card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Team, hello', at: 720 }),
     );
     seedRooms();
@@ -568,6 +569,10 @@ describe('Bots page', () => {
     expect(chat()).toContain('Private answer');
     expect(chat()).not.toContain('Team, hello');
     expect(container.querySelector('[data-bots-thread-chip^="dm:"]')).toBeNull();
+    // Another bot speaking in this 1:1 is named; the 1:1's own bot is not.
+    const heads = [...container.querySelectorAll('[data-bots-messages] [data-bots-msg-head]')].map((el) => el.textContent);
+    expect(heads).toContain('Verifier');
+    expect(heads).not.toContain('Lead');
   });
 
   it('a group message goes to the whole room unless a bot is picked (a chip, or a typed @name)', async () => {

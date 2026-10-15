@@ -44,7 +44,7 @@
 // (resolved here at send; main reads only the field). Typing `@` in a room
 // suggests its bots.
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { dmThreadBot, dmThreadId, type RoomCard as RoomCardData, type ThreadId } from '../../../shared/room';
+import { dmThreadBot, dmThreadId, type RoomCard as RoomCardData, type ThreadId, type ThreadSummary } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import Button from '../ui/Button';
 import Select from '../ui/Select';
@@ -95,10 +95,15 @@ const SYSTEM_FOLD_CHARS = 140;
 /** The cards a conversation shows, narrowed to one thread when asked: its
  *  own cards and those that link it (an approval card posted where the bot
  *  talks with the owner links its PR's thread). Pure. */
-export function chatCards(conversation: Conversation, roomCards: readonly RoomCardData[], thread: ThreadId | null): RoomCardData[] {
+export function chatCards(
+  conversation: Conversation,
+  roomCards: readonly RoomCardData[],
+  thread: ThreadId | null,
+  threads: Readonly<Record<string, readonly ThreadSummary[] | undefined>> = {},
+): RoomCardData[] {
   // A 1:1 is handed every room's cards (botConversationCards); a group its
   // own, without the 1:1 threads and what they started.
-  const own = conversation.kind === 'bot' ? conversationCards(roomCards, conversation.row.bot.id, { lone: conversation.lone }) : roomViewCards(roomCards);
+  const own = conversation.kind === 'bot' ? conversationCards(roomCards, conversation.row.bot.id, { lone: conversation.lone, threads }) : roomViewCards(roomCards, threads);
   return thread ? own.filter((c) => c.threadId === thread || c.refs?.threadId === thread) : own;
 }
 
@@ -317,6 +322,9 @@ interface RowCtx {
   onThread: (workspaceId: string, threadId: ThreadId) => void;
   /** The thread a side panel shows: its rows name no chip for it. */
   hideThread?: ThreadId;
+  /** A 1:1's bot: another bot speaking in its 1:1 (work its 1:1 started)
+   *  is named above its run, as in a room. */
+  selfBot?: string;
   onOpenBot?: (botId: string) => void;
   /** How message text renders: links (PR and issue links as chips), rich
    *  code blocks. */
@@ -393,6 +401,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
   const botId = card.actor.kind === 'bot' ? card.actor.botId : '';
   const botRow = ctx.bots.find((b) => b.bot.id === botId);
   const role = botRow?.bot.role ?? ctx.actors[botId]?.role;
+  const showName = group || (!!ctx.selfBot && !!botId && botId !== ctx.selfBot);
   const name = human ? t('room.actor.you') : actorLabel(card.actor, t, ctx.bots, ctx.actors);
   // A bot the runtime no longer lists still gets a face: its name as the room knows it.
   const face = botRow?.bot ?? (role ? { id: botId, name, role } : null);
@@ -451,7 +460,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
     >
       <div className="wmux-bots-msg-gutter">{runEnd && face ? <BotAvatar bot={face} size={28} /> : null}</div>
       <div className="wmux-bots-msg-main">
-        {!continuation && group && (
+        {!continuation && showName && (
           <div className="wmux-bots-msg-head" data-bots-msg-head>
             <span className="truncate" style={botNameStyle(botId)}>{name}</span>
           </div>
@@ -461,7 +470,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
         ) : (
           <div className={waiting ? 'wmux-bots-waiting' : 'wmux-bots-bubble wmux-bots-bubble-bot'} title={fullTime(card.at)}>
             {/* The author for assistive tech where no name is shown. */}
-            {(continuation || !group) && <span className="sr-only">{`${name}: `}</span>}
+            {(continuation || !showName) && <span className="sr-only">{`${name}: `}</span>}
             <BotProse card={card} answers={answers} waiting={waiting} ctx={ctx} />
           </div>
         )}
@@ -1609,7 +1618,8 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   const [openThread, setOpenThread] = useState<{ workspaceId: string; threadId: ThreadId } | null>(null);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const actors = useStore((s) => s.roomActors);
-  const cards = useMemo(() => chatCards(conversation, roomCards, null), [conversation, roomCards]);
+  const roomThreads = useStore((s) => s.roomThreads);
+  const cards = useMemo(() => chatCards(conversation, roomCards, null, roomThreads), [conversation, roomCards, roomThreads]);
   // The plans still waiting (each bot's newest), judged on every card the
   // conversation holds.
   const livePlans = useMemo(() => livePlanIds(roomCards), [roomCards]);
@@ -1780,7 +1790,6 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   }, [tasks, openWorkspaceIds]);
   // PR and issue links become chips: titled from a thread this conversation
   // holds, which they open beside the chat.
-  const roomThreads = useStore((s) => s.roomThreads);
   const pattern = useMemo(() => mentionPattern(bots.map((b) => b.bot.name)), [bots]);
   const markdown = useMemo((): MarkdownOptions => ({
     links: true,
@@ -1809,7 +1818,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       return <RefChip url={url} label={label} title={summary?.title ?? null} onOpen={holder ? () => onThread(holder.workspaceId, threadId) : null} />;
     },
   }), [cards, roomThreads, onThread, pattern, bots]);
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown };
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}) };
   // The open thread is read whole, from its first card (the cached room
   // timeline holds only its newest page), and shown from every card read
   // for the room — not only this conversation's.

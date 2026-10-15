@@ -171,6 +171,13 @@ describe('approval requests (bot side)', () => {
     expect(answering.writer.get(WS, req.cardId as string)?.refs?.threadId).toBeUndefined();
   });
 
+  it('a turn in the bot\'s own 1:1 (its task\'s work, asked for there) asks there, though the owner spoke in the room since', async () => {
+    const DM = bot('bot-0000de01');
+    const inDm = rig({ conversationThread: () => 'general' as never, bots: () => ({ listEnabled: () => [DM], get: () => DM }) });
+    inDm.state.wakes.set(DM.id, { wakeId: 'w-3', attempt: 1, threadId: `dm:${DM.id}` as never, tainted: false });
+    expect(await inDm.ask(DM, { action: 'merge', prNumber: 1, reason: 'x' })).toMatchObject({ threadId: `dm:${DM.id}` });
+  });
+
   it('refuses outside a wake, without a repository, a closed PR, or an unreadable login', async () => {
     const r = rig();
     r.state.wakes.delete(DEV.id);

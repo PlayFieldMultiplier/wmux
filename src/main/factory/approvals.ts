@@ -85,7 +85,7 @@ import type { Fact, FactDraft } from '../../shared/facts';
 import type { MergeEffect } from '../../shared/moaDecision';
 import type { PrLaneFacts } from '../../shared/prReview';
 import type { RpcContext } from '../../shared/rpc';
-import { GENERAL_THREAD, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, dmThreadBot, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
 import { normalizeRepoKey } from './repoWatch';
@@ -558,10 +558,14 @@ export class ApprovalService {
     }
   }
 
-  /** The thread a request's card goes to: the thread of the owner's latest
-   *  words to the bot (its latest owner-message wake), else the running
-   *  wake's when that is the owner's, else `general`. */
+  /** The thread a request's card goes to: the bot's 1:1 when its turn runs
+   *  there, else the thread of the owner's latest words to the bot (its
+   *  latest owner-message wake), else the running wake's when that is the
+   *  owner's, else `general`. */
   private conversationThread(botId: string, wake: ApprovalWake): ThreadId {
+    // A turn in the bot's 1:1 (its task's facts wake there too) asks there:
+    // the 1:1 is where that work was asked for.
+    if (dmThreadBot(wake.threadId) === botId) return wake.threadId as ThreadId;
     let thread: ThreadId | null = null;
     try {
       thread = this.ports.conversationThread?.(botId) ?? null;

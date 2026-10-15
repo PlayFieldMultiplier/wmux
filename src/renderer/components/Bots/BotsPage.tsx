@@ -436,16 +436,17 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const [view, setView] = useState<'list' | 'chat'>('list');
 
   const seenAt = useStore((s) => s.botsSeenAt);
+  const roomThreads = useStore((s) => s.roomThreads);
   const rows = useMemo(() => model.conversations.map((c) => {
     const since = seenAt[c.id] ?? BOTS_SESSION_START;
-    const own = c.kind === 'bot' ? conversationCards(everyCard, c.row.bot.id, { lone: c.lone }) : roomViewCards(cardsByWs.get(c.workspaceId) ?? []);
+    const own = c.kind === 'bot' ? conversationCards(everyCard, c.row.bot.id, { lone: c.lone, threads: roomThreads }) : roomViewCards(cardsByWs.get(c.workspaceId) ?? [], roomThreads);
     return {
       c,
       title: conversationTitle(c, nameOf),
       preview: conversationPreview(c, t, bots, actors),
       unread: unreadCount(own, since),
     };
-  }), [model.conversations, nameOf, t, bots, actors, seenAt, everyCard, cardsByWs]);
+  }), [model.conversations, nameOf, t, bots, actors, seenAt, everyCard, cardsByWs, roomThreads]);
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter((r) => r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)) : rows;
 

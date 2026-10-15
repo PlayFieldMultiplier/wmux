@@ -410,7 +410,8 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   12px above its first bubble, and the bot's 28px avatar once, beside its
   last bubble (bottom-left); bubbles of a run sit 4px apart, runs 12px, a
   bubble at most 78% of the column (density, owner decision 2026-10-14). A 1:1
-  shows no name (the pill names the bot). The full date and time is the
+  shows no name for its own bot (the pill names it); another bot speaking
+  in it (work its 1:1 started) is named as in a room. The full date and time is the
   bubble's tooltip. A bot's kind word (Verdict, Report; a refusal's red, a
   budget's yellow, a waiting card's needs-you text) and a verdict's word
   sit in 11px muted at the top of its bubble; the title and body read as one

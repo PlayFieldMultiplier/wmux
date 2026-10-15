@@ -239,6 +239,21 @@ describe('a 1:1 and the room are separate (owner decision 2026-10-15)', () => {
     expect(roomViewCards([...all, spoof, approval, pr]).map((c) => c.id)).toEqual([oldPost, oldDm, roomPost, spoof, pr].map((c) => c.id));
   });
 
+  it('main\'s thread summaries keep the split when the page of cards misses the 1:1 or its opening hop', () => {
+    // Only room activity is loaded, but the room has 1:1 threads since t=200.
+    const before = card({ workspaceId: 'w1', actor: bot('w1', LEAD), title: 'old', at: 100 });
+    const after = card({ workspaceId: 'w1', actor: bot('w1', LEAD), title: 'room post', at: 300 });
+    // A hop of a request thread whose opening card is off the page.
+    const hop = card({ workspaceId: 'w1', actor: bot('w1', VERIFIER), threadId: 'handoff:h-5' as ThreadId, at: 310 });
+    const sum = (threadId: string, extra: Record<string, unknown>) => ({ threadId: threadId as ThreadId, title: 't', lastAt: 1, lastSeq: 1, cardCount: 1, openQuestions: 0, lastKind: 'status' as const, status: 'open' as const, unread: null, ...extra });
+    const threads = { w1: [sum(dm(LEAD), { dmBotId: LEAD, firstAt: 200 }), sum('handoff:h-5', { dmBotId: LEAD })] };
+    const all = [before, after, hop];
+    expect(conversationCards(all, LEAD, { threads }).map((c) => c.id)).toEqual([before.id, hop.id]);
+    expect(roomViewCards(all, threads).map((c) => c.id)).toEqual([before.id, after.id]);
+    // Without them the page alone decides (no 1:1 read: all legacy).
+    expect(conversationCards(all, LEAD).map((c) => c.id)).toEqual([before.id, after.id]);
+  });
+
   it('a lone bot keeps everything it says in its 1:1, and the model has no room for it', () => {
     const post = card({ workspaceId: 'hq', actor: bot('hq', MOA), title: 'morning', at: 500 });
     const dmCard = card({ workspaceId: 'hq', actor: { kind: 'human' }, kind: 'human', threadId: dm(MOA), refs: { botId: MOA }, at: 400 });

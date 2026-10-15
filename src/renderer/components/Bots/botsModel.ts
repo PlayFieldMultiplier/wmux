@@ -16,10 +16,12 @@
 // decision 2026-10-15: the 1:1 and the room are separate, never mirrors) —
 // what the owner and the bot say there, its greeting and the work it does
 // for those words — plus the threads its 1:1 started (a coordinator's request
-// thread, whose opening hop or pointer card names the 1:1). Before a 1:1
-// thread existed a 1:1 was a filter of the rooms, and those cards keep it:
-// in every room read, the cards older than the first card of any 1:1 thread
-// (none yet: all of them) that are the bot's own, the owner's messages
+// thread, whose opening hop or pointer card names the 1:1; main's thread
+// summaries say so too, `dmBotId`, so a page of cards that misses those
+// cards still knows). Before a 1:1 thread existed a 1:1 was a filter of the
+// rooms, and those cards keep it: in every room read, the cards older than
+// the first card of any 1:1 thread (read, or its summary's `firstAt`; none
+// yet: all of them) that are the bot's own, the owner's messages
 // addressed to it (`refs.botId`) or the system cards about its work (naming
 // the bot, or in a thread other than General it wrote in). A bot alone in its
 // workspace has no room row, so its 1:1 keeps that filter over every card
@@ -208,14 +210,22 @@ export function isBotConversationCard(card: RoomCard, botId: string, scope?: Bot
   return card.kind === 'human' && card.refs?.botId === botId;
 }
 
+/** What the room summaries say about 1:1 threads, per workspace. */
+type ThreadsByWorkspace = Readonly<Record<string, readonly ThreadSummary[] | undefined>>;
+
 /** The threads a 1:1 started (a coordinator's request thread), by thread
- *  key, to the bot whose 1:1 it is: main's opening hop card links the 1:1
- *  (`refs.threadId`), or names the owner's request in it
- *  (`refs.requestCardId`), or main's pointer card in the 1:1 links the
- *  thread. Only main's own cards count. Pure. */
-export function dmStartedThreads(cards: readonly RoomCard[]): Map<string, string> {
+ *  key, to the bot whose 1:1 it is: the thread's summary says so
+ *  (`dmBotId`), main's opening hop card links the 1:1 (`refs.threadId`) or
+ *  names the owner's request in it (`refs.requestCardId`), or main's pointer
+ *  card in the 1:1 links the thread. Only main's own cards count. Pure. */
+export function dmStartedThreads(cards: readonly RoomCard[], threads: ThreadsByWorkspace = {}): Map<string, string> {
   const byId = new Map(cards.map((c) => [c.id, c]));
   const out = new Map<string, string>();
+  for (const [workspaceId, list] of Object.entries(threads)) {
+    for (const th of list ?? []) {
+      if (th.dmBotId && !dmThreadBot(th.threadId)) out.set(threadKeyOf({ workspaceId, threadId: th.threadId }), th.dmBotId);
+    }
+  }
   for (const c of cards) {
     if (c.actor.kind !== 'system') continue;
     const inDm = dmThreadBot(c.threadId);
@@ -240,8 +250,8 @@ function dmOwnerOf(card: RoomCard, started: ReadonlyMap<string, string>): string
 
 /** A room's own cards: every card but the 1:1 threads and the threads they
  *  started. Pure. */
-export function roomViewCards(cards: readonly RoomCard[]): RoomCard[] {
-  const started = dmStartedThreads(cards);
+export function roomViewCards(cards: readonly RoomCard[], threads: ThreadsByWorkspace = {}): RoomCard[] {
+  const started = dmStartedThreads(cards, threads);
   return cards.filter((c) => dmOwnerOf(c, started) === null);
 }
 
@@ -250,11 +260,15 @@ export function roomViewCards(cards: readonly RoomCard[]): RoomCard[] {
  *  outside the 1:1 threads for a bot alone in its workspace) that are its
  *  own, the owner's messages to it and the system cards about its work.
  *  Pure. */
-export function conversationCards(cards: readonly RoomCard[], botId: string, opts: { lone?: boolean } = {}): RoomCard[] {
-  const started = dmStartedThreads(cards);
+export function conversationCards(cards: readonly RoomCard[], botId: string, opts: { lone?: boolean; threads?: ThreadsByWorkspace } = {}): RoomCard[] {
+  const threads = opts.threads ?? {};
+  const started = dmStartedThreads(cards, threads);
   const mine = new Set<RoomCard>();
   const rest: RoomCard[] = [];
   let firstDm = Infinity;
+  for (const list of Object.values(threads)) {
+    for (const th of list ?? []) if (dmThreadBot(th.threadId) && typeof th.firstAt === 'number') firstDm = Math.min(firstDm, th.firstAt);
+  }
   for (const c of cards) {
     const owner = dmOwnerOf(c, started);
     if (owner === null) rest.push(c);
@@ -281,7 +295,7 @@ export function allRoomCards(cards: ReadonlyMap<string, readonly RoomCard[]>): R
 }
 
 /** A bot's 1:1 conversation across every room read. */
-export function botConversationCards(cards: ReadonlyMap<string, readonly RoomCard[]>, botId: string, opts: { lone?: boolean } = {}): RoomCard[] {
+export function botConversationCards(cards: ReadonlyMap<string, readonly RoomCard[]>, botId: string, opts: { lone?: boolean; threads?: ThreadsByWorkspace } = {}): RoomCard[] {
   return conversationCards(allRoomCards(cards), botId, opts);
 }
 
@@ -471,7 +485,7 @@ export function buildBots(input: BotsInput): BotsModel {
   // A room is listed once its workspace has a team (two or more bots).
   const rooms: RoomConversation[] = botsRooms(bots).filter((ws) => !isLoneBot(bots, ws)).map((workspaceId) => {
     const all = input.cards.get(workspaceId) ?? [];
-    const started = dmStartedThreads(all);
+    const started = dmStartedThreads(all, input.threads);
     const cards = all.filter((c) => dmOwnerOf(c, started) === null);
     const last = lastOf(cards);
     const threadLast = (input.threads[workspaceId] ?? [])
@@ -492,7 +506,7 @@ export function buildBots(input: BotsInput): BotsModel {
   const every = allRoomCards(input.cards);
   const oneToOne: BotConversation[] = bots.map((row) => {
     const lone = isLoneBot(bots, row.bot.workspaceId);
-    const own = conversationCards(every, row.bot.id, { lone });
+    const own = conversationCards(every, row.bot.id, { lone, threads: input.threads });
     const last = lastOf(own);
     const openQuestions = openQuestionsBy(own, row.bot.id, input.threads);
     const openApprovals = openApprovalsBy(own, row.bot.id);
