@@ -17,7 +17,7 @@ vi.mock('../../../deck/deckDecisionStore', () => ({ loadWorkspaceDecision: vi.fn
 
 import { sendToRenderer } from '../_bridge';
 import { git } from '../../../git/git';
-import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, type FanOutBotPort } from '../fanout.rpc';
+import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
 import { FanOutGuards } from '../../../worktask/fanoutGuards';
@@ -674,5 +674,13 @@ describe('task.fanout.start — a bot hears whether its workers started (A2)', (
     r.port.refusal = 'the owner stopped this bot';
     await r.flush();
     expect(r.port.outcomes).toEqual([]);
+  });
+});
+
+describe('workersHeldNote', () => {
+  it('says a worker waiting for a slot has not started', () => {
+    expect(workersHeldNote(0, 1, 1)).toBe(': 1 is waiting for an agent slot, not started');
+    expect(workersHeldNote(1, 2, 1)).toBe(': 1 of your workers is open, 1 is starting, 1 is waiting for an agent slot, not started');
+    expect(workersHeldNote(0, 0, 0)).toBe('');
   });
 });

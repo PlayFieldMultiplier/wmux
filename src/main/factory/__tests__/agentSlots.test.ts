@@ -2,7 +2,6 @@
 // slot, first come first served, and a stop ends the wait.
 import { describe, expect, it, vi } from 'vitest';
 import { AgentSlots, SLOT_GRANT_MAX_MS, SLOT_ROW_GRACE_MS, rowHoldsAgentSlot, type AgentSlotPorts, type SlotLiveness } from '../agentSlots';
-import { workersHeldNote } from '../../pipe/handlers/fanout.rpc';
 
 function slots(over: Partial<AgentSlotPorts> & { bots?: () => number; workers?: () => number } = {}) {
   let now = 0;
@@ -177,13 +176,5 @@ describe('rowHoldsAgentSlot', () => {
     rows.pop();
     const g = await s.acquire({ taskId: 't', title: 't', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-1' });
     expect(g.ok).toBe(true);
-  });
-});
-
-describe('workersHeldNote', () => {
-  it('says a worker waiting for a slot has not started', () => {
-    expect(workersHeldNote(0, 1, 1)).toBe(': 1 is waiting for an agent slot, not started');
-    expect(workersHeldNote(1, 2, 1)).toBe(': 1 of your workers is open, 1 is starting, 1 is waiting for an agent slot, not started');
-    expect(workersHeldNote(0, 0, 0)).toBe('');
   });
 });
