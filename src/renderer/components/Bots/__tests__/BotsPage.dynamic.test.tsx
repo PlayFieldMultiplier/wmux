@@ -603,6 +603,16 @@ describe('Bots page', () => {
     await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
     expect(options()).toEqual([]);
     expect(input.value).toBe('@L');
+    // A new draft suggests again; completing inside a name replaces the whole word.
+    await typeText('');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'ask @Ve check');
+      input.setSelectionRange(7, 7);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(options()).toEqual([VERIFIER]);
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
+    expect(input.value).toBe('ask @Verifier check');
   });
 
   it('a live worker is a row under its bot in the list; a click shows its terminal beside the chat, never switching workspace', async () => {
@@ -1292,6 +1302,9 @@ describe('BotsChat helpers', () => {
     // A Latin name ends at a word boundary; an unknown name and an address are plain text.
     expect(textMentions('@Adam and @foo, mail me@Ada.dev', room)).toEqual([]);
     expect(textMentions('ask @ada.', room)).toEqual([ada.bot.id]);
+    // A longer name of a bot elsewhere is that bot's, not a room bot's prefix.
+    const far = botRow('bot-00000014', 'verifier', 'w2', 4, 'Ada Lovelace');
+    expect(textMentions('@Ada Lovelace check', room, [...room, far])).toEqual([]);
     // The `@` being typed before the caret, and what it suggests.
     expect(mentionQuery('hi @대', 5)).toEqual({ at: 3, query: '대' });
     expect(mentionQuery('me@Ad', 5)).toBeNull();

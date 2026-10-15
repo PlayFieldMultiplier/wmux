@@ -192,18 +192,21 @@ const LATIN_WORD = /[A-Za-z0-9_]/;
 
 /** The bots among `candidates` named by an `@Name` anywhere in the text,
  *  in the order typed, each once (owner, 2026-10-15: a typed `@Name`
- *  addresses that bot wherever it stands). A longer name wins over one it
- *  starts with ("@Ada Lovelace" is not "@Ada"); case does not matter. A
- *  Latin name ends at a non-word character; a name ending in another script
- *  may run straight into the next word (a Korean particle: "@대장이").
- *  An `@` naming no candidate is plain text. Pure. */
-export function textMentions(text: string, candidates: readonly FactoryBotRow[]): string[] {
+ *  addresses that bot wherever it stands). Each `@` is read against every
+ *  bot in `known` (the candidates too): a longer name wins over one it
+ *  starts with ("@Ada Lovelace" is not "@Ada", wherever Ada Lovelace
+ *  lives), a candidate wins a shared name; case does not matter. A Latin
+ *  name ends at a non-word character; a name ending in another script may
+ *  run straight into the next word (a Korean particle: "@대장이"). An `@`
+ *  naming no candidate is plain text. Pure. */
+export function textMentions(text: string, candidates: readonly FactoryBotRow[], known: readonly FactoryBotRow[] = candidates): string[] {
   if (!text.includes('@')) return [];
   const lower = text.toLowerCase();
-  const named = candidates
-    .map((r) => ({ id: r.bot.id, name: r.bot.name.trim().toLowerCase() }))
+  const allowed = new Set(candidates.map((r) => r.bot.id));
+  const named = [...new Map([...candidates, ...known].map((r) => [r.bot.id, r])).values()]
+    .map((r) => ({ id: r.bot.id, name: r.bot.name.trim().toLowerCase(), here: allowed.has(r.bot.id) ? 0 : 1 }))
     .filter((r) => r.name)
-    .sort((a, b) => b.name.length - a.name.length);
+    .sort((a, b) => b.name.length - a.name.length || a.here - b.here);
   const out: string[] = [];
   for (let at = lower.indexOf('@'); at >= 0; at = lower.indexOf('@', at + 1)) {
     if (at > 0 && BEFORE_MENTION.test(text.charAt(at - 1))) continue;
@@ -211,7 +214,7 @@ export function textMentions(text: string, candidates: readonly FactoryBotRow[])
       if (!lower.startsWith(r.name, at + 1)) continue;
       const next = lower.charAt(at + 1 + r.name.length);
       if (next && LATIN_WORD.test(r.name.charAt(r.name.length - 1)) && LATIN_WORD.test(next)) continue;
-      if (!out.includes(r.id)) out.push(r.id);
+      if (allowed.has(r.id) && !out.includes(r.id)) out.push(r.id);
       break;
     }
   }
@@ -1038,7 +1041,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   const roomCandidates = useMemo(() => (conversation.kind === 'room' ? roomBots(bots, workspaceId) : []), [conversation.kind, bots, workspaceId]);
   // A room message goes to the chips picked and every room bot named by an
   // `@Name` anywhere in the text (main reads the field, never the text).
-  const typed = useMemo(() => textMentions(text, roomCandidates), [text, roomCandidates]);
+  const typed = useMemo(() => textMentions(text, roomCandidates, bots.filter((r) => r.bot.enabled)), [text, roomCandidates, bots]);
   const mentions: string[] = useMemo(
     () => (conversation.kind === 'bot' ? [conversation.row.bot.id] : [...new Set([...picks.picked, ...typed])]),
     [conversation, picks.picked, typed],
@@ -1102,7 +1105,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   const insertMention = (row: FactoryBotRow) => {
     if (!query) return;
     const name = `@${row.bot.name.trim()} `;
-    const next = text.slice(0, query.at) + name + text.slice(caret);
+    // The rest of the word the caret is in is replaced too ("@Ad|a" → "@Ada ").
+    const rest = text.slice(caret).replace(/^[^\s@]*\s?/u, '');
+    const next = text.slice(0, query.at) + name + rest;
     const at = query.at + name.length;
     pendingCaret.current = at;
     textNow.current = next;
@@ -1273,6 +1278,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
             textNow.current = e.target.value;
             setText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);
+            setDismissedAt(null);
             if (conversation.kind === 'room') picks.onText(e.target.value);
             if (error) setError(null);
           }}
