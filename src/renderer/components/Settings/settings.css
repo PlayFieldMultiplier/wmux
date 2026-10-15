@@ -104,7 +104,7 @@
   background: none;
 }
 .settings-more:hover { text-decoration: underline; }
-.settings-note { margin: 0; padding: 10px 14px; font-size: 12px; line-height: 16px; color: var(--text-sub); }
+.settings-note { margin: 0; padding: 10px 14px; font-size: 12px; line-height: 16px; color: var(--settings-quiet); }
 .settings-note[data-tone="warning"] { color: color-mix(in srgb, var(--accent-yellow) 80%, var(--text-main)); }
 .settings-note[data-tone="danger"] { color: color-mix(in srgb, var(--accent-red) 80%, var(--text-main)); }
 .settings-select > select { min-width: 140px; }
@@ -123,7 +123,7 @@
 
 /* Keyboard rows. */
 .settings-kbd-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; padding: 6px 14px; }
-.settings-kbd-desc { font-size: 13px; line-height: 20px; color: var(--text-main); }
+.settings-kbd-desc { font-size: 14px; line-height: 20px; color: var(--text-main); }
 .settings-kbd {
   display: inline-flex;
   align-items: center;
