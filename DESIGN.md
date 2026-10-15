@@ -1202,7 +1202,8 @@ always neutral (the fill ladder).
   (Graphite's sidebar group heads, via `--group-case` / `--group-track`).
 - **Scale:** 11px metadata, chips and footers · 12px Fleet detail and
   secondary controls · 13px rows, tabs, menus, body · 14px chat prose and
-  composer input · 16px page and dialog titles (`--text-display-size`).
+  composer input · 16px page and dialog titles (`--text-display-size`);
+  Settings has its own calmer scale (see Settings under Component rules).
   Tabular figures for counts, durations and diff stats.
 - **Icons** cap at 16px in chrome (19px on the rail); wmux's own icon set
   (`icons.tsx`), never emoji.
@@ -1297,7 +1298,8 @@ one soft floating shadow on the panel only, no bevel.
   action on the right, where a status needs an action.
 - **Field row:** 13px/500 label + 11px `--text-sub` description on the left,
   control on the right (`inline`) or underneath (`stacked`). The row wires
-  the label and `aria-describedby` into its control.
+  the label and `aria-describedby` into its control. Settings overrides this
+  recipe on its own page only (below); dialogs keep it everywhere.
 - **Controls:** switches and checkboxes are neutral (dim when off, a light
   track with a dark knob when on); segmented controls are a `--chip-radius`
   track with the active segment on `--selection`; inputs use a `--line`
@@ -1326,14 +1328,26 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
   open Factory, the agent factory's tab).
 - **Theme picker:** visual cards whose thumbnails show the look's face,
   chip shape and selection style; selected by a neutral outline + check.
-- **Nav:** 13px icon + label rows; group headings muted sentence case; the
-  selected row uses the selection grammar above.
-- **Page:** one centred column (720px max); the tab's name as the 16px
-  title; sections 28px apart, each a muted sentence-case heading over ONE
-  rounded container of rows.
-- **Row:** label + one-line muted description on the left, control on the
-  right; overflowing copy collapses behind Learn more. Status words are
+- **Type scale** (2026-10-15, calmer than the chrome scale). One quiet
+  colour, `--settings-quiet` (halfway between `--text-sub` and
+  `--text-muted`), carries descriptions, notes, inactive nav labels, nav
+  icons and every heading below the page title.
+- **Nav:** 14px/400 icon + label rows, 32px tall, 14px icons, labels in the
+  quiet colour; group headings 12px/400 quiet, sentence case. The selected
+  row is the look's selection grammar (`--selection` fill plus
+  `--select-ring`), in `--text-main`: a soft pill, with no accent edge of
+  its own.
+- **Page:** one centred column (680px max, 32px top padding); the tab's
+  name as a 22px/500 title, 24px above the first section; sections 32px
+  apart, each a 13px/400 quiet sentence-case heading over ONE rounded
+  container of rows.
+- **Row:** a 14px/400 label over a 12px quiet description line on the left,
+  control on the right; rows are 48px minimum with 8px × 14px padding.
+  Overflowing copy collapses behind a 12px Learn more. Status words are
   Badges. At most one primary per tab.
+- **Controls:** a 30×18 switch (12px knob), a select at least 140px wide
+  with an 8px radius, 32px buttons. These sizes apply only on the Settings
+  page, never inside a dialog opened from it.
 
 ## Motion
 
@@ -1462,6 +1476,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-15 | Owner decision (dogfood of 4.5.0, recommended option): a bot's 1:1 and its workspace room are separate conversations. The 1:1 is its own thread of the room (`dm:<botId>`): the owner's messages there, the bot's answers, its greeting and the work it starts there (a coordinator's request thread); the room never shows them, and a bot's room posts never show in its 1:1. The room is listed once the workspace has two or more bots; a lone bot has only its 1:1, which also keeps what it says in the room. Cards from before 1:1 threads keep the old 1:1 filter. Amends List and System lines | The 1:1 was a filter of the room, so the coordinator's greeting showed in both and every 1:1 message showed in the room: the owner read them as mirrors, and a room appeared for a single bot on its own |
 | 2026-10-15 | Owner decision (modelled on the reference messenger the owner uses): group chats are the owner's. No workspace has a room by itself and no bot makes one; `+` › New group chat takes a name and two or more bots of one workspace (they share its repository and room), and a group's pill renames it, changes its bots or deletes it (its messages stay saved). A group lives in its own thread (`group:<id>`) with the work started from it. A group message goes to every bot in it unless bots are picked in the recipients control above the composer ("To: everyone ▾", a checkbox per bot; a typed `@Name` ticks its bot; the picks reset after each send); the coordinator-only routing of an untagged room message is gone. Nobody greets first in a group and no "joined" line is drawn: a bot new to the group introduces itself in its first answer. Add team makes the bots only, then offers Make a group chat with this team. A room the owner had written in became a group named after its workspace, reading on in General. Amends List, Avatars, Needs you, Chat, Composer, Add bot and First run, and the same day's 1:1-and-room row; supersedes the same day's coordinator-only routing and its "To <lead>" line | The owner asked how they would even know who the coordinator is: a hidden rule that sent untagged room messages to one bot read as the room ignoring the rest, and a room that appeared on its own for every team was not a conversation the owner had chosen |
 | 2026-10-15 | Owner decision: the Bots rail item is listed only while the bots are on; they are turned on in Settings › Bots, whose switch description says so, and the item appears at once without leaving Settings. Turning them off while the Bots page is open returns to Workspaces; the Toggle Bots shortcut and the palette's Open Bots open Settings › Bots while they are off. The first-run panel is reached only with the bots on. Amends Rail and pages, Bots off, Add bot and First run | A Bots item on the rail from the first launch advertised a feature the owner had not chosen, and opened a page that could do nothing until the bots were on. Settings stays open after the switch because Settings › Bots has its own add form and the plan and connection settings the owner may be setting up |
+| 2026-10-15 | Owner decision: settings type and spacing were too large and loud. Settings gets its own calmer scale: regular-weight 14px row labels over quiet 12px descriptions, a 22px/500 page title, 12px nav group labels and 13px section headings in one quiet colour (`--settings-quiet`, between `--text-sub` and `--text-muted`), nav rows as the look's selection pill without the accent edge, a 30×18 switch, a narrower select and a 680px column. Scoped to the Settings page; the shared Field recipe and dialogs are unchanged | Bold 13px labels in near-white over bright 11px descriptions made every row shout at the same volume, and the accent edge on the nav added a second mark for one selection. Weight and a quieter secondary colour, not size, carry the hierarchy now, so a long settings page reads calmly |
 
 ### Desktop conversation view
 
