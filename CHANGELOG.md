@@ -1,5 +1,185 @@
 ## [Unreleased]
 
+## [4.5.0] — 2026-10-15
+
+### Added
+
+- **Releases now include a headless wmux for Linux hosts.** Each release
+  publishes `wmux-server-<version>-linux-x64.tar.gz` and `-linux-arm64.tar.gz`.
+  Each one bundles its own Node, so it runs on a Linux machine without root or
+  a system Node and puts the daemon and `wmux web` in `~/.wmux/runtime`. The
+  desktop app ships with the hashes of both files, so the upcoming "Add PC over
+  SSH" can verify what it installs. To install it by hand, see
+  `docs/how-to/install-wmux-server-manually.md`.
+
+- **`wmux web pair`.** `wmux web pair --name <device> [--kind desktop|phone]
+  [--json]` starts a pairing on the web server that is already running and
+  prints its code, port and input grant. It never restarts the server, so
+  devices that are already paired stay paired, and it never prints the access
+  token. A computer paired with `--kind desktop` may also open new workspaces
+  on that host. Phones never can.
+
+- **`wmux daemon status --json` reports more.** It now includes the daemon's
+  release version, how many panes are running, and whether the web server is
+  on (with its port and input grant).
+
+- **Add a PC over SSH.** "Add PC over SSH…" in the computer switcher (and
+  from Connect a PC) lists the hosts in your `~/.ssh/config`, or takes
+  `user@host`, and does the rest: it installs the wmux server on that Linux
+  computer (checked against this app build), starts `wmux web` on loopback,
+  pairs this computer and adds it to the switcher, all over your own ssh with
+  your keys or agent. Before, a headless Linux box had to be set up and
+  paired by hand. wmux keeps one SSH connection open to the host while it is
+  paired and sends nothing until that connection is up and the host is the
+  one you confirmed. If the server there stopped while idle, wmux starts it
+  again, on the same port and settings, the next time it connects. When the
+  host's identity changes, "Check SSH connection…" shows
+  what changed and asks before trusting it again. Password prompts are never
+  answered for you: run `ssh <host>` once in a terminal first. (#2176)
+
+- **Keep the daemon running on a Linux server.** `wmux daemon install-service`
+  sets up a systemd user service so the wmux daemon starts at boot and keeps
+  running after you log out of SSH. It never stops a daemon that is already
+  running, and it never runs sudo. If your account needs lingering, it prints
+  the one command to run. `wmux daemon uninstall-service` removes it and leaves
+  the running daemon alone. On macOS, or without systemd, it prints the command
+  to run under your own supervisor instead.
+
+- Add PC over SSH: an opt-in **Start after reboot** checkbox installs the wmux daemon on that computer as a login service (Linux with systemd), and the PC switcher's host settings get a matching on/off. The dialog says plainly when the host cannot run it, or when linger is off and shows the one `sudo` command to run there.
+
+- **New workspaces on a computer added over SSH.** With that computer selected
+  in the PC switcher, the sidebar's `+` (and the collapsed rail's) now opens a
+  new workspace on that computer, with a shell running there, and shows it in
+  its list. It appears only for computers that let this desktop create
+  workspaces; other paired computers still have no `+`.
+
+- **Your lead bot can run a relay.** When the coordinator hands work to a bot, it can name the bots that follow — say research, then build, then triage — and wmux passes each result straight on. The coordinator hears back once, with the final result or why the relay stopped. The work runs in its own thread, and General gets one "Finished" or "Stopped" card under your message that opens it. (#2193)
+
+- **Add a whole team at once.** "Add team" on the Bots page adds a lead and four role bots — research, build, triage and review — to the current workspace. Only the lead greets you; in that room the composer shows you're talking to the lead, and the others join when it hands them work or you @mention them. If you haven't pinned a bot for the phone, the new lead becomes the one your phone talks to. (#2195)
+
+- **Connections for bots' workers.** Settings › Bots › Connections holds MCP servers you define once — for every bot, or the bots you pick — and a bot's profile lists the ones that apply to it, with a switch to turn an every-bot connection off for that bot alone. Presets for GitHub and local files start read-only, with their write tools blocked; a custom connection allows only the tools you list. A connection's keys are stored encrypted with your other bot keys, and a bot cannot hand them to a worker on its own. (#2205)
+
+- **Choose what a bot's workers run on: Claude Code or Codex.** A bot's
+  profile now has a "Workers run on" setting, with an optional model and
+  effort. Every task the bot fans out runs on that engine, under the same
+  worker guard; before, a bot's workers always ran on Claude Code. Codex
+  workers are not available on Windows yet: the profile shows them as
+  unavailable there, and choosing Codex is refused with the reason. (#2206)
+
+- **Turning bots on now asks you to confirm that bots run on your own Claude plan.** Each bot thinks with the Claude Agent SDK on this computer's Claude Code sign-in and its workers run your own Claude Code, so their usage counts toward your plan's limits. If your bots were already on, the Bots page asks once, and you can keep them on or turn them off. (#2208)
+
+- **Bots' workers use their connections.** A bot can give a task the connections that apply to it, and the Claude worker it starts loads them, with the tool rules you set: blocked tools stay blocked, and a custom connection runs only the tools you listed, even when the worker skips permission prompts. A connection's keys reach only that task's worker. A task with connections is treated like a task with keys: it does not merge on its own. (#2209)
+
+- **Bots' Codex workers use their connections too.** When a bot's workers run on Codex, a task's connections reach them with the same tool rules as on Claude Code. Codex sends a Bearer key only in the Authorization header and does not reach SSE servers, so a task with such a connection is refused for Codex workers. (#2210)
+
+- **A protected pane shows the sites it recently blocked, with an Allow for each.**
+  In "Only these sites" mode a page that needs a host you did not list (sign-in,
+  a CDN, an API) used to fail with Chrome's generic connection error and no hint
+  why. Browser protection now lists the hosts the pane's Chrome was refused since
+  it started or the protection last changed, and Allow adds one to that pane's
+  allowed sites at once. The list is the operator's alone: agents still get
+  `policy_denied` and cannot read it or allow hosts. (#2063)
+
+### Changed
+
+- **Panes opened from another computer survive the night.** A pane created
+  through the web API (a phone or a paired computer) used to be closed after
+  8 hours with no client attached and no output, so a shell left on a remote
+  host overnight was gone in the morning. Those panes now stay for up to a week
+  of silence, across daemon restarts, and are still closed when you close them.
+
+- **"Add PC over SSH" now supports older Linux hosts.** The headless server it
+  installs needed glibc 2.34, so Ubuntu 20.04, Debian 11 and RHEL 8 machines
+  were refused. It now runs on glibc 2.28 and newer, on both x64 and arm64.
+
+- **Bots start with a name and a hello.** An empty Bots page asks for your first bot's name; Start turns bots on, adds it to the current workspace and opens its chat, where it greets you. No bots or HQ workspace are made for you any more: the Moa and Lead bots an earlier update created are removed when you never dealt with them (a backup is kept), and a former HQ workspace is an ordinary one. If Claude isn't signed in, the panel offers Log in to Claude. (#2187)
+
+- **Bot chats read like a messenger.** Bots on the left, you on the right, each bot with its own colour and shape, date separators, PR and issue chips, and a rounded composer. A finished task's answer shows in the chat, and a thread opens beside it with its whole history. (#2187)
+
+- **A bot's workers are listed under it.** Like a workspace's tasks in the Sidebar: state, title, branch and changes. Clicking one opens its terminal beside the chat on the Bots page, without switching workspaces; bot workers no longer crowd the Sidebar, Fleet or Missions. The room panel on the right side of the window is gone — the Bots page is the one place for bot conversations. (#2187)
+
+- **A room with a lead bot talks to it.** In a workspace room that has a coordinator bot, a message you post without @mentioning anyone goes to the coordinator alone; the other bots join when you @mention them or the coordinator hands them work. Rooms without a coordinator work as before. (#2189)
+
+- **The coordinator leads its room.** In a workspace with a coordinator bot, results and requests with no other addressee go to it, and a job it hands to another bot stays connected after that bot passes the work to a worker — the answer comes back to whoever asked instead of starting over. (#2191)
+
+- Internal: the Token usage Custom tab's MCP server list and wmux tools list now render their tool rows with one shared `McpToolRow` (and one switch-or-state toggle), instead of two copies. Golden HTML tests pin both lists first; what the tab shows is unchanged. (#2192)
+
+- **Bots know their team.** Each bot now sees every bot in its room with its role and job, and the role templates follow the team flow: the coordinator plans the request and names who follows, the others pass their result on when asked and otherwise answer whoever asked. The coordinator no longer talks about Moa. (#2194)
+
+- **Bot workers publish their work through wmux.** A bot's worker no longer runs `git push` itself; wmux pushes the worker's own task branch for it — only to the bot's repository, never to the default branch, never with force — and refuses when the repository's git settings would send it elsewhere. Worker terminals no longer open on Claude Code's notice about a permission rule. (#2196)
+
+- **A bot's workers load only wmux and the connections you give bots, not your own MCP servers.** Before, a bot's Claude worker also loaded every MCP server from your own Claude Code setup (user and project servers, plugins and claude.ai connectors). (#2209)
+
+- **A bot's Claude worker does not start in a folder whose own Claude settings run a program or set the environment.** A repository's `.claude/settings.json` or `.claude/settings.local.json` with hooks, `env`, a status line, a key helper or plugins now stops the worker from launching there, with the reason. (#2209)
+
+- **A bot's Codex workers load only wmux and the connections you give bots.** Your own Codex MCP servers, ChatGPT apps and plugins are turned off for them. (#2210)
+
+### Fixed
+
+- **A terminal shows its last screen on the first switch after a restart.**
+  Before, the pane stayed blank for up to a second while its output was
+  replayed. The screens are saved only while "Restore on launch" is on;
+  turning it off stops saving them and drops the ones already saved. (#2162)
+
+- **A WSL login tab receives the account directory selected in Settings.** Windows account paths are translated for the Linux agent, and explicit Linux profile paths are preserved. Previously the login could use a different directory while wmux kept waiting for the selected account. This transfer is limited to the login tab's vendor; ordinary WSL panes retain their existing Linux profile selection. (#2170)
+
+- **Opening a pane in a workspace works on a host with no desktop app.** On a
+  machine running only the wmux daemon (a headless server), opening a new pane
+  in an existing workspace from another computer or a phone failed with
+  "desktop unavailable". The daemon now reads the workspace's account binding
+  itself. A workspace with no account runs on the default login. A bound
+  account whose folder is gone, or an account file it cannot read, still
+  refuses instead of guessing.
+
+- **Rust terminal engine availability in desktop installers.** Include the optional native module in Windows x64, macOS arm64 and Linux x64 release builds so the Rust choice in Settings can be enabled. Node remains the default. Packaging now checks the copied module and runs a real PTY with the packaged executable before creating installers. (#2179)
+
+- **A remote pane in a narrow split keeps a readable font.** When the split was
+  too narrow for 40 columns at your font size, the mirror never asked the
+  other computer to resize, so the pane kept its 80-column grid and the font
+  shrank to about 6px. It now asks for 40 columns, the narrowest the host
+  accepts, and the font shrinks only slightly. Widening the split resizes it
+  again.
+
+- Remote page: a paired computer's status now comes from the same source as the PC switcher, so the page no longer says Waiting while the switcher says Online. It reads Connected while the computer answers (an SSH host included), Disconnected with when it was last seen, or Waiting before the first check.
+
+- **Keys you give a bot reach its workers in WSL.** Their names are passed through `WSLENV`; the values are never written to a file. (#2187)
+
+- **Typing a message no longer closes a bot's open question,** and a sent message no longer flips back to "Queued". (#2187)
+
+- **Wheel and drag keep working in Codex panes on Windows after a reattach.**
+  When a Windows console app such as Codex turns on mouse input, the terminal
+  host announces it as one sequence that also selects the SGR mouse format.
+  The daemon's pane snapshot read only that format switch when it stood alone,
+  so a pane rebuilt from a snapshot (reattach, workspace switch) kept mouse
+  tracking but lost the format. Its wheel and drag events were then dropped
+  instead of reaching the app, while keys still worked. The snapshot now
+  restores the format from either form. (#2190)
+
+- The first Bots screen offers "Add a team" beside Start. (#2195)
+
+- Room lines and list previews name a bot by its name only, without its internal role ("Lead", not "Lead (moa)"). (#2195)
+
+- A bot's greeting question closes once you message it, so its needs-you badge no longer stays after you've given it work. (#2195)
+
+- Bots in the same room get clearly different colours. (#2195)
+
+- A lead's request thread is titled with the first line of your message instead of "Request". (#2195)
+
+- The Bots list previews each conversation's latest message, not a system line. (#2195)
+
+- **Computer use captures a DPI-unaware window whole at display scaling above 100 %.** Older apps that are not DPI-aware were shown shrunk into the top-left corner of a mostly black screenshot, and coordinates read from it were wrong. (#2199)
+
+- **Bots push from WSL repositories and to GitLab.** When a bot's repository lives inside a WSL distro, wmux now pushes the worker's task branch with that distro's own git, so the SSH keys and credential helpers set up in WSL are used. Before, the push ran in Windows git, which could not see them. Bots also work with GitLab projects, including self-hosted servers, custom ports and projects in subgroups (`group/sub/project`). Before, a subgroup project could not be a bot's repository, and only GitHub was asked for the default branch. (#2201)
+
+### Security
+
+- **Pairing no longer falls back to the shared token.** A daemon that could not
+  load its device roster used to answer a pairing code with the operator
+  token, which no one can revoke per device. It now refuses to pair and says
+  why.
+
+- **Research results count as untrusted input.** Work a researcher bot starts or hands on is marked as coming from untrusted input, so it can't reach the merge lane as if you had asked for it directly. (#2189)
+
 ## [4.4.0] — 2026-10-14
 
 ### Added
