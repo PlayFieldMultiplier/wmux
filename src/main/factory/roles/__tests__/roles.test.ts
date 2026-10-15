@@ -132,6 +132,8 @@ describe('bot prompts (job, powers and outputs)', () => {
     expect(lead).toMatch(/handoff_send: .*next/);
     expect(lead).toMatch(/decide the flow/);
     expect(lead).toMatch(/A relay's last result/);
+    // A closed issue or a merged PR is not dispatched again (#2214 was re-sent after its PR merged).
+    expect(lead).toMatch(/Before you dispatch work on an issue or a pull request.*issue_read or pr_read.*is not dispatched again/);
     for (const template of BOT_TEMPLATES) {
       const prompt = rolePrompt(profile(template));
       expect(prompt).not.toMatch(/\bMoa\b/);

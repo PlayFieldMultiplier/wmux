@@ -38,6 +38,7 @@
 // boots and acknowledged only once a wake actually delivered it.
 
 import * as fs from 'node:fs';
+import { assertNotLiveWmuxPath } from '../../shared/constants';
 import * as path from 'node:path';
 import {
   LEDGER_GATE_TAIL_MAX_BYTES,
@@ -271,6 +272,7 @@ export class TaskLedger {
   readonly recoveredFromRotated: boolean;
 
   constructor(opts: TaskLedgerOptions) {
+    assertNotLiveWmuxPath(opts.dir);
     this.dir = opts.dir;
     this.filePath = getTaskLedgerPath(opts.dir);
     this.now = opts.now ?? Date.now;

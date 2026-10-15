@@ -17,8 +17,12 @@
 // bot's session is spawned or resumed from `sessions.json`, the wake prompt
 // is sent, and the turn is bounded by `budget.turnTimeoutMs`. A failed
 // attempt is retried once; the second failure parks the item and the bot
-// (`parked{error}`, a `bot.error` hook). A turn the owner interrupts ends
-// `interrupted` and is not replayed.
+// (`parked{error}`, a `bot.error` hook). A failure of the network or the API
+// server (isTransientEngineError) is not the turn's: the wake runs again
+// after a growing wait, without spending an attempt or parking the bot, up to
+// TRANSIENT_RETRY_MAX times. A turn that reached none of its wmux tools
+// forgets its conversation, so the retry does not replay the failed calls.
+// A turn the owner interrupts ends `interrupted` and is not replayed.
 //
 // Out of turns, the bot is parked `budget` with one `bot.budget_exhausted`
 // hook. The owner's own message still runs (counted as a turn): the budget
@@ -253,6 +257,27 @@ export const WAKE_THREAD_TAIL_CARDS = 12;
  *  bot's turn on the same message. */
 export const ROOM_RUN_STAGGER_MS = 20_000;
 
+/** A turn that failed on the way to the model (no network, the API server
+ *  unreachable or overloaded) is retried after a growing wait, up to
+ *  TRANSIENT_RETRY_MAX times, without spending the wake's attempts or
+ *  parking the bot; past that it fails like any other error. */
+export const TRANSIENT_RETRY_BASE_MS = 30_000;
+export const TRANSIENT_RETRY_CAP_MS = 10 * 60_000;
+export const TRANSIENT_RETRY_MAX = 8;
+
+const TRANSIENT_ERROR_RE = new RegExp([
+  String.raw`\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENETUNREACH|ENETDOWN|EHOSTUNREACH|EPIPE|UND_ERR_[A-Z_]+)\b`,
+  String.raw`can't reach the api server|could not reach the api|connection error|socket hang up|fetch failed|network error`,
+  String.raw`\boverloaded(?:_error)?\b|internal server error|bad gateway|service unavailable|gateway timeout`,
+  String.raw`\bapi error:?\s*5\d\d\b|\b(?:status|http)(?: code)?:?\s*5\d\d\b`,
+].join('|'), 'i');
+
+/** Whether a turn's error is the network or the API server's, not the
+ *  turn's own: worth retrying as is. Pure. */
+export function isTransientEngineError(message: string): boolean {
+  return TRANSIENT_ERROR_RE.test(message);
+}
+
 /** The run of a room-wide owner message a wake answers, or null. Pure. */
 export function roomRunOf(item: Pick<WakeItem, 'reason'>): string | null {
   const r = item.reason;
@@ -297,6 +322,8 @@ export class BotRuntime {
   private disposed = false;
   /** Held wakes the owner let through by resuming their bot (this app run). */
   private readonly released = new Set<string>();
+  /** Network retries spent per wake (this app run). */
+  private readonly transientRetries = new Map<string, number>();
 
   constructor(private readonly deps: BotRuntimeDeps) {
     this.now = deps.now ?? Date.now;
@@ -809,6 +836,13 @@ export class BotRuntime {
         // A timed-out turn may still be running in the engine: never send the
         // retry into the same session, start a fresh one.
         if ('timedOut' in result && result.timedOut) this.endSession(botId);
+        // A turn that reached none of its wmux tools leaves a conversation
+        // full of failed calls; resuming it replays them. The retry starts a
+        // new conversation, and the saved one is forgotten.
+        if ('freshSession' in result && result.freshSession) {
+          this.endSession(botId);
+          this.deps.sessions.delete(botId);
+        }
       }
     } catch (err) {
       if (run?.interrupted) outcome = 'interrupted';
@@ -825,7 +859,7 @@ export class BotRuntime {
     timeoutMs: number,
     interrupted: () => boolean,
     stopped: Promise<'stop'> = new Promise<'stop'>(() => undefined),
-  ): Promise<{ ok: true; sessionId: string | null } | { ok: false; error: string; timedOut?: true }> {
+  ): Promise<{ ok: true; sessionId: string | null } | { ok: false; error: string; timedOut?: true; freshSession?: true }> {
     // A stored bot secret never reaches a bot's prompt (secretRedaction.ts).
     const iterator = live.adapter.send(redactStoredSecrets(prompt))[Symbol.asyncIterator]();
     let timer: unknown = null;
@@ -833,6 +867,7 @@ export class BotRuntime {
       timer = this.setTimer(() => resolve('timeout'), timeoutMs);
     });
     let error = '';
+    let freshSession = false;
     try {
       for (;;) {
         const next = await Promise.race([iterator.next(), timeout, stopped]);
@@ -856,13 +891,16 @@ export class BotRuntime {
           await Promise.resolve(iterator.return?.()).catch(() => undefined);
           return { ok: true, sessionId: ev.sessionId };
         }
-        if (ev.type === 'error') error = ev.message;
+        if (ev.type === 'error') {
+          error = ev.message;
+          if (ev.botTools) freshSession = true;
+        }
       }
     } finally {
       if (timer !== null) this.clearTimer(timer);
     }
     if (interrupted()) return { ok: false, error: 'interrupted' };
-    return { ok: false, error: error || 'the turn ended without a result' };
+    return { ok: false, error: error || 'the turn ended without a result', ...(freshSession ? { freshSession: true as const } : {}) };
   }
 
   private settle(profile: BotProfile, item: WakeItem, outcome: 'done' | 'failed' | 'interrupted' | 'engine', message: string, offSwitch = false): void {
@@ -872,7 +910,9 @@ export class BotRuntime {
     // Quitting: the item stays `running` on disk, so the next start marks it
     // interrupted (R8) instead of replaying it.
     if (this.disposed) return;
-    if (outcome !== 'failed' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS) this.released.delete(item.id);
+    const retryIn = outcome === 'failed' ? this.transientRetryDelay(item.id, message) : null;
+    if (retryIn === null) this.transientRetries.delete(item.id);
+    if (retryIn === null && (outcome !== 'failed' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS)) this.released.delete(item.id);
     if (outcome === 'done') {
       this.deps.queue.finish(item.id);
       this.lastError.delete(botId);
@@ -891,6 +931,11 @@ export class BotRuntime {
           at,
         });
       }
+    } else if (retryIn !== null) {
+      // The network or the API server failed, not the turn: the wake waits
+      // and runs again by itself; the bot is not parked.
+      this.lastError.set(botId, { message: `${message.slice(0, 440)} (retrying in ${Math.round(retryIn / 1000)}s)`, at });
+      this.deps.queue.retry(item.id, { notBefore: at + retryIn, refundAttempt: true });
     } else {
       this.lastError.set(botId, { message: message.slice(0, 500), at });
       const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
@@ -904,6 +949,17 @@ export class BotRuntime {
     }
     this.pushStatus(botId);
     this.kick();
+  }
+
+  /** How long a wake whose turn failed with `message` waits before running
+   *  again, when that failure is the network's and its retries are not spent;
+   *  else null. Counts the retry. */
+  private transientRetryDelay(wakeId: string, message: string): number | null {
+    if (!isTransientEngineError(message)) return null;
+    const n = this.transientRetries.get(wakeId) ?? 0;
+    if (n >= TRANSIENT_RETRY_MAX) return null;
+    this.transientRetries.set(wakeId, n + 1);
+    return Math.min(TRANSIENT_RETRY_BASE_MS * 2 ** n, TRANSIENT_RETRY_CAP_MS);
   }
 
   /** On quit: interrupt running turns, end every session (revoking tokens). */

@@ -20,7 +20,7 @@ import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { worktreeFromMissions } from './verifyPreset';
-import { AgentSlots, setAgentSlots } from './agentSlots';
+import { AgentSlots, rowHoldsAgentSlot, setAgentSlots, setSlotLiveness, type SlotLiveness } from './agentSlots';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
@@ -59,6 +59,11 @@ export interface WorkerLifecycleDeps {
   fanOutService?: Pick<FanOutService, 'spawnBotTaskPane'>;
 }
 
+/** Which open workspaces run no agent any more is read at most this often. */
+const LIVENESS_REFRESH_MS = 10_000;
+/** Holders a slot-wait card names, at most. */
+const HOLDERS_SHOWN_MAX = 6;
+
 /** The renderer's workspace.close answers this fast or not at all. */
 const CLOSE_TIMEOUT_MS = 10_000;
 
@@ -88,6 +93,42 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const s = await rpc('daemon.listSessions', {});
     return Array.isArray(s) ? (s as WorkerSessionInfo[]) : [];
   };
+  // What the agent budget knows of the workers' panes: the open workspaces
+  // (the mirror, read now) and those whose panes all run no agent any more
+  // (the daemon's sessions, read in the background at most every
+  // LIVENESS_REFRESH_MS; until the first read, none).
+  let idleWorkspaces: ReadonlySet<string> = new Set();
+  let idleReadAt = 0;
+  let idleReading = false;
+  const refreshIdle = (): void => {
+    if (idleReading || Date.now() - idleReadAt < LIVENESS_REFRESH_MS) return;
+    idleReading = true;
+    void listSessions().then((sessions) => {
+      const byId = new Map(sessions.map((x) => [x.id, x]));
+      const next = new Set<string>();
+      for (const e of getWorkspaceMirror().getEntries() ?? []) {
+        const ptys = Array.isArray(e.ptyIds) ? e.ptyIds : [];
+        // Gone, or seen to exit; an agent never attributed is not known dead.
+        if (ptys.length > 0 && ptys.every((id) => { const x = byId.get(id); return !x || x.agentProcessAlive === false; })) next.add(e.id);
+      }
+      idleWorkspaces = next;
+      idleReadAt = Date.now();
+    }).catch(() => undefined).finally(() => {
+      idleReading = false;
+    });
+  };
+  const liveness = (): SlotLiveness => {
+    refreshIdle();
+    const entries = getWorkspaceMirror().getEntries();
+    return { workspaces: entries ? new Set(entries.map((e) => e.id)) : null, idleWorkspaces, now: Date.now() };
+  };
+  /** Open bot task rows whose worker holds an agent slot. */
+  const slotRows = (): ReturnType<typeof ledger.list> => {
+    const live = liveness();
+    return ledger.list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r, live));
+  };
+  setSlotLiveness(liveness);
+  offs.push(() => setSlotLiveness(null));
   /** Whether a task's row is open (a reclaimed task can reopen: failed → working). */
   const taskOpen = (taskId: string): boolean => {
     const st = ledger.get(taskId)?.status;
@@ -224,7 +265,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         const store = getBotStore();
         const profile = store?.get(botId);
         if (!store || !profile) return 'the bot was removed';
-        const open = ledger.list({ openOnly: true }).filter((r) => r.dispatch?.origin.kind === 'bot' && r.dispatch.origin.botId === botId).length;
+        const open = slotRows().filter((r) => r.dispatch?.origin.botId === botId).length;
         const c = checkWorkers(profile.budget, store.usageOf(botId), open + resumedLive(botId) + starting, 1, Date.now());
         return c.ok ? null : `this bot's worker budget refuses another worker now (${c.reason})`;
       },
@@ -270,15 +311,17 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   }
 
   // The agent budget.
+  const runningBotNames = (): string[] => {
+    const rt = getBotRuntime();
+    return rt ? (getBotStore()?.list({}) ?? []).filter((b) => rt.currentTurn(b.id) !== null).map((b) => b.name) : [];
+  };
   const slots = new AgentSlots({
     cap: () => getFactorySettings().maxConcurrentAgents,
-    runningBots: () => {
-      const rt = getBotRuntime();
-      return rt ? (getBotStore()?.list({}) ?? []).filter((b) => rt.currentTurn(b.id) !== null).length : 0;
-    },
-    // Open tasks, ended bot tasks whose worker is not reclaimed yet, resumed
-    // workers.
-    liveWorkers: () => ledger.list({ openOnly: true }).length
+    runningBots: () => runningBotNames().length,
+    // Open bot tasks whose worker still runs, ended bot tasks whose worker
+    // is not reclaimed yet, resumed workers. The owner's own fan-outs and a
+    // row whose worker is gone do not count (rowHoldsAgentSlot).
+    liveWorkers: () => slotRows().length
       + (reclaimOn ? unreclaimedEndedWorkers(ledger.list({}), reclaimed, Date.now()) + resumedLive() : 0),
     // A spawned worker whose row was not written: while its workspace lives
     // and still no row names it.
@@ -287,11 +330,25 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     onWaiting: (w, inUse, cap) => note(
       w.ownerWorkspaceId,
       (w.threadId ?? `task:${w.taskId}`) as ThreadId,
-      'Worker waiting for a slot',
-      `"${w.title}" starts when an agent slot frees (${inUse} of ${cap} in use: bots in a turn and live workers).`,
+      'Worker waiting, not started',
+      `"${w.title}" is waiting for an agent slot and has not started; it starts when one frees. ${inUse} of ${cap} in use: ${slotHolders(inUse)}.`,
     ),
     changed,
   });
+  /** What holds the slots, in words: bots in a turn, then workers by title. */
+  function slotHolders(inUse: number): string {
+    const bots = runningBotNames();
+    const workers = slotRows().map((r) => `"${r.title}"`);
+    const parts: string[] = [];
+    const list = (names: string[]): string => names.length <= HOLDERS_SHOWN_MAX
+      ? names.join(', ')
+      : `${names.slice(0, HOLDERS_SHOWN_MAX).join(', ')} and ${names.length - HOLDERS_SHOWN_MAX} more`;
+    if (bots.length > 0) parts.push(`${bots.length === 1 ? 'bot' : 'bots'} in a turn ${list(bots)}`);
+    if (workers.length > 0) parts.push(`${workers.length === 1 ? 'worker' : 'workers'} ${list(workers)}`);
+    const rest = inUse - bots.length - workers.length;
+    if (rest > 0) parts.push(`${rest} other ${rest === 1 ? 'worker' : 'workers'} starting, resumed or not yet reclaimed`);
+    return parts.length > 0 ? parts.join('; ') : 'nothing the factory can name';
+  }
   setAgentSlots(slots);
   offs.push(ledger.onTransition(() => slots.kick()));
   offs.push(() => {

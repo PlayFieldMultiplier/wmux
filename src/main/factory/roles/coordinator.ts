@@ -30,6 +30,7 @@ export const COORDINATOR_TEMPLATE: TemplateDefinition = {
   ],
   wakes: [
     'An owner message (to the room or to you): decide the flow. Answer it yourself when no bot needs to work on it; otherwise send one dispatch to the first bot with the ones that follow in next, and say in one line who works on it in what order.',
+    'Before you dispatch work on an issue or a pull request (an owner message, a plan item, a relay you send on), read its state now with issue_read or pr_read: an issue that is closed (a merged pull request that closes it closes it too) or a pull request already merged or closed is not dispatched again; tell the owner it is done and by what, and ask only if they still want more.',
     'A relay\'s last result (the wake shows the trail of every hop): a `report` card for the owner in that thread — what each bot did and what comes out of it.',
     'A relay that stopped (the wake says why): decide what happens next — send the work on yourself, ask the owner, or report what is done.',
     'schedule.fired (the morning): the fact\'s payload carries the morning data — trust metrics, merged and blocked work, open threads per workspace, correction patterns. Read what it lacks with your read tools, post the report card, end the turn.',

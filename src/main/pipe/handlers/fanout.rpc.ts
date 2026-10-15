@@ -138,7 +138,7 @@ import { getFactLog, type FactLog } from '../../factory/factLog';
 import { getWakeQueue } from '../../factory/wakeQueue';
 import { getVerdictedTasks } from '../../factory/verdictedTasks';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
-import { getAgentSlots } from '../../factory/agentSlots';
+import { getAgentSlots, getSlotLiveness, rowHoldsAgentSlot } from '../../factory/agentSlots';
 import { resumedWorkersLive } from '../../factory/workerReclaim';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { Fact } from '../../../shared/facts';
@@ -742,6 +742,17 @@ export function countOpenBotWorkers(
   return { bot, factory };
 }
 
+/** What fills a bot's own worker budget, for its refusal: a worker waiting
+ *  for an agent slot has not started, and the bot must not say it runs. Pure. */
+export function workersHeldNote(open: number, booked: number, waiting: number): string {
+  const parts: string[] = [];
+  if (open > 0) parts.push(`${open} of your workers ${open === 1 ? 'is' : 'are'} open`);
+  const starting = Math.max(0, booked - waiting);
+  if (starting > 0) parts.push(`${starting} ${starting === 1 ? 'is' : 'are'} starting`);
+  if (waiting > 0) parts.push(`${waiting} ${waiting === 1 ? 'is' : 'are'} waiting for an agent slot, not started`);
+  return parts.length > 0 ? `: ${parts.join(', ')}` : '';
+}
+
 /** Why a bot's fan-out may not launch now, or null. Pure. With the factory
  *  off no bot launches a worker, whatever its profile or wake say. */
 export function botLaunchRefusal(
@@ -790,9 +801,12 @@ function defaultBotPort(): FanOutBotPort | null {
       const wake = runningWake(resolveRoomPorts(), botId);
       return wake && wake.wakeId === runtime.currentTurn(botId)?.wakeId ? wake.handoffId ?? null : null;
     },
-    // Open bot tasks, plus resumed workers whose task row has ended.
+    // Open bot tasks whose worker still runs, plus resumed workers whose task
+    // row has ended.
     openWorkers: (botId) => {
-      const open = countOpenBotWorkers(getTaskLedger().list({ openOnly: true }), botId, (ids) => {
+      const live = getSlotLiveness();
+      const rows = getTaskLedger().list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r, live));
+      const open = countOpenBotWorkers(rows, botId, (ids) => {
         const kept = getVerdictedTasks();
         const found = verdictedTaskIds(ids.filter((id) => !kept?.has(id)));
         for (const id of ids) if (kept?.has(id)) found.add(id);
@@ -1387,7 +1401,10 @@ export function registerFanOutRpc(
       const budget = checkWorkers(botProfile.budget, botPort.usage(bot.botId), open.bot + bookedBot, n, Date.now());
       if (!budget.ok) {
         botPort.budgetExhausted(bot, budget.reason);
-        return deny('RESOURCE_EXHAUSTED', `this bot's worker budget refuses the fan-out (${budget.reason})`);
+        const held = budget.reason === 'concurrent_workers'
+          ? workersHeldNote(open.bot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
+          : '';
+        return deny('RESOURCE_EXHAUSTED', `this bot's worker budget refuses the fan-out (${budget.reason})${held}`);
       }
     }
 

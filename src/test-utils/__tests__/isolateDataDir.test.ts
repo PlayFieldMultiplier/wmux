@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { getWmuxDir } from '../../daemon/config';
+import { TaskLedger, getTaskLedgerPath } from '../../daemon/ledger/TaskLedger';
+import { getTaskLedger, setTaskLedgerForTests } from '../../main/deck/taskLedgerHost';
+import { createFilePersister } from '../../main/factory/versionedFile';
 
 describe('isolateDataDir setup', () => {
   const origHome = process.env.HOME;
@@ -76,5 +79,27 @@ describe('isolateDataDir setup', () => {
     delete process.env.WMUX_TEST_ISOLATED;
     process.env.WMUX_DATA_SUFFIX = '-rig';
     expect(getWmuxHomeDir()).toMatch(/\.wmux-rig$/);
+  });
+
+  it('the hosted task ledger the fan-out tests use writes under the temp home, never the real one', async () => {
+    setTaskLedgerForTests(null);
+    try {
+      await getTaskLedger().register({ id: 'wtask-isolation-probe', taskWorkspaceId: 'ws-task-1', ownerWorkspaceId: 'ws-ceo', title: 'A' });
+      const file = getTaskLedgerPath(getWmuxDir());
+      expect(fs.existsSync(file)).toBe(true);
+      expect(fs.realpathSync(file).startsWith(fs.realpathSync(os.homedir()))).toBe(true);
+    } finally {
+      setTaskLedgerForTests(null);
+    }
+  });
+
+  it('a store handed a path inside the real ~/.wmux is refused (task ledger, factory files)', () => {
+    const realHome = process.env.WMUX_TEST_REAL_HOME;
+    expect(realHome).toBeDefined();
+    if (!realHome) return;
+    expect(() => new TaskLedger({ dir: path.join(realHome, '.wmux') })).toThrow('Refusing to touch the live wmux data dir from a test');
+    expect(() => createFilePersister(path.join(realHome, '.wmux', 'factory', 'sessions.json'), () => ({}))).toThrow('Refusing to touch the live wmux data dir');
+    // A suffixed sibling (a rig lane's own data dir) is not the live one.
+    expect(() => createFilePersister(path.join(realHome, '.wmux-rig', 'factory', 'x.json'), () => ({}))).not.toThrow();
   });
 });

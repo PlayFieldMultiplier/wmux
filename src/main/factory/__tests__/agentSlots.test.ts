@@ -1,7 +1,8 @@
 // One budget for bots and workers: a bot's new worker past it waits for a
 // slot, first come first served, and a stop ends the wait.
 import { describe, expect, it, vi } from 'vitest';
-import { AgentSlots, SLOT_GRANT_MAX_MS, type AgentSlotPorts } from '../agentSlots';
+import { AgentSlots, SLOT_GRANT_MAX_MS, SLOT_ROW_GRACE_MS, rowHoldsAgentSlot, type AgentSlotPorts, type SlotLiveness } from '../agentSlots';
+import { workersHeldNote } from '../../pipe/handlers/fanout.rpc';
 
 function slots(over: Partial<AgentSlotPorts> & { bots?: () => number; workers?: () => number } = {}) {
   let now = 0;
@@ -131,5 +132,58 @@ describe('AgentSlots grants (review fixes, PR #2164)', () => {
     if (b.ok) b.hold('ws-b');
     await Promise.resolve();
     expect(s.inFlight('bot-0000000a')).toEqual(['c']);
+  });
+});
+
+describe('rowHoldsAgentSlot', () => {
+  const now = 100 * SLOT_ROW_GRACE_MS;
+  const old = now - SLOT_ROW_GRACE_MS;
+  const bot = { kind: 'bot', botId: 'bot-0000000a' };
+  const live: SlotLiveness = { workspaces: new Set(['ws-live', 'ws-idle']), idleWorkspaces: new Set(['ws-idle']), now };
+  const row = (taskWorkspaceId: string, origin?: { kind: string; botId?: string }, updatedAt = old) =>
+    ({ taskWorkspaceId, updatedAt, ...(origin ? { dispatch: { origin } } : {}) });
+
+  it('a bot worker whose workspace is open and whose agent runs holds a slot', () => {
+    expect(rowHoldsAgentSlot(row('ws-live', bot), live)).toBe(true);
+  });
+
+  it('the owner\'s and the orchestrator\'s fan-outs, and rows with no dispatch, never count', () => {
+    expect(rowHoldsAgentSlot(row('ws-live', { kind: 'orchestrator' }), live)).toBe(false);
+    expect(rowHoldsAgentSlot(row('ws-live', { kind: 'pane' }), live)).toBe(false);
+    // A row from before dispatch existed (or a stray test fixture).
+    expect(rowHoldsAgentSlot(row('ws-task-1'), live)).toBe(false);
+  });
+
+  it('an open row whose workspace is gone, or whose agent exited, holds nothing', () => {
+    expect(rowHoldsAgentSlot(row('ws-gone', bot), live)).toBe(false);
+    expect(rowHoldsAgentSlot(row('ws-idle', bot), live)).toBe(false);
+  });
+
+  it('a recent row counts while its worker comes up; with nothing known every bot row counts', () => {
+    expect(rowHoldsAgentSlot(row('ws-gone', bot, now - 1_000), live)).toBe(true);
+    expect(rowHoldsAgentSlot(row('ws-gone', bot), { ...live, workspaces: null })).toBe(true);
+    expect(rowHoldsAgentSlot(row('ws-gone', bot), null)).toBe(true);
+  });
+
+  it('stale and foreign rows no longer starve the bots: only the live bot worker counts', async () => {
+    const rows = [
+      row('ws-task-1'), row('ws-task-3'), row('ws-task-4'), // leaked fixtures: no dispatch
+      row('ws-gone-1', { kind: 'orchestrator' }), row('ws-gone-2', { kind: 'orchestrator' }),
+      row('ws-gone-3', bot), row('ws-idle', bot),
+      row('ws-live', bot),
+    ];
+    const s = new AgentSlots({ cap: () => 2, runningBots: () => 1, liveWorkers: () => rows.filter((r) => rowHoldsAgentSlot(r, live)).length, pollMs: 60_000 });
+    expect(s.inUse()).toBe(2);
+    rows.pop();
+    const g = await s.acquire({ taskId: 't', title: 't', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-1' });
+    expect(g.ok).toBe(true);
+  });
+});
+
+describe('workersHeldNote', () => {
+  it('says a worker waiting for a slot has not started', () => {
+    expect(workersHeldNote(0, 1, 1)).toBe(': 1 is waiting for an agent slot, not started');
+    expect(workersHeldNote(1, 2, 1)).toBe(': 1 of your workers is open, 1 is starting, 1 is waiting for an agent slot, not started');
+    expect(workersHeldNote(0, 0, 0)).toBe('');
   });
 });

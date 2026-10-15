@@ -183,7 +183,9 @@ describe('ClaudeSdkAdapter bot mode', () => {
     const last = events.at(-1);
     expect(last?.type).toBe('error');
     expect(last && 'message' in last ? last.message : '').toMatch(/fanout_start, room_post, handoff_send.*mcp__wmux__<name>/);
-    // The conversation is kept for the retry.
+    // Marked, so the bot runtime starts the retry in a fresh conversation
+    // instead of resuming this one full of failed calls.
+    expect(last?.type === 'error' && last.botTools).toBe('unreached');
     expect(adapter.sessionId).toBe('sess');
     adapter.dispose();
   });
@@ -209,6 +211,7 @@ describe('ClaudeSdkAdapter bot mode', () => {
     const events = await collect(adapter.send('wake'));
     expect(events.map((e) => e.type)).toEqual(['error']);
     expect(events[0].type === 'error' && events[0].message).toMatch(/wmux tools did not load.*failed/);
+    expect(events[0].type === 'error' && events[0].botTools).toBe('missing');
     expect(interrupted()).toBe(1);
     adapter.dispose();
   });

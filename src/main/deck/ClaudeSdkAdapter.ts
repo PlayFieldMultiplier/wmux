@@ -1168,10 +1168,10 @@ export class ClaudeSdkAdapter implements BrainAdapter {
           const noTools = guard?.observe(msg as RawSdkMessage) ?? null;
           if (noTools) {
             stopForTools = true;
-            events = [...events, { type: 'error', message: noTools }];
+            events = [...events, { type: 'error', message: noTools, botTools: 'missing' }];
           } else if (guard && events.some((e) => e.type === 'turn-end')) {
             const unreached = guard.verdict();
-            if (unreached) events = events.map((e): BrainEvent => (e.type === 'turn-end' ? { type: 'error', message: unreached } : e));
+            if (unreached) events = events.map((e): BrainEvent => (e.type === 'turn-end' ? { type: 'error', message: unreached, botTools: 'unreached' } : e));
           }
           for (const ev of events) {
             // A turn that errors before ANYTHING reached the renderer, on the

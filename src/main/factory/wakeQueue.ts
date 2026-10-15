@@ -432,10 +432,14 @@ export class WakeQueue implements WakeSinkApi {
     });
   }
 
-  /** running → queued (a failed attempt that may run again). */
-  retry(id: string): WakeItem | null {
+  /** running → queued (a failed attempt that may run again). `notBefore`
+   *  holds it until then; `refundAttempt` gives the attempt back (a network
+   *  failure is not the wake's fault). */
+  retry(id: string, opts: { notBefore?: number; refundAttempt?: boolean } = {}): WakeItem | null {
     return this.transition(id, ['running'], (i) => {
       i.state = 'queued';
+      if (opts.notBefore !== undefined) i.notBefore = opts.notBefore;
+      if (opts.refundAttempt) i.attempts = Math.max(0, i.attempts - 1);
     });
   }
 

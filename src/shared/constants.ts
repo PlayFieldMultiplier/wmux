@@ -963,6 +963,24 @@ export function assertNotLiveWmuxDataDir(home: string): void {
   }
 }
 
+/**
+ * The same refusal for a store handed its directory or file whole (the task
+ * ledger, the factory's files): under vitest, a path inside the real user's
+ * `~/.wmux` is refused. Before the isolate setup existed, fan-out tests wrote
+ * their fixture tasks into the owner's real task ledger, where they stayed
+ * open for good.
+ */
+export function assertNotLiveWmuxPath(p: string): void {
+  const realHome = process.env.WMUX_TEST_REAL_HOME;
+  if (!process.env.VITEST || !realHome || !p) return;
+  const norm = (x: string) => x.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const live = `${norm(realHome)}/.wmux`;
+  const target = norm(p);
+  if (target === live || target.startsWith(`${live}/`)) {
+    throw new Error('Refusing to touch the live wmux data dir from a test');
+  }
+}
+
 // wmux user home directory — root for plugin-trust.json, pid-map/, and other
 // substrate state that needs to survive across wmux restarts. Single source
 // of truth so callers don't reimplement the USERPROFILE/HOME dance.

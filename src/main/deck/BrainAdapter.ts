@@ -100,6 +100,10 @@ export type BrainEvent =
       /** Set when the brain process never came up (spawn or attach failed,
        *  or it died during startup), so the prompt was never typed. */
       spawnFailed?: true;
+      /** Set by a bot turn that reached none of its wmux tools (botToolGuard.ts):
+       *  'missing' — the tools did not load; 'unreached' — the model called
+       *  them by names they do not have. Its conversation is not resumed. */
+      botTools?: 'missing' | 'unreached';
     }
   // Main changed this workspace's decision slot outside a brain turn (Moa's
   // issue proposals). Carries nothing: the decision card refetches.

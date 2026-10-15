@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrainAdapter, BrainEvent, BrainStartOptions } from '../../deck/BrainAdapter';
-import { BotRuntime, BotSessionStore, CONTEXT_WAIT_MS, ROOM_RUN_STAGGER_MS, botSessionsPath, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
+import { BotRuntime, BotSessionStore, CONTEXT_WAIT_MS, ROOM_RUN_STAGGER_MS, TRANSIENT_RETRY_BASE_MS, TRANSIENT_RETRY_MAX, botSessionsPath, isTransientEngineError, roomRunOf, setBotRuntimePorts, __resetBotRuntimePortsForTesting } from '../BotRuntime';
 import type { BotEngineFactory, BotEngineSpawnInput } from '../botEngines';
 import { BotStore, botsFilePath } from '../botStore';
 import { WakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -480,6 +480,75 @@ describe('BotRuntime', () => {
     r.runtime.resume(id);
     await settle(10);
     expect(r.adapters[0].prompts).toHaveLength(4);
+  });
+
+  it('a network failure retries after a wait, spends no attempt and never parks the bot', async () => {
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    const item = must(r.runtime.wake(id));
+    await settle();
+    r.adapters[0].end([{ type: 'error', message: "API Error: Can't reach the API server (ENOTFOUND)" }]);
+    await settle();
+    expect(r.queue.get(item.id)).toMatchObject({ state: 'queued', attempts: 0, notBefore: clock + TRANSIENT_RETRY_BASE_MS });
+    expect(r.store.get(id)?.parked).toBeUndefined();
+    expect(hooks.some((h) => h.type === 'bot.error')).toBe(false);
+    expect(r.runtime.status(id)?.lastError?.message).toMatch(/ENOTFOUND.*retrying in 30s/);
+    // Nothing runs before the wait is over; then the same wake runs again.
+    expect(r.adapters[0].prompts).toHaveLength(1);
+    clock += TRANSIENT_RETRY_BASE_MS;
+    timers.filter((t) => t.at <= clock).forEach((t) => t.fn());
+    await settle();
+    expect(r.adapters[0].prompts).toHaveLength(2);
+    r.adapters[0].end();
+    await settle();
+    expect(r.queue.get(item.id)?.state).toBe('done');
+  });
+
+  it('network retries are bounded: past TRANSIENT_RETRY_MAX the wake fails like any error', async () => {
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ timers });
+    const id = createBot(r);
+    const item = must(r.runtime.wake(id));
+    await settle();
+    for (let i = 0; i < TRANSIENT_RETRY_MAX + 2; i++) {
+      r.adapters[0].end([{ type: 'error', message: 'request failed: connect ECONNREFUSED 127.0.0.1:443' }]);
+      await settle();
+      clock += 60 * 60_000;
+      timers.splice(0).forEach((t) => t.fn());
+      await settle();
+    }
+    expect(r.queue.get(item.id)?.state).toBe('parked');
+    expect(r.store.get(id)?.parked?.reason).toBe('error');
+    expect(r.adapters[0].prompts).toHaveLength(TRANSIENT_RETRY_MAX + 2);
+  });
+
+  it('isTransientEngineError: network and server failures, not the turn\'s own errors', () => {
+    for (const m of ["API Error: Can't reach the API server (ENOTFOUND)", 'getaddrinfo EAI_AGAIN api.anthropic.com', 'read ECONNRESET', 'connect ETIMEDOUT', 'API Error: 529 {"type":"overloaded_error"}', 'API Error: 503 Service Unavailable', 'socket hang up']) {
+      expect(isTransientEngineError(m), m).toBe(true);
+    }
+    for (const m of ['boom', 'error_max_turns', 'the turn ran past 600s', 'the bot called room_post, which are not its tools', 'API Error: 400 invalid_request_error', 'Claude Code not found']) {
+      expect(isTransientEngineError(m), m).toBe(false);
+    }
+  });
+
+  it('a turn that reached none of its wmux tools forgets its conversation: the retry starts a fresh one', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id);
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    const item = must(r.runtime.wake(id, { text: 'post the summary' }));
+    await settle();
+    r.adapters[0].end([{ type: 'error', message: 'the bot called room_post, which are not its tools', botTools: 'unreached' }]);
+    await settle();
+    expect(r.sessions.get(id)).toBeNull();
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.adapters).toHaveLength(2);
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    expect(r.queue.get(item.id)).toMatchObject({ state: 'running', attempts: 2 });
   });
 
   it('an engine refusal parks the bot at once (no retry loop)', async () => {
