@@ -323,8 +323,13 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   of the page; Search opens a filter field under the header (Escape closes
   and clears it). One row per conversation (8px 10px padding, inset 8px): a 32px avatar, the 13px/500 name
   with the newest message's time, and one 12px muted preview line (the
-  owner's own as "You: …", a room's prefixed with who spoke). Every
-  workspace room is a group conversation and every bot a 1:1. Rooms and
+  owner's own as "You: …", a room's prefixed with who spoke). Every bot is
+  a 1:1, and a workspace with two or more bots (a team) has its room as a
+  group conversation; a lone bot has only its 1:1. The two are separate
+  conversations, never mirrors (owner decision 2026-10-15): a 1:1 is its own
+  thread of the bot's room — what the owner and the bot say there, and the
+  work it starts there — and the room never shows it; what a bot posts in
+  the room (a team greeting) stays in the room. Rooms and
   bots follow by latest activity; nothing is pinned (the workspace an
   earlier version made the HQ is a room like any other). The selected row is the `--selection` pill
   (10px radius), hover `--hover-fill`. A row with unread bot messages
@@ -443,8 +448,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   (header, body and chip), one alignment per line. Consecutive system cards of one thread merge
   into one line naming the first three and "N events", the red and yellow
   words kept; it opens into the lines themselves. A 1:1 holds the system
-  cards about the bot's own work: those naming the bot or its task, or
-  written in a thread it wrote in.
+  cards of its own thread and of the work it started; from before 1:1
+  threads (and, for a lone bot, from the room too) those naming the bot or
+  its task, or written in a thread it wrote in.
 - **Threads (owner decision 2026-10-14):** a thread other than General shows
   in the timeline as its first card (its root) — a system line (a task's
   start) as much as a message — carrying the thread's chip when its name
@@ -1410,6 +1416,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-15 | Orchestrator decision (team workflow track): in a room with an enabled coordinator, an owner message that names no bot goes to the coordinator alone, and the composer's muted line says "To <lead>"; Add team in the add form makes the five-bot team (lead first) in one action, a ghost button with no new chrome | The owner talks to the team's lead, who decides who works on each request; a room-wide wake of every bot would start five parallel answers to one request |
 | 2026-10-15 | Owner decision (bot connections): MCP servers for bots' workers live in one library, Settings › Bots › Connections (one row each: name, purpose, who gets it, Key missing in the needs-you text, on/off, Edit, Remove asked in place), scoped to every bot by default or to the bots picked; a bot's profile lists the ones that apply to it with a per-bot off switch for every-bot ones. Amends the profile's item list only | Grok-Bot-style connectors without a per-bot settings page: defined once, the owner sees every connection in one place, and a bot's profile answers what its workers can reach |
 | 2026-10-15 | Owner decision (dogfood of 4.5.0): in a room, an `@Name` of one of its bots anywhere in the message addresses that bot (with any chips picked), and typing `@` suggests the room's bots. Amends the Composer's "an `@name` inside a sentence is plain text" | The owner typed `@대장` in the workspace room and the message did not reach that bot: a mention that works only at the very start of the message reads as broken |
+| 2026-10-15 | Owner decision (dogfood of 4.5.0, recommended option): a bot's 1:1 and its workspace room are separate conversations. The 1:1 is its own thread of the room (`dm:<botId>`): the owner's messages there, the bot's answers, its greeting and the work it starts there (a coordinator's request thread); the room never shows them, and a bot's room posts never show in its 1:1. The room is listed once the workspace has two or more bots; a lone bot has only its 1:1, which also keeps what it says in the room. Cards from before 1:1 threads keep the old 1:1 filter. Amends List and System lines | The 1:1 was a filter of the room, so the coordinator's greeting showed in both and every 1:1 message showed in the room: the owner read them as mirrors, and a room appeared for a single bot on its own |
 
 ### Desktop conversation view
 

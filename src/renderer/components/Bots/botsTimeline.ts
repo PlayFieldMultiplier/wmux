@@ -20,7 +20,7 @@
 // owner reads a finished task's answer without opening the thread.
 //
 // Pure; times are local.
-import type { RoomCard, ThreadId } from '../../../shared/room';
+import { dmThreadBot, type RoomCard, type ThreadId } from '../../../shared/room';
 import type { FactoryBotRow } from '../Room/factoryPorts';
 import type { RoomEntry } from './botsModel';
 
@@ -58,23 +58,25 @@ export function threadKey(workspaceId: string, threadId: ThreadId): string {
   return `${workspaceId}\u0000${threadId}`;
 }
 
-/** The main timeline's cards and the threads behind them: General cards,
- *  each thread's root (first card) with its summary, any thread card that
- *  waits on the owner, and each thread's newest bot reply (`surfaced`). */
+/** The main timeline's cards and the threads behind them: General cards
+ *  (and a 1:1 thread's: the conversation itself), each thread's root (first
+ *  card) with its summary, any thread card that waits on the owner, and
+ *  each thread's newest bot reply (`surfaced`). */
 export function splitThreads(cards: readonly RoomCard[], waits: (card: RoomCard) => boolean): { main: RoomCard[]; threads: Map<string, ThreadView>; surfaced: Set<string> } {
   const main: RoomCard[] = [];
   const byKey = new Map<string, ThreadView>();
   const rootOf = new Map<string, string>();
   const lastBotReply = new Map<string, string>();
+  const inMain = (card: RoomCard) => card.threadId === 'general' || dmThreadBot(card.threadId) !== null;
   for (const card of cards) {
-    if (card.threadId === 'general') continue;
+    if (inMain(card)) continue;
     const key = threadKey(card.workspaceId, card.threadId);
     if (!rootOf.has(key)) rootOf.set(key, card.id);
     else if (card.actor.kind === 'bot') lastBotReply.set(key, card.id);
   }
   const surfaced = new Set(lastBotReply.values());
   for (const card of cards) {
-    if (card.threadId === 'general') {
+    if (inMain(card)) {
       main.push(card);
       continue;
     }

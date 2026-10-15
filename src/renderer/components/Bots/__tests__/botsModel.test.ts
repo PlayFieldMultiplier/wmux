@@ -9,7 +9,7 @@ import type { FactoryBotRow } from '../../Room/factoryPorts';
 import { timelineKey, ALL_THREADS } from '../../../stores/slices/roomSlice';
 import {
   awaitsApproval, botConversationCards, botWorkScope, botWorkerTree, botWorkers, buildBots, botsNeedsYou, botsRooms, conversationCards, greetingCardIds, isBotSystemCard,
-  livePlanIds, openApprovalsBy, openQuestionsBy, roomCardsByWorkspace, roomEntries, taskBubbles,
+  livePlanIds, openApprovalsBy, openQuestionsBy, roomCardsByWorkspace, roomEntries, roomViewCards, taskBubbles,
   type BotsInput,
 } from '../botsModel';
 
@@ -200,8 +200,66 @@ describe('botWorkers from the bot\'s tasks', () => {
     const room = m.conversations.find((c) => c.id === 'room:w1');
     expect(room?.kind === 'room' && room.workers.map((w) => w.workspaceId)).toEqual(['t1']);
     expect(room?.needsYou).toBe(0);
-    expect(m.conversations.find((c) => c.id === 'room:hq')?.kind === 'room' && (m.conversations.find((c) => c.id === 'room:hq') as { workers: unknown[] }).workers).toEqual([]);
+    // A lone bot's workspace lists no room.
+    expect(m.conversations.find((c) => c.id === 'room:hq')).toBeUndefined();
     expect(m.needsYou).toBe(1);
+  });
+});
+
+describe('a 1:1 and the room are separate (owner decision 2026-10-15)', () => {
+  const dm = (id: string) => `dm:${id}` as ThreadId;
+
+  it('a team: the 1:1 is its dm thread and the threads it started; the room never shows them', () => {
+    // From before 1:1 threads: the lead's room post and a 1:1 message stay in the lead's 1:1.
+    const oldPost = card({ workspaceId: 'w1', actor: bot('w1', LEAD), title: 'old status', at: 100 });
+    const oldDm = card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', refs: { botId: LEAD }, title: 'old 1:1', at: 110 });
+    // The lead's greeting and the owner's request, in its 1:1.
+    const greet = card({ workspaceId: 'w1', actor: bot('w1', LEAD), kind: 'question', threadId: dm(LEAD), greeting: true, state: 'open', at: 200 });
+    const ask = card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', threadId: dm(LEAD), refs: { botId: LEAD }, title: 'Add a flag', at: 210 });
+    // The work it started: the opening hop links the request; a hop in it.
+    const open = card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', threadId: 'handoff:h-1' as ThreadId, refs: { handoffId: 'h-1', requestCardId: ask.id }, at: 220 });
+    const hop = card({ workspaceId: 'w1', actor: bot('w1', VERIFIER), threadId: 'handoff:h-1' as ThreadId, at: 230 });
+    const done = card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', threadId: dm(LEAD), refs: { threadId: 'handoff:h-1' as ThreadId, handoffId: 'h-2' }, title: 'Finished: Add a flag', at: 240 });
+    // A team greeting the lead posts in the room, after 1:1 threads exist.
+    const roomPost = card({ workspaceId: 'w1', actor: bot('w1', LEAD), title: 'Team, hello', at: 300 });
+    // The verifier's own 1:1.
+    const vdm = card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', threadId: dm(VERIFIER), refs: { botId: VERIFIER }, at: 310 });
+    const all = [oldPost, oldDm, greet, ask, open, hop, done, roomPost, vdm];
+    expect(conversationCards(all, LEAD).map((c) => c.id)).toEqual([oldPost, oldDm, greet, ask, open, hop, done].map((c) => c.id));
+    expect(conversationCards(all, VERIFIER).map((c) => c.id)).toEqual([vdm.id]);
+    expect(roomViewCards(all).map((c) => c.id)).toEqual([oldPost, oldDm, roomPost].map((c) => c.id));
+    // A thread opened from a 1:1 is known by its opening hop alone (no owner message behind it).
+    const own = card({ workspaceId: 'w1', actor: { kind: 'system' }, kind: 'fact', threadId: 'handoff:h-9' as ThreadId, refs: { handoffId: 'h-9', threadId: dm(LEAD) }, at: 400 });
+    expect(roomViewCards([...all, own]).map((c) => c.id)).not.toContain(own.id);
+    expect(conversationCards([...all, own], LEAD).map((c) => c.id)).toContain(own.id);
+    // A bot's card cannot move a thread into a 1:1; a PR thread an approval links stays the room's.
+    const spoof = card({ workspaceId: 'w1', actor: bot('w1', VERIFIER), threadId: 'handoff:h-7' as ThreadId, refs: { threadId: dm(LEAD) }, at: 410 });
+    const approval = card({ workspaceId: 'w1', actor: bot('w1', LEAD), kind: 'approval', threadId: dm(LEAD), refs: { threadId: 'pr:github.com/a/b#1' as ThreadId }, at: 420 });
+    const pr = card({ workspaceId: 'w1', actor: bot('w1', VERIFIER), threadId: 'pr:github.com/a/b#1' as ThreadId, at: 430 });
+    expect(roomViewCards([...all, spoof, approval, pr]).map((c) => c.id)).toEqual([oldPost, oldDm, roomPost, spoof, pr].map((c) => c.id));
+  });
+
+  it('a lone bot keeps everything it says in its 1:1, and the model has no room for it', () => {
+    const post = card({ workspaceId: 'hq', actor: bot('hq', MOA), title: 'morning', at: 500 });
+    const dmCard = card({ workspaceId: 'hq', actor: { kind: 'human' }, kind: 'human', threadId: dm(MOA), refs: { botId: MOA }, at: 400 });
+    expect(conversationCards([dmCard, post], MOA, { lone: true }).map((c) => c.id)).toEqual([dmCard.id, post.id]);
+    // As a team member the newer room post is the room's only.
+    expect(conversationCards([dmCard, post], MOA).map((c) => c.id)).toEqual([dmCard.id]);
+    const m = buildBots(input({ cards: new Map([['hq', [dmCard, post]]]) }));
+    const row = m.conversations.find((c) => c.id === `bot:${MOA}`);
+    expect(row?.kind === 'bot' && row.lone).toBe(true);
+    expect(row?.last?.id).toBe(post.id);
+    expect(m.conversations.some((c) => c.id === 'room:hq')).toBe(false);
+  });
+
+  it('a room\'s row reads its own cards and threads only: a 1:1 is neither its preview nor its time', () => {
+    const roomMsg = card({ workspaceId: 'w1', actor: bot('w1', VERIFIER), title: 'room', at: 100 });
+    const dmMsg = card({ workspaceId: 'w1', actor: bot('w1', LEAD), threadId: dm(LEAD), title: 'private', at: 900 });
+    const threads = { w1: [
+      { threadId: dm(LEAD), title: 'x', lastAt: 900, lastSeq: 2, cardCount: 1, openQuestions: 0, lastKind: 'status' as const, status: 'open' as const, unread: null },
+    ] };
+    const room = buildBots(input({ cards: new Map([['w1', [roomMsg, dmMsg]]]), threads })).conversations.find((c) => c.id === 'room:w1')!;
+    expect([room.last?.id, room.lastAt]).toEqual([roomMsg.id, 100]);
   });
 });
 
@@ -251,7 +309,7 @@ describe('greetingCardIds and roomEntries', () => {
 });
 
 describe('buildBots', () => {
-  it('orders rooms and bots by latest activity; the old HQ room is not pinned', () => {
+  it('orders rooms and bots by latest activity; the old HQ room is not pinned; a lone bot\'s workspace has no room row', () => {
     const cards = new Map<string, RoomCard[]>([
       ['hq', [card({ workspaceId: 'hq', actor: bot('hq', MOA), at: 100 })]],
       ['w1', [
@@ -264,16 +322,17 @@ describe('buildBots', () => {
       `bot:${LEAD}`, // 900 — ties break by id
       'room:w1', // 900
       `bot:${VERIFIER}`, // 500
-      `bot:${MOA}`, // 100
-      'room:hq', // 100
+      `bot:${MOA}`, // 100 — alone in hq: no room:hq
     ]);
     const room = m.conversations.find((c) => c.id === 'room:w1');
     expect(room?.kind === 'room' && room.bots.map((b) => b.bot.id)).toEqual([LEAD, VERIFIER]);
   });
 
-  it('a bot with no message yet sorts by its creation', () => {
+  it('a bot with no message yet sorts by its creation; the room appears with the second bot', () => {
     const m = buildBots(input({ bots: [botRow(LEAD, 'lead', 'w1', 5000)] }));
-    expect(m.conversations.map((c) => [c.id, c.lastAt])).toEqual([[`bot:${LEAD}`, 5000], ['room:w1', 0]]);
+    expect(m.conversations.map((c) => [c.id, c.lastAt])).toEqual([[`bot:${LEAD}`, 5000]]);
+    const team = buildBots(input({ bots: [botRow(LEAD, 'lead', 'w1', 5000), botRow(VERIFIER, 'verifier', 'w1', 6000)] }));
+    expect(team.conversations.map((c) => [c.id, c.lastAt])).toEqual([[`bot:${VERIFIER}`, 6000], [`bot:${LEAD}`, 5000], ['room:w1', 0]]);
   });
 
   it('needs you: a bot\'s open questions plus its waiting workers; the badge sums the 1:1 rows only', () => {

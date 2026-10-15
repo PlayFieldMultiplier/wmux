@@ -1734,6 +1734,7 @@ export const zh = {
   'room.question.waiting': "正在等待机器人关闭此问题。",
   'room.thread.all': "全部动态",
   'room.thread.general': "常规",
+  'room.thread.dm': "私聊",
   'room.thread.task': "任务",
   'room.thread.handoff': "请求",
   'room.thread.plan': "计划",

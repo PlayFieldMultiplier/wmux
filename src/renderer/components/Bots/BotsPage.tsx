@@ -51,7 +51,7 @@ import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine';
 import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
-import { allRoomCards, botConversationId, conversationCards, roomCardsByWorkspace, type Conversation } from './botsModel';
+import { allRoomCards, botConversationId, conversationCards, roomCardsByWorkspace, roomViewCards, type Conversation } from './botsModel';
 import { unreadCount } from './botsTimeline';
 import { BOTS_SESSION_START } from '../../stores/slices/roomSlice';
 import { useBots, useBotsSync } from './useBots';
@@ -438,7 +438,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const seenAt = useStore((s) => s.botsSeenAt);
   const rows = useMemo(() => model.conversations.map((c) => {
     const since = seenAt[c.id] ?? BOTS_SESSION_START;
-    const own = c.kind === 'bot' ? conversationCards(everyCard, c.row.bot.id) : cardsByWs.get(c.workspaceId) ?? [];
+    const own = c.kind === 'bot' ? conversationCards(everyCard, c.row.bot.id, { lone: c.lone }) : roomViewCards(cardsByWs.get(c.workspaceId) ?? []);
     return {
       c,
       title: conversationTitle(c, nameOf),

@@ -1613,6 +1613,7 @@ export const pl = {
   'room.question.waiting': "Czekam, aż boty zamkną to pytanie.",
   'room.thread.all': "Cała aktywność",
   'room.thread.general': "Ogólne",
+  'room.thread.dm': "Rozmowa prywatna",
   'room.thread.task': "Zadanie",
   'room.thread.handoff': "Prośba",
   'room.thread.plan': "Plan",

@@ -161,7 +161,7 @@ describe('Bots page', () => {
     expect(q('[data-bots-paused]')?.textContent).toContain('Bots are off');
     expect(q('[data-bots-run]')?.textContent).toBe('Turn bots on');
     // The list is all there, "+" too, and nothing is counted.
-    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`, 'room:hq']);
+    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`]);
     expect(q('[data-bots-add]')).not.toBeNull();
     expect(container.querySelectorAll('[data-bots-needs]')).toHaveLength(0);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
@@ -366,7 +366,7 @@ describe('Bots page', () => {
   it('composerHint: a Lead\'s empty 1:1 asks for its first task; otherwise "Message <name>"', () => {
     const tt = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;
     const conv = (role: BotRole): Conversation => ({
-      kind: 'bot', id: 'bot:x', workspaceId: 'w1', row: botRow(LEAD, role, 'w1', 1, 'Lead'), last: null, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [],
+      kind: 'bot', id: 'bot:x', workspaceId: 'w1', row: botRow(LEAD, role, 'w1', 1, 'Lead'), last: null, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [], lone: false,
     });
     expect(composerHint(conv('lead'), 0, 'Lead', tt)).toBe('botsPage.leadHint{"name":"Lead"}');
     expect(composerHint(conv('lead'), 2, 'Lead', tt)).toBe('botsPage.messageTo{"name":"Lead"}');
@@ -374,6 +374,8 @@ describe('Bots page', () => {
   });
 
   it('a plan is answered on the Bots page with the room dock\'s own answers, naming workspaces', async () => {
+    // A second HQ bot makes the HQ a team, so its room is listed.
+    bots.push(botRow('bot-0000000e', 'verifier', 'hq', 4, 'HQ Helper'));
     const resolve = vi.fn(async () => ({ ok: true as const, card: cards[0] }));
     const plan = card({
       workspaceId: 'hq', actor: by('hq', MOA), kind: 'plan', state: 'open', threadId: 'plan:p-1', at: 500,
@@ -479,7 +481,7 @@ describe('Bots page', () => {
   it('lists rooms and bots by latest activity (the HQ room is not pinned), with needs-you on the bot that asked', async () => {
     seedRooms();
     await render(<BotsPage />);
-    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`, 'room:hq']);
+    expect(rowIds()).toEqual(['room:w1', `bot:${LEAD}`, `bot:${VERIFIER}`, `bot:${MOA}`]);
     expect(container.textContent).not.toContain('HQ');
     // Lead: one open question and its worker t1 (status not reported: not live).
     expect(q(`[data-bots-row="bot:${LEAD}"] [data-bots-needs]`)?.textContent).toBe('1');
@@ -540,12 +542,32 @@ describe('Bots page', () => {
     });
     await act(async () => { q('[data-testid="bots-composer-send"]')!.click(); });
     expect(posted).toHaveLength(1);
-    expect(posted[0]).toMatchObject({ workspaceId: 'w1', threadId: 'general', title: 'Please rebase', mentions: [LEAD] });
+    expect(posted[0]).toMatchObject({ workspaceId: 'w1', threadId: `dm:${LEAD}`, title: 'Please rebase', mentions: [LEAD] });
     expect(posted[0].to).toBeUndefined();
     // The posted card arrives by push; its delivery line names the bot.
     const sentCard = card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', title: 'Please rebase', refs: { botId: LEAD } });
     act(() => useStore.getState().applyRoomEvent({ workspaceId: 'w1', card: { ...sentCard, id: `c${seq - 1}` }, threadSummary: { threadId: 'general', title: 'General', lastAt: 1, lastSeq: 1, cardCount: 1, openQuestions: 0, lastKind: 'human', status: 'open', unread: null } }));
     expect(q('[data-bots-delivery]')?.textContent).toBe('Sent to Lead');
+  });
+
+  it('a 1:1 and the room are separate: a 1:1 thread shows only in its bot\'s chat, never as a thread chip in the room', async () => {
+    cards.push(
+      card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', threadId: `dm:${LEAD}`, refs: { botId: LEAD }, title: 'Private ask', at: 700 }),
+      card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: `dm:${LEAD}`, title: 'Private answer', at: 710 }),
+      card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Team, hello', at: 720 }),
+    );
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="room:w1"]')!.click());
+    const chat = () => q('[data-bots-messages]')?.textContent ?? '';
+    expect(chat()).toContain('Team, hello');
+    expect(chat()).not.toContain('Private');
+    expect(q(`[data-bots-thread-chip="dm:${LEAD}"]`)).toBeNull();
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    expect(chat()).toContain('Private ask');
+    expect(chat()).toContain('Private answer');
+    expect(chat()).not.toContain('Team, hello');
+    expect(container.querySelector('[data-bots-thread-chip^="dm:"]')).toBeNull();
   });
 
   it('a group message goes to the whole room unless a bot is picked (a chip, or a typed @name)', async () => {
@@ -748,7 +770,7 @@ describe('Bots page', () => {
     expect(order.indexOf('joined')).toBe(order.length - 2);
     // A room whose first card is the greeting still shows the joined line.
     const W2 = 'bot-0000000f';
-    bots.push(botRow(W2, 'lead', 'w2', 50_000, 'Wmux Issue'));
+    bots.push(botRow(W2, 'lead', 'w2', 50_000, 'Wmux Issue'), botRow('bot-00000010', 'verifier', 'w2', 40_000, 'Wmux Review'));
     cards.push(card({ workspaceId: 'w2', actor: by('w2', W2), kind: 'question', state: 'open', title: 'Hello', threadId: 'handoff:h-0000000009', at: 50_100, greeting: true }));
     cards.push(card({ workspaceId: 'w2', actor: { kind: 'human' }, kind: 'human', title: 'Hi', at: 60_000 }));
     act(() => useStore.setState({ workspaces: [...useStore.getState().workspaces, ws('w2', 'web')], roomThreads: { ...useStore.getState().roomThreads, w2: [] }, roomTimelines: { ...useStore.getState().roomTimelines, [timelineKey('w2', ALL_THREADS)]: { cards: cards.filter((c) => c.workspaceId === 'w2'), nextSinceSeq: 0, hasMore: false } } } as never));
@@ -1109,7 +1131,7 @@ describe('Bots page', () => {
   it('isStillStarting: a new bot starts until its first message, unless its turn failed', () => {
     const conv = (last: RoomCard | null, lastError?: { message: string; at: number }): Conversation => {
       const row = botRow(LEAD, 'lead', 'w1', 1, 'Lead');
-      return { kind: 'bot', id: `bot:${LEAD}`, workspaceId: 'w1', row: { ...row, status: { ...row.status!, ...(lastError ? { lastError } : {}) } }, last, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [] };
+      return { kind: 'bot', id: `bot:${LEAD}`, workspaceId: 'w1', row: { ...row, status: { ...row.status!, ...(lastError ? { lastError } : {}) } }, last, lastAt: 0, needsYou: 0, openQuestions: 0, openApprovals: 0, workers: [], tree: [], lone: false };
     };
     expect(isStillStarting(undefined)).toBe(true);
     expect(isStillStarting(conv(null))).toBe(true);

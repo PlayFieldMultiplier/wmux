@@ -36,14 +36,15 @@
 // While the bots are off the conversation is read-only: no answers and no
 // composer, only the reason under it.
 //
-// Sending: a 1:1 message is a room post in the bot's workspace that mentions
-// that one bot (main wakes it alone). A group message goes to the whole room
+// Sending: a 1:1 message is a post in the bot's 1:1 thread (`dm:<botId>`) of
+// its workspace's room that mentions that one bot (main wakes it alone, in
+// that thread). A group message goes to the whole room
 // — main wakes every bot of the workspace — unless bots are picked: the chip
 // row under the box, or an `@Name` of a room bot anywhere in the text
 // (resolved here at send; main reads only the field). Typing `@` in a room
 // suggests its bots.
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { RoomCard as RoomCardData, ThreadId } from '../../../shared/room';
+import { dmThreadBot, dmThreadId, type RoomCard as RoomCardData, type ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import Button from '../ui/Button';
 import Select from '../ui/Select';
@@ -67,7 +68,7 @@ import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOptio
 import { templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botIdentityColor } from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
-import { awaitsApproval, conversationCards, greetingCardIds, livePlanIds, roomEntries, taskBubbles, type BotTreeRow, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
+import { awaitsApproval, conversationCards, greetingCardIds, roomViewCards, livePlanIds, roomEntries, taskBubbles, type BotTreeRow, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
 import { treeRowState } from './BotsWorkerTree';
 import { loadWholeThread } from './useBots';
 import { useShallow } from 'zustand/react/shallow';
@@ -95,15 +96,16 @@ const SYSTEM_FOLD_CHARS = 140;
  *  own cards and those that link it (an approval card posted where the bot
  *  talks with the owner links its PR's thread). Pure. */
 export function chatCards(conversation: Conversation, roomCards: readonly RoomCardData[], thread: ThreadId | null): RoomCardData[] {
-  // A 1:1 is handed every room's cards (botConversationCards); a group its own.
-  const own = conversation.kind === 'bot' ? conversationCards(roomCards, conversation.row.bot.id) : [...roomCards];
+  // A 1:1 is handed every room's cards (botConversationCards); a group its
+  // own, without the 1:1 threads and what they started.
+  const own = conversation.kind === 'bot' ? conversationCards(roomCards, conversation.row.bot.id, { lone: conversation.lone }) : roomViewCards(roomCards);
   return thread ? own.filter((c) => c.threadId === thread || c.refs?.threadId === thread) : own;
 }
 
 /** The thread a card links besides its own (its subject's), or null. */
 function linkedThread(card: RoomCardData): ThreadId | null {
   const linked = card.refs?.threadId;
-  return linked && linked !== card.threadId && linked !== 'general' ? linked : null;
+  return linked && linked !== card.threadId && linked !== 'general' && !dmThreadBot(linked) ? linked : null;
 }
 
 /** Why a 1:1 message cannot be sent right now, or null: the bot is off. The
@@ -243,7 +245,8 @@ export function mentionSuggestions(candidates: readonly FactoryBotRow[], query: 
  *  reference (with its mark), else the thread's name in words; its id only
  *  in the tooltip. */
 function ThreadChip({ threadId, t, onPick, taskTitle, requestTitle }: { threadId: ThreadId; t: T; onPick: (id: ThreadId) => void; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf }) {
-  if (threadId === 'general') return null;
+  // General and a 1:1 are conversations, never a thread to open.
+  if (threadId === 'general' || dmThreadBot(threadId)) return null;
   const label = threadLabel(threadId, t, taskTitle, requestTitle);
   const ref = isRefThread(threadId);
   return (
@@ -407,7 +410,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
   // leads nowhere its summary line does not.
   const named = isRefThread(card.threadId) || (/^task:/.test(card.threadId) && !!ctx.taskTitle(card.threadId.slice(5)))
     || (/^handoff:/.test(card.threadId) && !!ctx.requestTitle(card.threadId));
-  const own = card.threadId !== 'general' && card.threadId !== ctx.hideThread && !(thread && !named);
+  const own = card.threadId !== 'general' && !dmThreadBot(card.threadId) && card.threadId !== ctx.hideThread && !(thread && !named);
   const link = linked && linked !== ctx.hideThread ? linked : null;
   const chips = (own || link || line) && (
     <div className={`mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 ${human ? 'justify-end' : ''}`}>
@@ -924,7 +927,7 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestT
   const { title, body } = ownerCardText(card, botNames);
   const foldable = body.length > SYSTEM_FOLD_CHARS || body.includes('\n');
   const word = card.kind === 'refusal' || card.kind === 'budget' ? kindLabel(card.kind, t) : null;
-  const chip = card.threadId !== 'general' && card.threadId !== hideThread;
+  const chip = card.threadId !== 'general' && !dmThreadBot(card.threadId) && card.threadId !== hideThread;
   // One alignment per line: a bare line is centred; one with evidence under
   // it reads left, header and chip with it.
   const align = body ? 'justify-start' : 'justify-center';
@@ -1881,7 +1884,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         <div className="wmux-bots-composer">
           <BotsComposer
             conversation={conversation}
-            threadId="general"
+            threadId={conversation.kind === 'bot' ? dmThreadId(conversation.row.bot.id) : 'general'}
             bots={bots}
             placeholder={composerHint(conversation, cards.length, title, t)}
             t={t}

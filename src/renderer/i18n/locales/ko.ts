@@ -1155,6 +1155,7 @@ export const ko = {
   'room.question.waiting': "봇이 이 질문을 닫기를 기다리는 중이에요.",
   'room.thread.all': "전체 활동",
   'room.thread.general': "일반",
+  'room.thread.dm': "1:1 대화",
   'room.thread.task': "작업",
   'room.thread.handoff': "요청",
   'room.thread.plan': "계획",

@@ -1635,6 +1635,7 @@ export const en = {
   'room.question.waiting': "Waiting for the bots to close this question.",
   'room.thread.all': "All activity",
   'room.thread.general': "General",
+  'room.thread.dm': "Private chat",
   'room.thread.task': "Task",
   'room.thread.handoff': "Request",
   'room.thread.plan': "Plan",

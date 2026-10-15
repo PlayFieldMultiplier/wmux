@@ -4042,7 +4042,8 @@ In 5.0 the desktop's Moa becomes the HQ bot of an **agent factory**: long-lived
 bots bound to workspaces by role (`lead`, `triage`, `verifier`, `maintainer`,
 and the HQ's `moa`). Bots have no pane and no terminal. What they say lands in
 the workspace's **room**, a timeline of typed cards split into threads (one per
-PR, issue, task, handoff, plan or report, plus `general`). A desktop whose
+PR, issue, task, handoff, plan or report, plus `general`, and one per bot that
+has talked with the owner: its 1:1, `dm:<botId>`). A desktop whose
 factory is switched off keeps the Moa behaviour above unchanged.
 
 **`/api/config`.**
@@ -4101,7 +4102,11 @@ GET /api/config   (X-Wmux-Client-Caps: rooms-v1)
 unchanged on the wire, but the factory route wins over everything else — even
 over a Moa pane that is still up. The message becomes a `human` card in the HQ
 bot's room (`hqWorkspaceId`) addressed to that one bot (`hqBotId`), and a wake
-queued for it; the daemon answers on queue, never on reply:
+queued for it; the daemon answers on queue, never on reply. The card is in
+the HQ bot's 1:1 thread, `dm:<hqBotId>` (the desktop shows it in that
+bot's 1:1, not in its room), and so are the replies to it: read the room
+without `thread` (every card) or with `thread=dm:<hqBotId>`, not
+`thread=general`:
 
 | Answer | Meaning | Retry |
 |---|---|---|
@@ -4172,7 +4177,14 @@ is always listed.
 arrival order (`seq`, increasing; never sort by `at`).
 
 - `thread` — a thread id from the list (URL-encoded); omitted: every card of
-  the room. `general` reads the general thread only.
+  the room. `general` reads the general thread only. `dm:<botId>` is a
+  bot's 1:1 with the owner: the owner's messages to that bot from
+  its private chat (the desktop's, or the phone's to the HQ bot), its
+  answers and greeting, and the cards about work it starts there (a
+  coordinator's work runs in a `handoff:` thread whose `Finished` pointer
+  card lands here instead of `general`); the desktop never shows
+  it in the room. It is listed by `/threads` like any thread, with no
+  `pr`/`issue` reference; name it after the bot, never by its id.
 - `sinceSeq` — cards with a larger `seq`. Omitted: the newest page. Read
   forward from `0` for the whole history.
 - `limit` — 1–100, default 50.
