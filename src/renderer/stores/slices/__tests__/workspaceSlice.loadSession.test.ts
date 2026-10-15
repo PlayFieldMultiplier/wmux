@@ -53,7 +53,6 @@ type TestState = WorkspaceSlice & {
   // agentToolbarSlice fields touched by loadSession
   agentToolbarEnabled: boolean;
   toolbarSnippets: { id: string; label: string; text: string }[];
-  newConversationCommand: string;
   // #517 — main-owned browser backend mirror (NOT a SessionData key).
   browserBackend: 'builtin' | 'external';
   // Orchestrator brain vendor — loadSession re-coerces it on every load.
@@ -112,7 +111,6 @@ function createTestStore() {
       sessionStartTime: null,
       agentToolbarEnabled: true,
       toolbarSnippets: [],
-      newConversationCommand: '/clear',
       // #517 — main-owned backend mirror. Seeded here so the non-persistence
       // test can prove loadSession never writes it (it isn't a SessionData key).
       browserBackend: 'builtin',
@@ -524,11 +522,9 @@ describe('loadSession — agent toolbar prefs', () => {
       sidebarVisible: true,
       agentToolbarEnabled: false,
       agentToolbarSnippets: [{ id: 's1', label: 'A', text: 'aaa' }],
-      agentToolbarNewCommand: '/reset',
     } as any);
     expect(store.getState().agentToolbarEnabled).toBe(false);
     expect(store.getState().toolbarSnippets).toEqual([{ id: 's1', label: 'A', text: 'aaa' }]);
-    expect(store.getState().newConversationCommand).toBe('/reset');
   });
 });
 

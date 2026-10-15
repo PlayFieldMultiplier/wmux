@@ -406,8 +406,6 @@ export const ko = {
   'filetree.refresh': '새로 고침',
   'filetree.empty': '비어 있거나 읽을 수 없음',
   'filetree.noCwdDetected': '작업 디렉터리를 찾지 못했습니다',
-  'filetree.toggleShow': '파일 트리 보기',
-  'filetree.toggleHide': '파일 트리 숨기기',
   'filetree.resize': '파일 트리 크기 조절 (더블클릭하면 기본값)',
   'filetree.menu.open': '열기',
   'filetree.menu.insertPath': '터미널에 경로 넣기',
@@ -2593,7 +2591,6 @@ export const ko = {
   'settings.inspect.proxyLabel': '{token} 편집 ({role})',
 
   // Agent toolbar
-  'toolbar.attach': '첨부',
   'toolbar.fileExplorer': '파일',
   'toolbar.snippets': '스니펫',
   'toolbar.richInput': '리치 입력',
@@ -2604,12 +2601,10 @@ export const ko = {
   'toolbar.attachFiles': '파일 첨부…',
   'toolbar.insertPath': '경로 삽입…',
   'toolbar.newConversation': '새 대화',
-  'toolbar.newConversationConfirm': '새 대화 확인',
   'toolbar.addSnippetEmpty': '스니펫 추가…',
   'toolbar.fanOutStartAgents': '에이전트 시작',
   'toolbar.fanOutMultiTask': '병렬 작업',
   'toolbar.new': '새로',
-  'toolbar.newChat': '새 대화',
   'toolbar.pin': '툴바 고정',
   'toolbar.unpin': '고정 해제 — 커서가 아래로 갈 때만 표시',
   'toolbar.send': '보내기',
@@ -2617,14 +2612,12 @@ export const ko = {
   'toolbar.close': '닫기',
   'toolbar.richPlaceholder': '프롬프트를 입력하거나 붙여넣으세요. Enter는 줄바꿈입니다. Send를 누르면 에이전트에 붙여넣습니다.',
   'toolbar.noTerminal': '포커스된 터미널 없음',
-  'toolbar.noWorkingDir': '작업 디렉터리 없음.',
   'toolbar.addSnippet': '스니펫 추가',
   'toolbar.snippetLabel': '레이블',
   'toolbar.snippetText': '프롬프트 텍스트',
   'settings.agentToolbar': '에이전트 주입 크롬',
   'settings.agentToolbarShow': '에이전트 주입 크롬',
-  'settings.agentToolbarShowDesc': '입력창, 첨부, 병렬 작업을 표시합니다. Ctrl+G는 항상 동작합니다.',
-  'settings.agentToolbarNewCommand': '새 대화 명령',
+  'settings.agentToolbarShowDesc': '파일, 스니펫, 입력창, 예약, 병렬 작업을 표시합니다. Ctrl+G는 항상 동작합니다.',
 
   // Channels (a2a.channel.* RPC UI surface)
   'channels.taskCommentPlaceholder': '작업에 의견 남기기…',
@@ -3229,15 +3222,7 @@ export const ko = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ──────────────────────────
   'toolbar.fanOut': '병렬 작업',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — 현재 워크스페이스의 모든 터미널 페인에 같은 텍스트(격리 없음)',
   'toolbar.broadcastPrompt': 'broadcast — 현재 워크스페이스의 모든 터미널 페인에 전송',
-  'toolbar.broadcastTitle': '터미널에 브로드캐스트',
-  'toolbar.broadcastTargets': '터미널 {n}개',
-  'toolbar.broadcastPlaceholder': '한 번 입력하면 이 워크스페이스의 모든 터미널 페인에 전송됩니다…',
-  'toolbar.broadcastSend': '전송',
-  'toolbar.broadcastSending': '전송 중…',
-  'toolbar.broadcastResult': '{ok} 전송 · {fail} 실패',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ────────────────────────
   'fanout.title': '병렬 작업 — N개 격리 태스크 동시 실행',

@@ -2350,8 +2350,6 @@ function AgentToolbarSection() {
   const t = useT();
   const agentToolbarEnabled = useStore((s) => s.agentToolbarEnabled);
   const setAgentToolbarEnabled = useStore((s) => s.setAgentToolbarEnabled);
-  const newConversationCommand = useStore((s) => s.newConversationCommand);
-  const setNewConversationCommand = useStore((s) => s.setNewConversationCommand);
 
   return (
     <SettingsSection title={t('settings.agentToolbar')}>
@@ -2360,18 +2358,6 @@ function AgentToolbarSection() {
           checked={agentToolbarEnabled}
           onChange={setAgentToolbarEnabled}
           label={t('settings.agentToolbarShow')}
-        />
-      </SettingRow>
-      <SettingRow label={t('settings.agentToolbarNewCommand')}>
-        <Input
-          type="text"
-          aria-label={t('settings.agentToolbarNewCommand')}
-          value={newConversationCommand}
-          onChange={(e) => setNewConversationCommand(e.target.value)}
-          spellCheck={false}
-          // A command line is machine evidence: mono.
-          className="settings-input font-mono"
-          style={{ width: 240 }}
         />
       </SettingRow>
     </SettingsSection>

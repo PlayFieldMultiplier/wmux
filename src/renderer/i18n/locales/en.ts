@@ -385,8 +385,6 @@ export const en = {
   'filetree.refresh': 'Refresh',
   'filetree.empty': 'Empty or not available',
   'filetree.noCwdDetected': 'No working directory detected',
-  'filetree.toggleShow': 'Show file tree',
-  'filetree.toggleHide': 'Hide file tree',
   'filetree.resize': 'Resize file tree (double-click to reset)',
   'filetree.menu.open': 'Open',
   'filetree.menu.insertPath': 'Insert path into terminal',
@@ -3169,7 +3167,6 @@ export const en = {
   'claudeIntegration.usage.status.read-error': 'Credential read error',
 
   // Agent toolbar
-  'toolbar.attach': 'Attach',
   'toolbar.fileExplorer': 'Files',
   'toolbar.snippets': 'Snippets',
   'toolbar.richInput': 'Rich Input',
@@ -3182,12 +3179,10 @@ export const en = {
   'toolbar.attachFiles': 'Attach files…',
   'toolbar.insertPath': 'Insert path…',
   'toolbar.newConversation': 'New conversation',
-  'toolbar.newConversationConfirm': 'Confirm new conversation',
   'toolbar.addSnippetEmpty': 'Add snippet…',
   'toolbar.fanOutStartAgents': 'Start agents',
   'toolbar.fanOutMultiTask': 'Multi Task',
   'toolbar.new': 'New',
-  'toolbar.newChat': 'New chat',
   'toolbar.pin': 'Keep the toolbar open',
   'toolbar.unpin': 'Hide the toolbar until the pointer nears the bottom edge',
   'toolbar.send': 'Send',
@@ -3195,7 +3190,6 @@ export const en = {
   'toolbar.close': 'Close',
   'toolbar.richPlaceholder': 'Write or paste a prompt. Enter for newline. Send pastes it into the agent.',
   'toolbar.noTerminal': 'No terminal focused',
-  'toolbar.noWorkingDir': 'No working directory.',
   'toolbar.addSnippet': 'Add snippet',
   'toolbar.snippetLabel': 'Label',
   'toolbar.snippetText': 'Prompt text',
@@ -3236,8 +3230,7 @@ export const en = {
   'sessionSchedule.otherSession': 'Other session · {ptyId}',
   'settings.agentToolbar': 'Agent inject chrome',
   'settings.agentToolbarShow': 'Agent inject chrome',
-  'settings.agentToolbarShowDesc': 'Show compose, attach, and Multi Task. Ctrl+G always works.',
-  'settings.agentToolbarNewCommand': 'New-conversation command',
+  'settings.agentToolbarShowDesc': 'Show files, snippets, compose, schedule and Multi Task. Ctrl+G always works.',
 
   // Channels (a2a.channel.* RPC UI surface)
   'channels.taskCommentPlaceholder': 'Leave a comment on this task…',
@@ -3742,15 +3735,7 @@ export const en = {
 
   // ─── Agent toolbar: fan-out / broadcast buttons ──────────────────────────
   'toolbar.fanOut': 'Multi Task',
-  'toolbar.broadcast': 'Broadcast',
-  'toolbar.broadcastTooltip': 'Broadcast — same text to every terminal pane in the current workspace (no isolation)',
   'toolbar.broadcastPrompt': 'Broadcast — send to every terminal pane in the current workspace',
-  'toolbar.broadcastTitle': 'Broadcast to terminals',
-  'toolbar.broadcastTargets': '{n} terminals',
-  'toolbar.broadcastPlaceholder': 'Type once — sent to every terminal pane in this workspace…',
-  'toolbar.broadcastSend': 'Send',
-  'toolbar.broadcastSending': 'Sending…',
-  'toolbar.broadcastResult': '{ok} sent · {fail} failed',
 
   // ─── Fan-out dialog (1 prompt → N isolated tasks) ────────────────────────
   'fanout.title': 'Multi Task — N parallel isolated tasks',

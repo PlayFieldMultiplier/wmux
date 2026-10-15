@@ -1739,7 +1739,6 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         state.agentToolbarPinned = data.agentToolbarPinned;
       }
       if (data.agentToolbarSnippets != null) state.toolbarSnippets = data.agentToolbarSnippets;
-      if (data.agentToolbarNewCommand != null) state.newConversationCommand = data.agentToolbarNewCommand;
       if (data.prefixConfig) {
         // Merge the saved bindings ON TOP of DEFAULT_PREFIX_CONFIG instead of
         // wholesale replacement (mirrors the layoutTemplates merge above). A

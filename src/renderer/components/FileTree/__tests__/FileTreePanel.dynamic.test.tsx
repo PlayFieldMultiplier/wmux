@@ -9,7 +9,6 @@ import FileTreePanel, { fileTreeCwd, isAtOrUnder, relativeTo } from '../FileTree
 import { toggleFileTreePanel } from '../fileTreeToggle';
 import { filterTree } from '../fileTreeFilter';
 import { fileTreeWidthForDrag } from '../FileTreeResizeHandle';
-import FileTreeToggle from '../../Titlebar/FileTreeToggle';
 import { useStore } from '../../../stores';
 import { DEFAULT_PC_RAIL_PERSISTED } from '../../../../shared/pcRail';
 import { clampFileTreeWidth, FILE_TREE_DEFAULT_WIDTH, FILE_TREE_MAX_WIDTH, FILE_TREE_MIN_WIDTH } from '../../../utils/fileTreeLayout';
@@ -185,18 +184,6 @@ describe('toggleFileTreePanel', () => {
     toggleFileTreePanel(useStore.getState());
     expect(useStore.getState().fileTreeVisible).toBe(true);
     expect(useStore.getState().appRoute).toBe('workspaces');
-  });
-});
-
-describe('FileTreeToggle', () => {
-  it('is pressed only while the column is on screen', () => {
-    act(() => root.render(createElement(FileTreeToggle)));
-    const button = () => container.querySelector('[data-file-tree-toggle]') as HTMLButtonElement;
-    expect(button().getAttribute('aria-pressed')).toBe('false');
-    act(() => { button().click(); });
-    expect(button().getAttribute('aria-pressed')).toBe('true');
-    act(() => useStore.setState({ appRoute: 'git' }));
-    expect(button().getAttribute('aria-pressed')).toBe('false');
   });
 });
 

@@ -1048,7 +1048,6 @@ export interface SessionData {
   agentToolbarEnabled?: boolean;
   agentToolbarPinned?: boolean;
   agentToolbarSnippets?: { id: string; label: string; text: string }[];
-  agentToolbarNewCommand?: string;
 }
 
 // === xterm 20-slot ANSI palette ===
