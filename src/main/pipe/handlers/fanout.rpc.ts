@@ -117,6 +117,7 @@ import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/b
 import { SHARED_SURFACE } from '../../../shared/botSurface';
 import { WAKE_LIMITS, botFanoutIdempotencyKey, type WakeItem } from '../../../shared/wake';
 import { getBotStore } from '../../factory/botStore';
+import { withBotWorkerAgent } from '../../../shared/botWorkerAgent';
 import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
 import { getConnectorStore, isConnectionKey, type ConnectorStore } from '../../factory/connectorStore';
 import { CONNECTOR_LIMITS, CONNECTOR_NAME_RE, CONNECTOR_WORKER_AGENTS, type Connector } from '../../../shared/botConnector';
@@ -1313,7 +1314,10 @@ export function registerFanOutRpc(
       bot ? deps.botPresets ?? botFanoutPresetList : deps.presets ?? (() => loadFanoutPresets()),
     );
     if ('error' in selection) return deny('INVALID_ARGUMENT', selection.error);
-    const agentChoices = selection.kind === 'none' ? [] : selection.agents;
+    // A bot's workers run on the engine its owner picked in its profile
+    // (main's record of the bot, never the bot's arguments): the bot names
+    // only a preset. Applied before the labels, so the ledger names it.
+    const agentChoices = selection.kind === 'none' ? [] : bot ? withBotWorkerAgent(selection.agents, botProfile?.workerAgent) : selection.agents;
     const agentLabels = agentChoices.map(describeFanoutAgentChoice);
     const worktree = !(selection.kind === 'preset' && selection.preset.worktree === false);
     // §13 rule 3: a bot fans out only with the bot presets (every bot holds

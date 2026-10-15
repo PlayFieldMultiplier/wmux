@@ -100,6 +100,16 @@ export type BotEngine =
 
 export const DEFAULT_BOT_ENGINE: BotEngine = { kind: 'claude-sdk' };
 
+/** The agent CLI a bot's fan-out workers run on (shared/botWorkerAgent.ts):
+ *  a slug from fan-out's closed agent table that has a bot-worker guard, plus
+ *  an optional model and effort. Set only by the owner; absent = the bot
+ *  presets' own engine (Claude Code). */
+export interface BotWorkerAgent {
+  agent: string;
+  model?: string;
+  effort?: string;
+}
+
 export interface BotBudget {
   /** Turns per rolling hour. Absent = no hourly cap (never 0: a stored 0 is
    *  read as absent and refused on write). */
@@ -147,6 +157,8 @@ export interface BotProfile {
    *  itself (job_set → bot.setJob, during a wake on the owner's words). */
   job?: string;
   engine: BotEngine;
+  /** What its fan-out workers run on (absent: the presets' own engine). */
+  workerAgent?: BotWorkerAgent;
   triggers: BotTrigger[];
   budget: BotBudget;
   /** The repo the bot acts on (fan-out needs it: a bot has no pane cwd). */

@@ -14,6 +14,7 @@ import { effectiveJob } from './roles/templates';
 import type { Fact } from '../../shared/facts';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import { botFanoutIdempotencyKey, type WakeItem } from '../../shared/wake';
+import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel } from '../../shared/botWorkerAgent';
 
 /** A fan-out task as the wake reports it (from its ledger row). */
 export interface WakeTaskSummary {
@@ -399,10 +400,19 @@ export function buildWakePrompt(input: WakePromptInput): string {
   }
   lines.push(
     '',
+    workerEngineLine(profile),
     `Fan-out keys for this wake: the first fanout_start you make uses idempotency_key "${botFanoutIdempotencyKey(item.id, 1)}", ` +
       `the second "${botFanoutIdempotencyKey(item.id, 2)}", and so on. Re-sending a key polls that fan-out; it never starts a second one.`,
   );
   return lines.join('\n');
+}
+
+/** Which engine the bot's workers run on, in one line it can tell the owner. */
+function workerEngineLine(profile: BotProfile): string {
+  const w = profile.workerAgent;
+  const name = botWorkerAgentLabel(w?.agent ?? DEFAULT_BOT_WORKER_AGENT);
+  const detail = w ? [w.model, w.effort ? `${w.effort} effort` : undefined].filter(Boolean).join(', ') : '';
+  return `Your fan-out workers run on ${name}${detail ? ` (${detail})` : ''}${w ? ', as the owner set in your profile' : ' (the default; the owner can change it in your profile)'}; you do not choose it.`;
 }
 
 /** A `bot.notice` fact: main's own words, plain; a quoted error is data. */

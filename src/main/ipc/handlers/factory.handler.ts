@@ -37,6 +37,9 @@ import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type Facto
 import { getWorkerResumePorts, resumeWorker, type WorkerResumePorts, type WorkerResumeResult } from '../../factory/workerReclaim';
 import { botClaudeConfigDir, engineReadiness, startEngineLogin, type EngineLoginDeps, type EngineReadinessDeps } from '../../factory/engineReadiness';
 import type { FactoryEngineReadiness } from '../../../shared/factoryEngine';
+import { BOT_WORKER_AGENTS, botWorkerAgentLabel, botWorkerAgentSupported, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
+import { agentExecEnv } from '../../../shared/execEnv';
+import { resolveOnPath } from '../../factory/botEngines';
 import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { loadClaudeCredential } from '../../claude/claudeCredential';
 import { sendToRenderer } from '../../pipe/handlers/_bridge';
@@ -138,6 +141,23 @@ export function factoryEngineReadinessHandler(
   return async (e) => {
     if (!isMainWindowSender(e, getWindow())) return { ready: false, reason: 'unknown', message: 'only the main window may ask' };
     return engineReadiness(deps);
+  };
+}
+
+/** FACTORY_WORKER_AGENTS: the engines a bot's workers may run on, each with
+ *  whether its CLI is on the login shell's PATH here (the lookup bot engines
+ *  use, botEngines.resolveOnPath). Main window only; any other sender gets
+ *  none. */
+export function factoryWorkerAgentsHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: { env?: () => Promise<NodeJS.ProcessEnv>; resolve?: (cmd: string, env: NodeJS.ProcessEnv) => string | null; platform?: NodeJS.Platform } = {},
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<BotWorkerAgentOption[]> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) return [];
+    const env = await (deps.env ?? (() => agentExecEnv(process.env)))();
+    const resolve = deps.resolve ?? ((cmd: string, en: NodeJS.ProcessEnv) => resolveOnPath(cmd, en));
+    const platform = deps.platform ?? process.platform;
+    return BOT_WORKER_AGENTS.map((agent) => ({ agent, label: botWorkerAgentLabel(agent), installed: resolve(agent, env) !== null, supported: botWorkerAgentSupported(agent, platform) }));
   };
 }
 
@@ -303,6 +323,7 @@ export function registerFactoryHandlers(
     IPC.FACTORY_WORKER_RESUME,
     IPC.FACTORY_ENGINE_READINESS,
     IPC.FACTORY_ENGINE_LOGIN,
+    IPC.FACTORY_WORKER_AGENTS,
   ];
   for (const c of channels) ipcMain.removeHandler(c);
 
@@ -347,6 +368,8 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_ENGINE_READINESS, wrapHandler(IPC.FACTORY_ENGINE_READINESS, factoryEngineReadinessHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_ENGINE_LOGIN, wrapHandler(IPC.FACTORY_ENGINE_LOGIN, factoryEngineLoginHandler(getWindow, defaultEngineLoginDeps(getWindow))));
+
+  ipcMain.handle(IPC.FACTORY_WORKER_AGENTS, wrapHandler(IPC.FACTORY_WORKER_AGENTS, factoryWorkerAgentsHandler(getWindow)));
 
   return () => {
     for (const c of channels) ipcMain.removeHandler(c);

@@ -17,6 +17,7 @@ import {
   type BrowserPolicyWritePayload,
   type BrowserPolicyGrantsPayload,
   type BrowserPolicyWriteResult,
+  type BrowserPolicyBlockedResult,
 } from '../shared/browserPolicy';
 import type {
   AgySensorInstallResult,
@@ -1011,6 +1012,9 @@ const electronAPI = {
       // Revoke standing consent ("Always on this pane"); revocation only.
       grants: (payload: BrowserPolicyGrantsPayload): Promise<BrowserPolicyWriteResult> =>
         ipcRenderer.invoke(BROWSER_POLICY_IPC.grants, payload),
+      // Hosts the pane's protected proxy refused recently (#2063); read only.
+      blocked: (workspaceId: string, paneId: string): Promise<BrowserPolicyBlockedResult> =>
+        ipcRenderer.invoke(BROWSER_POLICY_IPC.blocked, { workspaceId, paneId }),
     },
     onDiscarded: (callback: (surfaceId: string) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, surfaceId: string) => callback(surfaceId);
@@ -1210,6 +1214,9 @@ const electronAPI = {
     // active workspace); rejects when no tab could be opened. Poll
     // factoryEngineReadiness to see it land.
     factoryEngineLogin: () => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN) as Promise<void>,
+    // The engines a bot's workers may run on, and which are installed here.
+    workerAgents: () =>
+      ipcRenderer.invoke(IPC.FACTORY_WORKER_AGENTS) as Promise<import('../shared/botWorkerAgent').BotWorkerAgentOption[]>,
     // Every bot's routines, read-only (routine.list as the operator).
     listRoutines: async (): Promise<import('../shared/botRoutine').BotRoutine[]> => {
       const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, 'routine.list', {})) as { ok?: unknown; result?: { ok?: unknown; routines?: unknown } } | null;

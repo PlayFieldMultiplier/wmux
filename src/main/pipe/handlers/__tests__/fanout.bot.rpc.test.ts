@@ -541,6 +541,22 @@ describe('task.fanout.start — bot origin', () => {
       expect(req.checkout).toBeUndefined();
     });
 
+    it('every task runs on the engine the owner picked for the bot; the preset\'s own engine otherwise', async () => {
+      const codex = rig('lead', { workerAgent: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' } }, { builtinPresets: true });
+      expect((await codex.call({ idempotencyKey: 'wake:w-1:1', titles: ['a', 'b'], prompt: 'build it', preset: 'default' }, botCtx('lead'))).status).toBe('accepted');
+      await codex.flush();
+      expect((codex.start.mock.calls[0][0] as FanOutRequest).agents).toEqual([
+        { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' },
+        { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' },
+      ]);
+      const plain = rig('lead', {}, { builtinPresets: true });
+      expect((await plain.call({ idempotencyKey: 'wake:w-1:1', titles: ['a'], prompt: 'build it', preset: 'default' }, botCtx('lead'))).status).toBe('accepted');
+      await plain.flush();
+      expect((plain.start.mock.calls[0][0] as FanOutRequest).agents).toEqual([{ agent: 'claude' }]);
+      // The bot still cannot name an engine itself.
+      expect((await codex.call({ idempotencyKey: 'wake:w-1:2', titles: ['x'], agents: [{ agent: 'claude' }] }, botCtx('lead'))).status).not.toBe('accepted');
+    });
+
     it('verify refuses a fan-out without a checkout; the other presets refuse one', async () => {
       const v = rig('verifier', {}, { builtinPresets: true });
       const err = errorOf(await v.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify' }, botCtx('verifier')));

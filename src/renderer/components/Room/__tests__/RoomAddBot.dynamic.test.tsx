@@ -395,7 +395,7 @@ describe('Add team', () => {
     await render(createElement(AddBotForm, { port, t, rows: withLead, workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined }));
     expect(q('factory-add-team')).toBeNull();
     const off = teamPort([]);
-    const turnOn = vi.fn(async () => true);
+    const turnOn = vi.fn(async () => 'on' as const);
     await render(createElement(AddBotForm, { port: off.port, t, rows: [], workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined, botsOff: true, turnOn }));
     await act(async () => q<HTMLButtonElement>('factory-add-team')!.click());
     expect(off.createTeam).not.toHaveBeenCalled();

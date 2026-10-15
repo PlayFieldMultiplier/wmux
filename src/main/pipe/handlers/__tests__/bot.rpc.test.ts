@@ -321,7 +321,7 @@ describe('bot-runtime module', () => {
     const mod = botRuntimeModule(router, deps, { engines: () => ({ ok: true, adapter: new OkAdapter() }) });
     await mod.start();
     await getFactorySettingsStore()!.update({ enabled: false });
-    await getFactorySettingsStore()!.update({ enabled: true });
+    await getFactorySettingsStore()!.update({ enabled: true, planConsent: { version: 1, at: '2026-10-15T00:00:00.000Z' } });
     const listed = (await (handlers.get('bot.list') as Handler)({}, OPERATOR)) as { bots: unknown[] };
     expect(listed.bots).toEqual([]);
     await settle();

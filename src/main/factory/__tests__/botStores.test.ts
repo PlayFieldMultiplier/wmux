@@ -27,6 +27,7 @@ import { FactorySettingsStore, factorySettingsPath, mergeFactorySettings, DEFAUL
 import { __resetBotHooksForTesting, onBotHook, type BotHookEvent } from '../botHooks';
 import { DEFAULT_BOT_BUDGETS } from '../../../shared/bot';
 import { WAKE_LIMITS } from '../../../shared/wake';
+import { BOTS_PLAN_CONSENT_VERSION } from '../../../shared/factorySettings';
 
 let dir = '';
 let clock = 1_000_000;
@@ -47,12 +48,39 @@ afterEach(async () => {
 
 function newStore(): BotStore {
   let n = 0;
-  const s = new BotStore(botsFilePath(dir), { now, newId: () => `bot-0000000${n++}` });
+  const s = new BotStore(botsFilePath(dir), { now, newId: () => `bot-0000000${n++}`, platform: 'darwin' });
   pendingFlush.push(() => s.flush());
   return s;
 }
 
 describe('BotStore', () => {
+  it('keeps the owner\'s worker engine: set, cleared, validated on update and on read', async () => {
+    const s = newStore();
+    const r = s.create({ workspaceId: 'ws-1', name: 'Dev' });
+    if (!r.ok) throw new Error('create');
+    expect(r.bot.workerAgent).toBeUndefined();
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' } })).toMatchObject({ ok: true, bot: { workerAgent: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' } } });
+    // Only an agent with a bot-worker guard; only a verified one; no unknown field.
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'grok' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'gemini' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'codex', unattended: true } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.update(r.bot.id, { workerAgent: { agent: 'codex', model: '--yolo' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(s.get(r.bot.id)?.workerAgent).toEqual({ agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' });
+    expect(s.update(r.bot.id, { workerAgent: null })).toMatchObject({ ok: true });
+    expect(s.get(r.bot.id)?.workerAgent).toBeUndefined();
+    // A Windows host refuses codex workers at save, with the reason; claude stays.
+    const win = new BotStore(botsFilePath(dir), { now, newId: () => 'bot-000000ff', platform: 'win32' });
+    const w = win.create({ workspaceId: 'ws-1', name: 'Win' });
+    if (!w.ok) throw new Error('create');
+    expect(win.update(w.bot.id, { workerAgent: { agent: 'codex' } })).toMatchObject({ ok: false, code: 'invalid_argument', message: expect.stringMatching(/not available on Windows/) });
+    expect(win.update(w.bot.id, { workerAgent: { agent: 'claude' } })).toMatchObject({ ok: true });
+    // On read: a stored pick that no longer validates is dropped, the bot kept.
+    const stored = { ...s.get(r.bot.id)!, workerAgent: { agent: 'grok' } };
+    expect(parseBotProfile(stored)).toMatchObject({ id: r.bot.id });
+    expect(parseBotProfile(stored)?.workerAgent).toBeUndefined();
+    expect(parseBotProfile({ ...stored, workerAgent: { agent: 'codex' } })?.workerAgent).toEqual({ agent: 'codex' });
+  });
+
   it('creates with role defaults; any number of bots of one role share a workspace', () => {
     const s = newStore();
     const r = s.create({ workspaceId: 'ws-1', role: 'verifier' });
@@ -555,11 +583,29 @@ describe('factory settings', () => {
   it('defaults to off and keeps only well-formed fields', async () => {
     const s = new FactorySettingsStore(factorySettingsPath(dir));
     expect(s.load()).toMatchObject({ enabled: false, verifierOnOwnerPrs: true, globalConcurrentBots: 3 });
-    const next = await s.update({ enabled: true, globalConcurrentBots: 9, trustedAuthors: ['owner', 'bad login'], morning: { hour: 7, weekdays: [5, 1, 9] } });
+    const next = await s.update({ enabled: true, planConsent: { version: 1, at: '2026-10-15T00:00:00.000Z' }, globalConcurrentBots: 9, trustedAuthors: ['owner', 'bad login'], morning: { hour: 7, weekdays: [5, 1, 9] } });
     expect(next).toMatchObject({ enabled: true, globalConcurrentBots: 3, trustedAuthors: ['owner'], morning: { hour: 7, weekdays: [1, 5] } });
     const t = new FactorySettingsStore(factorySettingsPath(dir));
     expect(t.load().enabled).toBe(true);
     expect(mergeFactorySettings({ ...DEFAULT_FACTORY_SETTINGS, trustedAuthors: [], morning: { hour: 9, weekdays: [] } }, { defaultEngine: { kind: 'acp', command: 'hermes', args: ['acp'] } }).defaultEngine)
       .toEqual({ kind: 'acp', command: 'hermes', args: ['acp'] });
+  });
+
+  it('turning bots on needs the plan consent: refused without it, taken with it (main\'s time), and bots on from before it stay on', async () => {
+    const s = new FactorySettingsStore(factorySettingsPath(dir));
+    s.load();
+    await expect(s.update({ enabled: true })).rejects.toThrow('turn bots on in the wmux app first');
+    expect(s.get()).toMatchObject({ enabled: false });
+    expect(s.get().planConsent).toBeUndefined();
+    const before = Date.now();
+    const on = await s.update({ enabled: true, planConsent: { version: BOTS_PLAN_CONSENT_VERSION, at: '2000-01-01T00:00:00.000Z' } });
+    expect(on).toMatchObject({ enabled: true, planConsent: { version: BOTS_PLAN_CONSENT_VERSION } });
+    expect(Date.parse(on.planConsent!.at)).toBeGreaterThanOrEqual(before);
+    // A settings file from before the consent: the bots stay on and other changes still apply.
+    fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: true }));
+    const legacy = new FactorySettingsStore(factorySettingsPath(dir));
+    expect(legacy.load()).toMatchObject({ enabled: true });
+    expect(legacy.get().planConsent).toBeUndefined();
+    await expect(legacy.update({ laneDailyCap: 3 })).resolves.toMatchObject({ enabled: true, laneDailyCap: 3 });
   });
 });

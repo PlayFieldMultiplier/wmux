@@ -42,8 +42,10 @@
 // `setFactoryBotPort` / `setFactorySettingsPort` replace a port outright
 // (tests, or a host that wires it another way).
 
-import type { BotEngine, BotProfile, BotStatus } from '../../../shared/bot';
+import type { BotEngine, BotProfile, BotStatus, BotWorkerAgent } from '../../../shared/bot';
+import type { BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import type { BotTaskView } from '../../../shared/botTask';
+import type { BotsPlanConsent } from '../../../shared/factorySettings';
 import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
@@ -81,6 +83,8 @@ export type BotAction = 'wake' | 'park' | 'resume' | 'interrupt';
  *  `budget.maxTurnsPerHour: null` removes the hourly cap. */
 export type BotProfilePatch = Partial<Pick<BotProfile, 'name' | 'enabled' | 'template'>> & {
   job?: string | null;
+  /** What the bot's workers run on; null puts them back on the default. */
+  workerAgent?: BotWorkerAgent | null;
   budget?: Partial<Omit<BotProfile['budget'], 'maxTurnsPerHour'>> & { maxTurnsPerHour?: number | null };
 };
 
@@ -112,6 +116,9 @@ export interface FactoryBotPort {
   /** Absent: no resume here. Relaunch the stopped worker of an ended task
    *  with the same conversation (main/factory/workerReclaim.ts). */
   resumeWorker?(taskId: string): Promise<{ ok: boolean; message?: string; workspaceId?: string }>;
+  /** Absent: no engine choice here. The engines a bot's workers may run on,
+   *  and which are installed. */
+  workerAgents?(): Promise<BotWorkerAgentOption[]>;
 }
 
 /** The factory settings the tab shows (main/factory/factorySettings.ts). */
@@ -133,6 +140,9 @@ export interface FactorySettingsView {
   laneDailyCap: number;
   /** The bot the phone talks to (absent: automatic); null in a patch clears it. */
   phoneBotId?: string | null;
+  /** The owner's consent that bots run on their own Claude plan
+   *  (Bots/BotsPlanConsent.tsx); turning bots on needs it. */
+  planConsent?: BotsPlanConsent;
 }
 
 export interface FactorySettingsPort {
@@ -157,6 +167,7 @@ interface FactoryBridge {
   stopAll?: () => Promise<FactoryStopResult>;
   stopBot?: (botId: string) => Promise<FactoryStopResult>;
   resumeWorker?: (taskId: string) => Promise<{ ok: boolean; message?: string; workspaceId?: string }>;
+  workerAgents?: () => Promise<BotWorkerAgentOption[]>;
 }
 
 function bridge(): FactoryBridge | null {
@@ -197,6 +208,7 @@ export function bridgeBotPort(): FactoryBotPort {
     ...(b.stopAll ? { stopAll: b.stopAll } : {}),
     ...(b.stopBot ? { stopBot: b.stopBot } : {}),
     ...(b.resumeWorker ? { resumeWorker: b.resumeWorker } : {}),
+    ...(b.workerAgents ? { workerAgents: b.workerAgents } : {}),
   };
 }
 

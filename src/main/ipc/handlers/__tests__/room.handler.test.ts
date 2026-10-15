@@ -177,7 +177,7 @@ describe('liveFactoryState', () => {
       await store.update({ enabled: false, hqWorkspaceId: 'ws-live' });
       setFactorySettingsStore(store);
       expect(liveFactoryState(() => dir)).toEqual({ enabled: false, hqWorkspaceId: null });
-      await store.update({ enabled: true });
+      await store.update({ enabled: true, planConsent: { version: 1, at: '2026-10-15T00:00:00.000Z' } });
       expect(liveFactoryState(() => dir).enabled).toBe(true);
     } finally {
       setFactorySettingsStore(null);

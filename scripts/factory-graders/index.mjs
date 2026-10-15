@@ -44,6 +44,7 @@ export const GRADERS = {
   'interrupted-wake-after-restart': wakes.interruptedAfterRestart,
   'repowatch-baseline-first-poll': lane.repoWatchBaseline,
   'lead-task-system-gate': handoffs.leadTaskSystemGate,
+  'bot-worker-codex-engine': handoffs.botWorkerCodexEngine,
   'approval-typed-merge': approvals.approvalTypedMerge,
   'approval-needs-owner-words': approvals.approvalNeedsOwnerWords,
   'approval-head-moved': approvals.approvalHeadMoved,

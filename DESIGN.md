@@ -376,7 +376,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   count) in the chat's 44px header row, the messages under it with no rule
   between. The pill opens
   the bot's profile (template, job — the owner's words, with Edit —
-  workspace, repository, on/off and presence, turns used and left today,
+  workspace, repository, what its workers run on — a native Select:
+  Default (the presets' engine) or an installed engine that has a worker
+  guard, one not installed listed but disabled — on/off and presence, turns used and left today,
   its routines, its connections — each library connection that applies to
   it, an every-bot one with a switch that turns it off for this bot alone,
   a picked one with Edit and Remove from this bot, then Add connection and

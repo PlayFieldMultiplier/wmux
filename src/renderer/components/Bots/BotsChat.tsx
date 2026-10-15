@@ -44,6 +44,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { RoomCard as RoomCardData, ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import Button from '../ui/Button';
+import Select from '../ui/Select';
 import Popover from '../ui/Popover';
 import { IconPlus } from '../icons';
 import { renderBrainMarkdown, type MarkdownOptions } from '../shared/BrainMarkdown';
@@ -60,6 +61,7 @@ import { PresenceDot, botPresence } from '../Room/BotChips';
 import { MentionChips, deliveryLine, deliveryTaken, roomBots, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, normalizeBotJob } from '../../../shared/bot';
+import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botIdentityColor } from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
@@ -1282,11 +1284,80 @@ function JobLine({ row, t, jobPort }: { row: FactoryBotRow; t: T; jobPort?: Pick
   );
 }
 
+/** What the bot's workers run on: the default (the presets' engine) or an
+ *  installed engine that has a worker guard, saved as the owner. Read-only
+ *  text when the port cannot update or list the engines. */
+function WorkerEngineLine({ row, t, port }: { row: FactoryBotRow; t: T; port?: Pick<FactoryBotPort, 'update' | 'workerAgents'> }) {
+  const [options, setOptions] = useState<BotWorkerAgentOption[] | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const list = port?.workerAgents;
+  const update = port?.update;
+  useEffect(() => {
+    if (!list) return;
+    let live = true;
+    list().then((o) => { if (live) setOptions(o); }, () => { if (live) setOptions([]); });
+    return () => { live = false; };
+  }, [list]);
+  const current = row.bot.workerAgent?.agent ?? '';
+  // A save in flight shows its value until the profile catches up.
+  useEffect(() => { if (pending !== null && pending === current) setPending(null); }, [pending, current]);
+  const defaultName = botWorkerAgentLabel(DEFAULT_BOT_WORKER_AGENT);
+  const label = t('botsPage.profile.workersRunOn');
+  if (!update || !list) {
+    return <ProfileLine label={label} value={<span data-bots-profile-workers-engine>{current ? botWorkerAgentLabel(current) : t('botsPage.profile.workersDefault', { name: defaultName })}</span>} />;
+  }
+  // Every guarded engine but the default's own (listed only when it is the
+  // stored pick), and the stored pick even when the list could not be read.
+  const listed = (options ?? []).filter((o) => o.agent !== DEFAULT_BOT_WORKER_AGENT || o.agent === current);
+  const choices = current && !listed.some((o) => o.agent === current)
+    ? [...listed, { agent: current, label: botWorkerAgentLabel(current), installed: false, supported: true }]
+    : listed;
+  const save = async (value: string) => {
+    setPending(value);
+    setError(null);
+    try {
+      const r = await update(row.bot.id, { workerAgent: value ? { agent: value } : null });
+      if (!r.ok) {
+        setPending(null);
+        setError(r.message || t('botsPage.profile.workersFailed'));
+      }
+    } catch (err) {
+      setPending(null);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const optionText = (o: BotWorkerAgentOption): string => {
+    if (!o.supported) return t('botsPage.profile.workersUnavailable', { name: o.label });
+    return o.installed ? o.label : t('botsPage.profile.workersNotInstalled', { name: o.label });
+  };
+  return (
+    <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-workers-engine>
+      <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{label}</span>
+      <div className="min-w-0 flex-1">
+        <Select
+          data-testid="bots-profile-workers-engine"
+          aria-label={label}
+          value={pending ?? current}
+          disabled={pending !== null || options === null}
+          onChange={(e) => void save(e.target.value)}
+        >
+          <option value="">{t('botsPage.profile.workersDefault', { name: defaultName })}</option>
+          {choices.map((o) => (
+            <option key={o.agent} value={o.agent} disabled={!o.installed || !o.supported}>{optionText(o)}</option>
+          ))}
+        </Select>
+        {error && <p role="alert" className="mt-1 text-[11px] text-[var(--accent-red)]">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 /** The bot's profile under its name pill: template, job (editable),
- *  workspace, repo, on/off, turns used and left today, its routines
+ *  workspace, repo, what its workers run on, on/off, turns used and left today, its routines
  *  (read-only), its connections, then what it can do (the shared powers,
  *  read-only), whom it reports to, its workers now, and Stop. */
-function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update'> }) {
+function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'> }) {
   const left = row.status?.budgetLeft?.turnsDay;
   const routines = (useBotRoutines()?.routines ?? []).filter((r) => r.botId === row.bot.id);
   const canDo = botCanDo(row.bot);
@@ -1298,6 +1369,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort }: { row
       <JobLine key={`${row.bot.id}:${row.bot.job ?? ''}`} row={row} t={t} jobPort={jobPort} />
       <ProfileLine label={t('botsPage.profile.workspace')} value={workspaceName} />
       <ProfileLine label={t('botsPage.profile.repo')} value={row.bot.repo?.repoKey ?? t('botsPage.profile.noRepo')} />
+      <WorkerEngineLine row={row} t={t} port={jobPort} />
       <ProfileLine label={t('botsPage.profile.state')} value={`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(`room.presence.${botPresence(row)}`)}`} />
       {typeof left === 'number' && (
         <ProfileLine
@@ -1365,7 +1437,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   stopPort?: BotsStopPort;
   /** The bot port's update: the profile's job editor and a job_changed
    *  card's Undo (absent: neither). */
-  jobPort?: Pick<FactoryBotPort, 'update'>;
+  jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'>;
   /** The bot port's resumeWorker: a done worker's Resume (absent: none). */
   resumePort?: Pick<FactoryBotPort, 'resumeWorker'>;
   /** Opens a bot's 1:1 (a room's "joined" line; absent: no link). */

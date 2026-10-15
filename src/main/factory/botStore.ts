@@ -11,7 +11,8 @@
 // Settings' Add bot) and `setAvatar`, both checked by botAvatar.ts; `update`
 // refuses it, so the pipe's bot.update never sets one. A picture that fails
 // the check on read is dropped and the bot kept; so is a job that fails
-// normalizeBotJob.
+// normalizeBotJob, and a worker agent (`workerAgent`, optional, owner-set
+// through `update`) that fails validateBotWorkerAgent.
 //
 // Any number of bots, of any template, may share a workspace. A profile
 // written before templates gets its template from its role on read
@@ -47,6 +48,7 @@ import { emptyUsage, pruneUsage, sanitizeUsage, type BotUsage } from './budget';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { LEGACY_TRIAGE_TRIGGERS, defaultTriggers } from './roleDefaults';
 import { parseBotAvatar } from './botAvatar';
+import { validateBotWorkerAgent } from '../../shared/botWorkerAgent';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -233,6 +235,9 @@ export function parseBotProfile(raw: unknown): BotProfile | null {
   // but not a template: Custom, which grants nothing beyond the shared set.
   const template: BotTemplate = r.template === undefined ? templateOfRole(r.role) : isBotTemplate(r.template) ? r.template : 'custom';
   const job = normalizeBotJob(r.job);
+  // What the workers run on: kept when it still validates, dropped (the bot
+  // kept, on the presets' engine) otherwise.
+  const workerAgent = r.workerAgent === undefined ? undefined : validateBotWorkerAgent(r.workerAgent);
   return {
     version: 1,
     id: r.id,
@@ -242,6 +247,7 @@ export function parseBotProfile(raw: unknown): BotProfile | null {
     name,
     ...(job ? { job } : {}),
     engine,
+    ...(workerAgent?.ok ? { workerAgent: workerAgent.value } : {}),
     triggers,
     budget,
     ...(repo ? { repo } : {}),
@@ -316,15 +322,18 @@ export interface BotCreateInput {
 }
 
 /** The fields `update` may change (identity — id, workspace, role — never).
- *  `job: null` clears the job; `template` changes what the bot is shown as
+ *  `job: null` clears the job, `workerAgent: null` puts the workers back on
+ *  the presets' engine; `template` changes what the bot is shown as
  *  and, for the Coordinator, its reads in other workspaces. */
-export const BOT_UPDATABLE_FIELDS = ['name', 'job', 'template', 'engine', 'triggers', 'budget', 'repo', 'enabled'] as const;
+export const BOT_UPDATABLE_FIELDS = ['name', 'job', 'template', 'engine', 'workerAgent', 'triggers', 'budget', 'repo', 'enabled'] as const;
 
 export interface BotStoreOptions {
   now?: () => number;
   newId?: () => string;
   /** Engine for a create that names none (factory settings). */
   defaultEngine?: () => BotEngine;
+  /** The host a worker agent is saved for (default: this one). */
+  platform?: string;
 }
 
 export function botsFilePath(wmuxDir: string): string {
@@ -338,6 +347,7 @@ export class BotStore implements BotDirectoryApi {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly defaultEngine: () => BotEngine;
+  private readonly platform: string;
   private readonly listeners = new Set<() => void>();
   /** Triage bots moved off the old default triggers by the last load. */
   private migrated: string[] = [];
@@ -346,6 +356,7 @@ export class BotStore implements BotDirectoryApi {
     this.now = opts.now ?? Date.now;
     this.newId = opts.newId ?? (() => `bot-${randomBytes(4).toString('hex')}`);
     this.defaultEngine = opts.defaultEngine ?? (() => ({ kind: 'claude-sdk' }));
+    this.platform = opts.platform ?? process.platform;
     this.persister = createFilePersister(file, () => this.snapshot());
   }
 
@@ -528,6 +539,15 @@ export class BotStore implements BotDirectoryApi {
       const engine = sanitizeBotEngine(patch.engine);
       if (!engine) return refuse('invalid_argument', 'engine is malformed');
       next.engine = engine;
+    }
+    if (patch.workerAgent !== undefined) {
+      if (patch.workerAgent === null) {
+        delete next.workerAgent;
+      } else {
+        const v = validateBotWorkerAgent(patch.workerAgent, this.platform);
+        if (!v.ok) return refuse('invalid_argument', v.error);
+        next.workerAgent = v.value;
+      }
     }
     if (patch.triggers !== undefined) {
       const triggers = sanitizeTriggers(patch.triggers);

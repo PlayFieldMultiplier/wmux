@@ -413,7 +413,10 @@ describe('FactoryTab', () => {
     const sw = container.querySelector<HTMLButtonElement>('[data-testid="factory-enabled"]')!;
     expect(sw.disabled).toBe(false);
     await act(async () => sw.click());
-    expect(settingsPort.set).toHaveBeenCalledWith({ enabled: true });
+    // The plan consent comes first; Turn on bots sends it with the switch.
+    expect(settingsPort.set).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-confirm"]')!.click());
+    expect(settingsPort.set).toHaveBeenCalledWith({ enabled: true, planConsent: expect.objectContaining({ version: 1 }) });
     expect(container.querySelector('[data-testid="factory-not-installed"]')).toBeNull();
   });
 });

@@ -127,6 +127,15 @@ afterEach(() => {
 
 const q = <E extends Element = HTMLElement>(sel: string) => container.querySelector<E & HTMLElement>(sel);
 const rowIds = () => [...container.querySelectorAll('[data-bots-row]')].map((el) => el.getAttribute('data-bots-row'));
+/** Answers the plan consent dialog that turning the bots on asks first. */
+async function acceptPlanConsent() {
+  for (let i = 0; i < 5 && !document.querySelector('[data-testid="bots-plan-consent"]'); i++) await act(async () => { await Promise.resolve(); });
+  const ok = document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-confirm"]');
+  expect(ok?.textContent).toBe('Turn on bots');
+  await act(async () => { ok!.click(); });
+}
+const ON_WITH_CONSENT = { enabled: true, planConsent: expect.objectContaining({ version: 1 }) };
+
 async function render(node: React.ReactNode) {
   await act(async () => { root.render(node); });
   await act(async () => { await Promise.resolve(); });
@@ -164,7 +173,8 @@ describe('Bots page', () => {
     expect(q<HTMLButtonElement>('[data-testid="bots-composer-send"]')!.disabled).toBe(true);
     expect(q('[data-testid="bots-composer-status"]')?.textContent).toBe('Bots are off. Turn bots on to message them.');
     await act(async () => { q('[data-bots-run]')!.click(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    await acceptPlanConsent();
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
   });
 
   it('with no bot yet: one centred panel, a name and Start, which turns the bots on, adds the bot here and opens its chat', async () => {
@@ -195,8 +205,9 @@ describe('Bots page', () => {
     });
     expect(start.disabled).toBe(false);
     await act(async () => { start.click(); });
+    await acceptPlanConsent();
     await act(async () => { await Promise.resolve(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(create).toHaveBeenCalledWith({ workspaceId: 'w1', name: 'Ada' });
     // Its chat opens at once, starting, before the list shows the bot.
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
@@ -238,8 +249,9 @@ describe('Bots page', () => {
     await act(async () => { answer({ ready: true }); });
     expect(team.disabled).toBe(false);
     await act(async () => { team.click(); });
+    await acceptPlanConsent();
     await act(async () => { await Promise.resolve(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(createTeam).toHaveBeenCalledWith({ workspaceId: 'w1', names: { coordinator: 'Lead', researcher: 'Research', developer: 'Developer', issue: 'Issues', reviewer: 'Reviewer' } });
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
   });
@@ -865,6 +877,52 @@ describe('Bots page', () => {
     expect(update).toHaveBeenCalledWith(LEAD, { job: 'Review PRs.' });
   });
 
+  it('the profile picks what the workers run on: default or an installed engine, saved through the bot port', async () => {
+    const update = vi.fn(async () => ({ ok: true }));
+    const workerAgents = vi.fn(async () => [
+      { agent: 'claude', label: 'Claude Code', installed: true, supported: true },
+      { agent: 'codex', label: 'Codex', installed: true, supported: true },
+    ]);
+    setFactoryBotPort({ ...port, update, workerAgents } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => q('[data-bots-pill]')!.click());
+    const profile = q(`[data-bots-profile="${LEAD}"]`)!;
+    const select = profile.querySelector<HTMLSelectElement>('[data-testid="bots-profile-workers-engine"]')!;
+    expect([...select.options].map((o) => [o.value, o.textContent, o.disabled])).toEqual([['', 'Default (Claude Code)', false], ['codex', 'Codex', false]]);
+    expect(select.value).toBe('');
+    await act(async () => {
+      select.value = 'codex';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(update).toHaveBeenCalledWith(LEAD, { workerAgent: { agent: 'codex' } });
+    // The pick shows at once, before the profile is read again.
+    expect(select.value).toBe('codex');
+  });
+
+  it('keeps a stored pick visible when the engines cannot be listed, and an explicit Claude pick', async () => {
+    bots = bots.map((r) => (r.bot.id === LEAD ? { ...r, bot: { ...r.bot, workerAgent: { agent: 'claude', model: 'opus' } } } : r));
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })), workerAgents: async () => { throw new Error('no'); } } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => q('[data-bots-pill]')!.click());
+    const select = q(`[data-bots-profile="${LEAD}"] [data-testid="bots-profile-workers-engine"]`) as HTMLSelectElement;
+    expect(select.value).toBe('claude');
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'claude']);
+  });
+
+  it('an engine that is not installed is listed but cannot be picked', async () => {
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })), workerAgents: async () => [{ agent: 'codex', label: 'Codex', installed: false, supported: true }] } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => q('[data-bots-pill]')!.click());
+    const select = q(`[data-bots-profile="${LEAD}"] [data-testid="bots-profile-workers-engine"]`) as HTMLSelectElement;
+    expect([...select.options].map((o) => [o.value, o.textContent, o.disabled])).toEqual([['', 'Default (Claude Code)', false], ['codex', 'Codex (not installed)', true]]);
+  });
+
   it('a bot without a job of its own shows its template\'s starting job, in the UI language', async () => {
     bots = bots.map((r) => (r.bot.id === MOA ? { ...r, bot: { ...r.bot, template: 'coordinator', job: undefined } } : r));
     seedRooms();
@@ -924,6 +982,51 @@ describe('Bots page', () => {
     expect(q('[data-bots-starting]')).not.toBeNull();
   });
 
+  it('bots on from before the plan consent: the page asks once; Keep bots on records it, Turn bots off turns them off, Cancel on a turn-on changes nothing', async () => {
+    seedRooms(true);
+    let stored: unknown = { enabled: true };
+    const settings = { available: true, get: vi.fn(async () => stored as never), set: vi.fn(async (p: object) => ({ enabled: true, ...p }) as never) };
+    await render(<BotsPage settings={settings} />);
+    const dialog = () => document.querySelector('[data-testid="bots-plan-consent"]');
+    expect(dialog()?.textContent).toContain('Bots run on your Claude plan');
+    expect(dialog()?.textContent).toContain('Their usage counts toward your Claude plan\'s limits.');
+    expect(document.querySelector('[data-testid="bots-plan-consent-cancel"]')?.textContent).toBe('Turn bots off');
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-confirm"]')!.click(); });
+    expect(settings.set).toHaveBeenCalledWith({ planConsent: expect.objectContaining({ version: 1 }) });
+    expect(dialog()).toBeNull();
+    // Opened again without consent: Escape decides later (nothing written), Turn bots off turns them off.
+    const reopen = async () => {
+      act(() => root.unmount());
+      root = createRoot(container);
+      await render(<BotsPage settings={settings} />);
+    };
+    settings.set.mockClear();
+    await reopen();
+    act(() => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(dialog()).toBeNull();
+    expect(settings.set).not.toHaveBeenCalled();
+    await reopen();
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-cancel"]')!.click(); });
+    expect(settings.set).toHaveBeenCalledWith({ enabled: false });
+    // Bots off: Turn bots on asks; Cancel leaves them off and writes nothing.
+    act(() => root.unmount());
+    root = createRoot(container);
+    settings.set.mockClear();
+    stored = null;
+    seedRooms(false);
+    const off = api();
+    off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
+    setRoomsApiForTests(off);
+    await render(<BotsPage settings={settings} />);
+    expect(dialog()).toBeNull();
+    await act(async () => { q('[data-bots-run]')!.click(); });
+    for (let i = 0; i < 5 && !dialog(); i++) await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[data-testid="bots-plan-consent-cancel"]')?.textContent).toBe('Cancel');
+    await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="bots-plan-consent-cancel"]')!.click(); });
+    expect(settings.set).not.toHaveBeenCalled();
+    expect(dialog()).toBeNull();
+  });
+
   it('"+" while the bots are off: Add asks once, in place, then turns them on and adds', async () => {
     const off = api();
     off.status = vi.fn(async () => ({ running: true, enabled: false, hqWorkspaceId: 'hq' })) as unknown as RoomsApi['status'];
@@ -945,8 +1048,9 @@ describe('Bots page', () => {
     expect(create).not.toHaveBeenCalled();
     expect(dialog.querySelector('[data-testid="factory-add-bot-on-confirm-row"]')?.textContent).toContain('Adding Triage turns bots on');
     await act(async () => { dialog.querySelector<HTMLButtonElement>('[data-testid="factory-add-bot-on-confirm"]')!.click(); });
+    await acceptPlanConsent();
     await act(async () => { await Promise.resolve(); });
-    expect(settings.set).toHaveBeenCalledWith({ enabled: true });
+    expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(create).toHaveBeenCalledTimes(1);
   });
 

@@ -52,7 +52,8 @@ import { BotConnectionsSection } from './BotConnectionsSection';
 import { InlineConfirm } from '../Bots/InlineConfirm';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
-import { createBot, turnBotsOn } from '../Bots/botsAddBot';
+import { createBot, turnBotsOn, type TurnBotsOnResult } from '../Bots/botsAddBot';
+import { botsOnPatch, useBotsPlanConsent } from '../Bots/BotsPlanConsent';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -332,9 +333,9 @@ export interface AddBotFormProps {
   pickFolder?: () => Promise<string | null>;
   /** The bots are off: Add asks once, in place, then turns them on. */
   botsOff?: boolean;
-  /** Turns the bots on (default: the factory settings port). False: main
-   *  did not take it. */
-  turnOn?: () => Promise<boolean>;
+  /** Turns the bots on, asking the plan consent when needed (default: the
+   *  factory settings port, which turns them on only with consent stored). */
+  turnOn?: () => Promise<TurnBotsOnResult>;
 }
 
 /** Why Add cannot be pressed, as one line's key, or null. Pure. */
@@ -482,8 +483,10 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
     setError(null);
     try {
       if (turnOnFirst) {
-        const turnOn = props.turnOn ?? (() => turnBotsOn(getFactorySettingsPort()));
-        if (!(await turnOn())) { setError(t('settings.factory.notStarted')); return; }
+        const turnOn = props.turnOn ?? (() => turnBotsOn(getFactorySettingsPort(), async () => false));
+        const on = await turnOn();
+        if (on === 'declined') return;
+        if (on !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
       const r = await createBot(port, {
         workspaceId,
@@ -508,8 +511,10 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
     setError(null);
     try {
       if (turnOnFirst) {
-        const turnOn = props.turnOn ?? (() => turnBotsOn(getFactorySettingsPort()));
-        if (!(await turnOn())) { setError(t('settings.factory.notStarted')); return; }
+        const turnOn = props.turnOn ?? (() => turnBotsOn(getFactorySettingsPort(), async () => false));
+        const on = await turnOn();
+        if (on === 'declined') return;
+        if (on !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
       const r = await port.createTeam({ workspaceId, names: teamNames(t), ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
       // The team's lead is the one to talk to: its chat opens.
@@ -652,7 +657,7 @@ function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pick
   defaultWorkspaceId: string;
   pickFolder: () => Promise<string | null>;
   botsOff: boolean;
-  turnOn: () => Promise<boolean>;
+  turnOn: () => Promise<TurnBotsOnResult>;
 }) {
   const rows = useFactoryBots(null, port);
   const [editing, setEditing] = useState<string | null>(null);
@@ -768,12 +773,21 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
     }
     if ('enabled' in p) void refreshRoomStatus();
   };
+  // Turning the bots on asks the plan consent first when it is not stored.
+  const consent = useBotsPlanConsent(t);
+  const setEnabled = async (on: boolean) => {
+    if (!on) return patch({ enabled: false });
+    const p = await botsOnPatch(settings, consent.confirmOn);
+    if (p) await patch(p);
+  };
   // "Add bot" while the bots are off turns them on (after its confirm).
-  const turnOn = async (): Promise<boolean> => {
-    const next = await sPort.set({ enabled: true });
+  const turnOn = async (): Promise<TurnBotsOnResult> => {
+    const p = await botsOnPatch(settings, consent.confirmOn);
+    if (!p) return 'declined';
+    const next = await sPort.set(p);
     if (next) setSettings(next);
     void refreshRoomStatus();
-    return !!next?.enabled;
+    return next?.enabled ? 'on' : 'failed';
   };
 
   const off = !sPort.available || !settings;
@@ -787,7 +801,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
       )}
       <SettingsSection title={t('settings.factory.section')}>
         <SettingRow id="factoryswitch" label={t('settings.factory.enabled')} description={t('settings.factory.enabledDesc')}>
-          <Switch checked={settings?.enabled === true} disabled={off} onCheckedChange={(v) => void patch({ enabled: v })} data-testid="factory-enabled" />
+          <Switch checked={settings?.enabled === true} disabled={off} onCheckedChange={(v) => void setEnabled(v)} data-testid="factory-enabled" />
         </SettingRow>
         <SettingRow id="factorytrustedauthors" label={t('settings.factory.trustedAuthors')} description={t('settings.factory.trustedAuthorsDesc')}>
           <Input
@@ -900,6 +914,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder }: FactoryTabProp
       <BotConnectionsSection t={t} />
       <ApprovalRules t={t} botName={botName} workspaceName={workspaceName} />
       <BotSecretsSection t={t} />
+      {consent.dialog}
     </div>
   );
 }
