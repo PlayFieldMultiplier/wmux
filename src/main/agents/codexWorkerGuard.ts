@@ -96,6 +96,9 @@ export interface CodexWorkerGuardDeps {
   mcpEntry?: () => string | null;
   /** The instance data dir (default: getWmuxDir()): connections' run folders. */
   dir?: string;
+  /** Codex's system config folder (default /etc/codex), whose config.toml
+   *  and managed_config.toml codex loads with the user's. */
+  systemCodexDir?: string;
   /** A re-fire's or resume's connections (default: the task's, from the
    *  ledger, still this bot's in the library). */
   sessionConnectors?: (record: { workspaceId?: string }) => Connector[];
@@ -387,10 +390,12 @@ async function guardedCodexLine(
   const roots = codexWorkerWritableRoots(gitDir, commonDir);
   if (!roots) throw refuse('the worker\'s folder is not a linked git worktree');
   // The worker's MCP servers: wmux and the task's connections, every other
-  // server of the owner's config off (an override of a server the config
-  // does not define stops codex, so the names come from that config).
-  const ownerServers = codexMcpServerNames(configPath);
-  if (ownerServers === null) throw refuse('the codex config could not be read, so its MCP servers could not be turned off');
+  // server of the owner's and the system's codex config off (an override of
+  // a server no config defines stops codex, so the names come from them).
+  const system = deps.systemCodexDir ?? '/etc/codex';
+  const layers = [configPath, path.join(system, 'config.toml'), path.join(system, 'managed_config.toml')].map(codexMcpServerNames);
+  if (layers.some((l) => l === null)) throw refuse('a codex config could not be read, so its MCP servers could not be turned off');
+  const ownerServers = [...new Set(layers.flatMap((l) => l ?? []))];
   const clash = connectors.find((c) => ownerServers.includes(c.name));
   if (clash) throw refuse(`the codex config has its own server named ${clash.name}, the name of a connection`);
   const unnamed = ownerServers.filter((n) => n !== 'wmux' && !/^[A-Za-z0-9_-]{1,64}$/.test(n));

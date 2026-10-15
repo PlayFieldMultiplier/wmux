@@ -290,13 +290,21 @@ describe('a codex worker\'s MCP servers', () => {
     expect(without).toBe(plain!.initialCommand);
   });
 
-  posixOnly('refuses a connection named like an owner server, an SSE one, and a config it cannot read', async () => {
+  posixOnly('refuses a connection named like an owner or system server, an SSE one, and a config it cannot read; turns system servers off', async () => {
     const h = home();
     const env = { CODEX_HOME: h };
     const clash = { strict: true, spawns: [{ botId: 'bot-00000001', connectors: [{ ...gh, name: 'node_repl' }] }] };
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, clash, deps)).rejects.toThrow(/its own server named node_repl/);
     const sse = { strict: true, spawns: [{ botId: 'bot-00000001', connectors: [{ ...gh, transport: 'sse' as const }] }] };
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, sse, deps)).rejects.toThrow(/SSE/);
+    // The system config's servers count too.
+    const system = path.join(root, 'etc-codex');
+    fs.mkdirSync(system, { recursive: true });
+    fs.writeFileSync(path.join(system, 'config.toml'), '[mcp_servers.corp]\ncommand = "x"\n');
+    const corp = await guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, strict, { ...deps, systemCodexDir: system });
+    expect(corp!.initialCommand).toContain('-c mcp_servers.corp.enabled=false');
+    const corpClash = { strict: true, spawns: [{ botId: 'bot-00000001', taskId: 'wtask-1', connectors: [{ ...gh, name: 'corp' }] }] };
+    await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, corpClash, { ...deps, systemCodexDir: system })).rejects.toThrow(/its own server named corp/);
     fs.writeFileSync(path.join(h, 'config.toml'), '[mcp_servers.x\n');
     await expect(guardCodexBotWorker({ initialCommand: line(), cwd: wt, env }, strict, deps)).rejects.toThrow(/could not be read/);
     fs.writeFileSync(path.join(h, 'config.toml'), '[mcp_servers."my server"]\ncommand = "x"\n');
