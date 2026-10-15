@@ -33,6 +33,7 @@ import {
   ROOM_EVENT,
   ROOM_LIMITS,
   ROOM_RPC,
+  dmThreadBot,
   parseThreadId,
   type CardKind,
   type RoomCard,
@@ -155,8 +156,12 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     if (p.workspaceId !== undefined && p.workspaceId !== bot.workspaceId) {
       return refusal('cross_workspace', 'a bot posts into its own workspace\'s room');
     }
-    // Main pins the thread: the one named, else the running wake's.
-    const threadId = namedThread ?? runningWakeThread(ports, bot.botId) ?? GENERAL_THREAD;
+    // Main pins the thread: the one named, else the running wake's. Another
+    // bot's 1:1 is named only from the wake running in it.
+    const wakeThread = runningWakeThread(ports, bot.botId);
+    const dmOf = dmThreadBot(namedThread);
+    if (dmOf && dmOf !== bot.botId && namedThread !== wakeThread) return refusal('invalid', 'a bot posts in its own 1:1 thread only');
+    const threadId = namedThread ?? wakeThread ?? GENERAL_THREAD;
     const wake = runningWake(ports, bot.botId);
     const clientPostId = p.clientPostId ?? wakeOrdinals.next(wake, 'post');
     // A card the bot names no parent for answers the owner message its wake

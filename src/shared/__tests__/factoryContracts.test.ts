@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FACT_KINDS, factDedupeKey, isFactKind, type FactKind } from '../facts';
-import { parseThreadId, prThreadId, issueThreadId, taskOriginThread, taskThreadOf } from '../room';
+import { dmThreadBot, dmThreadId, parseThreadId, prThreadId, issueThreadId, taskOriginThread, taskThreadOf } from '../room';
 import { normalizeRepoKey } from '../repoKey';
 import {
   BOT_JOB_MAX,
@@ -77,6 +77,14 @@ describe('thread ids', () => {
     expect(parseThreadId('pr:a/b#12')).toBe('pr:github.com/a/b#12');
     expect(parseThreadId(prThreadId('github.com/a/b', 5))).toBe('pr:github.com/a/b#5');
     expect(parseThreadId(issueThreadId('github.com/a/b', 3))).toBe('issue:github.com/a/b#3');
+  });
+
+  it('a bot\'s 1:1 thread is dm:<bot id>, and nothing else after dm: parses', () => {
+    expect(dmThreadId('bot-0a1b2c3d')).toBe('dm:bot-0a1b2c3d');
+    expect(parseThreadId('dm:bot-0a1b2c3d')).toBe('dm:bot-0a1b2c3d');
+    expect(dmThreadBot('dm:bot-0a1b2c3d')).toBe('bot-0a1b2c3d');
+    for (const v of ['dm:', 'dm:bot-XYZ', 'dm:moa', 'dm:bot-0a1b2c3d/x']) expect(parseThreadId(v), v).toBeNull();
+    for (const v of ['general', 'task:t-1', 'dm:nope', undefined]) expect(dmThreadBot(v)).toBeNull();
   });
 
   it('one PR is one thread however its repo key is spelled', () => {

@@ -463,12 +463,12 @@ describe('phone → HQ bot', () => {
     expect(factoryPhoneMessage(payload, deps({ bots: [] }).d)).toEqual({ ok: false, code: 'hq_missing' });
   });
 
-  it('on: a human card in the HQ room, a directed fact and one priority-0 phone wake; a retry queues nothing more', () => {
+  it('on: a human card in the HQ bot\'s 1:1 thread, a directed fact and one priority-0 phone wake pinned there; a retry queues nothing more', () => {
     const { d, writer, queue } = deps();
     expect(factoryPhoneMessage(payload, d)).toEqual({ ok: true, accepted: true, queued: true });
     const cards = writer.read('ws-hq').cards;
-    expect(cards).toMatchObject([{ kind: 'human', title: 'What is blocked today?', refs: { botId: moa.id } }]);
-    expect(queue.list({ states: ['queued'] })).toMatchObject([{ botId: moa.id, priority: 0, reason: { kind: 'human', source: 'phone' } }]);
+    expect(cards).toMatchObject([{ kind: 'human', threadId: `dm:${moa.id}`, title: 'What is blocked today?', refs: { botId: moa.id } }]);
+    expect(queue.list({ states: ['queued'] })).toMatchObject([{ botId: moa.id, priority: 0, threadId: `dm:${moa.id}`, reason: { kind: 'human', source: 'phone' } }]);
     expect(log.readSince('0').facts).toMatchObject([{ kind: 'human.message', ref: { botId: moa.id }, payload: { source: 'phone' } }]);
     // A retry is the same queued wake, not a second one.
     expect(factoryPhoneMessage(payload, d)).toEqual({ ok: true, accepted: true, queued: true });

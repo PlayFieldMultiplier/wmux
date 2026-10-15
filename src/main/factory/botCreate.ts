@@ -32,6 +32,7 @@ import { TEAM_TEMPLATES, type FactoryBotCreateResult, type FactoryBotCreateTeamR
 import { BOTS_MAX } from './botStore';
 import type { WakeItem } from '../../shared/wake';
 import { normalizeRepoKey } from '../../shared/repoKey';
+import { dmThreadId } from '../../shared/room';
 import { git as runGit, type GitResult } from '../git/git';
 import { parseRemoteKey } from '../github/PrProvider';
 import type { WorkspaceListEntry } from '../../shared/workspaceMirror';
@@ -186,14 +187,16 @@ export async function createTeamFromFolder(
 }
 
 /** Queue a new bot's first wake (`intro`: greet the owner, ask what to do
- *  with choices). Deduped by its reason key, so it runs once. Returns the
- *  item, or null when nothing was queued (no queue yet, bot disabled). */
+ *  with choices), pinned to the bot's 1:1 thread: the greeting is said to
+ *  the owner there, never in the room's General. Deduped by its reason key,
+ *  so it runs once. Returns the item, or null when nothing was queued (no
+ *  queue yet, bot disabled). */
 export function greetNewBot(
   bot: Pick<BotProfile, 'id' | 'workspaceId' | 'enabled'>,
   enqueue: ((input: WakeEnqueueInput) => WakeItem | null) | null,
 ): WakeItem | null {
   if (!bot.enabled || !enqueue) return null;
-  return enqueue({ botId: bot.id, workspaceId: bot.workspaceId, reason: { kind: 'intro' }, priority: 0 });
+  return enqueue({ botId: bot.id, workspaceId: bot.workspaceId, reason: { kind: 'intro' }, priority: 0, threadId: dmThreadId(bot.id) });
 }
 
 export interface BotRepoSuggestDeps extends BotRepoDeps {

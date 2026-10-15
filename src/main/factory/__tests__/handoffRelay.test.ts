@@ -514,6 +514,33 @@ describe('the General card that points at a coordinator\'s thread', () => {
     expect(r.rooms.read('ws1', { threadId: ownThread }).cards[0].refs?.requestCardId).toBeUndefined();
   });
 
+  it('work the lead takes on in its 1:1 opens its own thread, linked to the owner\'s 1:1 message; its pointer lands in the 1:1, never in General', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const dm = `dm:${t.lead.id}` as ThreadId;
+    const request = r.rooms.append({ workspaceId: 'ws1', threadId: dm, kind: 'human', actor: { kind: 'human' }, title: 'Add a --version flag', refs: { botId: t.lead.id } })!;
+    r.run(t.lead, owner(), { runId: `run-${request.id}` }, dm);
+    const d = r.router.send(binding(t.lead), { kind: 'dispatch', toBotId: t.dev.id, title: 'Add the flag', body: 'b' });
+    if (!d.ok) throw new Error('refused');
+    r.running.delete(t.lead.id);
+    await r.router.idle();
+    const root = r.router.get(d.handoffId)!;
+    expect(root).toMatchObject({ threadId: `handoff:${d.handoffId}`, opensThread: true, openedIn: dm });
+    expect(r.rooms.read('ws1', { threadId: root.threadId }).cards[0].refs?.requestCardId).toBe(request.id);
+    const res = answer(r, t.dev, root, 'Added');
+    if (!res.ok) throw new Error('refused');
+    await r.router.idle();
+    expect(r.rooms.read('ws1', { threadId: dm }).cards.filter((c) => c.refs?.threadId === root.threadId))
+      .toEqual([expect.objectContaining({ title: 'Finished: Add the flag', replyTo: request.id })]);
+    expect(pointers(r, root.threadId)).toEqual([]);
+    // The 1:1 it was opened from survives a restart.
+    const again = await rig(t.all);
+    await again.router.idle();
+    expect(again.router.get(d.handoffId)?.openedIn).toBe(dm);
+    // A bot names another bot's 1:1 only from a wake running in it.
+    expect(r.router.send(binding(t.dev), { kind: 'message', toBotId: t.lead.id, title: 'hi', body: '', threadId: dm })).toMatchObject({ ok: false });
+  });
+
   it('a stopped relay points there too, once: "Stopped: <title>"', async () => {
     const t = team();
     const r = await rig(t.all);

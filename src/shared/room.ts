@@ -2,13 +2,15 @@
 //
 // A room is one workspace's timeline (`getWmuxDir()/factory/rooms/<ws>.jsonl`,
 // main-owned). A thread is the room's sub-timeline for one PR, issue, task,
-// handoff, plan or report; `general` is the room itself. Bots write cards
+// handoff, plan or report, or a bot's 1:1 with the owner (`dm:<botId>`);
+// `general` is the room itself. Bots write cards
 // with `room.post`; facts become compact `fact` cards; an `ask_person` lands
 // as a `question` card backed by a WorkspaceDecision in the same thread.
 
 import type { FactRef } from './facts';
 import type { Party } from './handoff';
 import { normalizeRepoKey } from './repoKey';
+import { BOT_ID_RE } from './bot';
 
 export type ThreadId =
   | `pr:${string}#${number}`
@@ -17,6 +19,8 @@ export type ThreadId =
   | `handoff:${string}`
   | `plan:${string}`
   | `report:${string}`
+  /** A bot's 1:1 with the owner (`dm:<botId>`), in the bot's own room. */
+  | `dm:${string}`
   | 'general';
 
 export const GENERAL_THREAD: ThreadId = 'general';
@@ -38,7 +42,22 @@ export function parseThreadId(value: unknown): ThreadId | null {
   }
   const opaque = /^(task|handoff|plan|report):(.+)$/.exec(value);
   if (opaque) return OPAQUE_RE.test(opaque[2]) ? (value as ThreadId) : null;
+  const dm = /^dm:(.+)$/.exec(value);
+  if (dm) return BOT_ID_RE.test(dm[1]) ? (value as ThreadId) : null;
   return null;
+}
+
+/** A bot's 1:1 thread: what the owner and that bot say to each other, apart
+ *  from the room's General. */
+export function dmThreadId(botId: string): ThreadId {
+  return `dm:${botId}`;
+}
+
+/** The bot whose 1:1 a thread is, or null when it is no 1:1 thread. */
+export function dmThreadBot(threadId: unknown): string | null {
+  if (typeof threadId !== 'string' || !threadId.startsWith('dm:')) return null;
+  const botId = threadId.slice(3);
+  return BOT_ID_RE.test(botId) ? botId : null;
 }
 
 /** A repo key as a thread names it (shared/repoKey.ts normalizeRepoKey) —

@@ -394,6 +394,22 @@ describe('a bot\'s reply links the owner message its wake answers', () => {
     expect((await r.reply(lead, { title: 'handoff work' })).card.replyTo).toBeUndefined();
   });
 
+  it('a 1:1: the owner\'s post in dm:<bot> wakes that bot alone, pinned there, and its reply stays in the 1:1', async () => {
+    const lead = bot('ws1', 'lead');
+    const dev = bot('ws1', 'maintainer');
+    const r = rig([lead, dev]);
+    // Whatever else it names, a 1:1 message is for its bot.
+    const m = await r.owner('fix the login', { threadId: `dm:${dev.id}`, mentions: [lead.id] });
+    expect(m).toMatchObject({ threadId: `dm:${dev.id}`, refs: { botId: dev.id } });
+    expect(r.wakes.map((w) => [w.botId, w.threadId])).toEqual([[dev.id, `dm:${dev.id}`]]);
+    r.run(1);
+    expect((await r.reply(dev)).card).toMatchObject({ threadId: `dm:${dev.id}`, replyTo: m.id });
+    expect(r.writer.read('ws1', { threadId: 'general' }).cards).toEqual([]);
+    // Another bot does not post into this 1:1; a 1:1 lives in its bot's room.
+    expect(await handleRoomPost({ kind: 'status', title: 'x', threadId: `dm:${dev.id}` }, asBot(lead), r.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    expect(await handleRoomPost({ workspaceId: 'ws2', kind: 'human', title: 'x', threadId: `dm:${dev.id}` }, OPERATOR, r.deps)).toMatchObject({ ok: false, code: 'invalid' });
+  });
+
   it('two owner messages back to back: each wake\'s cards answer its own message', async () => {
     const lead = bot('ws1', 'lead');
     const r = rig([lead]);

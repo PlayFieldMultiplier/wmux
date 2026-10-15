@@ -338,11 +338,11 @@ describe('factorySettingsSetHandler (IPC guard)', () => {
 });
 
 describe('greetNewBot', () => {
-  it('queues one intro wake for an enabled bot, and none for a disabled bot or without a queue', () => {
+  it('queues one intro wake for an enabled bot, pinned to its 1:1 thread, and none for a disabled bot or without a queue', () => {
     const enqueue = vi.fn((input: unknown) => ({ id: 'w-1', ...(input as object) }) as never);
     const bot = { id: 'bot-0a1b2c3d', workspaceId: 'ws-1', enabled: true };
     expect(greetNewBot(bot, enqueue)).toMatchObject({ id: 'w-1' });
-    expect(enqueue).toHaveBeenCalledWith({ botId: 'bot-0a1b2c3d', workspaceId: 'ws-1', reason: { kind: 'intro' }, priority: 0 });
+    expect(enqueue).toHaveBeenCalledWith({ botId: 'bot-0a1b2c3d', workspaceId: 'ws-1', reason: { kind: 'intro' }, priority: 0, threadId: 'dm:bot-0a1b2c3d' });
     expect(greetNewBot({ ...bot, enabled: false }, enqueue)).toBeNull();
     expect(greetNewBot(bot, null)).toBeNull();
     expect(enqueue).toHaveBeenCalledTimes(1);

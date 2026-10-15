@@ -15,6 +15,10 @@
 //              oldest; the team's lead hands the work on), else every enabled
 //              bot of the workspace (the oldest ROOM_LIMITS.MENTIONS_MAX).
 //
+// A message posted in a bot's 1:1 thread (`dm:<botId>`) is for that bot
+// alone, whatever else it names; the bot must live in that room. Its wake is
+// pinned to the thread, so the bot answers in the 1:1, not in General.
+//
 // The card keeps the addressees main settled on (`refs.botIds`, and
 // `refs.botId` when there is exactly one, so a 1:1 stays a 1:1). Every wake
 // of one message carries the same runId (`run-<cardId>`), so the handoffs its
@@ -33,7 +37,7 @@
 import type { BotProfile, BotRole } from '../../shared/bot';
 import { BOT_ID_RE, isBotRole, isCoordinatorBot } from '../../shared/bot';
 import type { FactDraft } from '../../shared/facts';
-import { GENERAL_THREAD, ROOM_LIMITS, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, type RoomCard, type ThreadId } from '../../shared/room';
 import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
 
@@ -219,7 +223,13 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     };
   };
 
-  const { bots: to, room, lead } = humanAddressees(ports.bots, workspaceId, { mentions: input.mentions, toBotId: input.toBotId, to: input.to });
+  // A 1:1 thread names its one addressee.
+  const dmBot = dmThreadBot(threadId);
+  if (dmBot && safeGet(ports, dmBot)?.workspaceId !== workspaceId) {
+    return { ok: false, code: 'invalid', message: 'a 1:1 thread is in its bot\'s own room' };
+  }
+  const addressing = dmBot ? { mentions: [dmBot] } : { mentions: input.mentions, toBotId: input.toBotId, to: input.to };
+  const { bots: to, room, lead } = humanAddressees(ports.bots, workspaceId, addressing);
   const botIds = to.map((b) => b.id);
   const refs: RoomCard['refs'] = { ...(input.refs ?? {}) };
   delete refs.botId;
@@ -252,7 +262,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     const said = input.wakeText?.trim() && card.body !== undefined && capBody(input.wakeText) === card.body ? input.wakeText.trim() : fromCard;
     // A message to the room keeps the mode it was posted with: its
     // coordinator alone, or every bot it named.
-    const roomWide = !input.mentions?.length && input.toBotId === undefined && input.to === undefined;
+    const roomWide = !dmBot && !input.mentions?.length && input.toBotId === undefined && input.to === undefined;
     const sentToLead = roomWide && ids.length === 1 && isCoordinatorBot(safeGet(ports, ids[0]));
     const results: HumanAddresseeResult[] = [];
     for (const id of ids) {

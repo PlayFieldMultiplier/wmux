@@ -51,7 +51,7 @@ import type { MoaWakePayload, MoaWakeResult } from '../../shared/moaWake';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
 import type { FactorySettings } from '../../shared/factorySettings';
-import { ROOM_LIMITS } from '../../shared/room';
+import { ROOM_LIMITS, dmThreadId } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
@@ -380,6 +380,8 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
   const clientPostId = `phone:${actor}:${payload.clientMessageId}`.slice(0, ROOM_LIMITS.CLIENT_ID_MAX);
   const r = postHumanMessage(writer, ports, {
     workspaceId: bot.workspaceId,
+    // The phone's chat with its bot is that bot's 1:1, as on the desktop.
+    threadId: dmThreadId(bot.id),
     title: oneLine(payload.text, ROOM_LIMITS.TITLE_MAX) || 'Message',
     body: capBody(payload.text),
     // The card holds a capped copy; the bot's wake carries the whole message.
