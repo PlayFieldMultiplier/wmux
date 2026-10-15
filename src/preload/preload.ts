@@ -1689,6 +1689,11 @@ const electronAPI = {
     setTitleBarOverlay: (opts: { color: string; symbolColor: string }) => {
       ipcRenderer.send(IPC.WINDOW_SET_TITLEBAR_OVERLAY, opts);
     },
+    // macOS window glass: match the app's appearance to the theme so the
+    // material behind the window has the theme's tone. Main validates it.
+    setAppearance: (appearance: 'dark' | 'light') => {
+      ipcRenderer.send(IPC.WINDOW_SET_APPEARANCE, appearance);
+    },
     // Whole-interface zoom (#822): push the persisted factor to main, which
     // scales the renderer and re-places the native chrome. The overlay color
     // pair is the same theme colors sent to setTitleBarOverlay (Windows only).

@@ -3602,6 +3602,8 @@ function TabAppearance() {
   const attentionBlinkRemindMs = useStore((s) => s.attentionBlinkRemindMs);
   const setAttentionBlinkRemindMs = useStore((s) => s.setAttentionBlinkRemindMs);
   const attentionBlinkFinished = useStore((s) => s.attentionBlinkFinished);
+  const windowGlass = useStore((s) => s.windowGlass);
+  const setWindowGlass = useStore((s) => s.setWindowGlass);
   const setAttentionBlinkFinished = useStore((s) => s.setAttentionBlinkFinished);
   const workspaceSettleIdleDays = useStore((s) => s.workspaceSettle.idleDays);
   const fleetLayout = useStore((s) => s.fleetLayout);
@@ -3719,6 +3721,20 @@ function TabAppearance() {
             </span>
           </div>
         </SettingRow>
+        {/* macOS only: the window material is a macOS feature. */}
+        {window.electronAPI?.platform === 'darwin' && (
+          <SettingRow id="windowglass" label={t('settings.windowGlass')} description={t('settings.windowGlassDesc')}>
+            <SegmentedControl
+              value={windowGlass}
+              onValueChange={setWindowGlass}
+              options={[
+                { value: 'off', label: t('settings.windowGlassOff') },
+                { value: 'soft', label: t('settings.windowGlassSoft') },
+                { value: 'clear', label: t('settings.windowGlassClear') },
+              ]}
+            />
+          </SettingRow>
+        )}
         <SettingRow id="chrome" label={t('settings.chromePreset')} description={t('settings.chromePresetDesc')}>
           <ChromePresetActionsView onApply={applyChromePresetWithFeedback} />
         </SettingRow>

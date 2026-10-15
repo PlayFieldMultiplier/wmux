@@ -13,11 +13,12 @@ import './styles/onboarding.css';
 // and the screen disagree until the user touches the theme picker.
 // loadSession overrides this with the persisted choice moments later.
 document.documentElement.setAttribute('data-theme', useStore.getState().theme);
+document.documentElement.setAttribute('data-glass-level', useStore.getState().windowGlass);
 
 // Undo any programmatic scroll of the page chrome (#1679) — see pinChromeScroll.
 installChromeScrollPin();
 
-// Translucent chrome over the macOS window material while the theme is dark.
+// Translucent chrome over the macOS window material, in the theme's appearance.
 installWindowGlass();
 
 const root = createRoot(document.getElementById('root')!);

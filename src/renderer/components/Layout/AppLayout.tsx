@@ -457,6 +457,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     attentionBlink: state.attentionBlink,
     attentionBlinkRemindMs: state.attentionBlinkRemindMs,
     attentionBlinkFinished: state.attentionBlinkFinished,
+    windowGlass: state.windowGlass,
     sidebarSortMode: state.sidebarSortMode,
     sidebarSortModeChosen: state.sidebarSortModeChosen,
     sidebarPinnedIds: state.sidebarPinnedIds,
@@ -2090,7 +2091,7 @@ export default function AppLayout() {
       <ErrorBoundary name="Main">
       {/* `relative` anchors ToolbarHost: the agent toolbar overlays this column
           rather than taking a row, so revealing it never resizes a PTY. */}
-      <div className="flex-1 min-w-0 flex flex-col relative">
+      <div className="wmux-main-column flex-1 min-w-0 flex flex-col relative">
         {/* P1.5 — the status strip moved into the Titlebar (owner feedback:
             the empty titlebar center + a second status row doubled the top
             chrome). This column now starts directly with the pane area. */}

@@ -2314,6 +2314,30 @@ html[data-fullscreen] .wmux-shell-body {
 .wmux-rail > div:last-child { border-top: 0; }
 .wmux-frame-row > .wmux-shell-body { margin-left: 0; }
 .wmux-frame-row.flex-row-reverse > .wmux-shell-body { margin-left: var(--sheet-inset); margin-right: 0; }
+/* The sheet meets the window's right and bottom edges: no margin there, its
+ * rounded corners kept. */
+.wmux-shell-body,
+.wmux-shell-body.flex-row-reverse,
+.wmux-frame-row > .wmux-shell-body,
+.wmux-frame-row.flex-row-reverse > .wmux-shell-body {
+  margin: 0;
+}
+/* Inside the sheet the panes round off where they meet the sidebar, with a
+ * hairline that follows the curve. */
+.wmux-shell-body .wmux-main-column {
+  border-left: 1px solid var(--sheet-edge);
+  border-radius: var(--sheet-radius) 0 0 var(--sheet-radius);
+  background-color: var(--bg-base);
+  overflow: clip;
+}
+.wmux-shell-body.flex-row-reverse .wmux-main-column {
+  border-left: 0;
+  border-right: 1px solid var(--sheet-edge);
+  border-radius: 0 var(--sheet-radius) var(--sheet-radius) 0;
+}
+.wmux-shell-body .wmux-sidebar { box-shadow: none !important; }
+.wmux-shell-body { background: var(--bg-mantle); }
+.wmux-rail { padding-bottom: 0; }
 
 /* ─── Detail pass: one boundary per element ───────────────────────────────────
  * Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/app/shell/Sidebar.tsx,
