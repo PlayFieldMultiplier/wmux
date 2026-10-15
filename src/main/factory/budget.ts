@@ -133,6 +133,15 @@ export function recordTurn(usage: BotUsage, now: number): void {
   usage.turns.push(now);
 }
 
+/** Give back the turn recorded at `at` (a turn that never reached the model:
+ *  the network failed). Returns false when none was recorded then. */
+export function unrecordTurn(usage: BotUsage, at: number): boolean {
+  const i = usage.turns.lastIndexOf(at);
+  if (i < 0) return false;
+  usage.turns.splice(i, 1);
+  return true;
+}
+
 /** A task's worker starts once: a second start of the same task records
  *  nothing. `resumed`: the task's stopped worker runs again, a new interval
  *  (unless one is still open). */

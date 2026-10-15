@@ -493,6 +493,8 @@ describe('BotRuntime', () => {
     expect(r.queue.get(item.id)).toMatchObject({ state: 'queued', attempts: 0, notBefore: clock + TRANSIENT_RETRY_BASE_MS });
     expect(r.store.get(id)?.parked).toBeUndefined();
     expect(hooks.some((h) => h.type === 'bot.error')).toBe(false);
+    // The turn never reached the model: it is not charged to the budget.
+    expect(r.store.usageOf(id).turns).toHaveLength(0);
     expect(r.runtime.status(id)?.lastError?.message).toMatch(/ENOTFOUND.*retrying in 30s/);
     // Nothing runs before the wait is over; then the same wake runs again.
     expect(r.adapters[0].prompts).toHaveLength(1);
@@ -508,19 +510,25 @@ describe('BotRuntime', () => {
   it('network retries are bounded: past TRANSIENT_RETRY_MAX the wake fails like any error', async () => {
     const timers: Array<{ fn: () => void; at: number }> = [];
     const r = rig({ timers });
-    const id = createBot(r);
-    const item = must(r.runtime.wake(id));
+    // A maintainer runs on four turns a day: the retries must not spend them.
+    const id = createBot(r, 'maintainer');
+    const item = must(r.runtime.wake(id, { text: 'refresh the map' }));
     await settle();
     for (let i = 0; i < TRANSIENT_RETRY_MAX + 2; i++) {
       r.adapters[0].end([{ type: 'error', message: 'request failed: connect ECONNREFUSED 127.0.0.1:443' }]);
       await settle();
-      clock += 60 * 60_000;
-      timers.splice(0).forEach((t) => t.fn());
+      const held = r.queue.get(item.id);
+      if (held?.state !== 'queued' || held.notBefore === undefined || held.notBefore <= clock) continue;
+      clock = held.notBefore;
+      for (let k = timers.length - 1; k >= 0; k--) if (timers[k].at <= clock) timers.splice(k, 1)[0].fn();
       await settle();
     }
     expect(r.queue.get(item.id)?.state).toBe('parked');
     expect(r.store.get(id)?.parked?.reason).toBe('error');
+    // The spent network retries are not handed out again by the ordinary retry.
     expect(r.adapters[0].prompts).toHaveLength(TRANSIENT_RETRY_MAX + 2);
+    // A small daily turn budget is not used up by the network retries.
+    expect(r.store.usageOf(id).turns).toHaveLength(2);
   });
 
   it('isTransientEngineError: network and server failures, not the turn\'s own errors', () => {

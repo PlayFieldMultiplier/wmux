@@ -50,7 +50,7 @@ import type { BrainAdapter, BrainEvent } from '../deck/BrainAdapter';
 import { emitBotHook } from './botHooks';
 import type { BotEngineFactory } from './botEngines';
 import type { BotStore } from './botStore';
-import { budgetLeft, checkTurn, nextTurnAllowedAt, recordTurn, type BudgetRefusalReason } from './budget';
+import { budgetLeft, checkTurn, nextTurnAllowedAt, recordTurn, unrecordTurn, type BudgetRefusalReason } from './budget';
 import type { FactorySettings } from './factorySettings';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import {
@@ -906,13 +906,19 @@ export class BotRuntime {
   private settle(profile: BotProfile, item: WakeItem, outcome: 'done' | 'failed' | 'interrupted' | 'engine', message: string, offSwitch = false): void {
     const botId = profile.id;
     const at = this.now();
+    const startedAt = this.running.get(botId)?.startedAt;
     this.running.delete(botId);
     // Quitting: the item stays `running` on disk, so the next start marks it
     // interrupted (R8) instead of replaying it.
     if (this.disposed) return;
     const retryIn = outcome === 'failed' ? this.transientRetryDelay(item.id, message) : null;
-    if (retryIn === null) this.transientRetries.delete(item.id);
-    if (retryIn === null && (outcome !== 'failed' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS)) this.released.delete(item.id);
+    const finalAttempt = outcome !== 'failed' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
+    // Spent network retries stay counted until the wake ends, so the
+    // ordinary retry after them does not earn a fresh set.
+    if (retryIn === null && finalAttempt) {
+      this.transientRetries.delete(item.id);
+      this.released.delete(item.id);
+    }
     if (outcome === 'done') {
       this.deps.queue.finish(item.id);
       this.lastError.delete(botId);
@@ -936,6 +942,8 @@ export class BotRuntime {
       // and runs again by itself; the bot is not parked.
       this.lastError.set(botId, { message: `${message.slice(0, 440)} (retrying in ${Math.round(retryIn / 1000)}s)`, at });
       this.deps.queue.retry(item.id, { notBefore: at + retryIn, refundAttempt: true });
+      // Nor is the turn charged to the bot's budget: it never reached the model.
+      if (startedAt !== undefined && this.deps.store.get(botId)) this.deps.store.mutateUsage(botId, (u) => { unrecordTurn(u, startedAt); });
     } else {
       this.lastError.set(botId, { message: message.slice(0, 500), at });
       const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
