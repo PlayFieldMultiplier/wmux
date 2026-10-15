@@ -57,3 +57,24 @@ export function moaMorningReportReal(snap, expect) {
       `${handoffsOfKind(snap, 'dispatch').length} dispatch(es), ${factsOfKind(snap, 'handoff.received').length} delivery fact(s)`),
   ];
 }
+
+/** researcher-dispatch-real: the researcher's dispatch wake settles done and
+ *  its answer went back as a result handoff (its wmux tools were reached);
+ *  a wake that settled done with nothing sent is the 4.5.0 silent failure. */
+export function researcherDispatchReal(snap, expect) {
+  const lead = botId(snap, expect.lead);
+  const researcher = botId(snap, expect.researcher);
+  const dispatch = handoffsOfKind(snap, 'dispatch').find((h) => h.from?.botId === lead && h.to?.botId === researcher) ?? null;
+  const wakes = wakesOf(snap, expect.researcher).filter((w) => w.reason?.kind === 'handoff' && w.reason.handoffId === dispatch?.id);
+  // A refused attempt keeps its text but reached nobody.
+  const results = handoffsOfKind(snap, 'result').filter((h) => h.from?.botId === researcher && h.replyTo === dispatch?.id && h.status !== 'refused');
+  const sentSomething = results.length > 0 || botCards(snap, expect.researcher).length > 0;
+  const text = results.map((h) => `${h.payload?.title ?? ''}\n${h.payload?.body ?? ''}`).join('\n');
+  return [
+    criterion('dispatch_delivered', dispatch !== null, dispatch ? dispatch.id : 'no dispatch to the researcher'),
+    criterion('researcher_wake_done', wakes.length > 0 && wakes.every((w) => w.state === 'done'), wakes.map((w) => w.state).join(', ') || 'none'),
+    criterion('result_sent', results.length > 0, `${results.length} result handoff(s)`),
+    criterion('result_answers', new RegExp(expect.answerPattern, 'i').test(text), text.slice(0, 200)),
+    criterion('no_silent_done', !(wakes.some((w) => w.state === 'done') && !sentSomething), sentSomething ? 'sent' : 'nothing sent'),
+  ];
+}

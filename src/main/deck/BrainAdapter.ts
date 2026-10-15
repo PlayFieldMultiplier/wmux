@@ -252,6 +252,10 @@ export interface RawSdkMessage {
   usage?: { input_tokens?: number; output_tokens?: number };
   /** Present on `type:'rate_limit_event'` frames (SDKRateLimitEvent). */
   rate_limit_info?: RawRateLimitInfo;
+  /** Present on `type:'system', subtype:'init'` frames (SDKSystemMessage):
+   *  the session's tool names and its MCP servers' connection status. */
+  tools?: string[];
+  mcp_servers?: Array<{ name?: string; status?: string }>;
   /** Present on `type:'system', subtype:'api_retry'` frames (SDKAPIRetryMessage):
    *  a typed error enum + the SDK's auto-retry counters. `error:'rate_limit'` is
    *  the only value we treat as a limit (see normalizeSdkMessage). */

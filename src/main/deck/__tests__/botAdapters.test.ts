@@ -125,6 +125,100 @@ describe('ClaudeSdkAdapter bot mode', () => {
     expect(prompts[0]).toBe('one');
     adapter.dispose();
   });
+
+  // The 4.5.0 researcher incident: its session held every mcp__wmux__ tool,
+  // but the model called them by the bare names the prompts use, each call
+  // failed with "No such tool available", and the turn settled as done.
+  const TOOLS = ['Read', 'Grep', 'Glob', 'mcp__wmux__room_post', 'mcp__wmux__handoff_send', 'mcp__wmux__fanout_start'];
+  const init = (status = 'connected', tools = TOOLS) => ({
+    type: 'system', subtype: 'init', session_id: 'sess', tools, mcp_servers: [{ name: 'wmux', status }],
+  });
+  const call = (id: string, name: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: {} }] } });
+  const result = (id: string, isError: boolean) => ({
+    type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError }] },
+  });
+  function turnOf(frames: unknown[], seen: Array<Record<string, unknown>> = []): { adapter: ClaudeSdkAdapter; interrupted: () => number } {
+    let interrupts = 0;
+    const adapter = new ClaudeSdkAdapter({
+      bot: { binding: { ...BINDING, role: 'lead' }, cwd: dir, wmuxDir: dir },
+      allowedTools: ['mcp__wmux__room_post', 'mcp__wmux__handoff_send', 'mcp__wmux__fanout_start'],
+      workspaceId: BINDING.workspaceId,
+      mcpBundlePath: '/b.js',
+      queryFn: ({ options = {} }) => {
+        seen.push(options);
+        return {
+          async *[Symbol.asyncIterator]() {
+            for (const f of frames) yield f as never;
+          },
+          interrupt: () => { interrupts += 1; },
+        };
+      },
+    });
+    adapter.start({ systemPrompt: 'BOT' });
+    return { adapter, interrupted: () => interrupts };
+  }
+
+  it('tells the brain the exact names of its wmux tools in the system prompt', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { adapter } = turnOf([{ type: 'result', subtype: 'success', session_id: 's' }], seen);
+    await collect(adapter.send('wake'));
+    const prompt = seen[0].systemPrompt as string;
+    expect(prompt.startsWith('BOT\n\n')).toBe(true);
+    expect(prompt).toContain('mcp__wmux__room_post, mcp__wmux__handoff_send, mcp__wmux__fanout_start');
+    expect(prompt).toContain('"room_post" means the tool mcp__wmux__room_post');
+    adapter.dispose();
+  });
+
+  it('a turn that called its tools only by bare names ends in an error, not a turn-end', async () => {
+    const { adapter } = turnOf([
+      init(),
+      call('t1', 'Grep'), result('t1', false),
+      call('t2', 'fanout_start'), result('t2', true),
+      call('t3', 'room_post'), result('t3', true),
+      call('t4', 'handoff_send'), result('t4', true),
+      { type: 'result', subtype: 'success', session_id: 'sess' },
+    ]);
+    const events = await collect(adapter.send('wake'));
+    expect(events.some((e) => e.type === 'turn-end')).toBe(false);
+    const last = events.at(-1);
+    expect(last?.type).toBe('error');
+    expect(last && 'message' in last ? last.message : '').toMatch(/fanout_start, room_post, handoff_send.*mcp__wmux__<name>/);
+    // The conversation is kept for the retry.
+    expect(adapter.sessionId).toBe('sess');
+    adapter.dispose();
+  });
+
+  it('a bare-name slip followed by the real tool still ends the turn normally', async () => {
+    const { adapter } = turnOf([
+      init(),
+      call('t1', 'handoff_send'), result('t1', true),
+      call('t2', 'mcp__wmux__handoff_send'), result('t2', false),
+      { type: 'result', subtype: 'success', session_id: 'sess' },
+    ]);
+    const events = await collect(adapter.send('wake'));
+    expect(events.at(-1)?.type).toBe('turn-end');
+    adapter.dispose();
+  });
+
+  it('a session whose wmux MCP server failed stops at once with an error', async () => {
+    const { adapter, interrupted } = turnOf([
+      init('failed', []),
+      call('t1', 'Grep'), result('t1', false),
+      { type: 'result', subtype: 'success', session_id: 'sess' },
+    ]);
+    const events = await collect(adapter.send('wake'));
+    expect(events.map((e) => e.type)).toEqual(['error']);
+    expect(events[0].type === 'error' && events[0].message).toMatch(/wmux tools did not load.*failed/);
+    expect(interrupted()).toBe(1);
+    adapter.dispose();
+  });
+
+  it('a connected wmux server that lists no tools is the same error', async () => {
+    const { adapter } = turnOf([init('connected', ['Read']), { type: 'result', subtype: 'success', session_id: 'sess' }]);
+    const events = await collect(adapter.send('wake'));
+    expect(events.map((e) => e.type)).toEqual(['error']);
+    adapter.dispose();
+  });
 });
 
 describe('ClaudeSdkAdapter bot mode with a repository', () => {

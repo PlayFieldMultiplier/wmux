@@ -36,6 +36,7 @@ import { redactStoredSecretsDeep } from '../factory/secretRedaction';
 import type { BotBinding } from '../../shared/bot';
 import { SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
+import { BotToolGuard, botToolNamingRule } from './botToolGuard';
 import { COMMANDER_MODE_ARG, COMMANDER_TOOL_SURFACE, COMMANDER_ONLY_TOOLS } from '../../shared/commanderSurface';
 import {
   type BrainAdapter,
@@ -931,6 +932,10 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     options.canUseTool = async () => ({ behavior: 'deny' as const, message: 'bots act only through their wmux tools' });
     options.settingSources = [];
     options.cwd = bot.cwd;
+    // The prompts name wmux tools without their MCP prefix; say the exact
+    // names, or a model that copies a bare name reaches none of them.
+    const naming = botToolNamingRule(this.allowedTools);
+    if (naming && typeof options.systemPrompt === 'string') options.systemPrompt = `${options.systemPrompt}\n\n${naming}`;
     if (bot.repoRoot) this.applyRepoRead(options, bot.repoRoot);
     if (!this.mcpBundlePath) {
       delete options.mcpServers;
@@ -1153,13 +1158,27 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       this._active = handle;
       let yielded = false;
       let retryFresh = false;
+      // A bot turn that cannot reach its wmux tools ends in an error, never
+      // a silent success (botToolGuard.ts).
+      const guard = this.bot ? new BotToolGuard(this.allowedTools) : null;
+      let stopForTools = false;
       try {
         outer: for await (const msg of handle) {
-          for (const ev of normalizeSdkMessage(msg as RawSdkMessage, state)) {
+          let events = normalizeSdkMessage(msg as RawSdkMessage, state);
+          const noTools = guard?.observe(msg as RawSdkMessage) ?? null;
+          if (noTools) {
+            stopForTools = true;
+            events = [...events, { type: 'error', message: noTools }];
+          } else if (guard && events.some((e) => e.type === 'turn-end')) {
+            const unreached = guard.verdict();
+            if (unreached) events = events.map((e): BrainEvent => (e.type === 'turn-end' ? { type: 'error', message: unreached } : e));
+          }
+          for (const ev of events) {
             // A turn that errors before ANYTHING reached the renderer, on the
             // first attempt against an unvalidated disk id → treat the id as
             // dead and swallow the error in favor of a fresh retry.
-            if (ev.type === 'error' && resumingUnvalidated && attempt === 0 && !yielded) {
+            // (Not the tool guard's error: that one is about the MCP server.)
+            if (ev.type === 'error' && resumingUnvalidated && attempt === 0 && !yielded && !noTools) {
               retryFresh = true;
               break outer;
             }
@@ -1196,6 +1215,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
             }
             yield ev;
           }
+          if (stopForTools) break;
         }
         // Some SDK error paths end the stream without a `result` frame; make
         // sure the session id captured mid-stream survives for resume.
@@ -1210,6 +1230,13 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       } finally {
         if (this._active === handle) this._active = null;
         this.disposeHandoff();
+      }
+      if (stopForTools && handle.interrupt) {
+        try {
+          void Promise.resolve(handle.interrupt()).catch(() => undefined);
+        } catch {
+          /* already ending */
+        }
       }
       if (!retryFresh) return;
       // Best-effort teardown of the dead attempt's subprocess before retrying.

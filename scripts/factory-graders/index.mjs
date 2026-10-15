@@ -38,6 +38,7 @@ export const GRADERS = {
   'verifier-real-pr': content.verifierRealPr,
   'moa-morning-report': handoffs.moaMorningReport,
   'moa-morning-report-real': content.moaMorningReportReal,
+  'researcher-dispatch-real': content.researcherDispatchReal,
   'lane-ready-card': lane.laneReadyCard,
   'lane-owner-login-trusted': lane.laneReadyCard,
   'human-correction-plan-decline': handoffs.humanCorrectionPlanDecline,
