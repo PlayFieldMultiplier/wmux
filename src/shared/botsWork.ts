@@ -464,3 +464,15 @@ export function placeWork(entries: readonly WorkEntry[], opts: { work?: Readonly
   }
   return { entries: out, at };
 }
+
+/** The pull request each task opened, as a GitHub URL (`prUrl` for
+ *  workView): a task's `pr` on a bot whose repository is on GitHub. Pure. */
+export function taskPrUrls(bots: ReadonlyArray<{ repoKey?: string; tasks?: readonly BotTaskView[] }>): Map<string, string> {
+  const urls = new Map<string, string>();
+  for (const b of bots) {
+    const repo = b.repoKey;
+    if (!repo || !/^github\.com\//.test(repo)) continue;
+    for (const task of b.tasks ?? []) if (task.pr) urls.set(task.taskId, `https://${repo}/pull/${task.pr.number}`);
+  }
+  return urls;
+}
