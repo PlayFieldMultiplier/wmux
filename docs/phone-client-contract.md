@@ -4408,6 +4408,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `thread.finished` | `title` string | `Finished: {title}` | — |
 | `thread.stopped` | `title` string | `Stopped: {title}` | — |
 | `skill.archived` | `skill` string | `Skill archived: {skill}` | `skill`: the skill's name. |
+| `secret.deleted` | `name` string | `Key deleted: {name}` | `name`: the key's name (never its value). |
 
 #### The Bots page (`bots`, `botMessages`, `/api/bots`, `/api/rooms/:workspaceId/messages`)
 

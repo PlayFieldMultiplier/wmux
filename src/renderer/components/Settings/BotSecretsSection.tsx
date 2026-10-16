@@ -104,7 +104,7 @@ export function BotSecretsSection({ t, port = getBotSecretPort(), now }: { t: T;
               testId={`factory-key-${row.name}`}
             />
           ) : (
-            <Button size="sm" variant="destructive" data-testid={`factory-key-delete-${row.name}`} onClick={() => setConfirming(row.name)}>
+            <Button size="sm" variant="destructive" data-testid={`factory-key-delete-${row.name}`} aria-label={t('settings.factory.keyDeleteNamed', { name: row.name })} onClick={() => setConfirming(row.name)}>
               {t('settings.factory.keyDelete')}
             </Button>
           )}

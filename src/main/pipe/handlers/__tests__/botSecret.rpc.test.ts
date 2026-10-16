@@ -24,8 +24,16 @@ import {
   ownerDeleteSecret,
   ownerLogin,
   ownerSetSecret,
+  postSecretDeletedCard,
   registerSecretIpc,
 } from '../botSecret.rpc';
+import { dmThreadId } from '../../../../shared/room';
+import type { BotProfile } from '../../../../shared/bot';
+import { wakeDeletedKeys } from '../../../factory/wakeContext';
+import { buildWakePrompt } from '../../../factory/wakePrompt';
+import { noticeText } from '../../../../renderer/components/Room/roomFormat';
+import { en } from '../../../../renderer/i18n/locales/en';
+import { ko } from '../../../../renderer/i18n/locales/ko';
 import { BOT_SECRET_IPC } from '../../../../shared/botSecret';
 import type { RpcContext } from '../../../../shared/rpc';
 import { phoneRoomCard } from '../../../../shared/phoneRooms';
@@ -198,5 +206,61 @@ describe('login_request', () => {
     expect(await ownerLogin({ workspaceId: 'ws-1', cardId: site.cardId }, deps, checks)).toMatchObject({ signedIn: false });
     expect(await ownerLogin({ workspaceId: 'ws-1', cardId: site.cardId, done: true }, deps, checks)).toMatchObject({ signedIn: true });
     expect(await ownerLogin({ workspaceId: 'ws-1', cardId: site.cardId, done: true }, deps, checks)).toMatchObject({ ok: false, code: 'invalid_card' });
+  });
+});
+
+describe('the owner deletes a key a bot used', () => {
+  const OTHER = 'bot-0000beef';
+  const VALUE = 'abcdefgh12345678';
+  const profile = (id: string): BotProfile => ({
+    version: 1, id, workspaceId: 'ws-1', role: 'lead', name: 'Dev', engine: { kind: 'claude-sdk' }, triggers: [],
+    budget: { maxTurnsPerDay: 9, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 1, turnTimeoutMs: 1 } as BotProfile['budget'],
+    enabled: true, createdAt: 0, updatedAt: 0,
+  });
+
+  function stored(): void {
+    const asked = handleSecretRequest({ name: 'NPM_TOKEN', label: 'npm token', why: 'publish' }, botCtx, deps) as { cardId: string };
+    expect(asked.cardId).toBeTruthy();
+    expect(ownerSetSecret({ name: 'NPM_TOKEN', value: VALUE, workspaceId: 'ws-1', cardId: asked.cardId }, deps)).toMatchObject({ ok: true });
+    store.markUsed(['NPM_TOKEN'], OTHER);
+  }
+
+  it('tells each bot that asked for it or used it last, by name only, and its next wake says to ask again', () => {
+    stored();
+    const noteDeleted = vi.fn();
+    expect(ownerDeleteSecret({ name: 'NPM_TOKEN' }, { ...deps, noteDeleted })).toEqual({ ok: true });
+    expect(noteDeleted.mock.calls).toEqual([[BOT.botId, 'NPM_TOKEN'], [OTHER, 'NPM_TOKEN']]);
+    // Nothing to tell for a key that is not stored.
+    expect(ownerDeleteSecret({ name: 'NPM_TOKEN' }, { ...deps, noteDeleted })).toEqual({ ok: false });
+    expect(noteDeleted).toHaveBeenCalledTimes(2);
+
+    for (const id of [BOT.botId, OTHER]) {
+      const keys = wakeDeletedKeys({ secrets: () => store } as never, profile(id));
+      expect(keys).toEqual(['NPM_TOKEN']);
+      const item = { id: 'w-1', botId: id, workspaceId: 'ws-1', reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+      expect(buildWakePrompt({ item, profile: profile(id), deletedKeys: keys }))
+        .toContain('The owner deleted the key NPM_TOKEN; ask with secret_request if you still need it.');
+    }
+    expect(wakeDeletedKeys({ secrets: () => store } as never, profile('bot-00000000'))).toEqual([]);
+
+    // Remembered across a restart, and forgotten once the key is stored again.
+    const again = new SecretStore({ file: path.join(dir, 'secrets.json'), crypto });
+    again.load();
+    expect(again.deletedFor(OTHER)).toEqual(['NPM_TOKEN']);
+    expect(fs.readFileSync(path.join(dir, 'secrets.json'), 'utf8')).not.toContain(VALUE);
+    expect(again.set('NPM_TOKEN', VALUE).ok).toBe(true);
+    expect(again.deletedFor(OTHER)).toEqual([]);
+  });
+
+  it('the card names the key, never its value, worded in the reader\'s language', () => {
+    expect(postSecretDeletedCard(writer, 'ws-1', dmThreadId(BOT.botId), 'NPM_TOKEN')).toBe(true);
+    const card = writer.read('ws-1', { threadId: dmThreadId(BOT.botId) }).cards.at(-1);
+    expect(card).toMatchObject({ kind: 'fact', actor: { kind: 'system' }, title: 'Key deleted: NPM_TOKEN', notice: { code: 'secret.deleted', args: { name: 'NPM_TOKEN' } } });
+    const word = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) =>
+      (dict[key] ?? key).replace(/\{(\w+)\}/g, (_m, k: string) => String(vars?.[k] ?? ''));
+    expect(noticeText(card as never, word(en as Record<string, string>))?.title).toBe('Key deleted: NPM_TOKEN');
+    expect(noticeText(card as never, word(ko as Record<string, string>))?.title).toBe('키 삭제됨: NPM_TOKEN');
+    // The phone receives the code and the name.
+    expect(phoneRoomCard(card as never, () => null)).toMatchObject({ notice: { code: 'secret.deleted', args: { name: 'NPM_TOKEN' } } });
   });
 });

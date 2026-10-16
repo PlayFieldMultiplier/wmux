@@ -22,6 +22,7 @@
 
 import { getConnectorStore, type ConnectorStore } from './connectorStore';
 import { getBotSkillStore, type BotSkillStore } from './botSkills';
+import { getSecretStore, type SecretStore } from './secretStore';
 import type { SkillIndexEntry } from '../../shared/botSkill';
 import type { BotProfile } from '../../shared/bot';
 import type { RoomCard, ThreadId } from '../../shared/room';
@@ -47,6 +48,8 @@ export interface WakeContextPorts {
   connectors?: () => Pick<ConnectorStore, 'forBot'> | null;
   /** The bot skills store (default: the running one). */
   skills?: () => Partial<Pick<BotSkillStore, 'index' | 'archivedNames' | 'approvalStatus'>> | null;
+  /** The bot key store (default: the running one). */
+  secrets?: () => Pick<SecretStore, 'deletedFor'> | null;
   /** Cards of a room (a thread, or every thread), oldest first: the newest
    *  `limit`, or with `sinceSeq` the first `limit` after it. */
   cards: (workspaceId: string, threadId: ThreadId | null, limit: number, sinceSeq?: number) => readonly RoomCard[];
@@ -263,6 +266,7 @@ export function wakeContext(ports: WakeContextPorts, profile: BotProfile, item: 
     connectors: wakeConnectors(ports, profile),
     skills: wakeSkills(ports, profile),
     archivedSkills: wakeArchivedSkills(ports, profile),
+    deletedKeys: wakeDeletedKeys(ports, profile),
     group: wakeGroup(ports, profile, item),
     now,
   };
@@ -300,6 +304,16 @@ export function wakeConnectors(ports: WakeContextPorts, profile: BotProfile): Wa
 export function wakeSkills(ports: WakeContextPorts, profile: BotProfile): SkillIndexEntry[] {
   try {
     return (ports.skills ?? getBotSkillStore)()?.index?.(profile.id) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** The keys the owner deleted that the bot asked for or last used, for its
+ *  wake: names only. */
+export function wakeDeletedKeys(ports: WakeContextPorts, profile: BotProfile): string[] {
+  try {
+    return (ports.secrets ?? getSecretStore)()?.deletedFor(profile.id) ?? [];
   } catch {
     return [];
   }

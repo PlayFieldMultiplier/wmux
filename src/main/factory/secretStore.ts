@@ -4,8 +4,10 @@
 // safeStorage ciphertext (the OS keychain / DPAPI / the Linux secret
 // service) in a 0600 file: `{version:1, secrets:[{name, cipher, label?,
 // requestedBy?, createdAt, updatedAt, lastUsed?:{botId, at}}], retired?:
-// [{name, cipher, at}]}` (`retired`: replaced and deleted values, encrypted
-// the same way, so they stay redacted across restarts). Main decrypts
+// [{name, cipher, at}], deleted?: [{name, at, bots}]}` (`retired`: replaced
+// and deleted values, encrypted the same way, so they stay redacted across
+// restarts; `deleted`: the names the owner deleted and the bots that asked
+// for or last used each, so their wakes are told). Main decrypts
 // the values once, after the app is ready, and holds them in memory for the
 // two uses it has: a worker spawn's env (secretGrants.ts) and redaction
 // (secretRedaction.ts). Nothing here returns a value to a caller outside
@@ -98,6 +100,18 @@ function isStoredRetired(raw: unknown): raw is { name: string; cipher: string; a
 }
 const LABEL_MAX = BOT_SECRET_LIMITS.LABEL_MAX;
 
+/** A key the owner deleted: its name only, and the bots told about it. */
+interface Deleted { name: string; at: number; bots: string[] }
+/** Deleted keys remembered for the bots' wakes. */
+const DELETED_MAX = 32;
+
+function isStoredDeleted(raw: unknown): raw is Deleted {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  return isBotSecretName(r.name) && typeof r.at === 'number' && Array.isArray(r.bots) && r.bots.length <= 8
+    && r.bots.every((b) => typeof b === 'string' && b.length > 0 && b.length <= BOT_ID_MAX);
+}
+
 function isStored(raw: unknown): raw is StoredSecret {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
@@ -139,6 +153,8 @@ export class SecretStore {
   /** Values replaced or deleted: still redacted, since a worker started
    *  before keeps them in its environment. Kept (encrypted) in the file. */
   private retired: Retired[] = [];
+  /** Keys the owner deleted, for the wakes of the bots that used them. */
+  private deleted: Deleted[] = [];
   /** The file exists but could not be read: nothing is written over it. */
   private unreadable = false;
   private readonly now: () => number;
@@ -175,6 +191,7 @@ export class SecretStore {
   load(): void {
     this.held.clear();
     this.retired = [];
+    this.deleted = [];
     this.unreadable = false;
     let raw: unknown = null;
     let exists = true;
@@ -224,6 +241,11 @@ export class SecretStore {
         }
       }
       this.retired.push({ name: item.name, value, cipher: item.cipher, at: item.at });
+    }
+    const deleted = readable ? (raw as { deleted?: unknown }).deleted : undefined;
+    for (const item of Array.isArray(deleted) ? deleted.slice(-DELETED_MAX) : []) {
+      if (!isStoredDeleted(item) || item.at < since || this.held.has(item.name)) continue;
+      this.deleted.push({ name: item.name, at: item.at, bots: [...item.bots] });
     }
     this.loaded = true;
     this.publish(false);
@@ -288,8 +310,11 @@ export class SecretStore {
     const next = new Map(this.held);
     next.set(name, { record, value });
     const retired = prior && prior.value !== value ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
-    if (!this.persist(next, retired)) return { ok: false, code: 'write_failed', message: 'The key could not be written to disk.' };
+    // Stored again: no longer a deleted key.
+    const deleted = this.deleted.filter((d) => d.name !== name);
+    if (!this.persist(next, retired, deleted)) return { ok: false, code: 'write_failed', message: 'The key could not be written to disk.' };
     this.retired = retired;
+    this.deleted = deleted;
     this.held = next;
     this.publish(true);
     return { ok: true, entry: entryOf(record) };
@@ -302,11 +327,28 @@ export class SecretStore {
     const next = new Map(this.held);
     next.delete(name);
     const retired = prior ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
-    if (!this.persist(next, retired)) return false;
+    const since = this.now() - RETIRED_KEEP_MS;
+    const deleted = [...this.deleted.filter((d) => d.name !== name && d.at >= since), { name, at: this.now(), bots: this.botsOf(name) }].slice(-DELETED_MAX);
+    if (!this.persist(next, retired, deleted)) return false;
     this.retired = retired;
+    this.deleted = deleted;
     this.held = next;
     this.publish(true);
     return true;
+  }
+
+  /** The bots that asked for or last used `name`: whom its deletion is told
+   *  to. Empty when it is not stored. */
+  botsOf(name: string): string[] {
+    const r = this.held.get(name)?.record;
+    return [...new Set([r?.requestedBy, r?.lastUsed?.botId].filter((b): b is string => !!b))];
+  }
+
+  /** The keys the owner deleted that `botId` asked for or last used, oldest
+   *  first: names only. */
+  deletedFor(botId: string): string[] {
+    const since = this.now() - RETIRED_KEEP_MS;
+    return this.deleted.filter((d) => d.at >= since && d.bots.includes(botId)).map((d) => d.name);
   }
 
   /** The values of `names` (for a worker spawn), or the names missing. */
@@ -359,12 +401,13 @@ export class SecretStore {
     }
   }
 
-  private persist(map: ReadonlyMap<string, Held>, retired: readonly Retired[] = this.retired): boolean {
+  private persist(map: ReadonlyMap<string, Held>, retired: readonly Retired[] = this.retired, deleted: readonly Deleted[] = this.deleted): boolean {
     const file = this.opts.file;
     const body = `${JSON.stringify({
       version: SECRETS_FILE_VERSION,
       secrets: [...map.values()].map((h) => h.record),
       ...(retired.length > 0 ? { retired: retired.map((r) => ({ name: r.name, cipher: r.cipher, at: r.at })) } : {}),
+      ...(deleted.length > 0 ? { deleted: deleted.map((d) => ({ name: d.name, at: d.at, bots: d.bots })) } : {}),
     })}\n`;
     const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     try {

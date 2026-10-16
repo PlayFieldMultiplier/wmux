@@ -113,6 +113,8 @@ export interface WakePromptInput {
   skills?: readonly SkillIndexEntry[];
   /** Skills the owner archived after approving them (wakeContext.ts). */
   archivedSkills?: readonly string[];
+  /** Keys the owner deleted that the bot asked for or last used (wakeContext.ts). */
+  deletedKeys?: readonly string[];
   /** The group chat the wake's thread is (wakeContext.ts): its roster is
    *  the group's members only. */
   group?: WakeGroup | null;
@@ -286,6 +288,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
       'Skills the owner archived (no longer loaded; do not apply them, even where an earlier message or an open question of yours cites them):',
       fenceData(archived.join('\n'), 'archived-skills'),
     );
+  }
+  for (const name of input.deletedKeys ?? []) {
+    lines.push(`The owner deleted the key ${name}; ask with secret_request if you still need it.`);
   }
   if (item.threadId) lines.push(`Thread: ${item.threadId} (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner's eyes).`);
   const thread = input.thread;

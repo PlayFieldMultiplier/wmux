@@ -183,6 +183,7 @@ const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
   ['handoff.sent', false], ['thread.finished', false], ['thread.stopped', false],
   ['bot.error', false], ['worker.startFailed', false],
   ['skill.archived', true],
+  ['secret.deleted', true],
 ]);
 
 /** The notice codes whose title names their subject by a `title` arg, with

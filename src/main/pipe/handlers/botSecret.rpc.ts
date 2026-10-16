@@ -28,7 +28,7 @@ import {
   type BotSecretEntry,
   type LoginService,
 } from '../../../shared/botSecret';
-import { GENERAL_THREAD, parseThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
+import { GENERAL_THREAD, dmThreadId, parseThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
 import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
 import {
@@ -240,6 +240,26 @@ export type OwnerSecretResult =
 
 export interface OwnerSecretDeps extends SecretHandlerDeps {
   now?: () => number;
+  /** The owner deleted a key a bot asked for or last used: one system card
+   *  in that bot's conversation. Best effort. */
+  noteDeleted?: (botId: string, name: string) => void;
+}
+
+/** The card a deleted key posts in a bot's conversation thread: its name
+ *  only, never its value, worded from its notice code (`secret.deleted`) in
+ *  the reader's language. */
+export function postSecretDeletedCard(writer: Pick<RoomWriter, 'append'> | null, workspaceId: string, threadId: ThreadId, name: string): boolean {
+  if (!writer) return false;
+  const card = writer.append({
+    workspaceId,
+    threadId,
+    kind: 'fact',
+    actor: { kind: 'system' },
+    title: `Key deleted: ${name}`,
+    body: 'The owner deleted it from the keys in Settings. Workers already running keep it until they stop; the bot\'s next wake says to ask again if it still needs it.',
+    notice: { code: 'secret.deleted', args: { name } },
+  });
+  return !!card;
 }
 
 /** An open request card of `kind` in `workspaceId`, or a refusal text. */
@@ -310,7 +330,17 @@ export function ownerDeleteSecret(raw: unknown, deps: OwnerSecretDeps): { ok: bo
   const store = deps.store();
   const name = params(raw).name;
   if (!store || typeof name !== 'string') return { ok: false };
-  return { ok: store.delete(name) };
+  // Read before the delete: the bots that asked for it or used it last.
+  const bots = store.botsOf(name);
+  if (!store.delete(name)) return { ok: false };
+  for (const botId of bots) {
+    try {
+      deps.noteDeleted?.(botId, name);
+    } catch {
+      /* the bot's wake still says it is deleted */
+    }
+  }
+  return { ok: true };
 }
 
 export interface LoginCheckPorts {
@@ -395,6 +425,21 @@ export function registerSecretIpc(getWindow: () => BrowserWindow | null, deps: O
   };
 }
 
+/** The deleted-key card, in the thread the owner last woke the bot in (its
+ *  1:1 otherwise), as an archived skill's (skill.rpc.ts). Best effort: a
+ *  failure is logged. */
+function noteDeletedInRoom(botId: string, name: string): void {
+  void (async () => {
+    const [{ getBotDirectory }, { latestOwnerWakeThread }] = await Promise.all([
+      import('../../factory/botStore'),
+      import('../../factory/wakeQueue'),
+    ]);
+    const bot = getBotDirectory()?.get(botId);
+    if (!bot) return;
+    postSecretDeletedCard(getRoomWriter(), bot.workspaceId, latestOwnerWakeThread(botId) ?? dmThreadId(botId), name);
+  })().catch((err) => console.warn(`[factory] key deleted card not posted: ${String(err)}`));
+}
+
 // ── Module ─────────────────────────────────────────────────────────────────
 
 export function createSecretModule(
@@ -402,7 +447,7 @@ export function createSecretModule(
   crypto: () => SecretCrypto = electronSecretCrypto,
 ): FactoryModuleHandle {
   let offIpc: (() => void) | null = null;
-  const handlerDeps: OwnerSecretDeps = { store: getSecretStore, writer: getRoomWriter, ports: resolveRoomPorts };
+  const handlerDeps: OwnerSecretDeps = { store: getSecretStore, writer: getRoomWriter, ports: resolveRoomPorts, noteDeleted: noteDeletedInRoom };
   return {
     start() {
       if (getSecretStore()) return;
