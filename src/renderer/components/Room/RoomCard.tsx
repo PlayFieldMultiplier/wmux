@@ -66,6 +66,7 @@ export { PROPOSAL_RESOLUTION } from './CardAnswers';
  *  requests main holds. */
 export function useIdLabels(bots: readonly FactoryBotRow[], t: T): IdLabels {
   const { byId } = useApprovals();
+  const locale = useStore((s) => s.locale);
   return useMemo((): IdLabels => {
     const tasks = new Map<string, string>();
     for (const r of bots) for (const task of r.tasks ?? []) tasks.set(task.taskId, task.title);
@@ -77,7 +78,7 @@ export function useIdLabels(bots: readonly FactoryBotRow[], t: T): IdLabels {
         return r.prNumber !== undefined ? t('botsPage.idLabel.approvalPr', { pr: r.prNumber }) : t('botsPage.idLabel.approval');
       },
     };
-  }, [bots, byId, t]);
+  }, [bots, byId, t, locale]);
 }
 
 export interface RoomCardProps {

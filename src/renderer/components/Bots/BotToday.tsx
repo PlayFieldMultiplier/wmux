@@ -64,9 +64,7 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
   const [busy, setBusy] = useState(false);
   const view = botBudgetView(row.bot, row.status);
   if (!view.blocker && view.lines.length === 0) return null;
-  // Parked during a running turn the runtime reports it running until the
-  // turn ends: the park is what Resume undoes.
-  const canResume = !!act && (botActionsFor(row).resume || !!row.bot.parked);
+  const canResume = !!act && botActionsFor(row).resume;
   // A task in review (reported, still open) may keep its worker's slot.
   const inReviewTasks = (row.tasks ?? []).filter((task) => task.stage === 'coded').length;
   const resume = async () => {

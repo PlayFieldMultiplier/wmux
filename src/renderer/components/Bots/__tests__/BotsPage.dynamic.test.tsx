@@ -623,6 +623,34 @@ describe('Bots page', () => {
     expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Idle');
   });
 
+  it('Resuming… lasts at most 10 s while the runtime reports nothing, then reads as a bot with no turn yet', async () => {
+    const notify: Array<() => void> = [];
+    bots = bots.map((b) => (b.bot.id === VERIFIER ? { ...b, bot: { ...b.bot, parked: { reason: 'human' as const, at: 1 } }, status: { ...b.status!, presence: 'parked' as const } } : b));
+    const act$ = vi.fn(async () => {
+      bots = bots.map((b) => (b.bot.id === VERIFIER ? { ...b, bot: { ...b.bot, parked: undefined }, status: { ...b.status!, presence: 'unknown' as const } } : b));
+      for (const fn of notify) fn();
+      return { ok: true };
+    });
+    setFactoryBotPort({ ...port, act: act$, subscribe: (fn) => { notify.push(fn); return () => undefined; } });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Parked');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await act(async () => { q<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
+      for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Resuming…'; i++) await act(async () => { await Promise.resolve(); });
+      expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
+      await act(async () => { vi.advanceTimersByTime(9_000); });
+      expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
+      await act(async () => { vi.advanceTimersByTime(1_000); });
+      expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Not reported yet');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a parked bot\'s profile says why and offers Resume (budget or errors); a bot that is not parked shows none', async () => {
     const act$ = vi.fn(async () => ({ ok: true }));
     bots[1] = { ...bots[1], bot: { ...bots[1].bot, parked: { reason: 'budget', at: 1 } }, status: { ...bots[1].status!, presence: 'parked' } };

@@ -1196,6 +1196,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     : conversation.kind === 'bot' ? oneToOneRefusal(conversation.row, t)
       : roomCandidates.length === 0 ? t('botsPage.group.noneOn') : null;
 
+  // `t` reads the store's language: callbacks and memos keyed on it also
+  // key on the locale, so they re-word after a language change.
+  const locale = useStore((s) => s.locale);
   const submit = useCallback(async (e?: FormEvent) => {
     e?.preventDefault();
     if (inFlight || refusal) return;
@@ -1230,7 +1233,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     } finally {
       setInFlight(false);
     }
-  }, [api, inFlight, refusal, text, workspaceId, threadId, mentions, picks, t, onSent]);
+  }, [api, inFlight, refusal, text, workspaceId, threadId, mentions, picks, t, locale, onSent]);
 
   // `@` suggestions: typing `@` and the start of a name in a room lists the
   // room's bots that match; Enter or Tab (or a click) puts `@Name ` in its
@@ -1548,7 +1551,7 @@ function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort
   const [busy, setBusy] = useState(false);
   const [pausing, setPausing] = useState(false);
   const stopBot = port.stopBot;
-  const canPause = !!act && row.bot.enabled && !row.bot.parked && botActionsFor(row).park;
+  const canPause = !!act && row.bot.enabled && botActionsFor(row).park;
   if (!stopBot && !canPause) return null;
   const run = async () => {
     if (!stopBot) return;
@@ -1833,22 +1836,53 @@ function WorkerEngineLine({ row, t, port }: { row: FactoryBotRow; t: T; port?: P
   );
 }
 
-/** Each bot's last presence the runtime reported, other than not
- *  reported, while the app runs. */
+/** Each bot's last presence the runtime reported while the app runs, and
+ *  when one last reported parked went unreported (its Resume). */
 const lastProfilePresence = new Map<string, BotPresence>();
+const profileResumedAt = new Map<string, number>();
+/** How long a resumed bot reads "Resuming…" at most. */
+export const RESUMING_MAX_MS = 10_000;
 
 /** The profile's state word. A bot the runtime reported parked and now
  *  reports nothing for (its session attaches on its next turn) was just
- *  resumed: it reads "Resuming…" until the runtime reports, not "Not
- *  reported yet". */
-export function profilePresenceKey(row: FactoryBotRow, last: Map<string, BotPresence> = lastProfilePresence): string {
+ *  resumed: it reads "Resuming…" until the runtime reports, for at most
+ *  RESUMING_MAX_MS; then it reads as any bot with no turn yet. */
+export function profilePresenceKey(
+  row: FactoryBotRow,
+  now: number = Date.now(),
+  last: Map<string, BotPresence> = lastProfilePresence,
+  resumedAt: Map<string, number> = profileResumedAt,
+): string {
+  const id = row.bot.id;
   const presence = botPresence(row);
   if (presence !== 'unknown') {
-    last.set(row.bot.id, presence);
+    last.set(id, presence);
+    resumedAt.delete(id);
     return `room.presence.${presence}`;
   }
-  if (row.bot.enabled && !row.bot.parked && last.get(row.bot.id) === 'parked') return 'botsPage.profile.resuming';
+  if (row.bot.enabled && !row.bot.parked) {
+    if (last.get(id) === 'parked') {
+      resumedAt.set(id, now);
+      last.set(id, 'unknown');
+    }
+    const at = resumedAt.get(id);
+    if (at !== undefined && now - at < RESUMING_MAX_MS) return 'botsPage.profile.resuming';
+  }
   return 'room.presence.unknown';
+}
+
+/** The profile's state line: on/off and presence, re-read when "Resuming…"
+ *  runs out. */
+function ProfileState({ row, t }: { row: FactoryBotRow; t: T }) {
+  const [, expire] = useState(0);
+  const key = profilePresenceKey(row);
+  useEffect(() => {
+    if (key !== 'botsPage.profile.resuming') return;
+    const at = profileResumedAt.get(row.bot.id) ?? Date.now();
+    const h = setTimeout(() => expire((n) => n + 1), Math.max(0, at + RESUMING_MAX_MS - Date.now()));
+    return () => clearTimeout(h);
+  }, [key, row.bot.id]);
+  return <ProfileLine label={t('botsPage.profile.state')} value={<span data-bots-profile-state>{`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(key)}`}</span>} />;
 }
 
 /** The bot's profile under its name pill: template, job (editable),
@@ -1871,7 +1905,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
       <BrainModelLine row={row} t={t} port={jobPort} />
       <WorkerEngineLine row={row} t={t} port={jobPort} />
       <WorkerModelLine row={row} t={t} port={jobPort} />
-      <ProfileLine label={t('botsPage.profile.state')} value={<span data-bots-profile-state>{`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(profilePresenceKey(row))}`}</span>} />
+      <ProfileState row={row} t={t} />
       <BotToday row={row} act={adminPort?.act} liveWorkers={workers.length} t={t} />
       {routines.length > 0 && (
         <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-routines>
@@ -2205,6 +2239,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     shownChat.current.mounted = true;
     return () => { shownChat.current.mounted = false; };
   }, []);
+  const locale = useStore((s) => s.locale);
   const resumeShown = useCallback(async (taskId: string): Promise<void> => {
     const resume = resumePort?.resumeWorker;
     if (!resume) return;
@@ -2215,7 +2250,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         useStore.getState().setBotsWorkerPanel({ workspaceId: r.workspaceId, conversationId });
       }
     }).catch((err: unknown) => useStore.getState().pushToast({ message: String(err), level: 'error' }));
-  }, [resumePort, conversationId, t]);
+  }, [resumePort, conversationId, t, locale]);
   const askedNonce = threadAsk?.nonce;
   useEffect(() => {
     if (threadAsk) onThread(threadAsk.workspaceId, threadAsk.threadId);
