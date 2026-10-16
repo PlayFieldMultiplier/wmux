@@ -211,6 +211,8 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(text).toContain('A reply marked to_you spoke to you: answer it in your post and mention its bot.');
     expect(text).toContain('Write to the owner in Korean, the language of their latest message: «머지할거 머지해».');
     expect(text).toContain('your job (job_set), routine titles (routine_set) and approval reasons');
+    // The owner is spoken to directly: in Korean with no "owner님" or other title.
+    expect(text).toContain('Speak to the owner directly, with no label or title for them: plain Korean sentences, with no "owner님", "오너님" or other title.');
     // Earlier words are marked as a language sample, never a request.
     const later = buildWakePrompt({ item: item({ kind: 'routine', routineId: 'r-abcdefgh', dueAt: 1 }), profile, language: { name: null, source: 'owner', sample: 'merge it', earlier: true } });
     expect(later).toContain('(an earlier message, quoted only to show the language, not a request for this wake: «merge it»).');
@@ -220,6 +222,8 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(later).toContain('Write to the owner in the language their latest message is written in (an earlier message');
     const english = buildWakePrompt({ item: item({ kind: 'intro' }), profile, language: { name: 'English', source: 'owner', sample: 'hello there', earlier: true } });
     expect(english).toContain('Write to the owner in English, the language of their latest message (an earlier message, quoted only to show the language, not a request for this wake: «hello there»).');
+    expect(english).toContain('Speak to the owner directly, with no label or title for them.');
+    expect(english).not.toContain('owner님');
     // A thread id is for the bot's tools, not for the owner.
     expect(text).toContain('Thread: general (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner\'s eyes).');
     expect(text).toContain('The owner\'s local time is Tuesday 2026-10-13 23:52 (Asia/Seoul). Write times in that zone, never in UTC.');

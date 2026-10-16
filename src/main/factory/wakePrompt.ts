@@ -460,7 +460,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
         ? (lang.name ? `Write to the owner in ${lang.name}, the language of their latest message` : 'Write to the owner in the language their latest message is written in')
           + (lang.sample ? (lang.earlier ? ` (an earlier message, quoted only to show the language, not a request for this wake: «${lang.sample}»).` : `: «${lang.sample}».`) : '.')
         : `The owner has not written yet: write in ${lang.name ?? 'English'}, the language of their wmux.`)
-        + ' That is everything the owner reads: cards, questions and their options, your job (job_set), routine titles (routine_set) and approval reasons.',
+        + ' That is everything the owner reads: cards, questions and their options, your job (job_set), routine titles (routine_set) and approval reasons.'
+        + ' Speak to the owner directly, with no label or title for them'
+        + (lang.name === 'Korean' ? ': plain Korean sentences, with no "owner님", "오너님" or other title.' : '.'),
     );
   }
   if (input.clock) {
