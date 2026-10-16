@@ -65,10 +65,11 @@ export async function loadRoomActors(): Promise<void> {
   }
 }
 
-/** A first read main refuses is tried again after each of these delays,
- *  then left for the next trigger. On a cold start the window loads before
- *  main starts the rooms, and until then every read answers `not_started`. */
-export const FIRST_READ_RETRY_MS: readonly number[] = [500, 1000, 2000, 4000, 8000, 16000];
+/** A first read main refuses is tried again after each of these delays
+ *  (about 95 s in all), then left for the next trigger. On a cold start the
+ *  renderer loads in parallel with the daemon bootstrap, and main starts the
+ *  rooms only after it; until then every read answers `not_started`. */
+export const FIRST_READ_RETRY_MS: readonly number[] = [500, 1000, 2000, 4000, 8000, 16000, 16000, 16000, 16000, 16000];
 
 interface RetryLoop {
   /** Ends the current wait, so the next try runs now. */
