@@ -315,6 +315,15 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
  *  session record. */
 const launchOfCreate = new WeakMap<object, { launch?: BotWorkerLaunchFiles; cwd?: string; wsl?: boolean }>();
 
+/** The task a create is the fan-out (or resume) launch of: the one task its
+ *  in-flight spawns are for; none for any other create in a task workspace
+ *  (a split, a new tab, a replaced pane). Pure. */
+export function botWorkerLaunchTask(worker: Pick<BotWorkerCreate, 'strict' | 'spawns'> | null): { taskId?: string } {
+  if (!worker?.strict || !worker.spawns) return {};
+  const ids = [...new Set(worker.spawns.map((s) => s.taskId))];
+  return ids.length === 1 && ids[0] ? { taskId: ids[0] } : {};
+}
+
 /** pty:create, when it records the session: the guarded launch's files and
  *  the folder it was checked in. */
 export function guardedLaunchOf(options: object | undefined): { launch?: BotWorkerLaunchFiles; cwd?: string; wsl?: boolean } {
@@ -495,7 +504,7 @@ export function noteBotWorkerSession(
   dir: string = getWmuxDir(),
   /** What the launch carried: a guarded codex launch's folder and
    *  repository, or a claude launch's files (and whether its shell is WSL). */
-  launch: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string; launch?: BotWorkerLaunchFiles; wsl?: boolean } = {},
+  launch: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string; launch?: BotWorkerLaunchFiles; wsl?: boolean; taskId?: string } = {},
 ): void {
   const map = loadSessions(dir);
   if (unreadable) throw guardError('PTY_CREATE', `the worker sessions record is unreadable: ${unreadable}`);
@@ -507,6 +516,7 @@ export function noteBotWorkerSession(
     ...(launch.agent && launch.cwd ? { agent: launch.agent, ...(launch.repoKey ? { repoKey: launch.repoKey } : {}), ...(launch.codexHome ? { codexHome: launch.codexHome } : {}) } : {}),
     ...(launch.launch ? { launch: launch.launch } : {}),
     ...(launch.wsl ? { wsl: true } : {}),
+    ...(launch.taskId ? { taskId: launch.taskId } : {}),
   });
   try {
     saveSessions(dir, next);

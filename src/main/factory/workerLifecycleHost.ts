@@ -15,7 +15,7 @@ import { eventBus } from '../events/EventBus';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
 import { lastHookTurnStart, lastTurnEnd } from '../notification/turnEvidence';
 import { lastUserInputAt } from '../notification/idleSuppression';
-import { guardSessionLaunch } from '../agents/botWorkerMergeGuard';
+import { botWorkerSessionRecord, guardSessionLaunch } from '../agents/botWorkerMergeGuard';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getBotRuntime } from './BotRuntime';
 import { getBotStore } from './botStore';
@@ -216,16 +216,19 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       tasks: () => {
         const entries = mirror.getEntries();
         if (!entries) return null;
-        const out: Array<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[] }> = [];
+        const out: Array<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[]; launched: readonly string[] }> = [];
         for (const r of ledger.list({ openOnly: true })) {
           const rec = reclaimed.get(r.id);
           if (!isReclaimableReport(r) || isReclaimedSince(rec, r)) continue;
           const ws = entries.find((e) => e.id === r.taskWorkspaceId);
+          const panes = ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
           out.push({
             taskId: r.id,
             reportedAt: r.updatedAt,
-            panes: ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [],
+            panes,
             recorded: rec?.sessions.map((x) => x.sessionId) ?? [],
+            // The pane the task's own fan-out (or resume) launch created.
+            launched: panes.filter((id) => botWorkerSessionRecord(id)?.taskId === r.id),
           });
         }
         return out;
@@ -286,6 +289,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         return !!panes && workerPanesIdle(panes.map(paneActivity), entry.updatedAt, Date.now(), REPORTED_IDLE_MS);
       },
       reportedPanes: (entry) => reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId)),
+      // The daemon, read again right before the stop, must still show every
+      // worker pane's turn over.
+      confirmIdle: (entry) => turnSeed.confirmIdle(reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId)) ?? []),
       workspacePanes: workspacePtys,
     }));
     // The viewed workspace moving (and every other tree push) may make a

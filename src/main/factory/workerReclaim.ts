@@ -355,6 +355,11 @@ export interface WorkerReclaimPorts {
    *  task's stop reaches only these, never a shell in its workspace; none
    *  or unknown: nothing is stopped. Absent: workspacePanes. */
   reportedPanes?: (entry: LedgerEntry) => readonly string[] | null;
+  /** Asked right before a reported task's idle worker is stopped: whether
+   *  the daemon, read again now, still shows its turn over (a turn start
+   *  main missed leaves turnEnded true on stale evidence). false: not now,
+   *  looked at again on the next pass, no attempt spent. Absent: not asked. */
+  confirmIdle?: (entry: LedgerEntry) => Promise<boolean>;
 }
 
 /** Whether one pane of a reported task's workspace ended its turn, from the
@@ -419,25 +424,40 @@ export interface DaemonTurnState {
   settledAgoMs?: number;
 }
 
-/** Reads of one worker pane that came back without an answer (no state, an
- *  older daemon) before it is left unknown. */
-export const TURN_SEED_ATTEMPTS_MAX = 3;
+/** A worker pane whose read came back without an answer (no state, an
+ *  older daemon) is read again after this, doubling per failure up to
+ *  TURN_SEED_RETRY_MAX_MS; never given up on. */
+export const TURN_SEED_RETRY_MS = 60_000;
+export const TURN_SEED_RETRY_MAX_MS = 30 * 60_000;
 /** A worker pane the daemon reported mid-turn (or with no hook seen) is read
  *  again this often. */
 export const TURN_SEED_OPEN_RECHECK_MS = 5 * 60_000;
 
-/** The worker panes of one reported task: of its workspace's panes, those
- *  whose agent the daemon reports running (agentProcessAlive, or a WSL
- *  worker's launch line, isWslWorkerPane), the ones recorded for the task
- *  first. A pane with no agent (a plain shell, the owner's own) is never
- *  one. Pure. */
-export function taskWorkerPanes(panes: readonly string[], recorded: readonly string[], sessions: readonly WorkerSessionInfo[]): string[] {
+/**
+ * The worker panes of one reported task, among its workspace's panes whose
+ * agent the daemon reports running (agentProcessAlive, or a WSL worker's
+ * launch line, isWslWorkerPane). With panes recorded for the task (its
+ * reclaim record), only those. Otherwise the one pane its own fan-out (or
+ * resume) launch created (`launched`: the bot worker session record names
+ * the task), and only while it is the workspace's single agent pane. Anything
+ * else (a recorded worker that exited beside another agent, two agents, an
+ * agent the task did not launch) identifies no worker: the task is not idle
+ * and nothing is stopped. A plain shell is never one. Pure.
+ */
+export function taskWorkerPanes(panes: readonly string[], recorded: readonly string[], launched: readonly string[], sessions: readonly WorkerSessionInfo[]): string[] {
   const alive = panes.filter((id) => {
     const s = sessions.find((x) => x.id === id);
     return !!s && (s.agentProcessAlive === true || isWslWorkerPane(s));
   });
-  const own = alive.filter((id) => recorded.includes(id));
-  return own.length > 0 ? own : alive;
+  if (recorded.length > 0) return alive.filter((id) => recorded.includes(id));
+  return alive.length === 1 && launched.includes(alive[0]) ? alive : [];
+}
+
+/** Whether the daemon's read of a pane shows its turn over: a turn known
+ *  closed, no running turn, no prompt waiting. No state, or an older daemon
+ *  that does not say, is not. Pure. */
+export function daemonTurnClosed(state: DaemonTurnState | null): boolean {
+  return !!state && state.turnOpen === false && state.agentStatus !== 'running' && state.agentStatus !== 'awaiting_input';
 }
 
 /** The panes a reported task's idle stop looks at and stops: its identified
@@ -466,9 +486,10 @@ export function mergePaneActivity(live: PaneActivity, seeded: Pick<PaneActivity,
 export interface DaemonTurnSeedPorts {
   /** The open reported bot tasks not yet stopped for that report: their
    *  workspace's panes, the panes recorded for the task (its reclaim
-   *  record), and the report time; null when the workspace tree is not
-   *  known yet (nothing is read or dropped). */
-  tasks: () => ReadonlyArray<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[] }> | null;
+   *  record), the panes its own launch created (taskWorkerPanes), and the
+   *  report time; null when the workspace tree is not known yet (nothing is
+   *  read or dropped). */
+  tasks: () => ReadonlyArray<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[]; launched: readonly string[] }> | null;
   /** Whether the daemon can be asked now (not connected: nothing is read). */
   ready: () => boolean;
   /** The daemon's sessions (daemon.listSessions). */
@@ -489,6 +510,11 @@ export interface DaemonTurnSeed {
   workerPanes(taskId: string): readonly string[] | null;
   /** Identify the worker panes and read those still unknown. */
   pass(): Promise<void>;
+  /** Read the panes again right before they are stopped: true only when the
+   *  daemon shows every one's turn over (daemonTurnClosed). A pane it shows
+   *  mid-turn loses its seed (a turn start main missed) and is read again
+   *  later. */
+  confirmIdle(ptyIds: readonly string[]): Promise<boolean>;
 }
 
 /**
@@ -504,18 +530,21 @@ export interface DaemonTurnSeed {
  * prompt waiting) counts as having ended its turn at its last settled result,
  * never before the report; the daemon's time since the last key input moves
  * the window too. An open turn is read again later (TURN_SEED_OPEN_RECHECK_MS);
- * no state and an older daemon that does not say are tried a few times
- * (TURN_SEED_ATTEMPTS_MAX), a read lost to a disconnect is not counted, and a
- * reconnect starts the count afresh. Evidence main sees itself always wins: a
- * live turn end replaces this one, a live hook turn start outweighs it, and a
- * pane that shows live evidence by the time its read returns is not seeded.
+ * no state and an older daemon that does not say are read again with a
+ * growing delay (TURN_SEED_RETRY_MS), never given up on; a read lost to a
+ * disconnect is not counted, and a reconnect reads again at once. Evidence
+ * main sees itself always wins: a live turn end replaces this one, a live
+ * hook turn start outweighs it, and a pane that shows live evidence by the
+ * time its read returns is not seeded. Before any stop the panes are read
+ * again (confirmIdle), so a seed a missed turn start made stale stops nothing.
  */
 export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed {
   const now = ports.now ?? Date.now;
   const seeds = new Map<string, { turnEndAt: number; inputAt?: number }>();
   const workers = new Map<string, string[]>();
-  const attempts = new Map<string, number>();
-  const recheckAt = new Map<string, number>();
+  /** Reads in a row that came back without an answer. */
+  const failures = new Map<string, number>();
+  const nextReadAt = new Map<string, number>();
   let wasReady = false;
   let running = false;
 
@@ -530,11 +559,14 @@ export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed
     if (!state || state.turnOpen === undefined) {
       // Lost to a disconnect: not counted.
       if (!state && !ports.ready()) return;
-      attempts.set(ptyId, (attempts.get(ptyId) ?? 0) + 1);
+      const n = (failures.get(ptyId) ?? 0) + 1;
+      failures.set(ptyId, n);
+      nextReadAt.set(ptyId, readAt + Math.min(TURN_SEED_RETRY_MS * 2 ** (n - 1), TURN_SEED_RETRY_MAX_MS));
       return;
     }
-    if (state.turnOpen || state.hookReports !== true || state.agentStatus === 'running' || state.agentStatus === 'awaiting_input') {
-      recheckAt.set(ptyId, readAt + TURN_SEED_OPEN_RECHECK_MS);
+    failures.delete(ptyId);
+    if (!daemonTurnClosed(state) || state.hookReports !== true) {
+      nextReadAt.set(ptyId, readAt + TURN_SEED_OPEN_RECHECK_MS);
       return;
     }
     // Live evidence that arrived while the read was out wins.
@@ -546,8 +578,7 @@ export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed
       turnEndAt: Math.max(reportedAt, settledAt ?? -Infinity),
       ...(inputAt !== undefined ? { inputAt } : {}),
     });
-    attempts.delete(ptyId);
-    recheckAt.delete(ptyId);
+    nextReadAt.delete(ptyId);
   };
 
   return {
@@ -571,8 +602,11 @@ export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed
         }
         if (!tasks) return;
         const ready = ports.ready();
-        // A (re)connect: reads that came back empty before count afresh.
-        if (ready && !wasReady) attempts.clear();
+        // A (re)connect: reads that came back empty are tried again now.
+        if (ready && !wasReady) {
+          for (const id of failures.keys()) nextReadAt.delete(id);
+          failures.clear();
+        }
         wasReady = ready;
         if (!ready) return;
         let sessions: WorkerSessionInfo[];
@@ -584,20 +618,38 @@ export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed
         workers.clear();
         const reportedAt = new Map<string, number>();
         for (const t of tasks) {
-          const w = taskWorkerPanes(t.panes, t.recorded, sessions);
+          const w = taskWorkerPanes(t.panes, t.recorded, t.launched, sessions);
           if (w.length === 0) continue;
           workers.set(t.taskId, w);
           for (const id of w) reportedAt.set(id, t.reportedAt);
         }
         // A pane that is no longer a reported task's worker keeps nothing.
-        for (const m of [seeds, attempts, recheckAt]) for (const id of [...m.keys()]) if (!reportedAt.has(id)) m.delete(id);
+        for (const m of [seeds, failures, nextReadAt]) for (const id of [...m.keys()]) if (!reportedAt.has(id)) m.delete(id);
         const at = now();
-        const due = [...reportedAt].filter(([id]) => !seeds.has(id) && !ports.liveEvidence(id)
-          && (attempts.get(id) ?? 0) < TURN_SEED_ATTEMPTS_MAX && (recheckAt.get(id) ?? -Infinity) <= at);
+        const due = [...reportedAt].filter(([id]) => !seeds.has(id) && !ports.liveEvidence(id) && (nextReadAt.get(id) ?? -Infinity) <= at);
         await Promise.all(due.map(([id, t]) => read(id, t)));
       } finally {
         running = false;
       }
+    },
+    async confirmIdle(ptyIds) {
+      if (ptyIds.length === 0 || !ports.ready()) return false;
+      const states = await Promise.all(ptyIds.map(async (id) => {
+        try {
+          return await ports.readState(id);
+        } catch {
+          return null;
+        }
+      }));
+      let ok = true;
+      states.forEach((state, i) => {
+        if (daemonTurnClosed(state)) return;
+        ok = false;
+        // Shown mid-turn: a turn start main missed. Its seed goes (main's own
+        // turn end, if any, stays) and it is read again later.
+        if (state && state.turnOpen !== undefined && seeds.delete(ptyIds[i])) nextReadAt.set(ptyIds[i], now() + TURN_SEED_OPEN_RECHECK_MS);
+      });
+      return ok;
     },
   };
 }
@@ -882,6 +934,20 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
       return false;
     }
   };
+  const confirming = new Set<string>();
+  let disposed = false;
+  const runReported = (e: LedgerEntry): void => {
+    if (!ports.confirmIdle) {
+      run(e, 'reported');
+      return;
+    }
+    if (confirming.has(e.id) || inFlight.has(e.id) || isReclaimedSince(ports.store.get(e.id), e)) return;
+    confirming.add(e.id);
+    void ports.confirmIdle(e).catch(() => false).then((ok) => {
+      confirming.delete(e.id);
+      if (ok && !disposed && turnEndedIn(e)) run(e, 'reported');
+    });
+  };
   const catchUp = (): void => {
     let rows: LedgerEntry[] = [];
     try {
@@ -894,7 +960,7 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     const idleSince = at - (ports.reportedIdleMs ?? REPORTED_IDLE_MS);
     for (const e of rows) {
       if (e.updatedAt >= since && isReclaimableEnd(e, e.status)) run(e, e.status as 'completed' | 'cancelled' | 'failed');
-      else if (ports.turnEnded && e.updatedAt <= idleSince && isReclaimableReport(e) && turnEndedIn(e)) run(e, 'reported');
+      else if (ports.turnEnded && e.updatedAt <= idleSince && isReclaimableReport(e) && turnEndedIn(e)) runReported(e);
     }
   };
   catchUp();
@@ -904,6 +970,7 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     timer.unref?.();
   }
   return () => {
+    disposed = true;
     off();
     if (timer) clearInterval(timer);
   };

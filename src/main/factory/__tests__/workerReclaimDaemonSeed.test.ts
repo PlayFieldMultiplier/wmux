@@ -12,10 +12,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import {
+  RECLAIM_ATTEMPTS_MAX,
   REPORTED_IDLE_MS,
   ReclaimedWorkers,
-  TURN_SEED_ATTEMPTS_MAX,
   TURN_SEED_OPEN_RECHECK_MS,
+  TURN_SEED_RETRY_MAX_MS,
+  TURN_SEED_RETRY_MS,
   createDaemonTurnSeed,
   installWorkerReclaim,
   mergePaneActivity,
@@ -72,6 +74,8 @@ interface MainOpts {
   panes?: () => string[] | null;
   sessions?: () => WorkerSessionInfo[];
   recorded?: string[];
+  /** The panes the task's own launch created (default: the worker's). */
+  launched?: string[];
 }
 
 /** main after a restart, wired as workerLifecycleHost wires it: main's own
@@ -86,7 +90,7 @@ function restartedMain(read: (id: string) => Promise<DaemonTurnState | null>, op
   const seed = createDaemonTurnSeed({
     tasks: () => {
       const p = panes();
-      return p ? [{ taskId: reported().id, reportedAt: REPORT, panes: p, recorded: opts.recorded ?? [] }] : null;
+      return p ? [{ taskId: reported().id, reportedAt: REPORT, panes: p, recorded: opts.recorded ?? [], launched: opts.launched ?? [WORKER] }] : null;
     },
     ready: opts.ready ?? (() => true),
     listSessions: async () => sessions(),
@@ -131,9 +135,10 @@ async function reclaimLook(main: ReturnType<typeof restartedMain>, at: number): 
     log: () => undefined,
     turnEnded: (e) => main.idleAt(at, e),
     reportedPanes: main.ownPanes,
+    confirmIdle: (e) => main.seed.confirmIdle(main.ownPanes(e) ?? []),
     workspacePanes: () => [WORKER, SHELL],
   });
-  await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 50));
   await vi.waitFor(() => expect(store.get(entry.id)?.state ?? 'none').not.toBe('stopping'));
   off();
   const rec = store.get(entry.id);
@@ -142,15 +147,21 @@ async function reclaimLook(main: ReturnType<typeof restartedMain>, at: number): 
 }
 
 describe('a reported task\'s own worker pane', () => {
-  it('taskWorkerPanes: a pane whose agent runs, the recorded one first; never a plain shell', () => {
-    const third: WorkerSessionInfo = { ...workerSession(), id: 'daemon-3' };
-    expect(taskWorkerPanes([WORKER, SHELL], [], [workerSession(), shellSession()])).toEqual([WORKER]);
-    expect(taskWorkerPanes([WORKER, SHELL, 'daemon-3'], ['daemon-3'], [workerSession(), shellSession(), third])).toEqual(['daemon-3']);
-    // A recorded pane whose agent no longer runs is no worker pane.
-    expect(taskWorkerPanes([WORKER, SHELL], [SHELL], [workerSession(), shellSession()])).toEqual([WORKER]);
-    expect(taskWorkerPanes([SHELL], [], [shellSession()])).toEqual([]);
+  it('taskWorkerPanes: the recorded pane only; else the one agent pane the task launched; never a plain shell', () => {
+    const owners: WorkerSessionInfo = { ...workerSession(), id: 'daemon-3' };
+    // The pane the task's launch created, the only agent pane: the worker.
+    expect(taskWorkerPanes([WORKER, SHELL], [], [WORKER], [workerSession(), shellSession()])).toEqual([WORKER]);
+    // An agent pane the task did not launch: none.
+    expect(taskWorkerPanes([WORKER, SHELL], [], [], [workerSession(), shellSession()])).toEqual([]);
+    // Two agent panes (the owner's own Claude beside the worker): none.
+    expect(taskWorkerPanes([WORKER, 'daemon-3'], [], [WORKER], [workerSession(), owners])).toEqual([]);
+    // Recorded: that pane only, never another agent pane.
+    expect(taskWorkerPanes([WORKER, 'daemon-3'], ['daemon-3'], [WORKER], [workerSession(), owners])).toEqual(['daemon-3']);
+    // A recorded worker that exited beside the owner's agent: none.
+    expect(taskWorkerPanes([WORKER, 'daemon-3'], [WORKER], [WORKER], [{ ...workerSession(), agentProcessAlive: false }, owners])).toEqual([]);
+    expect(taskWorkerPanes([SHELL], [], [SHELL], [shellSession()])).toEqual([]);
     // Not a session the daemon knows.
-    expect(taskWorkerPanes([WORKER], [], [])).toEqual([]);
+    expect(taskWorkerPanes([WORKER], [], [WORKER], [])).toEqual([]);
     expect(reportedWorkerPanes(null, [WORKER])).toEqual([]);
     expect(reportedWorkerPanes([WORKER], null)).toBeNull();
     expect(reportedWorkerPanes([WORKER, 'gone'], [WORKER, SHELL])).toEqual([WORKER]);
@@ -177,6 +188,29 @@ describe('a reported task\'s own worker pane', () => {
     // Before any pass (the daemon not read yet) the same.
     const fresh = restartedMain(async () => CLOSED);
     expect(fresh.idleAt(REPORT + 60 * MIN)).toBe(false);
+  });
+
+  it('the owner\'s agent beside a dead worker: nothing is stopped, recorded or not', async () => {
+    const owners: WorkerSessionInfo = { ...workerSession(), id: 'daemon-3' };
+    const dead = { ...workerSession(), agentProcessAlive: false };
+    for (const recorded of [[WORKER], []]) {
+      const main = restartedMain(async () => CLOSED, { panes: () => [WORKER, 'daemon-3'], sessions: () => [dead, owners], recorded });
+      await main.seed.pass();
+      expect(main.seed.workerPanes(reported().id)).toBeNull();
+      expect(main.readState).not.toHaveBeenCalled();
+      expect(main.idleAt(REPORT + 60 * MIN)).toBe(false);
+      expect(await reclaimLook(main, REPORT + 60 * MIN)).toEqual([]);
+    }
+    // The owner's idle Claude beside the live worker, no record: two agents, none identified.
+    const both = restartedMain(async () => CLOSED, { panes: () => [WORKER, 'daemon-3'], sessions: () => [workerSession(), owners] });
+    await both.seed.pass();
+    expect(both.seed.workerPanes(reported().id)).toBeNull();
+    expect(await reclaimLook(both, REPORT + 60 * MIN)).toEqual([]);
+    // The only agent pane, but not one the task launched: none.
+    const foreign = restartedMain(async () => CLOSED, { launched: [] });
+    await foreign.seed.pass();
+    expect(foreign.seed.workerPanes(reported().id)).toBeNull();
+    expect(await reclaimLook(foreign, REPORT + 60 * MIN)).toEqual([]);
   });
 
   it('live, the shell pane never holds the worker either: only the worker pane\'s own turn end counts', async () => {
@@ -252,7 +286,7 @@ describe('after a restart: the daemon reports the worker\'s turn open', () => {
     // Read again on the slower cadence, never given up on.
     let answer: DaemonTurnState = { agentStatus: 'running', turnOpen: true, hookReports: true };
     const main = restartedMain(async () => answer);
-    for (let i = 0; i < TURN_SEED_ATTEMPTS_MAX + 2; i++) await main.seed.pass();
+    for (let i = 0; i < 5; i++) await main.seed.pass();
     expect(main.readState).toHaveBeenCalledTimes(1);
     answer = CLOSED;
     main.clock.now += TURN_SEED_OPEN_RECHECK_MS;
@@ -279,51 +313,59 @@ describe('after a restart: the daemon cannot say', () => {
     }
   });
 
-  it('a read that came back empty is tried again a bounded number of times; one that lands later seeds', async () => {
+  it('a read that came back empty is read again with a growing delay, never given up on', async () => {
     let answer: DaemonTurnState | null = null;
     const main = restartedMain(async () => answer);
-    for (let i = 0; i < TURN_SEED_ATTEMPTS_MAX - 1; i++) await main.seed.pass();
+    await main.seed.pass();
+    expect(main.readState).toHaveBeenCalledTimes(1);
+    // Not again before its delay.
+    await main.seed.pass();
+    expect(main.readState).toHaveBeenCalledTimes(1);
+    // The delay doubles per failure up to its cap; reads go on past any count.
+    let delay = TURN_SEED_RETRY_MS;
+    for (let i = 2; i <= 12; i++) {
+      main.clock.now += delay - 1;
+      await main.seed.pass();
+      expect(main.readState).toHaveBeenCalledTimes(i - 1);
+      main.clock.now += 1;
+      await main.seed.pass();
+      expect(main.readState).toHaveBeenCalledTimes(i);
+      delay = Math.min(delay * 2, TURN_SEED_RETRY_MAX_MS);
+    }
+    expect(delay).toBe(TURN_SEED_RETRY_MAX_MS);
+    // The daemon answers at last: seeded, and not read again.
     answer = CLOSED;
+    main.clock.now += delay;
     await main.seed.pass();
     expect(main.seed.activity(WORKER)).toEqual({ turnEndAt: REPORT });
-    // Seeded: not read again.
     await main.seed.pass();
-    expect(main.readState).toHaveBeenCalledTimes(TURN_SEED_ATTEMPTS_MAX);
-    const gaveUp = restartedMain(async () => null);
-    for (let i = 0; i < TURN_SEED_ATTEMPTS_MAX + 2; i++) await gaveUp.seed.pass();
-    expect(gaveUp.readState).toHaveBeenCalledTimes(TURN_SEED_ATTEMPTS_MAX);
+    expect(main.readState).toHaveBeenCalledTimes(13);
   });
 
-  it('a read lost to a disconnect is not counted, and a reconnect starts the count afresh', async () => {
+  it('a read lost to a disconnect is not counted, and a reconnect reads again at once', async () => {
     let ready = true;
-    let answer: DaemonTurnState | null = null;
     const main = restartedMain(async () => {
       ready = false;
-      return answer;
+      return null;
     }, { ready: () => ready });
-    // Every read drops the connection: none is counted.
-    for (let i = 0; i < TURN_SEED_ATTEMPTS_MAX + 2; i++) {
+    // Every read drops the connection: none waits out a delay.
+    for (let i = 0; i < 4; i++) {
       ready = true;
       await main.seed.pass();
     }
-    expect(main.readState).toHaveBeenCalledTimes(TURN_SEED_ATTEMPTS_MAX + 2);
-    // Reads that came back empty while connected use up the count...
+    expect(main.readState).toHaveBeenCalledTimes(4);
+    // A read that came back empty while connected waits its delay...
     const flaky = restartedMain(async () => null, { ready: () => ready });
     ready = true;
-    for (let i = 0; i < TURN_SEED_ATTEMPTS_MAX + 1; i++) await flaky.seed.pass();
-    expect(flaky.readState).toHaveBeenCalledTimes(TURN_SEED_ATTEMPTS_MAX);
-    // ...until the daemon disconnects and connects again.
+    await flaky.seed.pass();
+    await flaky.seed.pass();
+    expect(flaky.readState).toHaveBeenCalledTimes(1);
+    // ...unless the daemon disconnects and connects again.
     ready = false;
     await flaky.seed.pass();
     ready = true;
     await flaky.seed.pass();
-    expect(flaky.readState).toHaveBeenCalledTimes(TURN_SEED_ATTEMPTS_MAX + 1);
-    // The connection holds again and the daemon answers: seeded.
-    answer = CLOSED;
-    ready = true;
-    const steady = restartedMain(async () => answer, { ready: () => ready });
-    await steady.seed.pass();
-    expect(steady.seed.activity(WORKER)).toEqual({ turnEndAt: REPORT });
+    expect(flaky.readState).toHaveBeenCalledTimes(2);
   });
 
   it('reads nothing while the daemon is not connected or the workspace tree is not known', async () => {
@@ -332,7 +374,7 @@ describe('after a restart: the daemon cannot say', () => {
     const main = restartedMain(async () => CLOSED, { ready: () => ready, panes: () => tree });
     await main.seed.pass();
     tree = [WORKER, SHELL];
-    for (let i = 0; i < TURN_SEED_ATTEMPTS_MAX + 1; i++) await main.seed.pass();
+    for (let i = 0; i < 4; i++) await main.seed.pass();
     expect(main.readState).not.toHaveBeenCalled();
     ready = true;
     await main.seed.pass();
@@ -390,6 +432,76 @@ describe('after a restart: live evidence wins over the daemon read', () => {
     await pass;
     expect(main.seed.activity(WORKER)).toBeNull();
     expect(main.idleAt(REPORT + 60 * MIN)).toBe(false);
+  });
+
+  it('a seed made stale by a missed turn start stops nothing: the daemon is read again right before the stop', async () => {
+    let answer: DaemonTurnState = CLOSED;
+    const main = restartedMain(async () => answer);
+    await main.seed.pass();
+    expect(main.idleAt(REPORT + 60 * MIN)).toBe(true);
+    // A turn starts and main misses its hook: the daemon now shows it open.
+    for (const open of [
+      { agentStatus: 'idle', turnOpen: true, hookReports: true },
+      { agentStatus: 'running', turnOpen: false, hookReports: true },
+      { agentStatus: 'awaiting_input', turnOpen: false, hookReports: true },
+    ] as DaemonTurnState[]) {
+      answer = open;
+      expect(await main.seed.confirmIdle([WORKER])).toBe(false);
+    }
+    answer = { agentStatus: 'running', turnOpen: true, hookReports: true };
+    expect(await reclaimLook(main, REPORT + 60 * MIN)).toEqual([]);
+    // Its stale seed is gone: not idle until it is read closed again.
+    expect(main.seed.activity(WORKER)).toBeNull();
+    expect(main.idleAt(REPORT + 60 * MIN)).toBe(false);
+    // No answer, or an older daemon that does not say, confirms nothing either.
+    for (const unsure of [null, { agentStatus: 'idle' }] as Array<DaemonTurnState | null>) {
+      const fresh = restartedMain(async () => CLOSED);
+      await fresh.seed.pass();
+      fresh.readState.mockImplementation(async () => unsure);
+      expect(await reclaimLook(fresh, REPORT + 60 * MIN)).toEqual([]);
+      expect(fresh.seed.activity(WORKER)).toEqual({ turnEndAt: REPORT });
+    }
+    // Read closed again later (its turn just ended): stopped from that end.
+    answer = { ...CLOSED, settledAgoMs: 0 };
+    main.clock.now = RESTART + TURN_SEED_OPEN_RECHECK_MS;
+    await main.seed.pass();
+    expect(main.seed.activity(WORKER)).toEqual({ turnEndAt: RESTART + TURN_SEED_OPEN_RECHECK_MS });
+    expect(await reclaimLook(main, RESTART + TURN_SEED_OPEN_RECHECK_MS + 5 * MIN)).toEqual([WORKER]);
+  });
+
+  it('a stop the re-read refuses spends no attempt: once the turn is over the worker is stopped', async () => {
+    const store = ReclaimedWorkers.at(path.join(dir, 'confirm'));
+    const entry = reported();
+    let closed = false;
+    const confirmIdle = vi.fn(async () => closed);
+    const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
+    const off = installWorkerReclaim({
+      onTransition: () => () => undefined,
+      allRows: () => [entry],
+      row: () => entry,
+      store,
+      worktreeOf: async () => wt,
+      listSessions: async () => [workerSession()],
+      stopAgent,
+      now: () => REPORT + 60 * MIN,
+      log: () => undefined,
+      retryMs: 5,
+      turnEnded: () => true,
+      reportedPanes: () => [WORKER],
+      confirmIdle,
+      workspacePanes: () => [WORKER],
+    });
+    try {
+      await vi.waitFor(() => expect(confirmIdle.mock.calls.length).toBeGreaterThan(RECLAIM_ATTEMPTS_MAX + 1));
+      expect(stopAgent).not.toHaveBeenCalled();
+      closed = true;
+      await vi.waitFor(() => expect(store.get(entry.id)?.state).toBe('stopped'));
+      expect(stopAgent).toHaveBeenCalledWith(WORKER);
+    } finally {
+      off();
+    }
+    const rec = store.get(entry.id);
+    if (rec) await store.put(rec);
   });
 
   it('a live byte-rate running status keeps a seeded pane', async () => {

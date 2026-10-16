@@ -400,6 +400,9 @@ export interface BotWorkerSessionRecord {
   codexHome?: string;
   launch?: BotWorkerLaunchFiles;
   wsl?: boolean;
+  /** The bot task whose own fan-out (or resume) launch created this pane;
+   *  absent for any other pane of the task's workspace. */
+  taskId?: string;
 }
 
 /** The per-launch files under `<dir>/factory/`: only these folders, a JSON
@@ -444,6 +447,7 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
         ...(typeof r.codexHome === 'string' && r.codexHome.length <= 4096 ? { codexHome: r.codexHome } : {}),
         ...(launch ? { launch } : {}),
         ...(r.wsl === true ? { wsl: true } : {}),
+        ...(typeof r.taskId === 'string' && r.taskId.length > 0 && r.taskId.length <= 128 ? { taskId: r.taskId } : {}),
       });
     }
   } catch (err) {

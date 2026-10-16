@@ -6,6 +6,8 @@ import { clearedLaunchLine,
   BOT_WORKER_DENY,
   beginBotWorkerSpawn,
   botWorkerForCreate,
+  botWorkerLaunchTask,
+  botWorkerSessionRecord,
   botWorkerSessionsPath,
   botWorkerSettingsPath,
   buildBotWorkerSettings,
@@ -289,6 +291,27 @@ describe('bot worker sessions survive a restart', () => {
     expect(guardSessionLaunch('daemon-human', resume, { dir })).toBe(resume);
   });
 
+  it('the pane a task\'s own fan-out launch created records that task; any other pane of the workspace records none', () => {
+    const release = beginBotWorkerSpawn('ws-owner', '/w/task', { botId: 'bot-0000000a', taskId: 'wtask-abc-12345678' });
+    try {
+      const launch = botWorkerForCreate({ fanoutTaskOf: 'ws-owner', cwd: '/w/task', workspaceId: 'ws-task' }, { dir, isBotTaskWorkspace: () => false });
+      expect(botWorkerLaunchTask(launch)).toEqual({ taskId: 'wtask-abc-12345678' });
+      noteBotWorkerSession('daemon-launch', 'ws-task', dir, botWorkerLaunchTask(launch));
+    } finally {
+      release();
+    }
+    // A split or a new tab in the same task workspace.
+    const split = botWorkerForCreate({ workspaceId: 'ws-task', cwd: '/w/task' }, { dir, isBotTaskWorkspace: (ws: string) => ws === 'ws-task' });
+    expect(botWorkerLaunchTask(split)).toEqual({});
+    noteBotWorkerSession('daemon-split', 'ws-task', dir, botWorkerLaunchTask(split));
+    expect(botWorkerLaunchTask(null)).toEqual({});
+    // Two tasks in flight for the same owner and folder: neither is named.
+    expect(botWorkerLaunchTask({ strict: true, spawns: [{ botId: 'b', taskId: 't1' }, { botId: 'b', taskId: 't2' }] })).toEqual({});
+    reloadBotWorkerSessionsForTests();
+    expect(botWorkerSessionRecord('daemon-launch', dir)?.taskId).toBe('wtask-abc-12345678');
+    expect(botWorkerSessionRecord('daemon-split', dir)).not.toHaveProperty('taskId');
+  });
+
   it('a workspace whose ledger row is gone is still known from its recorded sessions', () => {
     noteBotWorkerSession('daemon-bot5', 'ws-task', dir);
     reloadBotWorkerSessionsForTests();
@@ -354,8 +377,11 @@ describe('pty:create applies the guard (source-level lock)', () => {
       expect(src.indexOf(line, at)).toBeGreaterThan(at);
     }
     // The session is recorded (before the daemon creates it), and forgotten with the pane.
-    expect(src.indexOf('if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, staged.launch);')).toBeLessThan(src.indexOf("daemonClient.rpc('daemon.createSession'"));
-    expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, staged.launch);');
+    // It names the task when it is that task's own fan-out (or resume) launch.
+    const noted = src.indexOf('if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });');
+    expect(noted).toBeGreaterThan(-1);
+    expect(noted).toBeLessThan(src.indexOf("daemonClient.rpc('daemon.createSession'"));
+    expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });');
     // The record carries a guarded codex launch's folder as well as a claude launch's files.
     expect(src).toContain('launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded) }');
     expect(src.split('forgetBotWorkerSession(id);').length - 1).toBe(2);
