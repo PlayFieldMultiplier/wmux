@@ -184,6 +184,15 @@ export function __resetFactoryStopForTesting(): void {
   turnStops.clear();
 }
 
+/** Whether a row is a bot task the owner stopped (Stop worker, Stop for one
+ *  bot, Stop all, or "Run bots" off): cancelled by the system as "stopped
+ *  by owner". A stop deletes nothing, so its folder is kept
+ *  (taskFolderCleanup.ts). Pure. */
+export function isStoppedByOwnerRow(row: Pick<LedgerEntry, 'status' | 'summary' | 'updatedBy' | 'dispatch'>): boolean {
+  const origin = row.dispatch?.origin;
+  return origin?.kind === 'bot' && !!origin.botId && row.status === 'cancelled' && row.summary === STOPPED_BY_OWNER && row.updatedBy?.kind === 'system';
+}
+
 /** Whether a row is a task the owner stopped recently (its worker is stopped again). */
 function isRecentlyStopped(row: LedgerEntry, botId: string | undefined, since: number): boolean {
   const origin = row.dispatch?.origin;

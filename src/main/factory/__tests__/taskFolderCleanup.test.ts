@@ -396,6 +396,40 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolders(p, rows, { force: true })).toEqual({ removed: 1, keptDirty: 0, busy: 0, failed: 0 });
     expect(await taskFolderUsage(p, rows)).toEqual({ bytes: 0, folders: 0, dirty: 0 });
   });
+
+  it('a task the owner stopped keeps its worktree and research folder; another cancel does not; Clean up now still applies', async () => {
+    const mgr = new TaskWorktreeManager();
+    const stoppedWt = await taskWorktree(mgr, 'stop-33333333');
+    const otherWt = await taskWorktree(mgr, 'other-44444444');
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-1', 'task-1');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'notes.md'), 'found it');
+    const missions = new Map<string, TaskMission>([
+      ['wtask-stop-33333333', { folder: stoppedWt, branch: 'wtask/stop-33333333' }],
+      ['wtask-other-44444444', { folder: otherWt, branch: 'wtask/other-44444444' }],
+      ['wtask-research-5555', { folder: scratch }],
+    ]);
+    // As factoryStop writes it: cancelled by the system, "stopped by owner".
+    const stoppedBy = { summary: 'stopped by owner', updatedBy: { kind: 'system' as const, workspaceId: 'ws-daemon' }, updatedAt: 49_000 };
+    const rows = [
+      row('cancelled', { id: 'wtask-stop-33333333', ...stoppedBy }),
+      row('cancelled', { id: 'wtask-research-5555', ...stoppedBy, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } }),
+      row('cancelled', { id: 'wtask-other-44444444', updatedAt: 49_000 }),
+    ];
+    const p = ports({}, missions);
+    const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => rows });
+    await vi.waitFor(() => expect(fs.existsSync(otherWt)).toBe(false));
+    installed.dispose();
+    expect(fs.existsSync(path.join(stoppedWt, 'a.txt'))).toBe(true);
+    expect(fs.readFileSync(path.join(scratch, 'notes.md'), 'utf8')).toBe('found it');
+    expect(p.store.get('wtask-stop-33333333')).toBeNull();
+    expect(await cleanTaskFolder(p, rows[0], missions.get('wtask-stop-33333333')!, [])).toBe('skipped');
+    expect(fs.existsSync(stoppedWt)).toBe(true);
+    // The owner's Clean up now: the rules apply (a clean one goes, its branch stays).
+    expect(await cleanTaskFolders(p, rows, { force: true })).toMatchObject({ removed: 2 });
+    expect(fs.existsSync(stoppedWt)).toBe(false);
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/stop-33333333')).toMatch(/^[0-9a-f]{40}$/);
+  });
 });
 
 describe('resume after removal', () => {

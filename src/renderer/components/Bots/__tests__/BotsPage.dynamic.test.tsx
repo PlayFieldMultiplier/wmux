@@ -1136,6 +1136,51 @@ describe('Bots page', () => {
     act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
+  it('a Stop worker that answers after the panel moved to another worker leaves that worker\'s confirm and focus alone', async () => {
+    seedRooms();
+    const pane = (id: string) => ({
+      ...ws(id, `wtask: ${id}`),
+      rootPane: { id: `${id}-p`, type: 'leaf', ordinal: 1, surfaces: [{ id: `s-${id}`, ptyId: `pty-${id}`, title: '', shell: 'zsh', cwd: '/', surfaceType: 'terminal' }], activeSurfaceId: `s-${id}` },
+    }) as Workspace;
+    act(() => useStore.setState({
+      workspaces: [ws('hq', 'Headquarters'), ws('w1', 'api'), pane('t1'), pane('t2')],
+      surfaceAgent: { 'pty-t1': { name: 'Claude Code', status: 'running' }, 'pty-t2': { name: 'Claude Code', status: 'running' } },
+      surfaceAgentStatus: { 'pty-t1': 'running', 'pty-t2': 'running' },
+    } as never));
+    const view = (taskId: string, ws: string, title: string) => ({
+      taskId, taskWorkspaceId: ws, ownerWorkspaceId: 'w1', botId: LEAD, title, status: 'working' as const, stage: 'working' as const, updatedAt: Date.now(),
+    });
+    bots[1] = { ...bots[1], tasks: [view('wtask-aaaa-00000001', 't1', 'task A'), view('wtask-bbbb-00000002', 't2', 'task B')] };
+    let answerA: (r: { ok: boolean; workersStopped: number; tasksCancelled: number }) => void = () => undefined;
+    const stopTask = vi.fn((taskId: string) => (taskId === 'wtask-aaaa-00000001'
+      ? new Promise<{ ok: boolean; workersStopped: number; tasksCancelled: number }>((resolve) => { answerA = resolve; })
+      : Promise.resolve({ ok: true, workersStopped: 1, tasksCancelled: 1 })));
+    act(() => useStore.setState({ toasts: [] } as never));
+    await render(<BotsPage stop={{ stopTask }} />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    // Stop A, and while it runs show B and open B's confirm.
+    act(() => q('[data-bots-tree] [data-bots-worker="t1"]')!.click());
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    act(() => q('[data-bots-worker-panel-stop]')!.click());
+    await act(async () => { q('[data-testid="bots-stop-worker-confirm"]')!.click(); });
+    expect(stopTask).toHaveBeenCalledWith('wtask-aaaa-00000001');
+    act(() => q('[data-bots-tree] [data-bots-worker="t2"]')!.click());
+    expect(q('[data-bots-worker-panel="t2"]')).not.toBeNull();
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    act(() => q('[data-bots-worker-panel-stop]')!.click());
+    const bConfirm = q('[data-testid="bots-stop-worker-confirm"]')!;
+    expect(q('[data-testid="bots-stop-worker-confirm-row"]')?.textContent).toContain('task B');
+    expect(document.activeElement).toBe(bConfirm);
+    // A answers: its toast, but B's confirm stays open and keeps the focus.
+    await act(async () => { answerA({ ok: true, workersStopped: 1, tasksCancelled: 1 }); });
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped the worker for “task A”.');
+    expect(q('[data-testid="bots-stop-worker-confirm-row"]')?.textContent).toContain('task B');
+    expect(document.activeElement).toBe(bConfirm);
+    expect(stopTask).toHaveBeenCalledTimes(1);
+    act(() => q('[data-testid="bots-stop-worker-cancel"]')!.click());
+    act(() => useStore.getState().setBotsWorkerPanel(null));
+  });
+
   it('a partial Stop worker says why and keeps Stop worker offered once the task is cancelled, until a stop goes through', async () => {
     seedRooms();
     seedWorkerPanes();

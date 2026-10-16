@@ -22,6 +22,10 @@
 //   - Only bot tasks' own folders: a ledger row a bot started, whose folder
 //     sits under one of the two roots above. Owner fan-outs, phone worktrees
 //     and worktrees made by hand are never touched.
+//   - Not a task the owner stopped (cancelled "stopped by owner": Stop
+//     worker, a bot's Stop, Stop all, "Run bots" off). A stop deletes
+//     nothing (factoryStop.ts), so the owner can look at what the worker
+//     left; only the owner's Clean up now applies the rules to it.
 // What was removed is recorded in `<wmuxDir>/factory/task-folders.json`, with
 // the repository and branch to put it back. A resume of the task's worker
 // (workerReclaim.ts respawn, the owner's Resume or `worker_resume`) puts the
@@ -38,6 +42,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import { getExecEnv } from '../../shared/execEnv';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { sessionHostDir } from '../worktask/stopSessionsInDir';
+import { isStoppedByOwnerRow } from './factoryStop';
 
 export const TASK_FOLDERS_FILENAME = 'task-folders.json';
 export const TASK_FOLDERS_VERSION = 1 as const;
@@ -271,8 +276,9 @@ function throughNoLink(folder: string, root: string): boolean {
 
 /**
  * Remove one ended bot task's folder when the rules allow it. `force`: the
- * owner's Clean up now (a folder kept dirty is looked at again). Never
- * throws. `skipped`: not a bot task's folder, not ended, detached, already
+ * owner's Clean up now (a folder kept dirty, or one a stop kept, is looked
+ * at again). Never throws. `skipped`: not a bot task's folder, not ended,
+ * stopped by the owner (without `force`), detached, already
  * handled, held by a resume, or a worker still runs; `busy`: a session or a
  * gate still uses the folder.
  */
@@ -303,6 +309,8 @@ async function cleanTaskFolderNow(
   const log = ports.log ?? ((m: string) => console.warn(m));
   const exists = ports.exists ?? defaultExists;
   if (!isEndedBotTask(entry) || !mission || mission.detached === true) return 'skipped';
+  // A task the owner stopped keeps its folder; Clean up now still applies.
+  if (isStoppedByOwnerRow(entry) && opts.force !== true) return 'skipped';
   const botId = entry.dispatch?.origin.botId ?? '';
   const kind = taskFolderKind(mission.folder, mission.branch, botId, ports.roots);
   if (!kind) return 'skipped';

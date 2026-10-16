@@ -185,9 +185,16 @@ export default function BotsWorkerPanel({ workspaceId, hosted, name, state, atte
   // Stop worker's confirm belongs to the task it was asked for.
   const [confirmStop, setConfirmStop] = useState<string | null>(null);
   const asideRef = useRef<HTMLElement>(null);
-  // Cancel or a stop that went through hands focus back to the menu's ⋯.
-  const closeStop = () => {
-    setConfirmStop(null);
+  // The worker shown now, read when a stop answers.
+  const shownRef = useRef(workspaceId);
+  shownRef.current = workspaceId;
+  // Cancel or a stop that went through closes that task's confirm and hands
+  // focus back to the menu's ⋯ — only while the panel still shows the worker
+  // the stop was asked for. A stop that answers after the owner moved on to
+  // another worker leaves that worker's confirm and the focus alone.
+  const closeStop = (taskId: string, askedFor: string) => {
+    setConfirmStop((cur) => (cur === taskId ? null : cur));
+    if (shownRef.current !== askedFor) return;
     asideRef.current?.querySelector<HTMLButtonElement>('[data-bots-worker-panel-menu]')?.focus();
   };
   if (!workspace) return null;
@@ -214,7 +221,7 @@ export default function BotsWorkerPanel({ workspaceId, hosted, name, state, atte
         </button>
       </div>
       {stop && confirmStop === stop.taskId && (
-        <StopWorkerConfirm task={name} taskId={stop.taskId} stopTask={stop.stopTask} t={t} onClose={closeStop} />
+        <StopWorkerConfirm task={name} taskId={stop.taskId} stopTask={stop.stopTask} t={t} onClose={() => closeStop(stop.taskId, workspaceId)} />
       )}
       {/* The terminal right under the header: the pane's tab strip and its
           split, browser and zoom controls are Workspaces' (bots.css hides

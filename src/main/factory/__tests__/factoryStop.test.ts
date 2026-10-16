@@ -11,7 +11,7 @@ vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() 
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
-import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isWakeStoppedByOwner, stopFactoryTask, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
+import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isStoppedByOwnerRow, isWakeStoppedByOwner, stopFactoryTask, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
 import { factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handlers/factory.handler';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings, type FactorySettingsStore } from '../factorySettings';
 
@@ -506,6 +506,24 @@ describe('stopFactoryTask (the Bots page Stop worker)', () => {
     expect(__lateStopCountForTesting()).toBe(0);
     expect(pauseRoutines).not.toHaveBeenCalled();
     expect(stopResumed).not.toHaveBeenCalled();
+  });
+
+  it('Stop worker and the bot-wide stop leave the same mark, which keeps the task folder (isStoppedByOwnerRow)', async () => {
+    await task('t-one', LEAD);
+    await task('t-all', TRIAGE);
+    await task('t-done', LEAD, 'completed');
+    await task('t-failed', LEAD, 'failed');
+    const r = ports();
+    await stopFactoryTask(r.p, 't-one');
+    await stopFactoryWork(r.p, { botId: TRIAGE });
+    expect(isStoppedByOwnerRow(ledger.get('t-one') as LedgerEntry)).toBe(true);
+    expect(isStoppedByOwnerRow(ledger.get('t-all') as LedgerEntry)).toBe(true);
+    // An end the owner did not stop is not.
+    expect(isStoppedByOwnerRow(ledger.get('t-done') as LedgerEntry)).toBe(false);
+    expect(isStoppedByOwnerRow(ledger.get('t-failed') as LedgerEntry)).toBe(false);
+    const row = ledger.get('t-one') as LedgerEntry;
+    expect(isStoppedByOwnerRow({ ...row, updatedBy: { kind: 'brain', workspaceId: 'ws-1' } })).toBe(false);
+    expect(isStoppedByOwnerRow({ ...row, dispatch: { origin: { kind: 'pane' }, preset: 'default' } })).toBe(false);
   });
 
   it('wakes no bot, as the bot-wide stop does', async () => {
