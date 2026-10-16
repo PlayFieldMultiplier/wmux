@@ -38,6 +38,7 @@ import {
   ReclaimedWorkers,
   createDaemonTurnSeed,
   createResumedIdleSweep,
+  createViewAttention,
   createWorkerClear,
   dormantTaskWorkspaceSet,
   endedTaskAgentRuns,
@@ -56,6 +57,7 @@ import {
   type WorkerResumePorts,
   type WorkerSessionInfo,
   unreclaimedEndedWorkers,
+  viewProtects,
   workerPanesIdle,
 } from './workerReclaim';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
@@ -329,8 +331,16 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         ...(inputAt !== undefined ? { inputAt } : {}),
       }, turnSeed.activity(id));
     };
-    const viewed = (workspaceId: string): boolean => mirror.getViewed()?.workspaceId === workspaceId
-      || mirror.getPanelWorkspaceId() === workspaceId;
+    // Shown protects a worker only while the owner typed into it or turned
+    // to it (came into view, its active pane changed) in the last
+    // VIEWED_ATTENTION_MS; then the usual idle test applies.
+    const attention = createViewAttention();
+    const observeView = (): void => attention.observe(mirror.getViewed(), mirror.getPanelWorkspaceId(), Date.now());
+    observeView();
+    offs.push(mirror.onSnapshot(observeView));
+    const viewed = (workspaceId: string): boolean => (mirror.getViewed()?.workspaceId === workspaceId
+      || mirror.getPanelWorkspaceId() === workspaceId)
+      && viewProtects(attention.shownAt(workspaceId), (workspacePtys(workspaceId) ?? []).map((id) => paneActivity(id).inputAt), Date.now());
     const reportedIdle = (entry: LedgerEntry): boolean => {
       if (viewed(entry.taskWorkspaceId)) return false;
       const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));

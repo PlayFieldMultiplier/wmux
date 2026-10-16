@@ -11,9 +11,12 @@ import {
   REPORTED_IDLE_MS,
   RESUMED_IDLE_MS,
   ReclaimedWorkers,
+  VIEWED_ATTENTION_MS,
   createResumedIdleSweep,
+  createViewAttention,
   installWorkerReclaim,
   resumedAgentAlive,
+  viewProtects,
   workerPanesIdle,
   type PaneActivity,
   type ResumedIdlePorts,
@@ -222,5 +225,92 @@ describe('the idle stop of resumed workers', () => {
     expect(store.get(TASK)?.state).toBe('resumed');
     await r.sweep(31 * MIN);
     expect(stopAgent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('a shown worker is protected only for 30 minutes after the owner\'s last input or focus', () => {
+  it('viewProtects: shown and turned to or typed into within the window', () => {
+    expect(VIEWED_ATTENTION_MS).toBe(30 * MIN);
+    expect(viewProtects(undefined, [], 0)).toBe(false);
+    expect(viewProtects(0, [], 29 * MIN)).toBe(true);
+    expect(viewProtects(0, [], 31 * MIN)).toBe(false);
+    expect(viewProtects(0, [undefined, 21 * MIN], 31 * MIN)).toBe(true);
+  });
+
+  it('createViewAttention: coming into view or a pane focus restarts the clock; leaving forgets it', () => {
+    const a = createViewAttention();
+    a.observe({ workspaceId: 'ws-task', paneId: 'p1' }, null, 0);
+    a.observe({ workspaceId: 'ws-task', paneId: 'p1' }, null, 10 * MIN);
+    expect(a.shownAt('ws-task')).toBe(0);
+    a.observe({ workspaceId: 'ws-task', paneId: 'p2' }, null, 20 * MIN);
+    expect(a.shownAt('ws-task')).toBe(20 * MIN);
+    // Shown in the Bots panel while another workspace is active.
+    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, 'ws-task', 25 * MIN);
+    expect(a.shownAt('ws-task')).toBe(25 * MIN);
+    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, 'ws-task', 40 * MIN);
+    expect(a.shownAt('ws-task')).toBe(25 * MIN);
+    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, null, 41 * MIN);
+    expect(a.shownAt('ws-task')).toBeUndefined();
+  });
+
+  describe('the idle stop of a resumed worker shown in the Bots panel', () => {
+    let store: ReclaimedWorkers;
+    beforeEach(async () => {
+      store = ReclaimedWorkers.at(dir);
+      await store.put({
+        taskId: TASK, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${TASK}` as never,
+        ended: 'completed', state: 'resumed', at: 0, endRev: 3, sessions: [{ sessionId: 'daemon-1', cwd: dir, resumeSessionId: UUID }],
+      });
+    });
+
+    /** Opened in the panel at 0; its turn ended a minute in. */
+    function rig() {
+      let at = 0;
+      const pane: PaneActivity = { status: 'idle', turnEndAt: MIN };
+      const attention = createViewAttention();
+      attention.observe({ workspaceId: 'ws-owner', paneId: 'p0' }, 'ws-task', 0);
+      const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
+      // As the lifecycle host words it.
+      const sweep = createResumedIdleSweep({
+        store,
+        row: () => row('completed'),
+        stopAgent,
+        now: () => at,
+        paneActivity: () => ({ ...pane }),
+        viewed: (ws) => viewProtects(attention.shownAt(ws), [pane.inputAt], at),
+        log: () => undefined,
+      });
+      const live: WorkerSessionInfo[] = [{ id: 'daemon-1', spawnCwd: dir, agentProcessAlive: true }];
+      return { pane, stopAgent, attention, sweep: (t: number) => { at = t; return sweep.sweep(live); } };
+    }
+
+    it('shown 29 minutes with no input: not stopped; 31 minutes, idle: stopped', async () => {
+      const r = rig();
+      expect(await r.sweep(29 * MIN)).toEqual([]);
+      expect(r.stopAgent).not.toHaveBeenCalled();
+      expect(await r.sweep(31 * MIN)).toEqual([TASK]);
+      expect(store.get(TASK)?.state).toBe('stopped');
+    });
+
+    it('input 10 minutes ago keeps it, and focusing it again restores the protection', async () => {
+      const r = rig();
+      r.pane.inputAt = 21 * MIN;
+      expect(await r.sweep(31 * MIN)).toEqual([]);
+      // 30 minutes after that input, idle 5 minutes since: stopped, unless
+      // the owner turned to it again.
+      r.attention.observe({ workspaceId: 'ws-task', paneId: 'p1' }, 'ws-task', 50 * MIN);
+      expect(await r.sweep(52 * MIN)).toEqual([]);
+      expect(await r.sweep(81 * MIN)).toEqual([TASK]);
+    });
+
+    it('a live turn or a prompt waiting is never stopped, whatever its view time', async () => {
+      const r = rig();
+      r.pane.status = 'running';
+      r.pane.turnStartAt = 2 * MIN;
+      expect(await r.sweep(120 * MIN)).toEqual([]);
+      r.pane.status = 'awaiting_input';
+      expect(await r.sweep(240 * MIN)).toEqual([]);
+      expect(r.stopAgent).not.toHaveBeenCalled();
+    });
   });
 });
