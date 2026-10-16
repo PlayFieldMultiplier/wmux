@@ -480,7 +480,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   facts — and the owner approves each one. In the profile, under its
   connections, a Skills row lists them one line each: the name, then muted
   where it stands ("approved 1.1.0", "waiting for your approval (1.0.0)",
-  "approved 1.0.0 · update 1.1.0 waiting for your approval", "archived");
+  "approved 1.0.0 · update 1.1.0 waiting for your approval", "archived",
+  or after "approved 1.0.0" the muted note that it changed since approval
+  and does not load until the bot proposes it again);
   an approved skill's name is in the main text colour, every other one
   muted, and the description is the row's tooltip. Each one not archived
   has a muted text button, Archive, which acts at once (a skill is
@@ -492,7 +494,8 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   owner's typed "ok" does not approve one), titled "Add the skill <name>
   <version>?" or "Update the skill …", its body the bot's one line, what
   Approve and Deny do, then the change as a `diff` code block (removed
-  lines `- `, added `+ `, cut with a note past the card's length).
+  lines `- `, added `+ `), always whole: a proposal whose change would not
+  fit the card is refused to the bot, never cut.
 - **Messages are bubbles in runs (owner decision 2026-10-14, the reference
   messenger's look; replaces the same day's flat rows):** a bot's messages
   on the left in soft `--selection-subtle` bubbles (18px radius, fill only,

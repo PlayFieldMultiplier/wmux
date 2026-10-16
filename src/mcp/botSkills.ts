@@ -22,7 +22,8 @@ registerToolModule({
       'skill_propose',
       'Write a skill: a procedure for one kind of your work (steps, checks, pitfalls), not a standing fact. '
         + 'Proposing a name you already have updates that skill (prefer it over a new one); an update takes a newer version. '
-        + 'Nothing loads until the owner approves the card that shows the change; Deny archives the proposal.',
+        + 'Nothing loads until the owner approves the card that shows the change; Deny archives the proposal. '
+        + `The card shows the whole change, so it is at most ${SKILL_LIMITS.DIFF_MAX} characters (a new skill counts in full): keep a skill short, or split it.`,
       {
         name: NAME,
         content: z.string().min(1).max(SKILL_LIMITS.BODY_MAX)
@@ -39,12 +40,12 @@ registerToolModule({
 
     host.tool(
       'skill_read',
-      'Read one of your approved skills (its SKILL.md and reference names), or one of its references.',
+      'Read one of your approved skills (its SKILL.md and reference names), or one of its references. With no name: the list of your approved skills.',
       {
-        name: NAME,
+        name: NAME.optional(),
         reference: z.string().min(1).max(80).optional().describe('A reference file name from the skill.'),
       },
-      async ({ name, reference }) => call(BOT_SKILL_RPC.read, { name, ...(reference ? { reference } : {}) }),
+      async ({ name, reference }) => call(BOT_SKILL_RPC.read, { ...(name ? { name } : {}), ...(reference ? { reference } : {}) }),
     );
   },
 });

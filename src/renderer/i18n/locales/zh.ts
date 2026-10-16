@@ -2192,6 +2192,7 @@ export const zh = {
   'botsPage.profile.skillProposed': "等待你批准（{version}）",
   'botsPage.profile.skillUpdateProposed': "更新 {version} 等待你批准",
   'botsPage.profile.skillArchived': "已归档",
+  'botsPage.profile.skillChanged': "批准后已更改——在机器人重新提议之前不会加载",
   'botsPage.profile.skillArchive': "归档",
   'botsPage.profile.skillArchiveFailed': "无法归档该技能。",
   'settings.factory.keyDeleteConfirm': "删除 {name}？已在运行的工作进程在停止前仍会保留它。",

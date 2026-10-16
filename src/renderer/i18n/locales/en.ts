@@ -2095,6 +2095,7 @@ export const en = {
   'botsPage.profile.skillProposed': "waiting for your approval ({version})",
   'botsPage.profile.skillUpdateProposed': "update {version} waiting for your approval",
   'botsPage.profile.skillArchived': "archived",
+  'botsPage.profile.skillChanged': "changed since approval — not loaded until the bot proposes it again",
   'botsPage.profile.skillArchive': "Archive",
   'botsPage.profile.skillArchiveFailed': "The skill could not be archived.",
   'settings.factory.keyDeleteConfirm': "Delete {name}? Workers already running keep it until they stop.",

@@ -3,7 +3,8 @@
 // The skills the bot wrote for itself (shared/botSkill.ts), through the
 // preload bridge `electronAPI.factory.skills` (main-window IPC). Each row says
 // where the skill stands — approved (its version), waiting for the owner's
-// approval card, approved with an update waiting, archived — and every one
+// approval card, approved with an update waiting, changed on disk since
+// approval (so not loaded), archived — and every one
 // not archived has Archive. Approving and denying happen on the card, where
 // the change is shown; the profile only lists and archives.
 import { useCallback, useEffect, useState } from 'react';
@@ -65,8 +66,10 @@ export function useBotSkills(botId: string, p: BotSkillPort = getBotSkillPort())
 export function skillStateText(s: BotSkillView, t: T): string {
   if (s.state === 'archived') return t('botsPage.profile.skillArchived');
   if (s.state === 'proposed') return t('botsPage.profile.skillProposed', { version: s.proposed?.version ?? '' });
-  const approved = t('botsPage.profile.skillApproved', { version: s.version ?? '' });
-  return s.proposed ? `${approved} · ${t('botsPage.profile.skillUpdateProposed', { version: s.proposed.version })}` : approved;
+  const parts = [t('botsPage.profile.skillApproved', { version: s.version ?? '' })];
+  if (s.changed) parts.push(t('botsPage.profile.skillChanged'));
+  if (s.proposed) parts.push(t('botsPage.profile.skillUpdateProposed', { version: s.proposed.version }));
+  return parts.join(' · ');
 }
 
 export function BotSkills({ row, t, port: p = getBotSkillPort() }: { row: FactoryBotRow; t: T; port?: BotSkillPort }): React.ReactElement | null {
@@ -88,7 +91,7 @@ export function BotSkills({ row, t, port: p = getBotSkillPort() }: { row: Factor
         <ul className="space-y-0.5">
           {skills.map((s) => (
             <li key={s.name} data-bot-skill={s.name} data-skill-state={s.state} className="flex items-center gap-2">
-              <span className={`min-w-0 flex-1 truncate ${s.state === 'approved' ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)]'}`} title={s.description ?? s.proposed?.description}>
+              <span className={`min-w-0 flex-1 truncate ${s.state === 'approved' && !s.changed ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)]'}`} title={s.description ?? s.proposed?.description}>
                 {s.name}
                 <span className="text-[var(--text-muted)]">{` · ${skillStateText(s, t)}`}</span>
               </span>

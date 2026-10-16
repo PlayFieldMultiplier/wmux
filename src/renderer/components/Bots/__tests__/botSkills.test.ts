@@ -19,6 +19,8 @@ describe('bot profile: skills', () => {
     expect(skillStateText({ name: 'a', state: 'approved', version: '1.0.0', description: 'd', proposed: { version: '1.1.0', description: 'd', at: 1 }, updatedAt: 1 }, t))
       .toBe('approved 1.0.0 · update 1.1.0 waiting for your approval');
     expect(skillStateText({ name: 'a', state: 'archived', updatedAt: 1 }, t)).toBe('archived');
+    expect(skillStateText({ name: 'a', state: 'approved', version: '1.0.0', description: 'd', changed: true, updatedAt: 1 }, t))
+      .toBe('approved 1.0.0 · changed since approval — not loaded until the bot proposes it again');
   });
 
   it('an approved skill card is done, not "recorded only"', () => {
@@ -32,7 +34,7 @@ describe('bot profile: skills', () => {
     const { pl } = await import('../../../i18n/locales/pl');
     const { zh } = await import('../../../i18n/locales/zh');
     const keys = Object.keys(en).filter((k) => k.startsWith('botsPage.profile.skill') || k === 'botsPage.canDo.skills' || k === 'room.approval.action.skill');
-    expect(keys.length).toBe(10);
+    expect(keys.length).toBe(11);
     for (const locale of [ko, pl, zh] as Record<string, string>[]) for (const k of keys) expect(locale[k], k).toBeTruthy();
   });
 });

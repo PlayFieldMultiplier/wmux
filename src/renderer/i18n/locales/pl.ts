@@ -2073,6 +2073,7 @@ export const pl = {
   'botsPage.profile.skillProposed': "czeka na Twoją zgodę ({version})",
   'botsPage.profile.skillUpdateProposed': "aktualizacja {version} czeka na Twoją zgodę",
   'botsPage.profile.skillArchived': "zarchiwizowana",
+  'botsPage.profile.skillChanged': "zmieniona po zatwierdzeniu — nie jest wczytywana, dopóki bot nie zaproponuje jej ponownie",
   'botsPage.profile.skillArchive': "Archiwizuj",
   'botsPage.profile.skillArchiveFailed': "Nie udało się zarchiwizować umiejętności.",
   'settings.factory.keyDeleteConfirm': "Usunąć {name}? Działające workery zachowają go do zatrzymania.",

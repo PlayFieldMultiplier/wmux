@@ -389,23 +389,28 @@ function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'i
   return r.repoKey;
 }
 
-/** A skill card's lines after the bot's: what Approve does, then the diff
- *  (botSkills.skillFilesDiff: every line prefixed, so none closes the
- *  fence) cut to `room` characters with a note when it is longer. Pure. */
-export function skillCardLines(update: boolean, diff: string, room: number): string[] {
-  const head = [
+/** A skill card's lines after the bot's: what Approve does, then the whole
+ *  diff (botSkills.skillFilesDiff: every line prefixed, so none closes the
+ *  fence). Null when they do not fit in `room` characters: the owner sees
+ *  all of what they approve, so a diff is never cut. Pure. */
+export function skillCardLines(update: boolean, diff: string, room: number): string[] | null {
+  const fence = '```';
+  const lines = [
     '',
     update
       ? 'Approve to load this version in place of the approved one; Deny keeps the approved one and archives this proposal.'
       : 'Approve to load this skill in the bot\'s wakes and its workers; Deny archives it.',
     '',
+    `${fence}diff`,
+    diff,
+    fence,
   ];
-  const fence = '```';
-  const cut = '\n… (the rest is not shown)';
-  const budget = room - head.join('\n').length - (fence.length + 6) * 2 - cut.length;
-  if (budget <= 0) return head.slice(0, 2);
-  const body = diff.length > budget ? `${diff.slice(0, budget)}${cut}` : diff;
-  return [...head, `${fence}diff`, body, fence];
+  return lines.join('\n').length <= room ? lines : null;
+}
+
+/** The first line of an approval card's body. */
+function askLine(profile: BotProfile, reason: string): string {
+  return `${profile.name || 'A bot'} asks: ${reason}`;
 }
 
 export class ApprovalService {
@@ -610,6 +615,8 @@ export class ApprovalService {
     const reason = withoutOwnerQuotes(given, this.ownerTexts(bot.workspaceId)) || `${ACTION_TITLE.skill} ${input.name} ${input.version}.`;
     const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
     if (open >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open} requests already wait for the owner`);
+    const skillLines = skillCardLines(input.update, input.diff, ROOM_LIMITS.CARD_BODY_MAX - askLine(profile, reason).length - 1);
+    if (!skillLines) return refuse('invalid', 'the change does not fit on the owner\'s card; propose a shorter skill or a smaller change');
     const at = this.now();
     const record: StoredApproval = {
       requestId: newRequestId(),
@@ -628,7 +635,7 @@ export class ApprovalService {
       updatedAt: at,
     };
     if (!this.put(record)) return refuse('write_failed', 'the request could not be stored');
-    const card = this.postCard(record, profile, wake, input.diff);
+    const card = this.postCard(record, profile, wake, skillLines);
     if (card) this.put({ ...record, cardId: card.id });
     this.changed(record.workspaceId);
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
@@ -1208,7 +1215,7 @@ export class ApprovalService {
 
   // ── cards ──
 
-  private postCard(r: StoredApproval, profile: BotProfile, wake: ApprovalWake, skillDiff?: string): RoomCard | null {
+  private postCard(r: StoredApproval, profile: BotProfile, wake: ApprovalWake, skillLines?: readonly string[]): RoomCard | null {
     const writer = this.ports.rooms();
     if (!writer) return null;
     const replyTo = wakeReplyTo(writer, wake, r.workspaceId, r.threadId);
@@ -1217,12 +1224,12 @@ export class ApprovalService {
       : `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;
     const subjectThread = r.prNumber !== undefined ? prThreadId(r.repoKey, r.prNumber) : r.issueNumber !== undefined ? issueThreadId(r.repoKey, r.issueNumber) : null;
     const lines = [
-      `${profile.name || 'A bot'} asks: ${r.reason}`,
+      askLine(profile, r.reason),
       // "Started from outside text" is the card's own line, from the
       // request's `tainted` (ApprovalAnswers, the phone): not in the body.
       ...(r.action === 'merge' || r.action === 'skill' ? [] : ['wmux records your answer; it does not carry this act out yet.']),
     ];
-    if (r.skill) lines.push(...skillCardLines(r.skill.update, skillDiff ?? '', ROOM_LIMITS.CARD_BODY_MAX - lines.join('\n').length - 1));
+    if (skillLines) lines.push(...skillLines);
     const res = writer.post({
       workspaceId: r.workspaceId,
       threadId: r.threadId,

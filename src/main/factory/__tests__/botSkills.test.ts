@@ -15,11 +15,12 @@ import type { BotBinding, BotProfile } from '../../../shared/bot';
 import { SKILL_LIMITS, WORKER_SKILLS_EXCLUDE_LINE, parseSkillFrontmatter } from '../../../shared/botSkill';
 import { BOT_APPROVAL_RPC } from '../../../shared/botApproval';
 import type { RpcContext } from '../../../shared/rpc';
-import { BotSkillStore, botSkillsRoot, installWorkerSkills, skillFilesDiff, skillLineDiff, type SkillGitRun } from '../botSkills';
-import { ApprovalService, registerApprovalRpc, type ApprovalWake } from '../approvals';
+import { BOT_SKILLS_FILENAME, BotSkillStore, botSkillsRoot, installWorkerSkills, skillFilesDiff, skillLineDiff, type SkillGitRun } from '../botSkills';
+import { ApprovalService, registerApprovalRpc, skillCardLines, type ApprovalWake } from '../approvals';
+import { ROOM_LIMITS } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
 import { wakeSkills } from '../wakeContext';
-import { buildWakePrompt } from '../wakePrompt';
+import { buildWakePrompt, skillIndexText } from '../wakePrompt';
 import { excludeLineOnce } from '../../git/infoExclude';
 import { registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
@@ -30,8 +31,8 @@ const WS = 'ws-1';
 const A = 'bot-0000000a';
 const B = 'bot-0000000b';
 
-const profile = (id: string): BotProfile => ({
-  version: 1, id, workspaceId: WS, role: 'lead', name: `Bot ${id}`, engine: { kind: 'claude-sdk' }, triggers: [],
+const profile = (id: string, name = `Bot ${id}`): BotProfile => ({
+  version: 1, id, workspaceId: WS, role: 'lead', name, engine: { kind: 'claude-sdk' }, triggers: [],
   budget: { maxTurnsPerDay: 9, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 1, turnTimeoutMs: 1 } as BotProfile['budget'],
   enabled: true, createdAt: 0, updatedAt: 0,
 });
@@ -128,7 +129,7 @@ describe('skill store: writing and path containment', () => {
     fs.rmSync(live);
     fs.symlinkSync(path.join(outside, 'SKILL.md'), live);
     expect(s.read(A, 'report')).toMatchObject({ ok: false });
-    expect(s.index(A)).toEqual([{ name: 'report', description: 'How to report a task' }]);
+    expect(s.index(A)).toEqual([]);
     expect(s.approved(A)).toEqual([]);
   });
 
@@ -196,6 +197,83 @@ describe('skill store: approve, deny, update, archive', () => {
   });
 });
 
+describe('skill store: main keeps the approval record', () => {
+  it('records state and hashes in main\'s own file, never in the skill folder', () => {
+    const s = store();
+    const p = propose(s, A, 'report');
+    s.approve(A, 'report', p.hash);
+    const rec = JSON.parse(fs.readFileSync(path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME), 'utf8'));
+    expect(rec).toMatchObject({ version: 1, bots: { [A]: { report: { state: 'approved', approved: { hash: p.hash, version: '1.0.0' } } } } });
+    expect(fs.readdirSync(path.join(botSkillsRoot(wmuxDir, A), 'report')).sort()).toEqual(['SKILL.md']);
+    // A fresh store reads the same record.
+    expect(store().index(A)).toEqual([{ name: 'report', description: 'How to report a task' }]);
+  });
+
+  it('a skill.json in the skill folder is not read: a proposal stays unloaded', () => {
+    const s = store();
+    const p = propose(s, A, 'report');
+    const d = path.join(botSkillsRoot(wmuxDir, A), 'report');
+    fs.writeFileSync(path.join(d, 'skill.json'), JSON.stringify({ version: 1, name: 'report', state: 'approved', approved: { hash: p.hash, version: '1.0.0', description: 'x', at: 1 }, createdAt: 1, updatedAt: 1 }));
+    fs.copyFileSync(path.join(d, 'proposed', 'SKILL.md'), path.join(d, 'SKILL.md'));
+    for (const t of [s, store()]) {
+      expect(t.index(A)).toEqual([]);
+      expect(t.read(A, 'report')).toMatchObject({ ok: false, code: 'not_found' });
+      expect(t.approved(A)).toEqual([]);
+    }
+  });
+
+  it('approved files changed on disk do not load, and the profile says so', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report', skillMd('report'), [{ name: 'checklist.md', content: '- gate\n' }]).hash);
+    const d = path.join(botSkillsRoot(wmuxDir, A), 'report');
+    fs.writeFileSync(path.join(d, 'SKILL.md'), skillMd('report', '1.0.0', 'Other steps.\n', 'Another description'));
+    expect(s.index(A)).toEqual([]);
+    expect(s.approved(A)).toEqual([]);
+    expect(s.read(A, 'report')).toMatchObject({ ok: false, code: 'changed' });
+    expect(s.list(A)).toMatchObject([{ name: 'report', state: 'approved', changed: true }]);
+    // A reference file counts too.
+    fs.writeFileSync(path.join(d, 'SKILL.md'), skillMd('report'));
+    expect(s.index(A)).toHaveLength(1);
+    fs.writeFileSync(path.join(d, 'references', 'checklist.md'), '- skip the gate\n');
+    expect(s.index(A)).toEqual([]);
+    expect(s.list(A)[0].changed).toBe(true);
+  });
+
+  it('the wake\'s description comes from the approved files, not from any record', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    const file = path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME);
+    const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    rec.bots[A].report.approved.description = 'Edited description';
+    fs.writeFileSync(file, JSON.stringify(rec));
+    expect(store().index(A)).toEqual([{ name: 'report', description: 'How to report a task' }]);
+  });
+
+  it('an update\'s diff is against the approved files only when they verify; else the whole proposal is new', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    const live = path.join(botSkillsRoot(wmuxDir, A), 'report', 'SKILL.md');
+    fs.writeFileSync(live, skillMd('report', '1.0.0', 'Gate, lint, then report.\n'));
+    const up = propose(s, A, 'report', skillMd('report', '1.1.0', 'Gate, lint, then report.\n'));
+    expect(up.update).toBe(true);
+    expect(up.diff.split('\n')[0]).toMatch(/^@@ the approved version on disk is not the one approved/);
+    expect(up.diff).toContain('+ Gate, lint, then report.');
+    expect(up.diff).toContain('+ name: report');
+    expect(up.diff).not.toContain('- Run the gate');
+    // The same content as approved is a proposal again (it reloads only once approved).
+    const again = s.propose(A, { name: 'report', content: skillMd('report'), reason: 'restore' });
+    expect(again).toMatchObject({ ok: true });
+  });
+
+  it('refuses a proposal whose change would not fit the owner\'s card', () => {
+    const s = store();
+    const big = 'x'.repeat(70) + '\n';
+    const res = s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', big.repeat(Math.ceil(SKILL_LIMITS.DIFF_MAX / big.length))), reason: 'r' });
+    expect(res).toMatchObject({ ok: false, code: 'too_large' });
+    expect(s.list(A)).toEqual([]);
+  });
+});
+
 describe('line diff', () => {
   it('shows removed and added lines with context', () => {
     expect(skillLineDiff('a\nb\nc', 'a\nB\nc')).toBe('@@ line 1\n  a\n- b\n+ B\n  c');
@@ -206,7 +284,7 @@ describe('line diff', () => {
 
 // ── The owner's approval card ───────────────────────────────────────────────
 
-function approvalRig() {
+function approvalRig(botName?: string) {
   const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
   const skills = store();
   const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false }]]);
@@ -214,7 +292,7 @@ function approvalRig() {
   const events: string[] = [];
   const svc = new ApprovalService({
     file: path.join(wmuxDir, 'factory', 'approvals.json'),
-    bots: () => ({ listEnabled: () => [profile(A)], get: (id) => (id === A ? profile(A) : null) }),
+    bots: () => ({ listEnabled: () => [profile(A, botName)], get: (id) => (id === A ? profile(A, botName) : null) }),
     runningWake: (id) => wakes.get(id) ?? null,
     readPr: async () => { throw new Error('no PR'); },
     ghLogin: async () => null,
@@ -253,6 +331,25 @@ describe('skill_propose → approval card → load', () => {
     const again = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'again' });
     expect(again).toMatchObject({ ok: true, duplicate: true, approvalId: res.approvalId });
     expect(r.svc.listForOperator(WS)).toHaveLength(1);
+  });
+
+  it('the card shows the whole change at the largest size a proposal may have', async () => {
+    const r = approvalRig('n'.repeat(64));
+    const line = 'y'.repeat(60);
+    const head = skillMd('report', '1.0.0', '');
+    let body = '';
+    const diffLen = (b: string) => skillFilesDiff(null, { content: head + b, references: [] }).length;
+    while (diffLen(body + line + '\n') <= SKILL_LIMITS.DIFF_MAX) body += `${line}\n`;
+    body += 'END\n';
+    expect(diffLen(body)).toBeLessThanOrEqual(SKILL_LIMITS.DIFF_MAX);
+    const res = await r.call('skill.propose', { name: 'report', content: head + body, reason: 'r'.repeat(300) });
+    expect(res).toMatchObject({ ok: true });
+    const card = r.writer.get(WS, r.svc.get(res.approvalId as string)?.cardId as string);
+    expect(card?.body).toContain('+ END\n');
+    expect(card?.body?.trimEnd().endsWith('```')).toBe(true);
+    expect(card?.body).not.toContain('not shown');
+    // A diff that would not fit is never cut.
+    expect(skillCardLines(false, 'z'.repeat(ROOM_LIMITS.CARD_BODY_MAX), ROOM_LIMITS.CARD_BODY_MAX - 400)).toBeNull();
   });
 
   it('Approve loads it (approved), and the bot is told; Deny archives it', async () => {
@@ -318,6 +415,28 @@ describe('the wake lists approved skills only', () => {
     expect(text).not.toContain('pending-one');
     expect(text).not.toContain('Waiting update');
     expect(buildWakePrompt({ item, profile: profile(A), skills: [] })).not.toContain('Your skills');
+    expect(text).toContain('research workers do not');
+  });
+
+  it('a long index fits its fence and says how many more there are; skill_read with no name lists them all', () => {
+    const s = store();
+    for (let i = 0; i < SKILL_LIMITS.PER_BOT; i += 1) {
+      const name = `skill-${String(i).padStart(2, '0')}-${'a'.repeat(50)}`;
+      s.approve(A, name, propose(s, A, name, skillMd(name, '1.0.0', 'Steps.\n', 'd'.repeat(SKILL_LIMITS.DESCRIPTION_MAX))).hash);
+    }
+    const listed = wakeSkills({ skills: () => s } as never, profile(A));
+    expect(listed).toHaveLength(SKILL_LIMITS.PER_BOT);
+    const text = skillIndexText(listed);
+    const shown = text.split('\n').filter((l) => l.startsWith('skill-')).length;
+    expect(shown).toBeGreaterThan(0);
+    expect(text).toContain(`… ${SKILL_LIMITS.PER_BOT - shown} more: call skill_read with no name to list them all.`);
+    const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+    const prompt = buildWakePrompt({ item, profile: profile(A), skills: listed });
+    expect(prompt).toContain('more: call skill_read with no name');
+    expect(prompt).not.toContain('…(truncated)');
+    const all = s.read(A);
+    expect(all).toMatchObject({ ok: true });
+    expect((all as { skills: unknown[] }).skills).toHaveLength(SKILL_LIMITS.PER_BOT);
   });
 });
 
@@ -332,7 +451,8 @@ const realGit: SkillGitRun = async (args, cwd) => {
 };
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.hooksPath=/dev/null', ...args], { cwd, encoding: 'utf8' });
+  // core.autocrlf=false: a Windows checkout keeps the test's LF files as written.
+  return execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.hooksPath=/dev/null', '-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8' });
 }
 
 describe('a worker gets the approved skills, out of git', () => {
@@ -361,6 +481,24 @@ describe('a worker gets the approved skills, out of git', () => {
     // A second worker adds the line once.
     await installWorkerSkills(s.approved(A), wt, { git: realGit, exclude: excludeLineOnce });
     expect(fs.readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8').split('\n').filter((l) => l === WORKER_SKILLS_EXCLUDE_LINE)).toHaveLength(1);
+  });
+
+  it('removes its copies when the repository\'s ignore rules would let them into git', async () => {
+    const repo = path.join(dir, 'repo');
+    fs.mkdirSync(path.join(repo, '.claude', 'skills', 'shared'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude', 'skills', 'shared', 'SKILL.md'), 'tracked\n');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '!/.claude/skills/bot-*/\n');
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'init');
+    const wt = path.join(dir, 'wt');
+    git(repo, 'worktree', 'add', '-q', '-b', 'wtask/x', wt);
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report', skillMd('report'), [{ name: 'checklist.md', content: '- gate\n' }]).hash);
+    await expect(installWorkerSkills(s.approved(A), wt, { git: realGit, exclude: excludeLineOnce })).rejects.toThrow(/ignore rules do not exclude/);
+    expect(fs.existsSync(path.join(wt, '.claude', 'skills', 'bot-report'))).toBe(false);
+    expect(fs.readFileSync(path.join(wt, '.claude', 'skills', 'shared', 'SKILL.md'), 'utf8')).toBe('tracked\n');
+    expect(git(wt, 'status', '--porcelain', '--untracked-files=all')).toBe('');
   });
 
   it('copies nothing when the exclude cannot be found', async () => {

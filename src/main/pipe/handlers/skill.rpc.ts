@@ -7,7 +7,8 @@
 //                  wake: the store writes a proposed version and the
 //                  approval store posts its `skill` card with the diff. A
 //                  proposal that gets no card is dropped again.
-//   skill.read     a bot: one of its own approved skills.
+//   skill.read     a bot: one of its own approved skills, or the list of
+//                  them (no name).
 //   IPC list / archive   the main window only.
 // Anyone else is refused. Before the module started every method answers
 // `not_started`.
@@ -174,7 +175,13 @@ export function createSkillModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'getMa
   return {
     start() {
       if (getBotSkillStore()) return;
-      setBotSkillStore(new BotSkillStore({ wmuxDir: deps.wmuxDir() }));
+      try {
+        setBotSkillStore(new BotSkillStore({ wmuxDir: deps.wmuxDir() }));
+      } catch (err) {
+        // An unreadable record file: skills stay off rather than guess.
+        console.warn(`[factory] skills not started: ${String(err)}`);
+        return;
+      }
       approvalHost = skillApprovalHost(getBotSkillStore, emit);
       offIpc = registerSkillIpc(deps.getMainWindow, { store: getBotSkillStore, approvals: getApprovalService, emit });
     },

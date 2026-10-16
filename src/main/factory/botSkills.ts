@@ -3,11 +3,19 @@
 // One folder per skill under the bot's own folder (BotRuntime.botCwd):
 //
 //   <wmuxDir>/factory/bots/<botId>/skills/<name>/
-//     skill.json                   state, and the hash of each version
 //     SKILL.md, references/        the approved version — the only one read
 //                                  for a wake, skill_read or a worker
 //     proposed/                    the version waiting for the owner
 //     denied/<hash>/               the last few proposals the owner denied
+//
+// Each skill's state and the content hash of each version (the approved
+// one, the proposed one) are kept by main in `<wmuxDir>/factory/
+// bot-skills.json` (BOT_SKILLS_FILENAME), which only this store writes. The
+// skill folder holds files only. Every load (a wake's index, skill_read, a
+// worker's copy, the baseline of an update's diff) reads the files, hashes
+// them and uses them only when the hash is the one main recorded at the
+// owner's Approve; otherwise the skill does not load and the profile says
+// it changed since approval.
 //
 // Every path is built here from a checked bot id and a checked skill name;
 // nothing a caller sends is ever a path. A folder or file that is a symlink,
@@ -22,8 +30,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import { BOT_ID_RE } from '../../shared/bot';
+import { assertNotLiveWmuxPath } from '../../shared/constants';
+import { readVersionedFile } from './versionedFile';
 import {
   SKILL_LIMITS,
   SKILL_NAME_RE,
@@ -38,7 +49,9 @@ import {
   type SkillState,
 } from '../../shared/botSkill';
 
-const META_FILE = 'skill.json';
+/** Main's record of every bot's skills, under `<wmuxDir>/factory/`. */
+export const BOT_SKILLS_FILENAME = 'bot-skills.json';
+const SKILLS_FILE_VERSION = 1;
 const SKILL_FILE = 'SKILL.md';
 const REFERENCES_DIR = 'references';
 const PROPOSED_DIR = 'proposed';
@@ -48,7 +61,7 @@ const DENIED_KEEP = 3;
 /** A diff of more lines than this per side is shown as the new text. */
 const DIFF_MAX_LINES = 600;
 
-export type SkillRefusalCode = 'invalid' | 'not_found' | 'unsafe_path' | 'too_many' | 'unchanged' | 'stale' | 'write_failed';
+export type SkillRefusalCode = 'invalid' | 'not_found' | 'unsafe_path' | 'too_many' | 'too_large' | 'unchanged' | 'stale' | 'changed' | 'write_failed';
 
 export interface SkillRefusal {
   ok: false;
@@ -67,6 +80,7 @@ interface VersionMeta {
   at: number;
 }
 
+/** One skill as main records it (BOT_SKILLS_FILENAME). */
 interface SkillMeta {
   version: 1;
   name: string;
@@ -112,11 +126,12 @@ export function botSkillsRoot(wmuxDir: string, botId: string): string {
   return path.join(wmuxDir, 'factory', 'bots', botId, 'skills');
 }
 
-/** sha256 over SKILL.md and the references in name order. Pure. */
+/** sha256 over SKILL.md and every reference, in code-unit name order (the
+ *  same on every machine and locale). Pure. */
 export function skillHash(files: SkillFiles): string {
   const h = createHash('sha256');
   h.update(`${SKILL_FILE}\0${files.content}\0`);
-  for (const r of [...files.references].sort((a, b) => a.name.localeCompare(b.name))) h.update(`${r.name}\0${r.content}\0`);
+  for (const r of [...files.references].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) h.update(`${r.name}\0${r.content}\0`);
   return h.digest('hex');
 }
 
@@ -246,12 +261,18 @@ export function validateSkillProposal(name: unknown, content: unknown, reference
 
 function isMeta(v: unknown, name: string): v is SkillMeta {
   const m = v as SkillMeta | null;
+  const ver = (x: unknown): boolean => {
+    const r = x as VersionMeta | null;
+    return !!r && typeof r === 'object' && typeof r.hash === 'string' && typeof r.version === 'string' && typeof r.description === 'string' && Number.isSafeInteger(r.at);
+  };
   return !!m && typeof m === 'object' && m.version === 1 && m.name === name
     && (m.state === 'proposed' || m.state === 'approved' || m.state === 'archived')
+    && (m.approved === undefined || ver(m.approved))
+    && (m.proposed === undefined || ver(m.proposed))
     && Number.isSafeInteger(m.createdAt) && Number.isSafeInteger(m.updatedAt);
 }
 
-function view(m: SkillMeta): BotSkillView {
+function view(m: SkillMeta, changed: boolean): BotSkillView {
   return {
     name: m.name,
     state: m.state,
@@ -264,15 +285,79 @@ function view(m: SkillMeta): BotSkillView {
         ...(m.proposed.approvalId ? { approvalId: m.proposed.approvalId } : {}),
       },
     } : {}),
+    ...(changed ? { changed: true as const } : {}),
     updatedAt: m.updatedAt,
   };
 }
 
+/** An approved skill's files, read from disk and found to be the version
+ *  the owner approved, with its front matter. */
+interface VerifiedSkill {
+  files: SkillFiles;
+  version: string;
+  description: string;
+}
+
 export class BotSkillStore {
   private readonly now: () => number;
+  private readonly file: string;
+  /** botId → name → record: main's own state of every skill. */
+  private records = new Map<string, Map<string, SkillMeta>>();
 
+  /** Throws when main's record file exists but cannot be read (the skills
+   *  module then stays off rather than guess). */
   constructor(private readonly opts: { wmuxDir: string; now?: () => number }) {
     this.now = opts.now ?? Date.now;
+    this.file = path.join(opts.wmuxDir, 'factory', BOT_SKILLS_FILENAME);
+    assertNotLiveWmuxPath(this.file);
+    const raw = readVersionedFile(this.file, SKILLS_FILE_VERSION);
+    const bots = raw?.bots;
+    if (bots && typeof bots === 'object' && !Array.isArray(bots)) {
+      for (const [botId, skills] of Object.entries(bots as Record<string, unknown>)) {
+        if (!BOT_ID_RE.test(botId) || !skills || typeof skills !== 'object') continue;
+        const map = new Map<string, SkillMeta>();
+        for (const [name, rec] of Object.entries(skills as Record<string, unknown>)) {
+          if (SKILL_NAME_RE.test(name) && isMeta(rec, name)) map.set(name, rec);
+        }
+        if (map.size > 0) this.records.set(botId, map);
+      }
+    }
+  }
+
+  // ── main's record ──
+
+  private record(botId: string, name: string): SkillMeta | null {
+    return this.records.get(botId)?.get(name) ?? null;
+  }
+
+  /** Set (or with null drop) one record and write the file; undone in
+   *  memory when it did not reach the file. */
+  private commit(botId: string, name: string, rec: SkillMeta | null): boolean {
+    const before = this.record(botId, name);
+    const set = (r: SkillMeta | null): void => {
+      let map = this.records.get(botId);
+      if (r) {
+        if (!map) {
+          map = new Map();
+          this.records.set(botId, map);
+        }
+        map.set(name, r);
+      } else if (map) {
+        map.delete(name);
+        if (map.size === 0) this.records.delete(botId);
+      }
+    };
+    set(rec);
+    try {
+      const bots: Record<string, Record<string, SkillMeta>> = {};
+      for (const [id, map] of this.records) bots[id] = Object.fromEntries(map);
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      atomicWriteJSONSync(this.file, { version: SKILLS_FILE_VERSION, bots });
+      return true;
+    } catch {
+      set(before);
+      return false;
+    }
   }
 
   // ── paths ──
@@ -341,43 +426,41 @@ export class BotSkillStore {
   /** A version's files from `dir` (the skill folder or proposed/), or null
    *  when SKILL.md is missing or anything there is not a plain file. */
   private readVersion(dir: string): SkillFiles | null {
-    const top = lstatOrNull(dir);
-    if (!top || !top.isDirectory()) return null;
-    const content = this.readPlain(dir, SKILL_FILE);
-    if (content === null) return null;
-    const references: SkillReferenceInput[] = [];
-    const refDir = path.join(dir, REFERENCES_DIR);
-    const st = lstatOrNull(refDir);
-    if (st) {
-      if (!st.isDirectory()) return null;
-      for (const name of fs.readdirSync(refDir).sort()) {
-        if (!SKILL_REFERENCE_NAME_RE.test(name)) continue;
-        const text = this.readPlain(dir, `${REFERENCES_DIR}/${name}`);
-        if (text === null) return null;
-        references.push({ name, content: text });
-      }
-    }
-    return { content, references };
-  }
-
-  private readMeta(dir: string, name: string): SkillMeta | null {
-    const text = this.readPlain(dir, META_FILE);
-    if (text === null) return null;
     try {
-      const m = JSON.parse(text) as unknown;
-      return isMeta(m, name) ? m : null;
+      const top = lstatOrNull(dir);
+      if (!top || !top.isDirectory() || top.isSymbolicLink()) return null;
+      const content = this.readPlain(dir, SKILL_FILE);
+      if (content === null) return null;
+      const references: SkillReferenceInput[] = [];
+      const refDir = path.join(dir, REFERENCES_DIR);
+      const st = lstatOrNull(refDir);
+      if (st) {
+        if (!st.isDirectory()) return null;
+        for (const name of fs.readdirSync(refDir).sort()) {
+          if (!SKILL_REFERENCE_NAME_RE.test(name)) continue;
+          const text = this.readPlain(dir, `${REFERENCES_DIR}/${name}`);
+          if (text === null) return null;
+          references.push({ name, content: text });
+        }
+      }
+      return { content, references };
     } catch {
       return null;
     }
   }
 
-  private writeMeta(dir: string, meta: SkillMeta): void {
-    const file = path.join(dir, META_FILE);
-    const st = lstatOrNull(file);
-    if (st && !st.isFile()) throw new Error(`${META_FILE} is not a plain file`);
-    const tmp = path.join(dir, `.${META_FILE}.${randomBytes(6).toString('hex')}.tmp`);
-    fs.writeFileSync(tmp, `${JSON.stringify(meta, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, file);
+  /** The approved version of `name` as it is on disk, when its hash is the
+   *  one main recorded at the owner's Approve; null otherwise. The files
+   *  returned are the bytes that were hashed (never read again). */
+  private verified(botId: string, name: string, rec: SkillMeta | null): VerifiedSkill | null {
+    if (!rec || rec.state !== 'approved' || !rec.approved) return null;
+    const d = this.skillDir(botId, name, false);
+    if (!('dir' in d)) return null;
+    const files = this.readVersion(d.dir);
+    if (!files || skillHash(files) !== rec.approved.hash) return null;
+    const fm = parseSkillFrontmatter(files.content);
+    if (!fm.ok || fm.frontmatter.name !== name) return null;
+    return { files, version: fm.frontmatter.version, description: fm.frontmatter.description };
   }
 
   /** Write a version into a fresh folder under `dir` (never through what is there). */
@@ -395,70 +478,68 @@ export class BotSkillStore {
 
   // ── reads ──
 
-  /** The bot's skills, by name. Never throws. */
-  list(botId: string): BotSkillView[] {
-    let root: string | null = null;
-    try {
-      root = this.root(botId, false);
-    } catch {
-      root = null;
-    }
-    if (!root || !lstatOrNull(root)) return [];
-    const out: BotSkillView[] = [];
-    let names: string[] = [];
-    try {
-      names = fs.readdirSync(root).filter((n) => SKILL_NAME_RE.test(n)).sort();
-    } catch {
-      return [];
-    }
-    for (const name of names) {
-      const d = this.skillDir(botId, name, false);
-      if (!('dir' in d)) continue;
-      const meta = this.readMeta(d.dir, name);
-      if (meta) out.push(view(meta));
-    }
-    return out;
+  private names(botId: string): string[] {
+    return [...(this.records.get(botId)?.keys() ?? [])].sort();
   }
 
-  /** What a wake lists: the approved skills' names and descriptions. */
+  /** The bot's skills, by name. An approved skill whose files on disk are
+   *  not the approved version is `changed`. Never throws. */
+  list(botId: string): BotSkillView[] {
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return [];
+    return this.names(botId).map((name) => {
+      const rec = this.record(botId, name) as SkillMeta;
+      const changed = rec.state === 'approved' && !this.verified(botId, name, rec);
+      return view(rec, changed);
+    });
+  }
+
+  /** What a wake lists: each approved skill whose files are the approved
+   *  version, with the description from those files. */
   index(botId: string): SkillIndexEntry[] {
-    return this.list(botId)
-      .filter((s) => s.state === 'approved' && s.description !== undefined)
-      .map((s) => ({ name: s.name, description: s.description as string }));
+    return this.verifiedAll(botId).map((s) => ({ name: s.name, description: s.description }));
+  }
+
+  private verifiedAll(botId: string): Array<VerifiedSkill & { name: string }> {
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return [];
+    const out: Array<VerifiedSkill & { name: string }> = [];
+    for (const name of this.names(botId)) {
+      const v = this.verified(botId, name, this.record(botId, name));
+      if (v) out.push({ name, ...v });
+    }
+    return out;
   }
 
   /** The approved version of every approved skill (for a worker's copy). */
   approved(botId: string): ApprovedSkill[] {
-    const out: ApprovedSkill[] = [];
-    for (const s of this.list(botId)) {
-      if (s.state !== 'approved') continue;
-      const d = this.skillDir(botId, s.name, false);
-      if (!('dir' in d)) continue;
-      const meta = this.readMeta(d.dir, s.name);
-      const files = this.readVersion(d.dir);
-      // Only the bytes the owner approved.
-      if (meta?.approved && files && skillHash(files) === meta.approved.hash) out.push({ name: s.name, files });
-    }
-    return out;
+    return this.verifiedAll(botId).map((s) => ({ name: s.name, files: s.files }));
   }
 
   /** `skill_read`: an approved skill's SKILL.md and its reference names, or
-   *  one reference. A proposal is never read. */
-  read(botId: string, name: unknown, reference?: unknown): { ok: true; name: string; version: string; content: string; references: string[] } | SkillRefusal {
+   *  one reference; with no name, the list of approved skills. A proposal
+   *  is never read. */
+  read(botId: string, name?: unknown, reference?: unknown):
+    | { ok: true; name: string; version: string; content: string; references: string[] }
+    | { ok: true; skills: Array<SkillIndexEntry & { version: string }> }
+    | SkillRefusal {
+    if (name === undefined) {
+      if (reference !== undefined) return refuse('invalid', 'a reference is read with the name of its skill');
+      return { ok: true, skills: this.verifiedAll(botId).map((s) => ({ name: s.name, description: s.description, version: s.version })) };
+    }
     const d = this.skillDir(botId, name, false);
     if (!('dir' in d)) return d;
     const skill = name as string;
-    const meta = this.readMeta(d.dir, skill);
-    if (!meta || meta.state !== 'approved' || !meta.approved) return refuse('not_found', `no approved skill ${skill}`);
-    const files = this.readVersion(d.dir);
-    if (!files || skillHash(files) !== meta.approved.hash) return refuse('unsafe_path', `skill ${skill} on disk is not the version the owner approved`);
+    const rec = this.record(botId, skill);
+    if (!rec || rec.state !== 'approved' || !rec.approved) return refuse('not_found', `no approved skill ${skill}`);
+    const v = this.verified(botId, skill, rec);
+    if (!v) return refuse('changed', `skill ${skill} on disk is not the version the owner approved, so it does not load; propose it again with skill_propose`);
+    const references = v.files.references.map((r) => r.name);
     if (reference !== undefined) {
       if (typeof reference !== 'string' || !SKILL_REFERENCE_NAME_RE.test(reference)) return refuse('invalid', 'reference is a reference file name');
-      const ref = files.references.find((r) => r.name === reference);
+      const ref = v.files.references.find((r) => r.name === reference);
       if (!ref) return refuse('not_found', `skill ${skill} has no reference ${reference}`);
-      return { ok: true, name: skill, version: meta.approved.version, content: ref.content, references: files.references.map((r) => r.name) };
+      return { ok: true, name: skill, version: v.version, content: ref.content, references };
     }
-    return { ok: true, name: skill, version: meta.approved.version, content: files.content, references: files.references.map((r) => r.name) };
+    return { ok: true, name: skill, version: v.version, content: v.files.content, references };
   }
 
   // ── writes ──
@@ -473,22 +554,32 @@ export class BotSkillStore {
     if (!reason) return refuse('invalid', 'reason is required (one line: what you learned, and from what)');
     const d = this.skillDir(botId, name, true);
     if (!('dir' in d)) return d;
-    const exists = !!lstatOrNull(d.dir);
-    if (!exists && this.list(botId).length >= SKILL_LIMITS.PER_BOT) return refuse('too_many', `a bot keeps at most ${SKILL_LIMITS.PER_BOT} skills; update one of yours instead`);
-    const meta = exists ? this.readMeta(d.dir, name) : null;
-    if (exists && !meta) return refuse('unsafe_path', `skill ${name} has no readable ${META_FILE}`);
+    const meta = this.record(botId, name);
+    if (!meta && this.names(botId).length >= SKILL_LIMITS.PER_BOT) return refuse('too_many', `a bot keeps at most ${SKILL_LIMITS.PER_BOT} skills; update one of yours instead`);
     const hash = skillHash(checked.files);
-    const approvedFiles = meta?.approved ? this.readVersion(d.dir) : null;
-    if (meta?.approved && meta.state === 'approved' && meta.approved.hash === hash) return refuse('unchanged', `skill ${name} ${meta.approved.version} is already approved with this content`);
-    if (meta?.approved && !skillVersionNewer(checked.version, meta.approved.version)) {
+    // The diff's baseline is the approved version only when its files are
+    // the ones the owner approved; otherwise the whole proposal is new.
+    const baseline = this.verified(botId, name, meta);
+    if (baseline && meta?.approved?.hash === hash) return refuse('unchanged', `skill ${name} ${baseline.version} is already approved with this content`);
+    if (baseline && meta?.approved && !skillVersionNewer(checked.version, meta.approved.version)) {
       return refuse('invalid', `an update of ${name} takes a version newer than ${meta.approved.version}`);
     }
-    const diff = skillFilesDiff(approvedFiles, checked.files);
+    const shown = skillFilesDiff(baseline?.files ?? null, checked.files);
+    const diff = meta?.approved && !baseline
+      ? `@@ the approved version on disk is not the one approved; the whole proposal is shown\n${shown}`
+      : shown;
+    if (diff.length > SKILL_LIMITS.DIFF_MAX) {
+      return refuse('too_large', `the change is ${diff.length} characters and the owner's card shows at most ${SKILL_LIMITS.DIFF_MAX}, all of it; propose a shorter skill or a smaller change (split a long one into two skills)`);
+    }
+    const proposedDir = path.join(d.dir, PROPOSED_DIR);
     if (meta?.proposed?.hash === hash) {
-      return {
-        ok: true, skill: view(meta), hash, version: checked.version, description: checked.description, update: !!meta.approved, diff, duplicate: true,
-        ...(meta.proposed.approvalId ? { approvalId: meta.proposed.approvalId } : {}),
-      };
+      const onDisk = this.readVersion(proposedDir);
+      if (onDisk && skillHash(onDisk) === hash) {
+        return {
+          ok: true, skill: view(meta, meta.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: !!meta.approved, diff, duplicate: true,
+          ...(meta.proposed.approvalId ? { approvalId: meta.proposed.approvalId } : {}),
+        };
+      }
     }
     const at = this.now();
     const next: SkillMeta = {
@@ -502,52 +593,48 @@ export class BotSkillStore {
     };
     let tmp: string | null = null;
     try {
-      if (!exists) fs.mkdirSync(d.dir, { mode: 0o700 });
+      if (!lstatOrNull(d.dir)) fs.mkdirSync(d.dir, { mode: 0o700 });
       tmp = this.writeFresh(d.dir, checked.files);
-      const proposedDir = path.join(d.dir, PROPOSED_DIR);
       // rmSync on a symlink removes the link, never what it points at.
       fs.rmSync(proposedDir, { recursive: true, force: true });
       fs.renameSync(tmp, proposedDir);
       tmp = null;
-      this.writeMeta(d.dir, next);
     } catch (err) {
       if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
       return refuse('write_failed', `skill ${name} could not be written: ${String(err)}`);
     }
+    if (!this.commit(botId, name, next)) return refuse('write_failed', `skill ${name} could not be recorded`);
     return {
-      ok: true, skill: view(next), hash, version: checked.version, description: checked.description, update: !!meta?.approved, diff,
+      ok: true, skill: view(next, next.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: !!meta?.approved, diff,
       ...(meta?.proposed?.approvalId ? { replacedApprovalId: meta.proposed.approvalId } : {}),
     };
   }
 
   /** The proposal `hash` now has its approval card. */
   attachApproval(botId: string, name: string, hash: string, approvalId: string): boolean {
-    const d = this.skillDir(botId, name, false);
-    if (!('dir' in d)) return false;
-    const meta = this.readMeta(d.dir, name);
+    const meta = this.record(botId, name);
     if (!meta?.proposed || meta.proposed.hash !== hash) return false;
-    try {
-      this.writeMeta(d.dir, { ...meta, proposed: { ...meta.proposed, approvalId }, updatedAt: this.now() });
-      return true;
-    } catch {
-      return false;
-    }
+    return this.commit(botId, name, { ...meta, proposed: { ...meta.proposed, approvalId }, updatedAt: this.now() });
   }
 
   /** The owner approved the proposal `hash`: it becomes the approved
-   *  version. A proposal that changed since the card was posted is refused. */
+   *  version, and main records its hash. A proposal that changed since the
+   *  card was posted is refused. */
   approve(botId: string, name: string, hash: string): { ok: true; skill: BotSkillView } | SkillRefusal {
     const d = this.skillDir(botId, name, false);
     if (!('dir' in d)) return d;
-    const meta = this.readMeta(d.dir, name);
+    const meta = this.record(botId, name);
     if (!meta?.proposed || meta.proposed.hash !== hash) return refuse('stale', `the proposal of ${name} on this card is no longer the one waiting`);
     const proposedDir = path.join(d.dir, PROPOSED_DIR);
     const files = this.readVersion(proposedDir);
     if (!files || skillHash(files) !== hash) return refuse('stale', `the proposal of ${name} on disk is not the one on the card`);
+    const fm = parseSkillFrontmatter(files.content);
+    if (!fm.ok || fm.frontmatter.name !== name) return refuse('stale', `the proposal of ${name} on disk is not the one on the card`);
     let tmp: string | null = null;
     try {
+      // The approved SKILL.md and references/ are written from the bytes
+      // just hashed, never moved from proposed/.
       tmp = this.writeFresh(d.dir, files);
-      // The approved SKILL.md and references/ move in from the fresh copy.
       fs.rmSync(path.join(d.dir, REFERENCES_DIR), { recursive: true, force: true });
       if (files.references.length > 0) fs.renameSync(path.join(tmp, REFERENCES_DIR), path.join(d.dir, REFERENCES_DIR));
       const live = path.join(d.dir, SKILL_FILE);
@@ -557,18 +644,18 @@ export class BotSkillStore {
       fs.rmSync(tmp, { recursive: true, force: true });
       tmp = null;
       fs.rmSync(proposedDir, { recursive: true, force: true });
-      const at = this.now();
-      const next: SkillMeta = {
-        version: 1, name, state: 'approved',
-        approved: { hash, version: meta.proposed.version, description: meta.proposed.description, at },
-        createdAt: meta.createdAt, updatedAt: at,
-      };
-      this.writeMeta(d.dir, next);
-      return { ok: true, skill: view(next) };
     } catch (err) {
       if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
       return refuse('write_failed', `skill ${name} could not be approved: ${String(err)}`);
     }
+    const at = this.now();
+    const next: SkillMeta = {
+      version: 1, name, state: 'approved',
+      approved: { hash, version: fm.frontmatter.version, description: fm.frontmatter.description, at },
+      createdAt: meta.createdAt, updatedAt: at,
+    };
+    if (!this.commit(botId, name, next)) return refuse('write_failed', `skill ${name} could not be recorded as approved`);
+    return { ok: true, skill: view(next, false) };
   }
 
   /** The owner denied (or let lapse) the proposal `hash`: it moves to
@@ -576,17 +663,17 @@ export class BotSkillStore {
   deny(botId: string, name: string, hash: string): { ok: true; skill: BotSkillView } | SkillRefusal {
     const d = this.skillDir(botId, name, false);
     if (!('dir' in d)) return d;
-    const meta = this.readMeta(d.dir, name);
+    const meta = this.record(botId, name);
     if (!meta?.proposed || meta.proposed.hash !== hash) return refuse('stale', `the proposal of ${name} on this card is no longer the one waiting`);
+    const next: SkillMeta = { ...meta, state: meta.approved ? meta.state : 'archived', updatedAt: this.now() };
+    delete next.proposed;
+    if (!this.commit(botId, name, next)) return refuse('write_failed', `the proposal of ${name} could not be recorded as denied`);
     try {
       this.shelveProposal(d.dir, hash);
-      const next: SkillMeta = { ...meta, state: meta.approved ? meta.state : 'archived', updatedAt: this.now() };
-      delete next.proposed;
-      this.writeMeta(d.dir, next);
-      return { ok: true, skill: view(next) };
-    } catch (err) {
-      return refuse('write_failed', `the proposal of ${name} could not be archived: ${String(err)}`);
+    } catch {
+      /* the record no longer names it: it never loads */
     }
+    return { ok: true, skill: view(next, next.state === 'approved' && !this.verified(botId, name, next)) };
   }
 
   /** The owner's Archive: nothing of the skill loads any more, and a
@@ -595,17 +682,17 @@ export class BotSkillStore {
     const d = this.skillDir(botId, name, false);
     if (!('dir' in d)) return d;
     const skill = name as string;
-    const meta = this.readMeta(d.dir, skill);
+    const meta = this.record(botId, skill);
     if (!meta) return refuse('not_found', `no skill ${skill}`);
+    const next: SkillMeta = { ...meta, state: 'archived', updatedAt: this.now() };
+    delete next.proposed;
+    if (!this.commit(botId, skill, next)) return refuse('write_failed', `skill ${skill} could not be archived`);
     try {
       if (meta.proposed) this.shelveProposal(d.dir, meta.proposed.hash);
-      const next: SkillMeta = { ...meta, state: 'archived', updatedAt: this.now() };
-      delete next.proposed;
-      this.writeMeta(d.dir, next);
-      return { ok: true, skill: view(next), ...(meta.proposed?.approvalId ? { approvalId: meta.proposed.approvalId } : {}) };
-    } catch (err) {
-      return refuse('write_failed', `skill ${skill} could not be archived: ${String(err)}`);
+    } catch {
+      /* the record no longer names it: it never loads */
     }
+    return { ok: true, skill: view(next, false), ...(meta.proposed?.approvalId ? { approvalId: meta.proposed.approvalId } : {}) };
   }
 
   /** proposed/ → denied/<hash>/, keeping the newest DENIED_KEEP. */
@@ -634,17 +721,15 @@ export class BotSkillStore {
   discardProposal(botId: string, name: string, hash: string): void {
     const d = this.skillDir(botId, name, false);
     if (!('dir' in d)) return;
-    const meta = this.readMeta(d.dir, name);
+    const meta = this.record(botId, name);
     if (!meta?.proposed || meta.proposed.hash !== hash) return;
+    const never = !meta.approved && meta.state === 'proposed';
+    const next: SkillMeta = { ...meta, updatedAt: this.now() };
+    delete next.proposed;
+    if (!this.commit(botId, name, never ? null : next)) return;
     try {
       fs.rmSync(path.join(d.dir, PROPOSED_DIR), { recursive: true, force: true });
-      if (!meta.approved && meta.state === 'proposed') {
-        fs.rmSync(d.dir, { recursive: true, force: true });
-        return;
-      }
-      const next: SkillMeta = { ...meta, updatedAt: this.now() };
-      delete next.proposed;
-      this.writeMeta(d.dir, next);
+      if (never) fs.rmSync(d.dir, { recursive: true, force: true });
     } catch {
       /* the next proposal replaces it */
     }
@@ -661,7 +746,10 @@ export type SkillGitRun = (args: string[], cwd: string) => Promise<{ code: numbe
  *  the worktree's `info/exclude` (`git rev-parse --git-path`, the common
  *  one for a linked worktree) so they are never committed. Nothing is copied
  *  when the exclude cannot be written, and a folder already there (one the
- *  repository holds) is left alone. Returns the names copied. */
+ *  repository holds) is left alone. Once copied, every file is checked with
+ *  `git check-ignore`: when the repository's own ignore rules would let any
+ *  of them into git, the files and folders this call wrote are removed again
+ *  and it throws. Returns the names copied. */
 export async function installWorkerSkills(
   skills: readonly ApprovedSkill[],
   worktree: string,
@@ -678,18 +766,54 @@ export async function installWorkerSkills(
     const st = lstatOrNull(p);
     if (st && !st.isDirectory()) throw new Error(`${path.relative(worktree, p)} is not a plain folder`);
   }
-  fs.mkdirSync(skillsDir, { recursive: true });
-  const copied: string[] = [];
-  for (const s of skills) {
-    const target = path.join(skillsDir, workerSkillDirName(s.name));
-    if (lstatOrNull(target)) continue;
-    fs.mkdirSync(target);
-    fs.writeFileSync(path.join(target, SKILL_FILE), s.files.content, { encoding: 'utf8', flag: 'wx' });
-    if (s.files.references.length > 0) {
-      fs.mkdirSync(path.join(target, REFERENCES_DIR));
-      for (const ref of s.files.references) fs.writeFileSync(path.join(target, REFERENCES_DIR, ref.name), ref.content, { encoding: 'utf8', flag: 'wx' });
+  // What this call wrote, in order: only these are ever removed again.
+  const madeDirs: string[] = [];
+  const madeFiles: string[] = [];
+  const undo = (): void => {
+    for (const f of [...madeFiles].reverse()) {
+      try { fs.unlinkSync(f); } catch { /* already gone */ }
     }
-    copied.push(s.name);
+    for (const dir of [...madeDirs].reverse()) {
+      try { fs.rmdirSync(dir); } catch { /* not empty or gone: left */ }
+    }
+  };
+  const mkdir = (dir: string): void => {
+    fs.mkdirSync(dir);
+    madeDirs.push(dir);
+  };
+  const write = (file: string, text: string): void => {
+    fs.writeFileSync(file, text, { encoding: 'utf8', flag: 'wx' });
+    madeFiles.push(file);
+  };
+  const copied: string[] = [];
+  try {
+    for (const p of [claudeDir, skillsDir]) if (!lstatOrNull(p)) mkdir(p);
+    for (const s of skills) {
+      const target = path.join(skillsDir, workerSkillDirName(s.name));
+      if (lstatOrNull(target)) continue;
+      mkdir(target);
+      write(path.join(target, SKILL_FILE), s.files.content);
+      if (s.files.references.length > 0) {
+        mkdir(path.join(target, REFERENCES_DIR));
+        for (const ref of s.files.references) write(path.join(target, REFERENCES_DIR, ref.name), ref.content);
+      }
+      copied.push(s.name);
+    }
+  } catch (err) {
+    undo();
+    throw err;
+  }
+  if (madeFiles.length === 0) {
+    undo();
+    return [];
+  }
+  const rel = madeFiles.map((f) => path.relative(worktree, f).split(path.sep).join('/'));
+  const check = await deps.git(['check-ignore', '--', ...rel], worktree);
+  const ignored = new Set(check.code === 0 ? check.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : []);
+  const tracked = rel.filter((f) => !ignored.has(f));
+  if (tracked.length > 0) {
+    undo();
+    throw new Error(`the repository's ignore rules do not exclude ${tracked[0]}; no skills installed`);
   }
   return copied;
 }

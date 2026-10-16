@@ -13,8 +13,11 @@
 //     SKILL.md, references/     the approved version (what loads)
 //     proposed/SKILL.md, proposed/references/
 //                               the pending version (never loads)
-//     skill.json                state and the hashes that tie the two to the
-//                               owner's approval card
+//
+// Each skill's state, and the content hash of the version the owner
+// approved, are kept by main in its own `<wmuxDir>/factory/bot-skills.json`,
+// not in the skill folder. Every load hashes the files on disk again and
+// uses them only when they are the approved version.
 //
 // SKILL.md is markdown with a front matter of exactly `name`, `description`
 // and `version` (agentskills.io style). Writing a skill only ever creates a
@@ -22,8 +25,9 @@
 // `skill`, shared/botApproval.ts) makes it the approved one, Deny archives
 // the proposal. Nothing loads before approval: the bot's wake lists its
 // approved skills by name and description and `skill_read` returns an
-// approved body; a worker it starts gets copies of the approved skills in its
-// worktree's `.claude/skills/bot-<name>/`, excluded from git.
+// approved body; a worker it starts in a worktree gets copies of the approved
+// skills in its `.claude/skills/bot-<name>/`, excluded from git (a research
+// worker's scratch folder gets none).
 //
 // A bot writes and reads only its own skills; main takes the bot from the
 // token's binding and builds every path itself — a call never names a path.
@@ -32,7 +36,8 @@ export const BOT_SKILL_RPC = {
   /** `skill_propose`: create or update one of the caller's skills, as a
    *  proposed version that waits for the owner (SkillProposeParams). */
   propose: 'skill.propose',
-  /** `skill_read`: one of the caller's approved skills (SkillReadParams). */
+  /** `skill_read`: one of the caller's approved skills, or with no name
+   *  the list of them (SkillReadParams). */
   read: 'skill.read',
 } as const;
 
@@ -58,6 +63,10 @@ export const SKILL_LIMITS = {
   /** Skills one bot keeps (archived ones included). */
   PER_BOT: 40,
   REASON_MAX: 300,
+  /** The change a proposal shows on the owner's card (every character of
+   *  it is shown there): a new skill is all new lines, an update its hunks.
+   *  Below ROOM_LIMITS.CARD_BODY_MAX less the card's other lines. */
+  DIFF_MAX: 7000,
 } as const;
 
 /** A skill's name: a lowercase slug — no separator, no dot, so never `..`. */
@@ -93,9 +102,10 @@ export interface SkillProposeParams {
   reason: string;
 }
 
-/** `skill.read` params: a skill, or one of its reference files. */
+/** `skill.read` params: a skill, or one of its reference files; no name
+ *  lists the approved skills. */
 export interface SkillReadParams {
-  name: string;
+  name?: string;
   reference?: string;
 }
 
@@ -109,6 +119,9 @@ export interface BotSkillView {
   /** A proposed version waits for the owner. */
   proposed?: { version: string; description: string; approvalId?: string; at: number };
   approvedAt?: number;
+  /** The approved version's files on disk are not the ones the owner
+   *  approved: nothing of it loads until a new proposal is approved. */
+  changed?: true;
   updatedAt: number;
 }
 

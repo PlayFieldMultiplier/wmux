@@ -45,7 +45,7 @@ export const COMMON_POWERS: Readonly<Record<string, string>> = {
   routine_pause: 'pause or resume one of your routines.',
   stop_my_work: 'stop your own running workers and pause your routines, when the owner asks you to stop.',
   skill_propose: 'write down a procedure you learned as a skill (SKILL.md), or update one you have; it loads only once the owner approves its card. Propose one only after the owner corrected how you work, or after a task of yours failed and then succeeded; routine work gets none.',
-  skill_read: 'read one of your approved skills (the wake block lists them) before work it covers.',
+  skill_read: 'read one of your approved skills (the wake block lists them; with no name it lists them all) before work it covers.',
   fanout_start: 'start workers in fresh worktrees of your repository: each implements, gates and reports in its ledger row, and the preset decides what it is for ("default" to implement and open a pull request, "repro" to reproduce an issue, "verify" to grade one PR head, "maintain" to keep the feature map current). A question that needs no code takes preset "research": a scratch folder instead of a worktree, so it runs without a repository too.',
   ledger_update: 'settle a task you have read: completed once its system gate passed, failed or cancelled otherwise, input_required to send it back with a note.',
   terminal_read: 'read the pane of a worker you started when its ledger row or question needs more context.',

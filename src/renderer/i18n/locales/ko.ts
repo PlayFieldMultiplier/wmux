@@ -1619,6 +1619,7 @@ export const ko = {
   'botsPage.profile.skillProposed': "승인 대기 ({version})",
   'botsPage.profile.skillUpdateProposed': "업데이트 {version} 승인 대기",
   'botsPage.profile.skillArchived': "보관됨",
+  'botsPage.profile.skillChanged': "승인 후 변경됨 — 봇이 다시 제안할 때까지 불러오지 않음",
   'botsPage.profile.skillArchive': "보관",
   'botsPage.profile.skillArchiveFailed': "스킬을 보관하지 못했습니다.",
   'settings.factory.keyDeleteConfirm': "{name}을(를) 삭제할까요? 이미 실행 중인 워커는 멈출 때까지 갖고 있습니다.",
