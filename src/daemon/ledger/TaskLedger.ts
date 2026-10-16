@@ -21,7 +21,8 @@
 //   - transitions: `canTransition`; a same-status resubmit is a no-op.
 //   - authz: `canActorSet` — the ONE predicate, never re-implemented.
 //   - gate results are written by the `system` actor only (`recordGate`,
-//     the gate runner); `update` ignores a caller-supplied gate.
+//     the gate runner), never on a completed or cancelled entry; `update`
+//     ignores a caller-supplied gate.
 //   - `completed`: only by a `brain`, only from `review_requested` (table),
 //     only with a SYSTEM-recorded gate whose exitCode is exactly 0 — unless
 //     `force: true` with a non-empty `reason`, which is logged on the entry,
@@ -529,6 +530,16 @@ export class TaskLedger {
           ok: false,
           error: 'stale_rev',
           message: `expectedRev ${expectedRev} but the entry is at rev ${entry.rev} — re-read and retry`,
+          entry,
+        };
+      }
+      // An ended task keeps the record it ended on: a gate that finishes
+      // after the task was completed or cancelled grades nothing.
+      if (entry.status === 'completed' || entry.status === 'cancelled') {
+        return {
+          ok: false,
+          error: 'illegal_transition',
+          message: `task ${id} is ${entry.status}: a gate result is recorded only on an open task`,
           entry,
         };
       }

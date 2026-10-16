@@ -747,7 +747,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
             const known = await branches.branches([entry]);
             return known.has(entry.id) ? known.get(entry.id) ?? null : undefined;
           },
-          completeMerged: (taskId) => completeMergedTask(ledger, taskId),
+          completeMerged: (taskId, pr) => completeMergedTask(ledger, taskId, pr),
           wake: (input) => {
             const q = getWakeQueue();
             if (!q) console.info(`[factory] wake queue not running; ${input.botId} was not woken`);
