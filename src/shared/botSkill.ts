@@ -141,7 +141,7 @@ export interface SkillFrontmatter {
  *  (exactly SKILL_FRONTMATTER_KEYS, each once; a value may be quoted), `---`.
  *  Returns the fields and the body after it, or why not. Pure. */
 export function parseSkillFrontmatter(content: string): { ok: true; frontmatter: SkillFrontmatter; body: string } | { ok: false; error: string } {
-  const text = content.replace(/^﻿/, '');
+  const text = content.replace(/^\uFEFF/, '');
   const lines = text.split(/\r?\n/);
   if (lines[0]?.trim() !== '---') return { ok: false, error: 'SKILL.md starts with a --- front matter line' };
   const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');

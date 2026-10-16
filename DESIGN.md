@@ -460,7 +460,7 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   its routines, its connections — each library connection that applies to
   it, an every-bot one with a switch that turns it off for this bot alone,
   a picked one with Edit and Remove from this bot, then Add connection and
-  Manage (Settings › Bots › Connections); then, read-only, what it can do in the owner's words — one phrase per power of
+  Manage (Settings › Bots › Connections); its skills (Skills, below); then, read-only, what it can do in the owner's words — one phrase per power of
   the shared surface, plus a Coordinator's reads in every workspace, never
   per-bot settings — whom it reports to (You), and its workers now; last,
   Stop — the bot's turn and its workers — a
@@ -476,6 +476,23 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   The messages, the rail and the composer sit in one column capped at
   **44rem**, centred; while a side panel is open the column fills the
   chat's width instead.
+- **Skills (2026-10-16):** a bot writes its own skills — procedures, not
+  facts — and the owner approves each one. In the profile, under its
+  connections, a Skills row lists them one line each: the name, then muted
+  where it stands ("approved 1.1.0", "waiting for your approval (1.0.0)",
+  "approved 1.0.0 · update 1.1.0 waiting for your approval", "archived");
+  an approved skill's name is in the main text colour, every other one
+  muted, and the description is the row's tooltip. Each one not archived
+  has a muted text button, Archive, which acts at once (a skill is
+  proposed again by the bot, never restored by hand); a failure is one red
+  line under the list. With none, one muted line says when a bot proposes
+  one. There is no Approve in the profile: a proposal is decided on its
+  approval card in the chat, the same card as every other approval
+  (Approve / Deny, no Always allow — a rule never covers a skill, and the
+  owner's typed "ok" does not approve one), titled "Add the skill <name>
+  <version>?" or "Update the skill …", its body the bot's one line, what
+  Approve and Deny do, then the change as a `diff` code block (removed
+  lines `- `, added `+ `, cut with a note past the card's length).
 - **Messages are bubbles in runs (owner decision 2026-10-14, the reference
   messenger's look; replaces the same day's flat rows):** a bot's messages
   on the left in soft `--selection-subtle` bubbles (18px radius, fill only,
