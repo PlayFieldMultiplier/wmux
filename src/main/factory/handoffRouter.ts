@@ -1882,6 +1882,17 @@ export function isSameAnswer(answer: string, option: string): boolean {
 const FREE_TEXT_OPTION = /^\s*(other|something else|anything else)\s*([(:,.…—–-]|$)|\bown words\b|^\s*(tell me|let me (say|tell|explain|describe)|i'll (write|type|explain))\b/i;
 /** A question that asks for the owner's own words besides its options. */
 const FREE_TEXT_QUESTION = /own words|or tell me|tell me (what|how|in)|something else|anything else/i;
+/** A negation ("do not answer in your own words", "no other choice"). */
+const NEGATION = /\b(not|no|never|without|instead of|rather than)\b|n't\b/i;
+
+/** Whether the pattern matches in a clause of the text with no negation
+ *  before it in that clause: an affirmative invitation only. Pure. */
+function invites(pattern: RegExp, text: string): boolean {
+  return text.split(/[.!?;\n]+/).some((clause) => {
+    const m = pattern.exec(clause);
+    return !!m && !NEGATION.test(clause.slice(0, m.index));
+  });
+}
 
 /** Whether a question asks for the owner's own words, so an answer outside
  *  its options is an answer, not an override: the greeting (`intro`, "what
@@ -1890,8 +1901,8 @@ const FREE_TEXT_QUESTION = /own words|or tell me|tell me (what|how|in)|something
  *  check reads English only; `intro` is what holds for every language. Pure. */
 export function invitesFreeText(ask: Pick<Handoff, 'intro' | 'payload'>): boolean {
   if (ask.intro === true) return true;
-  if ((ask.payload.options ?? []).some((o) => FREE_TEXT_OPTION.test(o))) return true;
-  return FREE_TEXT_QUESTION.test(`${ask.payload.title}\n${ask.payload.body ?? ''}`);
+  if ((ask.payload.options ?? []).some((o) => invites(FREE_TEXT_OPTION, o))) return true;
+  return invites(FREE_TEXT_QUESTION, `${ask.payload.title}\n${ask.payload.body ?? ''}`);
 }
 
 function partyWorkspace(p: Party): string | undefined {

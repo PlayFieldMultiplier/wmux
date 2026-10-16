@@ -900,6 +900,12 @@ describe('human.correction from the owner\'s answers', () => {
     expect(invitesFreeText(ask('Which branch?', ['Current branch', 'Other branch']))).toBe(false);
     expect(invitesFreeText(ask('Which approach?', ['Keep it in TypeScript', 'Rewrite it in Rust']))).toBe(false);
     expect(invitesFreeText(ask('Which?', ['A', 'Something else (tell me)']))).toBe(true);
+    // Negated wording is no invitation; an affirmative clause beside it still is.
+    expect(invitesFreeText(ask('Which?', ['A', 'B'], 'Pick one; do not answer in your own words.'))).toBe(false);
+    expect(invitesFreeText(ask('Which? Don\'t tell me what you want, pick one.', ['A', 'B']))).toBe(false);
+    expect(invitesFreeText(ask('Which?', ['A', 'Not in your own words']))).toBe(false);
+    expect(invitesFreeText(ask('Which?', ['A', 'B'], 'No need for anything else. Or tell me in your own words.'))).toBe(true);
+    expect(invitesFreeText(ask('Pick only one, or tell me what you want.', ['A', 'B']))).toBe(true);
   });
 
   it('an override answered through handoff.answer (the phone path) is recorded too; a dismissal is not', async () => {
