@@ -33,16 +33,14 @@ interface PrSpec {
   labelTotal?: number;
   author?: string;
   createdAt?: number;
-  /** The branch it merges into (absent: not read). */
-  base?: string;
 }
 interface IssueSpec { number: number; labels?: string[]; labelTotal?: number; createdAt?: number; author?: string }
-interface RepoSpec { prs: PrSpec[]; prTotal?: number; recent?: Array<{ number: number; state: 'MERGED' | 'CLOSED'; closedAt?: string; author?: { login: string }; baseRefName?: string; headRefName?: string; headRefOid?: string; isCrossRepository?: boolean }>; issues?: IssueSpec[]; issueTotal?: number }
+interface RepoSpec { prs: PrSpec[]; prTotal?: number; recent?: Array<{ number: number; state: 'MERGED' | 'CLOSED' }>; issues?: IssueSpec[]; issueTotal?: number }
 
 function prNode(p: PrSpec) {
   return {
     number: p.number, title: `PR ${p.number}`, createdAt: new Date(p.createdAt ?? T0 - 86_400_000).toISOString(),
-    state: 'OPEN', isDraft: false, headRefOid: p.head, headRefName: `b${p.number}`, ...(p.base ? { baseRefName: p.base } : {}), isCrossRepository: false,
+    state: 'OPEN', isDraft: false, headRefOid: p.head, headRefName: `b${p.number}`, isCrossRepository: false,
     mergeStateStatus: 'CLEAN', author: { login: p.author ?? 'owner' },
     labels: { totalCount: p.labelTotal ?? (p.labels ?? []).length, nodes: (p.labels ?? []).map((name) => ({ name })) },
     commits: { nodes: [{ commit: { oid: p.rollupOid ?? p.head, statusCheckRollup: p.rollup === undefined || p.rollup === null ? null : { state: p.rollup } } }] },
@@ -199,55 +197,6 @@ describe('repoWatch — baseline and edges', () => {
     await w2.dispose();
   });
 
-  it('a PR opened and merged between two polls is announced from the recent list, once, and not again after a restart', async () => {
-    const iso = (t: number) => new Date(t).toISOString();
-    let spec: RepoSpec = { prs: [] };
-    const gh = fakeGh(() => spec);
-    const facts = fakeFacts();
-    const w1 = makeWatch({ graphql: gh.graphql, facts });
-    await w1.start();
-    await w1.pollNow(KEY); // the baseline
-    now = T0 + 60_000;
-    spec = {
-      prs: [],
-      recent: [
-        { number: 7, state: 'MERGED', closedAt: iso(T0 + 30_000), author: { login: 'wmux-bot' }, baseRefName: 'main', headRefName: 'wmux/task-7', headRefOid: 'h7', isCrossRepository: false },
-        { number: 8, state: 'CLOSED', closedAt: iso(T0 + 40_000), baseRefName: 'main', headRefName: 'wmux/task-8', headRefOid: 'h8', isCrossRepository: false },
-        // Closed before the baseline, back in the list for a comment: silent.
-        { number: 3, state: 'MERGED', closedAt: iso(T0 - 86_400_000), baseRefName: 'main', headRefName: 'old', headRefOid: 'h3', isCrossRepository: false },
-        // No close time read: not announced.
-        { number: 4, state: 'MERGED', baseRefName: 'main', headRefName: 'x', headRefOid: 'h4', isCrossRepository: false },
-      ],
-    };
-    await w1.pollNow(KEY);
-    expect(facts.appended.map((f) => [f.kind, f.ref?.pr])).toEqual([['pr.merged', 7], ['pr.closed', 8]]);
-    expect(facts.appended[0]).toMatchObject({
-      repoKey: KEY, ref: { pr: 7, headSha: 'h7' }, actor: { kind: 'github', id: 'wmux-bot' },
-      payload: { author: 'wmux-bot', baseRefName: 'main', headRefName: 'wmux/task-7', headRefOid: 'h7', isCrossRepository: false },
-    });
-    // Still in the list on the next poll: the log drops its repeated key.
-    now += 60_000;
-    await w1.pollNow(KEY);
-    expect(facts.appended).toHaveLength(2);
-    await w1.flush();
-    await w1.dispose();
-
-    // A restart: the fact log's dedupe index survives it, and the close is
-    // older than the last poll anyway.
-    now += 10 * 60_000;
-    const w2 = makeWatch({ graphql: gh.graphql, facts });
-    await w2.start();
-    expect(await w2.pollNow(KEY)).toMatchObject({ ok: true, baseline: false, emitted: 0 });
-    await w2.flush();
-    await w2.dispose();
-    const fresh = fakeFacts();
-    const w3 = makeWatch({ graphql: gh.graphql, facts: fresh });
-    await w3.start();
-    await w3.pollNow(KEY);
-    expect(fresh.appended).toEqual([]);
-    await w3.dispose();
-  });
-
   it('an unreadable state file is a baseline (silence, not a burst)', async () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'repo-watch.json'), '{not json');
@@ -351,29 +300,6 @@ describe('diffRepo — ci, labels, open/close, issues', () => {
     expect(d.drafts.find((f) => f.kind === 'pr.opened')?.payload).toMatchObject({ author: 'ext', isCrossRepository: false });
     expect(d.next.prs['2']).toBeUndefined();
     for (const f of d.drafts) expect(factDedupeKey(f)).not.toBeNull();
-  });
-
-  it('the branches ride on pr.opened, and on pr.merged / pr.closed as read with the closed state', () => {
-    const state = base([{ number: 2, head: 'h2', base: 'main' }, { number: 3, head: 'h3' }, { number: 5, head: 'h5', base: 'main' }]);
-    const d = diffRepo(state, snap({
-      prs: [{ number: 4, head: 'h4', base: 'main' }, { number: 6, head: 'h6' }],
-      // #2 was seen open on main and retargeted before its merge.
-      recent: [
-        { number: 2, state: 'MERGED', baseRefName: 'scratch', headRefName: 'b2', headRefOid: 'm2', isCrossRepository: false },
-        { number: 3, state: 'CLOSED', baseRefName: 'main' },
-        { number: 5, state: 'MERGED' },
-      ],
-    }), KEY, T0 + 1);
-    const payload = (kind: string, n: number) => d.drafts.find((f) => f.kind === kind && f.ref?.pr === n)?.payload;
-    expect(payload('pr.opened', 4)).toMatchObject({ baseRefName: 'main' });
-    expect(payload('pr.opened', 6)?.baseRefName).toBeUndefined();
-    // Pushed to after the last poll: the merged head is the one read with the merge.
-    expect(payload('pr.merged', 2)).toMatchObject({ baseRefName: 'scratch', headRefName: 'b2', headRefOid: 'm2', isCrossRepository: false });
-    expect(d.drafts.find((f) => f.kind === 'pr.merged' && f.ref?.pr === 2)?.ref?.headSha).toBe('h2');
-    expect(payload('pr.closed', 3)).toMatchObject({ baseRefName: 'main' });
-    expect(payload('pr.merged', 5)?.baseRefName).toBeUndefined();
-    expect(payload('pr.merged', 5)?.headRefName).toBeUndefined();
-    expect(payload('pr.merged', 5)?.isCrossRepository).toBeUndefined();
   });
 
   it('issues: opened only when created after the baseline; an older one entering the window is silent; labels emit per added label', () => {

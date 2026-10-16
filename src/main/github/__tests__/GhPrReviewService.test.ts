@@ -95,6 +95,31 @@ describe('checks', () => {
   });
 });
 
+describe('mergedOfBranch', () => {
+  it('lists the merged PRs of a branch with their base, head and fork flag, naming the repo; an unreadable fork flag reads as a fork', async () => {
+    const { svc, calls } = make(() => JSON.stringify([
+      { number: 5, baseRefName: 'main', headRefOid: 'c'.repeat(40), isCrossRepository: false },
+      { number: 4, baseRefName: 'main', headRefOid: 'b'.repeat(40), isCrossRepository: true },
+      { number: 3, baseRefName: 'scratch', headRefOid: 'a'.repeat(40) },
+      { number: 'x' },
+    ]));
+    expect(await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1')).toEqual({ ok: true, value: [
+      { pr: 5, base: 'main', headSha: 'c'.repeat(40), cross: false },
+      { pr: 4, base: 'main', headSha: 'b'.repeat(40), cross: true },
+      { pr: 3, base: 'scratch', headSha: 'a'.repeat(40), cross: true },
+    ] });
+    expect(calls[0].args).toEqual(['pr', 'list', '--repo', KEY, '--head', 'wtask/fix-1', '--state', 'merged', '--json', 'number,baseRefName,headRefOid,isCrossRepository', '--limit', '5']);
+  });
+
+  it('a failing gh is an error; a branch that reads as a flag is refused without calling gh', async () => {
+    const { svc, calls } = make(() => errWith({ stderr: 'boom' }));
+    expect((await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1')).ok).toBe(false);
+    const n = calls.length;
+    expect((await svc.mergedOfBranch('/repo', KEY, '--web')).ok).toBe(false);
+    expect(calls).toHaveLength(n);
+  });
+});
+
 describe('merge', () => {
   const okState = (over: Record<string, unknown> = {}) => (a: string[]) => (a[1] === 'view' ? headJson(over) : '');
 

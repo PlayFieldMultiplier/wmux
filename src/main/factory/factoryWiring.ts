@@ -740,9 +740,16 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
           },
           complete: (taskId) => completeCheckedTask(ledger, taskId),
           completeResearch: (taskId) => completeResearchTask(ledger, taskId),
-          // A merged PR from a reported task's branch ends that task.
+          // A merged PR from a reported task's branch ends that task: GitHub's
+          // list is the evidence (the repo watch's gh runner and breaker); a
+          // pr.merged fact only checks again sooner.
           onFact: (fn) => getFactLog()?.subscribe(fn) ?? (() => undefined),
-          prFacts: () => prFactsOf(getFactLog()),
+          prsOfBranch: async (repoKey, branch) => {
+            const { ghPrReviewService } = await import('../github/GhPrReviewService');
+            const r = await ghPrReviewService.mergedOfBranch(deps.wmuxDir(), repoKey, branch);
+            if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+            return r.value;
+          },
           branchOf: async (entry) => {
             const known = await branches.branches([entry]);
             return known.has(entry.id) ? known.get(entry.id) ?? null : undefined;

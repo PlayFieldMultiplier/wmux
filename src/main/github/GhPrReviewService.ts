@@ -533,6 +533,30 @@ export class GhPrReviewService {
     });
   }
 
+  /** The merged PRs whose head is `branch` (newest first, at most `limit`):
+   *  the task gate's evidence that a bot task's work landed. `--head` also
+   *  matches a fork's PR with the same branch name, so each carries its
+   *  `cross` flag for the caller to drop. Never cached. */
+  mergedOfBranch(repoPath: string, key: string, branch: string, limit = 5): Promise<PrReviewRead<Array<{ pr: number; base: string; headSha: string; cross: boolean }>>> {
+    return this.read(async () => {
+      const { host } = this.repo(key);
+      if (!branch || branch.startsWith('-')) throw new Error(`not a branch name: ${branch}`);
+      const out = await this.gh(host, [
+        'pr', 'list', '--repo', key, '--head', branch, '--state', 'merged',
+        '--json', 'number,baseRefName,headRefOid,isCrossRepository', '--limit', String(limit),
+      ], repoPath);
+      const raw = JSON.parse(out) as unknown;
+      if (!Array.isArray(raw)) return [];
+      return raw.flatMap((r) => {
+        const o = r as Record<string, unknown>;
+        return typeof o.number === 'number' && typeof o.baseRefName === 'string' && typeof o.headRefOid === 'string'
+          // Unreadable reads as a fork: the cautious side.
+          ? [{ pr: o.number, base: o.baseRefName, headSha: o.headRefOid, cross: o.isCrossRepository !== false }]
+          : [];
+      });
+    });
+  }
+
   /** A comment on one line of the diff at the head the person saw. */
   comment(repoPath: string, key: string, number: number, req: PrCommentRequest): Promise<PrWriteResult> {
     return this.write(async () => {
