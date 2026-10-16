@@ -526,21 +526,28 @@ function extractPermissionModeFromTranscript(transcriptPath) {
   }
 }
 
-// The permission mode a lifecycle hook captures for the resume binding: the
-// transcript tail first (above), then the `permission_mode` Claude Code puts on
-// the Stop payload itself. The fallback matters when the transcript cannot be
-// opened from here: a WSL agent's hook runs this bridge in the Windows runtime
-// (hook.sh), where the Linux `transcript_path` does not exist, so the tail read
-// always missed and a resumed WSL worker lost its mode (#2270). Measured: Stop
-// carries the field, SessionStart does not. Stop only: a SubagentStop's mode can
-// be the subagent's own (an agent definition may set one), and the binding's
-// sticky merge would carry it onto the lead's resume.
+// The permission mode a hook captures for the resume binding. On SessionStart,
+// Stop and SubagentStop: the transcript tail first (above), then the
+// `permission_mode` Claude Code puts on the payload itself. The fallback matters
+// when the transcript cannot be opened from here: a WSL agent's hook runs this
+// bridge in the Windows runtime (hook.sh), where the Linux `transcript_path`
+// does not exist, so the tail read always missed and a resumed WSL worker lost
+// its mode (#2270). Measured: Stop carries the field; SessionStart has not, so
+// it is taken there only when present. On UserPromptSubmit: the payload alone,
+// the mode of the turn starting now (the transcript tail is the last turn's).
+// That turn start is what records the mode of a worker whose task ends before
+// its first Stop. Never from a SubagentStop payload: its mode can be the
+// subagent's own (an agent definition may set one), and the binding's sticky
+// merge would carry it onto the lead's resume.
 function permissionModeForHook(hookName, transcriptPath, payload) {
+  const reported = hookName === 'SessionStart' || hookName === 'Stop' || hookName === 'UserPromptSubmit'
+    ? payload?.permission_mode
+    : undefined;
+  const fromPayload = typeof reported === 'string' && VALID_PERMISSION_MODES.has(reported) ? reported : undefined;
+  if (hookName === 'UserPromptSubmit') return fromPayload;
   if (hookName !== 'SessionStart' && hookName !== 'Stop' && hookName !== 'SubagentStop') return undefined;
   const fromTranscript = transcriptPath ? extractPermissionModeFromTranscript(transcriptPath) : null;
-  if (fromTranscript) return fromTranscript;
-  const reported = hookName === 'Stop' ? payload?.permission_mode : undefined;
-  return typeof reported === 'string' && VALID_PERMISSION_MODES.has(reported) ? reported : undefined;
+  return fromTranscript ?? fromPayload;
 }
 
 // Leftover background-work mining for Stop-class envelopes.
@@ -1249,8 +1256,8 @@ async function main() {
     leftoverWork = countLeftoverBackgroundTasks(transcriptPath);
   }
 
-  // X6 ③: capture the permission mode LIVE — on SessionStart and on every
-  // Stop/SubagentStop while the session is still alive. This is deliberately
+  // X6 ③: capture the permission mode LIVE — on SessionStart, on every
+  // UserPromptSubmit and on every Stop/SubagentStop while the session is still alive. This is deliberately
   // NOT a teardown/exit hook: a real reboot is SIGKILL, so no exit hook fires;
   // the resume binding must already be persisted from the last live hook (the
   // X6 ② SIGKILL-survival lesson). On SessionStart the transcript may not exist

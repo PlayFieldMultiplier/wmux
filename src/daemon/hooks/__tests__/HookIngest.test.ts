@@ -883,6 +883,22 @@ describe('HookIngest', () => {
         expect(w.f.bindings[0].binding.transcriptPath).toBeUndefined();
       });
 
+      it('binds the mode a turn starts in, before any Stop, and keeps the latest one', () => {
+        const w = wslIngest({ distribution: 'Ubuntu', user: 'dev' });
+        const signal = (kind: AgentSignalKind, permissionMode?: string, ts = 1) => makeSignal({
+          ptyId: 'pty-a', kind, agentSessionId: SID, ts,
+          payload: { transcript_path: own, ...(permissionMode ? { permissionMode } : {}) },
+        });
+        const i = new HookIngest(w.f.deps);
+        // SessionStart has no mode on a WSL pane; the first prompt does.
+        expect(i.handle(signal('agent.session_start', undefined, 1))).toEqual({ ok: true });
+        expect(i.handle(signal('agent.user_prompt_submit', 'bypassPermissions', 2))).toEqual({ ok: true });
+        expect(w.f.bindings.map((b) => b.binding.permissionMode)).toEqual([undefined, 'bypassPermissions']);
+        expect(w.f.bindings[1].binding).toMatchObject({ agent: 'claude', sessionId: SID });
+        expect(i.handle(signal('agent.user_prompt_submit', 'acceptEdits', 3))).toEqual({ ok: true });
+        expect(w.f.bindings[2].binding.permissionMode).toBe('acceptEdits');
+      });
+
       it('still refuses another user\'s file, a traversal, and the same path from a non-WSL pane', () => {
         for (const [target, p] of [
           [{ distribution: 'Ubuntu', user: 'dev' }, `/home/other/.claude/projects/-repo/${SID}.jsonl`],

@@ -1163,8 +1163,13 @@ export class HookIngest {
     // notification path but is the EARLIEST point the origin session id is
     // known. agentSessionId is the #12235-safe id (transcript basename) the
     // bridge derived; cwd + permissionMode complete the binding (F5/F7).
+    // A turn start binds too: it carries the mode that turn runs in, and is the
+    // only hook with a mode for a worker whose task ends before its first Stop
+    // (a WSL agent's SessionStart has none). The latest mode wins. Claude
+    // only: its bridge is the one that puts the mode on a turn start.
     if (
       (signal.kind === 'agent.session_start'
+        || (signal.kind === 'agent.user_prompt_submit' && signal.agent === 'claude')
         || signal.kind === 'agent.stop'
         || signal.kind === 'agent.subagent_stop')
       && signal.agentSessionId

@@ -61,6 +61,7 @@ import { isPlausibleResumeSessionId, normalizeResumeCwd, permissionFlagFor, type
 import { sessionHostDir, sessionsStartedIn } from '../worktask/stopSessionsInDir';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { STOPPED_BY_OWNER } from './factoryStop';
+import { botFanoutPreset } from '../worktask/botFanoutPresets';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
 export const RECLAIMED_WORKERS_VERSION = 1 as const;
@@ -176,6 +177,16 @@ export function resumeLineFor(s: ReclaimedSession): string | null {
   if (!s.resumeSessionId || !isPlausibleResumeSessionId('claude', s.resumeSessionId)) return null;
   const flag = permissionFlagFor(s.permissionMode);
   return `claude --resume ${s.resumeSessionId}${flag ? ` ${flag}` : ''}`;
+}
+
+/** The permission mode a bot task's worker was launched with: its preset's
+ *  (fanout.rpc.ts runs a bot's workers in it, whatever the operator's fan-out
+ *  setting). Undefined for a row with no bot preset, or a preset that adds no
+ *  flag. Pure. */
+export function workerLaunchMode(entry: Pick<LedgerEntry, 'dispatch'>): PermissionMode | undefined {
+  const preset = entry.dispatch?.origin.kind === 'bot' && entry.dispatch.preset ? botFanoutPreset(entry.dispatch.preset) : null;
+  const mode = preset?.permissionMode;
+  return mode && mode !== 'manual' && PERMISSION_MODES.has(mode) ? mode : undefined;
 }
 
 /** The recorded pane fields of a live session. Pure. */
@@ -497,6 +508,11 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
         if (old.permissionMode) p.permissionMode = old.permissionMode;
       }
     }
+    // A conversation whose mode no hook carried (a WSL worker whose task ended
+    // at its own report, before its first Stop) resumes in the mode its worker
+    // was launched with, not in Claude Code's default.
+    const launchMode = workerLaunchMode(entry);
+    if (launchMode) for (const p of panes) if (p.resumeSessionId && !p.permissionMode) p.permissionMode = launchMode;
     const rec: ReclaimedWorker = {
       taskId: entry.id,
       botId: entry.dispatch?.origin.botId ?? '',

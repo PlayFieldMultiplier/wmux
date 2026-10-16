@@ -25,6 +25,7 @@ import {
   setResumedLiveCount,
   stopResumedWorkers,
   unreclaimedEndedWorkers,
+  workerLaunchMode,
   RECLAIMED_WORKERS_MAX,
   type WorkerReclaimPorts,
   type WorkerResumePorts,
@@ -128,6 +129,30 @@ describe('reclaimWorker', () => {
     const refused = reclaimPorts(store, [session()], { stopAgent: async () => ({ ok: false, code: 'unsupported' }) });
     expect(await reclaimWorker(refused.ports, row('completed'), 'completed')).toBeNull();
     expect(store.all()).toEqual([]);
+  });
+
+  it('a conversation no hook gave a mode (only SessionStart) resumes in the mode its worker was launched with', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const noMode = session({ agentProcessAlive: false, resumeBinding: { agent: 'claude', sessionId: UUID, cwd: wt } });
+    const rec = await reclaimWorker(reclaimPorts(store, [noMode]).ports, row('completed'), 'completed');
+    // Every bot preset launches its workers with bypassPermissions.
+    expect(rec?.sessions[0]).toMatchObject({ resumeSessionId: UUID, permissionMode: 'bypassPermissions' });
+    const typeLine = vi.fn(() => true);
+    const r = await resumeWorker({ store, listSessions: async () => [noMode], typeLine, now: () => 9_000 }, 'wtask-abc-12345678', { kind: 'owner' });
+    expect(r).toMatchObject({ ok: true });
+    expect(typeLine).toHaveBeenCalledWith('daemon-1', `claude --resume ${UUID} --dangerously-skip-permissions`);
+  });
+
+  it('keeps the mode a hook recorded, and adds none for a task with no bot preset', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const accept = session({ resumeBinding: { agent: 'claude', sessionId: UUID, cwd: wt, permissionMode: 'acceptEdits' } });
+    expect((await reclaimWorker(reclaimPorts(store, [accept]).ports, row('completed'), 'completed'))?.sessions[0].permissionMode).toBe('acceptEdits');
+    const other = ReclaimedWorkers.at(path.join(dir, 'other'));
+    const noMode = session({ resumeBinding: { agent: 'claude', sessionId: UUID, cwd: wt } });
+    const unpreset = row('completed', { dispatch: { origin: { kind: 'bot', botId: BOT } } });
+    expect((await reclaimWorker(reclaimPorts(other, [noMode]).ports, unpreset, 'completed'))?.sessions[0].permissionMode).toBeUndefined();
+    expect(workerLaunchMode(row('completed'))).toBe('bypassPermissions');
+    expect(workerLaunchMode(row('completed', { dispatch: { origin: { kind: 'orchestrator' }, preset: 'default' } }))).toBeUndefined();
   });
 
   it('persists the record across a reload', async () => {
