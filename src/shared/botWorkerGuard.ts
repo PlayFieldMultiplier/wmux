@@ -20,7 +20,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { tokenize, launcherStem } from './agentResume';
+import { tokenize, launcherStem, isPlausibleResumeSessionId, PERMISSION_FLAG, type PermissionMode } from './agentResume';
 import { splitModelEnvMarker } from './workerLaunch';
 import { stripPromptFileArgument } from './promptFileArgument';
 import { wslClaudeHooks } from './wslIntegration';
@@ -400,6 +400,11 @@ export interface BotWorkerSessionRecord {
   codexHome?: string;
   launch?: BotWorkerLaunchFiles;
   wsl?: boolean;
+  /** The conversation the launch line pinned (`--session-id`), and the
+   *  permission mode its flags started it in: what a resume of that
+   *  conversation falls back to when no hook recorded a mode. */
+  launchSessionId?: string;
+  permissionMode?: PermissionMode;
 }
 
 /** The per-launch files under `<dir>/factory/`: only these folders, a JSON
@@ -444,6 +449,8 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
         ...(typeof r.codexHome === 'string' && r.codexHome.length <= 4096 ? { codexHome: r.codexHome } : {}),
         ...(launch ? { launch } : {}),
         ...(r.wsl === true ? { wsl: true } : {}),
+        ...(typeof r.launchSessionId === 'string' && isPlausibleResumeSessionId('claude', r.launchSessionId) ? { launchSessionId: r.launchSessionId } : {}),
+        ...(typeof r.permissionMode === 'string' && Object.prototype.hasOwnProperty.call(PERMISSION_FLAG, r.permissionMode) ? { permissionMode: r.permissionMode } : {}),
       });
     }
   } catch (err) {

@@ -15,7 +15,7 @@ import { eventBus } from '../events/EventBus';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
 import { lastHookTurnStart, lastTurnEnd } from '../notification/turnEvidence';
 import { lastUserInputAt } from '../notification/idleSuppression';
-import { guardSessionLaunch } from '../agents/botWorkerMergeGuard';
+import { botWorkerSessionRecord, guardSessionLaunch } from '../agents/botWorkerMergeGuard';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getBotRuntime } from './BotRuntime';
 import { getBotStore } from './botStore';
@@ -223,6 +223,10 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       stopAgent: async (sessionId) => (await rpc('session.stopAgent', { sessionId })) as { ok?: boolean; stopped?: boolean; code?: string },
       closePane: async (sessionId) => {
         await rpc('daemon.destroySession', { id: sessionId });
+      },
+      launchedConversation: (sessionId) => {
+        const r = botWorkerSessionRecord(sessionId);
+        return r?.launchSessionId ? { sessionId: r.launchSessionId, ...(r.permissionMode ? { permissionMode: r.permissionMode } : {}) } : null;
       },
       note,
       changed: () => {

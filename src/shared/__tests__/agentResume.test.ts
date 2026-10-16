@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  launchedConversation,
   toResumeCommand,
   isResumableLaunchCommand,
   resumeOfferForRecovered,
@@ -596,6 +597,29 @@ describe('isPlausibleResumeSessionId / parseCodexRolloutStem (#1823)', () => {
   it('splits a rollout stem into its local date and thread id', () => {
     expect(parseCodexRolloutStem(stem)).toEqual({ year: '2026', month: '10', day: '03', threadId: '01234567-89ab-7cde-8fab-0123456789ab' });
     expect(parseCodexRolloutStem('01234567-89ab-7cde-8fab-0123456789ab')).toBeUndefined();
+  });
+});
+
+describe('launchedConversation', () => {
+  const U = '7b0e3c2a-1f4d-4c8e-9a6b-2d5f8e1c3a90';
+  it('reads the pinned conversation and the mode the line starts it in', () => {
+    expect(launchedConversation(`claude --session-id ${U} --settings="/x/s.json" --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`))
+      .toEqual({ sessionId: U, permissionMode: 'bypassPermissions' });
+    expect(launchedConversation(`claude --session-id ${U.toUpperCase()} "Cost task A" --permission-mode auto --allowedTools x`)).toEqual({ sessionId: U, permissionMode: 'auto' });
+    expect(launchedConversation(`claude --session-id=${U} --permission-mode=acceptEdits`)).toEqual({ sessionId: U, permissionMode: 'acceptEdits' });
+    // The last mode flag wins; no flag, no mode.
+    expect(launchedConversation(`claude --session-id ${U} --dangerously-skip-permissions --permission-mode plan`)).toEqual({ sessionId: U, permissionMode: 'plan' });
+    expect(launchedConversation(`claude --session-id ${U}`)).toEqual({ sessionId: U });
+  });
+
+  it('takes nothing from a prompt, after --, or from a line that pins no id or is not Claude', () => {
+    expect(launchedConversation(`claude --session-id ${U} "--dangerously-skip-permissions"`)).toEqual({ sessionId: U });
+    expect(launchedConversation(`claude --session-id ${U} -- --dangerously-skip-permissions`)).toEqual({ sessionId: U });
+    expect(launchedConversation(`claude --session-id ${U} --permission-mode someday`)).toEqual({ sessionId: U });
+    expect(launchedConversation('claude --dangerously-skip-permissions')).toBeNull();
+    expect(launchedConversation(`claude --session-id not-a-uuid --dangerously-skip-permissions`)).toBeNull();
+    expect(launchedConversation(`codex --session-id ${U} --dangerously-skip-permissions`)).toBeNull();
+    expect(launchedConversation(`claude --resume ${U} --dangerously-skip-permissions`)).toBeNull();
   });
 });
 

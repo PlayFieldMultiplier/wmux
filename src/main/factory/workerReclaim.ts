@@ -61,7 +61,6 @@ import { isPlausibleResumeSessionId, normalizeResumeCwd, permissionFlagFor, type
 import { sessionHostDir, sessionsStartedIn } from '../worktask/stopSessionsInDir';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { STOPPED_BY_OWNER } from './factoryStop';
-import { botFanoutPreset } from '../worktask/botFanoutPresets';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
 export const RECLAIMED_WORKERS_VERSION = 1 as const;
@@ -177,16 +176,6 @@ export function resumeLineFor(s: ReclaimedSession): string | null {
   if (!s.resumeSessionId || !isPlausibleResumeSessionId('claude', s.resumeSessionId)) return null;
   const flag = permissionFlagFor(s.permissionMode);
   return `claude --resume ${s.resumeSessionId}${flag ? ` ${flag}` : ''}`;
-}
-
-/** The permission mode a bot task's worker was launched with: its preset's
- *  (fanout.rpc.ts runs a bot's workers in it, whatever the operator's fan-out
- *  setting). Undefined for a row with no bot preset, or a preset that adds no
- *  flag. Pure. */
-export function workerLaunchMode(entry: Pick<LedgerEntry, 'dispatch'>): PermissionMode | undefined {
-  const preset = entry.dispatch?.origin.kind === 'bot' && entry.dispatch.preset ? botFanoutPreset(entry.dispatch.preset) : null;
-  const mode = preset?.permissionMode;
-  return mode && mode !== 'manual' && PERMISSION_MODES.has(mode) ? mode : undefined;
 }
 
 /** The recorded pane fields of a live session. Pure. */
@@ -339,6 +328,10 @@ export interface WorkerReclaimPorts {
    *  daemon cannot stop by itself (`unsupported`: a WSL pane's Linux agent).
    *  Absent: such a worker is not stopped. */
   closePane?: (sessionId: string) => Promise<void>;
+  /** The conversation a pane's launch line pinned and the mode it started it
+   *  in, as recorded when wmux created the pane as a bot worker; null when
+   *  none was. Absent: no mode is filled in. */
+  launchedConversation?: (sessionId: string) => { sessionId: string; permissionMode?: PermissionMode } | null;
   note?: (workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string) => void;
   /** The Bots page re-reads (BOT_EVENT). */
   changed?: () => void;
@@ -509,10 +502,18 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
       }
     }
     // A conversation whose mode no hook carried (a WSL worker whose task ended
-    // at its own report, before its first Stop) resumes in the mode its worker
-    // was launched with, not in Claude Code's default.
-    const launchMode = workerLaunchMode(entry);
-    if (launchMode) for (const p of panes) if (p.resumeSessionId && !p.permissionMode) p.permissionMode = launchMode;
+    // at its own report, before its first Stop) resumes in the mode wmux
+    // launched it in: only the conversation the pane's own launch line pinned.
+    for (const p of panes) {
+      if (!p.resumeSessionId || p.permissionMode) continue;
+      let launched: { sessionId: string; permissionMode?: PermissionMode } | null = null;
+      try {
+        launched = ports.launchedConversation?.(p.sessionId) ?? null;
+      } catch {
+        launched = null;
+      }
+      if (launched?.permissionMode && launched.sessionId === p.resumeSessionId) p.permissionMode = launched.permissionMode;
+    }
     const rec: ReclaimedWorker = {
       taskId: entry.id,
       botId: entry.dispatch?.origin.botId ?? '',

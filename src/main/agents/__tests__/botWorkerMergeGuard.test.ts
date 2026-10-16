@@ -9,6 +9,7 @@ import { clearedLaunchLine,
   botWorkerSessionsPath,
   botWorkerSettingsPath,
   buildBotWorkerSettings,
+  botWorkerSessionRecord,
   forgetBotWorkerSession,
   guardRefireLine,
   guardSessionLaunch,
@@ -289,6 +290,17 @@ describe('bot worker sessions survive a restart', () => {
     expect(guardSessionLaunch('daemon-human', resume, { dir })).toBe(resume);
   });
 
+  it('keeps the conversation the launch line pinned and the mode it started in across a restart', () => {
+    const U = '11111111-2222-4333-8444-555555555555';
+    noteBotWorkerSession('daemon-bot6', 'ws-task', dir, { cwd: dir, wsl: true, conversation: { sessionId: U, permissionMode: 'bypassPermissions' } });
+    noteBotWorkerSession('daemon-bot7', 'ws-task', dir, { cwd: dir, conversation: null });
+    reloadBotWorkerSessionsForTests();
+    expect(botWorkerSessionRecord('daemon-bot6', dir)).toMatchObject({ launchSessionId: U, permissionMode: 'bypassPermissions', wsl: true });
+    const plain = botWorkerSessionRecord('daemon-bot7', dir);
+    expect(plain?.launchSessionId).toBeUndefined();
+    expect(plain?.permissionMode).toBeUndefined();
+  });
+
   it('a workspace whose ledger row is gone is still known from its recorded sessions', () => {
     noteBotWorkerSession('daemon-bot5', 'ws-task', dir);
     reloadBotWorkerSessionsForTests();
@@ -348,7 +360,8 @@ describe('pty:create applies the guard (source-level lock)', () => {
     expect(pathCheck).toBeGreaterThan(src.indexOf('async function stageCreate('));
     expect(pathCheck).toBeLessThan(src.indexOf('const guarded = withBotWorkerMergeGuard('));
     expect(src).toContain('if (refusal) throw new Error(`PTY_CREATE: ${refusal}`);');
-    expect(src).toContain('return { options: withLaunchSessionPin(guarded), launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded) } };');
+    expect(src).toContain('const pinned = withLaunchSessionPin(guarded);');
+    expect(src).toContain('return { options: pinned, launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded), ...(conversation ? { conversation } : {}) } };');
     expect(src.split('stampFanoutTaskPane(options);').length - 1).toBe(2);
     for (let at = src.indexOf('stampFanoutTaskPane(options);'); at !== -1; at = src.indexOf('stampFanoutTaskPane(options);', at + 1)) {
       expect(src.indexOf(line, at)).toBeGreaterThan(at);
@@ -356,8 +369,9 @@ describe('pty:create applies the guard (source-level lock)', () => {
     // The session is recorded (before the daemon creates it), and forgotten with the pane.
     expect(src.indexOf('if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, staged.launch);')).toBeLessThan(src.indexOf("daemonClient.rpc('daemon.createSession'"));
     expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, staged.launch);');
-    // The record carries a guarded codex launch's folder as well as a claude launch's files.
-    expect(src).toContain('launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded) }');
+    // The record carries a guarded codex launch's folder as well as a claude launch's files,
+    // and the conversation the launch line pinned.
+    expect(src).toContain('launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded), ...(conversation ? { conversation } : {}) }');
     expect(src.split('forgetBotWorkerSession(id);').length - 1).toBe(2);
     // A resume line typed through main gets the session guard.
     expect(src).toMatch(/IPC\.PTY_WRITE_LAUNCH[\s\S]{0,1400}const shaped = promptFileArgumentForShell\(text, \{ wsl: isWslShell\(getPtyShell\(id\)\), cmd: process\.platform === 'win32' && isCmdShellPath\(getPtyShell\(id\)\) \}\);\s+const guardedText = await guardBotWorkerSessionText\(id, shaped, 'write-launch', folders[\s\S]{0,400}isPlainCmdLaunchLine\(guardedText\)[\s\S]{0,300}const line = sanitizePtyText\(guardedText\)/);

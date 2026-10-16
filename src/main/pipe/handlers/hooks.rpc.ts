@@ -679,8 +679,11 @@ export function registerHooksRpc(
     // Only for a pane-EXACT route (#1523): this fallback cannot see the pane's
     // current binding, so a workspace/cwd guess could replace another agent's
     // conversation. Skipping it also keeps a guess out of the spool.
+    // A Claude turn start binds too, as on the daemon's own ingest
+    // (HookIngest): it carries the mode the turn runs in.
     if (
       (signal.kind === 'agent.session_start'
+        || (signal.kind === 'agent.user_prompt_submit' && signal.agent === 'claude')
         || signal.kind === 'agent.stop'
         || signal.kind === 'agent.subagent_stop')
       && signal.agentSessionId

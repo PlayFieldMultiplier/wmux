@@ -1445,6 +1445,7 @@ async function main() {
   // (ptyId) + a resumable id. A SessionStart whose transcript doesn't exist yet
   // still spools; a later Stop's spool overwrites it with the #12235-safe id.
   const isLifecycle = envelope.kind === 'agent.session_start'
+    || envelope.kind === 'agent.user_prompt_submit'
     || envelope.kind === 'agent.stop'
     || envelope.kind === 'agent.subagent_stop';
   if (!innerOk && isLifecycle && envPtyId && envelope.agentSessionId) {
