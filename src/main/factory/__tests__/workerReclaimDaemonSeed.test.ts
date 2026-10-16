@@ -20,12 +20,15 @@ import {
   TURN_SEED_RETRY_MS,
   createDaemonTurnSeed,
   installWorkerReclaim,
+  isReclaimedSince,
   mergePaneActivity,
+  reclaimWorker,
   reportedWorkerPanes,
   taskWorkerPanes,
   workerPanesIdle,
   type DaemonTurnState,
   type PaneActivity,
+  type WorkerReclaimPorts,
   type WorkerSessionInfo,
 } from '../workerReclaim';
 
@@ -613,5 +616,80 @@ describe('after a restart: live evidence wins over the daemon read', () => {
     await main.seed.pass();
     main.live.status.set(WORKER, 'running');
     expect(main.idleAt(REPORT + 60 * MIN)).toBe(false);
+  });
+});
+
+describe('the last step before a reported worker\'s stop', () => {
+  const SECOND = 'daemon-3';
+  function twoPanes(over: Partial<WorkerReclaimPorts> = {}) {
+    const store = ReclaimedWorkers.at(path.join(dir, `two-${Math.random()}`));
+    let current = reported();
+    const stopAgent = vi.fn<(id: string, opts?: { ifTurnClosed?: boolean }) => Promise<{ ok: boolean; stopped?: boolean; code?: string }>>(async () => ({ ok: true, stopped: true }));
+    const ports: WorkerReclaimPorts = {
+      onTransition: () => () => undefined,
+      row: () => current,
+      store,
+      worktreeOf: async () => wt,
+      listSessions: async () => [workerSession(), { ...workerSession(), id: SECOND }],
+      stopAgent,
+      now: () => REPORT + 60 * MIN,
+      log: () => undefined,
+      turnEnded: () => true,
+      reportedPanes: () => [WORKER, SECOND],
+      workspacePanes: () => [WORKER, SECOND],
+      ...over,
+    };
+    return { ports, store, stopAgent, setRow: (r: LedgerEntry) => { current = r; } };
+  }
+
+  it('a row that moved on while the daemon was read again has nothing stopped', async () => {
+    const t = twoPanes({ reportedPanes: () => [WORKER], workspacePanes: () => [WORKER] });
+    t.ports.confirmIdle = async () => {
+      // The task is sent back to working while the read is out.
+      t.setRow(reported({ status: 'working', rev: 4 }));
+      return true;
+    };
+    const out: { deferred?: boolean } = {};
+    expect(await reclaimWorker(t.ports, reported(), 'reported', out)).toBeNull();
+    expect(t.stopAgent).not.toHaveBeenCalled();
+    expect(t.store.get(reported().id)).toBeNull();
+    expect(out.deferred).toBeUndefined();
+  });
+
+  it('a second pane the daemon refuses (turn_open) leaves the record stopping, and the next look stops it', async () => {
+    const t = twoPanes();
+    t.stopAgent.mockImplementation(async (id) => (id === SECOND ? { ok: false, code: 'turn_open' } : { ok: true, stopped: true }));
+    const out: { deferred?: boolean } = {};
+    const rec = await reclaimWorker(t.ports, reported(), 'reported', out);
+    expect(t.stopAgent.mock.calls.map((c) => c[0])).toEqual([WORKER, SECOND]);
+    expect(rec?.state).toBe('stopping');
+    expect(out.deferred).toBe(true);
+    // Not covered: a later sweep looks again and stops the surviving agent.
+    expect(isReclaimedSince(t.store.get(reported().id), reported())).toBe(false);
+    t.stopAgent.mockImplementation(async () => ({ ok: true, stopped: true }));
+    t.ports.listSessions = async () => [{ ...workerSession(), agentProcessAlive: false }, { ...workerSession(), id: SECOND }];
+    t.ports.reportedPanes = () => [SECOND];
+    expect((await reclaimWorker(t.ports, reported(), 'reported'))?.state).toBe('stopped');
+    expect(t.stopAgent.mock.calls.at(-1)?.[0]).toBe(SECOND);
+    const last = t.store.get(reported().id);
+    if (last) await t.store.put(last);
+  });
+
+  it('a confirmation that turns false after the first stop leaves the record stopping', async () => {
+    const t = twoPanes();
+    let reads = 0;
+    t.ports.confirmIdle = async () => {
+      reads += 1;
+      return reads === 1;
+    };
+    const out: { deferred?: boolean } = {};
+    const rec = await reclaimWorker(t.ports, reported(), 'reported', out);
+    expect(t.stopAgent.mock.calls.map((c) => c[0])).toEqual([WORKER]);
+    expect(rec?.state).toBe('stopping');
+    expect(rec?.sessions.map((x) => x.sessionId)).toEqual([WORKER, SECOND]);
+    expect(out.deferred).toBe(true);
+    expect(isReclaimedSince(t.store.get(reported().id), reported())).toBe(false);
+    const last = t.store.get(reported().id);
+    if (last) await t.store.put(last);
   });
 });

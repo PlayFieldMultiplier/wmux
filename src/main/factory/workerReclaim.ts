@@ -851,6 +851,9 @@ export async function reclaimWorker(
     } catch {
       ownPanes = null;
     }
+    // A pane whose stop was held back (its turn is not over after all):
+    // the record stays `stopping`, live, for a later look.
+    let heldBack = false;
     for (const p of panes) {
       // The task reopened (or moved on from its report) meanwhile: what
       // still runs is its worker again.
@@ -866,9 +869,13 @@ export async function reclaimWorker(
           still = false;
         }
         if (!still) {
+          heldBack = true;
           if (out) out.deferred = true;
           break;
         }
+        // The row is read again after that read: one that moved on (back to
+        // working, a newer report) while it was out has nothing stopped.
+        if (movedOn(ports, entry, ended)) break;
       }
       attempted++;
       try {
@@ -882,6 +889,7 @@ export async function reclaimWorker(
         // signalled, and it is no failed stop.
         if (r.code === 'turn_open') {
           attempted--;
+          heldBack = true;
           if (out) out.deferred = true;
           break;
         }
@@ -907,6 +915,8 @@ export async function reclaimWorker(
     // Stopped only once every pane's stop succeeded; else it stays
     // `stopping` (still live for the agent budget) and a later look retries.
     if (failed > 0) return ports.store.get(entry.id);
+    // A pane held back after another was stopped: not stopped yet either.
+    if (heldBack) return ports.store.get(entry.id);
     ports.store.setState(entry.id, 'stopped', now());
     // Reopened part way: the conversation stays recorded, no card (the
     // task is open again, and its open row counts what still runs).
