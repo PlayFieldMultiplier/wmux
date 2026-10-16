@@ -783,7 +783,10 @@ export interface WorkerResumePorts {
   /** Hold the task's folder for the resume (taskFolderCleanup.ts
    *  holdTaskFolder): no cleanup removes it meanwhile. Returns the release. */
   holdFolder?: (taskId: string) => Promise<() => void>;
-  note?: (workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string) => void;
+  /** The resumed worker uses the task's folder again (taskFolderCleanup.ts
+   *  forgetKeptFolder: a folder a stop kept is no longer only kept). */
+  folderResumed?: (taskId: string) => void;
+  note?:(workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string) => void;
   changed?: () => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -1070,6 +1073,11 @@ async function launched(
 ): Promise<WorkerResumeResult> {
   const now = ports.now ?? Date.now;
   ports.store.setState(rec.taskId, 'resumed', now());
+  try {
+    ports.folderResumed?.(rec.taskId);
+  } catch {
+    /* best effort: the folder stays kept */
+  }
   onLaunched?.();
   try {
     ports.note?.(rec.ownerWorkspaceId, rec.threadId, 'Worker resumed', `${by.kind === 'owner' ? 'The owner' : 'The bot'} resumed the same conversation ${where === 'folder' ? 'in the task folder' : 'in a new pane in the task worktree'}.`, { code: 'worker.resumed', args: { by: by.kind, where } }, rec.taskId);

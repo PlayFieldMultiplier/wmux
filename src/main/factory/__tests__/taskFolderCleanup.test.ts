@@ -13,6 +13,7 @@ import {
   TaskFolders,
   cleanTaskFolder,
   cleanTaskFolders,
+  forgetKeptFolder,
   gitRepoInfo,
   holdTaskFolder,
   installTaskFolderCleanup,
@@ -422,13 +423,95 @@ describe('the automatic pass and Settings › Bots', () => {
     installed.dispose();
     expect(fs.existsSync(path.join(stoppedWt, 'a.txt'))).toBe(true);
     expect(fs.readFileSync(path.join(scratch, 'notes.md'), 'utf8')).toBe('found it');
-    expect(p.store.get('wtask-stop-33333333')).toBeNull();
+    expect(p.store.get('wtask-stop-33333333')).toMatchObject({ state: 'kept_stopped', stopped: { botId: BOT } });
     expect(await cleanTaskFolder(p, rows[0], missions.get('wtask-stop-33333333')!, [])).toBe('skipped');
     expect(fs.existsSync(stoppedWt)).toBe(true);
     // The owner's Clean up now: the rules apply (a clean one goes, its branch stays).
     expect(await cleanTaskFolders(p, rows, { force: true })).toMatchObject({ removed: 2 });
     expect(fs.existsSync(stoppedWt)).toBe(false);
     expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/stop-33333333')).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('a folder a stop kept is recorded on disk, so usage and Clean up now still find it after the ledger pruned its row', async () => {
+    const mgr = new TaskWorktreeManager();
+    const cleanWt = await taskWorktree(mgr, 'keep-66666666');
+    const dirtyWt = await taskWorktree(mgr, 'mess-77777777');
+    fs.writeFileSync(path.join(dirtyWt, 'draft.txt'), 'x'.repeat(500));
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-2', 'task-2');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'notes.md'), 'found it');
+    const missions = new Map<string, TaskMission>([
+      ['wtask-keep-66666666', { folder: cleanWt, branch: 'wtask/keep-66666666' }],
+      ['wtask-mess-77777777', { folder: dirtyWt, branch: 'wtask/mess-77777777' }],
+      ['wtask-research-8888', { folder: scratch }],
+    ]);
+    const stoppedBy = { summary: 'stopped by owner', updatedBy: { kind: 'system' as const, workspaceId: 'ws-daemon' }, updatedAt: 49_000 };
+    const rows = [
+      row('cancelled', { id: 'wtask-keep-66666666', ...stoppedBy }),
+      row('cancelled', { id: 'wtask-mess-77777777', ...stoppedBy }),
+      row('cancelled', { id: 'wtask-research-8888', ...stoppedBy, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } }),
+    ];
+    const p = ports({}, missions);
+    // The automatic pass keeps them and records each, with its bot.
+    expect(await cleanTaskFolders(p, rows)).toEqual({ removed: 0, keptDirty: 0, busy: 0, failed: 0 });
+    for (const id of ['wtask-keep-66666666', 'wtask-mess-77777777', 'wtask-research-8888']) {
+      expect(p.store.get(id)).toMatchObject({ state: 'kept_stopped', stopped: { botId: BOT } });
+    }
+    expect(p.store.get('wtask-research-8888')).toMatchObject({ kind: 'research', path: scratch });
+
+    // Past the retention window: the ledger pruned the rows (and the daemon
+    // its missions), and wmux restarted (the records are read from disk).
+    const later = ports({ store: TaskFolders.at(wmuxDir) }, new Map());
+    later.store.load();
+    expect(later.store.get('wtask-keep-66666666')?.state).toBe('kept_stopped');
+    const usage = await taskFolderUsage(later, []);
+    expect(usage.folders).toBe(3);
+    expect(usage.bytes).toBeGreaterThan(500);
+    // The automatic pass still leaves them alone.
+    const installed = installTaskFolderCleanup({ ...later, onTransition: () => () => undefined, allRows: () => [] });
+    await new Promise((r) => setTimeout(r, 50));
+    installed.dispose();
+    expect(fs.existsSync(cleanWt) && fs.existsSync(scratch)).toBe(true);
+
+    // Clean up now: the clean worktree and the research folder go (the branch
+    // stays); the dirty one is kept and still listed.
+    expect(await cleanTaskFolders(later, [], { force: true })).toEqual({ removed: 2, keptDirty: 1, busy: 0, failed: 0 });
+    expect(fs.existsSync(cleanWt)).toBe(false);
+    expect(fs.existsSync(scratch)).toBe(false);
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/keep-66666666')).toMatch(/^[0-9a-f]{40}$/);
+    expect(later.store.get('wtask-keep-66666666')?.state).toBe('removed');
+    expect(later.store.get('wtask-mess-77777777')).toMatchObject({ state: 'kept_dirty', stopped: { botId: BOT } });
+    expect(await taskFolderUsage(later, [])).toMatchObject({ folders: 1, dirty: 1 });
+    // Once committed, a later Clean up now finds it again and removes it.
+    fs.rmSync(path.join(dirtyWt, 'draft.txt'));
+    expect(await cleanTaskFolders(later, [], { force: true })).toMatchObject({ removed: 1 });
+    expect(await taskFolderUsage(later, [])).toEqual({ bytes: 0, folders: 0, dirty: 0 });
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/mess-77777777')).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('a resumed worker using its kept folder again ends the kept record; its next stop records it again', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr, 'back-99999999');
+    const missions = new Map<string, TaskMission>([['wtask-back-99999999', { folder: wt, branch: 'wtask/back-99999999' }]]);
+    const stopped = row('cancelled', { id: 'wtask-back-99999999', summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000 });
+    const p = ports({}, missions);
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)?.state).toBe('kept_stopped');
+    await forgetKeptFolder(p, stopped.id);
+    expect(p.store.get(stopped.id)).toBeNull();
+    // Only a folder a stop kept is forgotten.
+    await p.store.put({ taskId: 'wtask-x-00000001', kind: 'worktree', path: wt, state: 'removed', at: 1 });
+    await forgetKeptFolder(p, 'wtask-x-00000001');
+    expect(p.store.get('wtask-x-00000001')?.state).toBe('removed');
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)?.state).toBe('kept_stopped');
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('a record file that cannot be read is never taken as empty (the host leaves cleanup off)', () => {
+    fs.mkdirSync(path.join(wmuxDir, 'factory'), { recursive: true });
+    fs.writeFileSync(path.join(wmuxDir, 'factory', 'task-folders.json'), '{ not json');
+    expect(() => TaskFolders.at(wmuxDir).load()).toThrow();
   });
 });
 

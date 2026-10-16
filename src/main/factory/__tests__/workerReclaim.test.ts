@@ -586,6 +586,13 @@ describe('resume safety (review fixes)', () => {
     expect(store.get('wtask-abc-12345678')?.state).toBe('stopped');
   });
 
+  it('a resume that launches tells the folder cleanup the task\'s folder is in use again', async () => {
+    const store = await reclaimedStore();
+    const folderResumed = vi.fn();
+    expect(await resumeWorker(ports(store, [dead()], { folderResumed }), 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: true });
+    expect(folderResumed).toHaveBeenCalledWith('wtask-abc-12345678');
+  });
+
   it('one task\'s stop (Stop worker) reaches only that task\'s resumed worker and marks its record stopped', async () => {
     const store = await reclaimedStore();
     const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));

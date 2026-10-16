@@ -52,7 +52,7 @@ import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import path from 'node:path';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { TaskWorktreeManager } from '../worktask/TaskWorktreeManager';
-import { TaskFolders, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, restoreTaskFolder, setTaskFolderPorts, type TaskMission } from './taskFolderCleanup';
+import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, restoreTaskFolder, setTaskFolderPorts, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantTaskWorkspaces } from '../worktask/fanoutGuards';
@@ -313,7 +313,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         const ws = entries.find((e) => e.id === workspaceId);
         return ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
       },
-      ...(folderPorts ? { restoreFolder: (taskId: string, folder: string) => restoreTaskFolder(folderPorts, taskId, folder), holdFolder: holdTaskFolder } : {}),
+      ...(folderPorts ? {
+        restoreFolder: (taskId: string, folder: string) => restoreTaskFolder(folderPorts, taskId, folder),
+        holdFolder: holdTaskFolder,
+        folderResumed: (taskId: string) => { void forgetKeptFolder(folderPorts, taskId); },
+      } : {}),
       // The same stage a resume typed from the pane takes (pty:write-launch):
       // a bot worker's line carries its settings file, or this throws.
       typeLine: (sessionId, line) => {
