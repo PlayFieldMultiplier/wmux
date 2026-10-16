@@ -18,6 +18,8 @@ import { claimTokenForPane, claimTokenForRun } from '../../workspace/workspaceCl
 import { isIdentityRunPty, liveIdentityRunAnchors } from '../../automation/runIdentity';
 import type { PortSnapshot, SnapshotFn } from '../../pty/portWatch';
 import { walkToOwningAnchor } from '../../pty/serverSidePidWalk';
+import { isDaemonPtyId, liveDaemonPidEntries } from '../../pty/pidMap';
+import type { DaemonSessionShell, PidMapFile } from '../../pty/pidMap';
 import { tryProcessCreatedAt } from '../../pty/winSnapshotNative';
 import { readWindowsAncestry } from './callerAncestry';
 import { getAccountStore } from '../../account/accountStore';
@@ -492,6 +494,44 @@ export function registerA2aRpc(
     return workspaceToken ? { live: true, workspaceId: pane.workspaceId, workspaceToken } : { live: true };
   }
 
+  // The daemon's session list for the resolve-time pid-map check, kept for a
+  // short while so a burst of identity resolves (every MCP server at boot)
+  // costs one listSessions, not one each.
+  const DAEMON_SESSIONS_CACHE_MS = 2000;
+  let daemonSessionsCache: { at: number; sessions: DaemonSessionShell[] } | null = null;
+
+  /** A fresh session list, or null when the daemon is not connected or did not answer. */
+  async function fetchDaemonSessions(): Promise<DaemonSessionShell[] | null> {
+    const dc = getDaemonClient?.();
+    if (!dc || dc.isConnected === false) return null;
+    try {
+      const rows = await dc.rpc('daemon.listSessions', {}, { timeoutMs: 2000 });
+      if (!Array.isArray(rows)) return null;
+      daemonSessionsCache = { at: Date.now(), sessions: rows as DaemonSessionShell[] };
+      return daemonSessionsCache.sessions;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * `entries` without the daemon pid-map hits whose PID is not that session's
+   * current shell (see liveDaemonPidEntries). A cached list is trusted only to
+   * keep entries: before it drops one, the list is read again, so a pane that
+   * got a new shell inside the cache window is not refused. With no daemon
+   * (not connected, or the RPC failed) nothing is filtered and identity falls
+   * back to the pid-map alone, as before this check existed.
+   */
+  async function keepLiveDaemonPidEntries<T extends PidMapFile>(entries: T[]): Promise<T[]> {
+    if (!entries.some((e) => isDaemonPtyId(e.ptyId))) return entries;
+    const cache = daemonSessionsCache;
+    if (cache && Date.now() - cache.at < DAEMON_SESSIONS_CACHE_MS) {
+      const kept = liveDaemonPidEntries(entries, cache.sessions);
+      if (kept.length === entries.length) return kept;
+    }
+    return liveDaemonPidEntries(entries, await fetchDaemonSessions());
+  }
+
   // a2a.resolve.identity — handled in main process (not renderer).
   // Returns PID → CURRENT workspaceId mappings so an MCP server can resolve
   // which workspace it belongs to by walking its own process tree.
@@ -602,6 +642,19 @@ export function registerA2aRpc(
         }
       }
     } catch { /* best-effort: identity resolution is non-critical */ }
+
+    // A pid-map hit counts only while its PID is still the pane's shell. A
+    // daemon restart gives recovered sessions new shell PIDs; a file left on an
+    // old PID the OS has reused (a new worker's own claude.exe) would otherwise
+    // hand that process the old pane's identity. Filtered once here, so the
+    // client-side walk (entries / mappings), the server-side walk below, and
+    // the Codex thread and hinted-pane lookups all see only live anchors.
+    const liveEntries = await keepLiveDaemonPidEntries(entries);
+    if (liveEntries.length !== entries.length) {
+      const kept = new Set(liveEntries);
+      for (const e of entries) if (!kept.has(e)) delete mappings[e.pid];
+      entries.splice(0, entries.length, ...liveEntries);
+    }
 
     // Server-side walk: from callerPid's PARENT up the live tree to the first
     // ancestor that is a known live anchor. `entries` is already the set of LIVE

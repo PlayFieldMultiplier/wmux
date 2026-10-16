@@ -7,7 +7,8 @@ import { spawnTerminalPty, type TerminalPty } from '../../shared/terminalPty';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getPipeName, ENV_KEYS, getPidMapDir } from '../../shared/constants';
+import { getPipeName, ENV_KEYS } from '../../shared/constants';
+import { writePidMap, removePidMapByPtyId } from './pidMap';
 import { expandTilde } from '../../shared/expandTilde';
 import { resolveSpawnEnv } from './resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
@@ -369,26 +370,13 @@ export class PTYManager {
     // Code doesn't propagate env vars to MCP child processes). We store the
     // ptyId (stable) rather than the workspaceId — the owning workspace is
     // resolved live by a2a.resolve.identity, so it can't go stale if the
-    // workspace id is re-minted.
+    // workspace id is re-minted. The shared writer also keeps one PID per
+    // ptyId, the same rule daemon-mode panes follow.
     if (ptyProcess.pid) {
-      this.writePidMap(ptyProcess.pid, id);
+      writePidMap(ptyProcess.pid, id);
     }
 
     return instance;
-  }
-
-  private writePidMap(pid: number, ptyId: string): void {
-    try {
-      const dir = getPidMapDir();
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(`${dir}/${pid}`, ptyId, 'utf8');
-    } catch { /* best-effort */ }
-  }
-
-  private removePidMap(pid: number): void {
-    try {
-      fs.unlinkSync(`${getPidMapDir()}/${pid}`);
-    } catch { /* best-effort */ }
   }
 
   write(id: string, data: string): void {
@@ -417,7 +405,10 @@ export class PTYManager {
     this.pendingCreates.delete(id);
     const instance = this.instances.get(id);
     if (instance) {
-      this.removePidMap(instance.process.pid);
+      // Keyed by content (this pane's ptyId), not by the PID filename: it
+      // removes every anchor of this pane and never one that a reused PID
+      // now gives to another pane.
+      removePidMapByPtyId(id);
       try { instance.process.kill(); } catch { /* already dead */ }
       (instance.process as TerminalPty).dispose?.();
       this.onDisposeCallback?.(id);

@@ -528,7 +528,8 @@ describe('a2a.resolve.identity — accounts and the pane the env names', () => {
     const { router, rpc } = routerWithDaemon(true);
     const result = (await dispatchResolve(router, { callerPid: 39876, hintedPtyId: 'auto-run-1' })) as { hintedPane?: unknown };
     expect(result.hintedPane).toEqual({ live: false });
-    expect(rpc).not.toHaveBeenCalled();
+    // The pid-map check may list sessions; the WSL attestation must not run.
+    expect(rpc).not.toHaveBeenCalledWith('session.wslAgentLive', expect.anything(), expect.anything());
   });
 
   it('attests a live pane only when the daemon follows a live WSL agent in it', async () => {
@@ -637,4 +638,98 @@ describe('a2a.resolve.identity — scheduled runs with a browser identity', () =
     expect(res.ok).toBe(true);
     return (res as { result: ResolveResult & { workspaceToken?: string } }).result;
   }
+});
+
+describe('a2a.resolve.identity — a pid-map hit must be the session\'s current shell', () => {
+  // Live repro (F23): after a daemon restart the old pane daemon-04f1c884
+  // runs a new shell (13632), but its file for the earlier shell 6780 was
+  // still there. Windows gave 6780 to a new worker's claude.exe, whose MCP
+  // server walked up to it before reaching the worker's own shell 7644.
+  const ppidByPid = new Map<number, number>([[39876, 6780], [6780, 7644], [7644, 1]]);
+  const owners: Record<string, string> = { 'daemon-04f1c884': 'ws-old', 'daemon-worker': 'ws-worker' };
+  let sessions: Array<{ id: string; pid?: number; state: string }>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetWorkspaceClaimTrustForTesting();
+    dirRef.current = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-pidmap-live-'));
+    fs.writeFileSync(path.join(dirRef.current, '6780'), 'daemon-04f1c884');
+    fs.writeFileSync(path.join(dirRef.current, '7644'), 'daemon-worker');
+    sessions = [
+      { id: 'daemon-04f1c884', pid: 13632, state: 'detached' },
+      { id: 'daemon-worker', pid: 7644, state: 'attached' },
+    ];
+    sendToRendererMock.mockImplementation(
+      (_w: unknown, method: string, p: { ptyId: string }) =>
+        Promise.resolve({ workspaceId: method === 'input.findOwnerWorkspace' ? owners[p.ptyId] ?? null : null }),
+    );
+  });
+  afterEach(() => {
+    try { fs.rmSync(dirRef.current, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  function routerWith(daemon: DaemonClient | null): RpcRouter {
+    const router = new RpcRouter();
+    registerA2aRpc(router, () => fakeWindow, makeWorker(), {
+      snapshot: async () => ({ ppidByPid, listeners: [] }),
+      createdAt: () => null,
+      getDaemonClient: () => daemon,
+    });
+    return router;
+  }
+
+  function daemonListing(): { client: DaemonClient; rpc: ReturnType<typeof vi.fn> } {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'daemon.listSessions') return sessions;
+      throw new Error(`unexpected ${method}`);
+    });
+    return { client: { isConnected: true, rpc } as unknown as DaemonClient, rpc };
+  }
+
+  it('skips the stale file and walks on to the real shell\'s entry', async () => {
+    const result = await dispatchResolve(routerWith(daemonListing().client), { callerPid: 39876 });
+
+    expect(result.resolved).toEqual({ workspaceId: 'ws-worker', ptyId: 'daemon-worker' });
+    // The client-side walk reads these, so the stale PID is gone from both.
+    expect(result.entries).toEqual([{ pid: '7644', ptyId: 'daemon-worker', workspaceId: 'ws-worker' }]);
+    expect(result.mappings).toEqual({ '7644': 'ws-worker' });
+  });
+
+  it('keeps the previous behaviour when the daemon is not connected', async () => {
+    const result = await dispatchResolve(routerWith(null), { callerPid: 39876 });
+
+    expect(result.resolved).toEqual({ workspaceId: 'ws-old', ptyId: 'daemon-04f1c884' });
+    expect(result.entries).toHaveLength(2);
+  });
+
+  it('keeps the previous behaviour when listSessions fails', async () => {
+    const rpc = vi.fn(async () => { throw new Error('daemon down'); });
+    const result = await dispatchResolve(
+      routerWith({ isConnected: true, rpc } as unknown as DaemonClient),
+      { callerPid: 39876 },
+    );
+
+    expect(result.entries).toHaveLength(2);
+  });
+
+  it('reads the list again before a cached one drops an entry', async () => {
+    const { client, rpc } = daemonListing();
+    const router = routerWith(client);
+    await dispatchResolve(router, { callerPid: 39876 });
+    expect(rpc).toHaveBeenCalledTimes(1);
+
+    // Within the cache window the old pane gets a new shell that reuses 6780
+    // (reconnect writes its file); the cached list still says 13632.
+    sessions = [
+      { id: 'daemon-04f1c884', pid: 6780, state: 'detached' },
+      { id: 'daemon-worker', pid: 7644, state: 'attached' },
+    ];
+    const second = await dispatchResolve(router, {});
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(second.entries.map((e) => e.pid).sort()).toEqual(['6780', '7644']);
+
+    // A list that agrees is served from the cache.
+    await dispatchResolve(router, {});
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
 });
