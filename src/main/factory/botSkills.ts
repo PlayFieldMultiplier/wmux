@@ -137,9 +137,21 @@ export function skillHash(files: SkillFiles): string {
   return createHash('sha256').update(JSON.stringify({ v: 1, content: files.content, references })).digest('hex');
 }
 
-/** Control characters a skill's text never holds (tab and newline are text). */
+/** Characters a skill's text never holds: C0 and C1 controls (tab and
+ *  newline are text) and the bidirectional overrides and isolates, so the
+ *  card shows the text as it reads. */
 // eslint-disable-next-line no-control-regex
-const SKILL_CONTROL_RE = /[\u0000-\u0008\u000B-\u001F\u007F]/;
+const SKILL_CONTROL_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/;
+
+/** Remove a folder this store made; a failure leaves a dot-folder that never loads. */
+function removeQuietly(dir: string | null): void {
+  if (!dir) return;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* only SKILL.md and references/ are ever read */
+  }
+}
 
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
@@ -618,8 +630,12 @@ export class BotSkillStore {
       fs.renameSync(tmp, proposedDir);
       tmp = null;
     } catch (err) {
-      if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
-      if (setAside && !lstatOrNull(proposedDir)) fs.renameSync(aside, proposedDir);
+      removeQuietly(tmp);
+      try {
+        if (setAside && !lstatOrNull(proposedDir)) fs.renameSync(aside, proposedDir);
+      } catch {
+        /* the record still names the earlier proposal's hash: approve checks it */
+      }
       return refuse('write_failed', `skill ${name} could not be written: ${String(err)}`);
     }
     if (!this.commit(botId, name, next)) {
@@ -631,7 +647,7 @@ export class BotSkillStore {
       }
       return refuse('write_failed', `skill ${name} could not be recorded`);
     }
-    if (setAside) fs.rmSync(aside, { recursive: true, force: true });
+    if (setAside) removeQuietly(aside);
     return {
       ok: true, skill: view(next, next.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: meta?.state === 'approved', diff,
       ...(meta?.proposed?.approvalId ? { replacedApprovalId: meta.proposed.approvalId } : {}),
@@ -667,14 +683,18 @@ export class BotSkillStore {
     const movedAside: string[] = [];
     const placed: string[] = [];
     // Put the earlier approved files back (the proposal stays waiting).
+    // Whatever cannot be put back stays unloaded: the record still names
+    // the earlier hash, and files that do not match it never load.
     const restore = (): void => {
-      try {
-        for (const n of [...placed].reverse()) fs.rmSync(path.join(d.dir, n), { recursive: true, force: true });
-        for (const n of [...movedAside].reverse()) fs.renameSync(path.join(backup as string, n), path.join(d.dir, n));
-        if (backup) fs.rmSync(backup, { recursive: true, force: true });
-      } catch {
-        /* the record still names the earlier hash: unmatched files never load */
+      for (const n of [...placed].reverse()) removeQuietly(path.join(d.dir, n));
+      for (const n of [...movedAside].reverse()) {
+        try {
+          fs.renameSync(path.join(backup as string, n), path.join(d.dir, n));
+        } catch {
+          /* left in the backup folder, which never loads */
+        }
       }
+      removeQuietly(backup);
     };
     try {
       // The approved SKILL.md and references/ are written from the bytes
@@ -692,11 +712,9 @@ export class BotSkillStore {
       }
       fs.renameSync(path.join(tmp, SKILL_FILE), live);
       placed.push(SKILL_FILE);
-      fs.rmSync(tmp, { recursive: true, force: true });
-      tmp = null;
     } catch (err) {
-      if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
       restore();
+      removeQuietly(tmp);
       return refuse('write_failed', `skill ${name} could not be approved: ${String(err)}`);
     }
     const at = this.now();
@@ -705,16 +723,14 @@ export class BotSkillStore {
       approved: { hash, version: fm.frontmatter.version, description: fm.frontmatter.description, at },
       createdAt: meta.createdAt, updatedAt: at,
     };
+    removeQuietly(tmp);
     if (!this.commit(botId, name, next)) {
       restore();
       return refuse('write_failed', `skill ${name} could not be recorded as approved`);
     }
-    try {
-      fs.rmSync(backup, { recursive: true, force: true });
-      fs.rmSync(proposedDir, { recursive: true, force: true });
-    } catch {
-      /* leftovers never load: the record names the approved hash */
-    }
+    // Leftovers never load: the record names the approved hash.
+    removeQuietly(backup);
+    removeQuietly(proposedDir);
     return { ok: true, skill: view(next, false) };
   }
 

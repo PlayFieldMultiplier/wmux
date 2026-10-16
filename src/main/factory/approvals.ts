@@ -792,6 +792,8 @@ export class ApprovalService {
       }
       case 'undo': {
         if (cur.state !== 'approved') return refuse('not_pending', `the request is ${cur.state}`);
+        // An approved skill is loaded already; the profile's Archive unloads it.
+        if (cur.action === 'skill') return refuse('too_late', 'the skill is loaded; archive it from the bot\'s profile');
         if (cur.effectId || (cur.executeAfter !== undefined && this.now() >= cur.executeAfter)) return refuse('too_late', 'the merge has started');
         const next: StoredApproval = { ...cur, state: 'pending', updatedAt: this.now() };
         delete next.decidedBy;

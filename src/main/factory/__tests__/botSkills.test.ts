@@ -142,6 +142,9 @@ describe('skill store: writing and path containment', () => {
     expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'a\0b\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
     expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'a\u001bb\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
     expect(s.propose(A, { name: 'report', content: skillMd('report'), references: [{ name: 'a.md', content: 'x\0y' }], reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    for (const ch of ['\u009b', '\u202e', '\u2066']) {
+      expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', `a${ch}b\n`), reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    }
     expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'tab\there\n'), reason: 'r' })).toMatchObject({ ok: true });
   });
 
@@ -344,6 +347,19 @@ describe('skill store: main keeps the approval record', () => {
     }
     expect(failed).toBeGreaterThanOrEqual(4);
     expect(s.read(A, 'report', 'checklist.md')).toMatchObject({ ok: true, version: '1.1.0', content: '- new\n' });
+    // A cleanup that fails does not undo an approve that went through.
+    const next = propose(s, A, 'report', skillMd('report', '1.2.0', 'Later steps.\n'));
+    const realRm = fsDefault.rmSync;
+    const rm = vi.spyOn(fsDefault, 'rmSync').mockImplementation(((p: fs.PathLike, o?: fs.RmOptions) => {
+      if (path.basename(String(p)).startsWith('.tmp-')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      return realRm(p, o);
+    }) as typeof fsDefault.rmSync);
+    try {
+      expect(s.approve(A, 'report', next.hash)).toMatchObject({ ok: true, skill: { version: '1.2.0' } });
+    } finally {
+      rm.mockRestore();
+    }
+    expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.2.0', references: [] });
   });
 
   it('refuses a proposal whose change would not fit the owner\'s card', () => {
@@ -473,6 +489,31 @@ describe('skill_propose → approval card → load', () => {
     expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'stale' });
     expect(r.svc.get(id)?.state).toBe('expired');
     expect(r.skills.read(A, 'report')).toMatchObject({ ok: false, code: 'not_found' });
+  });
+
+  it('an approved skill is not undone from its card; a window that cannot be told does not change the approval', async () => {
+    const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
+    const skills = store();
+    const svc = new ApprovalService({
+      file: path.join(wmuxDir, 'factory', 'approvals.json'),
+      bots: () => ({ listEnabled: () => [profile(A)], get: (id) => (id === A ? profile(A) : null) }),
+      runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false }),
+      readPr: async () => { throw new Error('no PR'); },
+      ghLogin: async () => null,
+      rooms: () => writer,
+      merge: () => null,
+      skills: () => skillApprovalHost(() => skills, () => { throw new Error('window gone'); }),
+      now: () => 5_000,
+      log: () => undefined,
+    });
+    const p = skills.propose(A, { name: 'report', content: skillMd('report'), reason: 'r' });
+    if (!p.ok) throw new Error('refused');
+    const req = svc.proposeSkill(binding(A), { name: 'report', hash: p.hash, version: p.version, update: false, diff: p.diff, reason: 'r' });
+    if (!req.ok) throw new Error('refused');
+    expect(svc.decide({ requestId: req.request.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true, request: { state: 'approved' } });
+    expect(skills.read(A, 'report')).toMatchObject({ ok: true });
+    expect(svc.decide({ requestId: req.request.requestId, decision: 'undo' }, 'desktop')).toMatchObject({ ok: false, code: 'too_late' });
+    expect(svc.get(req.request.requestId)?.state).toBe('approved');
   });
 
   it('Approve loads it (approved), and the bot is told; Deny archives it', async () => {

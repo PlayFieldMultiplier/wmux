@@ -96,7 +96,12 @@ export function skillApprovalHost(store: () => BotSkillStore | null, emit: (payl
       if (!s) return 'skills are not running';
       if (!r.skill) return 'the request names no skill';
       const res = s.approve(r.botId, r.skill.name, r.skill.hash);
-      emit({ type: 'skills-changed', botId: r.botId });
+      // Telling the window is best effort: it never changes the outcome.
+      try {
+        emit({ type: 'skills-changed', botId: r.botId });
+      } catch {
+        /* the profile re-reads on its next event */
+      }
       return res.ok ? null : res.message;
     },
     deny(r) {
