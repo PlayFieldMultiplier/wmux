@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { countOpenBotWorkers } from '../openBotWorkers';
 import { WAKE_LIMITS } from '../../../shared/wake';
-import { AgentSlots, IdleSnapshot, SLOT_GRANT_MAX_MS, SLOT_HOLDERS_SHOWN_MAX, SLOT_ROW_GRACE_MS, paneRunsNoAgent, rowHoldsAgentSlot, slotHolderArgs, type AgentSlotPorts, type SlotLiveness } from '../agentSlots';
+import { AgentSlots, IdleSnapshot, SLOT_GRANT_MAX_MS, SLOT_HOLDERS_SHOWN_MAX, SLOT_ROW_GRACE_MS, paneRunsNoAgent, paneShowsWork, rowHoldsAgentSlot, slotHolderArgs, type AgentSlotPorts, type SlotLiveness } from '../agentSlots';
 
 function slots(over: Partial<AgentSlotPorts> & { bots?: () => number; workers?: () => number } = {}) {
   let now = 0;
@@ -194,6 +194,8 @@ describe('paneRunsNoAgent (F22: after a cold start)', () => {
     expect(paneRunsNoAgent({ state: 'detached', recoveredAgentUnconfirmed: true })).toBe(true);
     // An agent seen there again holds it.
     expect(paneRunsNoAgent({ state: 'detached', recoveredAgentUnconfirmed: true, agentProcessAlive: true })).toBe(false);
+    // A launch typed there before its agent is confirmed holds it too.
+    expect(paneRunsNoAgent({ state: 'detached', recoveredAgentUnconfirmed: true, commandRunning: true })).toBe(false);
   });
 
   it('gone, without a live PTY, or seen to exit runs none; never attributed is not known dead', () => {
@@ -248,6 +250,17 @@ describe('the factory-wide worker cap over paused review workers (F22)', () => {
     const live: SlotLiveness = { workspaces: new Set(), idleWorkspaces: new Set(), now };
     expect(rowHoldsAgentSlot(fresh, live)).toBe(true);
     expect(rowHoldsAgentSlot(fresh, { ...live, stoppedTasks: new Set(['t1']) })).toBe(false);
+  });
+
+  it('a stopped task\'s worker relaunched by hand holds its slot again', () => {
+    const row = review('t1', 'ws-1');
+    const live: SlotLiveness = { workspaces: new Set(['ws-1']), idleWorkspaces: new Set(), stoppedTasks: new Set(['t1']), now };
+    expect(rowHoldsAgentSlot(row, live)).toBe(false);
+    for (const pane of [{ agentProcessAlive: true }, { commandRunning: true }]) {
+      expect(paneShowsWork(pane)).toBe(true);
+      expect(rowHoldsAgentSlot(row, { ...live, busyWorkspaces: new Set(['ws-1']) })).toBe(true);
+    }
+    expect(paneShowsWork({ commandRunning: false })).toBe(false);
   });
 });
 

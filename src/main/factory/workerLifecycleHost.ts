@@ -22,7 +22,7 @@ import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { taskFolderFromMissions } from './verifyPreset';
-import { AgentSlots, IdleSnapshot, getAgentSlots, paneRunsNoAgent, rowHoldsAgentSlot, setAgentSlots, setSlotLiveness, slotHolderArgs, type SlotLiveness } from './agentSlots';
+import { AgentSlots, IdleSnapshot, getAgentSlots, paneRunsNoAgent, paneShowsWork, rowHoldsAgentSlot, setAgentSlots, setSlotLiveness, slotHolderArgs, type SlotLiveness } from './agentSlots';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
@@ -126,15 +126,19 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   // (the mirror, read now) and those whose panes all run no agent any more
   // (the daemon's sessions, read at most every LIVENESS_REFRESH_MS; until
   // the first read, none). A cap check awaits a fresh read (refreshSlotLiveness).
+  let busyWorkspaces: ReadonlySet<string> = new Set();
   const idle = new IdleSnapshot(async () => {
     const byId = new Map((await listSessions()).map((x) => [x.id, x]));
     const next = new Set<string>();
+    const busy = new Set<string>();
     for (const e of getWorkspaceMirror().getEntries() ?? []) {
       const ptys = Array.isArray(e.ptyIds) ? e.ptyIds : [];
+      if (ptys.some((id) => paneShowsWork(byId.get(id)))) busy.add(e.id);
       // Gone, seen to exit, or respawned by the daemon's restart with no agent
       // since; an agent never attributed otherwise is not known dead.
       if (ptys.length > 0 && ptys.every((id) => paneRunsNoAgent(byId.get(id)))) next.add(e.id);
     }
+    busyWorkspaces = busy;
     return next;
   }, LIVENESS_REFRESH_MS);
   // Bot tasks whose worker main stopped since the row last changed (paused
@@ -151,7 +155,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const liveness = (): SlotLiveness => {
     const idleWorkspaces = idle.get();
     const entries = getWorkspaceMirror().getEntries();
-    return { workspaces: entries ? new Set(entries.map((e) => e.id)) : null, idleWorkspaces, stoppedTasks: stoppedTasks(), now: Date.now() };
+    return { workspaces: entries ? new Set(entries.map((e) => e.id)) : null, idleWorkspaces, stoppedTasks: stoppedTasks(), busyWorkspaces, now: Date.now() };
   };
   /** Open bot task rows whose worker holds an agent slot. */
   const slotRows = (): ReturnType<typeof ledger.list> => {
