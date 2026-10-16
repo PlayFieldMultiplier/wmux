@@ -191,6 +191,23 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(buildWakePrompt({ item: item(reason), profile, tasks })).not.toContain('These tasks were started');
   });
 
+  it('work a bot handed on is reported by that bot: the delegate sends its result and posts no report card of its own', () => {
+    const fromBot = { handoffId: 'h-2', kind: 'dispatch', from: 'Coord', fromWorkspaceId: 'ws1', title: 'Clean up e2e-win', body: 'brief' };
+    const onDispatch = buildWakePrompt({ item: item({ kind: 'handoff', handoffId: 'h-2' }), profile, handoff: fromBot });
+    expect(onDispatch).toContain('Coord reports this work to the owner: its outcome goes in your `result` only. Post no status or report card of your own about it in this thread');
+    const reason = { kind: 'facts' as const, factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' as const } };
+    const tasks = [{ taskId: 'wtask-1', title: 'README', status: 'review_requested' as const }];
+    const onTaskEnd = buildWakePrompt({ item: item(reason), profile, tasks, taskParent: fromBot });
+    expect(onTaskEnd).toContain('Coord reports this work to the owner');
+    // A relay hop names the relay's lead.
+    const hop = buildWakePrompt({ item: item({ kind: 'handoff', handoffId: 'h-2' }), profile, handoff: { ...fromBot, from: 'Coord', relay: { lead: 'Coord (bot-0c)', next: [] } } });
+    expect(hop).toContain('Coord (bot-0c) reports this work to the owner');
+    // The owner's own dispatch (no bot sender) and a bot's result keep the bot's own report.
+    const fromOwner = { handoffId: 'h-3', kind: 'dispatch', from: 'the owner', title: 'Fix it', body: '' };
+    expect(buildWakePrompt({ item: item(reason), profile, tasks, taskParent: fromOwner })).not.toContain('reports this work to the owner');
+    expect(buildWakePrompt({ item: item({ kind: 'handoff', handoffId: 'h-2' }), profile, handoff: { ...fromBot, kind: 'result' } })).not.toContain('reports this work to the owner');
+  });
+
   it('lists the approvals as they stand, the other bots\' replies to a room message, the language and the owner\'s clock', () => {
     const text = buildWakePrompt({
       item: item({ kind: 'human', text: '머지할거 머지해', source: 'desktop', runId: 'run-c', room: true }, 'general'),

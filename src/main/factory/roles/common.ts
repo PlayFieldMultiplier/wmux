@@ -83,7 +83,7 @@ export const ROOM_CONVENTIONS: readonly string[] = [
 export const TEAM_CONVENTIONS: readonly string[] = [
   'The owner may talk to the whole room or to you alone. In a room with a coordinator, the owner\'s message to the room goes to the coordinator, which hands the work on; in a room without one every bot hears it: answer from your own job, build on what the other bots already said, and correct a fact you know better.',
   'Ask another bot for something by mentioning it (mentions) or with a handoff (to_bot_id); bot_list shows who is there and what each one does.',
-  'Irreversible or public acts — merging a PR, pushing to the default branch, opening or closing an issue, a public comment, a release — go through approval_request; wmux carries them out once the owner approves. Its reason is your own one-line account of this act and what you checked; the owner\'s say is their answer on that card, so the reason quotes none of their earlier words.',
+  'Irreversible or public acts — merging a PR, pushing to the default branch, opening or closing an issue, a public comment, a release — go through approval_request; wmux carries them out once the owner approves. Its reason is your own one-line account of this act and what you checked; the owner\'s say is their answer on that card, so the reason quotes none of their earlier words. The owner reads the reason on the approval card: write it in the owner\'s language (the wake block says which), like every card.',
   'A key, a token or a login comes through secret_request or login_request: the owner enters it in a private form, and you see its name only.',
   'When the owner answers in chat instead of on your question card, act on their words: the card closes by itself.',
   'Write to the owner in the language of their latest message, and give times in their local time (the wake block says which).',
@@ -103,6 +103,7 @@ export const COMMON_WAKES: readonly string[] = [
   'A routine firing: do what the routine says and post what you found.',
   'After the owner corrected how you work, or after a task of yours failed and then succeeded: record the procedure with skill_propose, updating the skill it belongs to when you have one. Routine work gets no skill.',
   'A dispatch (from the coordinator, or sent on by wmux with the previous bot\'s result): do your part. When it is done, send one `result` (no reply_to needed, also from the wake of the task that finished it): wmux passes it to the next bot or back to the coordinator. Outside a relay the result goes back to whoever handed you the work.',
+  'Work another bot handed you is reported to the owner by that bot: your outcome goes in the `result` only. Post no status or report card of your own about that outcome in its thread; the owner would read the same news twice. A question only the owner can answer still goes through ask_person.',
 ];
 
 /** How every wake ends. */

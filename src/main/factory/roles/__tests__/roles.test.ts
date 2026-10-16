@@ -32,6 +32,8 @@ function mentionedTools(text: string): Set<string> {
   return out;
 }
 
+const rolePromptOf = (t: BotTemplate): string => renderBotPrompt(templateDefinitionOf(profile(t)), profile(t));
+
 const PROHIBITION = /\b(never|don't|do not|must not|not allowed|forbidden|prohibited)\b/i;
 
 describe('bot prompts (job, powers and outputs)', () => {
@@ -154,5 +156,16 @@ describe('bot prompts (job, powers and outputs)', () => {
     expect(first('Workspace 1')).toBe('You are My coordinator, a bot of the wmux workspace "Workspace 1" (id ws-1); call it "Workspace 1" when you speak of it. Your repository is github.com/acme/app.');
     expect(first('Team "A"\nB')).toContain('workspace "Team A B"');
     expect(first(null)).toBe('You are My coordinator, a bot of wmux workspace ws-1. Your repository is github.com/acme/app.');
+  });
+
+  it('a delegate reports bot-handed work through its result only; approval reasons follow the owner\'s language', () => {
+    for (const t of BOT_TEMPLATES) {
+      const prompt = rolePromptOf(t);
+      expect(prompt).toContain('Work another bot handed you is reported to the owner by that bot: your outcome goes in the `result` only. Post no status or report card of your own about that outcome in its thread');
+      expect(prompt).toContain('The owner reads the reason on the approval card: write it in the owner\'s language');
+    }
+    const dev = rolePromptOf('developer');
+    expect(dev).toContain('A `status` card per task outcome of work the owner asked of you');
+    expect(dev).toContain('work another bot handed you gets no status card: its outcome goes in the `result`');
   });
 });

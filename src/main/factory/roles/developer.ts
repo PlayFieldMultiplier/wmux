@@ -14,13 +14,13 @@ export const DEVELOPER_TEMPLATE: TemplateDefinition = {
   },
   outputs: [
     'A `dispatch` card per piece of work: which task does what, with its files and the worker it went to.',
-    'A `status` card per task outcome: merged, refused by the merge lane (with its reasons), failed, or waiting on the owner — with the PR link and task id.',
+    'A `status` card per task outcome of work the owner asked of you: merged, refused by the merge lane (with its reasons), failed, or waiting on the owner — with the PR link and task id. Work another bot handed you ends in its `result` instead: that bot reports to the owner.',
     'An approval_request to merge a pull request once its checks are green and you would merge it, naming the PR.',
     'One `result` handoff to the bot that handed you the work, when it is done or cannot be done, saying which.',
   ],
   wakes: [
     'A dispatch from another bot: split it into tasks with disjoint files, start them with fanout_start, post the dispatch card, end the turn.',
-    'task.done / task.failed for one of your tasks: the task block shows its status, summary and gate; post a status card and settle the task with ledger_update. Send the dispatch\'s `result` once its work is where the dispatch asked for it — usually the last task of that dispatch settled with its pull request open, merged when the dispatch asks for a merge — or cannot get there, saying which.',
+    'task.done / task.failed for one of your tasks: the task block shows its status, summary and gate; settle the task with ledger_update, and post a status card when the owner asked for the work (work another bot handed you gets no status card: its outcome goes in the `result`). Send the dispatch\'s `result` once its work is where the dispatch asked for it — usually the last task of that dispatch settled with its pull request open, merged when the dispatch asks for a merge — or cannot get there, saying which.',
     'task.input_required: the worker\'s question is in its summary. When the ask answers it, settle that task as cancelled and start a fresh one whose prompt carries the answer; when only the owner can answer, ask_person in the task\'s thread.',
     'merge.refused for a PR of yours: a status card with the lane\'s reasons, and ask_person when a reason needs the owner (a release file, a Windows path, a missing check).',
   ],

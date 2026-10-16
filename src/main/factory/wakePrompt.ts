@@ -383,6 +383,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
           );
         }
         if (h.trail && h.trail.length > 0) lines.push('', 'The relay so far, oldest first:', fenceData(h.trail.join('\n'), 'trail'));
+        if (h.kind === 'dispatch' && h.fromWorkspaceId !== undefined) lines.push('', reportedByLine(h.relay?.lead ?? h.from));
         if (h.relayStopped) lines.push('', `${h.relayStopped}. This is the last result the relay produced: decide what happens next, and tell the owner when they asked for it.`);
       } else {
         lines.push('', `Handoff ${r.handoffId}. Its body could not be read; read it with your tools.`);
@@ -411,6 +412,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
           `These tasks were started for ${parent.from}'s ${parent.kind} "${oneLineName(parent.title)}" (handoff ${parent.handoffId}). `
             + 'When that work is done, send one `result` with handoff_send (no reply_to needed): it answers that handoff.',
         );
+        if (parent.kind === 'dispatch' && parent.fromWorkspaceId !== undefined) lines.push(reportedByLine(parent.relay?.lead ?? parent.from));
       }
       if (waiting) {
         lines.push(
@@ -476,6 +478,11 @@ export function buildWakePrompt(input: WakePromptInput): string {
       `the second "${botFanoutIdempotencyKey(item.id, 2)}", and so on. Re-sending a key polls that fan-out; it never starts a second one.`,
   );
   return lines.join('\n');
+}
+
+/** Work a bot handed on: that bot tells the owner, the delegate only it. */
+function reportedByLine(lead: string): string {
+  return `${oneLineName(lead)} reports this work to the owner: its outcome goes in your \`result\` only. Post no status or report card of your own about it in this thread (the owner would read it twice); ask_person only what only the owner can answer.`;
 }
 
 /** Which engine the bot's workers run on, in one line it can tell the owner. */
