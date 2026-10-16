@@ -397,7 +397,10 @@ export function describeTaskGate(r: GateRunResult): GateCard {
     // A no_changes skip that did not land in the ledger leaves the bot no
     // record to complete on: say so.
     const body = r.skipped === 'no_changes' && r.recorded === false ? `${r.detail} The skip was NOT recorded (ledger unreachable).` : r.detail;
-    return { title: `Gate skipped (${r.skipped}): task left open`, body, notice: { code: 'gate.skipped', args: { reason: r.skipped } } };
+    // The stored English words for no_changes are the rendered card's
+    // (room.notice.gate.reason.no_changes): the bot reads this title too.
+    const reason = r.skipped === 'no_changes' ? 'the task made no changes' : r.skipped;
+    return { title: `Gate skipped (${reason}): task left open`, body, notice: { code: 'gate.skipped', args: { reason: r.skipped } } };
   }
   if (!r.ok && r.status === 'busy') return { title: 'Gate already running: task left open', body: 'Another gate run holds this task; its result is in the task\'s ledger row when it ends.', notice: { code: 'gate.busy' } };
   if (!r.ok && r.code === 'no_base_gate') {

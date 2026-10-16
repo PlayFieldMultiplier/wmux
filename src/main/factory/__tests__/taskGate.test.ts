@@ -1131,7 +1131,7 @@ describe('a task with no commits beyond its base', () => {
     expect(row.updatedBy.kind).toBe('system');
     expect(r.note).toHaveBeenCalledTimes(1);
     const [, , title, body, key, notice] = r.note.mock.calls[0];
-    expect(title).toBe('Gate skipped (no_changes): task left open');
+    expect(title).toBe('Gate skipped (the task made no changes): task left open');
     expect(body).toBe(noChangesDetail(BASE));
     expect(key).toBe(verifyGateFactId('task-1', row.rev));
     expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
