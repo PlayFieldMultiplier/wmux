@@ -1122,11 +1122,12 @@ function workerState(worker: BotWorker): string {
  *  worker's name and state (needs-you text while it waits), else its row in
  *  the list's tree (in review, done, failed or cancelled, with its folder
  *  note, and whether it can resume), else a task's rail state, else its
- *  workspace's name with no state. */
-function workerPanelView(workspaceId: string, workers: readonly BotWorker[], tree: readonly BotTreeRow[], tasks: readonly BotTaskView[], t: T): { name: string; state: string | null; attention: boolean; resumeTaskId?: string } {
+ *  workspace's name with no state. `stopTaskId`: a live worker whose task
+ *  is still open (its row's), which Stop worker stops. */
+function workerPanelView(workspaceId: string, workers: readonly BotWorker[], tree: readonly BotTreeRow[], tasks: readonly BotTaskView[], t: T): { name: string; state: string | null; attention: boolean; resumeTaskId?: string; stopTaskId?: string } {
   const live = workers.find((w) => w.workspaceId === workspaceId);
-  if (live) return { name: live.name, state: t(workerState(live)), attention: live.waiting };
   const row = tree.find((r) => r.workspaceId === workspaceId);
+  if (live) return { name: live.name, state: t(workerState(live)), attention: live.waiting, ...(row?.stoppable && row.taskId ? { stopTaskId: row.taskId } : {}) };
   if (row) return { name: row.title, state: treeRowLabel(row, t), attention: row.state === 'needsYou', ...(row.resumable && row.taskId ? { resumeTaskId: row.taskId } : {}) };
   const task = tasks.find((x) => (x.workerWorkspaceId ?? x.taskWorkspaceId) === workspaceId);
   if (task) return { name: task.title, state: taskRailState(task, t), attention: false };
@@ -1885,12 +1886,13 @@ export function waitsOnOwner(card: RoomCardData, livePlans: ReadonlySet<string>)
  *  list (#2231): a round button right of the name pill, mirroring the back
  *  button, that opens the bot's worker tree as a popover. Shown only in the
  *  one-column layout (bots.css); the wide layout's list shows the tree. */
-function HeadWorkers({ rows, name, shownId, t, onOpen }: {
+function HeadWorkers({ rows, name, shownId, t, onOpen, stopTask }: {
   rows: readonly BotTreeRow[];
   name: string;
   shownId: string | null;
   t: T;
   onOpen: (workspaceId: string) => void;
+  stopTask?: BotsStopPort['stopTask'];
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
@@ -1924,7 +1926,7 @@ function HeadWorkers({ rows, name, shownId, t, onOpen }: {
           className="wmux-bots-head-workers-pop"
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); buttonRef.current?.focus(); } }}
         >
-          <BotsWorkerTree id={treeId} rows={rows} name={name} shownId={shownId} t={t} onOpen={(workspaceId) => { setOpen(false); onOpen(workspaceId); }} />
+          <BotsWorkerTree id={treeId} rows={rows} name={name} shownId={shownId} t={t} onOpen={(workspaceId) => { setOpen(false); onOpen(workspaceId); }} stopTask={stopTask} />
         </Popover>
       )}
     </span>
@@ -2273,7 +2275,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
           {presence && <PresenceDot presence={presence} />}
           {group && <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{conversation.bots.length === 1 ? t('botsPage.botCountOne') : t('botsPage.botCount', { count: conversation.bots.length })}</span>}
         </button>
-        {tree.length > 0 && <HeadWorkers rows={tree} name={title} shownId={shownId} t={t} onOpen={openWorker} />}
+        {tree.length > 0 && <HeadWorkers rows={tree} name={title} shownId={shownId} t={t} onOpen={openWorker} stopTask={stopPort.stopTask} />}
       </div>
       {profileOpen && conversation.kind === 'bot' && !removedBot && (
         <div className="wmux-bots-profile" ref={profileRef}><BotProfile row={conversation.row} workers={workers} workspaceName={workspaceName} t={t} stopPort={stopPort} jobPort={readOnly ? undefined : jobPort} adminPort={readOnly ? (jobPort?.remove ? { remove: jobPort.remove } : undefined) : jobPort} /></div>
@@ -2363,6 +2365,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         t={t}
         onClose={() => useStore.getState().setBotsWorkerPanel(null)}
         onResume={shown.resumeTaskId && !readOnly && resumePort?.resumeWorker ? () => resumeShown(shown.resumeTaskId!) : undefined}
+        stop={shown.stopTaskId && stopPort.stopTask ? { taskId: shown.stopTaskId, stopTask: stopPort.stopTask } : undefined}
         style={sideStyle}
       />
     )}

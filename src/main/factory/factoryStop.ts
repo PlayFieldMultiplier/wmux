@@ -390,6 +390,38 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
 }
 
 /**
+ * Stop one bot task's worker (the owner's Stop worker on the Bots page): the
+ * same stop Stop for one bot runs on each of its open tasks (stopTask), for
+ * this task only. Its row is cancelled ("stopped by owner", waking nobody),
+ * a gate running on it is cancelled and its worker's processes are stopped;
+ * the worktree, its branch and the task's workspace stay. The bot's turn,
+ * its other tasks and its routines are left alone, and nothing is remembered
+ * for later launches. Never throws. `not_found`: no bot task has that id; a
+ * task that already ended stops nothing (`ok`, zero counts).
+ */
+export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): Promise<FactoryStopResult> {
+  const log = ports.log ?? ((m: string) => console.warn(m));
+  const none = { botsInterrupted: 0, workersStopped: 0, tasksCancelled: 0, gatesCancelled: 0 };
+  let row: LedgerEntry | null = null;
+  try {
+    row = ports.ledger.get(taskId);
+  } catch (err) {
+    log(`[factory] stop: the task ledger could not be read: ${String(err)}`);
+    return { ok: false, ...none, code: 'partial', message: 'The task could not be read; stop again to retry.' };
+  }
+  const origin = row?.dispatch?.origin;
+  if (!row || origin?.kind !== 'bot' || typeof origin.botId !== 'string' || !origin.botId) {
+    return { ok: false, ...none, code: 'not_found', message: 'No bot task has that id.' };
+  }
+  if (!isOpenBotTask(row)) return { ok: true, ...none };
+  const r = await stopTask(ports, row, undefined, log);
+  const counts = { ...none, workersStopped: r.stopped ? 1 : 0, tasksCancelled: r.cancelled ? 1 : 0, gatesCancelled: r.gate ? 1 : 0 };
+  return r.failed
+    ? { ok: false, ...counts, code: 'partial', message: 'The worker could not be stopped; stop again to retry.' }
+    : { ok: true, ...counts };
+}
+
+/**
  * A task whose launch was under way when the owner stopped its bot (it held
  * an agent slot then) is stopped as it registers, within
  * LATE_STOP_WINDOW_MS; a task the bot starts after the stop is not. So is

@@ -1,29 +1,35 @@
 // ─── Stopping bots from the Bots page ────────────────────────────────────
 //
-// Two verbs main owns: stop every bot (each running turn interrupted, every
-// bot worker stopped, every queued gate cancelled) and stop one bot (its
-// turn and its workers). They reach the page through the factory bot port
-// when it carries them, else through the preload's `factory` bridge —
+// Three verbs main owns: stop every bot (each running turn interrupted, every
+// bot worker stopped, every queued gate cancelled), stop one bot (its turn
+// and its workers) and stop one task's worker (its task cancelled, the bot's
+// turn and other work left alone). They reach the page through the factory
+// bot port when it carries them, else through the preload's `factory`
+// bridge —
 //
 //   factory: {
 //     stopAll(): Promise<StopAllResult>
 //     stopBot(botId: string): Promise<StopBotResult>
+//     stopTask(taskId: string): Promise<StopTaskResult>
 //   }
 //
-// Both are optional: a build without them shows no Stop controls.
+// All are optional: a build without one shows no control for it.
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
 
 export interface StopAllResult { ok: boolean; botsInterrupted: number; workersStopped: number; gatesCancelled: number }
 export interface StopBotResult { ok: boolean; workersStopped: number }
+export interface StopTaskResult { ok: boolean; workersStopped: number; tasksCancelled?: number }
 
 export interface BotsStopPort {
   stopAll?(): Promise<StopAllResult>;
   stopBot?(botId: string): Promise<StopBotResult>;
+  stopTask?(taskId: string): Promise<StopTaskResult>;
 }
 
 interface StopBridge {
   stopAll?: () => Promise<StopAllResult>;
   stopBot?: (botId: string) => Promise<StopBotResult>;
+  stopTask?: (taskId: string) => Promise<StopTaskResult>;
 }
 
 function bridge(): StopBridge | null {
@@ -37,7 +43,8 @@ export function botsStopPort(port?: FactoryBotPort & BotsStopPort): BotsStopPort
   const b = bridge();
   const stopAll = p.stopAll ? p.stopAll.bind(p) : b?.stopAll;
   const stopBot = p.stopBot ? p.stopBot.bind(p) : b?.stopBot;
-  return { ...(stopAll ? { stopAll } : {}), ...(stopBot ? { stopBot } : {}) };
+  const stopTask = p.stopTask ? p.stopTask.bind(p) : b?.stopTask;
+  return { ...(stopAll ? { stopAll } : {}), ...(stopBot ? { stopBot } : {}), ...(stopTask ? { stopTask } : {}) };
 }
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -60,6 +67,15 @@ export function stopBotSummary(name: string, r: StopBotResult, t: T): string {
   return r.workersStopped > 0
     ? t('botsPage.stop.botStoppedWorkers', { name, count: r.workersStopped })
     : t('botsPage.stop.botStopped', { name });
+}
+
+/** One worker's stop (named by its task's title), in the owner's words:
+ *  stopped, or that its task had already ended. Pure. */
+export function stopTaskSummary(task: string, r: StopTaskResult, t: T): string {
+  if (!r.ok) return t('botsPage.stop.failed');
+  return r.workersStopped > 0 || (r.tasksCancelled ?? 0) > 0
+    ? t('botsPage.stop.workerStopped', { task })
+    : t('botsPage.stop.workerAlreadyStopped', { task });
 }
 
 /** What turning the bots off stopped, as main's settings write reports it

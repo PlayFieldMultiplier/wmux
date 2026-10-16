@@ -842,6 +842,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
                       shownId={isSelected && panel?.conversationId === r.c.id ? panel.workspaceId : null}
                       t={t}
                       onOpen={(workspaceId) => openWorker(botId, workspaceId)}
+                      stopTask={stopPort.stopTask}
                     />
                   )}
                 </div>
