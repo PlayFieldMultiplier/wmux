@@ -639,15 +639,13 @@ export class ApprovalService {
       createdAt: at,
       updatedAt: at,
     };
-    if (!this.put(record)) return refuse('write_failed', 'the request could not be stored');
+    // A skill is approved on its card only, so the card is posted first and
+    // the request is stored once, with it: nothing waits without a card.
     const card = this.postCard(record, profile, wake, skillLines);
-    if (!card || !this.put({ ...record, cardId: card.id })) {
-      // A skill is approved on its card only: without one, nothing waits.
-      const moot: StoredApproval = { ...record, state: 'expired', updatedAt: this.now() };
-      if (!this.put(moot)) this.requests.delete(record.requestId);
-      if (card) this.closeCard({ ...moot, cardId: card.id });
-      this.changed(record.workspaceId);
-      return refuse('write_failed', 'the approval card could not be posted; propose the skill again');
+    if (!card) return refuse('write_failed', 'the approval card could not be posted; propose the skill again');
+    if (!this.put({ ...record, cardId: card.id })) {
+      this.closeCard({ ...record, cardId: card.id });
+      return refuse('write_failed', 'the request could not be stored; propose the skill again');
     }
     this.changed(record.workspaceId);
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };

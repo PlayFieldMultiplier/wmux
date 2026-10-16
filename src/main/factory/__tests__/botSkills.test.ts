@@ -574,6 +574,21 @@ describe('skill_propose → approval card → load', () => {
     expect(res).toMatchObject({ ok: false, code: 'write_failed' });
     expect(r.svc.listForOperator(WS).filter((x) => x.state === 'pending')).toEqual([]);
     expect(r.skills.list(A)).toEqual([]);
+    // Posted, but the request cannot be stored: its card closes and nothing waits.
+    const realWrite = fsDefault.writeFileSync;
+    const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (typeof file === 'string' && path.basename(file).startsWith('approvals.json')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return (realWrite as (...a: unknown[]) => void)(file, ...rest);
+    }) as typeof fsDefault.writeFileSync);
+    let unstored: Record<string, unknown>;
+    try {
+      unstored = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(unstored).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(r.svc.listForOperator(WS)).toEqual([]);
+    expect(r.writer.read(WS, {}).cards.filter((c) => c.kind === 'approval' && c.state === 'open')).toEqual([]);
     const again = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
     expect(again).toMatchObject({ ok: true });
     expect(r.writer.get(WS, r.svc.get(again.approvalId as string)?.cardId as string)).toMatchObject({ kind: 'approval' });
