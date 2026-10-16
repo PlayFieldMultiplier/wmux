@@ -1984,6 +1984,8 @@ export const zh = {
   'room.notice.handoff.forwarded': "{hop}（由 wmux 转发）",
   'room.notice.thread.finished': "已完成：{title}",
   'room.notice.thread.stopped': "已停止：{title}",
+  'room.notice.skill.archived': "技能已归档：{skill}",
+  'room.notice.skill.archived.body': "此机器人及其工作者不再加载它；机器人下次唤醒时会被告知不要再应用它。",
   'room.notice.bot.error': "{bot} 出错了",
   'room.notice.worker.startFailed': "“{title}”的工作者无法启动：{cause}",
   'room.notice.worker.startFailed.cause.fetch': "无法从仓库获取要检查的代码",

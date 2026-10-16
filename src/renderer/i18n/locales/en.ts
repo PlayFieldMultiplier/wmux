@@ -1887,6 +1887,8 @@ export const en = {
   'room.notice.handoff.forwarded': "{hop} (forwarded by wmux)",
   'room.notice.thread.finished': "Finished: {title}",
   'room.notice.thread.stopped': "Stopped: {title}",
+  'room.notice.skill.archived': "Skill archived: {skill}",
+  'room.notice.skill.archived.body': "It no longer loads for this bot or its workers; the bot's next wake says not to apply it.",
   'room.notice.bot.error': "{bot} hit an error",
   'room.notice.worker.startFailed': "Worker for \"{title}\" could not start: {cause}",
   'room.notice.worker.startFailed.cause.fetch': "the code it was to check could not be fetched from the repository",

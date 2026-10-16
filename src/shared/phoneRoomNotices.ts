@@ -110,4 +110,6 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   },
   'thread.finished': titled('thread.finished', { title: 'string' }),
   'thread.stopped': titled('thread.stopped', { title: 'string' }),
+  // The owner archived one of a bot's skills (skill.rpc.ts).
+  'skill.archived': bodied('skill.archived', { skill: 'string' }),
 };

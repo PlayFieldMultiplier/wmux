@@ -80,9 +80,9 @@ describe('wakeContext', () => {
       { action: 'issue_close', issueNumber: 4, repoKey: 'k', state: 'refused', refusal: 'x', botId: 'bot-0000000z', createdAt: 1, updatedAt: now - 1000 },
     ];
     expect(wakeApprovals(ports([], { approvals: () => rows }), me, now)).toEqual([
-      { what: 'Close issue #4', state: 'refused', askedBy: 'bot-0000000z', at: now - 1000, refusal: 'x' },
-      { what: 'Merge PR #1', state: 'executed', askedBy: 'Wmux Reviewer', at: now - 60_000 },
-      { what: 'Merge PR #2', state: 'pending', askedBy: 'you', at: 5 },
+      { what: 'Close issue #4', state: 'refused', action: 'issue_close', askedBy: 'bot-0000000z', at: now - 1000, refusal: 'x' },
+      { what: 'Merge PR #1', state: 'executed', action: 'merge', askedBy: 'Wmux Reviewer', at: now - 60_000 },
+      { what: 'Merge PR #2', state: 'pending', action: 'merge', askedBy: 'you', at: 5 },
     ]);
     expect(wakeApprovals(ports([], { approvals: () => { throw new Error('x'); } }), me, now)).toEqual([]);
   });

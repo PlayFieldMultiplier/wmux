@@ -22,6 +22,8 @@
 import path from 'node:path';
 import { ipcMain, type BrowserWindow } from 'electron';
 import { BOT_EVENT, type BotEventPayload } from '../../../shared/bot';
+import { dmThreadId, type ThreadId } from '../../../shared/room';
+import type { RoomWriter } from '../../factory/roomWriter';
 import { BOT_SKILL_IPC, BOT_SKILL_RPC } from '../../../shared/botSkill';
 import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
@@ -45,6 +47,25 @@ export interface SkillHandlerDeps {
   store: () => BotSkillStore | null;
   approvals: () => Pick<ApprovalService, 'proposeSkill' | 'withdraw' | 'get'> | null;
   emit: (payload: BotEventPayload) => void;
+  /** The owner archived a skill: one system card in the bot's conversation.
+   *  Best effort. */
+  noteArchived?: (botId: string, name: string) => void;
+}
+
+/** The card an Archive posts in the bot's conversation thread: worded from
+ *  its notice code (`skill.archived`) in the reader's language. */
+export function postSkillArchivedCard(writer: Pick<RoomWriter, 'append'> | null, workspaceId: string, threadId: ThreadId, name: string): boolean {
+  if (!writer) return false;
+  const card = writer.append({
+    workspaceId,
+    threadId,
+    kind: 'fact',
+    actor: { kind: 'system' },
+    title: `Skill archived: ${name}`,
+    body: 'It no longer loads for this bot or its workers; the bot\'s next wake says not to apply it.',
+    notice: { code: 'skill.archived', args: { skill: name } },
+  });
+  return !!card;
 }
 
 export function registerSkillHandlers(router: Pick<FactoryRouter, 'register'>, deps: SkillHandlerDeps): void {
@@ -175,6 +196,11 @@ export function registerSkillIpc(getWindow: () => BrowserWindow | null, deps: Sk
       const res = store.archive(p.botId, p.name);
       if (!res.ok) return { ok: false, error: res.message };
       if (res.approvalId) deps.approvals()?.withdraw(res.approvalId);
+      try {
+        deps.noteArchived?.(p.botId, res.skill.name);
+      } catch {
+        /* the wake still says it is archived */
+      }
       deps.emit({ type: 'skills-changed', botId: p.botId });
       return { ok: true, skill: res.skill };
     } catch {
@@ -203,6 +229,21 @@ export async function installBotSkillsInWorktree(botId: string, worktree: string
   }
 }
 
+/** The archive card, in the thread the owner last woke the bot in (its 1:1
+ *  otherwise). Best effort: a failure is logged. */
+function noteArchivedInRoom(botId: string, name: string): void {
+  void (async () => {
+    const [{ getRoomWriter }, { getBotDirectory }, { latestOwnerWakeThread }] = await Promise.all([
+      import('../../factory/roomWriter'),
+      import('../../factory/botStore'),
+      import('../../factory/wakeQueue'),
+    ]);
+    const bot = getBotDirectory()?.get(botId);
+    if (!bot) return;
+    postSkillArchivedCard(getRoomWriter(), bot.workspaceId, latestOwnerWakeThread(botId) ?? dmThreadId(botId), name);
+  })().catch((err) => console.warn(`[factory] skill archive card not posted: ${String(err)}`));
+}
+
 export function createSkillModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'getMainWindow'>): FactoryModuleHandle {
   let offIpc: (() => void) | null = null;
   const emit = (payload: BotEventPayload): void => {
@@ -222,7 +263,7 @@ export function createSkillModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'getMa
       approvalHost = skillApprovalHost(getBotSkillStore, emit);
       const shelved = reconcileSkillProposals(getBotSkillStore(), getApprovalService(), emit);
       if (shelved > 0) console.log(`[factory] skills: ${shelved} proposal(s) whose card closed while skills were off shelved`);
-      offIpc = registerSkillIpc(deps.getMainWindow, { store: getBotSkillStore, approvals: getApprovalService, emit });
+      offIpc = registerSkillIpc(deps.getMainWindow, { store: getBotSkillStore, approvals: getApprovalService, emit, noteArchived: noteArchivedInRoom });
     },
     dispose() {
       offIpc?.();

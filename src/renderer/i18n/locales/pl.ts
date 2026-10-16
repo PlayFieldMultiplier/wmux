@@ -1865,6 +1865,8 @@ export const pl = {
   'room.notice.handoff.forwarded': "{hop} (przekazane przez wmux)",
   'room.notice.thread.finished': "Ukończono: {title}",
   'room.notice.thread.stopped': "Zatrzymano: {title}",
+  'room.notice.skill.archived': "Umiejętność zarchiwizowana: {skill}",
+  'room.notice.skill.archived.body': "Nie jest już wczytywana dla tego bota ani jego workerów; przy następnym wybudzeniu bot dowie się, by jej nie stosować.",
   'room.notice.bot.error': "{bot} napotkał błąd",
   'room.notice.worker.startFailed': "Nie udało się uruchomić workera dla \"{title}\": {cause}",
   'room.notice.worker.startFailed.cause.fetch': "nie udało się pobrać z repozytorium kodu do sprawdzenia",

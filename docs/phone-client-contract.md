@@ -4407,6 +4407,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `handoff.sent` | `hop` string, `to` string, `title` string, `relay` number | `dispatch → {to}: {title}`<br>`result → {to}: {title}`<br>`message → {to}: {title}`<br>`refusal → {to}: {title}`<br>`Answered → {to}: {title}` | One title per `hop`, in this order: `dispatch`, `result`, `message`, `refusal`, `answer`. `relay: 1`: wmux forwarded it (the desktop adds "(forwarded by wmux)"). |
 | `thread.finished` | `title` string | `Finished: {title}` | — |
 | `thread.stopped` | `title` string | `Stopped: {title}` | — |
+| `skill.archived` | `skill` string | `Skill archived: {skill}` | `skill`: the skill's name. |
 
 #### The Bots page (`bots`, `botMessages`, `/api/bots`, `/api/rooms/:workspaceId/messages`)
 

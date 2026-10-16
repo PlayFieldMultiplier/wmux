@@ -22,10 +22,14 @@ import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretR
 import { ApprovalService, registerApprovalRpc, skillCardLines, type ApprovalWake } from '../approvals';
 import { ROOM_LIMITS } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
-import { wakeSkills } from '../wakeContext';
+import { wakeApprovals, wakeArchivedSkills, wakeSkills } from '../wakeContext';
+import { noticeText } from '../../../renderer/components/Room/roomFormat';
+import { en } from '../../../renderer/i18n/locales/en';
+import { ko } from '../../../renderer/i18n/locales/ko';
 import { buildWakePrompt, skillIndexText } from '../wakePrompt';
 import { excludeLineOnce } from '../../git/infoExclude';
-import { reconcileSkillProposals, registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { postSkillArchivedCard, reconcileSkillProposals, registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { dmThreadId } from '../../../shared/room';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../../shared/phoneBotApprovals';
 import { pendingForChip, type ApprovalView as RendererApprovalView } from '../../../renderer/components/Room/approvalsStore';
@@ -680,6 +684,50 @@ describe('skill_propose → approval card → load', () => {
     expect(r.skills.list(A).map((s) => s.name)).toEqual(['report']);
     // A caller without a bot binding is refused.
     expect(await r.call('skill.propose', { name: 'x', content: skillMd('x'), reason: 'r' }, {} as RpcContext)).toMatchObject({ ok: false, code: 'not_bot' });
+  });
+});
+
+describe('an archived skill: the owner\'s chat and the bot\'s next wake', () => {
+  it('Archive posts one card worded in the reader\'s language, and the wake says not to apply the skill', () => {
+    const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
+    expect(postSkillArchivedCard(writer, WS, dmThreadId(A), 'report')).toBe(true);
+    const card = writer.read(WS, { threadId: dmThreadId(A) }).cards.at(-1);
+    expect(card).toMatchObject({ kind: 'fact', actor: { kind: 'system' }, notice: { code: 'skill.archived', args: { skill: 'report' } } });
+    const word = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) =>
+      (dict[key] ?? key).replace(/\{(\w+)\}/g, (_m, k: string) => String(vars?.[k] ?? ''));
+    expect(noticeText(card as never, word(en as Record<string, string>))?.title).toBe('Skill archived: report');
+    expect(noticeText(card as never, word(ko as Record<string, string>))?.title).toBe('스킬 보관됨: report');
+
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    s.approve(A, 'triage', propose(s, A, 'triage').hash);
+    // A proposal denied before it was ever approved is not "archived by the owner".
+    s.deny(A, 'never', propose(s, A, 'never').hash);
+    s.archive(A, 'report');
+    const archived = wakeArchivedSkills({ skills: () => s } as never, profile(A));
+    expect(archived).toEqual(['report']);
+    const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+    const text = buildWakePrompt({ item, profile: profile(A), skills: wakeSkills({ skills: () => s } as never, profile(A)), archivedSkills: archived });
+    expect(text).toContain('Archived by the owner, no longer loaded: report. Do not apply them');
+    expect(text).toContain('triage: How to report a task');
+    expect(text).not.toMatch(/^report: /m);
+  });
+
+  it('the wake words an approved skill by where it stands, never as a merge', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    s.approve(A, 'triage', propose(s, A, 'triage').hash);
+    s.archive(A, 'triage');
+    const row = (name: string, version = '1.0.0') => ({ action: 'skill', skill: { name, version }, repoKey: '', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 });
+    const rows = [row('report'), row('triage'), row('report', '0.9.0'), { action: 'merge', prNumber: 7, repoKey: 'k', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 }];
+    const approvals = wakeApprovals({ skills: () => s, approvals: () => rows, botName: () => null } as never, profile(A), 2_000);
+    const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+    const text = buildWakePrompt({ item, profile: profile(A), approvals });
+    expect(text).toContain('Load the skill report 1.0.0: approved by the owner; loaded');
+    expect(text).toContain('Load the skill triage 1.0.0: archived by the owner; do not apply it');
+    expect(text).toContain('Load the skill report 0.9.0: approved, since replaced by a newer approved version');
+    expect(text).toContain('Merge PR #7: approved by the owner, merging after the Undo window');
+    expect(text.match(/Undo window/g)).toHaveLength(1);
   });
 });
 

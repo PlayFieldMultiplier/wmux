@@ -182,6 +182,7 @@ const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
   ['pr.merged', false], ['pr.closed', false], ['verdict.recorded', false],
   ['handoff.sent', false], ['thread.finished', false], ['thread.stopped', false],
   ['bot.error', false], ['worker.startFailed', false],
+  ['skill.archived', true],
 ]);
 
 /** The notice codes that tell the owner a stopped worker can resume. */

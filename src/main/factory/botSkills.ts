@@ -540,6 +540,16 @@ export class BotSkillStore {
     return out;
   }
 
+  /** The skills the owner archived after approving them: no longer loaded,
+   *  and the wake says so (an earlier message may still cite them). */
+  archivedNames(botId: string): string[] {
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return [];
+    return this.names(botId).filter((name) => {
+      const rec = this.record(botId, name);
+      return rec?.state === 'archived' && !!rec.approved;
+    });
+  }
+
   /** The approved version of every approved skill (for a worker's copy). */
   approved(botId: string): ApprovedSkill[] {
     return this.verifiedAll(botId).map((s) => ({ name: s.name, files: s.files }));

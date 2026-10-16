@@ -1411,6 +1411,8 @@ export const ko = {
   'room.notice.handoff.forwarded': "{hop} (wmux가 전달)",
   'room.notice.thread.finished': "완료: {title}",
   'room.notice.thread.stopped': "중지됨: {title}",
+  'room.notice.skill.archived': "스킬 보관됨: {skill}",
+  'room.notice.skill.archived.body': "이 봇과 워커에서 더 이상 불러오지 않아요. 봇의 다음 깨우기에 이 스킬을 적용하지 말라고 알려요.",
   'room.notice.bot.error': "{bot}: 오류가 발생했습니다",
   'room.notice.worker.startFailed': "\"{title}\" 워커를 시작하지 못함: {cause}",
   'room.notice.worker.startFailed.cause.fetch': "확인할 코드를 저장소에서 가져오지 못함",
