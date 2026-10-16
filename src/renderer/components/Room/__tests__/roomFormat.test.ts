@@ -305,6 +305,11 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     expect(noticeText(card({ notice: { code: 'worker.doneResumable', args: { status: 'cancelled', title: 'Review PR #12' } } }), i18nT)?.title)
       .toBe('워커 종료됨 (이어서 가능): Review PR #12');
     setLocale('en');
+    // A title is shown as written, never worded as a template.
+    expect(noticeText(card({ notice: { code: 'worker.done', args: { status: 'completed', title: 'Fix {pane} handling' } } }), i18nT)?.title)
+      .toBe('Worker done: Fix {pane} handling');
+    expect(noticeText(card({ notice: { code: 'worker.resumed', args: { by: 'owner', where: 'folder', title: '{who} {place}' } } }), i18nT)?.title)
+      .toBe('Worker resumed: {who} {place}');
   });
 
   it('English words match what main writes', () => {
