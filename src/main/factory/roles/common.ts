@@ -116,8 +116,11 @@ function bullet(lines: readonly string[]): string {
   return lines.map((l) => `- ${l}`).join('\n');
 }
 
-/** The bot's system prompt: its job, then its powers and outputs. */
-export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfile, 'name' | 'job' | 'workspaceId' | 'repo' | 'engine'>): string {
+/** The bot's system prompt: its job, then its powers and outputs.
+ *  `workspaceName`: the owner's name for the bot's workspace, which the bot
+ *  says when it speaks of it (with only the id, a model names the workspace
+ *  after the repository's folder). */
+export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfile, 'name' | 'job' | 'workspaceId' | 'repo' | 'engine'>, workspaceName?: string | null): string {
   const powers = SHARED_SURFACE_TOOLS.map((tool) => `- ${tool}: ${def.powers[tool] ?? COMMON_POWERS[tool] ?? ''}`);
   // The same predicate decides whether the bot's session holds the read tools.
   const readRoot = botRepoReadRoot(profile);
@@ -125,8 +128,12 @@ export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfil
     powers.push(`- Read, Grep, Glob: read the files of your repository at ${readRoot} (the local checkout as it stands) ${def.repoRead ?? REPO_READ_POWER}`);
   }
   const repo = profile.repo?.repoKey ? ` Your repository is ${profile.repo.repoKey}.` : '';
+  const wsName = (workspaceName ?? '').replace(/[\s"]+/g, ' ').trim().slice(0, 80);
+  const where = wsName
+    ? `a bot of the wmux workspace "${wsName}" (id ${profile.workspaceId}); call it "${wsName}" when you speak of it.`
+    : `a bot of wmux workspace ${profile.workspaceId}.`;
   return [
-    `You are ${profile.name}, a bot of wmux workspace ${profile.workspaceId}.${repo}`,
+    `You are ${profile.name}, ${where}${repo}`,
     '',
     'Your job:',
     profile.job ?? def.defaultJob,
