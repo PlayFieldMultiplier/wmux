@@ -439,7 +439,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
   // An approval card always shows its request's state (answers only while
   // the bots run); a plan or proposal its answers while it waits.
   const answers = !human && ((!ctx.readOnly && waiting) || card.kind === 'approval');
-  const line = human && card.id in ctx.sent ? deliveryLine(ctx.sent[card.id], ctx.bots, t, ctx.started.has(card.id)) : null;
+  const line = human && card.id in ctx.sent ? deliveryLine(ctx.sent[card.id], ctx.bots, t, ctx.started.has(card.id), ctx.actors) : null;
   const linked = linkedThread(card);
   const chip = (id: ThreadId) => <ThreadChip threadId={id} t={t} onPick={(th) => ctx.onThread(card.workspaceId, th)} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} />;
   // A thread's root names its thread only when the name says something (a
