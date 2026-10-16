@@ -1779,13 +1779,14 @@ export class HandoffRouter {
 
   /** An answer that is none of the options the bot offered is the owner
    *  overriding the bot: a `human.correction` fact. Choosing any offered
-   *  option is not (the options carry no recommendation), and a free-text
-   *  question has nothing to override. */
+   *  option is not (the options carry no recommendation), and a question
+   *  that invites the owner's own words (invitesFreeText) has nothing to
+   *  override: words outside its options are the answer it asked for. */
   private noteOverride(ask: Handoff, text: string): void {
     const ws = partyWorkspace(ask.from);
     const options = ask.payload.options ?? [];
     if (ask.from.kind !== 'bot' || !ws || options.length === 0) return;
-    if (options.some((o) => isSameAnswer(text, o))) return;
+    if (options.some((o) => isSameAnswer(text, o)) || invitesFreeText(ask)) return;
     emitHumanCorrection(this.opts.ports(), {
       workspaceId: ws,
       botId: ask.from.botId,
@@ -1874,6 +1875,23 @@ function invalid(message: string): HandoffResult {
 export function isSameAnswer(answer: string, option: string): boolean {
   const norm = (v: string) => v.replace(/\s+/g, ' ').trim().toLowerCase();
   return norm(answer) === norm(option);
+}
+
+/** An option that stands for the owner's own words ("Other", "Something
+ *  else", "Tell me in your own words"). */
+const FREE_TEXT_OPTION = /^\s*(other|something else|anything else)\s*([(:,.…—–-]|$)|\bown words\b|^\s*(tell me|let me (say|tell|explain|describe)|i'll (write|type|explain))\b/i;
+/** A question that asks for the owner's own words besides its options. */
+const FREE_TEXT_QUESTION = /own words|or tell me|tell me (what|how|in)|something else|anything else/i;
+
+/** Whether a question asks for the owner's own words, so an answer outside
+ *  its options is an answer, not an override: the greeting (`intro`, "what
+ *  should I do?" — any words are the job, in whatever language the owner
+ *  writes), or one whose options or wording invite free text. The wording
+ *  check reads English only; `intro` is what holds for every language. Pure. */
+export function invitesFreeText(ask: Pick<Handoff, 'intro' | 'payload'>): boolean {
+  if (ask.intro === true) return true;
+  if ((ask.payload.options ?? []).some((o) => FREE_TEXT_OPTION.test(o))) return true;
+  return FREE_TEXT_QUESTION.test(`${ask.payload.title}\n${ask.payload.body ?? ''}`);
 }
 
 function partyWorkspace(p: Party): string | undefined {

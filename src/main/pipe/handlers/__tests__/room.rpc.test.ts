@@ -11,7 +11,7 @@ import { ROOM_LIMITS, type RoomCard, type ThreadId } from '../../../../shared/ro
 const ROOM_TITLE_MAX = ROOM_LIMITS.TITLE_MAX;
 const ROOM_BODY_MAX = ROOM_LIMITS.CARD_BODY_MAX;
 import { loadThreadDecision } from '../../../deck/deckDecisionStore';
-import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, setHandoffRouter } from '../../../factory/handoffRouter';
+import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, invitesFreeText, setHandoffRouter } from '../../../factory/handoffRouter';
 import { RoomWriter, type FactoryRoomPorts } from '../../../factory/roomWriter';
 import { humanAddressees, humanCardIdOfRun, humanRunId } from '../../../factory/humanMessage';
 import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../../../factory/secretRedaction';
@@ -863,6 +863,43 @@ describe('human.correction from the owner\'s answers', () => {
       payload: { category: 'question-override', cardKind: 'question', botRole: 'lead', threadId: 'task:b', note: 'Hold until Monday' },
     })]);
     router.dispose();
+  });
+
+  it('words outside the options answer a question that invites them: the greeting, an "own words" option or wording; no override', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    setHandoffRouter(router);
+    // The greeting, asked in the bot's first (intro) wake.
+    s.wake.id = { wakeId: 'w-intro', attempt: 1, reasonKind: 'intro' } as never;
+    await handleAskPerson({ title: 'Hi, I\'m Lead. What should I do?', body: '', threadId: `dm:${lead.id}`, options: ['Review PRs', 'Triage issues'] }, asBot(lead), { router: () => router });
+    s.wake.id = { wakeId: 'w-2', attempt: 1 };
+    await handleAskPerson({ title: 'Which branch?', body: '', threadId: 'task:a', options: ['main', 'Something else (tell me)'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Where next?', body: 'Pick one, or tell me in your own words.', threadId: 'task:b', options: ['Docs', 'Tests'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Ship?', body: '', threadId: 'task:c', options: ['Ship', 'Hold'] }, asBot(lead), { router: () => router });
+    const q = (thread: string) => s.writer.read('ws1').cards.find((c) => c.kind === 'question' && c.threadId === thread)!;
+    expect(q(`dm:${lead.id}`).greeting).toBe(true);
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q(`dm:${lead.id}`).id, resolution: 'lead this repo' }, OPERATOR, s.deps);
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:a').id, resolution: 'release/4.7' }, OPERATOR, s.deps);
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:b').id, resolution: 'wait for requests' }, OPERATOR, s.deps);
+    // Replacing the options of a question that offered only choices is still an override.
+    await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:c').id, resolution: 'Neither, revert it' }, OPERATOR, s.deps);
+    expect(corrections(s.facts).map((f) => f.payload)).toEqual([expect.objectContaining({ category: 'question-override', threadId: 'task:c', note: 'Neither, revert it' })]);
+    router.dispose();
+  });
+
+  it('invitesFreeText: the greeting, a free-text option, or wording that asks for the owner\'s words', () => {
+    const ask = (title: string, options: string[], body = '', intro = false) => ({ payload: { title, body, options }, ...(intro ? { intro: true as const } : {}) });
+    expect(invitesFreeText(ask('무엇을 할까요?', ['리뷰', '이슈 정리'], '', true))).toBe(true);
+    expect(invitesFreeText(ask('Which?', ['A', 'Other']))).toBe(true);
+    expect(invitesFreeText(ask('Which?', ['A', 'B', 'Tell me in your own words']))).toBe(true);
+    expect(invitesFreeText(ask('Which? Or tell me what you want.', ['A', 'B']))).toBe(true);
+    expect(invitesFreeText(ask('Merge?', ['Merge now', 'Wait']))).toBe(false);
+    expect(invitesFreeText(ask('Which branch?', ['main', 'the other branch']))).toBe(false);
+    expect(invitesFreeText(ask('Which branch?', ['Current branch', 'Other branch']))).toBe(false);
+    expect(invitesFreeText(ask('Which approach?', ['Keep it in TypeScript', 'Rewrite it in Rust']))).toBe(false);
+    expect(invitesFreeText(ask('Which?', ['A', 'Something else (tell me)']))).toBe(true);
   });
 
   it('an override answered through handoff.answer (the phone path) is recorded too; a dismissal is not', async () => {
