@@ -1133,6 +1133,7 @@ export const ko = {
   'botsPage.canDo.secrets': "키·로그인 요청 (이름만 봄)",
   'botsPage.canDo.coordinator': "모든 워크스페이스의 룸과 팩트 읽기",
   'botsPage.botOff': "{name}이(가) 꺼져 있어요. 설정에서 켜야 메시지를 보낼 수 있어요.",
+  'botsPage.pausedHint': "일시 정지됨. 다시 시작하면 {name}이(가) 이 메시지를 읽어요.",
   'botsPage.otherAddressee': "이 메시지는 {name}에게 가요. 룸에서 보내세요.",
   'botsPage.noConversations': "아직 대화가 없어요.",
   'botsPage.paused': "봇이 꺼져 있어요",

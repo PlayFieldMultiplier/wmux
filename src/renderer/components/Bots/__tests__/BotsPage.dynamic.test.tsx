@@ -940,6 +940,21 @@ describe('Bots page', () => {
     expect(posted.at(-1)!.mentions).toBeUndefined();
   });
 
+  it('a bot the owner paused: its 1:1 still takes a message and says, in one muted line, it reads it on resume', async () => {
+    bots = bots.map((r) => (r.bot.id === LEAD ? { ...r, bot: { ...r.bot, parked: { reason: 'human' as const, at: 1 } } } : r));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const status = q('[data-testid="bots-composer-status"]')!;
+    expect(status.textContent).toBe('Paused. Lead reads this when you resume it.');
+    expect(status.className).toContain('text-[var(--text-muted)]');
+    expect(status.getAttribute('role')).toBe('status');
+    expect(q<HTMLTextAreaElement>('[data-bots-composer] textarea, textarea')!.disabled).toBe(false);
+    // Another bot's 1:1, not paused, has no line.
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    expect(q('[data-testid="bots-composer-status"]')).toBeNull();
+  });
+
   it('a group with no bot on takes no message, and says why', async () => {
     bots = bots.map((r) => (r.bot.workspaceId === 'w1' ? { ...r, bot: { ...r.bot, enabled: false } } : r));
     seedRooms();

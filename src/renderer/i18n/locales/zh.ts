@@ -1709,6 +1709,7 @@ export const zh = {
   'botsPage.canDo.secrets': "向你索取密钥和登录（只看到名称）",
   'botsPage.canDo.coordinator': "读取所有工作区的房间和事实",
   'botsPage.botOff': "{name} 已关闭。在设置中开启后才能发消息。",
+  'botsPage.pausedHint': "已暂停。你恢复后，{name} 会读到这条消息。",
   'botsPage.otherAddressee': "这条消息会发给 {name}。请在房间里发送。",
   'botsPage.noConversations': "还没有对话。",
   'botsPage.paused': "机器人已暂停",

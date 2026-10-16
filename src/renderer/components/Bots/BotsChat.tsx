@@ -138,6 +138,13 @@ export function oneToOneRefusal(row: FactoryBotRow, t: T): string | null {
   return row.bot.enabled ? null : t('botsPage.botOff', { name: row.bot.name });
 }
 
+/** The quiet line by a 1:1's composer while the owner has paused its bot:
+ *  a message still goes, and the bot reads it once resumed. Null otherwise.
+ *  Pure. */
+export function pausedHint(row: FactoryBotRow, t: T): string | null {
+  return row.bot.enabled && row.bot.parked?.reason === 'human' ? t('botsPage.pausedHint', { name: row.bot.name }) : null;
+}
+
 /** The composer's placeholder: a Lead's empty 1:1 says what to ask it for
  *  (the first task after adding it), any other "Message <name>". Pure. */
 export function composerHint(conversation: Conversation, shown: number, title: string, t: T): string {
@@ -1298,7 +1305,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
       void submit();
     }
   };
-  const line = error ?? refusal;
+  const line = error ?? refusal ?? (conversation.kind === 'bot' ? pausedHint(conversation.row, t) : null);
   // "+": what to put in the box — a suggested message, or (in a room) a bot
   // to address. It closes on a pick, Escape or a press outside it.
   const [menuOpen, setMenuOpen] = useState(false);

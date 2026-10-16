@@ -1609,6 +1609,7 @@ export const en = {
   'botsPage.canDo.secrets': "Ask you for keys and logins (it sees only their names)",
   'botsPage.canDo.coordinator': "Read every workspace's rooms and facts",
   'botsPage.botOff': "{name} is off. Turn it on in Settings to message it.",
+  'botsPage.pausedHint': "Paused. {name} reads this when you resume it.",
   'botsPage.otherAddressee': "This would reach {name}. Send it from the room instead.",
   'botsPage.noConversations': "No conversations yet.",
   'botsPage.paused': "Bots are off",

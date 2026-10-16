@@ -1587,6 +1587,7 @@ export const pl = {
   'botsPage.canDo.secrets': "Prosić cię o klucze i logowania (widzi tylko nazwy)",
   'botsPage.canDo.coordinator': "Czytać pokoje i fakty wszystkich obszarów roboczych",
   'botsPage.botOff': "{name} jest wyłączony. Włącz go w Ustawieniach, aby wysłać wiadomość.",
+  'botsPage.pausedHint': "Wstrzymany. {name} przeczyta to, gdy go wznowisz.",
   'botsPage.otherAddressee': "Ta wiadomość trafiłaby do: {name}. Wyślij ją z pokoju.",
   'botsPage.noConversations': "Nie ma jeszcze rozmów.",
   'botsPage.paused': "Boty są wstrzymane",
