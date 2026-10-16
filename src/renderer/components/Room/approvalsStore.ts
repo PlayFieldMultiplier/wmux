@@ -112,7 +112,8 @@ export function approvalPhase(r: ApprovalView | undefined, now: number): Approva
       // A rule carries out merges only (never a release or a default-branch push).
       return { phase: 'pending', canAlways: r.action === 'merge' && !APPROVAL_NEVER_BY_RULE.has(r.action) };
     case 'approved':
-      if (r.action !== 'merge') return { phase: 'approved', byRule: r.decidedBy === 'rule', recordedOnly: true };
+      // An approved skill is in place already: approving was the act.
+      if (r.action !== 'merge') return { phase: 'approved', byRule: r.decidedBy === 'rule', recordedOnly: r.action !== 'skill' };
       if (!r.effectId && r.executeAfter !== undefined && now < r.executeAfter) {
         return { phase: 'undo', secondsLeft: Math.max(1, Math.ceil((r.executeAfter - now) / 1000)) };
       }

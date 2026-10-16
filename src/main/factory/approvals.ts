@@ -85,7 +85,7 @@ import type { Fact, FactDraft } from '../../shared/facts';
 import type { MergeEffect } from '../../shared/moaDecision';
 import type { PrLaneFacts } from '../../shared/prReview';
 import type { RpcContext } from '../../shared/rpc';
-import { GENERAL_THREAD, dmThreadBot, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
 import { normalizeRepoKey } from './repoWatch';
@@ -194,11 +194,34 @@ export interface ApprovalPorts {
    *  noticeBot: a directed fact and one wake per key). */
   notice?: (n: BotNoticeInput) => void;
   emit?: (payload: BotEventPayload) => void;
+  /** The bot skills store, for `skill` requests: the owner's answer is the
+   *  act. `approve` returns why the proposal on the card cannot be approved
+   *  (it changed since), or null once it is the approved version. */
+  skills?: () => ApprovalSkillHost | null;
   now?: () => number;
   log?: (line: string) => void;
 }
 
-type Refusal = FactoryRefusal<'not_bot' | 'not_running' | 'invalid' | 'no_repo' | 'read_failed' | 'not_open' | 'too_many' | 'not_found' | 'not_pending' | 'too_late' | 'not_ruleable' | 'write_failed' | 'not_started'>;
+/** What a `skill` request's decision does to the bot's skill. */
+export interface ApprovalSkillHost {
+  approve(r: StoredApproval): string | null;
+  /** Denied, or expired unanswered: the proposal is archived. */
+  deny(r: StoredApproval): void;
+}
+
+/** What `proposeSkill` takes (the store has written the proposal). */
+export interface SkillApprovalInput {
+  name: string;
+  hash: string;
+  version: string;
+  update: boolean;
+  /** The change against the approved version, shown on the card. */
+  diff: string;
+  /** The bot's one line. */
+  reason: string;
+}
+
+type Refusal = FactoryRefusal<'not_bot' | 'not_running' | 'invalid' | 'no_repo' | 'read_failed' | 'not_open' | 'too_many' | 'not_found' | 'not_pending' | 'too_late' | 'not_ruleable' | 'write_failed' | 'not_started' | 'stale'>;
 
 function refuse(code: Refusal['code'], message: string): Refusal {
   return { ok: false, code, message };
@@ -356,12 +379,33 @@ const ACTION_TITLE: Readonly<Record<ApprovalAction, string>> = {
   issue_close: 'Close',
   comment: 'Comment on',
   release: 'Publish a release of',
+  skill: 'Load the skill',
 };
 
-function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber'>): string {
+function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber' | 'skill'>): string {
+  if (r.skill) return `${r.skill.name} ${r.skill.version}`;
   if (r.prNumber !== undefined) return `PR #${r.prNumber}`;
   if (r.issueNumber !== undefined) return `issue #${r.issueNumber}`;
   return r.repoKey;
+}
+
+/** A skill card's lines after the bot's: what Approve does, then the diff
+ *  (botSkills.skillFilesDiff: every line prefixed, so none closes the
+ *  fence) cut to `room` characters with a note when it is longer. Pure. */
+export function skillCardLines(update: boolean, diff: string, room: number): string[] {
+  const head = [
+    '',
+    update
+      ? 'Approve to load this version in place of the approved one; Deny keeps the approved one and archives this proposal.'
+      : 'Approve to load this skill in the bot\'s wakes and its workers; Deny archives it.',
+    '',
+  ];
+  const fence = '```';
+  const cut = '\n… (the rest is not shown)';
+  const budget = room - head.join('\n').length - (fence.length + 6) * 2 - cut.length;
+  if (budget <= 0) return head.slice(0, 2);
+  const body = diff.length > budget ? `${diff.slice(0, budget)}${cut}` : diff;
+  return [...head, `${fence}diff`, body, fence];
 }
 
 export class ApprovalService {
@@ -454,6 +498,7 @@ export class ApprovalService {
       return refuse('invalid', `action must be one of ${APPROVAL_ACTIONS.join(', ')}`);
     }
     const act = action as ApprovalAction;
+    if (act === 'skill') return refuse('invalid', 'a skill is proposed with skill_propose');
     const num = (v: unknown): number | undefined | null => (v === undefined ? undefined : Number.isSafeInteger(v) && (v as number) > 0 ? (v as number) : null);
     const prNumber = num(raw.prNumber);
     const issueNumber = num(raw.issueNumber);
@@ -546,6 +591,59 @@ export class ApprovalService {
     this.changed(record.workspaceId);
     await this.applyRule(record.requestId);
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
+  }
+
+  /** A bot's skill proposal (the skills module, from `skill_propose`): one
+   *  `skill` request whose card shows the diff. No repository is needed and
+   *  no rule ever approves it. */
+  proposeSkill(bot: BotBinding, input: SkillApprovalInput): { ok: true; request: ApprovalView } | Refusal {
+    const wake = this.ports.runningWake(bot.botId);
+    if (!wake) return refuse('not_running', 'a bot proposes a skill only during a wake');
+    let profile: BotProfile | null = null;
+    try {
+      profile = this.ports.bots()?.get(bot.botId) ?? null;
+    } catch {
+      profile = null;
+    }
+    if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return refuse('not_bot', 'this bot is not running in the factory');
+    const given = oneLine(input.reason, APPROVAL_LIMITS.REASON_MAX);
+    const reason = withoutOwnerQuotes(given, this.ownerTexts(bot.workspaceId)) || `${ACTION_TITLE.skill} ${input.name} ${input.version}.`;
+    const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
+    if (open >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open} requests already wait for the owner`);
+    const at = this.now();
+    const record: StoredApproval = {
+      requestId: newRequestId(),
+      action: 'skill',
+      repoKey: normalizeRepoKey(profile.repo?.repoKey) ?? '',
+      repoPath: '',
+      skill: { name: input.name, hash: input.hash, version: input.version, update: input.update },
+      botId: bot.botId,
+      workspaceId: bot.workspaceId,
+      threadId: this.conversationThread(bot.botId, wake),
+      reason,
+      tainted: wake.tainted,
+      state: 'pending',
+      clientRequestId: `skill:${input.name}:${input.hash}`,
+      createdAt: at,
+      updatedAt: at,
+    };
+    if (!this.put(record)) return refuse('write_failed', 'the request could not be stored');
+    const card = this.postCard(record, profile, wake, input.diff);
+    if (card) this.put({ ...record, cardId: card.id });
+    this.changed(record.workspaceId);
+    return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
+  }
+
+  /** A pending request whose subject went away (a skill proposal replaced
+   *  or archived): it expires, its card closes, nobody is told. */
+  withdraw(requestId: string): boolean {
+    const r = this.requests.get(requestId);
+    if (!r || r.state !== 'pending') return false;
+    const next: StoredApproval = { ...r, state: 'expired', updatedAt: this.now() };
+    if (!this.put(next)) return false;
+    this.closeCard(next);
+    this.changed(next.workspaceId);
+    return true;
   }
 
   /** What the owner wrote in the workspace's room lately (newest page). */
@@ -679,6 +777,7 @@ export class ApprovalService {
         if (!this.put(next)) return refuse('write_failed', 'the decision could not be stored');
         this.log(`[factory] approval ${cur.requestId} denied by owner (${via})`);
         this.closeCard(next);
+        if (next.action === 'skill') this.skillDenied(next);
         this.changed(next.workspaceId);
         this.tellDecided(next, `The owner denied: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'Do not ask for it again unless the owner says so.');
         return { ok: true, request: approvalView(next) };
@@ -705,6 +804,18 @@ export class ApprovalService {
 
   private approve(cur: StoredApproval, approver: ApprovalApprover, by: string, ruleId?: string, newRule?: ApprovalRule): { ok: true; request: ApprovalView } | Refusal {
     if (cur.state !== 'pending') return refuse('not_pending', `the request is ${cur.state}`);
+    if (cur.action === 'skill') {
+      // The owner's answer is the act: the proposal on the card becomes the
+      // approved skill first, and the request records it only once it did.
+      const host = this.ports.skills?.() ?? null;
+      if (!host) return refuse('not_started', 'skills are not running yet');
+      const why = host.approve(cur);
+      if (why) {
+        // The proposal on the card is gone or changed: the card is moot.
+        this.withdraw(cur.requestId);
+        return refuse('stale', why);
+      }
+    }
     const at = this.now();
     const next: StoredApproval = {
       ...cur,
@@ -726,7 +837,9 @@ export class ApprovalService {
     if (next.action === 'merge') this.arm(next);
     this.changed(next.workspaceId);
     // A merge is told once it ran (merged, or refused); any other act now.
-    if (next.action !== 'merge') {
+    if (next.action === 'skill') {
+      this.tellDecided(next, `The owner approved your skill ${subject(next)}.`, 'It is listed in your wakes from now on; read it with skill_read.');
+    } else if (next.action !== 'merge') {
       this.tellDecided(next, `The owner approved: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'wmux records it but does not carry this act out yet.');
     }
     return { ok: true, request: approvalView(next) };
@@ -753,7 +866,8 @@ export class ApprovalService {
       this.typedSeen.delete(first);
     }
     this.expire();
-    const pending = [...this.requests.values()].filter((r) => r.state === 'pending');
+    // A skill is approved on its card only, where its diff is shown.
+    const pending = [...this.requests.values()].filter((r) => r.state === 'pending' && r.action !== 'skill');
     // The thread's latest cards: what sits between the requests and the words.
     const threadCards = writer.read(stored.workspaceId, { threadId: stored.threadId }).cards;
     let message: RoomCard = stored;
@@ -1075,23 +1189,40 @@ export class ApprovalService {
       const settled = [...this.requests.values()].filter((r) => r.state !== 'pending' && r.state !== 'approved').sort((a, b) => a.updatedAt - b.updatedAt);
       while (this.requests.size > APPROVAL_LIMITS.REQUESTS_MAX && settled.length > 0) this.requests.delete((settled.shift() as StoredApproval).requestId);
     });
-    if (ok) for (const r of stale) this.closeCard(r);
+    if (ok) {
+      for (const r of stale) {
+        this.closeCard(r);
+        if (r.action === 'skill') this.skillDenied(r);
+      }
+    }
+  }
+
+  /** A skill proposal the owner denied or left unanswered is archived. */
+  private skillDenied(r: StoredApproval): void {
+    try {
+      this.ports.skills?.()?.deny(r);
+    } catch (err) {
+      this.log(`[factory] skill proposal ${r.requestId} not archived: ${String(err)}`);
+    }
   }
 
   // ── cards ──
 
-  private postCard(r: StoredApproval, profile: BotProfile, wake: ApprovalWake): RoomCard | null {
+  private postCard(r: StoredApproval, profile: BotProfile, wake: ApprovalWake, skillDiff?: string): RoomCard | null {
     const writer = this.ports.rooms();
     if (!writer) return null;
     const replyTo = wakeReplyTo(writer, wake, r.workspaceId, r.threadId);
-    const what = `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;
+    const what = r.skill
+      ? `${r.skill.update ? 'Update the skill' : 'Add the skill'} ${subject(r)}?`
+      : `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;
     const subjectThread = r.prNumber !== undefined ? prThreadId(r.repoKey, r.prNumber) : r.issueNumber !== undefined ? issueThreadId(r.repoKey, r.issueNumber) : null;
     const lines = [
       `${profile.name || 'A bot'} asks: ${r.reason}`,
       // "Started from outside text" is the card's own line, from the
       // request's `tainted` (ApprovalAnswers, the phone): not in the body.
-      ...(r.action === 'merge' ? [] : ['wmux records your answer; it does not carry this act out yet.']),
+      ...(r.action === 'merge' || r.action === 'skill' ? [] : ['wmux records your answer; it does not carry this act out yet.']),
     ];
+    if (r.skill) lines.push(...skillCardLines(r.skill.update, skillDiff ?? '', ROOM_LIMITS.CARD_BODY_MAX - lines.join('\n').length - 1));
     const res = writer.post({
       workspaceId: r.workspaceId,
       threadId: r.threadId,

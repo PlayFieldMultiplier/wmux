@@ -21,6 +21,8 @@
 // Every read is best effort: what cannot be read is left out.
 
 import { getConnectorStore, type ConnectorStore } from './connectorStore';
+import { getBotSkillStore, type BotSkillStore } from './botSkills';
+import type { SkillIndexEntry } from '../../shared/botSkill';
 import type { BotProfile } from '../../shared/bot';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
@@ -43,6 +45,8 @@ export const WAKE_CONTEXT_LIMITS = {
 export interface WakeContextPorts {
   /** The connection library (default: the running one). */
   connectors?: () => Pick<ConnectorStore, 'forBot'> | null;
+  /** The bot skills store (default: the running one). */
+  skills?: () => Pick<BotSkillStore, 'index'> | null;
   /** Cards of a room (a thread, or every thread), oldest first: the newest
    *  `limit`, or with `sinceSeq` the first `limit` after it. */
   cards: (workspaceId: string, threadId: ThreadId | null, limit: number, sinceSeq?: number) => readonly RoomCard[];
@@ -51,6 +55,7 @@ export interface WakeContextPorts {
   /** The workspace's approval requests, newest first. */
   approvals?: (workspaceId: string) => ReadonlyArray<{
     action: string; prNumber?: number; issueNumber?: number; repoKey: string; state: string;
+    skill?: { name: string; version: string };
     botId: string; createdAt: number; updatedAt: number; refusal?: string;
   }>;
   botName: (botId: string) => string | null;
@@ -157,6 +162,7 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   issue_close: 'Close',
   comment: 'Comment on',
   release: 'Publish a release of',
+  skill: 'Load the skill',
 };
 
 /** The approval requests a wake shows: pending and approved ones, and the
@@ -173,7 +179,7 @@ export function wakeApprovals(ports: WakeContextPorts, profile: BotProfile, now:
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, WAKE_CONTEXT_LIMITS.APPROVALS)
     .map((r) => {
-      const subject = r.prNumber !== undefined ? `PR #${r.prNumber}` : r.issueNumber !== undefined ? `issue #${r.issueNumber}` : r.repoKey;
+      const subject = r.skill ? `${r.skill.name} ${r.skill.version}` : r.prNumber !== undefined ? `PR #${r.prNumber}` : r.issueNumber !== undefined ? `issue #${r.issueNumber}` : r.repoKey;
       return {
         what: `${ACTION_WORDS[r.action] ?? r.action} ${subject}`,
         state: r.state,
@@ -217,6 +223,7 @@ export function wakeContext(ports: WakeContextPorts, profile: BotProfile, item: 
     language: wakeLanguage(ports, profile, item),
     clock: wakeClock(now, ports.timeZone?.()),
     connectors: wakeConnectors(ports, profile),
+    skills: wakeSkills(ports, profile),
     group: wakeGroup(ports, profile, item),
     now,
   };
@@ -244,6 +251,16 @@ export function wakeConnectors(ports: WakeContextPorts, profile: BotProfile): Wa
   try {
     const lib = (ports.connectors ?? getConnectorStore)();
     return (lib?.forBot(profile.id) ?? []).map((c) => ({ name: c.name, ...(c.purpose ? { purpose: c.purpose } : {}) }));
+  } catch {
+    return [];
+  }
+}
+
+/** The bot's approved skills (name and description) for its wake; a
+ *  proposal waiting for the owner is never listed. */
+export function wakeSkills(ports: WakeContextPorts, profile: BotProfile): SkillIndexEntry[] {
+  try {
+    return (ports.skills ?? getBotSkillStore)()?.index(profile.id) ?? [];
   } catch {
     return [];
   }

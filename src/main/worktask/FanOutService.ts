@@ -488,6 +488,9 @@ export interface FanOutServiceOptions {
   launchPollMs?: number;
   /** #1920/#1921 — retry waits for the post-spawn daemon writes (tests pass zeros). */
   wiringRetryDelaysMs?: readonly number[];
+  /** A bot's worker: copy the bot's approved skills into its new worktree
+   *  (factory skills module). Best effort, never throws. Absent = off. */
+  botSkills?: (botId: string, worktreePath: string) => Promise<void>;
 }
 
 /** Create / hand over / discard a worker's private temp dir. */
@@ -557,6 +560,7 @@ export class FanOutService {
   private readonly launchConfirmMs: number;
   private readonly launchPollMs: number;
   private readonly wiringRetryDelaysMs: readonly number[];
+  private readonly botSkills?: (botId: string, worktreePath: string) => Promise<void>;
   /** #1919 — launch checks still in flight (tests await them). */
   private pendingLaunchChecks: Promise<void>[] = [];
 
@@ -584,6 +588,7 @@ export class FanOutService {
     this.launchConfirmMs = opts.launchConfirmMs ?? FANOUT_LAUNCH_CONFIRM_MS;
     this.launchPollMs = opts.launchPollMs ?? FANOUT_LAUNCH_POLL_MS;
     this.wiringRetryDelaysMs = opts.wiringRetryDelaysMs ?? FANOUT_WIRING_RETRY_DELAYS_MS;
+    this.botSkills = opts.botSkills;
   }
 
   /** Tests only: settle every launch check scheduled so far. */
@@ -1280,6 +1285,11 @@ export class FanOutService {
       if (!ctx.checkout) base.branch = plan.branch;
       cwd = plan.worktreePath;
       metaDir = plan.metaDir;
+      // The starting bot's approved skills, before the worker's agent starts
+      // (it reads .claude/skills/ at launch); git-excluded there.
+      if (ctx.requester?.kind === 'bot' && ctx.requester.botId && this.botSkills) {
+        await this.botSkills(ctx.requester.botId, plan.worktreePath).catch(() => undefined);
+      }
     }
     // A failure after this point keeps the folder: the worktree is preserved
     // for the J3 cleanup; an output folder is never removed by wmux at all.

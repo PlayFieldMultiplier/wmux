@@ -718,6 +718,10 @@ export type RpcMethod =
   | 'botSecret.request'
   | 'botSecret.list'
   | 'botLogin.request'
+  // A bot's own skills (shared/botSkill.ts): propose one for the owner's
+  // approval, read an approved one.
+  | 'skill.propose'
+  | 'skill.read'
   // Task lifecycle on the pipe (pipe/handlers/worktask.rpc.ts) — the half of
   // fan-out that finishes a task. Local-origin only, owner-scoped against
   // `task.mission.list`, and `task.close` / `task.pr` additionally raise a
@@ -1005,6 +1009,8 @@ export const ALL_RPC_METHODS = [
   'botSecret.request',
   'botSecret.list',
   'botLogin.request',
+  'skill.propose',
+  'skill.read',
   'task.gate.run',
   'task.gate.cancel',
   'task.adopt',

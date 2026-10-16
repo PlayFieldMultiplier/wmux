@@ -15,6 +15,7 @@ import type { Fact } from '../../shared/facts';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import { botFanoutIdempotencyKey, type WakeItem } from '../../shared/wake';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel } from '../../shared/botWorkerAgent';
+import type { SkillIndexEntry } from '../../shared/botSkill';
 
 /** A fan-out task as the wake reports it (from its ledger row). */
 export interface WakeTaskSummary {
@@ -108,6 +109,8 @@ export interface WakePromptInput {
   clock?: WakeClock | null;
   /** The connections this bot's workers may use (wakeContext.ts). */
   connectors?: readonly WakeConnectorSummary[];
+  /** The bot's approved skills (wakeContext.ts); proposals never. */
+  skills?: readonly SkillIndexEntry[];
   /** The group chat the wake's thread is (wakeContext.ts): its roster is
    *  the group's members only. */
   group?: WakeGroup | null;
@@ -240,6 +243,15 @@ export function buildWakePrompt(input: WakePromptInput): string {
       ...connectors.map((c) => `> ${c.name}${c.purpose ? ` — ${c.purpose}` : ''}`),
       `To use one, name it when you start a worker: fanout_start connectors:["${connectors[0].name}"]. Its key goes to that worker only.`,
       'A task with a connection counts as started from outside text: the merge lane will not merge it; ask the owner to approve.',
+    );
+  }
+  // The bot's approved skills: names and descriptions only (it wrote them,
+  // so they are data); skill_read loads one, and its workers get copies.
+  const skills = input.skills ?? [];
+  if (skills.length > 0) {
+    lines.push(
+      'Your skills (approved by the owner; read one with skill_read before work it covers — the workers you start have them too):',
+      fenceData(skills.map((s) => `${s.name}: ${s.description}`).join('\n'), 'skills'),
     );
   }
   if (item.threadId) lines.push(`Thread: ${item.threadId} (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner's eyes).`);

@@ -106,5 +106,10 @@ export function createFanOutService(
         void removeWorkerTempDir(dir);
       },
     },
+    // A bot's worker starts with the bot's approved skills in its worktree.
+    botSkills: async (botId: string, worktreePath: string) => {
+      const { installBotSkillsInWorktree } = await import('../pipe/handlers/skill.rpc');
+      await installBotSkillsInWorktree(botId, worktreePath);
+    },
   });
 }

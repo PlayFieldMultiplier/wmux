@@ -9,6 +9,7 @@ import { BOT_EVENT } from '../shared/bot';
 import { BOT_APPROVAL_IPC } from '../shared/botApproval';
 import { BOT_SECRET_IPC } from '../shared/botSecret';
 import { CONNECTOR_IPC } from '../shared/botConnector';
+import { BOT_SKILL_IPC } from '../shared/botSkill';
 import { BOT_GROUP_IPC } from '../shared/botGroup';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
@@ -1264,6 +1265,13 @@ const electronAPI = {
         ipcRenderer.invoke(CONNECTOR_IPC.setOffForBot, req) as Promise<import('../shared/botConnector').ConnectorSimpleResult>,
       setEnabled: (req: { id: string; enabled: boolean }) =>
         ipcRenderer.invoke(CONNECTOR_IPC.setEnabled, req) as Promise<import('../shared/botConnector').ConnectorSimpleResult>,
+    },
+    // A bot's skills (renderer/components/Bots/BotSkills.tsx): the list and
+    // the owner's Archive; changes arrive as BOT_EVENT {type:'skills-changed'}.
+    skills: {
+      list: (botId: string) => ipcRenderer.invoke(BOT_SKILL_IPC.list, { botId }) as Promise<import('../shared/botSkill').SkillListResult>,
+      archive: (req: import('../shared/botSkill').SkillArchiveRequest) =>
+        ipcRenderer.invoke(BOT_SKILL_IPC.archive, req) as Promise<import('../shared/botSkill').SkillArchiveResult>,
     },
     // The owner's group chats (shared/botGroup.ts); changes arrive as
     // BOT_EVENT {type:'groups-changed'}.

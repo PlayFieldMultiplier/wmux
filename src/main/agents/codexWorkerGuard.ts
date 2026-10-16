@@ -68,6 +68,7 @@ import { getBotStore } from '../factory/botStore';
 import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guardSessionLaunch, isBotWorkerSession, ledgerTaskConnectors, markGuardedCodexCreate, prepareConnectorRunDirs, taskConnectors } from './botWorkerMergeGuard';
 import { getWmuxDir } from '../../daemon/config';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
+import { excludeLineOnce } from '../git/infoExclude';
 
 const execFileP = promisify(execFile);
 const RUN_TIMEOUT_MS = 15_000;
@@ -130,28 +131,6 @@ async function defaultRun(cmd: string, args: string[], opts: { cwd: string; env:
 
 function refuse(why: string, where = 'PTY_CREATE'): Error {
   return new Error(`${where}: a bot's codex worker was not launched: ${why}`);
-}
-
-let excludeLock: Promise<void> = Promise.resolve();
-
-/** Add the anchored rules path to `info/exclude` once (check, then append),
- *  one writer at a time. */
-async function excludeRulesFile(commonDir: string): Promise<void> {
-  const run = async (): Promise<void> => {
-    const file = path.join(commonDir, 'info', 'exclude');
-    let text = '';
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch {
-      /* missing: created below */
-    }
-    if (text.split(/\r?\n/).includes(CODEX_WORKER_EXCLUDE_LINE)) return;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${CODEX_WORKER_EXCLUDE_LINE}\n`);
-  };
-  const next = excludeLock.then(run, run);
-  excludeLock = next.catch(() => undefined);
-  await next;
 }
 
 const SCAN_MAX = 500;
@@ -347,7 +326,7 @@ async function guardedCodexLine(
     try { fs.unlinkSync(tmp); } catch { /* never written */ }
     throw refuse(`the rules file could not be written: ${String(err)}`);
   }
-  await excludeRulesFile(commonDir).catch((err) => { throw refuse(`info/exclude could not be written: ${String(err)}`); });
+  await excludeLineOnce(path.join(commonDir, 'info', 'exclude'), CODEX_WORKER_EXCLUDE_LINE).catch((err) => { throw refuse(`info/exclude could not be written: ${String(err)}`); });
 
   // 4. The pane's codex: its version, and the rules it will load. The line
   // still names plain `codex`, so the pane shell's own codex wrapper (shell

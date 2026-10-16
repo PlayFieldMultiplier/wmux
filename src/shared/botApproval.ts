@@ -51,13 +51,19 @@ export const BOT_APPROVAL_IPC = {
 
 /** The acts that need the owner. `merge` is executed by main first; the
  *  others are requested and recorded, and their executors may follow (UI
- *  copy says so). */
-export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release';
+ *  copy says so). `skill` is a bot's own skill proposal (shared/botSkill.ts):
+ *  main raises it from `skill_propose`, never from `approval_request`, and
+ *  the owner's answer is the act (Approve loads the skill, Deny archives the
+ *  proposal). */
+export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'skill';
 
-export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release'];
+export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'skill'];
+
+/** The acts a bot may name in `approval_request`. */
+export const BOT_REQUESTABLE_ACTIONS: readonly ApprovalAction[] = APPROVAL_ACTIONS.filter((a) => a !== 'skill');
 
 /** Acts no rule may cover: each one always needs the owner. */
-export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default']);
+export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default', 'skill']);
 
 /** Who granted: the owner (card, chip, phone, matching message), or one of
  *  the owner's remembered rules. A rule approval is `'rule'` in MergeEffect.approvedBy. */
@@ -81,6 +87,9 @@ export interface ApprovalRequest {
   headSha?: string;
   /** The gh login main read when the request was made. */
   ghLogin?: string;
+  /** `skill`: the proposal the card shows (its content hash) and what it
+   *  would make of the skill. `repoKey` is the bot's repository or ''. */
+  skill?: { name: string; hash: string; version: string; update: boolean };
   botId: string;
   workspaceId: string;
   threadId: ThreadId;
@@ -124,7 +133,7 @@ export interface ApprovalListParams { state?: ApprovalState[]; limit?: number; }
 /** An "always allow" the owner remembered. */
 export interface ApprovalRule {
   ruleId: string;
-  action: Exclude<ApprovalAction, 'release' | 'push_default'>;
+  action: Exclude<ApprovalAction, 'release' | 'push_default' | 'skill'>;
   repoKey: string;
   /** One bot, or every bot of one workspace. */
   scope: { botId: string } | { workspaceId: string };

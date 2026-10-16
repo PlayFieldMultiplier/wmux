@@ -627,6 +627,8 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'botSecret.request':   { capability: 'wmux.internal' },
   'botSecret.list':      { capability: 'wmux.internal' },
   'botLogin.request':    { capability: 'wmux.internal' },
+  'skill.propose':       { capability: 'wmux.internal' },
+  'skill.read':          { capability: 'wmux.internal' },
 
   // --- Task lifecycle (pipe/handlers/worktask.rpc.ts) ---
   // The reads answer "what did this task produce"; the writes run the task's

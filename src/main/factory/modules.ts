@@ -20,6 +20,7 @@ import '../pipe/handlers/handoff.rpc';
 import './roles';
 import './mergeLaneHost';
 import './approvalsModule';
+import '../pipe/handlers/skill.rpc';
 import '../pipe/handlers/routine.rpc';
 import '../pipe/handlers/workerResume.rpc';
 import '../pipe/handlers/workerMessage.rpc';
