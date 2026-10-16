@@ -629,6 +629,15 @@ export async function forgetKeptFolder(ports: Pick<TaskFolderPorts, 'store' | 'n
   await ports.store.put({ ...rec, at: (ports.now ?? Date.now)() }).catch(() => undefined);
 }
 
+/** The task's resumed worker stopped again at `at`: a folder a stop kept
+ *  counts its 7 days from then. Written at the stop itself, so the clock
+ *  does not depend on the reclaimed worker's record outliving its cap. */
+export async function noteKeptFolderStopped(ports: Pick<TaskFolderPorts, 'store'>, taskId: string, at: number): Promise<void> {
+  const rec = ports.store.get(taskId);
+  if (rec?.state !== 'kept_stopped' || at <= rec.at) return;
+  await ports.store.put({ ...rec, at }).catch(() => undefined);
+}
+
 /**
  * Put a removed task folder back at the same path for a resume: the worktree
  * on its kept branch, or an empty research folder. Only the folder this

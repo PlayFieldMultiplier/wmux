@@ -20,6 +20,7 @@ import {
   gitRepoInfo,
   holdTaskFolder,
   installTaskFolderCleanup,
+  noteKeptFolderStopped,
   removeEmptyResearchBatch,
   restoreTaskFolder,
   taskFolderKind,
@@ -788,6 +789,23 @@ describe('a folder a stop kept, after 7 days', () => {
     await pass({ ...p, missions: async () => new Map<string, TaskMission>() }, [], () => expect(fs.existsSync(wt)).toBe(false));
     expect(keptFolderCleaned).toHaveBeenCalledWith(expect.objectContaining({ taskId: stopped.id, days: 7 }));
     expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/run-77777777')).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('the stop itself moves the clock, so a stop time the reclaimed record no longer holds still counts', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager(), 'evict-99999999');
+    const stopped = row('cancelled', { id: 'wtask-evict-99999999', ...stoppedBy });
+    let now = 50_000;
+    const p = ports({ now: () => now, workerStoppedAt: () => undefined }, new Map([[stopped.id, { folder: wt, branch: 'wtask/evict-99999999' }]]));
+    await cleanTaskFolders(p, [stopped]);
+    now = 50_000 + 2 * DAY;
+    await forgetKeptFolder(p, stopped.id);
+    // Stopped on day 10; its reclaimed record is evicted before the next pass.
+    await noteKeptFolderStopped(p, stopped.id, 50_000 + 10 * DAY);
+    await noteKeptFolderStopped(p, stopped.id, 50_000 + 3 * DAY);
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 + 10 * DAY });
+    now = 50_000 + 10 * DAY + 60_000;
+    await pass(p, []);
+    expect(fs.existsSync(wt)).toBe(true);
   });
 
   it('a record an older build dropped on resume is written again at the worker\'s next stop, though the row is over a day old', async () => {
