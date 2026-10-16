@@ -110,9 +110,11 @@ export interface SetJobPorts {
 }
 
 /** The wake carries the owner's own answer to the bot's question: an
- *  `answer` handoff from the owner to this bot, not a question closed
- *  without an answer, and not one resuming a hop that read outside text
- *  (wakeTaint.ts). No taint tracker reads as tainted. Pure over its deps. */
+ *  `answer` handoff from the owner to this bot, replying to a question this
+ *  bot asked that is still on record (a pruned question no longer says
+ *  which hop it resumed), not a question closed without an answer, and not
+ *  one resuming a hop that read outside text (wakeTaint.ts). No taint
+ *  tracker reads as tainted. Pure over its deps. */
 export function wakeOnOwnerAnswer(
   botId: string,
   wake: Pick<WakeItem, 'reason'>,
@@ -123,6 +125,8 @@ export function wakeOnOwnerAnswer(
     const h = deps.handoff(wake.reason.handoffId);
     if (!h || h.kind !== 'answer' || h.from.kind !== 'human' || h.payload.body === DISMISSED_ANSWER) return false;
     if (h.to.kind !== 'bot' || h.to.botId !== botId) return false;
+    const ask = h.replyTo ? deps.handoff(h.replyTo) : null;
+    if (!ask || ask.kind !== 'ask_person' || ask.from.kind !== 'bot' || ask.from.botId !== botId) return false;
     return !!deps.taint && !deps.taint.wakeTainted(wake);
   } catch {
     return false;

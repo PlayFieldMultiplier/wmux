@@ -306,6 +306,9 @@ describe('bot.setJob', () => {
     expect(on('h-bot')).toBe(false);
     expect(on('h-answer-hop')).toBe(false);
     expect(on('h-missing')).toBe(false);
+    // An answer whose question is gone (pruned) no longer says which hop it resumed.
+    records.set('h-orphan', base({ id: 'h-orphan', replyTo: 'h-pruned' }));
+    expect(on('h-orphan')).toBe(false);
     expect(on('h-answer', null)).toBe(false);
     expect(wakeOnOwnerAnswer(me, { reason: { kind: 'routine', routineId: 'r-1', dueAt: 1 } }, { handoff, taint })).toBe(false);
   });

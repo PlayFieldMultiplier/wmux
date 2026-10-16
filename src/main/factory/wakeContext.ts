@@ -99,6 +99,12 @@ export function localeLanguageName(locale: string): string {
   return code;
 }
 
+/** Every letter of the text is a Latin-script one (and there is one). Pure. */
+function latinScript(text: string): boolean {
+  const letters = text.match(/\p{L}/gu) ?? [];
+  return letters.length > 0 && letters.every((c) => /\p{Script=Latin}/u.test(c));
+}
+
 /** The UI language's name, for words whose script names no language: a UI
  *  in a language whose own script scriptLanguage names (Korean, Japanese,
  *  …) says nothing about Latin-script words, so null then. Pure. */
@@ -151,7 +157,7 @@ export function wakeLanguage(ports: WakeContextPorts, profile: BotProfile, item:
   if (said && said.trim()) {
     const script = scriptLanguage(said);
     const locale = script ? undefined : ports.uiLocale?.();
-    const name = script ?? (locale ? latinUiLanguage(locale) : null);
+    const name = script ?? (locale && latinScript(said) ? latinUiLanguage(locale) : null);
     const sample = human || !script ? said.replace(/\s+/g, ' ').trim().slice(0, WAKE_CONTEXT_LIMITS.SAMPLE_MAX) : undefined;
     return { name, source: 'owner', ...(sample ? { sample } : {}), ...(human ? {} : { earlier: true as const }) };
   }

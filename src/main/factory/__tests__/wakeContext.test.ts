@@ -81,6 +81,8 @@ describe('wakeContext', () => {
       .toEqual({ name: 'Korean', source: 'owner', sample: 'PR 리뷰해줘' });
     // ko UI, Latin-script words: Korean is not theirs, so no name; the sample shows the language.
     expect(wakeLanguage(ports([owner('Hello there')], { uiLocale: () => 'ko' }), me, intro)).toEqual({ name: null, source: 'owner', sample: 'Hello there', earlier: true });
+    // A script no language is named for that is not Latin (Greek): no name from the UI.
+    expect(wakeLanguage(ports([owner('Γεια σου')], { uiLocale: () => 'en' }), me, intro)).toEqual({ name: null, source: 'owner', sample: 'Γεια σου', earlier: true });
     expect(latinUiLanguage('de')).toBe('German');
     expect(latinUiLanguage('ja')).toBeNull();
     expect(latinUiLanguage('zh-TW')).toBeNull();
