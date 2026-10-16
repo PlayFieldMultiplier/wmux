@@ -41,16 +41,21 @@ const k = (code: string): string => `room.notice.${code}`;
 const titled = (code: string, args: PhoneNoticeCode['args'] = {}, more?: readonly string[]): PhoneNoticeCode => ({ args, titles: [k(code)], ...(more ? { more } : {}) });
 /** A code whose body is worded too. */
 const bodied = (code: string, args: PhoneNoticeCode['args'] = {}, more: readonly string[] = []): PhoneNoticeCode => ({ args, titles: [k(code)], more: [`${k(code)}.body`, ...more] });
+/** A worker card that names its task by `title`; its second title is for a
+ *  card with none (written before worker cards named their task). */
+const taskNamed = (code: string, args: PhoneNoticeCode['args'] = {}, more: readonly string[] = []): PhoneNoticeCode => ({
+  args: { title: 'string', ...args }, titles: [k(code), `${k(code)}.untitled`], more: [`${k(code)}.body`, ...more],
+});
 
 /** Every notice code the factory writes, as the phone may receive it. */
 export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> = {
   // A worker's lifecycle (workerReclaim.ts, workerLifecycleHost.ts, workerReportNudge.ts, botNotices.ts).
-  'worker.paused': bodied('worker.paused'),
-  'worker.pausedResumable': bodied('worker.pausedResumable', { kind: 'string' }, [`${k('worker.pausedResumable')}.body.research`]),
-  'worker.idlePausedResumable': bodied('worker.idlePausedResumable', { kind: 'string' }, [`${k('worker.idlePausedResumable')}.body.research`]),
-  'worker.done': bodied('worker.done', { status: 'string' }, STATUS),
-  'worker.doneResumable': bodied('worker.doneResumable', { status: 'string', kind: 'string' }, [`${k('worker.doneResumable')}.body.research`, ...STATUS]),
-  'worker.resumed': bodied('worker.resumed', { by: 'string', where: 'string' }, ['room.notice.by.owner', 'room.notice.by.bot', 'room.notice.where.folder', 'room.notice.where.newPane']),
+  'worker.paused': taskNamed('worker.paused'),
+  'worker.pausedResumable': taskNamed('worker.pausedResumable', { kind: 'string' }, [`${k('worker.pausedResumable')}.body.research`]),
+  'worker.idlePausedResumable': taskNamed('worker.idlePausedResumable', { kind: 'string' }, [`${k('worker.idlePausedResumable')}.body.research`]),
+  'worker.done': taskNamed('worker.done', { status: 'string' }, STATUS),
+  'worker.doneResumable': taskNamed('worker.doneResumable', { status: 'string', kind: 'string' }, [`${k('worker.doneResumable')}.body.research`, ...STATUS]),
+  'worker.resumed': taskNamed('worker.resumed', { by: 'string', where: 'string' }, ['room.notice.by.owner', 'room.notice.by.bot', 'room.notice.where.folder', 'room.notice.where.newPane']),
   'worker.waiting': bodied('worker.waiting', {
     title: 'string', inUse: 'number', cap: 'number', holders: 'string', bots: 'string', botCount: 'number', workers: 'string', workerCount: 'number',
   }, HOLDERS),

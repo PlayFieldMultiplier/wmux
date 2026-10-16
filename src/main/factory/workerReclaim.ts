@@ -61,6 +61,7 @@ import { isPlausibleResumeSessionId, normalizeResumeCwd, permissionFlagFor, type
 import { sessionHostDir, sessionsStartedIn } from '../worktask/stopSessionsInDir';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { STOPPED_BY_OWNER } from './factoryStop';
+import { fanoutTaskShortId } from '../../shared/fanoutCallerNudge';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
 export const RECLAIMED_WORKERS_VERSION = 1 as const;
@@ -120,6 +121,12 @@ export interface ReclaimedWorker {
   /** The ledger rev of the end this record was made for (absent: older
    *  records, compared by time). */
   endRev?: number;
+}
+
+/** The task a worker's lifecycle card names: its title, else its short id,
+ *  so cards for several tasks that ended together can be told apart. Pure. */
+export function lifecycleCardTask(title: string | undefined, taskId: string): string {
+  return title?.trim() || fanoutTaskShortId(taskId);
 }
 
 /** The workspace a reclaimed worker's pane lives in. Pure. */
@@ -579,27 +586,28 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
     const pane = ended === 'failed'
       ? 'Its pane stays open until you have looked at it, then closes.'
       : 'Its pane closes.';
+    const task = lifecycleCardTask(entry.title, entry.id);
     try {
       if (ended === 'reported') {
         ports.note?.(
           entry.ownerWorkspaceId,
           taskThreadOf(entry),
-          resumable ? 'Worker paused (resumable)' : 'Worker paused',
+          `${resumable ? 'Worker paused (resumable)' : 'Worker paused'}: ${task}`,
           resumable
             ? `The task is reported for review and its worker sat idle: its Claude stopped to free memory and its agent slot. The task stays open for review and its pane stays; the ${keptText}, and Resume continues the same conversation.`
             : 'The task is reported for review and its worker sat idle: its Claude stopped to free memory and its agent slot. The task stays open for review and its pane stays; the worktree is kept, but no conversation was recorded to resume.',
-          resumable && research ? { code: 'worker.pausedResumable', args: { kind: 'research' } } : { code: resumable ? 'worker.pausedResumable' : 'worker.paused' },
+          { code: resumable ? 'worker.pausedResumable' : 'worker.paused', args: { title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
           entry.id,
         );
       } else {
         ports.note?.(
           entry.ownerWorkspaceId,
           taskThreadOf(entry),
-          resumable ? 'Worker done (resumable)' : 'Worker done',
+          `${resumable ? 'Worker done (resumable)' : 'Worker done'}: ${task}`,
           resumable
             ? `Task ${ended}: its Claude stopped to free memory. ${pane} The ${keptText}; Resume continues the same conversation.`
             : `Task ${ended}: its Claude stopped to free memory. ${pane} The worktree is kept; no conversation was recorded to resume.`,
-          { code: resumable ? 'worker.doneResumable' : 'worker.done', args: { status: ended, ...(resumable && research ? { kind: 'research' } : {}) } },
+          { code: resumable ? 'worker.doneResumable' : 'worker.done', args: { status: ended, title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
           entry.id,
         );
       }
@@ -1070,7 +1078,8 @@ async function launched(
   ports.store.setState(rec.taskId, 'resumed', now());
   onLaunched?.();
   try {
-    ports.note?.(rec.ownerWorkspaceId, rec.threadId, 'Worker resumed', `${by.kind === 'owner' ? 'The owner' : 'The bot'} resumed the same conversation ${where === 'folder' ? 'in the task folder' : 'in a new pane in the task worktree'}.`, { code: 'worker.resumed', args: { by: by.kind, where } }, rec.taskId);
+    const task = lifecycleCardTask(rec.title, rec.taskId);
+    ports.note?.(rec.ownerWorkspaceId, rec.threadId, `Worker resumed: ${task}`, `${by.kind === 'owner' ? 'The owner' : 'The bot'} resumed the same conversation ${where === 'folder' ? 'in the task folder' : 'in a new pane in the task worktree'}.`, { code: 'worker.resumed', args: { by: by.kind, where, title: task } }, rec.taskId);
   } catch {
     /* best effort */
   }
@@ -1247,13 +1256,14 @@ export function createResumedIdleSweep(ports: ResumedIdlePorts): ResumedIdleSwee
     if (!ports.store.setState(rec.taskId, 'stopped', now())) return false;
     // A research task works in a task folder, not a worktree.
     const research = isResearchDispatch(rowOf(rec.taskId)?.dispatch);
+    const task = lifecycleCardTask(rec.title, rec.taskId);
     try {
       ports.note?.(
         rec.ownerWorkspaceId,
         rec.threadId,
-        'Worker paused (resumable)',
+        `Worker paused (resumable): ${task}`,
         `The resumed worker sat idle after its turn: its Claude stopped again to free memory and its agent slot. The ${research ? 'task folder' : 'worktree'} and the conversation are kept; Resume continues the same conversation.`,
-        research ? { code: 'worker.idlePausedResumable', args: { kind: 'research' } } : { code: 'worker.idlePausedResumable' },
+        { code: 'worker.idlePausedResumable', args: { title: task, ...(research ? { kind: 'research' } : {}) } },
         rec.taskId,
       );
     } catch {
