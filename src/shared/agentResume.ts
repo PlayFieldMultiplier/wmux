@@ -555,7 +555,10 @@ export function isResumableLaunchCommand(command: string): boolean {
  */
 export function launchedConversation(command: string): { sessionId: string; permissionMode?: PermissionMode } | null {
   const tokens = tokenize(command);
-  if (tokens.length === 0 || tokens[0].quoted || launcherStem(tokens[0].value) !== 'claude') return null;
+  if (tokens.length === 0 || tokens[0].quoted) return null;
+  const stem = launcherStem(tokens[0].value);
+  const pin = RESUME_BY_LAUNCHER.get(stem)?.pin;
+  if (!pin || !agentSupportsPermissionFlag(stem)) return null;
   let sessionId: string | undefined;
   let permissionMode: PermissionMode | undefined;
   for (let i = 1; i < tokens.length; i++) {
@@ -564,7 +567,7 @@ export function launchedConversation(command: string): { sessionId: string; perm
     if (t.value === '--') break;
     const next = tokens[i + 1];
     const value = (flag: string): string | undefined => (t.value === flag ? (next && !next.quoted ? next.value : undefined) : t.value.startsWith(`${flag}=`) ? t.value.slice(flag.length + 1) : undefined);
-    const id = value('--session-id');
+    const id = value(pin);
     if (id !== undefined && UUID_RE.test(id)) sessionId = id.toLowerCase();
     if (t.value === '--dangerously-skip-permissions') permissionMode = 'bypassPermissions';
     const mode = value('--permission-mode');
