@@ -217,6 +217,18 @@ describe('renderBrainMarkdown', () => {
     expect(container.textContent).toContain('after');
   });
 
+  it('a fence closes only on a backtick run at least as long as its own, so a longer fence keeps ``` and links inside as text', () => {
+    render(['````diff', '  ```', '  [label](https://example.com/a)', '- [old](https://example.com/b)', '+ ```js', '````', 'after'].join('\n'));
+    const blocks = container.querySelectorAll('[data-brain-md-code]');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].textContent).toBe(['  ```', '  [label](https://example.com/a)', '- [old](https://example.com/b)', '+ ```js'].join('\n'));
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toContain('after');
+    // A plain fence still closes on a plain ``` line.
+    render('```\ncode\n```\nafter');
+    expect(container.querySelector('[data-brain-md-code]')?.textContent).toBe('code');
+  });
+
   it('an unclosed fence (mid-stream) swallows to the end as code', () => {
     render('streaming:\n```\nhalf of a block');
     expect(container.querySelector('[data-brain-md-code]')?.textContent).toBe('half of a block');

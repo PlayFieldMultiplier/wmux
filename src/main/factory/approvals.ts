@@ -88,6 +88,7 @@ import type { RpcContext } from '../../shared/rpc';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
+import { fenceFor } from '../../shared/markdownFence';
 import { normalizeRepoKey } from './repoWatch';
 import { laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
@@ -390,11 +391,11 @@ function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'i
 }
 
 /** A skill card's lines after the bot's: what Approve does, then the whole
- *  diff (botSkills.skillFilesDiff: every line prefixed, so none closes the
- *  fence). Null when they do not fit in `room` characters: the owner sees
+ *  diff in a fence longer than any backtick run in it, so it shows as
+ *  written. Null when they do not fit in `room` characters: the owner sees
  *  all of what they approve, so a diff is never cut. Pure. */
 export function skillCardLines(update: boolean, diff: string, room: number): string[] | null {
-  const fence = '```';
+  const fence = fenceFor(diff);
   const lines = [
     '',
     update
@@ -811,18 +812,8 @@ export class ApprovalService {
 
   private approve(cur: StoredApproval, approver: ApprovalApprover, by: string, ruleId?: string, newRule?: ApprovalRule): { ok: true; request: ApprovalView } | Refusal {
     if (cur.state !== 'pending') return refuse('not_pending', `the request is ${cur.state}`);
-    if (cur.action === 'skill') {
-      // The owner's answer is the act: the proposal on the card becomes the
-      // approved skill first, and the request records it only once it did.
-      const host = this.ports.skills?.() ?? null;
-      if (!host) return refuse('not_started', 'skills are not running yet');
-      const why = host.approve(cur);
-      if (why) {
-        // The proposal on the card is gone or changed: the card is moot.
-        this.withdraw(cur.requestId);
-        return refuse('stale', why);
-      }
-    }
+    const skillHost = cur.action === 'skill' ? this.ports.skills?.() ?? null : null;
+    if (cur.action === 'skill' && !skillHost) return refuse('not_started', 'skills are not running yet');
     const at = this.now();
     const next: StoredApproval = {
       ...cur,
@@ -838,6 +829,25 @@ export class ApprovalService {
       if (newRule) this.rules.set(newRule.ruleId, newRule);
     });
     if (!stored) return refuse('write_failed', 'the decision could not be stored');
+    if (skillHost) {
+      // The owner's answer is the act: once the decision is stored, the
+      // proposal on the card becomes the approved skill. When it cannot (it
+      // changed since, or a write failed) the decision is taken back and
+      // the card is moot, so the two stores never disagree on a live skill.
+      let why: string | null;
+      try {
+        why = skillHost.approve(next);
+      } catch (err) {
+        why = `the skill could not be approved: ${String(err)}`;
+      }
+      if (why) {
+        const moot: StoredApproval = { ...cur, state: 'expired', updatedAt: this.now() };
+        if (this.put(moot)) this.closeCard(moot);
+        else this.log(`[factory] approval ${cur.requestId} kept as approved though its skill did not load`);
+        this.changed(cur.workspaceId);
+        return refuse('stale', why);
+      }
+    }
     this.log(`[factory] approval ${cur.requestId} approved by ${approver} (${by})`);
     // Decided: the card stops waiting on the owner (its Undo reads the request).
     this.closeCard(next);

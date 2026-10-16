@@ -5,6 +5,7 @@ import type { Party } from '../../../shared/handoff';
 import type { CardKind, RoomCard, ThreadId, ThreadSummary } from '../../../shared/room';
 import type { FactoryBotRow } from './factoryPorts';
 import { getLocale } from '../../i18n';
+import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -145,13 +146,17 @@ export function withoutInternalIds(text: string, labels: IdLabels): string {
   // Inline code is code unless it is just the id.
   const onlyId = new RegExp(String.raw`^\x60(?:${TASK_ID}|${APPROVAL_ID}|${NUMBERED_THREAD})\x60$`);
   const prose = (part: string): string => part.split(INLINE_CODE).map((p, i) => (i % 2 === 0 || onlyId.test(p) ? swap(p) : p)).join('');
-  let fenced = false;
+  let fence = 0;
   return text.split('\n').map((line) => {
-    if (line.trimStart().startsWith('```')) {
-      fenced = !fenced;
+    if (fence === 0 && fenceOpenLength(line) > 0) {
+      fence = fenceOpenLength(line);
       return line;
     }
-    return fenced ? line : prose(line);
+    if (fence > 0) {
+      if (closesFence(line, fence)) fence = 0;
+      return line;
+    }
+    return prose(line);
   }).join('\n');
 }
 

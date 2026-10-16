@@ -104,7 +104,7 @@ export interface SkillProposal {
   hash: string;
   version: string;
   description: string;
-  /** An approved version exists: this one would replace it. */
+  /** The skill is approved (not archived): this one would replace it. */
   update: boolean;
   /** What changes against the approved version (or the whole new skill). */
   diff: string;
@@ -126,14 +126,20 @@ export function botSkillsRoot(wmuxDir: string, botId: string): string {
   return path.join(wmuxDir, 'factory', 'bots', botId, 'skills');
 }
 
-/** sha256 over SKILL.md and every reference, in code-unit name order (the
- *  same on every machine and locale). Pure. */
+/** sha256 over one JSON document of SKILL.md and every reference, in
+ *  code-unit name order (the same on every machine and locale): each file
+ *  is a quoted JSON string, so the boundaries between files are part of
+ *  what is hashed. Pure. */
 export function skillHash(files: SkillFiles): string {
-  const h = createHash('sha256');
-  h.update(`${SKILL_FILE}\0${files.content}\0`);
-  for (const r of [...files.references].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) h.update(`${r.name}\0${r.content}\0`);
-  return h.digest('hex');
+  const references = [...files.references]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((r) => ({ name: r.name, content: r.content }));
+  return createHash('sha256').update(JSON.stringify({ v: 1, content: files.content, references })).digest('hex');
 }
+
+/** Control characters a skill's text never holds (tab and newline are text). */
+// eslint-disable-next-line no-control-regex
+const SKILL_CONTROL_RE = /[\u0000-\u0008\u000B-\u001F\u007F]/;
 
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
@@ -233,6 +239,7 @@ export function validateSkillProposal(name: unknown, content: unknown, reference
   if (typeof name !== 'string' || !SKILL_NAME_RE.test(name)) return refuse('invalid', 'name is a lowercase slug (a-z, 0-9, -), at most 64 characters');
   if (typeof content !== 'string' || content.length === 0) return refuse('invalid', 'content is the whole SKILL.md');
   if (Buffer.byteLength(content, 'utf8') > SKILL_LIMITS.BODY_MAX) return refuse('invalid', `SKILL.md is at most ${SKILL_LIMITS.BODY_MAX} bytes`);
+  if (SKILL_CONTROL_RE.test(content)) return refuse('invalid', 'SKILL.md is plain text: no control characters other than tab and newline (use \\n line ends)');
   const fm = parseSkillFrontmatter(content);
   if (!fm.ok) return refuse('invalid', fm.error);
   if (fm.frontmatter.name !== name) return refuse('invalid', `the front matter's name (${fm.frontmatter.name}) is not ${name}`);
@@ -248,6 +255,7 @@ export function validateSkillProposal(name: unknown, content: unknown, reference
         return refuse('invalid', 'a reference name is a slug ending in .md or .txt (no folder)');
       }
       if (typeof ref.content !== 'string') return refuse('invalid', `reference ${ref.name} needs its content`);
+      if (SKILL_CONTROL_RE.test(ref.content)) return refuse('invalid', `reference ${ref.name} is plain text: no control characters other than tab and newline`);
       const bytes = Buffer.byteLength(ref.content, 'utf8');
       if (bytes > SKILL_LIMITS.REFERENCE_MAX) return refuse('invalid', `reference ${ref.name} is over ${SKILL_LIMITS.REFERENCE_MAX} bytes`);
       total += bytes;
@@ -567,7 +575,7 @@ export class BotSkillStore {
       return refuse('invalid', `an update of ${name} takes a version newer than ${meta.approved.version}`);
     }
     const shown = skillFilesDiff(baseline?.files ?? null, checked.files);
-    const diff = meta?.approved && !baseline
+    const diff = meta?.state === 'approved' && !baseline
       ? `@@ the approved version on disk is not the one approved; the whole proposal is shown\n${shown}`
       : shown;
     if (diff.length > SKILL_LIMITS.DIFF_MAX) {
@@ -578,7 +586,7 @@ export class BotSkillStore {
       const onDisk = this.readVersion(proposedDir);
       if (onDisk && skillHash(onDisk) === hash) {
         return {
-          ok: true, skill: view(meta, meta.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: !!meta.approved, diff, duplicate: true,
+          ok: true, skill: view(meta, meta.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: meta.state === 'approved', diff, duplicate: true,
           ...(meta.proposed.approvalId ? { approvalId: meta.proposed.approvalId } : {}),
         };
       }
@@ -625,7 +633,7 @@ export class BotSkillStore {
     }
     if (setAside) fs.rmSync(aside, { recursive: true, force: true });
     return {
-      ok: true, skill: view(next, next.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: !!meta?.approved, diff,
+      ok: true, skill: view(next, next.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: meta?.state === 'approved', diff,
       ...(meta?.proposed?.approvalId ? { replacedApprovalId: meta.proposed.approvalId } : {}),
     };
   }
@@ -654,16 +662,16 @@ export class BotSkillStore {
     const liveRefs = path.join(d.dir, REFERENCES_DIR);
     let tmp: string | null = null;
     let backup: string | null = null;
+    // Each entry this approve moved aside, and each it put in place: a
+    // rollback undoes exactly those, nothing else.
+    const movedAside: string[] = [];
+    const placed: string[] = [];
     // Put the earlier approved files back (the proposal stays waiting).
     const restore = (): void => {
       try {
-        if (!backup) return;
-        fs.rmSync(liveRefs, { recursive: true, force: true });
-        fs.rmSync(live, { recursive: true, force: true });
-        for (const n of [SKILL_FILE, REFERENCES_DIR]) {
-          if (lstatOrNull(path.join(backup, n))) fs.renameSync(path.join(backup, n), path.join(d.dir, n));
-        }
-        fs.rmSync(backup, { recursive: true, force: true });
+        for (const n of [...placed].reverse()) fs.rmSync(path.join(d.dir, n), { recursive: true, force: true });
+        for (const n of [...movedAside].reverse()) fs.renameSync(path.join(backup as string, n), path.join(d.dir, n));
+        if (backup) fs.rmSync(backup, { recursive: true, force: true });
       } catch {
         /* the record still names the earlier hash: unmatched files never load */
       }
@@ -674,10 +682,16 @@ export class BotSkillStore {
       tmp = this.writeFresh(d.dir, files);
       backup = fs.mkdtempSync(path.join(d.dir, '.bak-'));
       for (const n of [SKILL_FILE, REFERENCES_DIR]) {
-        if (lstatOrNull(path.join(d.dir, n))) fs.renameSync(path.join(d.dir, n), path.join(backup, n));
+        if (!lstatOrNull(path.join(d.dir, n))) continue;
+        fs.renameSync(path.join(d.dir, n), path.join(backup, n));
+        movedAside.push(n);
       }
-      if (files.references.length > 0) fs.renameSync(path.join(tmp, REFERENCES_DIR), liveRefs);
+      if (files.references.length > 0) {
+        fs.renameSync(path.join(tmp, REFERENCES_DIR), liveRefs);
+        placed.push(REFERENCES_DIR);
+      }
       fs.renameSync(path.join(tmp, SKILL_FILE), live);
+      placed.push(SKILL_FILE);
       fs.rmSync(tmp, { recursive: true, force: true });
       tmp = null;
     } catch (err) {

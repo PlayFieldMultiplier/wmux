@@ -5,6 +5,7 @@
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import fsDefault from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,7 +16,8 @@ import type { BotBinding, BotProfile } from '../../../shared/bot';
 import { SKILL_LIMITS, WORKER_SKILLS_EXCLUDE_LINE, parseSkillFrontmatter } from '../../../shared/botSkill';
 import { BOT_APPROVAL_RPC } from '../../../shared/botApproval';
 import type { RpcContext } from '../../../shared/rpc';
-import { BOT_SKILLS_FILENAME, BotSkillStore, botSkillsRoot, installWorkerSkills, skillFilesDiff, skillLineDiff, type SkillGitRun } from '../botSkills';
+import { BOT_SKILLS_FILENAME, BotSkillStore, botSkillsRoot, installWorkerSkills, skillFilesDiff, skillHash, skillLineDiff, type SkillGitRun } from '../botSkills';
+import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
 import { ApprovalService, registerApprovalRpc, skillCardLines, type ApprovalWake } from '../approvals';
 import { ROOM_LIMITS } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
@@ -131,6 +133,16 @@ describe('skill store: writing and path containment', () => {
     expect(s.read(A, 'report')).toMatchObject({ ok: false });
     expect(s.index(A)).toEqual([]);
     expect(s.approved(A)).toEqual([]);
+  });
+
+  it('hashes the file boundaries too, and refuses control characters in a proposal', () => {
+    expect(skillHash({ content: 'A', references: [{ name: 'r.md', content: 'B' }] }))
+      .not.toBe(skillHash({ content: 'A\0r.md\0B', references: [] }));
+    const s = store();
+    expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'a\0b\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'a\u001bb\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(s.propose(A, { name: 'report', content: skillMd('report'), references: [{ name: 'a.md', content: 'x\0y' }], reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'tab\there\n'), reason: 'r' })).toMatchObject({ ok: true });
   });
 
   it('holds the size limits and the front matter\'s name', () => {
@@ -292,6 +304,48 @@ describe('skill store: main keeps the approval record', () => {
     expect(again).toMatchObject({ ok: true });
   });
 
+  it('an archived skill proposed again is a new one, with no note about the approved files', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    s.archive(A, 'report');
+    const again = propose(s, A, 'report', skillMd('report', '1.0.0', 'Back again.\n'));
+    expect(again.update).toBe(false);
+    expect(again.diff).not.toContain('not the one approved');
+    expect(again.diff.startsWith('--- SKILL.md')).toBe(true);
+  });
+
+  it('an approve that fails at any step leaves the earlier approved files, references included', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report', skillMd('report'), [{ name: 'checklist.md', content: '- gate\n' }]).hash);
+    const up = propose(s, A, 'report', skillMd('report', '1.1.0', 'New steps.\n'), [{ name: 'checklist.md', content: '- new\n' }]);
+    const skillDir = path.join(botSkillsRoot(wmuxDir, A), 'report');
+    const realRename = fsDefault.renameSync;
+    let failed = 0;
+    for (let step = 1; step < 10; step += 1) {
+      let n = 0;
+      const spy = vi.spyOn(fsDefault, 'renameSync').mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+        if (String(from).startsWith(skillDir)) {
+          n += 1;
+          if (n === step) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        }
+        return realRename(from, to);
+      }) as typeof fsDefault.renameSync);
+      let res: ReturnType<BotSkillStore['approve']>;
+      try {
+        res = s.approve(A, 'report', up.hash);
+      } finally {
+        spy.mockRestore();
+      }
+      if (res.ok) break;
+      failed += 1;
+      expect(res).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.0.0', content: skillMd('report'), references: ['checklist.md'] });
+      expect(s.read(A, 'report', 'checklist.md')).toMatchObject({ ok: true, content: '- gate\n' });
+    }
+    expect(failed).toBeGreaterThanOrEqual(4);
+    expect(s.read(A, 'report', 'checklist.md')).toMatchObject({ ok: true, version: '1.1.0', content: '- new\n' });
+  });
+
   it('refuses a proposal whose change would not fit the owner\'s card', () => {
     const s = store();
     const big = 'x'.repeat(70) + '\n';
@@ -377,6 +431,48 @@ describe('skill_propose → approval card → load', () => {
     expect(card?.body).not.toContain('not shown');
     // A diff that would not fit is never cut.
     expect(skillCardLines(false, 'z'.repeat(ROOM_LIMITS.CARD_BODY_MAX), ROOM_LIMITS.CARD_BODY_MAX - 400)).toBeNull();
+  });
+
+  it('the card\'s diff fence outlasts every backtick run inside it, so nothing in it renders as markdown', async () => {
+    const r = approvalRig();
+    const base = skillMd('report', '1.0.0', 'Step one.\n```\nSee [the guide](https://example.com/a).\n');
+    const first = await r.call('skill.propose', { name: 'report', content: base, reason: 'r' });
+    r.svc.decide({ requestId: first.approvalId, decision: 'approve' }, 'desktop');
+    const up = await r.call('skill.propose', { name: 'report', content: base.replace('version: 1.0.0', 'version: 1.1.0').replace('Step one.', 'Step one, then lint.'), reason: 'r' });
+    const body = r.writer.get(WS, r.svc.get(up.approvalId as string)?.cardId as string)?.body as string;
+    const lines = body.split('\n');
+    const open = lines.findIndex((l) => fenceOpenLength(l) > 0);
+    const len = fenceOpenLength(lines[open]);
+    expect(len).toBeGreaterThan(3);
+    const close = lines.findIndex((l, i) => i > open && closesFence(l, len));
+    expect(close).toBe(lines.length - 1);
+    expect(lines.slice(open + 1, close)).toContain('  ```');
+    expect(lines.slice(open + 1, close).some((l) => l.includes('[the guide](https://example.com/a)'))).toBe(true);
+  });
+
+  it('a decision that cannot be stored loads nothing; a skill that cannot load takes the decision back', async () => {
+    const r = approvalRig();
+    const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    const id = res.approvalId as string;
+    const realWrite = fsDefault.writeFileSync;
+    const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (typeof file === 'string' && path.basename(file).startsWith('approvals.json')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return (realWrite as (...a: unknown[]) => void)(file, ...rest);
+    }) as typeof fsDefault.writeFileSync);
+    try {
+      expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.svc.get(id)?.state).toBe('pending');
+    expect(r.skills.read(A, 'report')).toMatchObject({ ok: false, code: 'not_found' });
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'proposed' }]);
+    // The proposal changed on disk since its card: the decision is taken back.
+    fs.writeFileSync(path.join(botSkillsRoot(wmuxDir, A), 'report', 'proposed', 'SKILL.md'), skillMd('report', '1.0.0', 'Other.\n'));
+    expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'stale' });
+    expect(r.svc.get(id)?.state).toBe('expired');
+    expect(r.skills.read(A, 'report')).toMatchObject({ ok: false, code: 'not_found' });
   });
 
   it('Approve loads it (approved), and the bot is told; Deny archives it', async () => {

@@ -1,6 +1,7 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/features/sessions/ui/AgentTranscript.tsx), MIT License, Copyright (c) 2026 Nick
 import { Fragment, useState } from 'react';
 import { t } from '../../i18n';
+import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
 
 // ─── Command Deck — orchestrator prose markdown (dep-free subset) ────────────
 //
@@ -156,7 +157,7 @@ function preprocessGithubHtml(source: string): string {
   const lines = source.split('\n');
   const out: string[] = [];
   let chunk: string[] = [];
-  let inFence = false;
+  let fence = 0;
   const flush = () => {
     if (chunk.length === 0) return;
     const text = chunk.join('\n')
@@ -169,11 +170,12 @@ function preprocessGithubHtml(source: string): string {
     chunk = [];
   };
   for (const line of lines) {
-    if (line.trimStart().startsWith('```')) {
-      if (!inFence) flush();
-      inFence = !inFence;
+    if (fence === 0 && fenceOpenLength(line) > 0) {
+      flush();
+      fence = fenceOpenLength(line);
       out.push(line);
-    } else if (inFence) {
+    } else if (fence > 0) {
+      if (closesFence(line, fence)) fence = 0;
       out.push(line);
     } else {
       chunk.push(line);
@@ -323,11 +325,13 @@ function renderBlocks(source: string, opts: MarkdownOptions, depth: number, budg
     const line = lines[i];
 
     // Fenced code block (an unclosed fence swallows to the end — streaming).
-    if (line.trimStart().startsWith('```')) {
+    // It closes on a backtick run at least as long as the one it opened with.
+    const open = fenceOpenLength(line);
+    if (open > 0) {
       const codeLines: string[] = [];
-      const lang = line.trimStart().slice(3).trim().split(/\s+/)[0]?.slice(0, 24) ?? '';
+      const lang = line.trimStart().slice(open).trim().split(/\s+/)[0]?.slice(0, 24) ?? '';
       i++;
-      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
+      while (i < lines.length && !closesFence(lines[i], open)) {
         codeLines.push(lines[i]);
         i++;
       }
