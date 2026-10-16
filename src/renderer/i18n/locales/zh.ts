@@ -1738,6 +1738,7 @@ export const zh = {
   'botsPage.stop.workerConfirm': "停止“{task}”的工作者？该任务将被取消，其分支和更改会保留。",
   'botsPage.stop.workerStopped': "已停止“{task}”的工作者。",
   'botsPage.stop.workerAlreadyStopped': "“{task}”的工作者已经停止。",
+  'botsPage.stop.workerFailed': "无法停止“{task}”的工作者。",
   'botsPage.profile.parked.budget': "回合已用完：限额释放后会处理等待中的消息。",
   'botsPage.profile.parked.error': "因错误而停止：在你恢复之前不会进行回合。",
   'botsPage.profile.parked.limit': "已达使用限额而停止：将于 {time} 自动继续，也可以现在恢复。",

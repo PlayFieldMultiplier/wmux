@@ -1638,6 +1638,7 @@ export const en = {
   'botsPage.stop.workerConfirm': "Stop the worker for “{task}”? Its task is cancelled; its branch and changes stay.",
   'botsPage.stop.workerStopped': "Stopped the worker for “{task}”.",
   'botsPage.stop.workerAlreadyStopped': "The worker for “{task}” had already stopped.",
+  'botsPage.stop.workerFailed': "Could not stop the worker for “{task}”.",
   'botsPage.profile.parked.budget': "Out of turns: its waiting messages run when the limit frees up.",
   'botsPage.profile.parked.error': "Stopped after errors: it takes no turn until you resume it.",
   'botsPage.profile.parked.limit': "Stopped at the usage limit: it picks up again at {time}, or now if you resume it.",

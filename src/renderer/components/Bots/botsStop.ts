@@ -14,11 +14,12 @@
 //   }
 //
 // All are optional: a build without one shows no control for it.
+import { useSyncExternalStore } from 'react';
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
 
 export interface StopAllResult { ok: boolean; botsInterrupted: number; workersStopped: number; gatesCancelled: number }
 export interface StopBotResult { ok: boolean; workersStopped: number }
-export interface StopTaskResult { ok: boolean; workersStopped: number; tasksCancelled?: number }
+export interface StopTaskResult { ok: boolean; workersStopped: number; tasksCancelled?: number; code?: string; message?: string }
 
 export interface BotsStopPort {
   stopAll?(): Promise<StopAllResult>;
@@ -70,12 +71,38 @@ export function stopBotSummary(name: string, r: StopBotResult, t: T): string {
 }
 
 /** One worker's stop (named by its task's title), in the owner's words:
- *  stopped, or that its task had already ended. Pure. */
+ *  stopped, that its task had already ended, or that it could not be
+ *  stopped, with main's reason. Pure. */
 export function stopTaskSummary(task: string, r: StopTaskResult, t: T): string {
-  if (!r.ok) return t('botsPage.stop.failed');
+  if (!r.ok) return [t('botsPage.stop.workerFailed', { task }), r.message?.trim()].filter(Boolean).join(' ');
   return r.workersStopped > 0 || (r.tasksCancelled ?? 0) > 0
     ? t('botsPage.stop.workerStopped', { task })
     : t('botsPage.stop.workerAlreadyStopped', { task });
+}
+
+// The tasks whose Stop worker is under way or whose last stop was partial
+// (main answered `partial`: the task may already be cancelled while its
+// agent still runs). Stop worker stays offered for them, so the owner can
+// stop again; a stop that went through clears the mark.
+const unfinishedStops = new Set<string>();
+const stopListeners = new Set<() => void>();
+
+/** Mark (or clear) a task's Stop worker as not finished yet. */
+export function markWorkerStopUnfinished(taskId: string, unfinished: boolean): void {
+  if (unfinishedStops.has(taskId) === unfinished) return;
+  if (unfinished) unfinishedStops.add(taskId);
+  else unfinishedStops.delete(taskId);
+  for (const fn of stopListeners) fn();
+}
+
+function subscribeStops(fn: () => void): () => void {
+  stopListeners.add(fn);
+  return () => { stopListeners.delete(fn); };
+}
+
+/** Whether a task's Stop worker is under way or was partial. */
+export function useWorkerStopUnfinished(taskId: string | undefined): boolean {
+  return useSyncExternalStore(subscribeStops, () => !!taskId && unfinishedStops.has(taskId));
 }
 
 /** What turning the bots off stopped, as main's settings write reports it

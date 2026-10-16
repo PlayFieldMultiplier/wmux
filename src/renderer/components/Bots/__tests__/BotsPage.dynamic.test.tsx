@@ -1121,6 +1121,8 @@ describe('Bots page', () => {
     act(() => q('[data-testid="bots-stop-worker-cancel"]')!.click());
     expect(q('[data-testid="bots-stop-worker-confirm-row"]')).toBeNull();
     expect(stop.stopTask).not.toHaveBeenCalled();
+    // Focus goes back to the menu's ⋯.
+    expect(document.activeElement).toBe(q('[data-bots-worker-panel-menu]'));
     // Confirmed: that task's worker only, never the bot-wide stop; a toast says so.
     act(() => q('[data-bots-worker-panel-menu]')!.click());
     act(() => q('[data-bots-worker-panel-stop]')!.click());
@@ -1130,6 +1132,53 @@ describe('Bots page', () => {
     expect(stop.stopBot).not.toHaveBeenCalled();
     expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped the worker for “fix login”.');
     expect(q('[data-testid="bots-stop-worker-confirm-row"]')).toBeNull();
+    expect(document.activeElement).toBe(q('[data-bots-worker-panel-menu]'));
+    act(() => useStore.getState().setBotsWorkerPanel(null));
+  });
+
+  it('a partial Stop worker says why and keeps Stop worker offered once the task is cancelled, until a stop goes through', async () => {
+    seedRooms();
+    seedWorkerPanes();
+    const taskId = 'wtask-part-00000001';
+    const view = (stage: 'working' | 'cancelled') => [{
+      taskId, taskWorkspaceId: 't1', ownerWorkspaceId: 'w1', botId: LEAD, title: 'fix login',
+      status: stage, stage, updatedAt: Date.now(),
+    }];
+    bots[1] = { ...bots[1], tasks: view('working') as never };
+    const stopTask = vi.fn()
+      .mockResolvedValueOnce({ ok: false, code: 'partial', workersStopped: 0, tasksCancelled: 1, message: 'The worker could not be stopped; stop again to retry.' })
+      .mockResolvedValue({ ok: true, workersStopped: 1, tasksCancelled: 0 });
+    act(() => useStore.setState({ toasts: [] } as never));
+    await render(<BotsPage stop={{ stopTask }} />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-tree] [data-bots-worker="t1"]')!.click());
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    act(() => q('[data-bots-worker-panel-stop]')!.click());
+    await act(async () => { q('[data-testid="bots-stop-worker-confirm"]')!.click(); });
+    expect(useStore.getState().toasts.at(-1)).toMatchObject({
+      level: 'error',
+      message: 'Could not stop the worker for “fix login”. The worker could not be stopped; stop again to retry.',
+    });
+    // The confirm stays for another try.
+    expect(q('[data-testid="bots-stop-worker-confirm-row"]')).not.toBeNull();
+    // Main cancelled the task meanwhile: the page reads it again, and Stop worker is still offered.
+    act(() => root.unmount());
+    bots[1] = { ...bots[1], tasks: view('cancelled') as never };
+    root = createRoot(container);
+    await render(<BotsPage stop={{ stopTask }} />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-tree] [data-bots-worker="t1"]')!.click());
+    expect(q('[data-bots-tree] [data-bots-worker="t1"]')?.getAttribute('data-worker-state')).not.toBe('running');
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    act(() => q('[data-bots-worker-panel-stop]')!.click());
+    await act(async () => { q('[data-testid="bots-stop-worker-confirm"]')!.click(); });
+    expect(stopTask).toHaveBeenCalledTimes(2);
+    expect(stopTask).toHaveBeenLastCalledWith(taskId);
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped the worker for “fix login”.');
+    // Gone through: a cancelled task is offered no Stop worker again.
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
+    expect(q('[data-bots-worker-panel-stop]')).toBeNull();
     act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 

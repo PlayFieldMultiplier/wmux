@@ -529,11 +529,43 @@ describe('stopFactoryTask (the Bots page Stop worker)', () => {
     expect(r.stopWorker).not.toHaveBeenCalled();
   });
 
-  it('a worker that could not be stopped makes it partial; the task is cancelled all the same', async () => {
+  it('a worker that could not be stopped makes it partial; the task is cancelled all the same, and stopping again stops the agent that outlived it', async () => {
     await task('t-work', LEAD);
-    const r = ports({ stopWorker: vi.fn(async (): Promise<number> => { throw new Error('daemon gone'); }) });
+    const r = ports();
+    r.stopWorker.mockRejectedValueOnce(new Error('daemon gone'));
     expect(await stopFactoryTask(r.p, 't-work')).toMatchObject({ ok: false, code: 'partial', workersStopped: 0, tasksCancelled: 1 });
     expect(ledger.get('t-work')?.status).toBe('cancelled');
+    // The retry: the row is already cancelled; the leftover agent is stopped (panes kept).
+    expect(await stopFactoryTask(r.p, 't-work')).toEqual({ ok: true, botsInterrupted: 0, workersStopped: 1, tasksCancelled: 0, gatesCancelled: 0 });
+    expect(r.stopWorker).toHaveBeenCalledTimes(2);
+    expect(r.stopWorker.mock.calls[1][0].id).toBe('t-work');
+    expect(r.stopWorker.mock.calls[1]).toEqual([expect.objectContaining({ id: 't-work' }), { agentsOnly: true }]);
+    // A third stop finds nothing left and says so.
+    expect(await stopFactoryTask(r.p, 't-work')).toEqual({ ok: true, botsInterrupted: 0, workersStopped: 0, tasksCancelled: 0, gatesCancelled: 0 });
+  });
+
+  it('a task the bot-wide stop cancelled can be stopped again by its own Stop worker; one that ended otherwise is not reached', async () => {
+    await task('t-work', LEAD);
+    await task('t-gave-up', LEAD, 'failed');
+    const r = ports();
+    r.stopWorker.mockRejectedValueOnce(new Error('daemon gone'));
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, code: 'partial' });
+    expect(await stopFactoryTask(r.p, 't-work')).toMatchObject({ ok: true, workersStopped: 1 });
+    expect(await stopFactoryTask(r.p, 't-gave-up')).toEqual({ ok: true, botsInterrupted: 0, workersStopped: 0, tasksCancelled: 0, gatesCancelled: 0 });
+    expect(r.stopWorker.mock.calls.map((c) => c[0].id)).not.toContain('t-gave-up');
+  });
+
+  it('stops the task\'s resumed worker (a task that reopened after a resume) and counts the worker once', async () => {
+    await task('t-work', LEAD);
+    const stopResumedTask = vi.fn(async (id: string) => ({ stopped: id === 't-work' ? 1 : 0, failed: 0, taskIds: id === 't-work' ? [id] : [] }));
+    const r = ports({ stopResumedTask });
+    expect(await stopFactoryTask(r.p, 't-work')).toEqual({ ok: true, botsInterrupted: 0, workersStopped: 1, tasksCancelled: 1, gatesCancelled: 0 });
+    expect(stopResumedTask).toHaveBeenCalledWith('t-work');
+    expect(stopResumedTask).toHaveBeenCalledTimes(1);
+    // One the resumed-worker stop could not stop makes it partial.
+    await task('t-two', LEAD);
+    const failing = ports({ stopResumedTask: vi.fn(async () => ({ stopped: 0, failed: 1, taskIds: [] })) });
+    expect(await stopFactoryTask(failing.p, 't-two')).toMatchObject({ ok: false, code: 'partial', tasksCancelled: 1 });
   });
 
   it('the IPC answers only the main window and needs a task id', async () => {

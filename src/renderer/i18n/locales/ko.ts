@@ -1162,6 +1162,7 @@ export const ko = {
   'botsPage.stop.workerConfirm': "“{task}”의 워커를 중지할까요? 작업은 취소되고, 브랜치와 변경 사항은 남아요.",
   'botsPage.stop.workerStopped': "“{task}”의 워커를 중지했어요.",
   'botsPage.stop.workerAlreadyStopped': "“{task}”의 워커는 이미 멈춰 있었어요.",
+  'botsPage.stop.workerFailed': "“{task}”의 워커를 중지하지 못했어요.",
   'botsPage.profile.parked.budget': "턴 소진: 한도가 풀리면 대기 중인 메시지가 실행됩니다.",
   'botsPage.profile.parked.error': "오류로 멈춤: 재개할 때까지 턴을 받지 않습니다.",
   'botsPage.profile.parked.limit': "사용량 한도로 멈춤: {time}에 다시 시작하며, 지금 재개할 수도 있습니다.",

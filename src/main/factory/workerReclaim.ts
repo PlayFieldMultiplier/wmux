@@ -823,12 +823,14 @@ const clearing = new Set<string>();
  *  resumed or ends. */
 const botStarting = new Map<string, number>();
 
-/** Bumped by every stop of resumed workers (all bots, or one): a resume
- *  that was under way when a stop ran launches nothing more. */
+/** Bumped by every stop of resumed workers (all bots, one bot, or one
+ *  task's): a resume that was under way when a stop ran launches nothing
+ *  more. */
 let stopAllSeq = 0;
 const botStopSeq = new Map<string, number>();
-function stopMark(botId: string): string {
-  return `${stopAllSeq}:${botStopSeq.get(botId) ?? 0}`;
+const taskStopSeq = new Map<string, number>();
+function stopMark(botId: string, taskId: string): string {
+  return `${stopAllSeq}:${botStopSeq.get(botId) ?? 0}:${taskStopSeq.get(taskId) ?? 0}`;
 }
 
 function refuse(code: WorkerResumeCode, message: string): WorkerResumeResult {
@@ -902,8 +904,8 @@ async function resumeOnce(
   if (rec.state === 'stopping') return refuse('busy', 'this worker is still being stopped; try again in a moment');
   // Read in the same tick as the request: a stop of resumed workers from
   // here on ends this resume.
-  const mark = stopMark(rec.botId);
-  const stopped = (): boolean => stopMark(rec.botId) !== mark;
+  const mark = stopMark(rec.botId, rec.taskId);
+  const stopped = (): boolean => stopMark(rec.botId, rec.taskId) !== mark;
   if (by.kind === 'bot') {
     const text = typeof message === 'string' ? message.trim() : '';
     if (text && (ports.taskTainted?.(taskId) ?? true) === false && (ports.senderTainted?.(by.botId) ?? true) !== false) {
@@ -1117,6 +1119,20 @@ export function reclaimedWorkerState(rec: ReclaimedWorker | null): 'resumable' |
 export async function stopResumedWorkers(ports: WorkerResumePorts, botId?: string): Promise<{ stopped: number; failed: number; taskIds: string[] }> {
   if (botId === undefined) stopAllSeq++;
   else botStopSeq.set(botId, (botStopSeq.get(botId) ?? 0) + 1);
+  return stopResumedWhere(ports, (rec) => botId === undefined || rec.botId === botId);
+}
+
+/** The same for one task's resumed worker (the owner's Stop worker): a
+ *  task that reopened after its worker was resumed keeps the resume record
+ *  `resumed`, which the idle stop, the exit sweep and Resume read, so its
+ *  stop marks it stopped too. A resume of that task under way launches
+ *  nothing more; the bot's other resumes go on. */
+export async function stopResumedWorker(ports: WorkerResumePorts, taskId: string): Promise<{ stopped: number; failed: number; taskIds: string[] }> {
+  taskStopSeq.set(taskId, (taskStopSeq.get(taskId) ?? 0) + 1);
+  return stopResumedWhere(ports, (rec) => rec.taskId === taskId);
+}
+
+async function stopResumedWhere(ports: WorkerResumePorts, which: (rec: ReclaimedWorker) => boolean): Promise<{ stopped: number; failed: number; taskIds: string[] }> {
   if (!ports.stopAgent) return { stopped: 0, failed: 0, taskIds: [] };
   const now = ports.now ?? Date.now;
   const taskIds: string[] = [];
@@ -1125,7 +1141,7 @@ export async function stopResumedWorkers(ports: WorkerResumePorts, botId?: strin
   // Read only when a pane may be closed (a WSL worker, isWslWorkerPane).
   let live: WorkerSessionInfo[] | null = null;
   for (const rec of ports.store.all()) {
-    if (rec.state !== 'resumed' || (botId !== undefined && rec.botId !== botId)) continue;
+    if (rec.state !== 'resumed' || !which(rec)) continue;
     if (ports.closePane && !live) live = await ports.listSessions().catch(() => []);
     const { ok, stoppedHere } = await stopRecordedPanes(ports, rec, live, true);
     if (!ok) failed++;

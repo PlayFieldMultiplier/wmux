@@ -23,6 +23,7 @@ import {
   resumeWorker,
   resumedWorkersLive,
   setResumedLiveCount,
+  stopResumedWorker,
   stopResumedWorkers,
   unreclaimedEndedWorkers,
   RECLAIMED_WORKERS_MAX,
@@ -585,6 +586,19 @@ describe('resume safety (review fixes)', () => {
     expect(store.get('wtask-abc-12345678')?.state).toBe('stopped');
   });
 
+  it('one task\'s stop (Stop worker) reaches only that task\'s resumed worker and marks its record stopped', async () => {
+    const store = await reclaimedStore();
+    const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
+    const p = ports(store, [dead()], { stopAgent });
+    expect(await resumeWorker(p, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: true });
+    expect(await stopResumedWorker(p, 'wtask-other-0000001')).toEqual({ stopped: 0, failed: 0, taskIds: [] });
+    expect(stopAgent).not.toHaveBeenCalled();
+    expect(store.get('wtask-abc-12345678')?.state).toBe('resumed');
+    expect(await stopResumedWorker(p, 'wtask-abc-12345678')).toEqual({ stopped: 1, failed: 0, taskIds: ['wtask-abc-12345678'] });
+    expect(stopAgent).toHaveBeenCalledWith('daemon-1');
+    expect(store.get('wtask-abc-12345678')?.state).toBe('stopped');
+  });
+
   it('a resumed worker whose pane or agent was already gone is marked stopped, not counted, and is no failure', async () => {
     for (const answer of [{ ok: false, code: 'no_session' }, { ok: true, stopped: false }]) {
       const store = await reclaimedStore();
@@ -691,6 +705,27 @@ describe('reclaim state and reopen (review fixes, PR #2164)', () => {
     expect(await pending).toMatchObject({ ok: false, code: 'not_now' });
     expect(typeLine).not.toHaveBeenCalled();
     expect(store.get(ID)?.state).toBe('stopped');
+  });
+
+  it('one task\'s stop ends that task\'s resume under way, and only that task\'s', async () => {
+    for (const [stopId, ok] of [[ID, false], ['wtask-other-0000001', true]] as const) {
+      const store = ReclaimedWorkers.at(path.join(dir, ok ? 'other' : 'same'));
+      await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+      let release: () => void = () => undefined;
+      const typeLine = vi.fn(() => true);
+      const ports: WorkerResumePorts = {
+        store,
+        typeLine,
+        stopAgent: vi.fn(async () => ({ ok: true, stopped: true })),
+        listSessions: () => new Promise((resolve) => { release = () => resolve([dead()]); }),
+      };
+      const pending = resumeWorker(ports, ID, { kind: 'owner' });
+      await new Promise((r) => setTimeout(r, 0));
+      await stopResumedWorker(ports, stopId);
+      release();
+      expect((await pending).ok).toBe(ok);
+      expect(typeLine).toHaveBeenCalledTimes(ok ? 1 : 0);
+    }
   });
 
   it('a pane that reopened after the stop ran has its agent stopped once it is up', async () => {

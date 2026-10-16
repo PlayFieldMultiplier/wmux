@@ -41,7 +41,10 @@ describe('one worker\'s stop (Stop worker)', () => {
     // A cancelled task whose agent had already exited is still a stop.
     expect(stopTaskSummary('fix login', { ok: true, workersStopped: 0, tasksCancelled: 1 }, t)).toBe('botsPage.stop.workerStopped{"task":"fix login"}');
     expect(stopTaskSummary('fix login', { ok: true, workersStopped: 0, tasksCancelled: 0 }, t)).toBe('botsPage.stop.workerAlreadyStopped{"task":"fix login"}');
-    expect(stopTaskSummary('fix login', { ok: false, workersStopped: 0 }, t)).toBe('botsPage.stop.failed');
+    // A failure names the worker, not the bots, and keeps main's reason.
+    expect(stopTaskSummary('fix login', { ok: false, workersStopped: 0 }, t)).toBe('botsPage.stop.workerFailed{"task":"fix login"}');
+    expect(stopTaskSummary('fix login', { ok: false, workersStopped: 0, code: 'partial', message: 'Stop again to retry.' }, t))
+      .toBe('botsPage.stop.workerFailed{"task":"fix login"} Stop again to retry.');
   });
 
   it('the verb comes from the port when it has it, else from the bridge', async () => {

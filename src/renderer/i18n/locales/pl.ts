@@ -1616,6 +1616,7 @@ export const pl = {
   'botsPage.stop.workerConfirm': "Zatrzymać workera zadania „{task}”? Zadanie zostanie anulowane; gałąź i zmiany zostaną.",
   'botsPage.stop.workerStopped': "Zatrzymano workera zadania „{task}”.",
   'botsPage.stop.workerAlreadyStopped': "Worker zadania „{task}” był już zatrzymany.",
+  'botsPage.stop.workerFailed': "Nie udało się zatrzymać workera zadania „{task}”.",
   'botsPage.profile.parked.budget': "Brak tur: czekające wiadomości zostaną obsłużone, gdy limit się zwolni.",
   'botsPage.profile.parked.error': "Zatrzymany po błędach: nie podejmie tury, dopóki go nie wznowisz.",
   'botsPage.profile.parked.limit': "Zatrzymany na limicie użycia: wznowi pracę o {time} albo od razu, jeśli go wznowisz.",
