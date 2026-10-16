@@ -1997,7 +1997,7 @@ export const zh = {
   'room.notice.skill.archived': "技能已归档：{skill}",
   'room.notice.skill.archived.body': "此机器人及其工作者不再加载它；机器人下次唤醒时会被告知不要再应用它。",
   'room.notice.secret.deleted': "密钥已删除：{name}",
-  'room.notice.secret.deleted.body': "所有者已在设置的密钥中将其删除。已在运行的工作进程在停止前仍会保留它；机器人下次唤醒时会被告知，如仍需要请重新申请。",
+  'room.notice.secret.deleted.body': "所有者已在设置的密钥中将其删除。已在运行的工作进程在停止前仍会保留它，机器人下次唤醒时会被告知它已不存在。",
   'room.notice.bot.error': "{bot} 出错了",
   'room.notice.worker.startFailed': "“{title}”的工作者无法启动：{cause}",
   'room.notice.worker.startFailed.cause.fetch': "无法从仓库获取要检查的代码",

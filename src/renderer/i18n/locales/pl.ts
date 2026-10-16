@@ -1879,7 +1879,7 @@ export const pl = {
   'room.notice.skill.archived': "Umiejętność zarchiwizowana: {skill}",
   'room.notice.skill.archived.body': "Nie jest już wczytywana dla tego bota ani jego workerów; przy następnym wybudzeniu bot dowie się, by jej nie stosować.",
   'room.notice.secret.deleted': "Klucz usunięty: {name}",
-  'room.notice.secret.deleted.body': "Właściciel usunął go z kluczy w Ustawieniach. Działające workery zachowają go do zatrzymania; przy następnym wybudzeniu bot dowie się, by poprosić ponownie, jeśli nadal go potrzebuje.",
+  'room.notice.secret.deleted.body': "Właściciel usunął go z kluczy w Ustawieniach. Działające workery zachowają go do zatrzymania, a przy następnym wybudzeniu bot dowie się, że go nie ma.",
   'room.notice.bot.error': "{bot} napotkał błąd",
   'room.notice.worker.startFailed': "Nie udało się uruchomić workera dla \"{title}\": {cause}",
   'room.notice.worker.startFailed.cause.fetch': "nie udało się pobrać z repozytorium kodu do sprawdzenia",

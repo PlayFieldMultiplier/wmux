@@ -22,7 +22,7 @@
 
 import { getConnectorStore, type ConnectorStore } from './connectorStore';
 import { getBotSkillStore, type BotSkillStore } from './botSkills';
-import { getSecretStore, type SecretStore } from './secretStore';
+import { getSecretStore, type DeletedKey, type SecretStore } from './secretStore';
 import type { SkillIndexEntry } from '../../shared/botSkill';
 import type { BotProfile } from '../../shared/bot';
 import type { RoomCard, ThreadId } from '../../shared/room';
@@ -311,7 +311,7 @@ export function wakeSkills(ports: WakeContextPorts, profile: BotProfile): SkillI
 
 /** The keys the owner deleted that the bot asked for or last used, for its
  *  wake: names only. */
-export function wakeDeletedKeys(ports: WakeContextPorts, profile: BotProfile): string[] {
+export function wakeDeletedKeys(ports: WakeContextPorts, profile: BotProfile): DeletedKey[] {
   try {
     return (ports.secrets ?? getSecretStore)()?.deletedFor(profile.id) ?? [];
   } catch {

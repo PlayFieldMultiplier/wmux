@@ -236,7 +236,7 @@ describe('the owner deletes a key a bot used', () => {
 
     for (const id of [BOT.botId, OTHER]) {
       const keys = wakeDeletedKeys({ secrets: () => store } as never, profile(id));
-      expect(keys).toEqual(['NPM_TOKEN']);
+      expect(keys).toEqual([{ name: 'NPM_TOKEN' }]);
       const item = { id: 'w-1', botId: id, workspaceId: 'ws-1', reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
       expect(buildWakePrompt({ item, profile: profile(id), deletedKeys: keys }))
         .toContain('The owner deleted the key NPM_TOKEN; ask with secret_request if you still need it.');
@@ -246,10 +246,37 @@ describe('the owner deletes a key a bot used', () => {
     // Remembered across a restart, and forgotten once the key is stored again.
     const again = new SecretStore({ file: path.join(dir, 'secrets.json'), crypto });
     again.load();
-    expect(again.deletedFor(OTHER)).toEqual(['NPM_TOKEN']);
+    expect(again.deletedFor(OTHER)).toEqual([{ name: 'NPM_TOKEN' }]);
     expect(fs.readFileSync(path.join(dir, 'secrets.json'), 'utf8')).not.toContain(VALUE);
     expect(again.set('NPM_TOKEN', VALUE).ok).toBe(true);
     expect(again.deletedFor(OTHER)).toEqual([]);
+  });
+
+  it('remembers only keys a bot used, until stored again, however many other keys go or however long the bot sleeps', () => {
+    stored();
+    expect(ownerDeleteSecret({ name: 'NPM_TOKEN' }, deps)).toEqual({ ok: true });
+    // Keys no bot used are not remembered, so they never push a bot's out.
+    for (let i = 0; i < 40; i++) {
+      const name = `K${i}_TOKEN`;
+      expect(store.set(name, VALUE).ok).toBe(true);
+      expect(ownerDeleteSecret({ name }, deps)).toEqual({ ok: true });
+    }
+    const later = new SecretStore({ file: path.join(dir, 'secrets.json'), crypto, now: () => Date.now() + 90 * 24 * 3600_000 });
+    later.load();
+    expect(later.deletedFor(BOT.botId)).toEqual([{ name: 'NPM_TOKEN' }]);
+  });
+
+  it('a connection\'s key: the wake says to have the owner enter it in its connection, not to use secret_request', () => {
+    expect(store.set('GH_MCP_TOKEN', VALUE, { connectorId: 'con-0000abcd' }).ok).toBe(true);
+    store.markUsed(['GH_MCP_TOKEN'], OTHER);
+    expect(ownerDeleteSecret({ name: 'GH_MCP_TOKEN' }, deps)).toEqual({ ok: true });
+    const keys = wakeDeletedKeys({ secrets: () => store } as never, profile(OTHER));
+    expect(keys).toEqual([{ name: 'GH_MCP_TOKEN', connector: true }]);
+    const item = { id: 'w-1', botId: OTHER, workspaceId: 'ws-1', reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+    const text = buildWakePrompt({ item, profile: profile(OTHER), deletedKeys: keys });
+    expect(text).toContain('The owner deleted the key GH_MCP_TOKEN of a connection');
+    expect(text).toContain('Settings › Bots › Connections');
+    expect(text).not.toContain('ask with secret_request');
   });
 
   it('the card names the key, never its value, worded in the reader\'s language', () => {

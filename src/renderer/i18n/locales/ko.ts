@@ -1425,7 +1425,7 @@ export const ko = {
   'room.notice.skill.archived': "스킬 보관됨: {skill}",
   'room.notice.skill.archived.body': "이 봇과 워커에서 더 이상 불러오지 않아요. 봇의 다음 깨우기에 이 스킬을 적용하지 말라고 알려요.",
   'room.notice.secret.deleted': "키 삭제됨: {name}",
-  'room.notice.secret.deleted.body': "소유자가 설정의 키 목록에서 삭제했어요. 이미 실행 중인 워커는 멈출 때까지 갖고 있어요. 봇의 다음 깨우기에 아직 필요하면 다시 요청하라고 알려요.",
+  'room.notice.secret.deleted.body': "소유자가 설정의 키 목록에서 삭제했어요. 이미 실행 중인 워커는 멈출 때까지 갖고 있고, 봇의 다음 깨우기에 키가 없어졌다고 알려요.",
   'room.notice.bot.error': "{bot}: 오류가 발생했습니다",
   'room.notice.worker.startFailed': "\"{title}\" 워커를 시작하지 못함: {cause}",
   'room.notice.worker.startFailed.cause.fetch': "확인할 코드를 저장소에서 가져오지 못함",

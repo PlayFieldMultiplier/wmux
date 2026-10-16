@@ -256,7 +256,7 @@ export function postSecretDeletedCard(writer: Pick<RoomWriter, 'append'> | null,
     kind: 'fact',
     actor: { kind: 'system' },
     title: `Key deleted: ${name}`,
-    body: 'The owner deleted it from the keys in Settings. Workers already running keep it until they stop; the bot\'s next wake says to ask again if it still needs it.',
+    body: 'The owner deleted it from the keys in Settings. Workers already running keep it until they stop, and the bot\'s next wake is told it is gone.',
     notice: { code: 'secret.deleted', args: { name } },
   });
   return !!card;

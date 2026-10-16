@@ -113,8 +113,9 @@ export interface WakePromptInput {
   skills?: readonly SkillIndexEntry[];
   /** Skills the owner archived after approving them (wakeContext.ts). */
   archivedSkills?: readonly string[];
-  /** Keys the owner deleted that the bot asked for or last used (wakeContext.ts). */
-  deletedKeys?: readonly string[];
+  /** Keys the owner deleted that the bot asked for or last used
+   *  (wakeContext.ts); `connector`: a connection's key. */
+  deletedKeys?: ReadonlyArray<{ name: string; connector?: true }>;
   /** The group chat the wake's thread is (wakeContext.ts): its roster is
    *  the group's members only. */
   group?: WakeGroup | null;
@@ -289,8 +290,10 @@ export function buildWakePrompt(input: WakePromptInput): string {
       fenceData(archived.join('\n'), 'archived-skills'),
     );
   }
-  for (const name of input.deletedKeys ?? []) {
-    lines.push(`The owner deleted the key ${name}; ask with secret_request if you still need it.`);
+  for (const key of input.deletedKeys ?? []) {
+    lines.push(key.connector
+      ? `The owner deleted the key ${key.name} of a connection; the connection cannot use it until the owner enters it again in Settings › Bots › Connections (secret_request cannot replace a connection's key). Tell the owner if you still need it.`
+      : `The owner deleted the key ${key.name}; ask with secret_request if you still need it.`);
   }
   if (item.threadId) lines.push(`Thread: ${item.threadId} (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner's eyes).`);
   const thread = input.thread;

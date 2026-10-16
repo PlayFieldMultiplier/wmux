@@ -1901,7 +1901,7 @@ export const en = {
   'room.notice.skill.archived': "Skill archived: {skill}",
   'room.notice.skill.archived.body': "It no longer loads for this bot or its workers; the bot's next wake says not to apply it.",
   'room.notice.secret.deleted': "Key deleted: {name}",
-  'room.notice.secret.deleted.body': "The owner deleted it from the keys in Settings. Workers already running keep it until they stop; the bot's next wake says to ask again if it still needs it.",
+  'room.notice.secret.deleted.body': "The owner deleted it from the keys in Settings. Workers already running keep it until they stop, and the bot's next wake is told it is gone.",
   'room.notice.bot.error': "{bot} hit an error",
   'room.notice.worker.startFailed': "Worker for \"{title}\" could not start: {cause}",
   'room.notice.worker.startFailed.cause.fetch': "the code it was to check could not be fetched from the repository",

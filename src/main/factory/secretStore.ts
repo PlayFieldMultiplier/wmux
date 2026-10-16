@@ -4,10 +4,11 @@
 // safeStorage ciphertext (the OS keychain / DPAPI / the Linux secret
 // service) in a 0600 file: `{version:1, secrets:[{name, cipher, label?,
 // requestedBy?, createdAt, updatedAt, lastUsed?:{botId, at}}], retired?:
-// [{name, cipher, at}], deleted?: [{name, at, bots}]}` (`retired`: replaced
-// and deleted values, encrypted the same way, so they stay redacted across
-// restarts; `deleted`: the names the owner deleted and the bots that asked
-// for or last used each, so their wakes are told). Main decrypts
+// [{name, cipher, at}], deleted?: [{name, at, bots, connector?}]}`
+// (`retired`: replaced and deleted values, encrypted the same way, so they
+// stay redacted across restarts; `deleted`: the names the owner deleted and
+// the bots that asked for or last used each, so their wakes are told until
+// the key is stored again). Main decrypts
 // the values once, after the app is ready, and holds them in memory for the
 // two uses it has: a worker spawn's env (secretGrants.ts) and redaction
 // (secretRedaction.ts). Nothing here returns a value to a caller outside
@@ -100,16 +101,23 @@ function isStoredRetired(raw: unknown): raw is { name: string; cipher: string; a
 }
 const LABEL_MAX = BOT_SECRET_LIMITS.LABEL_MAX;
 
-/** A key the owner deleted: its name only, and the bots told about it. */
-interface Deleted { name: string; at: number; bots: string[] }
-/** Deleted keys remembered for the bots' wakes. */
+/** A key the owner deleted: its name only, the bots told about it, and
+ *  whether it was a connection's key (entered again in its connection, not
+ *  through secret_request). */
+interface Deleted { name: string; at: number; bots: string[]; connector?: true }
+/** Deleted keys remembered for the bots' wakes (only ones a bot used), the
+ *  oldest dropped first. */
 const DELETED_MAX = 32;
+
+/** A deleted key as a bot's wake reads it. */
+export interface DeletedKey { name: string; connector?: true }
 
 function isStoredDeleted(raw: unknown): raw is Deleted {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
-  return isBotSecretName(r.name) && typeof r.at === 'number' && Array.isArray(r.bots) && r.bots.length <= 8
-    && r.bots.every((b) => typeof b === 'string' && b.length > 0 && b.length <= BOT_ID_MAX);
+  return isBotSecretName(r.name) && typeof r.at === 'number' && Array.isArray(r.bots) && r.bots.length > 0 && r.bots.length <= 8
+    && r.bots.every((b) => typeof b === 'string' && b.length > 0 && b.length <= BOT_ID_MAX)
+    && (r.connector === undefined || r.connector === true);
 }
 
 function isStored(raw: unknown): raw is StoredSecret {
@@ -244,8 +252,8 @@ export class SecretStore {
     }
     const deleted = readable ? (raw as { deleted?: unknown }).deleted : undefined;
     for (const item of Array.isArray(deleted) ? deleted.slice(-DELETED_MAX) : []) {
-      if (!isStoredDeleted(item) || item.at < since || this.held.has(item.name)) continue;
-      this.deleted.push({ name: item.name, at: item.at, bots: [...item.bots] });
+      if (!isStoredDeleted(item) || this.held.has(item.name)) continue;
+      this.deleted.push({ name: item.name, at: item.at, bots: [...item.bots], ...(item.connector ? { connector: true as const } : {}) });
     }
     this.loaded = true;
     this.publish(false);
@@ -327,8 +335,13 @@ export class SecretStore {
     const next = new Map(this.held);
     next.delete(name);
     const retired = prior ? this.retiring(name, prior.value, prior.record.cipher) : this.retired;
-    const since = this.now() - RETIRED_KEEP_MS;
-    const deleted = [...this.deleted.filter((d) => d.name !== name && d.at >= since), { name, at: this.now(), bots: this.botsOf(name) }].slice(-DELETED_MAX);
+    // Told to the bots that used it until it is stored again; a key no bot
+    // used is not remembered.
+    const bots = this.botsOf(name);
+    const kept = this.deleted.filter((d) => d.name !== name);
+    const deleted = bots.length > 0
+      ? [...kept, { name, at: this.now(), bots, ...(prior?.record.connectorId ? { connector: true as const } : {}) }].slice(-DELETED_MAX)
+      : kept;
     if (!this.persist(next, retired, deleted)) return false;
     this.retired = retired;
     this.deleted = deleted;
@@ -346,9 +359,8 @@ export class SecretStore {
 
   /** The keys the owner deleted that `botId` asked for or last used, oldest
    *  first: names only. */
-  deletedFor(botId: string): string[] {
-    const since = this.now() - RETIRED_KEEP_MS;
-    return this.deleted.filter((d) => d.at >= since && d.bots.includes(botId)).map((d) => d.name);
+  deletedFor(botId: string): DeletedKey[] {
+    return this.deleted.filter((d) => d.bots.includes(botId)).map((d) => ({ name: d.name, ...(d.connector ? { connector: true as const } : {}) }));
   }
 
   /** The values of `names` (for a worker spawn), or the names missing. */
@@ -407,7 +419,7 @@ export class SecretStore {
       version: SECRETS_FILE_VERSION,
       secrets: [...map.values()].map((h) => h.record),
       ...(retired.length > 0 ? { retired: retired.map((r) => ({ name: r.name, cipher: r.cipher, at: r.at })) } : {}),
-      ...(deleted.length > 0 ? { deleted: deleted.map((d) => ({ name: d.name, at: d.at, bots: d.bots })) } : {}),
+      ...(deleted.length > 0 ? { deleted: deleted.map((d) => ({ name: d.name, at: d.at, bots: d.bots, ...(d.connector ? { connector: true } : {}) })) } : {}),
     })}\n`;
     const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     try {
