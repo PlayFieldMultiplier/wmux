@@ -400,6 +400,110 @@ export function workerPanesIdle(panes: readonly PaneActivity[], floor: number, n
     && now - Math.max(floor, p.turnEndAt, p.inputAt ?? -Infinity) >= ms);
 }
 
+/** One pane's turn as the daemon reports it (DaemonClient.getAgentState). */
+export interface DaemonTurnState {
+  agentStatus: string;
+  /** A turn is open (a quiet one reads `idle` in agentStatus). Absent from an older daemon. */
+  turnOpen?: boolean;
+  /** Milliseconds since the last key input. Absent from an older daemon. */
+  keyInputIdleMs?: number;
+}
+
+/** Reads of one pane's turn from the daemon before it is left unknown. */
+export const TURN_SEED_ATTEMPTS_MAX = 3;
+
+export interface DaemonTurnSeedPorts {
+  /** The worker panes of the open reported bot tasks not yet stopped for
+   *  that report, each with its task's report time; null when the
+   *  workspace tree is not known yet (nothing is read or dropped). */
+  panes: () => ReadonlyArray<{ ptyId: string; reportedAt: number }> | null;
+  /** Whether the daemon can be asked now (not connected: nothing is read
+   *  and no attempt is counted). */
+  ready: () => boolean;
+  /** The pane's state, null when the daemon has none (no session, a failed
+   *  or timed-out read). */
+  readState: (ptyId: string) => Promise<DaemonTurnState | null>;
+  /** Whether main saw a turn edge of the pane itself since it started. */
+  liveEvidence: (ptyId: string) => boolean;
+  now?: () => number;
+}
+
+export interface DaemonTurnSeed {
+  /** The daemon's turn end for a pane main has no turn end of its own for,
+   *  or null. */
+  activity(ptyId: string): Pick<PaneActivity, 'turnEndAt' | 'inputAt'> | null;
+  /** Read the panes still unknown. */
+  pass(): Promise<void>;
+}
+
+/**
+ * After a restart main has no turn evidence for a reported worker's panes
+ * (it lived only in memory), so workerPanesIdle could never call them idle.
+ * This reads each such pane's turn once from the daemon: a pane whose turn
+ * the daemon reports closed (`turnOpen` false, no running turn, no prompt
+ * waiting) counts as having ended its turn at the report, so its idle window
+ * runs from the report as before the restart. An open turn, no state, and an
+ * older daemon that does not say are left unknown (not idle). Evidence main
+ * sees itself always wins: a live turn end replaces this one, a live hook
+ * turn start comes after the report and so outweighs it, and a pane that
+ * shows live evidence by the time its read returns is not seeded at all.
+ */
+export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed {
+  const now = ports.now ?? Date.now;
+  const seeds = new Map<string, { turnEndAt: number; inputAt?: number }>();
+  const attempts = new Map<string, number>();
+  let running = false;
+  return {
+    activity(ptyId) {
+      const s = seeds.get(ptyId);
+      return s ? { ...s } : null;
+    },
+    async pass() {
+      if (running) return;
+      running = true;
+      try {
+        let panes: ReadonlyArray<{ ptyId: string; reportedAt: number }> | null = null;
+        try {
+          panes = ports.panes();
+        } catch {
+          panes = null;
+        }
+        if (!panes) return;
+        // A pane no longer a reported worker's (its task moved on, or was
+        // stopped for the report) keeps no seed.
+        const ids = new Set(panes.map((p) => p.ptyId));
+        for (const id of [...seeds.keys()]) if (!ids.has(id)) seeds.delete(id);
+        for (const id of [...attempts.keys()]) if (!ids.has(id)) attempts.delete(id);
+        if (!ports.ready()) return;
+        const due = panes.filter((p) => !seeds.has(p.ptyId) && !ports.liveEvidence(p.ptyId)
+          && (attempts.get(p.ptyId) ?? 0) < TURN_SEED_ATTEMPTS_MAX);
+        await Promise.all(due.map(async (p) => {
+          attempts.set(p.ptyId, (attempts.get(p.ptyId) ?? 0) + 1);
+          let state: DaemonTurnState | null = null;
+          try {
+            state = await ports.readState(p.ptyId);
+          } catch {
+            state = null;
+          }
+          const readAt = now();
+          if (!state || state.turnOpen !== false || state.agentStatus === 'running' || state.agentStatus === 'awaiting_input') return;
+          // Live evidence that arrived while the read was out wins.
+          if (ports.liveEvidence(p.ptyId)) return;
+          const idleMs = state.keyInputIdleMs;
+          seeds.set(p.ptyId, {
+            turnEndAt: p.reportedAt,
+            // Typed into before the restart: the window runs from that input.
+            ...(typeof idleMs === 'number' && Number.isFinite(idleMs) && idleMs >= 0 ? { inputAt: readAt - idleMs } : {}),
+          });
+          attempts.delete(p.ptyId);
+        }));
+      } finally {
+        running = false;
+      }
+    },
+  };
+}
+
 /** Whether a resumed worker's agent still runs in one of its recorded panes:
  *  an agent seen alive, or a WSL worker's pane, whose Linux agent the daemon
  *  does not always attribute (isWslWorkerPane). Pure. */

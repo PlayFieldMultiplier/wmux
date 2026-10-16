@@ -31,9 +31,11 @@ import {
   REPORTED_IDLE_MS,
   RESUMED_IDLE_MS,
   ReclaimedWorkers,
+  createDaemonTurnSeed,
   createResumedIdleSweep,
   createWorkerClear,
   installWorkerReclaim,
+  isReclaimableReport,
   isReclaimedSince,
   isTaskWorkspaceOf,
   noteWorkerAgentExit,
@@ -76,6 +78,9 @@ export interface WorkerLifecycleDeps {
 
 /** Which open workspaces run no agent any more is read at most this often. */
 const LIVENESS_REFRESH_MS = 10_000;
+
+/** One read of a worker pane's turn from the daemon waits this long. */
+const TURN_SEED_READ_TIMEOUT_MS = 5_000;
 
 /** A workspace tree push looks for freed task folders at most this often. */
 const FOLDER_KICK_MIN_MS = 10_000;
@@ -197,13 +202,36 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const reconcile = (): void => {
       void clear.reconcile();
     };
+    // A reported worker's pane main has no turn evidence for (after a
+    // restart) is read from the daemon (createDaemonTurnSeed).
+    const turnSeed = createDaemonTurnSeed({
+      panes: () => {
+        const entries = mirror.getEntries();
+        if (!entries) return null;
+        const out: Array<{ ptyId: string; reportedAt: number }> = [];
+        for (const r of ledger.list({ openOnly: true })) {
+          if (!isReclaimableReport(r) || isReclaimedSince(reclaimed.get(r.id), r)) continue;
+          const ws = entries.find((e) => e.id === r.taskWorkspaceId);
+          for (const id of ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : []) out.push({ ptyId: id, reportedAt: r.updatedAt });
+        }
+        return out;
+      },
+      ready: () => daemon()?.isConnected === true,
+      readState: async (id) => (await daemon()?.getAgentState(id, { timeoutMs: TURN_SEED_READ_TIMEOUT_MS })) ?? null,
+      liveEvidence: (id) => lastTurnEnd(id) !== undefined || lastHookTurnStart(id) !== undefined,
+    });
+    const seedTurns = (): void => {
+      void turnSeed.pass().catch(() => undefined);
+    };
     // What the idle stops read of a worker pane, and whether the owner is
-    // viewing a workspace (unknown: not viewing).
+    // viewing a workspace (unknown: not viewing). A turn end or input main
+    // saw itself wins over the daemon's.
     const paneActivity = (id: string): PaneActivity => {
+      const seeded = turnSeed.activity(id);
       const status = getLastBroadcastAgentStatus(id);
       const turnStartAt = lastHookTurnStart(id);
-      const turnEndAt = lastTurnEnd(id);
-      const inputAt = lastUserInputAt(id);
+      const turnEndAt = lastTurnEnd(id) ?? seeded?.turnEndAt;
+      const inputAt = lastUserInputAt(id) ?? seeded?.inputAt;
       return {
         ...(status !== undefined ? { status } : {}),
         ...(turnStartAt !== undefined ? { turnStartAt } : {}),
@@ -233,9 +261,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       // A reported task's worker is stopped once every pane of its
       // workspace sat idle for the window, counted from the report and from
       // each pane's own last turn edge and input (workerPanesIdle), and the
-      // owner is not viewing it; only those panes are stopped. A status main
-      // has not seen yet (right after a restart) is taken as idle only for a
-      // task reported long ago.
+      // owner is not viewing it; only those panes are stopped. Right after a
+      // restart a pane's turn end is the daemon's (turnSeed); a pane neither
+      // main nor the daemon knows the turn of is not idle.
       turnEnded: (entry) => {
         if (viewed(entry.taskWorkspaceId)) return false;
         const ws = mirror.getEntries()?.find((e) => e.id === entry.taskWorkspaceId);
@@ -422,6 +450,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     };
     offs.push(() => { reclaimed.onStateChange = null; });
     const sweep = setInterval(() => {
+      seedTurns();
       const resumed = reclaimed.all().filter((r) => r.state === 'resumed' && Date.now() - r.at >= RESUMED_SETTLE_MS);
       if (resumed.length === 0) {
         reconcile();
@@ -440,6 +469,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     offs.push(() => clearInterval(sweep));
     // Workspaces of tasks that ended before this start (an app restart).
     reconcile();
+    seedTurns();
   }
 
   // The agent budget.
