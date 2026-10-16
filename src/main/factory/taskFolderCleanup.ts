@@ -52,6 +52,9 @@ export const TASK_FOLDERS_FILENAME = 'task-folders.json';
 export const TASK_FOLDERS_VERSION = 1 as const;
 /** Records kept (oldest dropped first). */
 export const TASK_FOLDERS_MAX = 2000;
+/** Records of folders a stop kept, on a budget of their own (a folder
+ *  dropped past it is never deleted, only no longer listed). */
+export const TASK_FOLDERS_KEPT_MAX = 2000;
 /** How far back an ended task is looked at by the automatic pass. */
 export const TASK_FOLDER_CATCHUP_MS = 24 * 3_600_000;
 /** Attempts per task and end before the automatic pass gives up on a
@@ -137,11 +140,23 @@ export class TaskFolders {
   put(rec: TaskFolderRecord): Promise<void> {
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
-    // Oldest first; a folder a stop kept is never dropped (its record is the
-    // only way Clean up now finds it once the ledger pruned its row).
+    // Two budgets, each dropped oldest first: the folders a stop kept (their
+    // record is the only way Clean up now finds one once the ledger pruned
+    // its row) and every other record, so neither crowds the other out. The
+    // record being written is never the one dropped.
+    let kept = 0;
+    for (const r of this.records.values()) if (isKeptRecord(r)) kept++;
+    let other = this.records.size - kept;
     for (const [id, r] of this.records) {
-      if (this.records.size <= TASK_FOLDERS_MAX) break;
-      if (isKeptRecord(r)) continue;
+      if (kept <= TASK_FOLDERS_KEPT_MAX && other <= TASK_FOLDERS_MAX) break;
+      if (id === rec.taskId) continue;
+      if (isKeptRecord(r)) {
+        if (kept <= TASK_FOLDERS_KEPT_MAX) continue;
+        kept--;
+      } else {
+        if (other <= TASK_FOLDERS_MAX) continue;
+        other--;
+      }
       this.records.delete(id);
     }
     return this.persister.schedule();

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { TaskWorktreeManager } from '../../worktask/TaskWorktreeManager';
 import {
+  TASK_FOLDERS_KEPT_MAX,
   TASK_FOLDERS_MAX,
   TASK_FOLDER_RESTORE_HOLD_MS,
   TaskFolders,
@@ -554,7 +555,40 @@ describe('the automatic pass and Settings › Bots', () => {
     }
     expect(store.get('wtask-kept-00000001')?.state).toBe('kept_stopped');
     expect(store.get('wtask-gone-00000001')).toBeNull();
-    expect(store.all().length).toBe(TASK_FOLDERS_MAX);
+    // The other records keep their own budget; the kept one is on top of it.
+    expect(store.all().filter((r) => r.state === 'removed').length).toBe(TASK_FOLDERS_MAX);
+    expect(store.all().length).toBe(TASK_FOLDERS_MAX + 1);
+  });
+
+  it('with a full budget of kept records, an ordinary task\'s removal record is still stored and its folder can be put back', async () => {
+    const store = TaskFolders.at(wmuxDir);
+    // Records only (outside the roots, so a Clean up now passes them over quickly).
+    const keptPath = (i: number) => path.join(dir, 'records-only', `k${i}`);
+    for (let i = 0; i < TASK_FOLDERS_KEPT_MAX; i++) {
+      void store.put({ taskId: `wtask-k-${String(i).padStart(8, '0')}`, kind: 'worktree', path: keptPath(i), state: 'kept_stopped', stopped: { botId: BOT }, at: i });
+    }
+    // An ordinary research task's folder is removed: its record (how to put
+    // it back) is written and kept, and Resume puts the folder back.
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-4', 'task-4');
+    fs.mkdirSync(scratch, { recursive: true });
+    const research = row('completed', { id: 'wtask-res-00000004', dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } });
+    const p = ports({ store });
+    expect(await cleanTaskFolder(p, research, { folder: scratch }, [])).toBe('removed');
+    expect(store.get(research.id)?.state).toBe('removed');
+    expect(await restoreTaskFolder(p, research.id, scratch)).toBe(true);
+    expect(fs.existsSync(scratch)).toBe(true);
+    expect(store.all().filter((r) => r.state === 'kept_stopped').length).toBe(TASK_FOLDERS_KEPT_MAX);
+
+    // One more kept folder (2,001): the oldest kept record goes, never the new one.
+    const extra = { taskId: 'wtask-k-extra-0001', kind: 'research' as const, path: path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-5', 'task-5'), state: 'kept_stopped' as const, stopped: { botId: BOT }, at: 99_999 };
+    fs.mkdirSync(extra.path, { recursive: true });
+    await store.put(extra);
+    expect(store.get(extra.taskId)?.state).toBe('kept_stopped');
+    expect(store.get('wtask-k-00000000')).toBeNull();
+    // Cleaning one of those kept folders: its removed record is stored.
+    expect(await cleanTaskFolders(p, [], { force: true })).toMatchObject({ removed: 1 });
+    expect(fs.existsSync(extra.path)).toBe(false);
+    expect(store.get(extra.taskId)?.state).toBe('removed');
   });
 
   it('a removal of a kept folder that fails (EBUSY) stays found, is reported, and the next Clean up now finishes it', async () => {
