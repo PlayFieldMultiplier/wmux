@@ -368,7 +368,7 @@ describe('a reported task whose worker sat idle (refused or failed gate)', () =>
       off = installWorkerReclaim({ ...ports, now: () => 1_000 + 5 * 60_000 + 1 });
       await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'));
       off();
-      expect(stopAgent).toHaveBeenCalledWith('daemon-1');
+      expect(stopAgent).toHaveBeenCalledWith('daemon-1', { ifTurnClosed: true });
       // The same claim while the turn still runs keeps the worker.
       paneStatus.status.set('daemon-1', 'running');
       expect(turnEnded()).toBe(false);
@@ -415,7 +415,7 @@ describe('a reported task whose worker sat idle (refused or failed gate)', () =>
     off = installWorkerReclaim(ports);
     await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'));
     off();
-    expect(stopAgent).toHaveBeenCalledWith('daemon-1');
+    expect(stopAgent).toHaveBeenCalledWith('daemon-1', { ifTurnClosed: true });
     const rec = store.get(current.id);
     if (!rec) throw new Error('not recorded');
     expect(rec).toMatchObject({ ended: 'reported', endRev: 3 });
@@ -441,7 +441,7 @@ describe('a reported task whose worker sat idle (refused or failed gate)', () =>
     const owners = session({ id: 'daemon-2' }); // the owner's pane in another workspace, same folder
     const { ports, stopAgent } = reclaimPorts(store, [session(), owners], { row: () => row('review_requested'), turnEnded: () => true, workspacePanes: (ws) => (ws === 'ws-task' ? ['daemon-1'] : []) });
     expect(await reclaimWorker(ports, row('review_requested'), 'reported')).toMatchObject({ ended: 'reported', sessions: [{ sessionId: 'daemon-1' }] });
-    expect(stopAgent.mock.calls).toEqual([['daemon-1']]);
+    expect(stopAgent.mock.calls).toEqual([['daemon-1', { ifTurnClosed: true }]]);
     const unknown = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'u')), [session()], { row: () => row('review_requested'), turnEnded: () => true, workspacePanes: () => null });
     expect(await reclaimWorker(unknown.ports, row('review_requested'), 'reported')).toBeNull();
     expect(unknown.stopAgent).not.toHaveBeenCalled();

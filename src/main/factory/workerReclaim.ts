@@ -330,7 +330,7 @@ export interface WorkerReclaimPorts {
   worktreeOf: (entry: LedgerEntry) => Promise<string | null>;
   listSessions: () => Promise<WorkerSessionInfo[]>;
   /** daemon `session.stopAgent`. */
-  stopAgent: (sessionId: string) => Promise<{ ok?: boolean; stopped?: boolean; code?: string }>;
+  stopAgent: (sessionId: string, opts?: { ifTurnClosed?: boolean }) => Promise<{ ok?: boolean; stopped?: boolean; code?: string }>;
   /** Close a pane (daemon `daemon.destroySession`): the stop of an agent the
    *  daemon cannot stop by itself (`unsupported`: a WSL pane's Linux agent).
    *  Absent: such a worker is not stopped. */
@@ -366,10 +366,14 @@ export interface WorkerReclaimPorts {
    *  task's stop reaches only these, never a shell in its workspace; none
    *  or unknown: nothing is stopped. Absent: workspacePanes. */
   reportedPanes?: (entry: LedgerEntry) => readonly string[] | null;
-  /** Asked right before a reported task's idle worker is stopped: whether
-   *  the daemon, read again now, still shows its turn over (a turn start
-   *  main missed leaves turnEnded true on stale evidence). false: not now,
-   *  looked at again on the next pass, no attempt spent. Absent: not asked. */
+  /** Asked as the last step before each stop of a reported task's idle
+   *  worker, after every other await: whether the daemon, read again now,
+   *  still shows its turn over and the idle window still met with the
+   *  times it reports (a turn start main missed leaves turnEnded true on
+   *  stale evidence). false: not now, looked at again on the next pass, no
+   *  attempt spent. The stop itself is also conditional (`ifTurnClosed`: a
+   *  daemon that knows it refuses with `turn_open`, read the same way).
+   *  Absent: not asked. */
   confirmIdle?: (entry: LedgerEntry) => Promise<boolean>;
 }
 
@@ -480,17 +484,17 @@ export function reportedWorkerPanes(workers: readonly string[] | null, workspace
   return workers ? workers.filter((id) => workspacePtys.includes(id)) : [];
 }
 
-/** One pane's activity for the idle stops: main's own turn evidence, with a
- *  turn end it has not seen itself taken from the daemon read, and the later
- *  of the two inputs. Pure. */
+/** One pane's activity for the idle stops: main's own turn evidence and the
+ *  daemon's reads, the later turn end and the later input of the two. Pure. */
 export function mergePaneActivity(live: PaneActivity, seeded: Pick<PaneActivity, 'turnEndAt' | 'inputAt'> | null): PaneActivity {
-  const turnEndAt = live.turnEndAt ?? seeded?.turnEndAt;
-  const inputs = [live.inputAt, seeded?.inputAt].filter((t): t is number => t !== undefined);
+  const later = (a: number | undefined, b: number | undefined): number | undefined => (a === undefined ? b : b === undefined ? a : Math.max(a, b));
+  const turnEndAt = later(live.turnEndAt, seeded?.turnEndAt);
+  const inputAt = later(live.inputAt, seeded?.inputAt);
   return {
     ...(live.status !== undefined ? { status: live.status } : {}),
     ...(live.turnStartAt !== undefined ? { turnStartAt: live.turnStartAt } : {}),
     ...(turnEndAt !== undefined ? { turnEndAt } : {}),
-    ...(inputs.length > 0 ? { inputAt: Math.max(...inputs) } : {}),
+    ...(inputAt !== undefined ? { inputAt } : {}),
   };
 }
 
@@ -522,9 +526,11 @@ export interface DaemonTurnSeed {
   /** Identify the worker panes and read those still unknown. */
   pass(): Promise<void>;
   /** Read the panes again right before they are stopped: true only when the
-   *  daemon shows every one's turn over (daemonTurnClosed). A pane it shows
-   *  mid-turn loses its seed (a turn start main missed) and is read again
-   *  later. */
+   *  daemon shows every one's turn over (daemonTurnClosed). The times it
+   *  reports (its last settled result, its last key input) are folded into
+   *  the seed, so the caller checks the idle window again with them. A pane
+   *  it shows mid-turn loses its seed (a turn start main missed) and is
+   *  read again later. */
   confirmIdle(ptyIds: readonly string[]): Promise<boolean>;
 }
 
@@ -544,14 +550,15 @@ export interface DaemonTurnSeed {
  * no state and an older daemon that does not say are read again with a
  * growing delay (TURN_SEED_RETRY_MS), never given up on; a read lost to a
  * disconnect is not counted, and a reconnect reads again at once. Evidence
- * main sees itself always wins: a live turn end replaces this one, a live
- * hook turn start outweighs it, and a pane that shows live evidence by the
- * time its read returns is not seeded. Before any stop the panes are read
- * again (confirmIdle), so a seed a missed turn start made stale stops nothing.
+ * main sees itself is never overruled: the later turn end and input count,
+ * a live hook turn start outweighs an older end, and a pane that shows live
+ * evidence by the time its read returns is not seeded. Before any stop the
+ * panes are read again (confirmIdle) and their fresh times folded in, so a
+ * seed a missed turn start made stale stops nothing.
  */
 export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed {
   const now = ports.now ?? Date.now;
-  const seeds = new Map<string, { turnEndAt: number; inputAt?: number }>();
+  const seeds = new Map<string, { turnEndAt?: number; inputAt?: number }>();
   const workers = new Map<string, string[]>();
   /** Reads in a row that came back without an answer. */
   const failures = new Map<string, number>();
@@ -637,7 +644,7 @@ export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed
         // A pane that is no longer a reported task's worker keeps nothing.
         for (const m of [seeds, failures, nextReadAt]) for (const id of [...m.keys()]) if (!reportedAt.has(id)) m.delete(id);
         const at = now();
-        const due = [...reportedAt].filter(([id]) => !seeds.has(id) && !ports.liveEvidence(id) && (nextReadAt.get(id) ?? -Infinity) <= at);
+        const due = [...reportedAt].filter(([id]) => seeds.get(id)?.turnEndAt === undefined && !ports.liveEvidence(id) && (nextReadAt.get(id) ?? -Infinity) <= at);
         await Promise.all(due.map(([id, t]) => read(id, t)));
       } finally {
         running = false;
@@ -653,8 +660,23 @@ export function createDaemonTurnSeed(ports: DaemonTurnSeedPorts): DaemonTurnSeed
         }
       }));
       let ok = true;
+      const readAt = now();
       states.forEach((state, i) => {
-        if (daemonTurnClosed(state)) return;
+        if (state && daemonTurnClosed(state)) {
+          // Its fresh times: a result that settled or a key typed since the
+          // last look moves the window.
+          const ago = (ms: number | undefined): number | undefined => (typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? readAt - ms : undefined);
+          const settledAt = ago(state.settledAgoMs);
+          const inputAt = ago(state.keyInputIdleMs);
+          const prior = seeds.get(ptyIds[i]) ?? {};
+          const later = (a: number | undefined, b: number | undefined): number | undefined => (a === undefined ? b : b === undefined ? a : Math.max(a, b));
+          const turnEndAt = later(prior.turnEndAt, settledAt);
+          const input = later(prior.inputAt, inputAt);
+          if (turnEndAt !== undefined || input !== undefined) {
+            seeds.set(ptyIds[i], { ...(turnEndAt !== undefined ? { turnEndAt } : {}), ...(input !== undefined ? { inputAt: input } : {}) });
+          }
+          return;
+        }
         ok = false;
         // Shown mid-turn: a turn start main missed. Its seed goes (main's own
         // turn end, if any, stays) and it is read again later.
@@ -709,7 +731,15 @@ function movedOn(ports: Pick<WorkerReclaimPorts, 'row' | 'turnEnded'>, entry: Le
  * A record whose stops did not all succeed stays `stopping` (still live) and
  * is tried again.
  */
-export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntry, ended: ReclaimedWorker['ended']): Promise<ReclaimedWorker | null> {
+export async function reclaimWorker(
+  ports: WorkerReclaimPorts,
+  entry: LedgerEntry,
+  ended: ReclaimedWorker['ended'],
+  /** Set `deferred` when a reported task's stop was held back because its
+   *  turn is not over after all (confirmIdle, or the daemon's `turn_open`):
+   *  not a failed attempt. */
+  out?: { deferred?: boolean },
+): Promise<ReclaimedWorker | null> {
   const log = ports.log ?? ((m: string) => console.warn(m));
   const now = ports.now ?? Date.now;
   try {
@@ -825,6 +855,21 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
       // The task reopened (or moved on from its report) meanwhile: what
       // still runs is its worker again.
       if (movedOn(ports, entry, ended)) break;
+      // A reported task's idle worker: the last step before its stop, after
+      // every await above, reads the daemon again (a turn that started
+      // meanwhile, its hook missed, stops nothing).
+      if (ended === 'reported' && ports.confirmIdle) {
+        let still = false;
+        try {
+          still = await ports.confirmIdle(entry);
+        } catch {
+          still = false;
+        }
+        if (!still) {
+          if (out) out.deferred = true;
+          break;
+        }
+      }
       attempted++;
       try {
         // Only an end whose card says its pane closes closes a WSL worker's
@@ -832,7 +877,14 @@ export async function reclaimWorker(ports: WorkerReclaimPorts, entry: LedgerEntr
         const closable = (ended === 'completed' || ended === 'cancelled')
           && !!ownPanes?.includes(p.sessionId)
           && isWslWorkerPane(sessions.find((x) => x.id === p.sessionId));
-        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId);
+        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
+        // The daemon found the turn open at the stop itself: nothing was
+        // signalled, and it is no failed stop.
+        if (r.code === 'turn_open') {
+          attempted--;
+          if (out) out.deferred = true;
+          break;
+        }
         if (r.ok !== true) {
           failed++;
           log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${r.code ?? 'refused'}`);
@@ -919,8 +971,9 @@ async function stopOrClose(
   stopAgent: WorkerReclaimPorts['stopAgent'],
   closePane: WorkerReclaimPorts['closePane'],
   sessionId: string,
+  opts?: { ifTurnClosed?: boolean },
 ): Promise<{ ok?: boolean; stopped?: boolean; code?: string }> {
-  const r = await stopAgent(sessionId);
+  const r = await (opts ? stopAgent(sessionId, opts) : stopAgent(sessionId));
   if (r.code !== 'unsupported' || !closePane) return r;
   await closePane(sessionId);
   return { ok: true, stopped: true };
@@ -947,7 +1000,12 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     if (n >= RECLAIM_ATTEMPTS_MAX) return;
     attempts.set(key, n + 1);
     inFlight.add(entry.id);
-    void reclaimWorker(ports, entry, ended).finally(() => inFlight.delete(entry.id));
+    const out: { deferred?: boolean } = {};
+    void reclaimWorker(ports, entry, ended, out).finally(() => {
+      inFlight.delete(entry.id);
+      // Held back because the turn is not over: no attempt spent.
+      if (out.deferred && attempts.get(key) === n + 1) attempts.set(key, n);
+    });
   };
   const off = ports.onTransition((t) => {
     if (isReclaimableEnd(t.entry, t.to)) run(t.entry, t.to);
@@ -958,20 +1016,6 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     } catch {
       return false;
     }
-  };
-  const confirming = new Set<string>();
-  let disposed = false;
-  const runReported = (e: LedgerEntry): void => {
-    if (!ports.confirmIdle) {
-      run(e, 'reported');
-      return;
-    }
-    if (confirming.has(e.id) || inFlight.has(e.id) || isReclaimedSince(ports.store.get(e.id), e)) return;
-    confirming.add(e.id);
-    void ports.confirmIdle(e).catch(() => false).then((ok) => {
-      confirming.delete(e.id);
-      if (ok && !disposed && turnEndedIn(e)) run(e, 'reported');
-    });
   };
   const catchUp = (): void => {
     let rows: LedgerEntry[] = [];
@@ -985,7 +1029,7 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     const idleSince = at - (ports.reportedIdleMs ?? REPORTED_IDLE_MS);
     for (const e of rows) {
       if (e.updatedAt >= since && isReclaimableEnd(e, e.status)) run(e, e.status as 'completed' | 'cancelled' | 'failed');
-      else if (ports.turnEnded && e.updatedAt <= idleSince && isReclaimableReport(e) && turnEndedIn(e)) runReported(e);
+      else if (ports.turnEnded && e.updatedAt <= idleSince && isReclaimableReport(e) && turnEndedIn(e)) run(e, 'reported');
     }
   };
   catchUp();
@@ -995,7 +1039,6 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     timer.unref?.();
   }
   return () => {
-    disposed = true;
     off();
     if (timer) clearInterval(timer);
   };

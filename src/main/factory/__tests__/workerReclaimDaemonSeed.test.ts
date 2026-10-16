@@ -118,24 +118,32 @@ function restartedMain(read: (id: string) => Promise<DaemonTurnState | null>, op
   return { clock, live, seed, readState, activity, idleAt, ownPanes, sessions };
 }
 
-/** One reclaim look at `at` (the install catch-up): the panes it stopped. */
-async function reclaimLook(main: ReturnType<typeof restartedMain>, at: number): Promise<string[]> {
+/** One reclaim look at `at` (the install catch-up), wired as the host wires
+ *  it (confirmIdle: the daemon read again, then the window again): the
+ *  panes it stopped. */
+async function reclaimLook(
+  main: ReturnType<typeof restartedMain>,
+  at: number,
+  over: { worktreeOf?: () => Promise<string | null>; stopAgent?: (id: string, opts?: { ifTurnClosed?: boolean }) => Promise<{ ok: boolean; stopped?: boolean; code?: string }> } = {},
+): Promise<string[]> {
+  main.clock.now = at;
   const store = ReclaimedWorkers.at(path.join(dir, `store-${at}-${Math.random()}`));
   const entry = reported();
-  const stopAgent = vi.fn<(id: string) => Promise<{ ok: boolean; stopped: boolean }>>(async () => ({ ok: true, stopped: true }));
+  type Stop = (id: string, opts?: { ifTurnClosed?: boolean }) => Promise<{ ok: boolean; stopped?: boolean; code?: string }>;
+  const stopAgent = vi.fn<Stop>(over.stopAgent ?? (async () => ({ ok: true, stopped: true })));
   const off = installWorkerReclaim({
     onTransition: () => () => undefined,
     allRows: () => [entry],
     row: () => entry,
     store,
-    worktreeOf: async () => wt,
+    worktreeOf: over.worktreeOf ?? (async () => wt),
     listSessions: async () => main.sessions(),
     stopAgent,
     now: () => at,
     log: () => undefined,
     turnEnded: (e) => main.idleAt(at, e),
     reportedPanes: main.ownPanes,
-    confirmIdle: (e) => main.seed.confirmIdle(main.ownPanes(e) ?? []),
+    confirmIdle: async (e) => (await main.seed.confirmIdle(main.ownPanes(e) ?? [])) && main.idleAt(at, e),
     workspacePanes: () => [WORKER, SHELL],
   });
   await new Promise((r) => setTimeout(r, 50));
@@ -143,7 +151,9 @@ async function reclaimLook(main: ReturnType<typeof restartedMain>, at: number): 
   off();
   const rec = store.get(entry.id);
   if (rec) await store.put(rec);
-  return stopAgent.mock.calls.map((c) => c[0]);
+  // Only the stops that went through (a `turn_open` refusal signalled nothing).
+  const results = await Promise.all(stopAgent.mock.results.map((r) => r.value as Promise<{ code?: string }>));
+  return stopAgent.mock.calls.filter((_c, i) => results[i]?.code !== 'turn_open').map((c) => c[0]);
 }
 
 describe('a reported task\'s own worker pane', () => {
@@ -388,11 +398,13 @@ describe('after a restart: the daemon cannot say', () => {
 });
 
 describe('after a restart: live evidence wins over the daemon read', () => {
-  it('mergePaneActivity: a live turn end replaces the seeded one, the later input counts', () => {
+  it('mergePaneActivity: the later turn end and the later input count', () => {
     const seeded = { turnEndAt: REPORT, inputAt: RESTART - MIN };
     expect(mergePaneActivity({}, seeded)).toEqual({ turnEndAt: REPORT, inputAt: RESTART - MIN });
     expect(mergePaneActivity({ turnEndAt: RESTART + MIN, inputAt: RESTART + 2 * MIN, status: 'complete' }, seeded))
       .toEqual({ turnEndAt: RESTART + MIN, inputAt: RESTART + 2 * MIN, status: 'complete' });
+    // A result the daemon saw settle after main's own last turn end (its hooks missed).
+    expect(mergePaneActivity({ turnEndAt: REPORT - MIN, inputAt: REPORT - 2 * MIN }, seeded)).toEqual({ turnEndAt: REPORT, inputAt: RESTART - MIN });
     expect(mergePaneActivity({ turnStartAt: RESTART }, null)).toEqual({ turnStartAt: RESTART });
   });
 
@@ -466,7 +478,99 @@ describe('after a restart: live evidence wins over the daemon read', () => {
     main.clock.now = RESTART + TURN_SEED_OPEN_RECHECK_MS;
     await main.seed.pass();
     expect(main.seed.activity(WORKER)).toEqual({ turnEndAt: RESTART + TURN_SEED_OPEN_RECHECK_MS });
+    // Five minutes on, the re-read before the stop shows that same end.
+    answer = { ...CLOSED, settledAgoMs: 5 * MIN };
     expect(await reclaimLook(main, RESTART + TURN_SEED_OPEN_RECHECK_MS + 5 * MIN)).toEqual([WORKER]);
+  });
+
+  it('a turn that opens while the reclaim awaits its lookups stops nothing: the daemon is read again as the last step', async () => {
+    let answer: DaemonTurnState = CLOSED;
+    const main = restartedMain(async () => answer);
+    await main.seed.pass();
+    // The task folder lookup is out when the worker's turn starts; main misses its hook.
+    const worktreeOf = async (): Promise<string> => {
+      answer = { agentStatus: 'idle', turnOpen: true, hookReports: true };
+      return wt;
+    };
+    expect(await reclaimLook(main, REPORT + 60 * MIN, { worktreeOf })).toEqual([]);
+    // The same while the session listing is out.
+    const listing = restartedMain(async () => answer);
+    answer = CLOSED;
+    await listing.seed.pass();
+    const sessions = listing.sessions;
+    const lateOpen = { ...listing, sessions: () => {
+      // The reclaim's own session listing is out: the turn opens now.
+      answer = { agentStatus: 'running', turnOpen: true, hookReports: true };
+      return sessions();
+    } };
+    expect(await reclaimLook(lateOpen, REPORT + 60 * MIN)).toEqual([]);
+  });
+
+  it('the stop itself is conditional: a daemon that finds the turn open refuses it, and no attempt is spent', async () => {
+    const main = restartedMain(async () => CLOSED);
+    await main.seed.pass();
+    const seen: Array<{ ifTurnClosed?: boolean } | undefined> = [];
+    const stopAgent = async (...args: [string, { ifTurnClosed?: boolean }?]) => {
+      const opts = args[1];
+      seen.push(opts);
+      return { ok: false, code: 'turn_open' };
+    };
+    expect(await reclaimLook(main, REPORT + 60 * MIN, { stopAgent })).toEqual([]);
+    expect(seen).toEqual([{ ifTurnClosed: true }]);
+    // Refused every time: the reclaim keeps looking, never giving up.
+    const store = ReclaimedWorkers.at(path.join(dir, 'refused'));
+    const entry = reported();
+    let open = true;
+    const stop = vi.fn<(id: string, opts?: { ifTurnClosed?: boolean }) => Promise<{ ok: boolean; stopped?: boolean; code?: string }>>(async () => (open ? { ok: false, code: 'turn_open' } : { ok: true, stopped: true }));
+    const off = installWorkerReclaim({
+      onTransition: () => () => undefined,
+      allRows: () => [entry],
+      row: () => entry,
+      store,
+      worktreeOf: async () => wt,
+      listSessions: async () => [workerSession()],
+      stopAgent: stop,
+      now: () => REPORT + 60 * MIN,
+      log: () => undefined,
+      retryMs: 5,
+      turnEnded: () => true,
+      reportedPanes: () => [WORKER],
+      workspacePanes: () => [WORKER],
+    });
+    try {
+      await vi.waitFor(() => expect(stop.mock.calls.length).toBeGreaterThan(RECLAIM_ATTEMPTS_MAX + 1));
+      expect(store.get(entry.id)?.state ?? 'none').not.toBe('stopped');
+      open = false;
+      await vi.waitFor(() => expect(store.get(entry.id)?.state).toBe('stopped'));
+    } finally {
+      off();
+    }
+    const rec = store.get(entry.id);
+    if (rec) await store.put(rec);
+  });
+
+  it('the re-read\'s fresh times count: a result that just settled or a key just typed holds the stop', async () => {
+    let answer: DaemonTurnState = CLOSED;
+    const main = restartedMain(async () => answer);
+    await main.seed.pass();
+    const at = REPORT + 60 * MIN;
+    expect(main.idleAt(at)).toBe(true);
+    // A turn ran and ended 1 minute ago, its hooks missed.
+    answer = { ...CLOSED, settledAgoMs: MIN };
+    expect(await reclaimLook(main, at)).toEqual([]);
+    expect(main.seed.activity(WORKER)).toEqual({ turnEndAt: at - MIN });
+    expect(main.idleAt(at)).toBe(false);
+    expect(main.idleAt(at + 4 * MIN)).toBe(true);
+    // Someone typed into it 30 seconds ago.
+    const typed = restartedMain(async () => answer);
+    answer = CLOSED;
+    await typed.seed.pass();
+    answer = { ...CLOSED, keyInputIdleMs: 30_000 };
+    expect(await reclaimLook(typed, at)).toEqual([]);
+    expect(typed.seed.activity(WORKER)).toEqual({ turnEndAt: REPORT, inputAt: at - 30_000 });
+    // Once the window has run from those times, it is stopped.
+    answer = { ...CLOSED, settledAgoMs: 5 * MIN, keyInputIdleMs: 5 * MIN };
+    expect(await reclaimLook(main, at + 4 * MIN)).toEqual([WORKER]);
   });
 
   it('a stop the re-read refuses spends no attempt: once the turn is over the worker is stopped', async () => {
@@ -496,7 +600,7 @@ describe('after a restart: live evidence wins over the daemon read', () => {
       expect(stopAgent).not.toHaveBeenCalled();
       closed = true;
       await vi.waitFor(() => expect(store.get(entry.id)?.state).toBe('stopped'));
-      expect(stopAgent).toHaveBeenCalledWith(WORKER);
+      expect(stopAgent).toHaveBeenCalledWith(WORKER, { ifTurnClosed: true });
     } finally {
       off();
     }

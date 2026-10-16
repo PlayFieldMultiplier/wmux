@@ -9,6 +9,7 @@ import { getConnectorStore } from './connectorStore';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
 import type { CardNotice, ThreadId } from '../../shared/room';
+import type { LedgerEntry } from '../../shared/ledger';
 import { BOT_EVENT } from '../../shared/bot';
 import { sanitizePtyText } from '../../shared/types';
 import { eventBus } from '../events/EventBus';
@@ -258,6 +259,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     };
     const viewed = (workspaceId: string): boolean => mirror.getViewed()?.workspaceId === workspaceId
       || mirror.getPanelWorkspaceId() === workspaceId;
+    const reportedIdle = (entry: LedgerEntry): boolean => {
+      if (viewed(entry.taskWorkspaceId)) return false;
+      const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
+      return !!panes && workerPanesIdle(panes.map(paneActivity), entry.updatedAt, Date.now(), REPORTED_IDLE_MS);
+    };
     offs.push(installWorkerReclaim({
       onTransition: (fn) => ledger.onTransition(fn),
       allRows: () => ledger.list({}),
@@ -265,7 +271,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       store: reclaimed,
       worktreeOf: (entry) => taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry),
       listSessions,
-      stopAgent: async (sessionId) => (await rpc('session.stopAgent', { sessionId })) as { ok?: boolean; stopped?: boolean; code?: string },
+      // A reported worker's stop is conditional: a daemon that knows
+      // `ifTurnClosed` refuses it (`turn_open`) when the turn opened.
+      stopAgent: async (sessionId, opts) => (await rpc('session.stopAgent', { sessionId, ...(opts?.ifTurnClosed ? { ifTurnClosed: true } : {}) })) as { ok?: boolean; stopped?: boolean; code?: string },
       closePane: async (sessionId) => {
         await rpc('daemon.destroySession', { id: sessionId });
       },
@@ -287,15 +295,13 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       // after a restart a pane's turn end is the daemon's; a worker pane that
       // cannot be identified, or whose turn neither main nor the daemon
       // knows, is not idle.
-      turnEnded: (entry) => {
-        if (viewed(entry.taskWorkspaceId)) return false;
-        const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
-        return !!panes && workerPanesIdle(panes.map(paneActivity), entry.updatedAt, Date.now(), REPORTED_IDLE_MS);
-      },
+      turnEnded: reportedIdle,
       reportedPanes: (entry) => reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId)),
-      // The daemon, read again right before the stop, must still show every
-      // worker pane's turn over.
-      confirmIdle: (entry) => turnSeed.confirmIdle(reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId)) ?? []),
+      // The last step before each stop: the daemon, read again, must still
+      // show every worker pane's turn over, and the window must still be met
+      // with the times it reports now (folded into the seed).
+      confirmIdle: async (entry) => (await turnSeed.confirmIdle(reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId)) ?? []))
+        && reportedIdle(entry),
       workspacePanes: workspacePtys,
     }));
     // The viewed workspace moving (and every other tree push) may make a

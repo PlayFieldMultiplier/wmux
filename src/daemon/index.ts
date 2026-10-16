@@ -211,7 +211,7 @@ import { LANLINK_SENTINEL_SESSION_ID } from '../shared/lanlink';
 import { classifyTasklistOutput, classifyKillOutcome, lockOwnerIsReclaimable, type ProcessLiveness } from '../shared/processLiveness';
 import { deliverScheduledPrompt, deliveryInputFence, type ScheduledPromptDeliveryDeps } from './sessionPromptDelivery';
 import { deliverCallerNudge } from './callerNudgeDelivery';
-import { stopAgentTree } from './agentStop';
+import { paneTurnClosed, stopAgentTree } from './agentStop';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -8309,11 +8309,21 @@ async function main(): Promise<void> {
     const managed = id ? sessionManager.getSession(id) : undefined;
     if (!managed) return { ok: false, code: 'no_session' };
     if (managed.meta.exec) return { ok: false, code: 'unsupported' };
+    // Additive: main's idle stop of a reported worker stops only while the
+    // pane's turn is over by the daemon's own state, checked right before the
+    // first signal; otherwise `turn_open` and nothing is signalled.
+    const stillIdle = (rawParams as { ifTurnClosed?: unknown }).ifTurnClosed === true
+      ? () => {
+        const bridge = sessionManager.getSession(id)?.bridge;
+        return !!bridge && paneTurnClosed({ agentStatus: bridge.getAgentStatus(), turnOpen: bridge.isTurnOpen() });
+      }
+      : undefined;
     if (managed.meta.wslTarget) {
       // #2261 — a WSL agent attributed from its own hook is stopped inside the
       // distro; one never attributed stays unsupported (main closes its pane).
       const wslAgent = agentProcessTracker.wslAgentFor(id);
       if (!wslAgent) return { ok: false, code: 'unsupported' };
+      if (stillIdle && !stillIdle()) return { ok: false, code: 'turn_open' };
       try {
         return await stopWslAgent(wslAgent);
       } catch {
@@ -8325,6 +8335,7 @@ async function main(): Promise<void> {
         tree: () => agentProcessTracker.agentProcessTree(id, 'claude'),
         stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
         kill: (pid, signal) => process.kill(pid, signal),
+        ...(stillIdle ? { stillIdle } : {}),
       });
     } catch {
       return { ok: false, code: 'unknown' };
