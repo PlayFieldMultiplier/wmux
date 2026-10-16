@@ -1914,6 +1914,21 @@ describe('Bots page', () => {
     expect(q<HTMLTextAreaElement>('[data-testid="bots-composer-input"]')?.value).toBe('Give me a status update.');
   });
 
+  it('a bot row\'s group-chat preview follows a language change', async () => {
+    const G = 'group:grp-000000c1' as const;
+    groups = [{ id: 'grp-000000c1', workspaceId: 'w1', name: 'Team', memberIds: [LEAD, VERIFIER], threadId: G, createdAt: 3_000, updatedAt: 3_000 }];
+    cards = [cards[0], card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: G, title: 'Lead here', at: 3_200 })];
+    seedRooms();
+    await render(<BotsPage groupPort={groupPort} />);
+    expect(q(`[data-bots-row="bot:${LEAD}"]`)!.textContent).toContain('In Team: Lead here');
+    try {
+      act(() => useStore.getState().setLocale('ko'));
+      expect(q(`[data-bots-row="bot:${LEAD}"]`)!.textContent).toContain('Team에서: Lead here');
+    } finally {
+      act(() => useStore.getState().setLocale('en'));
+    }
+  });
+
   it('a bot row whose question is only in a group\'s handoff thread opens that group with the thread beside it', async () => {
     const G = 'group:grp-000000c1' as const;
     groups = [{ id: 'grp-000000c1', workspaceId: 'w1', name: 'Ship it', memberIds: [LEAD, VERIFIER], threadId: G, createdAt: 3_000, updatedAt: 3_000 }];
