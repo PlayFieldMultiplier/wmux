@@ -1903,6 +1903,8 @@ export const en = {
   'room.notice.secret.deleted': "Key deleted: {name}",
   'room.notice.secret.deleted.body': "The owner deleted it from the keys in Settings. Workers already running keep it until they stop, and the bot's next wake is told it is gone.",
   'room.notice.bot.error': "{bot} hit an error",
+  'room.notice.worker.reportAfterEnd': "Worker of \"{title}\" reported after its task ended",
+  'room.notice.worker.reportAfterEnd.body': "Its task had already ended, so the report was not recorded and the task stays as it was. The bot that started it was woken with the worker's message.",
   'room.notice.worker.startFailed': "Worker for \"{title}\" could not start: {cause}",
   'room.notice.worker.startFailed.cause.fetch': "the code it was to check could not be fetched from the repository",
   'room.notice.worker.startFailed.cause.worktree': "its worktree could not be created",

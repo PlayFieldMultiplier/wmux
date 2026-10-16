@@ -28,7 +28,7 @@
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
-import { commanderTokenWorkspace } from '../../deck/commanderTrust';
+import { botTokenBinding, commanderTokenWorkspace } from '../../deck/commanderTrust';
 import {
   loadWorkspaceDecision,
   raiseDecision,
@@ -49,6 +49,7 @@ import { reconcileOrphanDeckState } from '../../deck/deckOrphanReconcile';
 import { getWmuxDir } from '../../../daemon/config';
 import { DEFAULT_MAX_SNAPSHOT_AGE_MS, isOutstandingWorkerPane } from '../../deck/stopGate';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { reclaimedWorkerWorkspaces } from '../../factory/workerReclaim';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { attachDecisionToTask, carryDecision } from '../../workLink/decisionLink';
 
@@ -79,6 +80,8 @@ export interface DeckRpcDeps {
   getLedger?: () => TaskLedger;
   /** Injected in tests; defaults to the wmux data dir. */
   deckDir?: () => string;
+  /** Injected in tests; defaults to the reclaimed workers' record. */
+  reclaimedWorkerWorkspaces?: (botId: string, owner: string) => string[];
 }
 
 export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: DeckRpcDeps = {}): void {
@@ -135,6 +138,17 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
           .length > 0;
       } catch {
         // fail closed — a ledger we cannot read grants nothing.
+      }
+      // A bot's task whose row ended: the pane of its reclaimed worker, in
+      // the task's own workspace or the one a resume opened (input.rpc.ts
+      // botTaskLane grants the same panes).
+      if (!ownTask) {
+        const bot = botTokenBinding(token);
+        try {
+          ownTask = !!bot && (deps.reclaimedWorkerWorkspaces ?? reclaimedWorkerWorkspaces)(bot.botId, tokenWorkspaceId).includes(owner);
+        } catch {
+          ownTask = false;
+        }
       }
       if (ownTask) return { workspaceId: tokenWorkspaceId };
       throw new Error(

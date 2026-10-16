@@ -1427,6 +1427,8 @@ export const ko = {
   'room.notice.secret.deleted': "키 삭제됨: {name}",
   'room.notice.secret.deleted.body': "소유자가 설정의 키 목록에서 삭제했어요. 이미 실행 중인 워커는 멈출 때까지 갖고 있고, 봇의 다음 깨우기에 키가 없어졌다고 알려요.",
   'room.notice.bot.error': "{bot}: 오류가 발생했습니다",
+  'room.notice.worker.reportAfterEnd': "\"{title}\" 워커가 작업이 끝난 뒤 보고했어요",
+  'room.notice.worker.reportAfterEnd.body': "작업이 이미 끝나서 보고가 기록되지 않았고 작업은 그대로예요. 작업을 시작한 봇에게 워커의 메시지와 함께 알렸어요.",
   'room.notice.worker.startFailed': "\"{title}\" 워커를 시작하지 못함: {cause}",
   'room.notice.worker.startFailed.cause.fetch': "확인할 코드를 저장소에서 가져오지 못함",
   'room.notice.worker.startFailed.cause.worktree': "워크트리를 만들지 못함",

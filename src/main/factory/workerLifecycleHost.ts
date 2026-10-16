@@ -27,6 +27,10 @@ import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
+import { endedTaskNotice, setEndedTaskReportSink } from './endedTaskReport';
+import { noticeBot } from './botNotices';
+import { getFactLog } from './factLog';
+import { getWakeQueue } from './wakeQueue';
 import {
   REPORTED_IDLE_MS,
   RESUMED_IDLE_MS,
@@ -495,6 +499,14 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     return ptys.find((id) => sessions.find((s) => s.id === id)?.agentProcessAlive === true) ?? null;
   });
   offs.push(() => setWorkerLivePane(null));
+
+  // A resumed worker's report on its ended task reaches the bot that started
+  // it (endedTaskReport.ts).
+  setEndedTaskReportSink((entry, report) => {
+    const notice = endedTaskNotice(entry, reclaimed.get(entry.id), report);
+    if (notice) noticeBot({ factLog: getFactLog, wakes: getWakeQueue }, notice);
+  });
+  offs.push(() => setEndedTaskReportSink(null));
 
   // The report nudge, on worker turn ends.
   const nudger = installReportNudge({

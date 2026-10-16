@@ -1549,3 +1549,12 @@ export function setWorkerResumePorts(next: WorkerResumePorts | null): void {
 export function getWorkerResumePorts(): WorkerResumePorts | null {
   return resumePorts;
 }
+
+/** The workspaces the reclaimed workers of `botId`'s tasks in `owner` run
+ *  in (a resume may open a new one): panes of the bot's own tasks after
+ *  their row ended. */
+export function reclaimedWorkerWorkspaces(botId: string, owner: string, store: Pick<ReclaimedWorkers, 'all'> | null | undefined = resumePorts?.store): string[] {
+  return (store?.all() ?? [])
+    .filter((r) => r.botId === botId && r.ownerWorkspaceId === owner)
+    .map((r) => workerWorkspaceOf(r));
+}

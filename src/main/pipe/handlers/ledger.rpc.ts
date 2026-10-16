@@ -20,6 +20,7 @@ import { isLedgerStatus, type LedgerActor } from '../../../shared/ledger';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { LEDGER_SUMMARY_MAX_BYTES, truncateHead, type TaskLedger } from '../../../daemon/ledger/TaskLedger';
+import { reportOnEndedTask } from '../../factory/endedTaskReport';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -90,7 +91,14 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
     // workspace (resolved from its pane identity, never from params).
     const ownTask = actor.kind === 'worker' && !ctx?.bot ? ledgerOf().findOpenByTaskWorkspace(actor.workspaceId) : null;
     const taskId = str(params.taskId) || ownTask?.id || '';
+    /** A worker's report refused on its own task once that task ended: told
+     *  to the bot that started it, when its worker was resumed (endedTaskReport.ts). */
+    const refusedOnOwnTask = (row: ReturnType<TaskLedger['get']>): void => {
+      if (actor.kind !== 'worker' || ctx?.bot || !row || row.taskWorkspaceId !== actor.workspaceId) return;
+      reportOnEndedTask(row, { status: str(params.status), ...(text(params.summary) ? { summary: text(params.summary) } : {}) });
+    };
     if (!taskId) {
+      if (actor.kind === 'worker' && !ctx?.bot) refusedOnOwnTask(ledgerOf().findByTaskWorkspace(actor.workspaceId));
       return actor.kind === 'worker' && !ctx?.bot
         ? deny('NOT_FOUND', 'ledger.update: no open task belongs to your workspace')
         : deny('INVALID_ARGUMENT', 'ledger.update: taskId is required');
@@ -130,6 +138,7 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
       ...(text(params.reason) ? { reason: text(params.reason) } : {}),
     });
     if (!res.ok) {
+      refusedOnOwnTask(ledgerOf().get(taskId));
       // A worker that named a task that is not its own is told which one is.
       const hint = res.error === 'not_found' && ownTask && ownTask.id !== taskId ? ` (your task is ${ownTask.id} at rev ${ownTask.rev})` : '';
       return { ...deny(res.error.toUpperCase(), `ledger.update: ${res.message}${hint}`), ...(res.entry ? { entry: res.entry } : {}) };

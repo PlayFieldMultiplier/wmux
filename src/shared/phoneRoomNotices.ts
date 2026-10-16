@@ -62,6 +62,7 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   'worker.noReport': bodied('worker.noReport'),
   'worker.stillNoReport': bodied('worker.stillNoReport'),
   'worker.startFailed': titled('worker.startFailed', { title: 'string', cause: 'string' }, START_CAUSES),
+  'worker.reportAfterEnd': bodied('worker.reportAfterEnd', { title: 'string' }),
   // The task gate (taskGate.ts).
   'gate.checked': titled('gate.checked'),
   'gate.passedNotCompleted': titled('gate.passedNotCompleted'),

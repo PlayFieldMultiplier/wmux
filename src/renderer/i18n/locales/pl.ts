@@ -1881,6 +1881,8 @@ export const pl = {
   'room.notice.secret.deleted': "Klucz usunięty: {name}",
   'room.notice.secret.deleted.body': "Właściciel usunął go z kluczy w Ustawieniach. Działające workery zachowają go do zatrzymania, a przy następnym wybudzeniu bot dowie się, że go nie ma.",
   'room.notice.bot.error': "{bot} napotkał błąd",
+  'room.notice.worker.reportAfterEnd': "Worker zadania \"{title}\" zgłosił się po jego zakończeniu",
+  'room.notice.worker.reportAfterEnd.body': "Zadanie było już zakończone, więc zgłoszenia nie zapisano i zadanie pozostaje bez zmian. Bot, który je uruchomił, został wybudzony z wiadomością workera.",
   'room.notice.worker.startFailed': "Nie udało się uruchomić workera dla \"{title}\": {cause}",
   'room.notice.worker.startFailed.cause.fetch': "nie udało się pobrać z repozytorium kodu do sprawdzenia",
   'room.notice.worker.startFailed.cause.worktree': "nie udało się utworzyć jego worktree",

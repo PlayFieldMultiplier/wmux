@@ -9,6 +9,7 @@ import type { BrowserWindow } from 'electron';
 import { RpcRouter } from '../../RpcRouter';
 import { registerDeckRpc } from '../deck.rpc';
 import {
+  mintBotToken,
   mintCommanderToken,
   __resetCommanderTrustForTesting,
 } from '../../../deck/commanderTrust';
@@ -135,6 +136,29 @@ describe('deck.resolvePaneRoute', () => {
 
     expect(res.ok).toBe(true);
     expect((res as { result: unknown }).result).toEqual({ workspaceId: 'ws-mine' });
+  });
+
+  // F16: a resumed worker of a bot's ended task (its own pane, or the new one
+  // the Resume opened) routes as the bot, like its fan-out pane.
+  it("routes a bot's reclaimed worker pane after its task ended, and nobody else's", async () => {
+    const token = mintBotToken({ workspaceId: 'ws-mine', botId: 'bot-0000abcd', role: 'lead' });
+    const reclaimed = vi.fn((botId: string, owner: string) => (botId === 'bot-0000abcd' && owner === 'ws-mine' ? ['ws-resumed'] : []));
+    const router = new RpcRouter();
+    registerDeckRpc(router, () => fakeWindow, {
+      getLedger: () => fakeLedger([{ ownerWorkspaceId: 'ws-mine', taskWorkspaceId: 'ws-resumed', status: 'completed' }]),
+      reclaimedWorkerWorkspaces: reclaimed,
+    });
+    sendToRendererMock.mockResolvedValue({ workspaceId: 'ws-resumed' });
+    const res = await router.dispatch({ id: '1', method: 'deck.resolvePaneRoute', params: { token, ptyId: 'pty-r' } });
+    expect(res.ok).toBe(true);
+    expect((res as { result: unknown }).result).toEqual({ workspaceId: 'ws-mine' });
+    expect(reclaimed).toHaveBeenCalledWith('bot-0000abcd', 'ws-mine');
+
+    // Another bot of the workspace, and a commander token, get no such lane.
+    const other = mintBotToken({ workspaceId: 'ws-mine', botId: 'bot-0000beef', role: 'lead' });
+    expect((await router.dispatch({ id: '2', method: 'deck.resolvePaneRoute', params: { token: other, ptyId: 'pty-r' } })).ok).toBe(false);
+    const brain = mintCommanderToken('ws-mine');
+    expect((await router.dispatch({ id: '3', method: 'deck.resolvePaneRoute', params: { token: brain, ptyId: 'pty-r' } })).ok).toBe(false);
   });
 
   it.each([

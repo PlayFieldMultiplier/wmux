@@ -1999,6 +1999,8 @@ export const zh = {
   'room.notice.secret.deleted': "密钥已删除：{name}",
   'room.notice.secret.deleted.body': "所有者已在设置的密钥中将其删除。已在运行的工作进程在停止前仍会保留它，机器人下次唤醒时会被告知它已不存在。",
   'room.notice.bot.error': "{bot} 出错了",
+  'room.notice.worker.reportAfterEnd': "“{title}”的工作者在任务结束后提交了报告",
+  'room.notice.worker.reportAfterEnd.body': "任务已结束，因此报告未被记录，任务保持原样。已唤醒启动该任务的机器人，并附上工作者的消息。",
   'room.notice.worker.startFailed': "“{title}”的工作者无法启动：{cause}",
   'room.notice.worker.startFailed.cause.fetch': "无法从仓库获取要检查的代码",
   'room.notice.worker.startFailed.cause.worktree': "无法创建其工作树",
