@@ -1,5 +1,228 @@
 ## [Unreleased]
 
+## [4.6.1] — 2026-10-16
+
+### Added
+
+- **The phone can list every bot and write in any bot conversation.** A new
+  `GET /api/bots` route gives the phone the desktop Bots page's list in one
+  call: each bot with its name, role, status and Mochi character, and each 1:1
+  and group chat across workspaces, newest first, with the group's name and
+  members, the last message, unread and open questions. Before, the phone had
+  no bot names or avatars, no group names or members, and needed one request
+  per workspace. A new `POST /api/rooms/:workspaceId/messages` route sends a
+  message to any of those conversations, not only to the HQ bot, with the same
+  permissions, retries and answers as messages to Moa; a bot or group that is
+  switched off or gone is refused before anything is posted.
+
+- **Pick each bot's model and its workers' model.** A bot's profile on the
+  Bots page now sets the model and effort the bot thinks on, and the model
+  and effort of the workers it starts, next to the engine they run on. An
+  invalid model id is refused there, and wmux checks it again. New
+  Coordinator, Issue and Researcher bots think on a fast model (haiku), and
+  new Developer and Reviewer bots' workers run on the strongest (opus);
+  bots you already have keep what they ran on. Settings › Bots and the
+  group chat dialog show a short note of the models a bot uses. Before, a
+  bot always thought on the default model and its workers on the preset's.
+  (#2272)
+
+- **A bot's profile shows what it used of each limit today, and what stops
+  it.** A bot has separate limits for turns, worker time, workers at once
+  and the factory's agent slots, plus a queue cap, and a bot stopped by one
+  of them used to look simply stuck. The profile's Today block lists each
+  limit with what is used of it, shows a limit that is reached in yellow,
+  and puts one line on top naming the first thing that keeps the bot from
+  new work: paused, stopped after errors, the usage limit, out of turns or
+  worker time (with when it frees up), its workers at the cap, the factory
+  full, or its queue full. (#2290)
+
+### Changed
+
+- **The Bots chat's working rail leaves out ended tasks.** The rail above the
+  composer still shows workers waiting for a slot and open tasks whose worker
+  was paused. It no longer lists completed, cancelled or failed tasks with a
+  Resume button, so their rows go away. Resuming an ended task's worker is the
+  bot's call. You can still do it from the task's panel or from its "Worker
+  done" card. (#2271)
+
+- **Bots that verify a wmux pull request check what it changed.** The
+  repository now declares its own `verify` command in `wmux.json`: lint on
+  the changed files, the typecheck, and the tests related to the change.
+  Before, every check linted the whole tree and failed on errors older than
+  the change. Trust `wmux.json` once to use it. (#2278)
+
+- **Work a bot hands off is one card in the chat.** In a bot's 1:1 (a
+  coordinator's above all) and in a group chat, work the conversation handed
+  to another bot used to flood the timeline: that bot's replies "in thread"
+  and every system line of its thread (task reported, gate results, the next
+  dispatch, Finished). Each piece of handed-off work is now one card where
+  it started: who has it and its state (Working, Waiting for review, waiting
+  on you, Done, Failed, Cancelled), the request, that bot's newest message,
+  the PR or issue it is about and how many steps it took. Show steps lists
+  the steps in place, and Open thread opens the whole thread beside the
+  chat. Anything that waits on your answer still shows in the chat as before.
+  (#2286)
+
+### Fixed
+
+- **The app restores its panes faster after the background service
+  restarts.** Before, each pane waited for two Windows process lookups in turn,
+  which took about a second per pane. (#2242)
+
+- **A bot worker that Command Prompt cannot start now says why.** A bot worker
+  can be refused in a Command Prompt pane because its prompt file or the wmux
+  data folder has a path cmd cannot pass (it contains a character such as `!`,
+  `%` or `&`, or it is a network share). That refusal used to be reported as a merge-lane guard
+  failure, and the room card said only that the pane could not be opened. The
+  refusal and the card now name the cause and the fix: for a folder with `&`,
+  `|`, `^`, `<` or `>`, use PowerShell as the default shell or move the folder;
+  for one with `!` or `%`, or on a network share, which no shell can pass, move
+  the folder.
+
+- **A bot's new worker is no longer refused for workers that already
+  paused.** The factory-wide worker cap read which workers still run an
+  agent from a snapshot that was refreshed only when the previous check ran,
+  so after a quiet period it could count workers that had paused minutes
+  earlier. The cap check now reads the workers' panes as they are before it
+  decides. (#2258)
+
+- **A schedule run skipped because the previous run's session is still open now says so.** A finished run keeps its session open for up to 10 minutes in case it asked something, and the next run waits for it. The skip used to read "previous run still going", and **Run now** even said "Run started.". The run now reads "previous run's session still open" with a note that the session closes by itself, and Run now says it did not start. (#2259, refs #2065)
+
+- **Bot workers in WSL panes are stopped.** Delete bot, turning Run bots off
+  and an owner stop now close a WSL worker's pane, and the Bots-off count
+  includes it; so does the reclaim of a completed or cancelled task. A task
+  still in review, or one that failed, keeps its pane as its card says. Only
+  the task's own worker pane is closed, never a pane the owner opened in the
+  same folder. Before, wmux never found a WSL pane in its task worktree (the
+  pane records a Linux path), so its Linux Claude kept running, and Clean up
+  now tried to remove the folder it still held; now that folder is kept as in
+  use. A WSL worker is told apart from a plain shell by its running command
+  (OSC 133), which the bash integration reports; a WSL worker under zsh or
+  fish is not stopped this way yet. (#2260)
+
+- **A bot's worker in a WSL shell is paused when idle and can be resumed.**
+  A WSL worker ran without wmux's hooks, so wmux never saw its turn end or
+  the conversation it started. A worker left idle in review was never paused
+  and kept its agent slot, and Resume was never offered for it. Its launch
+  now keeps those hooks. wmux can also stop a WSL worker's agent now, so an
+  idle worker in review is paused like a Windows one. A resumed worker no
+  longer stops at Claude Code's "trust this folder" question. A relaunch
+  from the phone into a WSL worker also finds its settings file again. (#2265)
+
+- **Resumed bot workers no longer pile up.** Before, a worker you resumed on
+  an ended task stayed resident at its prompt until someone stopped it, and
+  kept holding its memory and an agent slot. After a few Resumes, bots were
+  refused new workers. Now a resumed worker whose turn has ended, and that
+  nothing has been typed into for five minutes, has its Claude stopped again.
+  Its slot frees, a "Worker paused (resumable)" card says so, and Resume
+  still picks up the same conversation. (#2271)
+
+- **A worker in review is no longer stopped right after you use it.** Before,
+  a reported task's worker counted as idle from the time it reported. If you
+  prompted it six minutes later, it could be stopped as soon as its answer
+  ended, even while you were looking at it or typing. Now idle time counts
+  from the pane's own last turn end and your last input there. Only a turn
+  end the agent actually reported counts. A long tool run that goes quiet, or
+  a worker wmux knows nothing about after a restart, is left alone. A worker
+  is never stopped as idle while you are looking at it, whether in its
+  workspace or in the Bots worker panel. Resumed workers follow the same rule.
+  (#2271)
+
+- **Resume respects the agent limit.** Resuming a bot's worker yourself now
+  takes a free agent slot, the same as when a bot resumes it. When every slot
+  is in use, Resume is refused with the limit in force. To make room, stop an
+  idle worker or raise the limit in Settings › Bots. Before, your Resume
+  started a worker past the limit. (#2271)
+
+- **Ending a verify task no longer drops commits its worker made.** A
+  verify task works on a detached checkout of a pull request. When the task
+  ended, its folder was removed like any other, and commits the worker had
+  made there were left on no branch, so git could later delete them. Before
+  such a folder goes, wmux now keeps those commits under
+  `refs/wmux/keep/<task id>`, and a resume still puts the folder back on
+  them. (#2273)
+
+- **Long bot messages are handled like short ones.** A bot's closing words, hand-off, question or a phone message longer than its card now goes through the same text handling as shorter text before it is shortened. (#2274)
+
+- **A schedule run skipped behind an unfinished run no longer says the
+  session closes by itself.** When the previous run's agent had exited but
+  its session was still up, the skip read "previous run's session still
+  open" with a note that the session closes within 10 minutes. That session
+  can stay until the run limit, so the skip now reads "previous run still
+  going". (#2275)
+
+- **Revealing a workspace no longer lights an idle pane running when the
+  daemon is off.** In local mode, the full-screen repaint an idle agent or
+  pager draws when its pane is refitted read as activity, and the pane showed
+  "running" for up to two minutes. The daemon path was fixed in #2241; this
+  covers local mode. (#2276)
+
+- **A bot that hits its Claude usage limit picks up again by itself.** It
+  used to stop as if it had failed and wait for you to resume it. It now
+  waits until the limit resets (the time Claude names, or at most five
+  hours when it names none), then carries on with the messages that were
+  waiting. Its card and profile say when. A bot you paused yourself stays
+  paused. (#2277)
+
+- **Workers no longer run their checks all at once.** When several workers
+  finished together, each started its own full lint, typecheck and test run
+  at the same moment, alongside any `npm ci` from a new task, and the machine
+  could slow to a crawl. Checks now run one at a time across all tasks, and a
+  new task's setup waits its turn too. A check that waited says how long.
+  (#2279)
+
+- **A bot's report now lands in the conversation it is about.** A bot that
+  started a worker while busy with another subject (the reviewer starting
+  the next queued pull request from inside the previous one) filed that
+  worker's progress, results and follow-ups under the previous subject. A
+  bot can now name the conversation its worker belongs to, and a worker that
+  checks out a pull request reports in that pull request's conversation.
+  (#2280)
+
+- **When you ask the coordinator in its 1:1, the other bots' answers come
+  back there.** When you asked the coordinator something in its 1:1 and it
+  asked the other bots in General, their answers went to General instead of
+  back to you. They now come to the 1:1 where you asked. (#2280)
+
+- **A resumed WSL bot worker starts in the same permission mode as its first
+  launch.** Before, the worker's saved session had no permission mode, so
+  Resume opened it in auto mode even when it first ran with bypass
+  permissions. The background service also stops logging a WSL agent's own
+  transcript file as refused on every turn. (#2283)
+
+- **An Esc while Claude Code is still thinking now settles the pane.** That
+  Esc ends the turn without Claude Code's "Interrupted" row, so the pane kept
+  showing running until its turn latch expired. wmux now reads the end of the
+  turn from Claude Code's window title instead. An Esc that only closes a
+  popup still leaves a running turn alone. (#2284)
+
+- **A bot's worker reports back to the request it was started for.** When a
+  bot was busy with one request and started a worker for another queued one
+  (the reviewer finishing PR #Y and starting the waiting check of PR #X), the
+  worker's result answered the request it was busy with. The request for #X
+  never got an answer, and the result showed in the wrong conversation. A
+  worker now answers the request about the thread it was started in or the
+  pull request it checks out. If wmux cannot tell which request that is, the
+  result is not attached to any request rather than to the wrong one. (#2285)
+
+- **More Bots system cards read in your language.** PR merged and closed,
+  verdicts, hand-off lines ("dispatch → …", "result → …", "message → …",
+  "Answered → …"), a coordinator's Finished and Stopped lines, the verify
+  gate's cards, a bot's error and a worker that could not start now show in
+  Korean, Polish or Chinese when the app is set to one. Before, they showed in
+  English whatever the language. Cards already in a room keep the words they
+  were written with. (#2287)
+
+- **Panes show the right status and title again after the app catches up
+  with a busy daemon.** When the daemon had dropped the app for falling
+  behind, the app subscribed again but kept whatever it missed in between: a
+  turn that started then read Idle until it ended, one that ended stayed
+  running, and titles stayed old. The app now reads each pane's state from
+  the daemon right after it subscribes again and corrects it, without
+  replaying notifications from the gap. (#2289)
+
+- The Korean UI calls the Bots page "Bots" in its title, the sidebar, Settings and the command palette, instead of translating the name to "봇".
+
 ## [4.6.0] — 2026-10-16
 
 ### Added
@@ -59,8 +282,9 @@
   button. (#2229)
 
 - **Settings reads calmer.** Row titles are no longer bold, descriptions are
-  smaller, the page title is larger, and switches and selects are more
-  compact. The selected tab no longer has an accent bar on its edge. (#2230)
+  a quieter colour at a slightly larger size, the page title is larger, and
+  switches and selects are more compact. The selected tab follows the look's
+  own selection, so only Amber Line keeps an accent bar on its edge. (#2230)
 
 - **wmux's own themes lead the theme picker.** Settings › Appearance lists
   Tint, Zinc, Graphite, Paper and Amber Line first, and every other theme
