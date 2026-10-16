@@ -143,7 +143,8 @@ export function pendingForChip(
   scope: { workspaceId?: string; threadId?: string | null; botId?: string },
 ): ApprovalView[] {
   const shown = new Set(cards.map((c) => c.id));
-  return list.filter((r) => r.state === 'pending'
+  // A skill is approved on its own card, where its change is shown.
+  return list.filter((r) => r.state === 'pending' && r.action !== 'skill'
     && (!scope.workspaceId || r.workspaceId === scope.workspaceId)
     && (!scope.threadId || r.threadId === scope.threadId)
     && (!scope.botId || r.botId === scope.botId) && !!r.cardId && shown.has(r.cardId));

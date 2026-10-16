@@ -22,6 +22,9 @@ import { wakeSkills } from '../wakeContext';
 import { buildWakePrompt } from '../wakePrompt';
 import { excludeLineOnce } from '../../git/infoExclude';
 import { registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
+import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../../shared/phoneBotApprovals';
+import { pendingForChip, type ApprovalView as RendererApprovalView } from '../../../renderer/components/Room/approvalsStore';
 
 const WS = 'ws-1';
 const A = 'bot-0000000a';
@@ -284,7 +287,13 @@ describe('skill_propose → approval card → load', () => {
     const said = r.writer.post({ workspaceId: WS, kind: 'human', actor: { kind: 'human' }, title: 'ok', refs: { botId: A } });
     if (!said.ok) throw new Error('post failed');
     expect(r.svc.onOwnerCard(said.card)).toEqual([]);
-    expect(r.svc.get(res.approvalId as string)?.state).toBe('pending');
+    // Nor from the phone (no diff there), nor by the "Approve N pending" chip.
+    const id = res.approvalId as string;
+    expect(handlePhoneBotApprovalCommand(PHONE_BOT_APPROVAL_DECIDE_COMMAND, { requestId: id, decision: 'approve' }, () => r.svc)).toMatchObject({ refused: { code: 'not_on_phone' } });
+    expect(handlePhoneBotApprovalCommand(PHONE_BOT_APPROVAL_COMMAND, { requestId: id }, () => r.svc)).toEqual({ notFound: true });
+    const view = r.svc.get(id) as unknown as RendererApprovalView;
+    expect(pendingForChip([view], [{ id: view.cardId as string }], { workspaceId: WS })).toEqual([]);
+    expect(r.svc.get(id)?.state).toBe('pending');
     // Between wakes: refused, and the written proposal is dropped again.
     r.wakes.delete(A);
     expect(await r.call('skill.propose', { name: 'triage', content: skillMd('triage'), reason: 'r' })).toMatchObject({ ok: false, code: 'not_running' });
