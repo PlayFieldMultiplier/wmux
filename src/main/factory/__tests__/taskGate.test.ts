@@ -1020,6 +1020,83 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     r.off();
   });
 
+  it('reports deferred at install that stay unanswerable take at most half a tick: the other reports are still checked', async () => {
+    const stuck = Array.from({ length: 25 }, (_, i) => `d${String(i).padStart(2, '0')}`);
+    const normal = Array.from({ length: 5 }, (_, i) => `z${i}`);
+    for (const id of [...stuck, ...normal]) {
+      await registerTask(id);
+      await report(id);
+      await ledger.recordGate(id, { ...PASS, exitCode: 1 }, { kind: 'system', workspaceId: 'ws-daemon' });
+    }
+    const branches = Object.fromEntries([...stuck, ...normal].map((id) => [id, `b/${id}`]));
+    // The stuck ones' worktrees never read: their checks stay 'unknown'.
+    const r = mergeRig({}, branches, { noted: () => true, mergeSweepMs: 400, worktreeOf: async (e) => (e.id.startsWith('d') ? null : `/wt/${e.id}`) });
+    await flush();
+    // The install woke the normal reports, and deferred the stuck ones.
+    expect(r.wake).toHaveBeenCalledTimes(normal.length);
+    const checks = (id: string): number => r.branchOf.mock.calls.filter((c) => c[0].id === id).length;
+    expect(normal.map(checks)).toEqual([1, 1, 1, 1, 1]);
+    await vi.waitFor(() => expect(normal.map(checks).every((n) => n > 1)).toBe(true), { interval: 5, timeout: 15_000 });
+    expect(r.wake).toHaveBeenCalledTimes(normal.length);
+    r.off();
+  });
+
+  for (const merged of [false, true]) {
+    it(`at install, a report not gated yet whose check cannot answer is neither gated nor woken; once it answers, ${merged ? 'its merge ends it' : 'it is gated'}: one wake`, async () => {
+      await registerTask();
+      await report();
+      let worktree: string | null = null;
+      const r = mergeRig({ [B1]: merged ? [pr(2)] : [] }, { 'task-1': 'wmux/task-1' }, { mergeSweepMs: 20, worktreeOf: async () => worktree });
+      await flush();
+      expect(r.runGate).not.toHaveBeenCalled();
+      expect(r.note).not.toHaveBeenCalled();
+      expect(r.wake).not.toHaveBeenCalled();
+      worktree = '/wt/task-1';
+      await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
+      await new Promise((res) => setTimeout(res, 80));
+      expect(r.wake).toHaveBeenCalledTimes(1);
+      const row = ledger.get('task-1') as LedgerEntry;
+      expect(row.status).toBe('completed');
+      if (merged) {
+        expect(row.completion).toEqual({ source: 'merge', pr: 2 });
+        expect(r.runGate).not.toHaveBeenCalled();
+        expect(r.note.mock.calls.map((c) => c[2])).toEqual(['PR #2 merged: task completed']);
+      } else {
+        expect(r.runGate).toHaveBeenCalledTimes(1);
+        expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Task checked: gate passed, task completed']);
+      }
+      r.off();
+    });
+  }
+
+  it('at install, a deferred report with no commits that the sweep later gates gets the no_changes skip, not a gate run', async () => {
+    const BASE = 'b'.repeat(40);
+    await registerTask();
+    await report();
+    let worktree: string | null = null;
+    const r = mergeRig({}, { 'task-1': 'wmux/task-1' }, {
+      mergeSweepMs: 20,
+      worktreeOf: async () => worktree,
+      taskBase: async () => BASE,
+      recordNoChanges: (id, detail) => recordNoChangesGate(ledger, id, detail),
+    }, undefined, { 'task-1': [BASE] });
+    await flush();
+    // Deferred: the check could not answer, so nothing ran and nobody was woken.
+    expect(r.runGate).not.toHaveBeenCalled();
+    expect(r.note).not.toHaveBeenCalled();
+    expect(r.wake).not.toHaveBeenCalled();
+    worktree = '/wt/task-1';
+    await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
+    await new Promise((res) => setTimeout(res, 80));
+    expect(r.wake).toHaveBeenCalledTimes(1);
+    expect(r.runGate).not.toHaveBeenCalled();
+    const row = ledger.get('task-1') as LedgerEntry;
+    expect(row.status).toBe('review_requested');
+    expect(row.gate).toMatchObject({ exitCode: 0, command: 'none', skipped: 'no_changes', recordedBy: 'system' });
+    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Gate skipped (the task made no changes): task left open']);
+    r.off();
+  });
+
   it('nothing after the unsubscribe: no sweep, no live fact, and a check under way writes nothing', async () => {
     // A report whose gate failed before a restart: the install's merge check
     // (the PR is merged) waits on the branch read.
