@@ -245,9 +245,15 @@ describe('liveDaemonPidEntries (resolve-time check)', () => {
     expect(liveDaemonPidEntries(entries, null)).toEqual(entries);
   });
 
-  it('keeps non-daemon entries, unknown ptyIds and live sessions without a PID', () => {
-    const entries = [entry('1', 'pty-local'), entry('2', 'daemon-not-listed-yet'), entry('3', 'daemon-nopid')];
+  it('keeps non-daemon entries and live sessions without a PID', () => {
+    const entries = [entry('1', 'pty-local'), entry('3', 'daemon-nopid')];
     expect(liveDaemonPidEntries(entries, [{ id: 'daemon-nopid', state: 'attached' }])).toEqual(entries);
+  });
+
+  it('drops an entry whose session the (complete) list does not have', () => {
+    const entries = [entry('6780', 'daemon-gone'), entry('7644', 'daemon-worker')];
+    expect(liveDaemonPidEntries(entries, [{ id: 'daemon-worker', pid: 7644, state: 'attached' }]))
+      .toEqual([entry('7644', 'daemon-worker')]);
   });
 
   it('drops entries for a dead or suspended session', () => {

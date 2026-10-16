@@ -732,4 +732,40 @@ describe('a2a.resolve.identity — a pid-map hit must be the session\'s current 
     await dispatchResolve(router, {});
     expect(rpc).toHaveBeenCalledTimes(2);
   });
+
+  it('skips a stale entry whose session the daemon no longer has (startup prune failed)', async () => {
+    // The old pane's session is gone, but its file survived because the
+    // startup prune did not run or failed; the renderer still answers for it.
+    sessions = [{ id: 'daemon-worker', pid: 7644, state: 'attached' }];
+    const { client, rpc } = daemonListing();
+
+    const result = await dispatchResolve(routerWith(client), { callerPid: 39876 });
+
+    expect(rpc).toHaveBeenCalledWith('daemon.listSessions', { includeSuspended: true }, expect.anything());
+    expect(result.resolved).toEqual({ workspaceId: 'ws-worker', ptyId: 'daemon-worker' });
+    expect(result.entries).toEqual([{ pid: '7644', ptyId: 'daemon-worker', workspaceId: 'ws-worker' }]);
+    expect(result.mappings).toEqual({ '7644': 'ws-worker' });
+  });
+
+  it('accepts a ptyId missing from the cached list once the re-read list has it', async () => {
+    // Cache the list while only the old pane exists.
+    fs.rmSync(path.join(dirRef.current, '7644'));
+    sessions = [{ id: 'daemon-04f1c884', pid: 6780, state: 'detached' }];
+    const { client, rpc } = daemonListing();
+    const router = routerWith(client);
+    await dispatchResolve(router, {});
+    expect(rpc).toHaveBeenCalledTimes(1);
+
+    // A new pane is created inside the cache window: its session and file appear.
+    sessions = [
+      { id: 'daemon-04f1c884', pid: 6780, state: 'detached' },
+      { id: 'daemon-worker', pid: 7644, state: 'attached' },
+    ];
+    fs.writeFileSync(path.join(dirRef.current, '7644'), 'daemon-worker');
+
+    const result = await dispatchResolve(router, {});
+
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(result.entries.map((e) => e.pid).sort()).toEqual(['6780', '7644']);
+  });
 });

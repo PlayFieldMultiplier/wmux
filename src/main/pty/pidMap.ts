@@ -235,10 +235,17 @@ export async function pruneDaemonPidMapAtConnect(
 /**
  * Resolve-time check for `a2a.resolve.identity`: keep a pid-map entry only if
  * its PID can still be the pane's shell. An entry for a daemon ptyId is
- * dropped when the daemon reports that session with no running shell (dead /
- * suspended), or with a known shell PID that is not the entry's PID: a
- * leftover file whose PID the OS has since given to another process (a new
- * worker's own claude.exe), which would otherwise claim the old pane.
+ * dropped when the daemon does not have that session, reports it with no
+ * running shell (dead / suspended), or reports a known shell PID that is not
+ * the entry's PID. Each is a leftover file whose PID the OS may have given to
+ * another process (a new worker's own claude.exe), which would otherwise
+ * claim the old pane. A missed or failed startup prune leaves such files.
+ *
+ * `sessions` must be the daemon's COMPLETE list (suspended sessions
+ * included), read after the entries' files were: `pty:create` writes a file
+ * only once its session exists, so a ptyId missing from that list is gone.
+ * The caller re-reads the list rather than judge against a cached one that
+ * predates the file.
  *
  * Kept as is:
  *  - everything, when `sessions` is null (the daemon is not connected or did
@@ -247,9 +254,6 @@ export async function pruneDaemonPidMapAtConnect(
  *    would break far more than the stale files can. The write-time and
  *    startup prunes still bound those files.
  *  - non-daemon entries (local PTYManager panes).
- *  - a ptyId the list does not have: the list may be a short-lived cache that
- *    predates a just-created pane, and a pane that is really gone is already
- *    dropped by the live owner lookup.
  *  - a live session whose row carries no PID.
  */
 export function liveDaemonPidEntries<T extends PidMapFile>(
@@ -261,7 +265,7 @@ export function liveDaemonPidEntries<T extends PidMapFile>(
   return entries.filter((e) => {
     if (!isDaemonPtyId(e.ptyId)) return true;
     const session = byId.get(e.ptyId);
-    if (!session) return true;
+    if (!session) return false;
     const shellPid = runningShellPid(session);
     if (shellPid === undefined) return true;
     return shellPid !== null && String(shellPid) === e.pid;

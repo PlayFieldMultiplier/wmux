@@ -500,12 +500,15 @@ export function registerA2aRpc(
   const DAEMON_SESSIONS_CACHE_MS = 2000;
   let daemonSessionsCache: { at: number; sessions: DaemonSessionShell[] } | null = null;
 
-  /** A fresh session list, or null when the daemon is not connected or did not answer. */
+  /**
+   * A fresh, complete session list (suspended sessions included), or null when
+   * the daemon is not connected or did not answer.
+   */
   async function fetchDaemonSessions(): Promise<DaemonSessionShell[] | null> {
     const dc = getDaemonClient?.();
     if (!dc || dc.isConnected === false) return null;
     try {
-      const rows = await dc.rpc('daemon.listSessions', {}, { timeoutMs: 2000 });
+      const rows = await dc.rpc('daemon.listSessions', { includeSuspended: true }, { timeoutMs: 2000 });
       if (!Array.isArray(rows)) return null;
       daemonSessionsCache = { at: Date.now(), sessions: rows as DaemonSessionShell[] };
       return daemonSessionsCache.sessions;
@@ -516,9 +519,11 @@ export function registerA2aRpc(
 
   /**
    * `entries` without the daemon pid-map hits whose PID is not that session's
-   * current shell (see liveDaemonPidEntries). A cached list is trusted only to
-   * keep entries: before it drops one, the list is read again, so a pane that
-   * got a new shell inside the cache window is not refused. With no daemon
+   * current shell, or whose session the daemon does not have (see
+   * liveDaemonPidEntries). A cached list is trusted only to keep entries:
+   * when it lacks an entry's ptyId or disagrees with its PID, the list is read
+   * again and the entry is judged on that fresh list, so a pane created or
+   * given a new shell inside the cache window is not refused. With no daemon
    * (not connected, or the RPC failed) nothing is filtered and identity falls
    * back to the pid-map alone, as before this check existed.
    */
