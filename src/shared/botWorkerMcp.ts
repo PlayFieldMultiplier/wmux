@@ -33,6 +33,7 @@ import { tokenize } from './agentResume';
 import { splitModelEnvMarker } from './workerLaunch';
 import { stripPromptFileArgument } from './promptFileArgument';
 import { argumentsMayExpand, isClaudeLauncher, isQuotable, isSingleCommand } from './botWorkerGuard';
+import { labelGateRules } from './botWorkerLabelGate';
 
 /** The wmux level a worker's server runs at. */
 export type WorkerWmuxLevel = 'core' | 'full';
@@ -96,16 +97,22 @@ export function buildWorkerMcpConfig(input: WorkerMcpInput): { mcpServers: Recor
 
 /** The worker's one `--settings` document: the worker rules, and per
  *  connection either every tool but the blocked ones, or only the listed
- *  ones (a per-tool allow plus a hook that refuses the rest). Pure. */
+ *  ones (a per-tool allow plus a hook that refuses the rest). With the
+ *  label gate's script, `gh pr edit` is left to it (botWorkerLabelGate.ts).
+ *  Pure. */
 export function buildWorkerSettings(
   connectors: readonly Connector[],
   /** wmux's own hook groups by event (an isolated instance's worker, which
    *  loads no user settings: setupHooks.bridgeHookGroups). */
   wmuxHooks?: Record<string, ReadonlyArray<{ matcher: string; hooks: ReadonlyArray<{ type: 'command'; command: string }> }>>,
+  /** The label gate's script file (botWorkerLabelGate.ts); without it, or
+   *  when its path cannot sit in a hook line, `gh pr edit` stays refused whole. */
+  labelGateScript?: string,
 ): Record<string, unknown> {
-  const allow: string[] = [];
-  const deny: string[] = [...BOT_WORKER_DENY];
-  const hooks: Array<{ matcher: string; hooks: Array<{ type: 'command'; command: string }> }> = [];
+  const gate = labelGateScript ? labelGateRules(BOT_WORKER_DENY, labelGateScript) : null;
+  const allow: string[] = gate ? [...gate.allow] : [];
+  const deny: string[] = gate ? gate.deny : [...BOT_WORKER_DENY];
+  const hooks: Array<{ matcher: string; hooks: Array<{ type: 'command'; command: string; timeout?: number }> }> = gate ? [gate.hook] : [];
   for (const c of connectors) {
     if (c.tools.mode === 'all') {
       allow.push(`mcp__${c.name}`);

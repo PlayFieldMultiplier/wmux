@@ -50,6 +50,7 @@ import {
   workerWmuxLevel,
   type WorkerWmuxLevel,
 } from '../../shared/botWorkerMcp';
+import { BOT_WORKER_LABEL_GATE_SCRIPT } from '../../shared/botWorkerLabelGate';
 import type { Connector } from '../../shared/botConnector';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getConnectorStore } from '../factory/connectorStore';
@@ -398,7 +399,8 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
   const { runDir, npmrc } = prepareConnectorRunDirs(dir, connectors);
   const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc, strayKeys }), null, 2)}\n`;
   const connectionKeys = [...new Set([...connectors.flatMap((c) => c.secrets.map((s) => s.secret)), ...strayKeys])];
-  const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined), null, 2)}\n`;
+  const labelGate = writeContentFile(path.join(factory, 'worker-gate'), BOT_WORKER_LABEL_GATE_SCRIPT, 'cjs');
+  const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined, labelGate), null, 2)}\n`;
   return {
     settingsFile: writeContentFile(path.join(factory, 'worker-settings'), settings),
     mcpConfigFile: writeContentFile(path.join(factory, 'worker-mcp'), mcp),
@@ -428,9 +430,9 @@ export function prepareConnectorRunDirs(dir: string, connectors: readonly Connec
   return { runDir, npmrc };
 }
 
-function writeContentFile(folder: string, content: string): string {
+function writeContentFile(folder: string, content: string, ext: 'json' | 'cjs' = 'json'): string {
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const file = path.join(folder, contentFileName(content));
+  const file = path.join(folder, contentFileName(content).replace(/\.json$/, `.${ext}`));
   try {
     if (fs.readFileSync(file, 'utf8') === content) {
       // In use again: the startup prune keeps it.

@@ -212,8 +212,8 @@ describe('the session record carries the launch', () => {
     expect(readJson(w.settings).disableAllHooks).toBe(false);
     expect(Object.keys(hooks).sort()).toEqual(['PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
     expect(hooks.Stop[0].hooks[0].command).toBe(`node "${BRIDGE}" Stop`);
-    // Signals only: no per-tool-call gate.
-    expect(hooks.PreToolUse.map((g) => g.matcher)).toEqual(['AskUserQuestion']);
+    // Signals only: no per-tool-call gate (the label gate on Bash is the worker's own).
+    expect(hooks.PreToolUse.map((g) => g.matcher)).toEqual(['Bash', 'AskUserQuestion']);
     expect(guardedLaunchOf(guarded).launch?.settingSources).toBe('project');
     // Re-fire, resume and the daemon's phone launch carry the same words.
     noteBotWorkerSession('pty-iso', 'ws-task', dir, guardedLaunchOf(guarded));
@@ -225,7 +225,7 @@ describe('the session record carries the launch', () => {
     // The installed app (no bridge of its own to prefer): today's line, word for word.
     const installed = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;
     expect(installed.initialCommand).not.toContain('--setting-sources');
-    expect(readJson(wordsOf(installed.initialCommand!).settings)).not.toHaveProperty('hooks');
+    expect(Object.keys(readJson(wordsOf(installed.initialCommand!).settings).hooks as object)).toEqual(['PreToolUse']);
   });
 
   it('spliceWorkerLaunch: the setting-sources word is ours too, and a foreign one is refused', () => {

@@ -21,6 +21,8 @@ import { clearedLaunchLine,
   withBotWorkerMergeGuard,
   writeBotWorkerSettings,
 } from '../botWorkerMergeGuard';
+import { BOT_WORKER_LABEL_GATE_SCRIPT, labelGateRules } from '../../../shared/botWorkerLabelGate';
+import { contentFileName } from '../../../shared/botWorkerMcp';
 import { MODEL_ENV_MARKER, applyWorkerPermissionFlags, reattachModelEnvMarker, splitModelEnvMarker } from '../../../shared/workerLaunch';
 import { applyRoleAgent } from '../../../shared/orchestratorRole';
 import { FANOUT_EXTRA_AGENT_STEMS, applyFanoutAgentFlags, fanoutChoiceBinding } from '../../../shared/fanoutPreset';
@@ -195,7 +197,13 @@ describe('which creates are a bot\'s workers: main\'s records, never the rendere
       const files = strictFiles(guarded);
       expect(guarded).toBe(`claude --settings="${files.settings}" --mcp-config="${files.mcp}" --strict-mcp-config --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);
       expect(path.dirname(files.settings)).toBe(path.join(dir, 'factory', 'worker-settings'));
-      expect(JSON.parse(fs.readFileSync(files.settings, 'utf8')).permissions.deny).toEqual([...BOT_WORKER_DENY]);
+      // gh pr edit is left to the label gate, a script written beside the settings.
+      const gate = path.join(dir, 'factory', 'worker-gate', contentFileName(BOT_WORKER_LABEL_GATE_SCRIPT).replace(/\.json$/, '.cjs'));
+      expect(fs.readFileSync(gate, 'utf8')).toBe(BOT_WORKER_LABEL_GATE_SCRIPT);
+      const rules = labelGateRules(BOT_WORKER_DENY, gate)!;
+      const settings = JSON.parse(fs.readFileSync(files.settings, 'utf8'));
+      expect(settings.permissions).toEqual({ allow: rules.allow, deny: rules.deny });
+      expect(settings.hooks).toEqual({ PreToolUse: [rules.hook] });
       expect(JSON.parse(fs.readFileSync(files.mcp, 'utf8'))).toEqual({ mcpServers: { wmux: { type: 'stdio', command: 'node', args: [ENTRY] } } });
       // A WSL shell keeps the worker settings file alone, as before.
       expect(withBotWorkerMergeGuard(opts, worker, { dir, ...mcp() }, { wsl: true })!.initialCommand).toBe(`claude --settings="${toWslPath(botWorkerSettingsPath(dir)) ?? botWorkerSettingsPath(dir)}" --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);

@@ -387,6 +387,14 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   dot is the signal. A worker row carries one dot, its state mark: the git
   line shows the diff counts, not its clean dot. A group row lists none
   (each worker sits under its bot once).
+- **What a worker may do on GitHub (owner decision 2026-10-16):** open its
+  pull request (labels included) and add or remove labels on one —
+  `gh pr edit <number> --add-label <labels>` and/or `--remove-label
+  <labels>`, alone on the line. Every other edit, a merge, a push of its
+  own, a `gh api` write and anything chained to the label command stays
+  refused. A hook checks the whole command line, and deny rules for the
+  other `gh pr edit` flags still apply when hooks are off
+  (`src/shared/botWorkerLabelGate.ts`). A WSL pane's worker cannot label yet.
 - **Group chats (owner decision 2026-10-15):** the owner makes them — `+` ›
   New group chat opens a dialog: the workspace (those with bots), a name
   and a checkbox per bot of that workspace, with one muted line saying a
