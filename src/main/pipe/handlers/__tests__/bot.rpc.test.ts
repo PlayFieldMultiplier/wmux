@@ -309,6 +309,9 @@ describe('bot.setJob', () => {
     // An answer whose question is gone (pruned) no longer says which hop it resumed.
     records.set('h-orphan', base({ id: 'h-orphan', replyTo: 'h-pruned' }));
     expect(on('h-orphan')).toBe(false);
+    // The tracker alone refuses it too: its question pruned, the answer reads as outside text.
+    const prunedTaint = new WakeTaint({ facts: () => [], handoff: (id) => (id === 'h-ask' ? null : handoff(id)), taskRow: () => null, runningWake: () => null });
+    expect(wakeOnOwnerAnswer(me, { reason: { kind: 'handoff', handoffId: 'h-answer' } }, { handoff, taint: prunedTaint })).toBe(false);
     expect(on('h-answer', null)).toBe(false);
     expect(wakeOnOwnerAnswer(me, { reason: { kind: 'routine', routineId: 'r-1', dueAt: 1 } }, { handoff, taint })).toBe(false);
   });
