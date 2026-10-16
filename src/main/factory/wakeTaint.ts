@@ -217,7 +217,10 @@ export class WakeTaint {
     if (!h) return;
     let tainted: boolean;
     if (h.from.kind !== 'bot') {
-      tainted = false;
+      // The owner's answer keeps the mark of the hop it resumes, read now
+      // while its question is on record: the answer itself may be pruned
+      // later, and then only this mark is left.
+      tainted = h.kind === 'answer' && !!h.replyTo && this.answerResumesTaintedHop(h.replyTo);
     } else if (h.relay === true || this.alwaysTainted(h.from.botId)) {
       // A relay's dispatch is wmux's, in the coordinator's name: its mark
       // is written before it is stored, never read from the coordinator's wake.

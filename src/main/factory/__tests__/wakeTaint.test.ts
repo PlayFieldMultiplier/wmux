@@ -192,6 +192,17 @@ describe('WakeTaint', () => {
     expect(t.handoffTainted('h-out-2')).toBe(true);
     expect(t.markForward('h-fwd', { handoffIds: ['ans-pruned'] })).toBe(true);
     expect(t.markForward('h-fwd-2', { handoffIds: ['ans-kept'] })).toBe(false);
+    // The answer pruned in turn: its delivery mark says what it was.
+    hs.push({ ...handoff('h-dirty', fromBot) }, { ...kept, id: 'a-dirty', forHop: 'h-dirty' }, answer('ans-dirty', 'a-dirty'));
+    t.onFact(fact('x4', 'handoff.received', { handoffId: 'ans-kept' }));
+    t.onFact(fact('x5', 'handoff.received', { handoffId: 'ans-dirty' }));
+    for (const id of ['ans-pruned', 'ans-kept', 'ans-dirty', 'a-dirty']) hs.splice(hs.findIndex((h) => h.id === id), 1);
+    expect(t.handoffTainted('ans-pruned')).toBe(true);
+    expect(t.handoffTainted('ans-dirty')).toBe(true);
+    expect(t.handoffTainted('ans-kept')).toBe(false);
+    // An answer gone with no mark at all reads tainted.
+    expect(t.handoffTainted('ans-never-seen')).toBe(true);
+    hs.push(answer('ans-pruned', 'a-pruned'), answer('ans-kept', 'a-kept'));
     // The running wake's mark (worker_message's sender and a fan-out's origin).
     setWakeTaint(t, () => running);
     try {
