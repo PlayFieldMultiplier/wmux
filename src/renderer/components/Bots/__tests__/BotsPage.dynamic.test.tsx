@@ -596,6 +596,33 @@ describe('Bots page', () => {
     expect(q('[data-testid="bots-pause-bot"]')).toBeNull();
   });
 
+  it('right after Resume the profile reads Resuming… until the runtime reports, not Not reported yet', async () => {
+    const notify: Array<() => void> = [];
+    const setLead = (over: Partial<FactoryBotRow['bot']>, presence: 'parked' | 'unknown' | 'idle') => {
+      bots = bots.map((b) => (b.bot.id === LEAD ? { ...b, bot: { ...b.bot, ...over }, status: { ...b.status!, presence } } : b));
+    };
+    setLead({ parked: { reason: 'human', at: 1 } }, 'parked');
+    const act$ = vi.fn(async () => {
+      bots = bots.map((b) => (b.bot.id === LEAD ? { ...b, bot: { ...b.bot, parked: undefined } } : b));
+      setLead({}, 'unknown');
+      for (const fn of notify) fn();
+      return { ok: true };
+    });
+    setFactoryBotPort({ ...port, act: act$, subscribe: (fn) => { notify.push(fn); return () => undefined; } });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Parked');
+    await act(async () => { q<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
+    for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Resuming…'; i++) await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
+    setLead({}, 'idle');
+    await act(async () => { for (const fn of notify) fn(); });
+    for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Idle'; i++) await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Idle');
+  });
+
   it('a parked bot\'s profile says why and offers Resume (budget or errors); a bot that is not parked shows none', async () => {
     const act$ = vi.fn(async () => ({ ok: true }));
     bots[1] = { ...bots[1], bot: { ...bots[1].bot, parked: { reason: 'budget', at: 1 } }, status: { ...bots[1].status!, presence: 'parked' } };

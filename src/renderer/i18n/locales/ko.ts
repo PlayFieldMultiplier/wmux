@@ -1104,6 +1104,7 @@ export const ko = {
   'botsPage.profile.state': "상태",
   'botsPage.profile.on': "켜짐",
   'botsPage.profile.off': "꺼짐",
+  'botsPage.profile.resuming': "재개하는 중…",
   'botsPage.profile.budget': "오늘 남은 턴",
   'botsPage.profile.budgetValue': "{max} 중 {left}",
   'botsPage.profile.canDo': "할 수 있는 일",

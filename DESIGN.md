@@ -453,7 +453,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   main is asked, and main checks it again) — what its workers run on — a native Select:
   Default (the presets' engine) or an installed engine that has a worker
   guard, one not installed listed but disabled — its workers' model and
-  effort (the same model line, for that engine) — on/off and presence,
+  effort (the same model line, for that engine) — on/off and presence
+  (right after Resume, "Resuming…" until the runtime reports, never "Not
+  reported yet"),
   then Today (owner decision 2026-10-16): on top, one muted line naming the
   first thing that keeps the bot from new work — paused by the owner,
   stopped after errors, the usage limit until a time, out of turns until a

@@ -1580,6 +1580,7 @@ export const en = {
   'botsPage.profile.state': "Status",
   'botsPage.profile.on': "On",
   'botsPage.profile.off': "Off",
+  'botsPage.profile.resuming': "Resuming…",
   'botsPage.profile.budget': "Turns left today",
   'botsPage.profile.budgetValue': "{left} of {max}",
   'botsPage.profile.canDo': "Can do",

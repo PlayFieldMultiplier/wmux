@@ -1558,6 +1558,7 @@ export const pl = {
   'botsPage.profile.state': "Stan",
   'botsPage.profile.on': "Włączony",
   'botsPage.profile.off': "Wyłączony",
+  'botsPage.profile.resuming': "Wznawianie…",
   'botsPage.profile.budget': "Pozostałe tury dziś",
   'botsPage.profile.budgetValue': "{left} z {max}",
   'botsPage.profile.canDo': "Może",

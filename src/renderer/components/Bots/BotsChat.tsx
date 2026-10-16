@@ -71,7 +71,7 @@ import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
-import { BOT_JOB_MAX, botTemplate, isCoordinatorBot, normalizeBotJob, type BotProfile as BotProfileData } from '../../../shared/bot';
+import { BOT_JOB_MAX, botTemplate, isCoordinatorBot, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botHueIndex, botIdentityColor, noteRemovedBotHues } from '../Room/BotAvatar';
@@ -1833,6 +1833,24 @@ function WorkerEngineLine({ row, t, port }: { row: FactoryBotRow; t: T; port?: P
   );
 }
 
+/** Each bot's last presence the runtime reported, other than not
+ *  reported, while the app runs. */
+const lastProfilePresence = new Map<string, BotPresence>();
+
+/** The profile's state word. A bot the runtime reported parked and now
+ *  reports nothing for (its session attaches on its next turn) was just
+ *  resumed: it reads "Resuming…" until the runtime reports, not "Not
+ *  reported yet". */
+export function profilePresenceKey(row: FactoryBotRow, last: Map<string, BotPresence> = lastProfilePresence): string {
+  const presence = botPresence(row);
+  if (presence !== 'unknown') {
+    last.set(row.bot.id, presence);
+    return `room.presence.${presence}`;
+  }
+  if (row.bot.enabled && !row.bot.parked && last.get(row.bot.id) === 'parked') return 'botsPage.profile.resuming';
+  return 'room.presence.unknown';
+}
+
 /** The bot's profile under its name pill: template, job (editable),
  *  workspace, repo, the model it thinks on, what its workers run on and
  *  their model, on/off, what it used today of each limit (and what stops
@@ -1853,7 +1871,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
       <BrainModelLine row={row} t={t} port={jobPort} />
       <WorkerEngineLine row={row} t={t} port={jobPort} />
       <WorkerModelLine row={row} t={t} port={jobPort} />
-      <ProfileLine label={t('botsPage.profile.state')} value={`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(`room.presence.${botPresence(row)}`)}`} />
+      <ProfileLine label={t('botsPage.profile.state')} value={<span data-bots-profile-state>{`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(profilePresenceKey(row))}`}</span>} />
       <BotToday row={row} act={adminPort?.act} liveWorkers={workers.length} t={t} />
       {routines.length > 0 && (
         <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-routines>

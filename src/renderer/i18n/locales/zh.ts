@@ -1680,6 +1680,7 @@ export const zh = {
   'botsPage.profile.state': "状态",
   'botsPage.profile.on': "开启",
   'botsPage.profile.off': "关闭",
+  'botsPage.profile.resuming': "正在恢复…",
   'botsPage.profile.budget': "今日剩余轮次",
   'botsPage.profile.budgetValue': "{left}/{max}",
   'botsPage.profile.canDo': "可以做",
