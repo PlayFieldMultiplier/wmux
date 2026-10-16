@@ -78,6 +78,16 @@ export function isCoordinatorBot(profile: { template?: BotTemplate; role: BotRol
   return !!profile && botTemplate(profile) === 'coordinator';
 }
 
+/** The bot's new piece of work handed off from its own 1:1 or a group chat
+ *  opens a request thread there (main/factory/handoffRouter.ts), which the
+ *  conversation shows folded into one work card (shared/botsWork.ts): the
+ *  Coordinator, or a bot with the `lead` role (the first bot a name-only
+ *  create makes is one). It grants nothing; powers stay with
+ *  isCoordinatorBot. Pure. */
+export function delegatesFromConversation(profile: { template?: BotTemplate; role: BotRole } | null | undefined): boolean {
+  return isCoordinatorBot(profile) || profile?.role === 'lead';
+}
+
 /** Longest job text, in UTF-16 units after trimming. */
 export const BOT_JOB_MAX = 2000;
 
