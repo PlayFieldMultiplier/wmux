@@ -572,6 +572,30 @@ describe('Bots page', () => {
     expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped Lead and 2 of its workers.');
   });
 
+  it('Pause in a bot\'s profile parks it at once (no confirm), and the profile then shows Paused with Resume', async () => {
+    const act$ = vi.fn(async (action: string, botId: string) => {
+      if (action === 'park') {
+        bots = bots.map((b) => (b.bot.id === botId ? { ...b, bot: { ...b.bot, parked: { reason: 'human' as const, at: 1 } }, status: { ...b.status!, presence: 'parked' as const } } : b));
+        for (const fn of notify) fn();
+      }
+      return { ok: true };
+    });
+    const notify: Array<() => void> = [];
+    setFactoryBotPort({ ...port, act: act$, subscribe: (fn) => { notify.push(fn); return () => undefined; } });
+    seedRooms();
+    await render(<BotsPage stop={{ stopBot: vi.fn(async () => ({ ok: true, workersStopped: 0 })) }} />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-profile-parked]')).toBeNull();
+    expect(q('[data-testid="bots-stop-bot"]')).not.toBeNull();
+    await act(async () => { q<HTMLButtonElement>('[data-testid="bots-pause-bot"]')!.click(); });
+    expect(act$).toHaveBeenCalledWith('park', LEAD);
+    for (let i = 0; i < 5 && !q('[data-bots-profile-parked="human"]'); i++) await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-profile-parked="human"]')?.textContent).toContain('Paused by you.');
+    expect(q('[data-testid="bots-resume-bot"]')).not.toBeNull();
+    expect(q('[data-testid="bots-pause-bot"]')).toBeNull();
+  });
+
   it('a parked bot\'s profile says why and offers Resume (budget or errors); a bot that is not parked shows none', async () => {
     const act$ = vi.fn(async () => ({ ok: true }));
     bots[1] = { ...bots[1], bot: { ...bots[1].bot, parked: { reason: 'budget', at: 1 } }, status: { ...bots[1].status!, presence: 'parked' } };
@@ -1383,8 +1407,8 @@ describe('Bots page', () => {
     expect(profile.querySelector('[data-bots-profile-workers]')?.textContent).toBe('1 running');
     // Turns used and left today (no hourly cap is shown).
     expect(profile.querySelector('[data-bots-profile-turns]')?.textContent).toBe(`${DEFAULT_BOT_BUDGETS.lead.maxTurnsPerDay - 30} used · 30 left`);
-    // Nothing on it edits the bot's powers.
-    expect(profile.querySelectorAll('input, button, select')).toHaveLength(0);
+    // Nothing on it edits the bot's powers: its one control is Pause.
+    expect([...profile.querySelectorAll('input, button, select')].map((el) => el.getAttribute('data-testid'))).toEqual(['bots-pause-bot']);
 
     act(() => q(`[data-bots-row="bot:${MOA}"]`)!.click());
     act(() => q('[data-bots-pill]')!.click());

@@ -1157,6 +1157,7 @@ export const ko = {
   'botsPage.stop.allConfirm': "실행 중인 모든 봇 턴, 모든 봇 워커, 대기 중인 모든 게이트를 중지할까요?",
   'botsPage.stop.allAction': "모두 중지",
   'botsPage.stop.bot': "중지",
+  'botsPage.pause.bot': "일시 정지",
   'botsPage.stop.botConfirm': "{name}의 턴과 워커를 중지할까요?",
   'botsPage.profile.parked.budget': "턴 소진: 한도가 풀리면 대기 중인 메시지가 실행됩니다.",
   'botsPage.profile.parked.error': "오류로 멈춤: 재개할 때까지 턴을 받지 않습니다.",

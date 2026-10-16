@@ -1633,6 +1633,7 @@ export const en = {
   'botsPage.stop.allConfirm': "Stop every running bot turn, every bot worker and every queued gate?",
   'botsPage.stop.allAction': "Stop all",
   'botsPage.stop.bot': "Stop",
+  'botsPage.pause.bot': "Pause",
   'botsPage.stop.botConfirm': "Stop {name}'s turn and its workers?",
   'botsPage.profile.parked.budget': "Out of turns: its waiting messages run when the limit frees up.",
   'botsPage.profile.parked.error': "Stopped after errors: it takes no turn until you resume it.",

@@ -1611,6 +1611,7 @@ export const pl = {
   'botsPage.stop.allConfirm': "Zatrzymać każdą trwającą turę bota, każdego workera bota i każdą oczekującą bramkę?",
   'botsPage.stop.allAction': "Zatrzymaj wszystko",
   'botsPage.stop.bot': "Zatrzymaj",
+  'botsPage.pause.bot': "Wstrzymaj",
   'botsPage.stop.botConfirm': "Zatrzymać turę i workery: {name}?",
   'botsPage.profile.parked.budget': "Brak tur: czekające wiadomości zostaną obsłużone, gdy limit się zwolni.",
   'botsPage.profile.parked.error': "Zatrzymany po błędach: nie podejmie tury, dopóki go nie wznowisz.",

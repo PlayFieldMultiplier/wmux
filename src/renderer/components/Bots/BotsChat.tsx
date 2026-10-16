@@ -68,7 +68,7 @@ import { RoomCard, useIdLabels } from '../Room/RoomCard';
 import { CardAnswers, useWorkspaceNames } from '../Room/CardAnswers';
 import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
-import { PresenceDot, botPresence } from '../Room/BotChips';
+import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, isCoordinatorBot, normalizeBotJob, type BotProfile as BotProfileData } from '../../../shared/bot';
@@ -1540,14 +1540,18 @@ function ProfileLine({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
-/** Stop: the bot's turn and its workers, after an inline confirm. The
- *  result is a toast. */
-function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: T }) {
+/** Pause (park the bot: it takes no new turn until Resume; reversible, so
+ *  no confirm) beside Stop (the bot's turn and its workers, after an inline
+ *  confirm; the result is a toast). A paused bot shows Resume in Today. */
+function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort; act?: FactoryBotPort['act']; t: T }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const stopBot = port.stopBot;
-  if (!stopBot) return null;
+  const canPause = !!act && row.bot.enabled && botActionsFor(row).park;
+  if (!stopBot && !canPause) return null;
   const run = async () => {
+    if (!stopBot) return;
     setBusy(true);
     try {
       const r = await stopBot(row.bot.id);
@@ -1559,9 +1563,21 @@ function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: 
       setBusy(false);
     }
   };
+  const pause = async () => {
+    if (!act) return;
+    setPausing(true);
+    try {
+      const r = await act('park', row.bot.id);
+      if (!r.ok) useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: r.message ?? '' }), level: 'error' });
+    } catch (err) {
+      useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: err instanceof Error ? err.message : String(err) }), level: 'error' });
+    } finally {
+      setPausing(false);
+    }
+  };
   return (
     <div className="mt-1 border-t border-[var(--stroke)] pt-2" data-bots-stop-bot={row.bot.id}>
-      {confirming ? (
+      {confirming && stopBot ? (
         <InlineConfirm
           text={t('botsPage.stop.botConfirm', { name: row.bot.name })}
           confirmLabel={t('botsPage.stop.bot')}
@@ -1572,7 +1588,10 @@ function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: 
           testId="bots-stop-bot"
         />
       ) : (
-        <Button size="sm" variant="destructive" data-testid="bots-stop-bot" onClick={() => setConfirming(true)}>{t('botsPage.stop.bot')}</Button>
+        <div className="flex items-center gap-2">
+          {canPause && <Button size="sm" variant="secondary" data-testid="bots-pause-bot" disabled={pausing} onClick={() => void pause()}>{t('botsPage.pause.bot')}</Button>}
+          {stopBot && <Button size="sm" variant="destructive" data-testid="bots-stop-bot" onClick={() => setConfirming(true)}>{t('botsPage.stop.bot')}</Button>}
+        </div>
       )}
     </div>
   );
@@ -1819,7 +1838,7 @@ function WorkerEngineLine({ row, t, port }: { row: FactoryBotRow; t: T; port?: P
  *  their model, on/off, what it used today of each limit (and what stops
  *  it, with Resume when parked), its routines
  *  (read-only), its connections, then what it can do (the shared powers,
- *  read-only), whom it reports to, its workers now, and Stop. */
+ *  read-only), whom it reports to, its workers now, and Pause and Stop. */
 function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'>; adminPort?: BotAdminPort }) {
   const routines = (useBotRoutines()?.routines ?? []).filter((r) => r.botId === row.bot.id);
   const canDo = botCanDo(row.bot);
@@ -1868,7 +1887,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
           )}
         />
       </div>
-      <StopBot row={row} port={stopPort} t={t} />
+      <StopBot row={row} port={stopPort} act={adminPort?.act} t={t} />
       <DeleteBot row={row} port={adminPort} t={t} />
     </div>
   );

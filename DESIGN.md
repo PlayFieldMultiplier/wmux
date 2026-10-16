@@ -470,6 +470,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   Manage (Settings › Bots › Connections); its skills (Skills, below); then, read-only, what it can do in the owner's words — one phrase per power of
   the shared surface, plus a Coordinator's reads in every workspace, never
   per-bot settings — whom it reports to (You), and its workers now; last,
+  Pause — a neutral secondary that parks the bot at once, with no confirm
+  (it is undone by Today's Resume, which then shows with "Paused by you"),
+  shown while the bot is on and not parked — then
   Stop — the bot's turn and its workers — a
   destructive secondary that asks in place, the solid red only on its
   final confirm, never a window dialog; under it Delete bot, the same

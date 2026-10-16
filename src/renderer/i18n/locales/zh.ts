@@ -1733,6 +1733,7 @@ export const zh = {
   'botsPage.stop.allConfirm': "停止所有正在运行的机器人回合、所有机器人工作者和所有排队中的检查？",
   'botsPage.stop.allAction': "全部停止",
   'botsPage.stop.bot': "停止",
+  'botsPage.pause.bot': "暂停",
   'botsPage.stop.botConfirm': "停止 {name} 的回合及其工作者？",
   'botsPage.profile.parked.budget': "回合已用完：限额释放后会处理等待中的消息。",
   'botsPage.profile.parked.error': "因错误而停止：在你恢复之前不会进行回合。",
