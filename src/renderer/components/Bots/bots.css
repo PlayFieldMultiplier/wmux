@@ -141,29 +141,6 @@
   text-align: left;
 }
 .wmux-bots-tree-row:hover { background: var(--hover-fill); }
-/* A row's ⋯ (Open in Workspaces, Stop worker) sits at its top right, shown
-   while the row is hovered or holds focus, or its menu is open; the title
-   keeps clear of it. Stop worker's confirm takes a line under the row. */
-.wmux-bots-tree-item { min-width: 0; }
-.wmux-bots-tree-row-wrap { position: relative; min-width: 0; }
-.wmux-bots-tree-row-wrap .wmux-bots-tree-row { padding-right: 30px; }
-.wmux-bots-tree-row-wrap:hover .wmux-bots-tree-row { background: var(--hover-fill); }
-.wmux-bots-tree-menu { position: absolute; top: 3px; right: 4px; opacity: 0; }
-.wmux-bots-tree-row-wrap:hover .wmux-bots-tree-menu,
-.wmux-bots-tree-row-wrap:focus-within .wmux-bots-tree-menu,
-.wmux-bots-tree-menu.is-open { opacity: 1; }
-.wmux-bots-tree-menu-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  color: var(--text-muted);
-}
-.wmux-bots-tree-menu-button:hover { background: var(--hover-fill); color: var(--text-main); }
-.wmux-bots-tree-menu-button.is-open { background: var(--selection-emphasis); color: var(--text-main); }
-.wmux-bots-tree-confirm { padding: 4px 8px 6px; }
 
 .wmux-bots-badge {
   display: inline-flex;

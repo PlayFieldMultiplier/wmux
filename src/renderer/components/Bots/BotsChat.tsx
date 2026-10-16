@@ -1886,13 +1886,12 @@ export function waitsOnOwner(card: RoomCardData, livePlans: ReadonlySet<string>)
  *  list (#2231): a round button right of the name pill, mirroring the back
  *  button, that opens the bot's worker tree as a popover. Shown only in the
  *  one-column layout (bots.css); the wide layout's list shows the tree. */
-function HeadWorkers({ rows, name, shownId, t, onOpen, stopTask }: {
+function HeadWorkers({ rows, name, shownId, t, onOpen }: {
   rows: readonly BotTreeRow[];
   name: string;
   shownId: string | null;
   t: T;
   onOpen: (workspaceId: string) => void;
-  stopTask?: BotsStopPort['stopTask'];
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
@@ -1926,7 +1925,7 @@ function HeadWorkers({ rows, name, shownId, t, onOpen, stopTask }: {
           className="wmux-bots-head-workers-pop"
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); buttonRef.current?.focus(); } }}
         >
-          <BotsWorkerTree id={treeId} rows={rows} name={name} shownId={shownId} t={t} onOpen={(workspaceId) => { setOpen(false); onOpen(workspaceId); }} stopTask={stopTask} />
+          <BotsWorkerTree id={treeId} rows={rows} name={name} shownId={shownId} t={t} onOpen={(workspaceId) => { setOpen(false); onOpen(workspaceId); }} />
         </Popover>
       )}
     </span>
@@ -2275,7 +2274,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
           {presence && <PresenceDot presence={presence} />}
           {group && <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{conversation.bots.length === 1 ? t('botsPage.botCountOne') : t('botsPage.botCount', { count: conversation.bots.length })}</span>}
         </button>
-        {tree.length > 0 && <HeadWorkers rows={tree} name={title} shownId={shownId} t={t} onOpen={openWorker} stopTask={stopPort.stopTask} />}
+        {tree.length > 0 && <HeadWorkers rows={tree} name={title} shownId={shownId} t={t} onOpen={openWorker} />}
       </div>
       {profileOpen && conversation.kind === 'bot' && !removedBot && (
         <div className="wmux-bots-profile" ref={profileRef}><BotProfile row={conversation.row} workers={workers} workspaceName={workspaceName} t={t} stopPort={stopPort} jobPort={readOnly ? undefined : jobPort} adminPort={readOnly ? (jobPort?.remove ? { remove: jobPort.remove } : undefined) : jobPort} /></div>

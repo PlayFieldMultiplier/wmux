@@ -386,15 +386,7 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   second fill. The panel never opens by itself — a new row with its running
   dot is the signal. A worker row carries one dot, its state mark: the git
   line shows the diff counts, not its clean dot. A group row lists none
-  (each worker sits under its bot once). Each worker row ends in a 22px `⋯`
-  (Worker options) at its top right, shown while the row is hovered or
-  focused or its menu is open: Open in Workspaces, and **Stop worker** (in
-  the red text) for a live worker whose task is still open. Stop worker asks
-  in place under the row — "Stop the worker for “<task>”?", Cancel · Stop —
-  and stops that one task's worker: its task is cancelled (stopped by
-  owner), its branch and changes stay, and the bot's turn and other work go
-  on; the outcome is a toast. A finished or paused worker, or a resumed
-  worker of an ended task, is not offered it.
+  (each worker sits under its bot once).
 - **Group chats (owner decision 2026-10-15):** the owner makes them — `+` ›
   New group chat opens a dialog: the workspace (those with bots), a name
   and a checkbox per bot of that workspace, with one muted line saying a
@@ -629,8 +621,7 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   and never switches the active workspace (owner decision 2026-10-14): a
   44px header on one line — the worker's name in 13px/500, "· its state" in
   11px (the needs-you text while it waits), a `⋯` menu (Open in Workspaces,
-  Resume for an ended task that can resume, and Stop worker for a live
-  worker whose task is open — the row's confirm, under the header) and Close as 28px icon
+  and Resume for an ended task that can resume) and Close as 28px icon
   buttons — and the terminal right under it, live and typed into in place.
   The panel only views the worker: the pane's tab strip and its split,
   browser and zoom controls stay on Workspaces. A side panel and the chat

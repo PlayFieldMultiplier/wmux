@@ -10,19 +10,13 @@
 // terminal in the panel beside the chat (BotsWorkerPanel); the row it shows
 // is selected. The rows reuse the Sidebar's marks (StatusMarkView,
 // IconFanOut, IconGitBranch), not its task group, whose menu closes
-// worktrees. Each row's ⋯ (shown on hover or focus) is the worker panel's
-// menu: Open in Workspaces, and Stop worker for a live worker whose task is
-// still open, confirmed in place under the row (BotsWorkerMenu).
-import { useState } from 'react';
+// worktrees.
 import { useStore } from '../../stores';
-import { focusNotificationTarget } from '../../hooks/useNotificationListener';
 import type { AgentStatus } from '../../../shared/types';
 import { FOCUS_RING } from '../focusRing';
 import { IconChevron, IconFanOut, IconGitBranch } from '../icons';
 import { StatusMarkView } from '../Sidebar/AgentMarks';
 import type { BotTreeRow } from './botsModel';
-import type { BotsStopPort } from './botsStop';
-import { WorkerMenu, WorkerStopConfirm } from './BotsWorkerMenu';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -59,74 +53,55 @@ export function treeRowLabel(row: BotTreeRow, t: T): string {
   return row.folderKept ? `${state} · ${t('botsPage.worker.folderKept')}` : state;
 }
 
-function TreeRow({ row, selected, t, onOpen, stopTask }: { row: BotTreeRow; selected: boolean; t: T; onOpen: () => void; stopTask?: BotsStopPort['stopTask'] }) {
+function TreeRow({ row, selected, t, onOpen }: { row: BotTreeRow; selected: boolean; t: T; onOpen: () => void }) {
   const meta = useStore((s) => s.workspaces.find((w) => w.id === row.workspaceId)?.metadata);
-  const [confirmStop, setConfirmStop] = useState(false);
   const state = treeRowState(row, t);
   const label = treeRowLabel(row, t);
   const needsYou = row.state === 'needsYou';
-  const stop = row.stoppable && row.taskId && stopTask ? { taskId: row.taskId, stopTask } : null;
   return (
-    <div className="wmux-bots-tree-item">
-      <div className="wmux-bots-tree-row-wrap">
-        <button
-          type="button"
-          data-bots-worker={row.workspaceId}
-          data-worker-state={row.state}
-          data-worker-needs-input={row.needsInput ? 'true' : undefined}
-          aria-current={selected ? 'true' : undefined}
-          aria-label={`${row.title}, ${label}`}
-          title={`${row.title} · ${label}`}
-          onClick={onOpen}
-          className={`wmux-bots-tree-row ${selected ? 'is-selected' : ''} ${FOCUS_RING}`}
-        >
-          <span className="mt-1 flex-none">
-            <StatusMarkView status={ROW_STATUS[row.state]} quiet={!needsYou} label={state} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 items-center gap-1">
-              <span className="flex-none text-[var(--text-muted)]" aria-hidden="true"><IconFanOut size={10} /></span>
-              {/* The worker shown in the panel reads in the title weight, as the
-                  Sidebar marks its focused task: no second fill inside the group. */}
-              <span className={`min-w-0 truncate text-[12px] ${selected ? 'font-[var(--title-weight,500)] text-[var(--text-main)]' : row.state === 'done' || row.state === 'failed' || row.state === 'cancelled' ? 'text-[var(--text-sub)]' : 'text-[var(--text-main)]'}`}>{row.title}</span>
+    <button
+      type="button"
+      data-bots-worker={row.workspaceId}
+      data-worker-state={row.state}
+      data-worker-needs-input={row.needsInput ? 'true' : undefined}
+      aria-current={selected ? 'true' : undefined}
+      aria-label={`${row.title}, ${label}`}
+      title={`${row.title} · ${label}`}
+      onClick={onOpen}
+      className={`wmux-bots-tree-row ${selected ? 'is-selected' : ''} ${FOCUS_RING}`}
+    >
+      <span className="mt-1 flex-none">
+        <StatusMarkView status={ROW_STATUS[row.state]} quiet={!needsYou} label={state} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="flex-none text-[var(--text-muted)]" aria-hidden="true"><IconFanOut size={10} /></span>
+          {/* The worker shown in the panel reads in the title weight, as the
+              Sidebar marks its focused task: no second fill inside the group. */}
+          <span className={`min-w-0 truncate text-[12px] ${selected ? 'font-[var(--title-weight,500)] text-[var(--text-main)]' : row.state === 'done' || row.state === 'failed' || row.state === 'cancelled' ? 'text-[var(--text-sub)]' : 'text-[var(--text-main)]'}`}>{row.title}</span>
+        </span>
+        {/* What a worker waiting on input asks, in the needs-you text. */}
+        {row.summary && (
+          <span data-bots-worker-summary title={row.summary} className="mt-0.5 block truncate text-[11px] text-[var(--attention-text)]">{row.summary}</span>
+        )}
+        {/* A neutral note, not an error: the folder waits for its changes. */}
+        {row.folderKept && (
+          <span data-bots-worker-folder-kept className="mt-0.5 block truncate text-[11px] text-[var(--text-muted)]">{t('botsPage.worker.folderKept')}</span>
+        )}
+        {meta?.gitBranch && (
+          <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] leading-4 tabular-nums text-[color-mix(in_srgb,var(--text-main)_45%,transparent)]" data-bots-worker-branch>
+            <span className="min-w-0 truncate">
+              <span className="mr-1 inline-flex align-[-2px]" aria-hidden="true"><IconGitBranch size={12} /></span>
+              {meta.gitBranch}
             </span>
-            {/* What a worker waiting on input asks, in the needs-you text. */}
-            {row.summary && (
-              <span data-bots-worker-summary title={row.summary} className="mt-0.5 block truncate text-[11px] text-[var(--attention-text)]">{row.summary}</span>
-            )}
-            {/* A neutral note, not an error: the folder waits for its changes. */}
-            {row.folderKept && (
-              <span data-bots-worker-folder-kept className="mt-0.5 block truncate text-[11px] text-[var(--text-muted)]">{t('botsPage.worker.folderKept')}</span>
-            )}
-            {meta?.gitBranch && (
-              <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] leading-4 tabular-nums text-[color-mix(in_srgb,var(--text-main)_45%,transparent)]" data-bots-worker-branch>
-                <span className="min-w-0 truncate">
-                  <span className="mr-1 inline-flex align-[-2px]" aria-hidden="true"><IconGitBranch size={12} /></span>
-                  {meta.gitBranch}
-                </span>
-                {/* The diff counts only: the git line's own clean dot would be a
-                    second dot on a row whose state mark leads it. */}
-                {(meta.gitSync?.added ?? 0) > 0 && <span data-git-diff="added" className="shrink-0 font-mono" style={{ color: 'var(--accent-green)' }}>+{meta.gitSync!.added}</span>}
-                {(meta.gitSync?.removed ?? 0) > 0 && <span data-git-diff="removed" className="shrink-0 font-mono" style={{ color: 'var(--accent-red)' }}>−{meta.gitSync!.removed}</span>}
-              </span>
-            )}
+            {/* The diff counts only: the git line's own clean dot would be a
+                second dot on a row whose state mark leads it. */}
+            {(meta.gitSync?.added ?? 0) > 0 && <span data-git-diff="added" className="shrink-0 font-mono" style={{ color: 'var(--accent-green)' }}>+{meta.gitSync!.added}</span>}
+            {(meta.gitSync?.removed ?? 0) > 0 && <span data-git-diff="removed" className="shrink-0 font-mono" style={{ color: 'var(--accent-red)' }}>−{meta.gitSync!.removed}</span>}
           </span>
-        </button>
-        <WorkerMenu
-          attr="data-bots-worker"
-          t={t}
-          wrapClassName="wmux-bots-tree-menu"
-          buttonClassName="wmux-bots-tree-menu-button"
-          onOpenInWorkspaces={() => focusNotificationTarget(() => useStore.getState(), { workspaceId: row.workspaceId }, { reveal: true })}
-          onStop={stop ? () => setConfirmStop(true) : undefined}
-        />
-      </div>
-      {confirmStop && stop && (
-        <div className="wmux-bots-tree-confirm">
-          <WorkerStopConfirm task={row.title} taskId={stop.taskId} stopTask={stop.stopTask} t={t} testId="bots-stop-worker" onClose={() => setConfirmStop(false)} />
-        </div>
-      )}
-    </div>
+        )}
+      </span>
+    </button>
   );
 }
 
@@ -159,7 +134,7 @@ export function TreeToggle({ count, expanded, controls, name, t, onToggle }: {
   );
 }
 
-export default function BotsWorkerTree({ id, rows, name, shownId, t, onOpen, stopTask }: {
+export default function BotsWorkerTree({ id, rows, name, shownId, t, onOpen }: {
   id: string;
   rows: readonly BotTreeRow[];
   /** The bot's name (the group's accessible name). */
@@ -168,13 +143,11 @@ export default function BotsWorkerTree({ id, rows, name, shownId, t, onOpen, sto
   shownId: string | null;
   t: T;
   onOpen: (workspaceId: string) => void;
-  /** Stop worker on a live row whose task is still open (absent: none). */
-  stopTask?: BotsStopPort['stopTask'];
 }) {
   return (
     <div id={id} role="group" aria-label={t('botsPage.worker.treeOf', { name })} className="wmux-bots-tree" data-bots-tree>
       {rows.map((row) => (
-        <TreeRow key={row.workspaceId} row={row} selected={shownId === row.workspaceId} t={t} onOpen={() => onOpen(row.workspaceId)} stopTask={stopTask} />
+        <TreeRow key={row.workspaceId} row={row} selected={shownId === row.workspaceId} t={t} onOpen={() => onOpen(row.workspaceId)} />
       ))}
     </div>
   );

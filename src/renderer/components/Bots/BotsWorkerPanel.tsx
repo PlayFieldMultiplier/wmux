@@ -11,19 +11,151 @@
 // (setActivePane is scoped to the active one). A worker that also holds a
 // browser or an editor is not moved here (selectWorkerPanelHost: their state
 // would not survive the remount); the panel says so and offers Workspaces.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { focusNotificationTarget } from '../../hooks/useNotificationListener';
 import PaneContainer from '../Pane/PaneContainer';
 import Button from '../ui/Button';
+import Popover from '../ui/Popover';
 import { FOCUS_RING } from '../focusRing';
-import { IconX } from '../icons';
-import { WorkerMenu, WorkerStopConfirm } from './BotsWorkerMenu';
-import type { BotsStopPort } from './botsStop';
+import { IconMoreHorizontal, IconX } from '../icons';
+import { InlineConfirm } from './InlineConfirm';
+import { stopTaskSummary, type BotsStopPort } from './botsStop';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
 const openInWorkspaces = (workspaceId: string) => focusNotificationTarget(() => useStore.getState(), { workspaceId }, { reveal: true });
+
+/** Stop worker's in-place confirm under the header, as the profile's Stop
+ *  asks: what will happen, Cancel and Stop. It stops that one task's worker
+ *  (its task cancelled, "stopped by owner"; the bot's turn and other work go
+ *  on). The result is a toast; a stop that went through closes it. */
+function StopWorkerConfirm({ task, taskId, stopTask, t, onClose }: {
+  task: string;
+  taskId: string;
+  stopTask: NonNullable<BotsStopPort['stopTask']>;
+  t: T;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await stopTask(taskId);
+      useStore.getState().pushToast({ message: stopTaskSummary(task, r, t), level: r.ok ? 'info' : 'error' });
+      if (r.ok) onClose();
+    } catch (err) {
+      useStore.getState().pushToast({ message: `${t('botsPage.stop.failed')} ${err instanceof Error ? err.message : String(err)}`, level: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="px-3 py-2" data-bots-worker-panel-stop-confirm>
+      <InlineConfirm
+        text={t('botsPage.stop.workerConfirm', { task })}
+        confirmLabel={t('botsPage.stop.bot')}
+        cancelLabel={t('room.hq.cancel')}
+        busy={busy}
+        onConfirm={() => void run()}
+        onCancel={onClose}
+        testId="bots-stop-worker"
+      />
+    </div>
+  );
+}
+
+/** The header's ⋮: Open in Workspaces, Resume for an ended task whose
+ *  stopped worker can resume the same conversation, and Stop worker for a
+ *  live worker whose task is still open. */
+function PanelMenu({ workspaceId, t, onResume, onStop }: { workspaceId: string; t: T; onResume?: () => void; onStop?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+  const close = () => { setOpen(false); buttonRef.current?.focus(); };
+  // The menu's keys: arrows, Home and End move between the items; the
+  // first is focused when it opens.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }, [open]);
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    const items = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === 'ArrowDown' ? (at + 1) % items.length
+      : e.key === 'ArrowUp' ? (at - 1 + items.length) % items.length
+        : e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    items[next].focus();
+  };
+  return (
+    <span ref={wrapRef} className="relative inline-flex">
+      <button
+        ref={buttonRef}
+        type="button"
+        data-bots-worker-panel-menu
+        aria-label={t('botsPage.worker.menu')}
+        title={t('botsPage.worker.menu')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={`wmux-bots-icon-button ${open ? 'is-open' : ''} ${FOCUS_RING}`}
+      >
+        <IconMoreHorizontal size={14} />
+      </button>
+      {open && (
+        <Popover
+          ref={menuRef}
+          role="menu"
+          aria-label={t('botsPage.worker.menu')}
+          className="absolute right-0 top-full z-40 mt-1 min-w-[180px]"
+          onKeyDown={onMenuKey}
+        >
+          {onResume && (
+            <button
+              type="button"
+              role="menuitem"
+              data-bots-worker-panel-resume
+              onClick={() => { close(); onResume(); }}
+              className={`ui-section-row w-full text-left text-[13px] ${FOCUS_RING}`}
+            >
+              {t('botsPage.worker.resume')}
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            data-bots-worker-panel-workspaces
+            onClick={() => { close(); openInWorkspaces(workspaceId); }}
+            className={`ui-section-row w-full text-left text-[13px] ${FOCUS_RING}`}
+          >
+            {t('botsPage.chat.openInWorkspaces')}
+          </button>
+          {onStop && (
+            <button
+              type="button"
+              role="menuitem"
+              data-bots-worker-panel-stop
+              onClick={() => { close(); onStop(); }}
+              className={`ui-section-row w-full text-left text-[13px] text-[var(--accent-red)] ${FOCUS_RING}`}
+            >
+              {t('botsPage.worker.stop')}
+            </button>
+          )}
+        </Popover>
+      )}
+    </span>
+  );
+}
 
 export default function BotsWorkerPanel({ workspaceId, hosted, name, state, attention, t, onClose, onResume, stop, style }: {
   workspaceId: string;
@@ -46,10 +178,9 @@ export default function BotsWorkerPanel({ workspaceId, hosted, name, state, atte
   style?: React.CSSProperties;
 }): React.ReactElement | null {
   const workspace = useStore((s) => s.workspaces.find((w) => w.id === workspaceId));
-  // Stop worker's confirm, under the header; it belongs to the worker shown.
+  // Stop worker's confirm belongs to the task it was asked for.
   const [confirmStop, setConfirmStop] = useState<string | null>(null);
   if (!workspace) return null;
-  const confirming = !!stop && confirmStop === stop.taskId;
   return (
     <aside className="wmux-bots-worker" data-bots-worker-panel={workspaceId} aria-label={t('botsPage.chat.workerPanel', { name })} style={style}>
       {/* One line: the name, its state, the menu, Close. */}
@@ -60,14 +191,7 @@ export default function BotsWorkerPanel({ workspaceId, hosted, name, state, atte
             <span data-bots-worker-panel-state className={`shrink-0 truncate text-[11px] ${attention ? 'text-[var(--attention-text)]' : 'text-[var(--text-muted)]'}`}>{`· ${state}`}</span>
           )}
         </span>
-        <WorkerMenu
-          attr="data-bots-worker-panel"
-          t={t}
-          buttonClassName="wmux-bots-icon-button"
-          onOpenInWorkspaces={() => openInWorkspaces(workspaceId)}
-          onResume={onResume}
-          onStop={stop ? () => setConfirmStop(stop.taskId) : undefined}
-        />
+        <PanelMenu workspaceId={workspaceId} t={t} onResume={onResume} onStop={stop ? () => setConfirmStop(stop.taskId) : undefined} />
         <button
           type="button"
           data-bots-worker-panel-close
@@ -79,10 +203,8 @@ export default function BotsWorkerPanel({ workspaceId, hosted, name, state, atte
           <IconX size={14} />
         </button>
       </div>
-      {confirming && stop && (
-        <div className="px-3 py-2" data-bots-worker-panel-stop-confirm>
-          <WorkerStopConfirm task={name} taskId={stop.taskId} stopTask={stop.stopTask} t={t} testId="bots-stop-worker-panel" onClose={() => setConfirmStop(null)} />
-        </div>
+      {stop && confirmStop === stop.taskId && (
+        <StopWorkerConfirm task={name} taskId={stop.taskId} stopTask={stop.stopTask} t={t} onClose={() => setConfirmStop(null)} />
       )}
       {/* The terminal right under the header: the pane's tab strip and its
           split, browser and zoom controls are Workspaces' (bots.css hides

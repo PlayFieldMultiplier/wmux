@@ -1089,7 +1089,7 @@ describe('Bots page', () => {
     } as never));
   }
 
-  it('Stop worker: a running worker\'s row menu and panel menu offer it, ask in place, and stop that one task (Cancel sends nothing)', async () => {
+  it('Stop worker: a running worker\'s panel menu offers it, asks in place, and stops that one task (Cancel sends nothing); its row has no menu', async () => {
     seedRooms();
     seedWorkerPanes();
     const taskId = 'wtask-run-00000001';
@@ -1104,44 +1104,32 @@ describe('Bots page', () => {
     act(() => useStore.setState({ toasts: [] } as never));
     await render(<BotsPage stop={stop} />);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    expect(q('[data-bots-tree] [data-bots-worker="t1"]')?.getAttribute('data-worker-state')).toBe('running');
-    // The row's menu: Open in Workspaces and Stop worker; Stop worker asks first.
-    const rowMenu = q('[data-bots-tree] [data-bots-worker-menu]')!;
-    expect(rowMenu.getAttribute('aria-label')).toBe('Worker options');
-    act(() => rowMenu.click());
-    expect(q('[data-bots-tree] [data-bots-worker-workspaces]')).not.toBeNull();
-    expect(q('[data-bots-tree] [data-bots-worker-stop]')?.textContent).toBe('Stop worker');
-    act(() => q('[data-bots-tree] [data-bots-worker-stop]')!.click());
-    expect(q('[data-bots-tree] [data-bots-worker-stop]')).toBeNull();
+    const row = q('[data-bots-tree] [data-bots-worker="t1"]')!;
+    expect(row.getAttribute('data-worker-state')).toBe('running');
+    // The list's row stays a plain row: no menu of its own.
+    expect(q('[data-bots-tree] [aria-haspopup="menu"]')).toBeNull();
+    act(() => row.click());
+    expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    expect(q('[data-bots-worker-panel-menu]')?.getAttribute('aria-label')).toBe('Worker options');
+    expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
+    expect(q('[data-bots-worker-panel-stop]')?.textContent).toBe('Stop worker');
+    act(() => q('[data-bots-worker-panel-stop]')!.click());
+    expect(q('[data-bots-worker-panel-stop]')).toBeNull();
     expect(q('[data-testid="bots-stop-worker-confirm-row"]')?.textContent).toContain('Stop the worker for “fix login”?');
     expect(stop.stopTask).not.toHaveBeenCalled();
     act(() => q('[data-testid="bots-stop-worker-cancel"]')!.click());
     expect(q('[data-testid="bots-stop-worker-confirm-row"]')).toBeNull();
     expect(stop.stopTask).not.toHaveBeenCalled();
-    // The panel's menu offers it too, with the same confirm.
-    act(() => q('[data-bots-tree] [data-bots-worker="t1"]')!.click());
-    expect(q('[data-bots-worker-panel="t1"]')).not.toBeNull();
-    act(() => q('[data-bots-worker-panel-menu]')!.click());
-    expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
-    act(() => q('[data-bots-worker-panel-stop]')!.click());
-    expect(q('[data-testid="bots-stop-worker-panel-confirm-row"]')?.textContent).toContain('Stop the worker for “fix login”?');
-    act(() => q('[data-testid="bots-stop-worker-panel-cancel"]')!.click());
-    expect(q('[data-testid="bots-stop-worker-panel-confirm-row"]')).toBeNull();
-    expect(stop.stopTask).not.toHaveBeenCalled();
     // Confirmed: that task's worker only, never the bot-wide stop; a toast says so.
     act(() => q('[data-bots-worker-panel-menu]')!.click());
     act(() => q('[data-bots-worker-panel-stop]')!.click());
-    await act(async () => { q('[data-testid="bots-stop-worker-panel-confirm"]')!.click(); });
+    await act(async () => { q('[data-testid="bots-stop-worker-confirm"]')!.click(); });
     expect(stop.stopTask).toHaveBeenCalledTimes(1);
     expect(stop.stopTask).toHaveBeenCalledWith(taskId);
-    expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped the worker for “fix login”.');
-    expect(q('[data-testid="bots-stop-worker-panel-confirm-row"]')).toBeNull();
-    act(() => q('[data-bots-tree] [data-bots-worker-menu]')!.click());
-    act(() => q('[data-bots-tree] [data-bots-worker-stop]')!.click());
-    await act(async () => { q('[data-testid="bots-stop-worker-confirm"]')!.click(); });
-    expect(stop.stopTask).toHaveBeenCalledTimes(2);
-    expect(stop.stopTask).toHaveBeenLastCalledWith(taskId);
     expect(stop.stopBot).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped the worker for “fix login”.');
+    expect(q('[data-testid="bots-stop-worker-confirm-row"]')).toBeNull();
     act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
@@ -1161,11 +1149,6 @@ describe('Bots page', () => {
     expect(q('[data-bots-tree] [data-bots-worker="t1"]')?.getAttribute('data-worker-state')).toBe('running');
     expect(q('[data-bots-tree] [data-bots-worker="t2"]')?.getAttribute('data-worker-state')).toBe('done');
     for (const id of ['t1', 't2']) {
-      const item = q(`[data-bots-tree] [data-bots-worker="${id}"]`)!.parentElement!;
-      act(() => item.querySelector<HTMLButtonElement>('[data-bots-worker-menu]')!.click());
-      expect(item.querySelector('[data-bots-worker-workspaces]')).not.toBeNull();
-      expect(item.querySelector('[data-bots-worker-stop]')).toBeNull();
-      act(() => item.querySelector<HTMLButtonElement>('[data-bots-worker-menu]')!.click());
       act(() => q(`[data-bots-tree] [data-bots-worker="${id}"]`)!.click());
       act(() => q('[data-bots-worker-panel-menu]')!.click());
       expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
@@ -1181,10 +1164,12 @@ describe('Bots page', () => {
     root = createRoot(container);
     await render(<BotsPage stop={{}} />);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
-    act(() => q('[data-bots-tree] [data-bots-worker-menu]')!.click());
-    expect(q('[data-bots-tree] [data-bots-worker-workspaces]')).not.toBeNull();
-    expect(q('[data-bots-tree] [data-bots-worker-stop]')).toBeNull();
+    act(() => q('[data-bots-tree] [data-bots-worker="t1"]')!.click());
+    act(() => q('[data-bots-worker-panel-menu]')!.click());
+    expect(q('[data-bots-worker-panel-workspaces]')).not.toBeNull();
+    expect(q('[data-bots-worker-panel-stop]')).toBeNull();
     expect(stop.stopTask).not.toHaveBeenCalled();
+    act(() => useStore.getState().setBotsWorkerPanel(null));
   });
 
   it('an open task whose worker was paused stays in the rail with Resume, which shows the new pane; a refusal for want of a slot is worded', async () => {
