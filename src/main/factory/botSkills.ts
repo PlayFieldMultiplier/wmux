@@ -313,11 +313,13 @@ export class BotSkillStore {
     const raw = readVersionedFile(this.file, SKILLS_FILE_VERSION);
     const bots = raw?.bots;
     if (bots && typeof bots === 'object' && !Array.isArray(bots)) {
+      // Per bot, a list of records: a skill name is never an object key.
       for (const [botId, skills] of Object.entries(bots as Record<string, unknown>)) {
-        if (!BOT_ID_RE.test(botId) || !skills || typeof skills !== 'object') continue;
+        if (!BOT_ID_RE.test(botId) || !Array.isArray(skills)) continue;
         const map = new Map<string, SkillMeta>();
-        for (const [name, rec] of Object.entries(skills as Record<string, unknown>)) {
-          if (SKILL_NAME_RE.test(name) && isMeta(rec, name)) map.set(name, rec);
+        for (const rec of skills as unknown[]) {
+          const name = (rec as { name?: unknown } | null)?.name;
+          if (typeof name === 'string' && SKILL_NAME_RE.test(name) && isMeta(rec, name)) map.set(name, rec);
         }
         if (map.size > 0) this.records.set(botId, map);
       }
@@ -349,8 +351,8 @@ export class BotSkillStore {
     };
     set(rec);
     try {
-      const bots: Record<string, Record<string, SkillMeta>> = {};
-      for (const [id, map] of this.records) bots[id] = Object.fromEntries(map);
+      const bots: Record<string, SkillMeta[]> = {};
+      for (const [id, map] of this.records) bots[id] = [...map.values()];
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       atomicWriteJSONSync(this.file, { version: SKILLS_FILE_VERSION, bots });
       return true;
@@ -592,18 +594,36 @@ export class BotSkillStore {
       updatedAt: at,
     };
     let tmp: string | null = null;
+    // The proposal waiting so far is set aside until the record is written,
+    // so a failed write leaves it and its record as they were.
+    const aside = path.join(d.dir, `.prev-${hash.slice(0, 12)}`);
+    let setAside = false;
     try {
       if (!lstatOrNull(d.dir)) fs.mkdirSync(d.dir, { mode: 0o700 });
       tmp = this.writeFresh(d.dir, checked.files);
       // rmSync on a symlink removes the link, never what it points at.
-      fs.rmSync(proposedDir, { recursive: true, force: true });
+      fs.rmSync(aside, { recursive: true, force: true });
+      if (lstatOrNull(proposedDir)) {
+        fs.renameSync(proposedDir, aside);
+        setAside = true;
+      }
       fs.renameSync(tmp, proposedDir);
       tmp = null;
     } catch (err) {
       if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+      if (setAside && !lstatOrNull(proposedDir)) fs.renameSync(aside, proposedDir);
       return refuse('write_failed', `skill ${name} could not be written: ${String(err)}`);
     }
-    if (!this.commit(botId, name, next)) return refuse('write_failed', `skill ${name} could not be recorded`);
+    if (!this.commit(botId, name, next)) {
+      try {
+        fs.rmSync(proposedDir, { recursive: true, force: true });
+        if (setAside) fs.renameSync(aside, proposedDir);
+      } catch {
+        /* the record still names the earlier proposal's hash: approve checks it */
+      }
+      return refuse('write_failed', `skill ${name} could not be recorded`);
+    }
+    if (setAside) fs.rmSync(aside, { recursive: true, force: true });
     return {
       ok: true, skill: view(next, next.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: !!meta?.approved, diff,
       ...(meta?.proposed?.approvalId ? { replacedApprovalId: meta.proposed.approvalId } : {}),
@@ -630,22 +650,39 @@ export class BotSkillStore {
     if (!files || skillHash(files) !== hash) return refuse('stale', `the proposal of ${name} on disk is not the one on the card`);
     const fm = parseSkillFrontmatter(files.content);
     if (!fm.ok || fm.frontmatter.name !== name) return refuse('stale', `the proposal of ${name} on disk is not the one on the card`);
+    const live = path.join(d.dir, SKILL_FILE);
+    const liveRefs = path.join(d.dir, REFERENCES_DIR);
     let tmp: string | null = null;
+    let backup: string | null = null;
+    // Put the earlier approved files back (the proposal stays waiting).
+    const restore = (): void => {
+      try {
+        if (!backup) return;
+        fs.rmSync(liveRefs, { recursive: true, force: true });
+        fs.rmSync(live, { recursive: true, force: true });
+        for (const n of [SKILL_FILE, REFERENCES_DIR]) {
+          if (lstatOrNull(path.join(backup, n))) fs.renameSync(path.join(backup, n), path.join(d.dir, n));
+        }
+        fs.rmSync(backup, { recursive: true, force: true });
+      } catch {
+        /* the record still names the earlier hash: unmatched files never load */
+      }
+    };
     try {
       // The approved SKILL.md and references/ are written from the bytes
       // just hashed, never moved from proposed/.
       tmp = this.writeFresh(d.dir, files);
-      fs.rmSync(path.join(d.dir, REFERENCES_DIR), { recursive: true, force: true });
-      if (files.references.length > 0) fs.renameSync(path.join(tmp, REFERENCES_DIR), path.join(d.dir, REFERENCES_DIR));
-      const live = path.join(d.dir, SKILL_FILE);
-      const st = lstatOrNull(live);
-      if (st && !st.isFile()) fs.rmSync(live, { recursive: true, force: true });
+      backup = fs.mkdtempSync(path.join(d.dir, '.bak-'));
+      for (const n of [SKILL_FILE, REFERENCES_DIR]) {
+        if (lstatOrNull(path.join(d.dir, n))) fs.renameSync(path.join(d.dir, n), path.join(backup, n));
+      }
+      if (files.references.length > 0) fs.renameSync(path.join(tmp, REFERENCES_DIR), liveRefs);
       fs.renameSync(path.join(tmp, SKILL_FILE), live);
       fs.rmSync(tmp, { recursive: true, force: true });
       tmp = null;
-      fs.rmSync(proposedDir, { recursive: true, force: true });
     } catch (err) {
       if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+      restore();
       return refuse('write_failed', `skill ${name} could not be approved: ${String(err)}`);
     }
     const at = this.now();
@@ -654,7 +691,16 @@ export class BotSkillStore {
       approved: { hash, version: fm.frontmatter.version, description: fm.frontmatter.description, at },
       createdAt: meta.createdAt, updatedAt: at,
     };
-    if (!this.commit(botId, name, next)) return refuse('write_failed', `skill ${name} could not be recorded as approved`);
+    if (!this.commit(botId, name, next)) {
+      restore();
+      return refuse('write_failed', `skill ${name} could not be recorded as approved`);
+    }
+    try {
+      fs.rmSync(backup, { recursive: true, force: true });
+      fs.rmSync(proposedDir, { recursive: true, force: true });
+    } catch {
+      /* leftovers never load: the record names the approved hash */
+    }
     return { ok: true, skill: view(next, false) };
   }
 
@@ -782,8 +828,10 @@ export async function installWorkerSkills(
     madeDirs.push(dir);
   };
   const write = (file: string, text: string): void => {
-    fs.writeFileSync(file, text, { encoding: 'utf8', flag: 'wx' });
+    // Listed first: a write that fails half-way is removed too (the folder
+    // was made by this call, so the name was free).
     madeFiles.push(file);
+    fs.writeFileSync(file, text, { encoding: 'utf8', flag: 'wx' });
   };
   const copied: string[] = [];
   try {

@@ -203,10 +203,33 @@ describe('skill store: main keeps the approval record', () => {
     const p = propose(s, A, 'report');
     s.approve(A, 'report', p.hash);
     const rec = JSON.parse(fs.readFileSync(path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME), 'utf8'));
-    expect(rec).toMatchObject({ version: 1, bots: { [A]: { report: { state: 'approved', approved: { hash: p.hash, version: '1.0.0' } } } } });
+    expect(rec).toMatchObject({ version: 1, bots: { [A]: [{ name: 'report', state: 'approved', approved: { hash: p.hash, version: '1.0.0' } }] } });
     expect(fs.readdirSync(path.join(botSkillsRoot(wmuxDir, A), 'report')).sort()).toEqual(['SKILL.md']);
     // A fresh store reads the same record.
     expect(store().index(A)).toEqual([{ name: 'report', description: 'How to report a task' }]);
+  });
+
+  it('keeps every valid name across a restart, object key names included', () => {
+    const s = store();
+    for (const name of ['constructor', 'prototype', 'report']) s.approve(A, name, propose(s, A, name).hash);
+    expect(store().index(A).map((x) => x.name)).toEqual(['constructor', 'prototype', 'report']);
+  });
+
+  it('a record that cannot be written leaves the approved files and the waiting proposal as they were', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    const up = propose(s, A, 'report', skillMd('report', '1.1.0', 'Gate, lint, then report.\n'));
+    // The record file becomes unwritable.
+    const file = path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME);
+    fs.rmSync(file, { force: true });
+    fs.mkdirSync(path.join(file, 'x'), { recursive: true });
+    expect(s.approve(A, 'report', up.hash)).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.0.0', content: skillMd('report') });
+    expect(s.propose(A, { name: 'report', content: skillMd('report', '1.2.0', 'z\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'write_failed' });
+    // Writable again: the card's proposal is still there to approve.
+    fs.rmSync(file, { recursive: true, force: true });
+    expect(s.approve(A, 'report', up.hash)).toMatchObject({ ok: true, skill: { version: '1.1.0' } });
+    expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.1.0' });
   });
 
   it('a skill.json in the skill folder is not read: a proposal stays unloaded', () => {
@@ -244,7 +267,7 @@ describe('skill store: main keeps the approval record', () => {
     s.approve(A, 'report', propose(s, A, 'report').hash);
     const file = path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME);
     const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
-    rec.bots[A].report.approved.description = 'Edited description';
+    rec.bots[A][0].approved.description = 'Edited description';
     fs.writeFileSync(file, JSON.stringify(rec));
     expect(store().index(A)).toEqual([{ name: 'report', description: 'How to report a task' }]);
   });
