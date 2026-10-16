@@ -28,15 +28,18 @@
 //     left; only the owner's Clean up now applies the rules to it. Such a
 //     folder is recorded (`kept_stopped`, with its bot), so Clean up now
 //     and the usage line still find it once the ledger has pruned the
-//     task's row; a removal or a resume of its worker ends that.
+//     task's row; a removal ends that. A resume of its worker keeps the
+//     record (the row may be pruned before the worker stops again).
 //     Owner decision 2026-10-17: a kept folder that has sat for
 //     TASK_FOLDER_KEPT_TTL_MS (7 days) since it was recorded is removed by
 //     the automatic pass when it is still clean, with every check above
 //     (inside its root through no link, no process or session in it, its
 //     worker not resumed, the branch kept, the keep ref for a detached
 //     HEAD). A dirty one goes to `kept_dirty` and is never removed
-//     automatically. A resume ends the record, so a later stop starts the
-//     7 days again. A removal posts one quiet card in the task's thread
+//     automatically. The 7 days count from the task's last stop: a resume
+//     restarts them, and when the resumed worker stops again (the owner's
+//     stop, an idle pause, its agent's exit) the record is refreshed to that
+//     stop, or written then if it is missing. A removal posts one quiet card in the task's thread
 //     (`task.keptFolderCleaned`): the record keeps the task's title and
 //     thread, since the ledger prunes the row after about as long.
 // What was removed is recorded in `<wmuxDir>/factory/task-folders.json`, with
@@ -243,6 +246,9 @@ export interface TaskFolderPorts {
   listSessions: () => Promise<TaskFolderSession[]>;
   /** The task's reclaimed worker: `resumed` and `stopping` still run. */
   workerState: (taskId: string) => 'stopping' | 'stopped' | 'resumed' | null;
+  /** When the task's reclaimed worker was last stopped, while it is
+   *  stopped (a resumed worker stopped again). Absent: not known. */
+  workerStoppedAt?: (taskId: string) => number | undefined;
   worktrees: {
     removeWorktree(repoRoot: string, repoHash: string, worktreePath: string): Promise<{ ok: true } | { ok: false; error: string; dirty?: boolean }>;
     restoreWorktree(repoRoot: string, repoHash: string, worktreePath: string, ref: string, detached?: boolean): Promise<{ ok: true } | { ok: false; error: string }>;
@@ -390,7 +396,9 @@ async function cleanTaskFolderNow(
   const stoppedByOwner = isStoppedByOwnerRow(entry);
   // A folder a stop kept, past its TTL: the automatic pass applies the
   // rules to it (a dirty one is kept, as always).
-  const expired = opts.keptTtl === true && prior?.state === 'kept_stopped' && !!prior.stopped && now() - prior.at >= TASK_FOLDER_KEPT_TTL_MS;
+  const stopAt = ports.workerStoppedAt?.(entry.id);
+  const expired = opts.keptTtl === true && prior?.state === 'kept_stopped' && !!prior.stopped
+    && now() - Math.max(prior.at, stopAt ?? -Infinity) >= TASK_FOLDER_KEPT_TTL_MS;
   // A task the owner stopped keeps its folder; Clean up now still applies.
   // It is recorded, so it is found once the ledger has pruned the row.
   if (stoppedByOwner && opts.force !== true && !expired) {
@@ -398,6 +406,11 @@ async function cleanTaskFolderNow(
     // Not while its worker runs again (resumed, or still stopping): the
     // record, and its 7 days, start at the next stop.
     const worker = ports.workerState(entry.id);
+    // A resumed worker stopped again since: its 7 days start at that stop.
+    const restopped = worker === 'stopped' && stopAt !== undefined && stopAt > entry.updatedAt ? stopAt : undefined;
+    if (prior?.state === 'kept_stopped' && restopped !== undefined && restopped > prior.at) {
+      await ports.store.put({ ...prior, at: restopped }).catch((err: unknown) => log(`[factory] kept folder of ${entry.id} not refreshed: ${String(err)}`));
+    }
     if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && worker !== 'resumed' && worker !== 'stopping' && exists(mission.folder)) {
       const thread = entry.dispatch?.threadId;
       await ports.store.put({
@@ -413,7 +426,7 @@ async function cleanTaskFolderNow(
         ...(prior?.repoHash ? { repoHash: prior.repoHash } : {}),
         ...(prior?.head ? { head: prior.head } : {}),
         ...(prior?.keepRef ? { keepRef: prior.keepRef } : {}),
-        at: now(),
+        at: restopped ?? now(),
       }).catch((err: unknown) => log(`[factory] kept folder of ${entry.id} not recorded: ${String(err)}`));
     }
     return 'skipped';
@@ -606,11 +619,14 @@ function keptRow(rec: TaskFolderRecord): LedgerEntry {
   } as LedgerEntry;
 }
 
-/** A resumed worker uses its task's folder again: a folder a stop kept is no
- *  longer only kept (its next stop records it again). */
-export async function forgetKeptFolder(ports: Pick<TaskFolderPorts, 'store'>, taskId: string): Promise<void> {
-  if (ports.store.get(taskId)?.state !== 'kept_stopped') return;
-  await ports.store.delete(taskId).catch(() => undefined);
+/** A resumed worker uses its task's folder again: a folder a stop kept stays
+ *  recorded (its row may be pruned before the worker stops again), and its
+ *  7 days start again (TASK_FOLDER_KEPT_TTL_MS; the worker's next stop moves
+ *  them to that stop). */
+export async function forgetKeptFolder(ports: Pick<TaskFolderPorts, 'store' | 'now'>, taskId: string): Promise<void> {
+  const rec = ports.store.get(taskId);
+  if (rec?.state !== 'kept_stopped') return;
+  await ports.store.put({ ...rec, at: (ports.now ?? Date.now)() }).catch(() => undefined);
 }
 
 /**
@@ -746,11 +762,21 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           if (!isEndedBotTask(r)) return false;
           const rec = ports.store.get(r.id);
           if (rec && rec.state !== 'restored' && rec.state !== 'removing') return false;
-          if (!rec && r.updatedAt < since) return false;
+          // A task the owner stopped whose resumed worker stopped again since
+          // its row last changed: its folder is recorded at that stop.
+          const restopped = isStoppedByOwnerRow(r) && ports.workerState(r.id) === 'stopped' && (ports.workerStoppedAt?.(r.id) ?? -Infinity) > r.updatedAt;
+          if (!rec && r.updatedAt < since && !restopped) return false;
           return (attempts.get(`${r.id}@${r.rev}`) ?? 0) < TASK_FOLDER_ATTEMPTS_MAX;
         });
         // Folders a stop kept that have sat out their TTL (found by their
         // record: the ledger has usually pruned the row by then).
+        // A kept folder whose resumed worker stopped again: its 7 days start
+        // at that stop.
+        for (const rec of ports.store.all()) {
+          if (rec.state !== 'kept_stopped' || ports.workerState(rec.taskId) !== 'stopped') continue;
+          const stopAt = ports.workerStoppedAt?.(rec.taskId);
+          if (stopAt !== undefined && stopAt > rec.at) await ports.store.put({ ...rec, at: stopAt }).catch(() => undefined);
+        }
         const expired = ports.store.all().filter((rec) => rec.state === 'kept_stopped' && !!rec.stopped
           && now() - rec.at >= TASK_FOLDER_KEPT_TTL_MS && (attempts.get(`${rec.taskId}@kept`) ?? 0) < TASK_FOLDER_ATTEMPTS_MAX);
         if (due.length === 0 && expired.length === 0) break;

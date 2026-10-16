@@ -421,6 +421,10 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       },
       listSessions,
       workerState: (taskId: string) => reclaimed.get(taskId)?.state ?? null,
+      workerStoppedAt: (taskId: string) => {
+        const r = reclaimed.get(taskId);
+        return r?.state === 'stopped' ? r.at : undefined;
+      },
       worktrees: folderWorktrees,
       repoInfo: gitRepoInfo,
       gateRunning: (taskId: string) => getSharedTaskGateRunner()?.isRunning(taskId) === true,

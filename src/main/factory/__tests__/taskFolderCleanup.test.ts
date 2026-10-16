@@ -492,22 +492,22 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/mess-77777777')).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it('a resumed worker using its kept folder again ends the kept record; its next stop records it again', async () => {
+  it('a resumed worker using its kept folder again keeps the kept record, its 7 days started again', async () => {
     const mgr = new TaskWorktreeManager();
     const wt = await taskWorktree(mgr, 'back-99999999');
     const missions = new Map<string, TaskMission>([['wtask-back-99999999', { folder: wt, branch: 'wtask/back-99999999' }]]);
     const stopped = row('cancelled', { id: 'wtask-back-99999999', summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000 });
-    const p = ports({}, missions);
+    let now = 50_000;
+    const p = ports({ now: () => now }, missions);
     await cleanTaskFolders(p, [stopped]);
-    expect(p.store.get(stopped.id)?.state).toBe('kept_stopped');
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 });
+    now = 60_000;
     await forgetKeptFolder(p, stopped.id);
-    expect(p.store.get(stopped.id)).toBeNull();
-    // Only a folder a stop kept is forgotten.
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 60_000, stopped: { botId: BOT, title: 'perf-A' } });
+    // Only a folder a stop kept is touched.
     await p.store.put({ taskId: 'wtask-x-00000001', kind: 'worktree', path: wt, state: 'removed', at: 1 });
     await forgetKeptFolder(p, 'wtask-x-00000001');
-    expect(p.store.get('wtask-x-00000001')?.state).toBe('removed');
-    await cleanTaskFolders(p, [stopped]);
-    expect(p.store.get(stopped.id)?.state).toBe('kept_stopped');
+    expect(p.store.get('wtask-x-00000001')).toMatchObject({ state: 'removed', at: 1 });
     expect(fs.existsSync(wt)).toBe(true);
   });
 
@@ -754,26 +754,51 @@ describe('a folder a stop kept, after 7 days', () => {
     expect(fs.existsSync(handed)).toBe(true);
   });
 
-  it('a pass while the worker is resumed does not record the folder again; its next stop starts the 7 days', async () => {
+  it('resumed after 2 days and stopped again: the folder is recorded at that stop, and cleaned 7 days after it', async () => {
     const wt = await taskWorktree(new TaskWorktreeManager(), 'run-77777777');
     const missions = new Map<string, TaskMission>([['wtask-run-77777777', { folder: wt, branch: 'wtask/run-77777777' }]]);
     const stopped = row('cancelled', { id: 'wtask-run-77777777', ...stoppedBy });
     let now = 50_000;
     let worker: 'stopped' | 'resumed' = 'stopped';
-    const p = ports({ now: () => now, workerState: () => worker }, missions);
-    await cleanTaskFolders(p, [stopped]);
-    now = 50_000 + DAY / 4;
+    let stoppedAt = 0; // no stop of a resumed worker yet
+    const keptFolderCleaned = vi.fn();
+    const p = ports({ now: () => now, workerState: () => worker, workerStoppedAt: () => (worker === 'stopped' ? stoppedAt : undefined), keptFolderCleaned }, missions);
+    await pass(p, [stopped]);
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 });
+    // Day 2: resumed (the record stays, its clock restarts); a pass while it
+    // runs records nothing new and removes nothing.
+    now = 50_000 + 2 * DAY;
     worker = 'resumed';
     await forgetKeptFolder(p, stopped.id);
-    await cleanTaskFolders(p, [stopped]);
-    expect(p.store.get(stopped.id)).toBeNull();
-    // Stopped again on day 6: recorded then, so still kept on day 7.
-    now = 50_000 + 6 * DAY;
-    worker = 'stopped';
-    await cleanTaskFolders(p, [stopped]);
-    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 + 6 * DAY });
-    now = 50_000 + 7 * DAY + DAY / 4;
+    now = 50_000 + 8 * DAY;
     await pass(p, [stopped]);
+    expect(fs.existsSync(wt)).toBe(true);
+    // Day 9: the resumed worker is stopped again (row unchanged, over a day old).
+    now = 50_000 + 9 * DAY;
+    worker = 'stopped';
+    stoppedAt = now;
+    await pass(p, [stopped]);
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 + 9 * DAY });
+    expect(fs.existsSync(wt)).toBe(true);
+    now = 50_000 + 15 * DAY;
+    await pass(p, [stopped]);
+    expect(fs.existsSync(wt)).toBe(true);
+    // Seven days after the second stop, with the row pruned by then.
+    now = 50_000 + 16 * DAY;
+    await pass({ ...p, missions: async () => new Map<string, TaskMission>() }, [], () => expect(fs.existsSync(wt)).toBe(false));
+    expect(keptFolderCleaned).toHaveBeenCalledWith(expect.objectContaining({ taskId: stopped.id, days: 7 }));
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/run-77777777')).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('a record an older build dropped on resume is written again at the worker\'s next stop, though the row is over a day old', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager(), 'lost-88888888');
+    const missions = new Map<string, TaskMission>([['wtask-lost-88888888', { folder: wt, branch: 'wtask/lost-88888888' }]]);
+    const stopped = row('cancelled', { id: 'wtask-lost-88888888', title: 'lost one', ...stoppedBy });
+    const now = 50_000 + 9 * DAY;
+    const p = ports({ now: () => now, workerStoppedAt: () => 50_000 + 9 * DAY - 60_000 }, missions);
+    await pass(p, [stopped], () => expect(p.store.get(stopped.id)).toMatchObject({
+      state: 'kept_stopped', at: 50_000 + 9 * DAY - 60_000, stopped: { botId: BOT, title: 'lost one', workspaceId: 'ws-owner' },
+    }));
     expect(fs.existsSync(wt)).toBe(true);
   });
 });
