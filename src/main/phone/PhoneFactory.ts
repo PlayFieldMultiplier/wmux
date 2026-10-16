@@ -15,18 +15,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
-import { isIdentitySlot, type BotProfile, type BotStatus } from '../../shared/bot';
+import { delegatesFromConversation, isIdentitySlot, type BotProfile, type BotStatus } from '../../shared/bot';
+import type { BotTaskView } from '../../shared/botTask';
+import { taskPrUrls, type WorkOwner } from '../../shared/botsWork';
 import type { BotGroup } from '../../shared/botGroup';
 import type { Handoff } from '../../shared/handoff';
-import { dmThreadBot, dmThreadId, groupThreadGroup, parseThreadId, type RoomCard, type ThreadId, type ThreadSummary } from '../../shared/room';
+import { dmThreadBot, dmThreadId, groupThreadGroup, parseThreadId, ROOM_LIMITS, type RoomCard, type ThreadId, type ThreadSummary } from '../../shared/room';
 import {
   PHONE_BOTS_COMMAND,
+  PHONE_BOTS_LIMITS,
   fitPhoneBots,
   parsePhoneBotsBot,
   parsePhoneBotsConversation,
+  phoneConversationWork,
   type PhoneBotsBot,
   type PhoneBotsConversation,
   type PhoneBotsReply,
+  type PhoneBotsWork,
 } from '../../shared/phoneBots';
 import { applyFactoryToSidebar, delegationsFromHandoffs, type PhoneFactoryState } from '../../shared/phoneFactory';
 import {
@@ -57,6 +62,8 @@ import { getHandoffRouter, HANDOFF_STORE_LIMITS } from '../factory/handoffRouter
 import { getRoomWriter, ROOMS_DIRNAME } from '../factory/roomWriter';
 import { phoneBot } from '../factory/phoneBot';
 import { getGroupStore } from '../factory/groupStore';
+import { getApprovalService } from '../factory/approvals';
+import { botTaskViews, getBotTaskSources } from '../factory/botTasks';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 
 /** The room reads this file needs (RoomWriter). */
@@ -80,6 +87,9 @@ export interface PhoneFactoryPorts {
    *  serve it as empty, so the phone is told the room is unavailable. */
   roomReadable(workspaceId: string): boolean;
   now(): number;
+  /** An approval request's action (`approval` cards' `approvalAction`), or
+   *  null when it is not known. Absent: none is served. */
+  approvalAction?(approvalId: string): string | null;
 }
 
 function roomFile(workspaceId: string): string {
@@ -103,6 +113,7 @@ export function defaultPhoneFactoryPorts(): PhoneFactoryPorts {
       }
     },
     now: () => Date.now(),
+    approvalAction: (approvalId) => getApprovalService()?.get(approvalId)?.action ?? null,
   };
 }
 
@@ -252,9 +263,16 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
     limit,
   });
   const info = botInfo(bots);
+  const action = (approvalId: string): string | null => {
+    try {
+      return ports.approvalAction?.(approvalId) ?? null;
+    } catch {
+      return null;
+    }
+  };
   const cards: PhoneRoomCard[] = [];
   for (const card of page.cards) {
-    const projected = phoneRoomCard(card, info);
+    const projected = phoneRoomCard(card, info, action);
     if (projected) cards.push(projected);
   }
   return fitPhoneRoomPage({ workspaceId, threadId, cards, nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore }, sinceSeq !== undefined);
@@ -267,6 +285,9 @@ export interface PhoneBotsPorts extends PhoneFactoryPorts {
   groups(): BotGroup[] | null;
   /** A workspace's name on the desktop, or null when it is not open. */
   workspaceName(workspaceId: string): string | null;
+  /** Each bot's tasks, as the desktop's Bots page lists them (a work card's
+   *  state and pull request). Absent: work is read from the cards alone. */
+  taskViews?(bots: BotProfile[]): Promise<ReadonlyMap<string, readonly BotTaskView[]>>;
 }
 
 export function defaultPhoneBotsPorts(): PhoneBotsPorts {
@@ -274,8 +295,16 @@ export function defaultPhoneBotsPorts(): PhoneBotsPorts {
     ...defaultPhoneFactoryPorts(),
     groups: () => getGroupStore()?.list() ?? null,
     workspaceName: (workspaceId) => getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name ?? null,
+    taskViews: async (bots) => {
+      const sources = getBotTaskSources();
+      return sources ? botTaskViews(bots, sources) : new Map();
+    },
   };
 }
+
+/** How long the list waits for the bots' tasks before it reads work from
+ *  the cards alone. */
+const TASK_VIEWS_WAIT_MS = 2000;
 
 /** Cards read from the end of a thread to find its newest message. */
 const PREVIEW_SCAN = 20;
@@ -343,16 +372,47 @@ function conversationActivity(
   };
 }
 
+/** What a conversation's work cards read besides its cards. */
+interface WorkContext {
+  threads: readonly ThreadSummary[];
+  workAuthor?: string;
+  workCandidates?: ReadonlySet<string>;
+  tasks: readonly BotTaskView[];
+  prUrl: (taskId: string) => string | null;
+}
+
+/** A conversation's work cards (shared/phoneBots.ts phoneConversationWork):
+ *  its own thread's newest page and the newest page of each of the newest
+ *  threads it started. */
+function conversationWork(rooms: PhoneRoomReader, workspaceId: string, scope: ConversationScope, owner: WorkOwner, ctx: WorkContext): PhoneBotsWork[] {
+  const started = scope.all
+    .filter((t) => t !== scope.own)
+    .sort((a, b) => b.lastAt - a.lastAt || b.lastSeq - a.lastSeq)
+    .slice(0, PHONE_BOTS_LIMITS.work);
+  if (started.length === 0) return [];
+  const cards: RoomCard[] = [];
+  for (const t of scope.own ? [scope.own, ...started] : started) cards.push(...rooms.read(workspaceId, { threadId: t.threadId, limit: ROOM_LIMITS.PAGE }).cards);
+  return phoneConversationWork({
+    owner, cards,
+    threads: { [workspaceId]: ctx.threads },
+    ...(ctx.workAuthor ? { workAuthor: ctx.workAuthor } : ctx.workCandidates ? { workCandidates: ctx.workCandidates } : {}),
+    tasks: ctx.tasks,
+    prUrl: ctx.prUrl,
+    threadTitle: (threadId) => ctx.threads.find((t) => t.threadId === threadId)?.title || null,
+  });
+}
+
 /**
  * The Bots page's list for the phone (shared/phoneBots.ts): every bot, and
  * one conversation per bot (its 1:1) and per live group chat, newest first,
  * across workspaces — the desktop's order (Bots/botsModel.ts buildBots). A
  * conversation is its own thread and the threads it started; the desktop's
  * 1:1 also folds in a bot's older General cards, which this list leaves out
- * (the phone reads a 1:1 as its `dm:` thread). Null before the factory
+ * (the phone reads a 1:1 as its `dm:` thread). `tasks` are each bot's tasks
+ * (PhoneBotsPorts.taskViews), for the work cards. Null before the factory
  * started.
  */
-export function phoneBotsReply(ports: PhoneBotsPorts): PhoneBotsReply | null {
+export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string, readonly BotTaskView[]> = new Map()): PhoneBotsReply | null {
   const all = ports.bots();
   const rooms = ports.rooms();
   const groups = ports.groups();
@@ -395,26 +455,48 @@ export function phoneBotsReply(ports: PhoneBotsPorts): PhoneBotsReply | null {
       return { lastAt: createdAt, lastSeq: 0, unread: null, openQuestions: 0 };
     }
   };
+  const allTasks = [...tasks.values()].flat();
+  const prUrls = taskPrUrls(all.map((b) => ({ repoKey: b.repo?.repoKey, tasks: tasks.get(b.id) })));
+  const workOf = (workspaceId: string, scope: ConversationScope, owner: WorkOwner, author: Pick<WorkContext, 'workAuthor' | 'workCandidates'>): { work?: PhoneBotsWork[] } => {
+    try {
+      const work = conversationWork(rooms, workspaceId, scope, owner, {
+        threads: threads(workspaceId), ...author, tasks: allTasks, prUrl: (taskId) => prUrls.get(taskId) ?? null,
+      });
+      return work.length > 0 ? { work } : {};
+    } catch {
+      return {};
+    }
+  };
   for (const group of groups) {
     const ws = workspaceName(group.workspaceId);
+    const members = group.memberIds.filter((id) => all.some((b) => b.id === id && b.workspaceId === group.workspaceId));
+    const scope = groupScope(threads(group.workspaceId), group);
+    // Only a coordinator's or a lead bot's dispatch opens a thread from a
+    // group: its only one handed it off, or the nearest of several (BotsChat.tsx).
+    const coordinators = new Set(members.filter((id) => delegatesFromConversation(all.find((b) => b.id === id))));
+    const author = coordinators.size === 1 ? { workAuthor: [...coordinators][0] } : { workCandidates: coordinators };
     rows.push({
       order: `group:${group.id}`,
       kind: 'group', threadId: group.threadId, workspaceId: group.workspaceId,
       ...(ws ? { workspaceName: ws } : {}),
       name: group.name || ws || '',
       groupId: group.id,
-      memberBotIds: group.memberIds.filter((id) => all.some((b) => b.id === id && b.workspaceId === group.workspaceId)),
-      ...activity(group.workspaceId, groupScope(threads(group.workspaceId), group), group.createdAt),
+      memberBotIds: members,
+      ...activity(group.workspaceId, scope, group.createdAt),
+      // A group made from the room (General) starts no thread of its own.
+      ...(groupThreadGroup(group.threadId) ? workOf(group.workspaceId, scope, { threadId: group.threadId }, author) : {}),
     });
   }
   for (const b of sorted) {
     const ws = workspaceName(b.workspaceId);
+    const scope = dmScope(threads(b.workspaceId), b.id);
     rows.push({
       order: `bot:${b.id}`,
       kind: 'dm', threadId: dmThreadId(b.id), workspaceId: b.workspaceId,
       ...(ws ? { workspaceName: ws } : {}),
       name: b.name, botId: b.id, memberBotIds: [b.id],
-      ...activity(b.workspaceId, dmScope(threads(b.workspaceId), b.id), b.createdAt),
+      ...activity(b.workspaceId, scope, b.createdAt),
+      ...workOf(b.workspaceId, scope, { botId: b.id }, { workAuthor: b.id }),
     });
   }
   rows.sort((a, b) => b.lastAt - a.lastAt || a.order.localeCompare(b.order));
@@ -427,8 +509,26 @@ export function phoneBotsReply(ports: PhoneBotsPorts): PhoneBotsReply | null {
   return fitPhoneBots({ factoryEnabled: settings.enabled, bots: parsedBots, conversations });
 }
 
+/** Each bot's tasks within TASK_VIEWS_WAIT_MS, else none (work is then
+ *  read from the cards alone). Never throws. */
+async function phoneTaskViews(ports: PhoneBotsPorts): Promise<ReadonlyMap<string, readonly BotTaskView[]>> {
+  const none = new Map<string, readonly BotTaskView[]>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const bots = ports.bots();
+    if (!bots || bots.length === 0 || !ports.taskViews) return none;
+    const late = new Promise<typeof none>((resolve) => { timer = setTimeout(() => resolve(none), TASK_VIEWS_WAIT_MS); });
+    return await Promise.race([ports.taskViews(bots), late]);
+  } catch {
+    return none;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** `workspaces.bots`; null for any other command. */
-export function handlePhoneBotsCommand(command: string, ports: () => PhoneBotsPorts = defaultPhoneBotsPorts): PhoneBotsReply | { unavailable: true } | null {
+export function handlePhoneBotsCommand(command: string, ports: () => PhoneBotsPorts = defaultPhoneBotsPorts): Promise<PhoneBotsReply | { unavailable: true }> | null {
   if (command !== PHONE_BOTS_COMMAND) return null;
-  return phoneBotsReply(ports()) ?? { unavailable: true };
+  const p = ports();
+  return phoneTaskViews(p).then((tasks) => phoneBotsReply(p, tasks) ?? { unavailable: true });
 }

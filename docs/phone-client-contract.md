@@ -4291,6 +4291,22 @@ arrival order (`seq`, increasing; never sort by `at`).
 - `greeting: true` — on a `question` card only: the bot's greeting question,
   asked in its first turn after the owner added it. It closes once the bot has
   a job.
+- `notice` — on a system card (`actor.kind: "system"`) only: `{code, args?}`,
+  the card's stable code and the values its words need, so the app can word
+  the card in the reader's language. Served only for a code listed in
+  [Room card notice codes](#room-card-notice-codes), with only the args that
+  table lists for it, each of its type (a string at most 500 characters, a
+  finite number). `title` and `body` stay the English text on every card:
+  show the `title` for a code the app does not know, for an arg that names
+  a word (`status`, `cause`, `limit`, `hop`, …) whose value the table does
+  not list, and for a template whose placeholder has no arg: a listed arg
+  may be absent (the desktop wrote none, or its value was not of its type).
+- `approvalAction` — on an `approval` card only: the act its request asks
+  for — `merge`, `push_default`, `issue_create`, `issue_close`, `comment`,
+  `release`, or `skill` (a skill a bot wrote for itself). A `skill`
+  approval, and any action the app does not know (any lower-case name may
+  come), is approved on the desktop only: show "Approve on the desktop" with
+  no buttons. Absent when the desktop no longer has the request.
 - `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
   `closes: true` — the card records the end of its thread's subject.
 - `replyTo` — the id of a card of the same thread this one answers. A card a
@@ -4327,6 +4343,71 @@ bot-authored), checked before anything else; no input grant. Every answer is
 | `503 {error:"desktop-unavailable"}` | No desktop attached (rooms live on the desktop; the daemon keeps no copy). |
 | `503 {error:"rooms-unavailable"}` | The desktop cannot read rooms: too old, its factory has not started, or the room's file cannot be read. |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
+
+#### Room card notice codes
+
+A system card's `notice.code` is one of these. The desktop words the card's
+title from the code with the English template below, `{name}` being the
+card's arg of that name; it carries the same templates in every language it
+ships. A card's `body` is served as written: show it as is. A code a later
+desktop adds is not served until it is listed here.
+
+Placeholders that are not args: `{time}` is `until` (a time in epoch ms) as
+a local time; `{cause}`, `{reason}` and `{verdict}` are their arg's value
+worded (the values listed); a value not listed means the English `title`.
+
+| Code | Args | English title (desktop) | Values |
+|---|---|---|---|
+| `worker.paused` | `title` string | `Worker paused: {title}`<br>`Worker paused` | `title`: the task's title, or its short id when it has none. The second title when there is no `title` (a card written before worker cards named their task). |
+| `worker.pausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | `title` as `worker.paused`. `kind: "research"`: a research task (a task folder, not a worktree). |
+| `worker.idlePausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | As `worker.pausedResumable`. |
+| `worker.done` | `title` string, `status` string | `Worker done: {title}`<br>`Worker done` | `title` as `worker.paused`. `status`: `completed`, `cancelled` or `failed`. |
+| `worker.doneResumable` | `title` string, `status` string, `kind` string | `Worker done (resumable): {title}`<br>`Worker done (resumable)` | As `worker.done`; `kind` as `worker.pausedResumable`. |
+| `worker.resumed` | `title` string, `by` string, `where` string | `Worker resumed: {title}`<br>`Worker resumed` | `title` as `worker.paused`. `by`: `owner` or `bot`. `where`: `folder` or `newPane`. |
+| `worker.waiting` | `title` string, `inUse` number, `cap` number, `holders` string, `bots` string, `botCount` number, `workers` string, `workerCount` number | `Worker waiting, not started` | `bots` / `workers`: names, one per line (the first few). `holders`: the same in English. |
+| `worker.noReport` | — | `Worker answered without reporting its task` | — |
+| `worker.stillNoReport` | — | `Worker still has not reported its task` | — |
+| `worker.startFailed` | `title` string, `cause` string | `Worker for "{title}" could not start: {cause}` | `cause`: `fetch`, `worktree`, `repository`, `promptFile`, `slot`, `pane`, `setupStep` or `setup`. |
+| `gate.checked` | — | `Task checked: gate passed, task completed` | — |
+| `gate.passedNotCompleted` | — | `Gate passed: task not completed` | — |
+| `gate.passed` | — | `Gate passed: task left open` | — |
+| `gate.killed` | — | `Gate was killed: task left open` | — |
+| `gate.failed` | `exit` number | `Gate failed (exit {exit}): task left open` | — |
+| `gate.skipped` | `reason` string | `Gate skipped ({reason}): task left open` | `reason`: `deps_missing`, `no_gate_command` or `gate_unavailable`. |
+| `gate.busy` | — | `Gate already running: task left open` | — |
+| `gate.noBase` | `detail` string | `No gate on the default branch yet: task left open` | `detail`: the error, in English. |
+| `gate.refused` | — | `Gate refused: task left open` | — |
+| `gate.notRunNoBot` | — | `Gate not run: task left open` | — |
+| `gate.notRunNoWorktree` | — | `Gate not run: task left open` | — |
+| `gate.notRunNoBaseRef` | — | `Gate not run: task left open` | — |
+| `research.completed` | — | `Research reported: task completed` | — |
+| `research.notCompleted` | — | `Research reported: task not completed` | — |
+| `verify.passed` | — | `Verify gate passed` | — |
+| `verify.killed` | — | `Verify gate was killed` | — |
+| `verify.failed` | `exit` number | `Verify gate failed (exit {exit})` | — |
+| `verify.skipped` | `reason` string | `Verify gate skipped ({reason})` | As `gate.skipped`. |
+| `verify.busy` | — | `Verify gate already running` | — |
+| `verify.refused` | — | `Verify gate refused` | — |
+| `verify.notRunNoBot` | — | `Verify gate not run` | — |
+| `verify.notRunNoWorktree` | — | `Verify gate not run` | — |
+| `verify.notRunNoBaseRef` | — | `Verify gate not run` | — |
+| `budget.exhausted` | `bot` string, `limit` string, `until` number | `{bot} is out of turns for this hour`<br>`{bot} is out of turns for today`<br>`{bot} is running as many workers as it may at once`<br>`{bot} has used its worker hours for today`<br>`{bot} waits: the bots are running as many workers as they may at once` | One title per `limit`, in this order: `turns_hour`, `turns_day`, `concurrent_workers`, `worker_hours_day`, `factory_workers`. `until`: when it picks up by itself. |
+| `budget.held` | `bot` string, `until` number | `Queued: {bot} is out of turns` | `until`: when it has turns again. |
+| `bot.usageLimit` | `bot` string, `until` number | `{bot} hit its usage limit; it picks up again at {time}` | `{time}` is `until`. |
+| `bot.error` | `bot` string | `{bot} hit an error` | — |
+| `task.done` | `title` string | `Task done: {title}` | — |
+| `task.reported` | `title` string | `Task reported · in review: {title}` | — |
+| `task.failed` | `title` string | `Task failed: {title}` | — |
+| `task.cancelled` | `title` string | `Task cancelled: {title}` | — |
+| `task.stoppedByOwner` | `title` string | `Task cancelled · stopped by owner: {title}` | — |
+| `task.inputRequired` | `title` string, `why` string | `Task needs input: {title}` | `why`: `trustDialog`, `firstRun` or `launchFailed`. |
+| `pr.merged` | `pr` number, `title` string | `PR #{pr} merged: {title}`<br>`PR #{pr} merged` | The second title when there is no `title`. |
+| `pr.closed` | `pr` number, `title` string | `PR #{pr} closed: {title}`<br>`PR #{pr} closed` | As `pr.merged`. |
+| `verdict.recorded` | `verdict` string, `pr` number, `sha` string, `bot` string | `Verdict {verdict} for #{pr} at {sha} by {bot}` | `verdict`: `pass` or `fail`. |
+| `handoff.sent` | `hop` string, `to` string, `title` string, `relay` number | `dispatch → {to}: {title}`<br>`result → {to}: {title}`<br>`message → {to}: {title}`<br>`refusal → {to}: {title}`<br>`Answered → {to}: {title}` | One title per `hop`, in this order: `dispatch`, `result`, `message`, `refusal`, `answer`. `relay: 1`: wmux forwarded it (the desktop adds "(forwarded by wmux)"). |
+| `thread.finished` | `title` string | `Finished: {title}` | — |
+| `thread.stopped` | `title` string | `Stopped: {title}` | — |
+| `skill.archived` | `skill` string | `Skill archived: {skill}` | `skill`: the skill's name. |
 
 #### The Bots page (`bots`, `botMessages`, `/api/bots`, `/api/rooms/:workspaceId/messages`)
 
@@ -4369,7 +4450,12 @@ a client that calls these routes reads replies as room cards by definition.
     { "kind": "dm", "threadId": "dm:bot-1a2b3c4d", "workspaceId": "ws-1", "workspaceName": "wmux",
       "name": "Lead", "botId": "bot-1a2b3c4d", "memberBotIds": [ "bot-1a2b3c4d" ],
       "lastAt": 1759500000000, "lastSeq": 40, "lastPreview": "Can you fix the login?",
-      "lastActor": { "kind": "human" }, "unread": 2, "openQuestions": 1 } ] }
+      "lastActor": { "kind": "human" }, "unread": 2, "openQuestions": 1,
+      "work": [ { "threadId": "handoff:hof-7c1d2e3f", "rootCardId": "c-1759400000100-a1b2",
+                  "delegateBotId": "bot-5e6f7a8b", "state": "review", "title": "Fix the login redirect",
+                  "latestCardId": "c-1759450000000-c3d4", "latestPreview": "PR #57 is up",
+                  "steps": 4, "lastAt": 1759450000000,
+                  "refUrl": "https://github.com/acme/app/pull/57" } ] } ] }
 ```
 
 - `factoryEnabled` — the desktop's factory switch. Off, the bots are paused:
@@ -4417,6 +4503,40 @@ a client that calls these routes reads replies as room cards by definition.
   - `unread` — cards after the owner's read position in its own thread, or
     `null` when none is known (not zero).
   - `openQuestions` — questions asked in it that are not answered yet.
+  - `work` — the work this conversation handed off: one entry per thread it
+    started (a coordinator's request thread, `handoff:<id>`), the card the
+    desktop draws in its place, newest first, at most 20. Absent when there
+    is none. A long list may come shortened to fit the reply (its oldest
+    entries left out); a conversation is never left out for its `work`.
+    Each entry, read from the newest 100 cards of the conversation's thread
+    and of each started thread:
+    - `threadId` — the started thread; read it with
+      `GET /api/rooms/:workspaceId/cards?thread=`. Its cards, and wmux's
+      `Finished: …` / `Stopped: …` line about it, are what the desktop folds
+      into the card.
+    - `rootCardId` — the card in the conversation's own thread the work card
+      sits under, as the desktop places it: the delegating bot's message
+      announcing the hand-off (its "handing this to …" reply), else the card
+      before the work's first card (often the owner's request). With no card
+      of the conversation before it, the work's first card read, which may
+      be in `threadId`: place it by `lastAt` then.
+    - `delegateBotId` — the bot the work was handed to.
+    - `state` — `working` (a worker at it, or no end yet), `review` (its
+      report waits for review), `waiting_on_you` (a card in it waits on the
+      owner, or its worker asks for input), `done`, `failed`, `stopped`
+      (cancelled). The desktop's states map one to one (`needsYou` →
+      `waiting_on_you`, `cancelled` → `stopped`). It reads the work's tasks
+      when the desktop lists them within 2 s, else its cards alone, so a
+      busy desktop can serve a reported task whose PR merged as `review`
+      rather than `done` until the next read.
+    - `title` — the request's words (the hand-off's title, else the thread's
+      title), one line, at most 200 characters; empty when neither is known.
+    - `latestCardId` / `latestPreview` — the delegate's newest message in the
+      thread and its title (one line, at most 200 characters).
+    - `steps` — the cards folded into it, of those read. `lastAt` — its
+      newest card's time.
+    - `refUrl` — the GitHub pull request or issue it is about: one a task of
+      it opened, else the newest one a card links.
 
 A 1:1 here is its `dm:` thread. Before 1:1 threads existed the desktop's 1:1
 also gathered a bot's cards from `general`; this list does not, so an old

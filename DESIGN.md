@@ -453,7 +453,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   main is asked, and main checks it again) — what its workers run on — a native Select:
   Default (the presets' engine) or an installed engine that has a worker
   guard, one not installed listed but disabled — its workers' model and
-  effort (the same model line, for that engine) — on/off and presence,
+  effort (the same model line, for that engine) — on/off and presence
+  (right after Resume, "Resuming…" until the runtime reports, for 10 s at
+  most; then as any bot with no turn yet),
   then Today (owner decision 2026-10-16): on top, one muted line naming the
   first thing that keeps the bot from new work — paused by the owner,
   stopped after errors, the usage limit until a time, out of turns until a
@@ -461,7 +463,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   cap, the factory's workers or agent slots full, its queue full — with a
   secondary Resume while it is parked; under it one muted line per limit in
   tabular figures: turns this hour (only with an hourly cap) and today,
-  used and left; worker time used of its cap; running workers of its cap;
+  used and left; worker time used of its cap; worker slots in use of its cap (the cap counts slots held, so a task in
+  review whose worker still holds one is named: "2 of 3 · 2 held by tasks in
+  review");
   the queue of its cap (only when not empty); a line at its limit in the
   caution yellow,
   its routines, its connections — each library connection that applies to
@@ -470,6 +474,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   Manage (Settings › Bots › Connections); its skills (Skills, below); then, read-only, what it can do in the owner's words — one phrase per power of
   the shared surface, plus a Coordinator's reads in every workspace, never
   per-bot settings — whom it reports to (You), and its workers now; last,
+  Pause — a neutral secondary that parks the bot at once, with no confirm
+  (it is undone by Today's Resume, which then shows with "Paused by you"),
+  shown while the bot is on and not parked — then
   Stop — the bot's turn and its workers — a
   destructive secondary that asks in place, the solid red only on its
   final confirm, never a window dialog; under it Delete bot, the same

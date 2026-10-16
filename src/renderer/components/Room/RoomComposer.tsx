@@ -22,6 +22,7 @@ import { isCoordinatorBot, type BotRole } from '../../../shared/bot';
 import type { ThreadId } from '../../../shared/room';
 import { FOCUS_RING } from '../focusRing';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
+import { useStore } from '../../stores';
 import type { FactoryBotRow } from './factoryPorts';
 import { messageTitle, roleLabel } from './roomFormat';
 import Button from '../ui/Button';
@@ -261,6 +262,9 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
   // new card.
   const failedPost = useRef<{ key: string; clientPostId: string } | null>(null);
   const here = roomBots(bots, workspaceId);
+  // `t` reads the store's language: callbacks and memos keyed on it also
+  // key on the locale, so they re-word after a language change.
+  const locale = useStore((s) => s.locale);
 
   const submit = useCallback(async (e?: FormEvent) => {
     e?.preventDefault();
@@ -300,7 +304,7 @@ export function RoomComposer({ workspaceId, threadId, bots, t, api, onAddBot }: 
     } finally {
       setInFlight(false);
     }
-  }, [api, inFlight, workspaceId, threadId, text, mentions, t]);
+  }, [api, inFlight, workspaceId, threadId, text, mentions, t, locale]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter sends, Shift+Enter is a newline; an IME composition's Enter

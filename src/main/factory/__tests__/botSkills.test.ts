@@ -22,10 +22,14 @@ import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretR
 import { ApprovalService, registerApprovalRpc, skillCardLines, type ApprovalWake } from '../approvals';
 import { ROOM_LIMITS } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
-import { wakeSkills } from '../wakeContext';
+import { wakeApprovals, wakeArchivedSkills, wakeSkills } from '../wakeContext';
+import { noticeText } from '../../../renderer/components/Room/roomFormat';
+import { en } from '../../../renderer/i18n/locales/en';
+import { ko } from '../../../renderer/i18n/locales/ko';
 import { buildWakePrompt, skillIndexText } from '../wakePrompt';
 import { excludeLineOnce } from '../../git/infoExclude';
-import { registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { forgetSkillsOfRemovedBots, postSkillArchivedCard, reconcileSkillProposals, registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { dmThreadId } from '../../../shared/room';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../../shared/phoneBotApprovals';
 import { pendingForChip, type ApprovalView as RendererApprovalView } from '../../../renderer/components/Room/approvalsStore';
@@ -420,7 +424,7 @@ describe('line diff', () => {
 
 // ── The owner's approval card ───────────────────────────────────────────────
 
-function approvalRig(botName?: string) {
+function approvalRig(botName?: string, gone: ReadonlySet<string> = new Set()) {
   const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
   const skills = store();
   const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false }]]);
@@ -428,7 +432,7 @@ function approvalRig(botName?: string) {
   const events: string[] = [];
   const svc = new ApprovalService({
     file: path.join(wmuxDir, 'factory', 'approvals.json'),
-    bots: () => ({ listEnabled: () => [profile(A, botName)], get: (id) => (id === A ? profile(A, botName) : null) }),
+    bots: () => ({ listEnabled: () => (gone.has(A) ? [] : [profile(A, botName)]), get: (id) => (id === A && !gone.has(A) ? profile(A, botName) : null) }),
     runningWake: (id) => wakes.get(id) ?? null,
     readPr: async () => { throw new Error('no PR'); },
     ghLogin: async () => null,
@@ -528,6 +532,47 @@ describe('skill_propose → approval card → load', () => {
     expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'stale' });
     expect(r.svc.get(id)?.state).toBe('expired');
     expect(r.skills.read(A, 'report')).toMatchObject({ ok: false, code: 'not_found' });
+    // Its proposal is shelved, as a lapsed card's is: nothing shows as waiting.
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'archived' }]);
+    expect(r.skills.list(A)[0].proposed).toBeUndefined();
+  });
+
+  it('a replacement whose card is refused writes nothing: the earlier proposal and its card still work', async () => {
+    const r = approvalRig();
+    const first = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    const dirOf = path.join(botSkillsRoot(wmuxDir, A), 'report');
+    const post = vi.spyOn(r.writer, 'post').mockReturnValue({ ok: false } as never);
+    const second = await r.call('skill.propose', { name: 'report', content: skillMd('report', '1.0.1', 'Other steps.\n'), reason: 'r' });
+    post.mockRestore();
+    expect(second).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(fs.readFileSync(path.join(dirOf, 'proposed', 'SKILL.md'), 'utf8')).toBe(skillMd('report'));
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'proposed', proposed: { version: '1.0.0', approvalId: first.approvalId } }]);
+    expect(r.svc.get(first.approvalId as string)?.state).toBe('pending');
+    expect(r.svc.decide({ requestId: first.approvalId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true });
+    expect(r.skills.read(A, 'report')).toMatchObject({ ok: true, content: skillMd('report') });
+  });
+
+  it('at start, a proposal whose card closed unanswered is shelved; an approved one is never denied', async () => {
+    const r = approvalRig();
+    const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    // The card lapsed while the skills were off: the store was never told.
+    r.svc.withdraw(res.approvalId as string);
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'proposed' }]);
+    const other = await r.call('skill.propose', { name: 'triage', content: skillMd('triage'), reason: 'r' });
+    const hash = r.skills.waitingProposals().find((w) => w.name === 'triage')?.hash as string;
+    const approvals = {
+      get: (id: string) => (id === other.approvalId
+        ? { action: 'skill', state: 'approved', skill: { name: 'triage', hash, version: '1.0.0', update: false } }
+        : r.svc.get(id)),
+    } as never;
+    expect(reconcileSkillProposals(r.skills, approvals, () => undefined)).toBe(1);
+    expect(r.skills.list(A)).toMatchObject([
+      { name: 'report', state: 'archived' },
+      { name: 'triage', state: 'proposed', proposed: { approvalId: other.approvalId } },
+    ]);
+    // A request the approval store no longer keeps can never be approved: shelved too.
+    expect(reconcileSkillProposals(r.skills, { get: () => null } as never, () => undefined)).toBe(1);
+    expect(r.skills.list(A).find((s) => s.name === 'triage')).toMatchObject({ state: 'archived' });
   });
 
   it('an approved skill is not undone from its card; a window that cannot be told does not change the approval', async () => {
@@ -594,6 +639,37 @@ describe('skill_propose → approval card → load', () => {
     expect(r.writer.get(WS, r.svc.get(again.approvalId as string)?.cardId as string)).toMatchObject({ kind: 'approval' });
   });
 
+  it('deleting the bot ends its skill request, drops its skills record and folder, and an approve after it is refused', async () => {
+    const gone = new Set<string>();
+    const r = approvalRig(undefined, gone);
+    r.skills.approve(A, 'triage', propose(r.skills, A, 'triage').hash);
+    const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    const id = res.approvalId as string;
+    gone.add(A);
+    expect(r.svc.botRemoved(A)).toBe(1);
+    expect(r.skills.removeBot(A)).toBe(true);
+    expect(r.svc.get(id)?.state).toBe('expired');
+    expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'not_bot' });
+    expect(r.skills.list(A)).toEqual([]);
+    expect(fs.existsSync(botSkillsRoot(wmuxDir, A))).toBe(false);
+    expect(fs.existsSync(path.join(wmuxDir, 'factory', 'bots', A))).toBe(true);
+    const rec = JSON.parse(fs.readFileSync(path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME), 'utf8'));
+    expect(rec.bots[A]).toBeUndefined();
+    expect(store().list(A)).toEqual([]);
+  });
+
+  it('at start, the skills of a bot the directory no longer has are removed', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    s.approve(B, 'report', propose(s, B, 'report').hash);
+    expect(forgetSkillsOfRemovedBots(s, { get: (id: string) => (id === B ? profile(B) : null) })).toBe(1);
+    expect(s.list(A)).toEqual([]);
+    expect(fs.existsSync(botSkillsRoot(wmuxDir, A))).toBe(false);
+    expect(s.list(B)).toHaveLength(1);
+    // A directory that is not running removes nothing.
+    expect(forgetSkillsOfRemovedBots(s, null)).toBe(0);
+  });
+
   it('Approve loads it (approved), and the bot is told; Deny archives it', async () => {
     const r = approvalRig();
     const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
@@ -639,6 +715,60 @@ describe('skill_propose → approval card → load', () => {
     expect(r.skills.list(A).map((s) => s.name)).toEqual(['report']);
     // A caller without a bot binding is refused.
     expect(await r.call('skill.propose', { name: 'x', content: skillMd('x'), reason: 'r' }, {} as RpcContext)).toMatchObject({ ok: false, code: 'not_bot' });
+  });
+});
+
+describe('an archived skill: the owner\'s chat and the bot\'s next wake', () => {
+  it('Archive posts one card worded in the reader\'s language, and the wake says not to apply the skill', () => {
+    const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
+    expect(postSkillArchivedCard(writer, WS, dmThreadId(A), 'report')).toBe(true);
+    const card = writer.read(WS, { threadId: dmThreadId(A) }).cards.at(-1);
+    expect(card).toMatchObject({ kind: 'fact', actor: { kind: 'system' }, notice: { code: 'skill.archived', args: { skill: 'report' } } });
+    const word = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) =>
+      (dict[key] ?? key).replace(/\{(\w+)\}/g, (_m, k: string) => String(vars?.[k] ?? ''));
+    expect(noticeText(card as never, word(en as Record<string, string>))?.title).toBe('Skill archived: report');
+    expect(noticeText(card as never, word(ko as Record<string, string>))?.title).toBe('스킬 보관됨: report');
+
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    s.approve(A, 'triage', propose(s, A, 'triage').hash);
+    // A proposal denied before it was ever approved is not "archived by the owner".
+    s.deny(A, 'never', propose(s, A, 'never').hash);
+    s.archive(A, 'report');
+    const archived = wakeArchivedSkills({ skills: () => s } as never, profile(A));
+    expect(archived).toEqual(['report']);
+    const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+    const text = buildWakePrompt({ item, profile: profile(A), skills: wakeSkills({ skills: () => s } as never, profile(A)), archivedSkills: archived });
+    expect(text).toContain('Skills the owner archived (no longer loaded; do not apply them');
+    expect(text).toContain('```archived-skills\nreport\n```');
+    expect(text).toContain('triage: How to report a task');
+    expect(text).not.toMatch(/^report: /m);
+  });
+
+  it('the wake words an approved skill by where it stands, never as a merge', () => {
+    const s = store();
+    const first = propose(s, A, 'report');
+    s.approve(A, 'report', first.hash);
+    s.archive(A, 'report');
+    // Approved again after Archive, with other content but the same version.
+    const again = propose(s, A, 'report', skillMd('report', '1.0.0', 'Other steps.\n'));
+    s.approve(A, 'report', again.hash);
+    const tri = propose(s, A, 'triage');
+    s.approve(A, 'triage', tri.hash);
+    s.archive(A, 'triage');
+    const row = (name: string, hash: string) => ({ action: 'skill', skill: { name, version: '1.0.0', hash }, repoKey: '', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 });
+    const rows = [row('report', again.hash), row('triage', tri.hash), row('report', first.hash), { action: 'merge', prNumber: 7, repoKey: 'k', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 }];
+    const approvals = wakeApprovals({ skills: () => s, approvals: () => rows, botName: () => null } as never, profile(A), 2_000);
+    const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
+    const text = buildWakePrompt({ item, profile: profile(A), approvals });
+    expect(text).toContain('Load the skill report 1.0.0: approved by the owner; loaded');
+    expect(text).toContain('Load the skill triage 1.0.0: archived by the owner; do not apply it');
+    expect(text).toContain('Load the skill report 1.0.0: approved, since replaced by another approved version');
+    // Files changed on disk since approval.
+    fs.writeFileSync(path.join(botSkillsRoot(wmuxDir, A), 'report', 'SKILL.md'), skillMd('report', '1.0.0', 'Edited.\n'));
+    expect(wakeApprovals({ skills: () => s, approvals: () => [rows[0]], botName: () => null } as never, profile(A), 2_000)[0].skill).toBe('changed');
+    expect(text).toContain('Merge PR #7: approved by the owner, merging after the Undo window');
+    expect(text.match(/Undo window/g)).toHaveLength(1);
   });
 });
 

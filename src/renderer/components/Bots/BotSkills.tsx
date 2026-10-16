@@ -7,7 +7,7 @@
 // approval (so not loaded), archived — and every one
 // not archived has Archive. Approving and denying happen on the card, where
 // the change is shown; the profile only lists and archives.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FOCUS_RING } from '../focusRing';
 import type { FactoryBotRow } from '../Room/factoryPorts';
 import { getFactoryBotPort } from '../Room/factoryPorts';
@@ -76,12 +76,22 @@ export function BotSkills({ row, t, port: p = getBotSkillPort() }: { row: Factor
   const botId = row.bot.id;
   const skills = useBotSkills(botId, p);
   const [error, setError] = useState<string | null>(null);
+  // The skill whose Archive is in flight: the buttons wait for its answer
+  // (the ref holds it between a click and the next render).
+  const [busy, setBusy] = useState<string | null>(null);
+  const inFlight = useRef(false);
   if (!p.available) return null;
   const archive = (name: string) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setError(null);
+    setBusy(name);
     p.archive({ botId, name }).then((r) => {
       if (!r.ok) setError(r.error);
-    }, () => setError(t('botsPage.profile.skillArchiveFailed')));
+    }, () => setError(t('botsPage.profile.skillArchiveFailed'))).finally(() => {
+      inFlight.current = false;
+      setBusy(null);
+    });
   };
   return (
     <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-skills>
@@ -96,7 +106,7 @@ export function BotSkills({ row, t, port: p = getBotSkillPort() }: { row: Factor
                 <span className="text-[var(--text-muted)]">{` · ${skillStateText(s, t)}`}</span>
               </span>
               {s.state !== 'archived' && (
-                <button type="button" data-testid={`bot-skill-archive-${s.name}`} onClick={() => archive(s.name)} className={`text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)] ${FOCUS_RING}`}>
+                <button type="button" data-testid={`bot-skill-archive-${s.name}`} disabled={busy !== null} onClick={() => archive(s.name)} className={`text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-50 ${FOCUS_RING}`}>
                   {t('botsPage.profile.skillArchive')}
                 </button>
               )}

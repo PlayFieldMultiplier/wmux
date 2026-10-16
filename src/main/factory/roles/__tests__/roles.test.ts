@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { BOT_ROLES, BOT_TEMPLATES, DEFAULT_BOT_BUDGETS, TEMPLATE_LEGACY_ROLE, type BotProfile, type BotRole, type BotTemplate } from '../../../../shared/bot';
 import { BOT_TOOL_RPC, SHARED_SURFACE } from '../../../../shared/botSurface';
 import { TEMPLATE_DEFINITIONS, rolePrompt, templateDefinitionOf } from '../index';
+import { renderBotPrompt } from '../common';
 import { BOT_FANOUT_PRESETS } from '../../../worktask/botFanoutPresets';
 
 function profile(template: BotTemplate, over: Partial<BotProfile> = {}): BotProfile {
@@ -145,5 +146,13 @@ describe('bot prompts (job, powers and outputs)', () => {
 
   it('a profile without a repository leaves the repository sentence out', () => {
     expect(rolePrompt(profile('coordinator', { repo: undefined }))).not.toContain('Your repository');
+  });
+
+  it('names the workspace by the owner\'s name for it, so a greeting does not name the repository folder', () => {
+    const p = profile('coordinator');
+    const first = (ws?: string | null) => renderBotPrompt(templateDefinitionOf(p), p, ws).split('\n')[0];
+    expect(first('Workspace 1')).toBe('You are My coordinator, a bot of the wmux workspace "Workspace 1" (id ws-1); call it "Workspace 1" when you speak of it. Your repository is github.com/acme/app.');
+    expect(first('Team "A"\nB')).toContain('workspace "Team A B"');
+    expect(first(null)).toBe('You are My coordinator, a bot of wmux workspace ws-1. Your repository is github.com/acme/app.');
   });
 });

@@ -89,6 +89,71 @@ describe('phone room cards', () => {
   });
 });
 
+describe('phone room cards — notice and approvalAction', () => {
+  const sys = { actor: { kind: 'system' as const }, kind: 'fact' as const };
+
+  it('passes a system card\'s notice for a published code, its title kept in English', () => {
+    const c = card(1, { ...sys, title: 'Task done: Add a flag', notice: { code: 'task.done', args: { title: 'Add a flag' } } });
+    const out = phoneRoomCard(c, () => null);
+    expect(out?.notice).toEqual({ code: 'task.done', args: { title: 'Add a flag' } });
+    expect(out?.title).toBe('Task done: Add a flag');
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+    expect(phoneRoomCard(card(2, { ...sys, notice: { code: 'gate.passed' } }), () => null)?.notice).toEqual({ code: 'gate.passed' });
+  });
+
+  it('drops a notice with an unpublished code, on a card that is not the system\'s, or that is no object', () => {
+    for (const code of ['task.later', 'constructor', '__proto__', 'toString', '', 7]) {
+      expect(parsePhoneRoomCard({ ...card(1, sys), notice: { code } })?.notice, String(code)).toBeUndefined();
+    }
+    expect(phoneRoomCard(card(1, { notice: { code: 'task.done', args: { title: 'x' } } }), () => null)?.notice).toBeUndefined();
+    expect(parsePhoneRoomCard({ ...card(1, sys), notice: 'task.done' })?.notice).toBeUndefined();
+    expect(parsePhoneRoomCard({ ...card(1, sys), notice: ['task.done'] })?.notice).toBeUndefined();
+  });
+
+  it('keeps only the code\'s own args, each of its type, strings bounded and without control characters', () => {
+    const out = parsePhoneRoomCard({
+      ...card(1, sys),
+      notice: { code: 'worker.waiting', args: {
+        title: `a\u0007b‮${'x'.repeat(600)}`, inUse: 2, cap: '3', bots: 'Lead\nDev', botCount: Number.NaN, secret: 'hunter2', constructor: 'x',
+      } },
+    });
+    expect(Object.keys(out?.notice?.args ?? {}).sort()).toEqual(['bots', 'inUse', 'title']);
+    expect(out?.notice?.args?.inUse).toBe(2);
+    expect(out?.notice?.args?.bots).toBe('Lead\nDev');
+    const title = out?.notice?.args?.title as string;
+    expect(title.startsWith('abx')).toBe(true);
+    expect(title).toHaveLength(500);
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+    // No arg left: the code alone.
+    expect(parsePhoneRoomCard({ ...card(1, sys), notice: { code: 'gate.failed', args: { exit: 'one' } } })?.notice).toEqual({ code: 'gate.failed' });
+  });
+
+  it('gives an approval card its request\'s action, and no other card one', () => {
+    const approval = card(1, { kind: 'approval', refs: { approvalId: 'apr-aaaaaaaa1' } });
+    const asked: string[] = [];
+    const action = (id: string) => (asked.push(id), 'merge');
+    const out = phoneRoomCard(approval, () => null, action);
+    expect(out?.approvalAction).toBe('merge');
+    expect(asked).toEqual(['apr-aaaaaaaa1']);
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+    // A later action passes by its name (the app shows it as desktop-only).
+    expect(phoneRoomCard(approval, () => null, () => 'skill')?.approvalAction).toBe('skill');
+    expect(phoneRoomCard(approval, () => null, () => null)?.approvalAction).toBeUndefined();
+    expect(phoneRoomCard(approval, () => null)?.approvalAction).toBeUndefined();
+    expect(phoneRoomCard(card(2, { kind: 'status', refs: { approvalId: 'apr-aaaaaaaa1' } }), () => null, action)?.approvalAction).toBeUndefined();
+    expect(phoneRoomCard(card(3, { kind: 'approval' }), () => null, action)?.approvalAction).toBeUndefined();
+    for (const v of ['Merge', 'a b', '', 'x'.repeat(41), 3]) expect(parsePhoneRoomCard({ ...approval, approvalAction: v })?.approvalAction, String(v)).toBeUndefined();
+    expect(parsePhoneRoomCard({ ...card(4), approvalAction: 'merge' })?.approvalAction).toBeUndefined();
+  });
+
+  it('leaves every other field as it was', () => {
+    const c = card(5, { ...sys, body: 'evidence', refs: { taskId: 't1' }, notice: { code: 'task.done', args: { title: 't' } } });
+    const { notice, ...rest } = phoneRoomCard(c, () => null, () => 'merge') ?? {};
+    expect(notice).toBeDefined();
+    expect(rest).toEqual(phoneRoomCard({ ...c, notice: undefined }, () => null));
+  });
+});
+
 describe('fitPhoneRoomPage', () => {
   const big = (seq: number) => parsePhoneRoomCard(card(seq, { body: 'x'.repeat(8000) }))!;
   const page = (n: number): PhoneRoomCardsReply => ({

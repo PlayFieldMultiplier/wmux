@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { RoomCard, ThreadId } from '../../../shared/room';
 import type { WakeItem } from '../../../shared/wake';
-import { localeLanguageName, scriptLanguage, wakeApprovals, wakeClock, wakeContext, wakeGroup, wakeLanguage, wakeRunReplies, type WakeContextPorts } from '../wakeContext';
+import { latinUiLanguage, localeLanguageName, scriptLanguage, wakeApprovals, wakeClock, wakeContext, wakeGroup, wakeLanguage, wakeRunReplies, type WakeContextPorts } from '../wakeContext';
 
 const me: BotProfile = {
   version: 1, id: 'bot-0000000a', workspaceId: 'ws1', role: 'lead', name: 'Wmux Dev', engine: { kind: 'claude-sdk' }, triggers: [],
@@ -66,6 +66,28 @@ describe('wakeContext', () => {
     expect(wakeLanguage(ports(cards, { uiLocale: () => 'en' }), me, wake({ kind: 'intro' }))).toEqual({ name: 'Korean', source: 'owner', earlier: true });
   });
 
+  it('names the language of Latin-script words from the UI language when it could be theirs; the owner\'s script always wins', () => {
+    const intro = wake({ kind: 'intro' });
+    // en UI, English words: English (the greeting no longer guesses).
+    expect(wakeLanguage(ports([owner('Hello, nice to meet you')], { uiLocale: () => 'en' }), me, intro))
+      .toEqual({ name: 'English', source: 'owner', sample: 'Hello, nice to meet you', earlier: true });
+    expect(wakeLanguage(ports([], { uiLocale: () => 'en' }), me, wake({ kind: 'human', text: 'Review my PRs', source: 'desktop' })))
+      .toEqual({ name: 'English', source: 'owner', sample: 'Review my PRs' });
+    // ko UI, Korean words: Korean.
+    expect(wakeLanguage(ports([owner('반가워요')], { uiLocale: () => 'ko' }), me, intro)).toEqual({ name: 'Korean', source: 'owner', earlier: true });
+    // en UI, Korean words: the owner's own language, Korean.
+    expect(wakeLanguage(ports([owner('반가워요')], { uiLocale: () => 'en' }), me, intro)).toEqual({ name: 'Korean', source: 'owner', earlier: true });
+    expect(wakeLanguage(ports([], { uiLocale: () => 'en' }), me, wake({ kind: 'human', text: 'PR 리뷰해줘', source: 'desktop' })))
+      .toEqual({ name: 'Korean', source: 'owner', sample: 'PR 리뷰해줘' });
+    // ko UI, Latin-script words: Korean is not theirs, so no name; the sample shows the language.
+    expect(wakeLanguage(ports([owner('Hello there')], { uiLocale: () => 'ko' }), me, intro)).toEqual({ name: null, source: 'owner', sample: 'Hello there', earlier: true });
+    // A script no language is named for that is not Latin (Greek): no name from the UI.
+    expect(wakeLanguage(ports([owner('Γεια σου')], { uiLocale: () => 'en' }), me, intro)).toEqual({ name: null, source: 'owner', sample: 'Γεια σου', earlier: true });
+    expect(latinUiLanguage('de')).toBe('German');
+    expect(latinUiLanguage('ja')).toBeNull();
+    expect(latinUiLanguage('zh-TW')).toBeNull();
+  });
+
   it('the owner\'s clock in their zone', () => {
     expect(wakeClock(Date.UTC(2026, 9, 13, 14, 52), 'Asia/Seoul')).toEqual({ timeZone: 'Asia/Seoul', local: '2026-10-13 23:52', weekday: 'Tuesday' });
     expect(wakeClock(0, 'Not/AZone')).toBeNull();
@@ -80,9 +102,9 @@ describe('wakeContext', () => {
       { action: 'issue_close', issueNumber: 4, repoKey: 'k', state: 'refused', refusal: 'x', botId: 'bot-0000000z', createdAt: 1, updatedAt: now - 1000 },
     ];
     expect(wakeApprovals(ports([], { approvals: () => rows }), me, now)).toEqual([
-      { what: 'Close issue #4', state: 'refused', askedBy: 'bot-0000000z', at: now - 1000, refusal: 'x' },
-      { what: 'Merge PR #1', state: 'executed', askedBy: 'Wmux Reviewer', at: now - 60_000 },
-      { what: 'Merge PR #2', state: 'pending', askedBy: 'you', at: 5 },
+      { what: 'Close issue #4', state: 'refused', action: 'issue_close', askedBy: 'bot-0000000z', at: now - 1000, refusal: 'x' },
+      { what: 'Merge PR #1', state: 'executed', action: 'merge', askedBy: 'Wmux Reviewer', at: now - 60_000 },
+      { what: 'Merge PR #2', state: 'pending', action: 'merge', askedBy: 'you', at: 5 },
     ]);
     expect(wakeApprovals(ports([], { approvals: () => { throw new Error('x'); } }), me, now)).toEqual([]);
   });
