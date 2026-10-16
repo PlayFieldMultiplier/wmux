@@ -42,6 +42,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { LedgerEntry } from '../../shared/ledger';
+import { BOT_ID_RE } from '../../shared/bot';
 import { getExecEnv } from '../../shared/execEnv';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { sessionHostDir } from '../worktask/stopSessionsInDir';
@@ -93,7 +94,15 @@ function isRecord(v: unknown): v is TaskFolderRecord {
   return typeof r.taskId === 'string' && (r.kind === 'worktree' || r.kind === 'research') && typeof r.path === 'string'
     && (r.state === 'removing' || r.state === 'removed' || r.state === 'kept_dirty' || r.state === 'restored' || r.state === 'kept_stopped')
     && typeof r.at === 'number'
-    && (r.stopped === undefined || (typeof r.stopped === 'object' && r.stopped !== null && typeof (r.stopped as { botId?: unknown }).botId === 'string'));
+    && (r.stopped === undefined || (typeof r.stopped === 'object' && r.stopped !== null && typeof (r.stopped as { botId?: unknown }).botId === 'string'
+      && BOT_ID_RE.test((r.stopped as { botId: string }).botId)));
+}
+
+/** A record of a folder a stop kept that is not gone yet (kept, kept dirty
+ *  after a Clean up now, or a removal that has not finished): what Clean up
+ *  now and the usage line find without the task's row. Never evicted. */
+function isKeptRecord(r: TaskFolderRecord): boolean {
+  return !!r.stopped && (r.state === 'kept_stopped' || r.state === 'kept_dirty' || r.state === 'removing');
 }
 
 export class TaskFolders {
@@ -128,8 +137,11 @@ export class TaskFolders {
   put(rec: TaskFolderRecord): Promise<void> {
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
-    for (const id of this.records.keys()) {
+    // Oldest first; a folder a stop kept is never dropped (its record is the
+    // only way Clean up now finds it once the ledger pruned its row).
+    for (const [id, r] of this.records) {
       if (this.records.size <= TASK_FOLDERS_MAX) break;
+      if (isKeptRecord(r)) continue;
       this.records.delete(id);
     }
     return this.persister.schedule();
@@ -162,6 +174,8 @@ export interface TaskFolderRoots {
  *  the bot's own research root (a batch and a task below it). Pure. */
 export function taskFolderKind(folder: string, branch: string | undefined, botId: string, roots: TaskFolderRoots): TaskFolderKind | null {
   if (!folder || !path.isAbsolute(folder)) return null;
+  // A bot id names one folder under the bots' root (no separators, no "..").
+  if (!BOT_ID_RE.test(botId)) return null;
   const research = path.join(roots.wmuxDir, 'factory', 'bots', botId, 'research');
   const relResearch = path.relative(research, path.resolve(folder));
   if (relResearch && !relResearch.startsWith('..') && !path.isAbsolute(relResearch) && relResearch.split(path.sep).length >= 2) return 'research';
@@ -331,7 +345,8 @@ async function cleanTaskFolderNow(
   // A task the owner stopped keeps its folder; Clean up now still applies.
   // It is recorded, so it is found once the ledger has pruned the row.
   if (stoppedByOwner && opts.force !== true) {
-    if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && prior?.state !== 'removing' && exists(mission.folder)) {
+    // A removal that did not finish (its folder still there) is kept again.
+    if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && exists(mission.folder)) {
       await ports.store.put({
         taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped', stopped: { botId },
         ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
@@ -373,7 +388,7 @@ async function cleanTaskFolderNow(
   if (kind === 'research') {
     try {
       if (!fs.lstatSync(mission.folder).isDirectory()) return 'skipped';
-      await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', at: now() });
+      await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', ...stoppedMark, at: now() });
       await (ports.removeDir ?? ((d: string) => fs.promises.rm(d, { recursive: true })))(mission.folder);
     } catch (err) {
       log(`[factory] research folder of ${entry.id} not removed: ${String(err)}`);
@@ -498,7 +513,7 @@ export async function cleanTaskFolders(ports: TaskFolderPorts, rows: readonly Le
 /** The folders a stop kept (kept dirty too, once Clean up now looked at one),
  *  as recorded: found without the task's ledger row. */
 function keptRecords(store: Pick<TaskFolders, 'all'>): TaskFolderRecord[] {
-  return store.all().filter((r) => !!r.stopped && (r.state === 'kept_stopped' || r.state === 'kept_dirty'));
+  return store.all().filter(isKeptRecord);
 }
 
 /** The task row a kept folder's record stands for once the ledger pruned it:
