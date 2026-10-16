@@ -722,12 +722,12 @@ describe('a folder a stop kept, after 7 days', () => {
     fs.mkdirSync(elsewhere, { recursive: true });
     fs.writeFileSync(path.join(elsewhere, 'keep.txt'), 'mine');
     const store = TaskFolders.at(wmuxDir);
-    await store.put({ taskId: 'wtask-stray-0000002', kind: 'research', path: elsewhere, state: 'kept_stopped', stopped: { botId: BOT }, at: 1 });
+    await store.put({ taskId: 'wtask-stray-0000002', kind: 'research', path: elsewhere, state: 'kept_stopped', stopped: { botId: BOT, workspaceId: 'ws-owner' }, at: 1 });
     // A link inside the research root to a folder outside it.
     const linked = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-8', 'task-8');
     fs.mkdirSync(path.dirname(linked), { recursive: true });
     fs.symlinkSync(path.dirname(elsewhere), linked, 'dir');
-    await store.put({ taskId: 'wtask-link-0000003', kind: 'research', path: linked, state: 'kept_stopped', stopped: { botId: BOT }, at: 1 });
+    await store.put({ taskId: 'wtask-link-0000003', kind: 'research', path: linked, state: 'kept_stopped', stopped: { botId: BOT, workspaceId: 'ws-owner' }, at: 1 });
     const removeDir = vi.fn(async () => undefined);
     const keptFolderCleaned = vi.fn();
     const p = ports({ store, removeDir, keptFolderCleaned, now: () => 1 + 30 * DAY });
@@ -735,6 +735,46 @@ describe('a folder a stop kept, after 7 days', () => {
     expect(removeDir).not.toHaveBeenCalled();
     expect(keptFolderCleaned).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(elsewhere, 'keep.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('after the row is pruned, a mission the owner detached, or a record with no owner workspace, is never removed', async () => {
+    const mgr = new TaskWorktreeManager();
+    const handed = await taskWorktree(mgr, 'hand-55555555');
+    const legacy = await taskWorktree(mgr, 'old-66666666');
+    const store = TaskFolders.at(wmuxDir);
+    await store.put({ taskId: 'wtask-hand-55555555', kind: 'worktree', path: handed, branch: 'wtask/hand-55555555', state: 'kept_stopped', stopped: { botId: BOT, workspaceId: 'ws-owner' }, at: 1 });
+    // Recorded before the record named its owner workspace.
+    await store.put({ taskId: 'wtask-old-66666666', kind: 'worktree', path: legacy, branch: 'wtask/old-66666666', state: 'kept_stopped', stopped: { botId: BOT }, at: 1 });
+    const missions = new Map<string, TaskMission>([['wtask-hand-55555555', { folder: handed, branch: 'wtask/hand-55555555', detached: true }]]);
+    const p = ports({ store, now: () => 1 + 30 * DAY }, missions);
+    await pass(p, []);
+    expect(fs.existsSync(handed) && fs.existsSync(legacy)).toBe(true);
+    // The daemon's missions cannot be read: nothing is removed either.
+    await pass({ ...p, missions: async () => null }, []);
+    expect(fs.existsSync(handed)).toBe(true);
+  });
+
+  it('a pass while the worker is resumed does not record the folder again; its next stop starts the 7 days', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager(), 'run-77777777');
+    const missions = new Map<string, TaskMission>([['wtask-run-77777777', { folder: wt, branch: 'wtask/run-77777777' }]]);
+    const stopped = row('cancelled', { id: 'wtask-run-77777777', ...stoppedBy });
+    let now = 50_000;
+    let worker: 'stopped' | 'resumed' = 'stopped';
+    const p = ports({ now: () => now, workerState: () => worker }, missions);
+    await cleanTaskFolders(p, [stopped]);
+    now = 50_000 + DAY / 4;
+    worker = 'resumed';
+    await forgetKeptFolder(p, stopped.id);
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)).toBeNull();
+    // Stopped again on day 6: recorded then, so still kept on day 7.
+    now = 50_000 + 6 * DAY;
+    worker = 'stopped';
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 + 6 * DAY });
+    now = 50_000 + 7 * DAY + DAY / 4;
+    await pass(p, [stopped]);
+    expect(fs.existsSync(wt)).toBe(true);
   });
 });
 

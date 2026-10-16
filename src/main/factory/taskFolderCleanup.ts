@@ -395,7 +395,10 @@ async function cleanTaskFolderNow(
   // It is recorded, so it is found once the ledger has pruned the row.
   if (stoppedByOwner && opts.force !== true && !expired) {
     // A removal that did not finish (its folder still there) is kept again.
-    if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && exists(mission.folder)) {
+    // Not while its worker runs again (resumed, or still stopping): the
+    // record, and its 7 days, start at the next stop.
+    const worker = ports.workerState(entry.id);
+    if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && worker !== 'resumed' && worker !== 'stopping' && exists(mission.folder)) {
       const thread = entry.dispatch?.threadId;
       await ports.store.put({
         taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped',
@@ -769,20 +772,21 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           }
         }
         for (const rec of expired) {
-          // With its row still there, its mission says where the folder is
-          // (and whether it was detached); without, its record does.
+          // Its mission, read from the daemon (detached missions outlive the
+          // row), says where the folder is and whether it was handed to the
+          // owner; only a mission gone too leaves the record to say where.
+          // A record that does not name its owner workspace is left to
+          // Clean up now.
           const live = rows.find((r) => r.id === rec.taskId);
           // A row that is open again is its task's, not a kept folder's.
           if (live && !isEndedBotTask(live)) continue;
-          let mission: TaskMission | null;
-          if (live) {
-            if (!byOwner.has(live.ownerWorkspaceId)) byOwner.set(live.ownerWorkspaceId, await ports.missions(live.ownerWorkspaceId).catch(() => null));
-            const missions = byOwner.get(live.ownerWorkspaceId);
-            if (!missions) continue;
-            mission = missions.get(live.id) ?? null;
-          } else {
-            mission = { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) };
-          }
+          const owner = live?.ownerWorkspaceId || rec.stopped?.workspaceId;
+          if (!owner) continue;
+          if (!byOwner.has(owner)) byOwner.set(owner, await ports.missions(owner).catch(() => null));
+          const missions = byOwner.get(owner);
+          if (!missions) continue;
+          const mission: TaskMission | null = missions.get(rec.taskId)
+            ?? (live ? null : { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) });
           const r = await cleanTaskFolder(ports, live ?? keptRow(rec), mission, sessions, { keptTtl: true });
           if (r === 'failed') {
             const key = `${rec.taskId}@kept`;
