@@ -28,6 +28,17 @@
 // the worker's own review_requested wake (fanoutCallerNotify.ts skips it), so
 // a report is one bot turn, after the gate, never one before it.
 //
+// A merged pull request ends its task too. A repo-watch `pr.merged` fact
+// whose PR is the newest one opened from a reported task's own branch on its
+// bot's repository (pr.opened facts, botTasks.ts indexPrFacts; never the PR's
+// title) completes that task as a gate pass does: written as the task's
+// owner, with `merged` as the reason the ledger records (a repository with no
+// gate, or a gate still running, has no pass to complete on), one card and
+// one wake the same way. A gate run still in flight when the merge lands
+// finds the row moved and settles nothing. A PR closed without a merge
+// leaves the task open, and so does a task still `working` (the ledger has
+// no working → completed move).
+//
 // Every card carries the id of the row it was written about
 // (`task.gated:<taskId>@<rev>`, the card's clientPostId).
 // At install (start, after a restart) every open row in this state is caught
@@ -44,12 +55,15 @@
 
 import { isResearchDispatch, type LedgerEntry } from '../../shared/ledger';
 import type { BotProfile } from '../../shared/bot';
+import type { Fact } from '../../shared/facts';
+import { normalizeRepoKey } from '../../shared/repoKey';
 import { isSystemGatePass } from '../../shared/botTask';
 import { taskThreadOf, type CardNotice, type RoomCard, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
 import type { LedgerUpdateInput, LedgerUpdateResult } from '../../daemon/ledger/TaskLedger';
 import type { GateRunInput, GateRunResult } from '../worktask/TaskGateRunner';
 import { VERIFY_GATE_SYSTEM_WORKSPACE, verifyGateFactId } from './verifyPreset';
+import { indexPrFacts, prOfBranch } from './botTasks';
 
 /** Whether a transition is a bot task (not a verify task) reporting its work. */
 export function isTaskGateReport(entry: LedgerEntry, to: string): boolean {
@@ -127,6 +141,41 @@ export async function completeCheckedTask(ledger: CheckedTaskLedger, taskId: str
   return { entry: null, why: 'the task kept changing' };
 }
 
+/** The reason the ledger records on a task its merged pull request ended. */
+export const MERGED_REASON = 'merged';
+
+/**
+ * Complete a reported bot task whose pull request was merged: only a row
+ * still in review_requested that the gate would check (not a verify or a
+ * research task), written as the task's owner, forced with MERGED_REASON (a
+ * merge is not a gate: a repository with no gate, or a gate still running,
+ * has no pass to complete on). One retry on a write that landed in between.
+ * Never throws; the completed row, or null with why not.
+ */
+export async function completeMergedTask(ledger: CheckedTaskLedger, taskId: string): Promise<{ entry: LedgerEntry } | { entry: null; why: string }> {
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const row = ledger.get(taskId);
+      if (!row) return { entry: null, why: 'the task is gone' };
+      if (row.status !== 'review_requested') return { entry: null, why: `the task moved to ${row.status}` };
+      if (!isTaskGateReport(row, row.status) || isResearchDispatch(row.dispatch)) return { entry: null, why: 'the task is not a bot\'s code task' };
+      const r = await ledger.update({
+        id: taskId,
+        status: 'completed',
+        actor: { kind: 'brain', workspaceId: row.ownerWorkspaceId },
+        expectedRev: row.rev,
+        force: true,
+        reason: MERGED_REASON,
+      });
+      if (r.ok) return { entry: r.entry };
+      if (r.error !== 'stale_rev') return { entry: null, why: r.message };
+    }
+  } catch (err) {
+    return { entry: null, why: String(err) };
+  }
+  return { entry: null, why: 'the task kept changing' };
+}
+
 export interface TaskGatePorts {
   onTransition: (fn: (t: { entry: LedgerEntry; from: string | null; to: string }) => void) => () => void;
   ledgerRow: (taskId: string) => LedgerEntry | null;
@@ -144,6 +193,19 @@ export interface TaskGatePorts {
   complete: (taskId: string) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
   /** completeResearchTask over the hosted ledger. */
   completeResearch?: (taskId: string) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
+  /** The fact log's live facts: a `pr.merged` ends its task (with prFacts,
+   *  branchOf and completeMerged; absent, merges end nothing). */
+  onFact?: (fn: (f: Fact) => void) => () => void;
+  /** The PR facts in the fact log's window, oldest first. */
+  prFacts?: () => readonly Fact[];
+  /** A task's branch; null when it has none (a detached checkout),
+   *  undefined when it cannot be read now. */
+  branchOf?: (entry: LedgerEntry) => Promise<string | null | undefined>;
+  /** completeMergedTask over the hosted ledger. */
+  completeMerged?: (taskId: string) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
+  /** How long a merge whose task branches could not be read waits before
+   *  they are read again (default MERGE_RETRY_MS). */
+  mergeRetryMs?: number;
   wake: (input: { botId: string; workspaceId: string; reason: WakeReason; priority: 1; threadId: ThreadId }) => unknown;
   /** A system card in the task's thread (best effort), keyed by the row it
    *  is about (`verifyGateFactId(taskId, rev)`): a key already carded writes
@@ -210,6 +272,11 @@ export function describeTaskGate(r: GateRunResult): GateCard {
 
 /** How far back a completion is woken again at install. */
 export const COMPLETION_REWAKE_MS = 24 * 3_600_000;
+
+/** A merge whose task branches could not be read (the daemon not connected
+ *  yet) is looked at again after this, at most MERGE_TRIES times in all. */
+export const MERGE_RETRY_MS = 15_000;
+export const MERGE_TRIES = 4;
 
 /** Install the gate on bot task reports. Returns the unsubscribe. */
 export function installTaskGate(ports: TaskGatePorts): () => void {
@@ -331,6 +398,64 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     if (isTaskGateReport(t.entry, t.to)) start(t.entry.id);
   });
 
+  let disposed = false;
+  const mergeTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** End the reported tasks whose PR `f` (a pr.merged) is; `tries` reads so far. */
+  const merged = async (f: Fact, tries: number): Promise<void> => {
+    const repo = normalizeRepoKey(f.repoKey);
+    const n = f.ref?.pr;
+    if (f.kind !== 'pr.merged' || !repo || typeof n !== 'number' || !ports.branchOf || !ports.completeMerged) return;
+    let rows: LedgerEntry[] = [];
+    try {
+      rows = (ports.openRows?.() ?? []).filter((e) => e.status === 'review_requested' && isTaskGateReport(e, e.status)
+        && !isResearchDispatch(e.dispatch) && normalizeRepoKey(ports.bot(e.dispatch?.origin.botId ?? '')?.repo?.repoKey) === repo);
+    } catch {
+      rows = [];
+    }
+    if (rows.length === 0) return;
+    let facts: readonly Fact[] = [];
+    try {
+      facts = ports.prFacts?.() ?? [];
+    } catch {
+      facts = [];
+    }
+    // The task's PR is the newest one opened from its branch on its bot's
+    // repository; the merge itself is indexed last.
+    const index = indexPrFacts([...facts, f]);
+    let unread = false;
+    for (const row of rows) {
+      let branch: string | null | undefined;
+      try {
+        branch = await ports.branchOf(row);
+      } catch {
+        branch = undefined;
+      }
+      if (branch === undefined) {
+        unread = true;
+        continue;
+      }
+      if (prOfBranch(index, repo, branch)?.number !== n) continue;
+      const done = await ports.completeMerged(row.id);
+      if (!done.entry) {
+        log(`[factory] merged PR #${n} did not complete task ${row.id}: ${done.why}`);
+        continue;
+      }
+      note(done.entry, `PR #${n} merged: task completed`, 'The pull request from this task\'s branch was merged, so the task ends without waiting for a gate.', { code: 'task.merged', args: { pr: n } });
+      wake(done.entry);
+    }
+    if (unread && tries + 1 < MERGE_TRIES && !disposed) {
+      const timer = setTimeout(() => {
+        mergeTimers.delete(timer);
+        void merged(f, tries + 1).catch((err) => log(`[factory] merge of PR #${n} not settled: ${String(err)}`));
+      }, ports.mergeRetryMs ?? MERGE_RETRY_MS);
+      timer.unref?.();
+      mergeTimers.add(timer);
+    }
+  };
+  const offFacts = ports.onFact?.((f) => {
+    if (f.kind === 'pr.merged') void merged(f, 0).catch((err) => log(`[factory] merge of PR #${String(f.ref?.pr)} not settled: ${String(err)}`));
+  });
+
   /** Whether this rev of the row already has its card; null: unknown yet. */
   const carded = (entry: LedgerEntry): boolean | null => {
     if (!ports.noted) return false;
@@ -340,7 +465,6 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       return null;
     }
   };
-  let disposed = false;
   let sweepTimer: ReturnType<typeof setTimeout> | null = null;
   const sweepOpen = (waitedMs: number): void => {
     sweepTimer = null;
@@ -392,6 +516,9 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   return () => {
     disposed = true;
     if (sweepTimer) clearTimeout(sweepTimer);
+    for (const t of mergeTimers) clearTimeout(t);
+    mergeTimers.clear();
     off();
+    offFacts?.();
   };
 }

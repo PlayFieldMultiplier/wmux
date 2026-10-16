@@ -1345,6 +1345,8 @@ export const ko = {
   'room.notice.research.completed': "조사 보고됨: 작업 완료",
   'room.notice.research.completed.body': "조사 작업은 코드를 바꾸지 않아서 게이트를 돌리지 않아요.",
   'room.notice.research.notCompleted': "조사 보고됨: 작업이 완료되지 않음",
+  'room.notice.task.merged': "PR #{pr} 머지됨: 작업 완료",
+  'room.notice.task.merged.body': "이 작업의 브랜치에서 연 풀 리퀘스트가 머지되어, 게이트를 기다리지 않고 작업을 끝냈어요.",
   'room.notice.status.completed': "완료",
   'room.notice.status.cancelled': "취소됨",
   'room.notice.status.failed': "실패",

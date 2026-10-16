@@ -1799,6 +1799,8 @@ export const pl = {
   'room.notice.research.completed': "Research zgłoszony: zadanie ukończone",
   'room.notice.research.completed.body': "Zadanie researchu nie zmienia kodu, więc nie uruchamia się na nim bramki.",
   'room.notice.research.notCompleted': "Research zgłoszony: zadanie nieukończone",
+  'room.notice.task.merged': "PR #{pr} scalony: zadanie ukończone",
+  'room.notice.task.merged.body': "Pull request z gałęzi tego zadania został scalony, więc zadanie kończy się bez czekania na bramkę.",
   'room.notice.status.completed': "ukończone",
   'room.notice.status.cancelled': "anulowane",
   'room.notice.status.failed': "nieudane",

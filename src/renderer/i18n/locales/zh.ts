@@ -1918,6 +1918,8 @@ export const zh = {
   'room.notice.research.completed': "研究已报告：任务已完成",
   'room.notice.research.completed.body': "研究任务不修改代码，因此不运行检查。",
   'room.notice.research.notCompleted': "研究已报告：任务未完成",
+  'room.notice.task.merged': "PR #{pr} 已合并：任务已完成",
+  'room.notice.task.merged.body': "从此任务分支创建的拉取请求已合并，因此任务无需等待检查即告结束。",
   'room.notice.status.completed': "已完成",
   'room.notice.status.cancelled': "已取消",
   'room.notice.status.failed': "失败",

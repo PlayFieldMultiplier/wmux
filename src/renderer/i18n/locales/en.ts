@@ -1821,6 +1821,8 @@ export const en = {
   'room.notice.research.completed': "Research reported: task completed",
   'room.notice.research.completed.body': "A research task changes no code, so no gate runs on it.",
   'room.notice.research.notCompleted': "Research reported: task not completed",
+  'room.notice.task.merged': "PR #{pr} merged: task completed",
+  'room.notice.task.merged.body': "The pull request from this task's branch was merged, so the task ends without waiting for a gate.",
   'room.notice.status.completed': "completed",
   'room.notice.status.cancelled': "cancelled",
   'room.notice.status.failed': "failed",

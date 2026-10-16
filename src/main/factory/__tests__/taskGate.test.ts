@@ -10,7 +10,8 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { LedgerEntry, LedgerGateResult } from '../../../shared/ledger';
 import type { GateRunInput, GateRunResult } from '../../worktask/TaskGateRunner';
-import { completeCheckedTask, completeResearchTask, describeTaskGate, gateCardNoted, installTaskGate, isTaskGateReport, reportWasGated, type TaskGatePorts } from '../taskGate';
+import { completeCheckedTask, completeMergedTask, completeResearchTask, describeTaskGate, gateCardNoted, installTaskGate, isTaskGateReport, MERGE_TRIES, reportWasGated, type TaskGatePorts } from '../taskGate';
+import type { Fact } from '../../../shared/facts';
 import type { RoomCard } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
 import { verifyGateFactId } from '../verifyPreset';
@@ -449,5 +450,231 @@ describe('describeTaskGate', () => {
     expect(describeTaskGate({ ok: false, status: 'refused', taskId: 't', code: 'no_base_gate', error: 'no script' }).notice).toEqual({ code: 'gate.noBase', args: { detail: 'no script' } });
     expect(describeTaskGate({ ok: false, status: 'busy', taskId: 't' }).notice).toEqual({ code: 'gate.busy' });
     expect(describeTaskGate({ ok: false, status: 'refused', taskId: 't', error: 'x' }).notice).toEqual({ code: 'gate.refused' });
+  });
+});
+
+describe('a merged pull request ends its task', () => {
+  const REPO = 'github.com/acme/app';
+  let seq = 0;
+  const fact = (kind: 'pr.opened' | 'pr.merged' | 'pr.closed', pr: number, payload: Record<string, unknown> = {}, repoKey = REPO): Fact => ({
+    id: `f${++seq}`, seq, kind, at: seq, dedupeKey: `k${seq}`, repoKey, ref: { pr }, payload,
+  });
+  const opened = (pr: number, branch: string, repoKey = REPO): Fact => fact('pr.opened', pr, { headRefName: branch, isCrossRepository: false }, repoKey);
+
+  /** A rig whose fact log is `log` and whose task branches are `branches`
+   *  (task id → branch; undefined: not readable); `emit` appends a fact and
+   *  delivers it live. */
+  function mergeRig(log: Fact[], branches: Record<string, string | null | undefined>, over: Partial<TaskGatePorts> = {}, runGate?: ReturnType<typeof vi.fn<TaskGatePorts['runGate']>>) {
+    const subs = new Set<(f: Fact) => void>();
+    const branchOf = vi.fn(async (e: LedgerEntry) => branches[e.id]);
+    const r = rig({
+      onFact: (fn) => {
+        subs.add(fn);
+        return () => subs.delete(fn);
+      },
+      prFacts: () => log,
+      branchOf,
+      completeMerged: (id) => completeMergedTask(ledger, id),
+      ...over,
+    }, runGate);
+    const emit = (f: Fact): void => {
+      log.push(f);
+      for (const fn of subs) fn(f);
+    };
+    return { ...r, emit, subs, branchOf };
+  }
+
+  it('no gate in the repository: the skip leaves the task open, the merge of its PR completes it as its owner, one more card and wake', async () => {
+    await register();
+    const r = mergeRig([opened(2, 'wmux/task-1')], { 'task-1': 'wmux/task-1' }, {}, recordingRunner({ ...PASS, command: 'none', skipped: 'no_gate_command' }));
+    await report();
+    await flush();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Gate skipped (no_gate_command): task left open']);
+    const moves: string[] = [];
+    ledger.onTransition((t) => moves.push(`${t.to}:${t.by.kind}`));
+    r.emit(fact('pr.merged', 2));
+    await flush();
+    const row = ledger.get('task-1') as LedgerEntry;
+    expect(row.status).toBe('completed');
+    expect(row.updatedBy).toEqual({ kind: 'brain', workspaceId: 'ws-lead' });
+    // The owner's completion a gate pass writes: the transition the worker
+    // reclaim keys off.
+    expect(moves).toEqual(['completed:brain']);
+    expect(r.note).toHaveBeenCalledTimes(2);
+    expect(r.note.mock.calls[1][2]).toBe('PR #2 merged: task completed');
+    expect(r.note.mock.calls[1][4]).toBe(verifyGateFactId('task-1', row.rev));
+    expect(r.note.mock.calls[1][5]).toEqual({ code: 'task.merged', args: { pr: 2 } });
+    expect(r.wake).toHaveBeenCalledTimes(2);
+    expect(r.wake.mock.calls[1][0]).toEqual({
+      botId: BOT, workspaceId: 'ws-lead', priority: 1, threadId: 'task:task-1',
+      reason: { kind: 'facts', factIds: [verifyGateFactId('task-1', row.rev)], trigger: { kind: 'task.done' } },
+    });
+    expect(countOpenBotWorkers(ledger.list({ openOnly: true }), BOT, () => new Set())).toEqual({ bot: 0, factory: 0 });
+    // The same fact again ends nothing more.
+    r.emit(fact('pr.merged', 2));
+    await flush();
+    expect(r.note).toHaveBeenCalledTimes(2);
+    expect(r.wake).toHaveBeenCalledTimes(2);
+  });
+
+  it('no recorded gate at all: the merge completes it forced, with "merged" as the reason the ledger records', async () => {
+    await register();
+    const r = mergeRig([opened(2, 'wmux/task-1')], { 'task-1': 'wmux/task-1' }, { baseRef: async () => null });
+    const reasons: Array<string | undefined> = [];
+    ledger.onTransition((t) => {
+      if (t.to === 'completed') reasons.push(t.forcedReason);
+    });
+    await report();
+    await flush();
+    expect(ledger.get('task-1')?.gate).toBeUndefined();
+    r.emit(fact('pr.merged', 2));
+    await flush();
+    const row = ledger.get('task-1') as LedgerEntry;
+    expect(row.status).toBe('completed');
+    expect(reasons).toEqual(['merged']);
+    expect(row.summary).toBe('done [forced: merged]');
+  });
+
+  it('a gated repository merged while its gate runs: the merge completes it, the gate\'s later pass settles nothing', async () => {
+    await register();
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const pass = recordingRunner(PASS);
+    const runGate = vi.fn(async (input: GateRunInput) => {
+      await held;
+      return pass(input);
+    });
+    const complete = vi.fn((id: string) => completeCheckedTask(ledger, id));
+    const r = mergeRig([opened(7, 'wmux/task-1')], { 'task-1': 'wmux/task-1' }, { complete }, runGate);
+    await report();
+    await flush();
+    expect(runGate).toHaveBeenCalledTimes(1);
+    r.emit(fact('pr.merged', 7));
+    await flush();
+    expect(ledger.get('task-1')?.status).toBe('completed');
+    (release as unknown as () => void)();
+    await flush();
+    expect(ledger.get('task-1')?.status).toBe('completed');
+    expect(complete).not.toHaveBeenCalled();
+    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['PR #7 merged: task completed']);
+    expect(r.wake).toHaveBeenCalledTimes(1);
+  });
+
+  it('a PR closed without a merge leaves the task open', async () => {
+    await register();
+    const r = mergeRig([opened(2, 'wmux/task-1')], { 'task-1': 'wmux/task-1' }, { baseRef: async () => null });
+    await report();
+    await flush();
+    r.emit(fact('pr.closed', 2));
+    await flush();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    expect(r.branchOf).not.toHaveBeenCalled();
+    expect(r.wake).toHaveBeenCalledTimes(1); // the gate's own
+  });
+
+  it('another PR\'s merge leaves it alone: another branch, the same number on another repository, a fork\'s PR from the same branch name, a PR never seen opened', async () => {
+    await register();
+    const log = [
+      opened(2, 'wmux/task-1'),
+      opened(3, 'wmux/other'),
+      opened(2, 'wmux/task-1', 'github.com/acme/elsewhere'),
+      fact('pr.opened', 4, { headRefName: 'wmux/task-1', isCrossRepository: true }),
+    ];
+    const r = mergeRig(log, { 'task-1': 'wmux/task-1' }, { baseRef: async () => null });
+    await report();
+    await flush();
+    r.emit(fact('pr.merged', 3));
+    r.emit(fact('pr.merged', 2, {}, 'github.com/acme/elsewhere'));
+    r.emit(fact('pr.merged', 4));
+    r.emit(fact('pr.merged', 9));
+    await flush();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    expect(r.wake).toHaveBeenCalledTimes(1);
+    r.off();
+    // A task with no branch, or whose newest PR is another one, neither.
+    await register('task-2');
+    await report('task-2');
+    const r2 = mergeRig([opened(2, 'wmux/task-1'), opened(5, 'wmux/task-1')], { 'task-1': 'wmux/task-1', 'task-2': null }, { baseRef: async () => null });
+    await flush();
+    r2.emit(fact('pr.merged', 2));
+    await flush();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    expect(ledger.get('task-2')?.status).toBe('review_requested');
+  });
+
+  it('a task already ended, still working, or another kind of task is untouched', async () => {
+    await register('done');
+    await register('gone');
+    await register('busy');
+    await register('v', 'verify');
+    await register('res', 'research');
+    const branches: Record<string, string> = { done: 'b/done', gone: 'b/gone', busy: 'b/busy', v: 'b/v', res: 'b/res' };
+    const log = Object.values(branches).map((b, i) => opened(10 + i, b));
+    const r = mergeRig(log, branches, { baseRef: async () => null, completeResearch: async () => ({ entry: null, why: 'held open for the test' }) });
+    for (const id of ['done', 'gone', 'v', 'res']) await report(id);
+    await flush();
+    const d = ledger.get('done') as LedgerEntry;
+    expect((await ledger.update({ id: 'done', status: 'completed', actor: { kind: 'brain', workspaceId: 'ws-lead' }, expectedRev: d.rev, force: true, reason: 'by hand' })).ok).toBe(true);
+    const g = ledger.get('gone') as LedgerEntry;
+    expect((await ledger.update({ id: 'gone', status: 'cancelled', actor: { kind: 'brain', workspaceId: 'ws-lead' }, expectedRev: g.rev })).ok).toBe(true);
+    const before = Object.fromEntries(Object.keys(branches).map((id) => [id, ledger.get(id)?.rev]));
+    const wakes = r.wake.mock.calls.length;
+    const prs = log.length;
+    for (let i = 0; i < prs; i++) r.emit(fact('pr.merged', 10 + i));
+    await flush();
+    for (const id of Object.keys(branches)) expect(ledger.get(id)?.rev).toBe(before[id]);
+    expect(ledger.get('done')?.status).toBe('completed');
+    expect(ledger.get('gone')?.status).toBe('cancelled');
+    expect(ledger.get('busy')?.status).toBe('working');
+    expect(ledger.get('v')?.status).toBe('review_requested');
+    expect(ledger.get('res')?.status).toBe('review_requested');
+    expect(r.wake.mock.calls.length).toBe(wakes);
+  });
+
+  it('a branch that cannot be read yet is read again a few times, then left; nothing after the unsubscribe', async () => {
+    await register();
+    await report();
+    const branches: Record<string, string | null | undefined> = { 'task-1': undefined };
+    const r = mergeRig([opened(2, 'wmux/task-1')], branches, { baseRef: async () => null, mergeRetryMs: 30 });
+    await flush();
+    r.emit(fact('pr.merged', 2));
+    await vi.waitFor(() => expect(r.branchOf).toHaveBeenCalledTimes(2), { interval: 1 });
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    branches['task-1'] = 'wmux/task-1';
+    await vi.waitFor(() => expect(ledger.get('task-1')?.status).toBe('completed'), { interval: 1 });
+    expect(r.branchOf).toHaveBeenCalledTimes(3);
+    r.off();
+    // Never read more than MERGE_TRIES times, and nothing after the unsubscribe.
+    await register('task-2');
+    await report('task-2');
+    const r2 = mergeRig([opened(3, 'wmux/task-2')], { 'task-2': undefined }, { baseRef: async () => null, mergeRetryMs: 10 });
+    r2.emit(fact('pr.merged', 3));
+    await vi.waitFor(() => expect(r2.branchOf).toHaveBeenCalledTimes(MERGE_TRIES), { interval: 1 });
+    await new Promise((res) => setTimeout(res, 60));
+    expect(r2.branchOf).toHaveBeenCalledTimes(MERGE_TRIES);
+    r2.emit(fact('pr.merged', 3));
+    r2.off();
+    expect(r2.subs.size).toBe(0);
+    await flush();
+    expect(r2.branchOf).toHaveBeenCalledTimes(MERGE_TRIES + 1);
+    r2.emit(fact('pr.merged', 3));
+    await new Promise((res) => setTimeout(res, 60));
+    expect(r2.branchOf).toHaveBeenCalledTimes(MERGE_TRIES + 1);
+  });
+});
+
+describe('completeMergedTask', () => {
+  it('completes only a reported bot code task, as its owner', async () => {
+    await register('a');
+    expect(await completeMergedTask(ledger, 'a')).toEqual({ entry: null, why: 'the task moved to working' });
+    await report('a');
+    const done = await completeMergedTask(ledger, 'a');
+    expect(done.entry?.status).toBe('completed');
+    expect(done.entry?.updatedBy).toEqual({ kind: 'brain', workspaceId: 'ws-lead' });
+    await register('v', 'verify');
+    await report('v');
+    expect((await completeMergedTask(ledger, 'v')).entry).toBeNull();
+    expect((await completeMergedTask(ledger, 'missing')).entry).toBeNull();
   });
 });
