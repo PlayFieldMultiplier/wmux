@@ -25,7 +25,7 @@ import { RoomWriter } from '../roomWriter';
 import { wakeSkills } from '../wakeContext';
 import { buildWakePrompt, skillIndexText } from '../wakePrompt';
 import { excludeLineOnce } from '../../git/infoExclude';
-import { registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { reconcileSkillProposals, registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../../shared/phoneBotApprovals';
 import { pendingForChip, type ApprovalView as RendererApprovalView } from '../../../renderer/components/Room/approvalsStore';
@@ -528,6 +528,44 @@ describe('skill_propose → approval card → load', () => {
     expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'stale' });
     expect(r.svc.get(id)?.state).toBe('expired');
     expect(r.skills.read(A, 'report')).toMatchObject({ ok: false, code: 'not_found' });
+    // Its proposal is shelved, as a lapsed card's is: nothing shows as waiting.
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'archived' }]);
+    expect(r.skills.list(A)[0].proposed).toBeUndefined();
+  });
+
+  it('a replacement whose card is refused writes nothing: the earlier proposal and its card still work', async () => {
+    const r = approvalRig();
+    const first = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    const dirOf = path.join(botSkillsRoot(wmuxDir, A), 'report');
+    const post = vi.spyOn(r.writer, 'post').mockReturnValue({ ok: false } as never);
+    const second = await r.call('skill.propose', { name: 'report', content: skillMd('report', '1.0.1', 'Other steps.\n'), reason: 'r' });
+    post.mockRestore();
+    expect(second).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(fs.readFileSync(path.join(dirOf, 'proposed', 'SKILL.md'), 'utf8')).toBe(skillMd('report'));
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'proposed', proposed: { version: '1.0.0', approvalId: first.approvalId } }]);
+    expect(r.svc.get(first.approvalId as string)?.state).toBe('pending');
+    expect(r.svc.decide({ requestId: first.approvalId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true });
+    expect(r.skills.read(A, 'report')).toMatchObject({ ok: true, content: skillMd('report') });
+  });
+
+  it('at start, a proposal whose card closed unanswered is shelved; an approved one is never denied', async () => {
+    const r = approvalRig();
+    const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    // The card lapsed while the skills were off: the store was never told.
+    r.svc.withdraw(res.approvalId as string);
+    expect(r.skills.list(A)).toMatchObject([{ name: 'report', state: 'proposed' }]);
+    const other = await r.call('skill.propose', { name: 'triage', content: skillMd('triage'), reason: 'r' });
+    const hash = r.skills.waitingProposals().find((w) => w.name === 'triage')?.hash as string;
+    const approvals = {
+      get: (id: string) => (id === other.approvalId
+        ? { action: 'skill', state: 'approved', skill: { name: 'triage', hash, version: '1.0.0', update: false } }
+        : r.svc.get(id)),
+    } as never;
+    expect(reconcileSkillProposals(r.skills, approvals, () => undefined)).toBe(1);
+    expect(r.skills.list(A)).toMatchObject([
+      { name: 'report', state: 'archived' },
+      { name: 'triage', state: 'proposed', proposed: { approvalId: other.approvalId } },
+    ]);
   });
 
   it('an approved skill is not undone from its card; a window that cannot be told does not change the approval', async () => {

@@ -853,8 +853,11 @@ export class ApprovalService {
       }
       if (why) {
         const moot: StoredApproval = { ...cur, state: 'expired', updatedAt: this.now() };
-        if (this.put(moot)) this.closeCard(moot);
-        else this.log(`[factory] approval ${cur.requestId} kept as approved though its skill did not load`);
+        if (this.put(moot)) {
+          this.closeCard(moot);
+          // As a lapsed card does: the proposal it showed is shelved.
+          this.skillDenied(moot);
+        } else this.log(`[factory] approval ${cur.requestId} kept as approved though its skill did not load`);
         this.changed(cur.workspaceId);
         return refuse('stale', why);
       }

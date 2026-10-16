@@ -4,9 +4,10 @@
 //
 // Who may call what (the handler is the gate):
 //   skill.propose  a bot, for itself only (the binding names it), during a
-//                  wake: the store writes a proposed version and the
-//                  approval store posts its `skill` card with the diff. A
-//                  proposal that gets no card is dropped again.
+//                  wake: the store checks the proposal, the approval store
+//                  posts its `skill` card with the diff, and only then is
+//                  the proposed version written. A proposal that gets no
+//                  card writes nothing.
 //   skill.read     a bot: one of its own approved skills, or the list of
 //                  them (no name).
 //   IPC list / archive   the main window only.
@@ -54,20 +55,23 @@ export function registerSkillHandlers(router: Pick<FactoryRouter, 'register'>, d
     if (!store || !approvals) return NOT_STARTED;
     const bot = ctx.bot;
     const p = obj(raw);
-    const res = store.propose(bot.botId, { name: p.name, content: p.content, references: p.references, reason: p.reason });
-    if (!res.ok) return res;
+    const prep = store.prepareProposal(bot.botId, { name: p.name, content: p.content, references: p.references, reason: p.reason });
+    if (!prep.ok) return prep;
     // The same proposal with its card still open: that one.
-    if (res.duplicate && res.approvalId && approvals.get(res.approvalId)?.state === 'pending') {
-      return { ok: true, duplicate: true, skill: res.skill, approvalId: res.approvalId, message: 'This proposal already waits for the owner.' };
+    if (prep.duplicate && prep.approvalId && approvals.get(prep.approvalId)?.state === 'pending') {
+      return { ok: true, duplicate: true, skill: prep.skill, approvalId: prep.approvalId, message: 'This proposal already waits for the owner.' };
     }
+    // The card first: a refused one writes nothing, so a proposal already
+    // waiting keeps its files and its card.
     const req = approvals.proposeSkill(bot, {
-      name: res.skill.name, hash: res.hash, version: res.version, update: res.update, diff: res.diff,
+      name: prep.skill.name, hash: prep.hash, version: prep.version, update: prep.update, diff: prep.diff,
       reason: typeof p.reason === 'string' ? p.reason : '',
     });
-    if (!req.ok) {
-      store.discardProposal(bot.botId, res.skill.name, res.hash);
-      deps.emit({ type: 'skills-changed', botId: bot.botId });
-      return req;
+    if (!req.ok) return req;
+    const res = store.writeProposal(bot.botId, prep);
+    if (!res.ok) {
+      approvals.withdraw(req.request.requestId);
+      return res;
     }
     if (res.replacedApprovalId) approvals.withdraw(res.replacedApprovalId);
     store.attachApproval(bot.botId, res.skill.name, res.hash, req.request.requestId);
@@ -86,6 +90,32 @@ export function registerSkillHandlers(router: Pick<FactoryRouter, 'register'>, d
     const p = obj(raw);
     return store.read(ctx.bot.botId, p.name, p.reference);
   });
+}
+
+/** The skills module's start: a waiting proposal whose card was denied or
+ *  expired while the skills were not running (the approval store starts
+ *  first and expires lapsed requests then) is shelved, as a Deny would.
+ *  An approved request is never undone here. Returns how many. */
+export function reconcileSkillProposals(
+  store: BotSkillStore | null,
+  approvals: Pick<ApprovalService, 'get'> | null,
+  emit: (payload: BotEventPayload) => void,
+): number {
+  if (!store || !approvals) return 0;
+  let shelved = 0;
+  for (const w of store.waitingProposals()) {
+    const r = approvals.get(w.approvalId);
+    if (!r || r.action !== 'skill' || r.skill?.hash !== w.hash) continue;
+    if (r.state === 'pending' || r.state === 'approved') continue;
+    if (!store.deny(w.botId, w.name, w.hash).ok) continue;
+    shelved += 1;
+    try {
+      emit({ type: 'skills-changed', botId: w.botId });
+    } catch {
+      /* the profile re-reads on its next event */
+    }
+  }
+  return shelved;
 }
 
 /** What the approval store's `skill` decisions do. */
@@ -188,6 +218,8 @@ export function createSkillModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'getMa
         return;
       }
       approvalHost = skillApprovalHost(getBotSkillStore, emit);
+      const shelved = reconcileSkillProposals(getBotSkillStore(), getApprovalService(), emit);
+      if (shelved > 0) console.log(`[factory] skills: ${shelved} proposal(s) whose card closed while skills were off shelved`);
       offIpc = registerSkillIpc(deps.getMainWindow, { store: getBotSkillStore, approvals: getApprovalService, emit });
     },
     dispose() {
