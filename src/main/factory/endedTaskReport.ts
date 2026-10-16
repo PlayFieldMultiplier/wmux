@@ -46,6 +46,8 @@ export function endedTaskNotice(entry: LedgerEntry, rec: Pick<ReclaimedWorker, '
     ...(summary ? { detail: summary } : {}),
     threadId: taskThreadOf(entry),
     card: true,
+    // A worker's report is the worker's doing, whatever it says.
+    tainted: true,
     taskId: entry.id,
     notice: { code: 'worker.reportAfterEnd', args: { title: entry.title } },
   };

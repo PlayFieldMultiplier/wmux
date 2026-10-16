@@ -16,7 +16,7 @@
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import type { RpcContext } from '../../../shared/rpc';
-import { isLedgerStatus, type LedgerActor } from '../../../shared/ledger';
+import { WORKER_SETTABLE_STATUSES, isLedgerStatus, type LedgerActor } from '../../../shared/ledger';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { LEDGER_SUMMARY_MAX_BYTES, truncateHead, type TaskLedger } from '../../../daemon/ledger/TaskLedger';
@@ -94,8 +94,12 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
     /** A worker's report refused on its own task once that task ended: told
      *  to the bot that started it, when its worker was resumed (endedTaskReport.ts). */
     const refusedOnOwnTask = (row: ReturnType<TaskLedger['get']>): void => {
+      const reported = str(params.status);
       if (actor.kind !== 'worker' || ctx?.bot || !row || row.taskWorkspaceId !== actor.workspaceId) return;
-      reportOnEndedTask(row, { status: str(params.status), ...(text(params.summary) ? { summary: text(params.summary) } : {}) });
+      // Only a status a worker may set, with the rev it read: anything else
+      // is the worker's mistake, not a report.
+      if (!isLedgerStatus(reported) || !WORKER_SETTABLE_STATUSES.includes(reported) || typeof params.expectedRev !== 'number') return;
+      reportOnEndedTask(row, { status: reported, ...(text(params.summary) ? { summary: text(params.summary) } : {}) });
     };
     if (!taskId) {
       if (actor.kind === 'worker' && !ctx?.bot) refusedOnOwnTask(ledgerOf().findByTaskWorkspace(actor.workspaceId));

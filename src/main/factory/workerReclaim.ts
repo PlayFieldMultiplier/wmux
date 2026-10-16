@@ -1558,3 +1558,11 @@ export function reclaimedWorkerWorkspaces(botId: string, owner: string, store: P
     .filter((r) => r.botId === botId && r.ownerWorkspaceId === owner)
     .map((r) => workerWorkspaceOf(r));
 }
+
+/** Whether `ptyId` is the recorded pane of a reclaimed worker of `botId`'s
+ *  task in `owner`, in the workspace that worker runs in: that pane only,
+ *  never another one opened there since. */
+export function isReclaimedWorkerPane(botId: string, owner: string, workspaceId: string, ptyId: string, store: Pick<ReclaimedWorkers, 'all'> | null | undefined = resumePorts?.store): boolean {
+  return (store?.all() ?? []).some((r) => r.botId === botId && r.ownerWorkspaceId === owner
+    && workerWorkspaceOf(r) === workspaceId && r.sessions.some((s) => s.sessionId === ptyId));
+}
