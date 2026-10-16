@@ -103,20 +103,31 @@ describe('mergedOfBranch', () => {
       { number: 3, baseRefName: 'scratch', headRefOid: 'a'.repeat(40) },
       { number: 'x' },
     ]));
-    expect(await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1')).toEqual({ ok: true, value: [
+    expect(await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1', 'main')).toEqual({ ok: true, value: [
       { pr: 5, base: 'main', headSha: 'c'.repeat(40), cross: false },
       { pr: 4, base: 'main', headSha: 'b'.repeat(40), cross: true },
       { pr: 3, base: 'scratch', headSha: 'a'.repeat(40), cross: true },
     ] });
-    expect(calls[0].args).toEqual(['pr', 'list', '--repo', KEY, '--head', 'wtask/fix-1', '--state', 'merged', '--json', 'number,baseRefName,headRefOid,isCrossRepository', '--limit', '5']);
+    expect(calls[0].args).toEqual(['pr', 'list', '--repo', KEY, '--head', 'wtask/fix-1', '--base', 'main', '--state', 'merged', '--json', 'number,baseRefName,headRefOid,isCrossRepository', '--limit', '20']);
   });
 
   it('a failing gh is an error; a branch that reads as a flag is refused without calling gh', async () => {
     const { svc, calls } = make(() => errWith({ stderr: 'boom' }));
-    expect((await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1')).ok).toBe(false);
+    expect((await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1', 'main')).ok).toBe(false);
     const n = calls.length;
-    expect((await svc.mergedOfBranch('/repo', KEY, '--web')).ok).toBe(false);
+    expect((await svc.mergedOfBranch('/repo', KEY, '--web', 'main')).ok).toBe(false);
+    expect((await svc.mergedOfBranch('/repo', KEY, 'wtask/fix-1', '--web')).ok).toBe(false);
     expect(calls).toHaveLength(n);
+  });
+});
+
+describe('defaultBranch', () => {
+  it('reads the default branch GitHub names, naming the repo; none is an error', async () => {
+    const { svc, calls } = make(() => JSON.stringify({ defaultBranchRef: { name: 'develop' } }));
+    expect(await svc.defaultBranch('/repo', KEY)).toEqual({ ok: true, value: 'develop' });
+    expect(calls[0].args).toEqual(['repo', 'view', KEY, '--json', 'defaultBranchRef']);
+    const empty = make(() => JSON.stringify({ defaultBranchRef: null }));
+    expect((await empty.svc.defaultBranch('/repo', KEY)).ok).toBe(false);
   });
 });
 

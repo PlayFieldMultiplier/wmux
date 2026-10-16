@@ -533,16 +533,16 @@ export class GhPrReviewService {
     });
   }
 
-  /** The merged PRs whose head is `branch` (newest first, at most `limit`):
-   *  the task gate's evidence that a bot task's work landed. `--head` also
-   *  matches a fork's PR with the same branch name, so each carries its
-   *  `cross` flag for the caller to drop. Never cached. */
-  mergedOfBranch(repoPath: string, key: string, branch: string, limit = 5): Promise<PrReviewRead<Array<{ pr: number; base: string; headSha: string; cross: boolean }>>> {
+  /** The PRs from `branch` merged into `base` (newest first, at most
+   *  `limit`): the task gate's evidence that a bot task's work landed.
+   *  `--head` also matches a fork's PR with the same branch name, so each
+   *  carries its `cross` flag for the caller to drop. Never cached. */
+  mergedOfBranch(repoPath: string, key: string, branch: string, base: string, limit = 20): Promise<PrReviewRead<Array<{ pr: number; base: string; headSha: string; cross: boolean }>>> {
     return this.read(async () => {
       const { host } = this.repo(key);
-      if (!branch || branch.startsWith('-')) throw new Error(`not a branch name: ${branch}`);
+      for (const ref of [branch, base]) if (!ref || ref.startsWith('-')) throw new Error(`not a branch name: ${ref}`);
       const out = await this.gh(host, [
-        'pr', 'list', '--repo', key, '--head', branch, '--state', 'merged',
+        'pr', 'list', '--repo', key, '--head', branch, '--base', base, '--state', 'merged',
         '--json', 'number,baseRefName,headRefOid,isCrossRepository', '--limit', String(limit),
       ], repoPath);
       const raw = JSON.parse(out) as unknown;
@@ -554,6 +554,18 @@ export class GhPrReviewService {
           ? [{ pr: o.number, base: o.baseRefName, headSha: o.headRefOid, cross: o.isCrossRepository !== false }]
           : [];
       });
+    });
+  }
+
+  /** The repository's default branch on GitHub. Never cached (the caller
+   *  keeps it). */
+  defaultBranch(repoPath: string, key: string): Promise<PrReviewRead<string>> {
+    return this.read(async () => {
+      const { host } = this.repo(key);
+      const out = await this.gh(host, ['repo', 'view', key, '--json', 'defaultBranchRef'], repoPath);
+      const name = str((JSON.parse(out) as { defaultBranchRef?: { name?: unknown } | null } | null)?.defaultBranchRef?.name);
+      if (!name) throw new Error('the repository has no default branch');
+      return name;
     });
   }
 

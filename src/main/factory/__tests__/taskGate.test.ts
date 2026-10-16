@@ -10,7 +10,7 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { LedgerEntry, LedgerGateResult } from '../../../shared/ledger';
 import type { GateRunInput, GateRunResult } from '../../worktask/TaskGateRunner';
-import { MERGE_BACKOFF_MAX_MS, MERGE_SWEEP_MAX, completeCheckedTask, completeMergedTask, completeResearchTask, describeTaskGate, gateCardNoted, installTaskGate, isMergeCompletion, isTaskGateReport, mergeBackoffMs, mergedMark, reportWasGated, worktreeHeadMerged, type BranchPr, type TaskGatePorts } from '../taskGate';
+import { MERGE_ANSWER_TTL_MS, MERGE_BACKOFF_MAX_MS, MERGE_SWEEP_MAX, completeCheckedTask, completeMergedTask, completeResearchTask, describeTaskGate, gateCardNoted, installTaskGate, isMergeCompletion, isTaskGateReport, mergeBackoffMs, mergedMark, reportWasGated, worktreeHeadMerged, type BranchPr, type TaskGatePorts } from '../taskGate';
 import { factDedupeKey, type Fact } from '../../../shared/facts';
 import type { RoomCard } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
@@ -453,7 +453,9 @@ describe('describeTaskGate', () => {
   });
 });
 
-describe('a merged pull request ends its task', () => {
+// Several of these run on real timers (the sweep): generous bounds, so a
+// loaded machine does not fail them.
+describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
   const REPO = 'github.com/acme/app';
   const SHA_A = 'a'.repeat(40);
   const SHA_B = 'b'.repeat(40);
@@ -477,23 +479,31 @@ describe('a merged pull request ends its task', () => {
     await ledger.register({ id, taskWorkspaceId: `${id}-ws`, ownerWorkspaceId: 'ws-lead', title: `task ${id}`, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: o.preset ?? 'default', ...(repoKey ? { repoKey } : {}) } });
   }
 
+  const HEAD = 'd'.repeat(40);
   /**
    * A rig whose GitHub lists `merged[`<repoKey> <branch>`]` as the merged PRs
-   * of a branch (a function: what it lists now; it may throw), whose task
-   * branches are `branches` (undefined: not readable), whose task worktree
-   * HEADs are held by the commits `holds[taskId]` lists (default: SHA_A), and
-   * whose clock is `clock.now`.
+   * of a branch (a function: what it lists now; it may throw or wait), whose
+   * repositories' default branch is main, whose task branches are `branches`
+   * (undefined: not readable), whose task worktrees are at `heads[taskId]`
+   * (default HEAD) and held by the commits `holds[taskId]` lists (default:
+   * SHA_A), and whose clock is `clock.now`.
    */
-  function mergeRig(merged: Record<string, BranchPr[] | (() => BranchPr[])>, branches: Record<string, string | null | undefined>, over: Partial<TaskGatePorts> = {}, runGate?: ReturnType<typeof vi.fn<TaskGatePorts['runGate']>>, holds: Record<string, string[]> = {}) {
+  function mergeRig(merged: Record<string, BranchPr[] | (() => BranchPr[] | Promise<BranchPr[]>)>, branches: Record<string, string | null | undefined>, over: Partial<TaskGatePorts> = {}, runGate?: ReturnType<typeof vi.fn<TaskGatePorts['runGate']>>, holds: Record<string, string[]> = {}) {
     const subs = new Set<(f: Fact) => void>();
     const clock = { now: 1_000_000 };
+    const heads: Record<string, string | null> = {};
     const branchOf = vi.fn(async (e: LedgerEntry) => branches[e.id]);
     const prsOfBranch = vi.fn(async (repoKey: string, branch: string): Promise<readonly BranchPr[]> => {
       const v = merged[`${repoKey} ${branch}`] ?? [];
       return typeof v === 'function' ? v() : v;
     });
+    const defaultBranchOf = vi.fn(async () => 'main');
+    const headOf = vi.fn(async (wt: string) => {
+      const id = wt.slice('/wt/'.length);
+      return id in heads ? heads[id] : HEAD;
+    });
     const headMerged = vi.fn(async (wt: string, sha: string) => (holds[wt.slice('/wt/'.length)] ?? [SHA_A]).includes(sha));
-    const completeMerged = vi.fn((id: string, n: number) => completeMergedTask(ledger, id, n));
+    const completeMerged = vi.fn((id: string, n: number, rev: number) => completeMergedTask(ledger, id, n, rev));
     const r = rig({
       worktreeOf: async (e) => `/wt/${e.id}`,
       onFact: (fn) => {
@@ -501,7 +511,9 @@ describe('a merged pull request ends its task', () => {
         return () => subs.delete(fn);
       },
       prsOfBranch,
+      defaultBranchOf,
       branchOf,
+      headOf,
       headMerged,
       completeMerged,
       now: () => clock.now,
@@ -510,7 +522,7 @@ describe('a merged pull request ends its task', () => {
     const emit = (f: Fact): void => {
       for (const fn of subs) fn(f);
     };
-    return { ...r, emit, subs, clock, branchOf, prsOfBranch, headMerged, completeMerged };
+    return { ...r, emit, subs, clock, heads, branchOf, prsOfBranch, defaultBranchOf, headOf, headMerged, completeMerged };
   }
   const B1 = `${REPO} wmux/task-1`;
 
@@ -651,7 +663,7 @@ describe('a merged pull request ends its task', () => {
     await flush();
     expect(ledger.get('task-1')?.status).toBe('completed');
     expect(r.prsOfBranch).toHaveBeenCalledTimes(1);
-    expect(r.prsOfBranch).toHaveBeenCalledWith(REPO, 'wmux/task-1');
+    expect(r.prsOfBranch).toHaveBeenCalledWith(REPO, 'wmux/task-1', 'main');
     expect(r.runGate).not.toHaveBeenCalled();
     expect(r.note.mock.calls.map((c) => c[2])).toEqual(['PR #2 merged: task completed']);
     expect(r.wake).toHaveBeenCalledTimes(1);
@@ -673,7 +685,7 @@ describe('a merged pull request ends its task', () => {
     expect(ledger.get('task-1')?.completion).toEqual({ source: 'merge', pr: 5 });
   });
 
-  it('a fork\'s PR from a branch of the same name, or a merge when origin\'s default branch cannot be resolved, ends nothing', async () => {
+  it('a fork\'s PR from a branch of the same name, or a merge when GitHub\'s default branch cannot be read, ends nothing', async () => {
     await registerTask();
     const r = mergeRig({ [B1]: [pr(6, { cross: true })] }, { 'task-1': 'wmux/task-1' }, NO_GATE);
     await report();
@@ -681,7 +693,7 @@ describe('a merged pull request ends its task', () => {
     expect(ledger.get('task-1')?.status).toBe('review_requested');
     expect(r.headMerged).not.toHaveBeenCalled();
     r.off();
-    const r2 = mergeRig({ [B1]: [pr(7)] }, { 'task-1': 'wmux/task-1' }, { ...NO_GATE, baseRef: async () => null });
+    const r2 = mergeRig({ [B1]: [pr(7)] }, { 'task-1': 'wmux/task-1' }, { ...NO_GATE, defaultBranchOf: async () => { throw new Error('gh: exit 1'); } });
     r2.emit(fact('pr.merged', 7));
     await flush();
     expect(ledger.get('task-1')?.status).toBe('review_requested');
@@ -696,7 +708,7 @@ describe('a merged pull request ends its task', () => {
     await report('old');
     await report('none');
     await flush();
-    expect(r.prsOfBranch.mock.calls).toEqual([['github.com/acme/old', 'wmux/task-1']]);
+    expect(r.prsOfBranch.mock.calls).toEqual([['github.com/acme/old', 'wmux/task-1', 'main']]);
     r.emit(fact('pr.merged', 6));
     await flush();
     expect(ledger.get('old')?.status).toBe('review_requested');
@@ -799,7 +811,7 @@ describe('a merged pull request ends its task', () => {
         expect(r.prsOfBranch).toHaveBeenCalledTimes(reads);
         fail = false;
         r.clock.now += mergeBackoffMs(1);
-        await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2 });
+        await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
         await new Promise((res) => setTimeout(res, 60));
         expect(r.wake).toHaveBeenCalledTimes(1);
         const row = ledger.get('task-1') as LedgerEntry;
@@ -875,17 +887,136 @@ describe('a merged pull request ends its task', () => {
     await flush();
     // The install: one read per open report.
     expect(r.prsOfBranch).toHaveBeenCalledTimes(ids.length);
-    await vi.waitFor(() => expect(r.prsOfBranch.mock.calls.length).toBeGreaterThan(ids.length), { interval: 5, timeout: 2000 });
+    // Past the kept answers: each tick reads what it checks.
+    r.clock.now += MERGE_ANSWER_TTL_MS;
+    await vi.waitFor(() => expect(r.prsOfBranch.mock.calls.length).toBeGreaterThan(ids.length), { interval: 5, timeout: 15_000 });
     await flush();
     const first = r.prsOfBranch.mock.calls.slice(ids.length).map((c) => c[1]);
     expect(first).toHaveLength(MERGE_SWEEP_MAX);
-    await vi.waitFor(() => expect(r.prsOfBranch.mock.calls.length).toBeGreaterThan(ids.length + MERGE_SWEEP_MAX), { interval: 5, timeout: 2000 });
+    await vi.waitFor(() => expect(r.prsOfBranch.mock.calls.length).toBeGreaterThan(ids.length + MERGE_SWEEP_MAX), { interval: 5, timeout: 15_000 });
     await flush();
-    const second = r.prsOfBranch.mock.calls.slice(ids.length + MERGE_SWEEP_MAX, ids.length + 2 * MERGE_SWEEP_MAX).map((c) => c[1]);
-    // The five the first tick left out come first.
+    // The five the first tick left out come first; the rest of that tick's
+    // twenty were answered within MERGE_ANSWER_TTL_MS, so are not read again.
+    const second = r.prsOfBranch.mock.calls.slice(ids.length + MERGE_SWEEP_MAX).map((c) => c[1]);
     const left = ids.map((id) => `b/${id}`).filter((b) => !first.includes(b));
     expect(left).toHaveLength(5);
     expect(second.slice(0, 5).sort()).toEqual(left.sort());
+    r.off();
+  });
+
+  it('a repository backing off holds no sweep slot: the others\' reports are checked', async () => {
+    const OTHER = 'github.com/acme/other';
+    const failing = Array.from({ length: MERGE_SWEEP_MAX + 1 }, (_, i) => `a${String(i).padStart(2, '0')}`);
+    for (const id of failing) {
+      await registerTask(id);
+      await report(id);
+      await ledger.recordGate(id, { ...PASS, exitCode: 1 }, { kind: 'system', workspaceId: 'ws-daemon' });
+    }
+    await registerTask('b00', { repoKey: OTHER });
+    await report('b00');
+    await ledger.recordGate('b00', { ...PASS, exitCode: 1 }, { kind: 'system', workspaceId: 'ws-daemon' });
+    const branches = Object.fromEntries([...failing, 'b00'].map((id) => [id, `b/${id}`]));
+    const listings = Object.fromEntries(failing.map((id) => [`${REPO} b/${id}`, () => { throw new Error('gh: exit 1'); }]));
+    const r = mergeRig(listings, branches, { noted: () => true, mergeSweepMs: 50 });
+    await flush();
+    // The install read each report once; acme/app failed and backs off.
+    const failed = r.prsOfBranch.mock.calls.filter((c) => c[0] === REPO).length;
+    expect(failed).toBe(failing.length);
+    expect(r.wake).toHaveBeenCalledTimes(1); // b00's own
+    // Ticks skip acme/app's reports (waiting for their wake as they are):
+    // the other repository's report is checked, none of acme/app's is read.
+    const before = r.branchOf.mock.calls.filter((c) => c[0].id === 'b00').length;
+    await vi.waitFor(() => expect(r.branchOf.mock.calls.filter((c) => c[0].id === 'b00').length).toBeGreaterThan(before + 1), { interval: 5, timeout: 15_000 });
+    expect(r.prsOfBranch.mock.calls.filter((c) => c[0] === REPO)).toHaveLength(failed);
+    expect(r.branchOf.mock.calls.filter((c) => c[0].id !== 'b00').length).toBe(failing.length);
+    r.off();
+  });
+
+  it('twenty triggers while a check is under way make one read; a sweep within MERGE_ANSWER_TTL_MS reads nothing, one after it reads once', async () => {
+    await registerTask();
+    let release: ((v: BranchPr[]) => void) | null = null;
+    let wait = false;
+    const r = mergeRig({ [B1]: () => (wait ? new Promise<BranchPr[]>((resolve) => { release = resolve; }) : []) }, { 'task-1': 'wmux/task-1' }, { ...NO_GATE, mergeSweepMs: 30 });
+    await report();
+    await flush();
+    const reads = r.prsOfBranch.mock.calls.length;
+    wait = true;
+    for (let i = 0; i < 20; i++) r.emit(fact('pr.merged', 100 + i));
+    await vi.waitFor(() => expect(release).not.toBeNull(), { interval: 2, timeout: 15_000 });
+    (release as unknown as (v: BranchPr[]) => void)([]);
+    await flush();
+    expect(r.prsOfBranch).toHaveBeenCalledTimes(reads + 1);
+    wait = false;
+    await new Promise((res) => setTimeout(res, 100));
+    expect(r.prsOfBranch).toHaveBeenCalledTimes(reads + 1);
+    r.clock.now += MERGE_ANSWER_TTL_MS;
+    await vi.waitFor(() => expect(r.prsOfBranch).toHaveBeenCalledTimes(reads + 2), { interval: 2, timeout: 15_000 });
+    r.off();
+  });
+
+  it('an answer for an older rev is not written to a newer report', async () => {
+    await registerTask();
+    let release: ((v: BranchPr[]) => void) | null = null;
+    let wait = false;
+    const r = mergeRig({ [B1]: () => (wait ? new Promise<BranchPr[]>((resolve) => { release = resolve; }) : []) }, { 'task-1': 'wmux/task-1' }, NO_GATE);
+    await report();
+    await flush();
+    const checked = (ledger.get('task-1') as LedgerEntry).rev;
+    wait = true;
+    r.emit(fact('pr.merged', 2));
+    await vi.waitFor(() => expect(release).not.toBeNull(), { interval: 2, timeout: 15_000 });
+    // Sent back and reported again while that check waits on GitHub.
+    const back = await ledger.update({ id: 'task-1', status: 'input_required', actor: { kind: 'brain', workspaceId: 'ws-lead' }, expectedRev: checked });
+    if (!back.ok) throw new Error(back.message);
+    await report();
+    (release as unknown as (v: BranchPr[]) => void)([pr(2)]);
+    await flush();
+    expect(r.completeMerged).toHaveBeenCalledWith('task-1', 2, checked);
+    const row = ledger.get('task-1') as LedgerEntry;
+    expect(row.status).toBe('review_requested');
+    expect(row.completion).toBeUndefined();
+  });
+
+  it('a HEAD that moved while the merge was checked is not completed on that answer', async () => {
+    await registerTask();
+    const r = mergeRig({ [B1]: [pr(2)] }, { 'task-1': 'wmux/task-1' }, NO_GATE);
+    let reads = 0;
+    r.headOf.mockImplementation(async () => (++reads === 1 ? HEAD : 'e'.repeat(40)));
+    await report();
+    await flush();
+    expect(r.completeMerged).not.toHaveBeenCalled();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+  });
+
+  it('the default branch is GitHub\'s: a repository on develop is not ended by a merge into main', async () => {
+    await registerTask();
+    const r = mergeRig({ [B1]: [pr(2, { base: 'main' })] }, { 'task-1': 'wmux/task-1' }, NO_GATE);
+    r.defaultBranchOf.mockImplementation(async () => 'develop');
+    await report();
+    await flush();
+    expect(r.prsOfBranch).toHaveBeenCalledWith(REPO, 'wmux/task-1', 'develop');
+    expect(r.completeMerged).not.toHaveBeenCalled();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    // Read once a repository, kept.
+    r.emit(fact('pr.merged', 3));
+    await flush();
+    expect(r.defaultBranchOf).toHaveBeenCalledTimes(1);
+  });
+
+  it('at install, a report whose worktree or default branch cannot be read is not woken; the sweep wakes it once a check answers', async () => {
+    await registerTask();
+    await report();
+    const g = await ledger.recordGate('task-1', { ...PASS, command: 'none', skipped: 'no_gate_command' }, { kind: 'system', workspaceId: 'ws-daemon' });
+    if (!g.ok) throw new Error(g.message);
+    let worktree: string | null = null;
+    const r = mergeRig({}, { 'task-1': 'wmux/task-1' }, { noted: () => true, mergeSweepMs: 20, worktreeOf: async () => worktree });
+    await flush();
+    expect(r.wake).not.toHaveBeenCalled();
+    worktree = '/wt/task-1';
+    await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
+    await new Promise((res) => setTimeout(res, 60));
+    expect(r.wake).toHaveBeenCalledTimes(1);
+    expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', g.entry.rev)]);
     r.off();
   });
 
@@ -898,7 +1029,7 @@ describe('a merged pull request ends its task', () => {
     let answer: ((b: string) => void) | null = null;
     const branchOf = vi.fn(() => new Promise<string>((resolve) => { answer = resolve; }));
     const r = mergeRig({ [B1]: [pr(2)] }, {}, { branchOf, noted: () => true, mergeSweepMs: 10 });
-    await vi.waitFor(() => expect(answer).not.toBeNull(), { interval: 2 });
+    await vi.waitFor(() => expect(answer).not.toBeNull(), { interval: 2, timeout: 15_000 });
     await new Promise((res) => setTimeout(res, 30));
     r.off();
     expect(r.subs.size).toBe(0);

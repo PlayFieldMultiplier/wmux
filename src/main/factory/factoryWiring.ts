@@ -744,18 +744,28 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
           // list is the evidence (the repo watch's gh runner and breaker); a
           // pr.merged fact only checks again sooner.
           onFact: (fn) => getFactLog()?.subscribe(fn) ?? (() => undefined),
-          prsOfBranch: async (repoKey, branch) => {
+          prsOfBranch: async (repoKey, branch, base) => {
             const { ghPrReviewService } = await import('../github/GhPrReviewService');
-            const r = await ghPrReviewService.mergedOfBranch(deps.wmuxDir(), repoKey, branch);
+            const r = await ghPrReviewService.mergedOfBranch(deps.wmuxDir(), repoKey, branch, base);
             if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
             return r.value;
+          },
+          defaultBranchOf: async (repoKey) => {
+            const { ghPrReviewService } = await import('../github/GhPrReviewService');
+            const r = await ghPrReviewService.defaultBranch(deps.wmuxDir(), repoKey);
+            if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+            return r.value;
+          },
+          headOf: async (worktreePath) => {
+            const r = await git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], worktreePath);
+            return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
           },
           branchOf: async (entry) => {
             const known = await branches.branches([entry]);
             return known.has(entry.id) ? known.get(entry.id) ?? null : undefined;
           },
           headMerged: (worktreePath, sha) => worktreeHeadMerged(git, worktreePath, sha),
-          completeMerged: (taskId, pr) => completeMergedTask(ledger, taskId, pr),
+          completeMerged: (taskId, pr, checkedRev) => completeMergedTask(ledger, taskId, pr, checkedRev),
           wake: (input) => {
             const q = getWakeQueue();
             if (!q) console.info(`[factory] wake queue not running; ${input.botId} was not woken`);
