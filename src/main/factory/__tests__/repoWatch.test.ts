@@ -37,7 +37,7 @@ interface PrSpec {
   base?: string;
 }
 interface IssueSpec { number: number; labels?: string[]; labelTotal?: number; createdAt?: number; author?: string }
-interface RepoSpec { prs: PrSpec[]; prTotal?: number; recent?: Array<{ number: number; state: 'MERGED' | 'CLOSED'; baseRefName?: string; headRefName?: string; headRefOid?: string; isCrossRepository?: boolean }>; issues?: IssueSpec[]; issueTotal?: number }
+interface RepoSpec { prs: PrSpec[]; prTotal?: number; recent?: Array<{ number: number; state: 'MERGED' | 'CLOSED'; closedAt?: string; author?: { login: string }; baseRefName?: string; headRefName?: string; headRefOid?: string; isCrossRepository?: boolean }>; issues?: IssueSpec[]; issueTotal?: number }
 
 function prNode(p: PrSpec) {
   return {
@@ -197,6 +197,55 @@ describe('repoWatch — baseline and edges', () => {
     expect(facts2.appended.map((f) => [f.kind, f.ref?.headSha])).toEqual([['pr.head_moved', 'a3']]);
     expect(before).toBe(2);
     await w2.dispose();
+  });
+
+  it('a PR opened and merged between two polls is announced from the recent list, once, and not again after a restart', async () => {
+    const iso = (t: number) => new Date(t).toISOString();
+    let spec: RepoSpec = { prs: [] };
+    const gh = fakeGh(() => spec);
+    const facts = fakeFacts();
+    const w1 = makeWatch({ graphql: gh.graphql, facts });
+    await w1.start();
+    await w1.pollNow(KEY); // the baseline
+    now = T0 + 60_000;
+    spec = {
+      prs: [],
+      recent: [
+        { number: 7, state: 'MERGED', closedAt: iso(T0 + 30_000), author: { login: 'wmux-bot' }, baseRefName: 'main', headRefName: 'wmux/task-7', headRefOid: 'h7', isCrossRepository: false },
+        { number: 8, state: 'CLOSED', closedAt: iso(T0 + 40_000), baseRefName: 'main', headRefName: 'wmux/task-8', headRefOid: 'h8', isCrossRepository: false },
+        // Closed before the baseline, back in the list for a comment: silent.
+        { number: 3, state: 'MERGED', closedAt: iso(T0 - 86_400_000), baseRefName: 'main', headRefName: 'old', headRefOid: 'h3', isCrossRepository: false },
+        // No close time read: not announced.
+        { number: 4, state: 'MERGED', baseRefName: 'main', headRefName: 'x', headRefOid: 'h4', isCrossRepository: false },
+      ],
+    };
+    await w1.pollNow(KEY);
+    expect(facts.appended.map((f) => [f.kind, f.ref?.pr])).toEqual([['pr.merged', 7], ['pr.closed', 8]]);
+    expect(facts.appended[0]).toMatchObject({
+      repoKey: KEY, ref: { pr: 7, headSha: 'h7' }, actor: { kind: 'github', id: 'wmux-bot' },
+      payload: { author: 'wmux-bot', baseRefName: 'main', headRefName: 'wmux/task-7', headRefOid: 'h7', isCrossRepository: false },
+    });
+    // Still in the list on the next poll: the log drops its repeated key.
+    now += 60_000;
+    await w1.pollNow(KEY);
+    expect(facts.appended).toHaveLength(2);
+    await w1.flush();
+    await w1.dispose();
+
+    // A restart: the fact log's dedupe index survives it, and the close is
+    // older than the last poll anyway.
+    now += 10 * 60_000;
+    const w2 = makeWatch({ graphql: gh.graphql, facts });
+    await w2.start();
+    expect(await w2.pollNow(KEY)).toMatchObject({ ok: true, baseline: false, emitted: 0 });
+    await w2.flush();
+    await w2.dispose();
+    const fresh = fakeFacts();
+    const w3 = makeWatch({ graphql: gh.graphql, facts: fresh });
+    await w3.start();
+    await w3.pollNow(KEY);
+    expect(fresh.appended).toEqual([]);
+    await w3.dispose();
   });
 
   it('an unreadable state file is a baseline (silence, not a burst)', async () => {

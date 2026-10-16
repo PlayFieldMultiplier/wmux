@@ -449,7 +449,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   /** End the reported task when its PR was merged: one card, one wake. */
   const checkMerged = async (taskId: string, facts: readonly Fact[]): Promise<boolean> => {
     const row = stillReported(taskId);
-    if (!row || isResearchDispatch(row.dispatch) || !ports.completeMerged) return false;
+    if (!row || isResearchDispatch(row.dispatch) || !normalizeRepoKey(row.dispatch?.repoKey) || !ports.completeMerged) return false;
     let pr: number | null = null;
     try {
       pr = await mergedPrOf(row, facts);
@@ -613,8 +613,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       sweepTimer.unref?.();
       return;
     }
-    // A PR merged while the app was closed, or before a report a quit cut short.
-    sweepMerged();
+    const facts = readPrFacts();
     for (const entry of open) {
       // A report that arrived while the sweep waited is being gated already.
       if (running.has(entry.id)) continue;
@@ -623,13 +622,29 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       // A carded pass is not: its completion did not land, so it is gated
       // again below, as any pass at install is.
       const passed = reportWasGated(entry) && isSystemGatePass(entry.gate);
-      if (carded(entry) === true && !passed) wake(entry);
+      if (carded(entry) === true && !passed) void wakeUnlessMerged(entry, facts);
       // Not gated, or gated with a pass that may belong to an older report:
-      // gate it (again). A gate that did not pass (its card is already up)
-      // wakes the bot again, which the queue drops once delivered.
+      // gate it (again; the gate checks for a merge first). A gate that did
+      // not pass (its card is already up) wakes the bot again, which the
+      // queue drops once delivered.
       else if (!reportWasGated(entry) || isSystemGatePass(entry.gate)) start(entry.id);
-      else wake(entry);
+      else void wakeUnlessMerged(entry, facts);
     }
+  };
+  /** Wake a report again at install, unless its PR was merged (while the app
+   *  was closed, or before a report a quit cut short): that ends it, with
+   *  its own wake. The merge check is awaited first, so such a report is one
+   *  bot turn, not one for this rev and one for the completion. */
+  const wakeUnlessMerged = async (entry: LedgerEntry, facts: readonly Fact[]): Promise<void> => {
+    try {
+      if (await endIfMerged(entry.id, facts)) return;
+    } catch (err) {
+      log(`[factory] merge check of ${entry.id} failed: ${String(err)}`);
+    }
+    // Woken only as it stood: a row that moved meanwhile was handled by what moved it.
+    const now = stillReported(entry.id);
+    if (disposed || !now || now.rev !== entry.rev || running.has(entry.id)) return;
+    wake(now);
   };
   sweepOpen(0);
   const mergeSweep = mergeable() ? setInterval(sweepMerged, ports.mergeSweepMs ?? MERGE_SWEEP_MS) : null;

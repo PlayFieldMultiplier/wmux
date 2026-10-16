@@ -687,8 +687,26 @@ describe('a merged pull request ends its task', () => {
     const r = mergeRig([opened(2, 'wmux/task-1'), merged(2)], { 'task-1': 'wmux/task-1' }, { noted: () => true });
     await flush();
     expect(r.runGate).not.toHaveBeenCalled();
-    expect(ledger.get('task-1')?.status).toBe('completed');
+    const row = ledger.get('task-1') as LedgerEntry;
+    expect(row.status).toBe('completed');
     expect(r.note.mock.calls.map((c) => c[2])).toEqual(['PR #2 merged: task completed']);
+    // One bot turn: the completion's wake, not also one for the report's old rev.
+    expect(r.wake).toHaveBeenCalledTimes(1);
+    expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
+  });
+
+  it('restart: a carded report whose PR is not merged is woken again once, after its merge check', async () => {
+    await registerTask();
+    await report();
+    await ledger.recordGate('task-1', { ...PASS, exitCode: 1 }, { kind: 'system', workspaceId: 'ws-daemon' });
+    const row = ledger.get('task-1') as LedgerEntry;
+    const r = mergeRig([opened(2, 'wmux/task-1')], { 'task-1': 'wmux/task-1' }, { noted: () => true });
+    await flush();
+    expect(r.branchOf).toHaveBeenCalledTimes(1);
+    expect(r.runGate).not.toHaveBeenCalled();
+    expect(ledger.get('task-1')?.status).toBe('review_requested');
+    expect(r.wake).toHaveBeenCalledTimes(1);
+    expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
   });
 
   it('restart: a report not gated yet whose PR is merged gets one card and one wake, no gate (the gate waits for the merge check under way)', async () => {

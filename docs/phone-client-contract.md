@@ -4382,6 +4382,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `gate.notRunNoBaseRef` | — | `Gate not run: task left open` | — |
 | `research.completed` | — | `Research reported: task completed` | — |
 | `research.notCompleted` | — | `Research reported: task not completed` | — |
+| `task.merged` | `pr` number | `PR #{pr} merged: task completed` | `pr`: the merged pull request that ended the task. |
 | `verify.passed` | — | `Verify gate passed` | — |
 | `verify.killed` | — | `Verify gate was killed` | — |
 | `verify.failed` | `exit` number | `Verify gate failed (exit {exit})` | — |

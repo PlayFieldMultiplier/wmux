@@ -49,6 +49,10 @@ export const REPO_WATCH_LIMITS = {
 /** The method name a watch_cap refusal carries (`bot.refused` keys need one). */
 export const REPO_WATCH_METHOD = 'repo.watch';
 
+/** A PR never seen open is announced closed when it closed after the last
+ *  poll, less this (GitHub's clock against ours). */
+export const UNSEEN_CLOSE_SKEW_MS = 5 * 60_000;
+
 export type WatchChecks = 'pass' | 'fail' | 'pending';
 
 export interface WatchedPrState {
@@ -102,7 +106,7 @@ export const WATCH_QUERY = `query($owner: String!, $repo: String!) {
       nodes { ${PR_FIELDS} }
     }
     recent: pullRequests(states: [CLOSED, MERGED], first: ${REPO_WATCH_LIMITS.RECENT_CLOSED}, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      nodes { number state baseRefName headRefName headRefOid isCrossRepository }
+      nodes { number state closedAt author { login } baseRefName headRefName headRefOid isCrossRepository }
     }
     issues(states: OPEN, first: ${REPO_WATCH_LIMITS.PAGE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
       totalCount
@@ -167,6 +171,8 @@ export interface WatchSnapshot {
    *  base it was closed on, its head branch and head commit, whether it came
    *  from a fork (each only when read). */
   recentRefs?: Record<string, ClosedPrRefs>;
+  /** The same PRs' close time (epoch ms; 0 unread) and author. */
+  recentClosed?: Record<string, { closedAt: number; author: string | null }>;
   issues: WatchIssue[];
   issueTotal: number;
 }
@@ -276,11 +282,13 @@ export function mapWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: s
   const recentNodes = (repo.recent as { nodes?: unknown } | null | undefined)?.nodes;
   const recent: Record<string, string> = {};
   const recentRefs: Record<string, ClosedPrRefs> = {};
+  const recentClosed: Record<string, { closedAt: number; author: string | null }> = {};
   if (Array.isArray(recentNodes)) {
     for (const n of recentNodes) {
-      const r = n as { number?: unknown; state?: unknown; baseRefName?: unknown; headRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown } | null;
+      const r = n as { number?: unknown; state?: unknown; closedAt?: unknown; author?: unknown; baseRefName?: unknown; headRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown } | null;
       if (typeof r?.number === 'number' && (r.state === 'MERGED' || r.state === 'CLOSED')) {
         recent[String(r.number)] = r.state;
+        recentClosed[String(r.number)] = { closedAt: timeOf(r.closedAt), author: str((r.author as { login?: unknown } | null)?.login) || null };
         const refs: ClosedPrRefs = {
           ...(str(r.baseRefName) ? { baseRefName: str(r.baseRefName) } : {}),
           ...(str(r.headRefName) ? { headRefName: str(r.headRefName) } : {}),
@@ -297,6 +305,7 @@ export function mapWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: s
       prTotal: page.total,
       recent,
       recentRefs,
+      recentClosed,
       issues: issuesConn.nodes.flatMap((n) => { const i = mapIssue(n); return i ? [i] : []; }),
       issueTotal: issuesConn.totalCount,
     },
@@ -427,6 +436,26 @@ export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, 
         ref: { pr: Number(n), headSha: was.headSha },
         actor: github(was.author),
         payload: { author: was.author, labels: was.labels, ...refs, ...(closedAs ? {} : { stateUnknown: true }) },
+      });
+    }
+    // A PR opened and closed between two polls was never seen open: its close
+    // is read from the recent list. Only a close after the last poll (less
+    // the skew) and after the baseline is new; the fact log drops a repeat of
+    // its key (`<kind>:<repo>#<n>`, kept across restarts), so a close seen
+    // again by the next poll is not announced twice.
+    const since = Math.max(prev.baselineAt, prev.lastPollAt - UNSEEN_CLOSE_SKEW_MS);
+    for (const [n, closedAs] of Object.entries(snap.recent)) {
+      if (prev.prs[n] || next.prs[n]) continue;
+      const closed = snap.recentClosed?.[n];
+      if (!closed || closed.closedAt <= 0 || closed.closedAt < since) continue;
+      const refs = snap.recentRefs?.[n] ?? {};
+      drafts.push({
+        kind: closedAs === 'MERGED' ? 'pr.merged' : 'pr.closed',
+        at: now,
+        repoKey,
+        ref: { pr: Number(n), ...(refs.headRefOid ? { headSha: refs.headRefOid } : {}) },
+        actor: github(closed.author),
+        payload: { author: closed.author, labels: [], ...refs },
       });
     }
   }
