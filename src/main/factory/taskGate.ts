@@ -55,9 +55,11 @@
 // it is made meanwhile. One check per task at a time: a caller that finds one
 // under way takes its answer. A check that cannot answer (a failed read, no
 // default branch, the task's branch, worktree or HEAD not readable) is
-// 'unknown'. At install a report woken again waits for its check; one whose
-// check is 'unknown' is woken by the sweep once a check answers, so it gets
-// one wake: the completion's or its own. A gate still running when the merge
+// 'unknown'. At install a report waits for its check before it is woken
+// again or gated; one whose check is 'unknown' is neither now, and the sweep
+// wakes or gates it once a check answers (such reports take at most half a
+// tick's slots), so it gets one wake: the completion's, its gate's or its
+// own. A gate still running when the merge
 // lands finds the row moved and settles nothing; the ledger records no gate
 // on an ended row. A PR closed without a merge leaves the task open, and so
 // does a task still `working` (the ledger has no working → completed move).
@@ -554,13 +556,14 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       if (merging.get(taskId) === check) merging.delete(taskId);
     }
   };
-  /** Reports woken again at install whose check had no answer: taskId → the
-   *  rev to wake once a check answers 'open' (the sweep). */
-  const wakeLater = new Map<string, number>();
+  /** Reports at install whose merge check had no answer: taskId → the rev
+   *  to settle once a check answers 'open' (the sweep), and how: woken again
+   *  (a report already gated and carded) or gated (one not gated yet). */
+  const deferred = new Map<string, { rev: number; then: 'wake' | 'gate' }>();
   /** When each open report was last checked by a sweep (oldest first next). */
   const sweptAt = new Map<string, number>();
-  /** Check `rows` one after another (never throws); a report waiting for its
-   *  install wake gets it once its check answers that it is open. */
+  /** Check `rows` one after another (never throws); a report deferred at
+   *  install is woken or gated once its check answers that it is open. */
   const endMerged = async (rows: readonly LedgerEntry[], fresh = false): Promise<void> => {
     for (const row of rows) {
       if (disposed) return;
@@ -570,33 +573,41 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       } catch (err) {
         log(`[factory] merge check of ${row.id} failed: ${String(err)}`);
       }
-      const rev = wakeLater.get(row.id);
-      if (rev === undefined || answer === 'unknown') continue;
-      wakeLater.delete(row.id);
+      const later = deferred.get(row.id);
+      if (!later || answer === 'unknown') continue;
+      deferred.delete(row.id);
       const now = stillReported(row.id);
-      if (answer === 'open' && !disposed && now && now.rev === rev && !running.has(row.id)) wake(now);
+      if (answer !== 'open' || disposed || !now || now.rev !== later.rev) continue;
+      if (later.then === 'gate') start(row.id);
+      else if (!running.has(row.id)) wake(now);
     }
   };
   /** One sweep tick: at most MERGE_SWEEP_MAX open reports of repositories
-   *  not backing off, those waiting for their install wake first, then the
-   *  longest unchecked. */
+   *  not backing off. Reports deferred at install take at most half the
+   *  slots (the longest unchecked of them), so ones that stay unanswerable
+   *  never crowd out the rest; the longest unchecked of all fill the others. */
   const sweepMerged = (): void => {
     if (disposed || !mergeable()) return;
     const rows = reportedRows();
     const open = new Set(rows.map((r) => r.id));
     for (const id of [...sweptAt.keys()]) if (!open.has(id)) sweptAt.delete(id);
-    for (const id of [...wakeLater.keys()]) if (!open.has(id)) wakeLater.delete(id);
+    for (const id of [...deferred.keys()]) if (!open.has(id)) deferred.delete(id);
     for (const id of [...answers.keys()]) if (!open.has(id)) answers.delete(id);
-    const picked = rows
+    const unchecked = rows
       .filter((r) => !backingOff(normalizeRepoKey(r.dispatch?.repoKey)))
-      .sort((a, b) => Number(wakeLater.has(b.id)) - Number(wakeLater.has(a.id)) || (sweptAt.get(a.id) ?? 0) - (sweptAt.get(b.id) ?? 0) || a.id.localeCompare(b.id))
-      .slice(0, MERGE_SWEEP_MAX);
+      .sort((a, b) => (sweptAt.get(a.id) ?? 0) - (sweptAt.get(b.id) ?? 0) || a.id.localeCompare(b.id));
+    const first = unchecked.filter((r) => deferred.has(r.id)).slice(0, Math.floor(MERGE_SWEEP_MAX / 2));
+    const firstIds = new Set(first.map((r) => r.id));
+    const picked = [...first, ...unchecked.filter((r) => !firstIds.has(r.id)).slice(0, MERGE_SWEEP_MAX - first.length)];
     const at = clock();
     for (const r of picked) sweptAt.set(r.id, at);
     if (picked.length > 0) void endMerged(picked);
   };
 
-  const run = async (taskId: string): Promise<void> => {
+  /** Gate a report. `atInstall`: one found open at install, whose merge
+   *  check, when it cannot answer, defers it to the sweep (not gated, not
+   *  woken now), so it gets one wake: the completion's or its gate's. */
+  const run = async (taskId: string, atInstall: boolean): Promise<void> => {
     const entry = stillReported(taskId);
     if (!entry) return;
     // A research task changed no code: nothing to gate.
@@ -616,7 +627,12 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       return;
     }
     // A PR merged before the report ends the task now, with no gate.
-    if (await endIfMerged(entry.id) === 'ended') return;
+    const merge = await endIfMerged(entry.id);
+    if (merge === 'ended') return;
+    if (merge === 'unknown' && atInstall) {
+      if (!disposed && stillReported(taskId)?.rev === entry.rev) deferred.set(taskId, { rev: entry.rev, then: 'gate' });
+      return;
+    }
     if (!stillReported(taskId)) return;
     const bot = ports.bot(entry.dispatch?.origin.botId ?? '');
     const repoPath = bot?.repo?.repoPath;
@@ -651,13 +667,13 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     await settle(now, passed ? null : describeTaskGate(result));
   };
 
-  const start = (taskId: string): void => {
+  const start = (taskId: string, atInstall = false): void => {
     if (running.has(taskId)) {
       again.add(taskId);
       return;
     }
     running.add(taskId);
-    void run(taskId)
+    void run(taskId, atInstall)
       .catch((err) => log(`[factory] gate for ${taskId} failed: ${String(err)}`))
       .finally(() => {
         running.delete(taskId);
@@ -717,7 +733,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       // gate it (again; the gate checks for a merge first). A gate that did
       // not pass (its card is already up) wakes the bot again, which the
       // queue drops once delivered.
-      else if (!reportWasGated(entry) || isSystemGatePass(entry.gate)) start(entry.id);
+      else if (!reportWasGated(entry) || isSystemGatePass(entry.gate)) start(entry.id, true);
       else void wakeUnlessMerged(entry);
     }
   };
@@ -725,7 +741,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
    *  was closed, or before a report a quit cut short): that ends it, with
    *  its own wake. The merge check is awaited first, so such a report is one
    *  bot turn, not one for this rev and one for the completion; a check with
-   *  no answer leaves the wake to the sweep (wakeLater). */
+   *  no answer leaves the wake to the sweep (deferred). */
   const wakeUnlessMerged = async (entry: LedgerEntry): Promise<void> => {
     let answer: MergeCheck = 'unknown';
     try {
@@ -735,7 +751,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     }
     if (answer === 'ended') return;
     if (answer === 'unknown') {
-      if (!disposed) wakeLater.set(entry.id, entry.rev);
+      if (!disposed) deferred.set(entry.id, { rev: entry.rev, then: 'wake' });
       return;
     }
     // Woken only as it stood: a row that moved meanwhile was handled by what moved it.
