@@ -461,7 +461,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   cap, the factory's workers or agent slots full, its queue full — with a
   secondary Resume while it is parked; under it one muted line per limit in
   tabular figures: turns this hour (only with an hourly cap) and today,
-  used and left; worker time used of its cap; running workers of its cap;
+  used and left; worker time used of its cap; worker slots in use of its cap (the cap counts slots held, so a task in
+  review whose worker still holds one is named: "2 of 3 · 2 held by tasks in
+  review");
   the queue of its cap (only when not empty); a line at its limit in the
   caution yellow,
   its routines, its connections — each library connection that applies to

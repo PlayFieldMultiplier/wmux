@@ -52,9 +52,17 @@ describe('BotToday', () => {
     expect(line('workerTime')?.getAttribute('data-reached')).toBe('true');
     expect(line('workerTime')?.className).toContain('--accent-yellow');
     expect(line('turnsDay')?.getAttribute('data-reached')).toBeNull();
-    expect(line('workers')?.textContent).toBe('Running workers0 of 1');
+    expect(line('workers')?.textContent).toBe('Worker slots in use0 of 1');
     expect(line('queue')?.textContent).toBe('Queue50 of 50');
     expect(host.querySelector('[data-testid="bots-resume-bot"]')).toBeNull();
+  });
+
+  it('names the slots held by tasks in review, so the cap line agrees with Workers now', () => {
+    const r = row({ budget: { ...DEFAULT_BOT_BUDGETS.verifier, maxConcurrentWorkers: 3 } }, { queueDepth: 0, usage: { turnsHour: null, turnsDay: 1, workerHoursDay: 1, workersRunning: 2 } });
+    act(() => root.render(<BotToday row={r} liveWorkers={0} t={t} />));
+    expect(host.querySelector('[data-bots-today-line="workers"]')?.textContent).toBe('Worker slots in use2 of 3 · 2 held by tasks in review');
+    act(() => root.render(<BotToday row={r} liveWorkers={2} t={t} />));
+    expect(host.querySelector('[data-bots-today-line="workers"]')?.textContent).toBe('Worker slots in use2 of 3');
   });
 
   it('a parked bot\'s line says why and Resume resumes it', async () => {

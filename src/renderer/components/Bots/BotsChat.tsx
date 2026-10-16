@@ -1854,7 +1854,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
       <WorkerEngineLine row={row} t={t} port={jobPort} />
       <WorkerModelLine row={row} t={t} port={jobPort} />
       <ProfileLine label={t('botsPage.profile.state')} value={`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(`room.presence.${botPresence(row)}`)}`} />
-      <BotToday row={row} act={adminPort?.act} t={t} />
+      <BotToday row={row} act={adminPort?.act} liveWorkers={workers.length} t={t} />
       {routines.length > 0 && (
         <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-routines>
           <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.routines')}</span>
