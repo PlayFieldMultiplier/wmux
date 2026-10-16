@@ -403,7 +403,9 @@ export function buildWakePrompt(input: WakePromptInput): string {
         else if (fact) lines.push(factBlock(fact));
         else if (task) lines.push(`- ${id}`, taskBlock(task));
         else lines.push(`- ${id} (not readable now)`);
-        if (task?.status === 'input_required' || id.startsWith('task.input_required:')) waiting = true;
+        // Waiting only while the task still is: an older input_required fact
+        // of a task that ended since (cancelled by the owner) is not a wait.
+        if (task ? task.status === 'input_required' : id.startsWith('task.input_required:')) waiting = true;
       }
       const parent = input.taskParent;
       if (parent && !parent.answered) {

@@ -3091,7 +3091,14 @@ function registerRpcHandlers(
       const agentProcessAlive = s.exec
         ? (s.state === 'attached' || s.state === 'detached' ? true : undefined)
         : agentProcessTracker.statusFor(s.id);
-      const withAlive = agentProcessAlive !== undefined ? { ...withPrompt, agentProcessAlive } : withPrompt;
+      const withAlive0 = agentProcessAlive !== undefined ? { ...withPrompt, agentProcessAlive } : withPrompt;
+      // A pane this daemon respawned at recovery runs a fresh shell until
+      // something shows an agent there again (its banner, a hook, the process
+      // watch): said only while that holds, so a client can tell "no agent
+      // since the restart" from "never attributed".
+      const withAlive = managedForPrompt?.recoveredAgentUnconfirmed === true && agentProcessAlive !== true
+        ? { ...withAlive0, recoveredAgentUnconfirmed: true as const }
+        : withAlive0;
       return surfacedBinding ? { ...withAlive, resumeBinding: surfacedBinding } : withAlive;
     });
 

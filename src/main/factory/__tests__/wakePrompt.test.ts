@@ -167,6 +167,13 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(text).toContain('worker_message');
     const done = buildWakePrompt({ item: item({ kind: 'facts', factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' } }), profile, tasks: [{ taskId: 'wtask-1', title: 'README', status: 'review_requested' }] });
     expect(done).not.toContain('waiting for input');
+    // F22: an input_required fact of a task the owner cancelled since is no wait.
+    const cancelled = buildWakePrompt({
+      item: item({ kind: 'facts', factIds: ['task.input_required:wtask-1@3'], trigger: { kind: 'task.input_required' } }),
+      profile,
+      tasks: [{ taskId: 'wtask-1', title: 'README', status: 'cancelled', summary: 'stopped by owner' }],
+    });
+    expect(cancelled).not.toContain('waiting for input');
   });
 
   it('a relay\'s dispatch says where the result goes; its last result shows the trail; a stop says why', () => {
