@@ -708,24 +708,34 @@ describe('an archived skill: the owner\'s chat and the bot\'s next wake', () => 
     expect(archived).toEqual(['report']);
     const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
     const text = buildWakePrompt({ item, profile: profile(A), skills: wakeSkills({ skills: () => s } as never, profile(A)), archivedSkills: archived });
-    expect(text).toContain('Archived by the owner, no longer loaded: report. Do not apply them');
+    expect(text).toContain('Skills the owner archived (no longer loaded; do not apply them');
+    expect(text).toContain('```archived-skills\nreport\n```');
     expect(text).toContain('triage: How to report a task');
     expect(text).not.toMatch(/^report: /m);
   });
 
   it('the wake words an approved skill by where it stands, never as a merge', () => {
     const s = store();
-    s.approve(A, 'report', propose(s, A, 'report').hash);
-    s.approve(A, 'triage', propose(s, A, 'triage').hash);
+    const first = propose(s, A, 'report');
+    s.approve(A, 'report', first.hash);
+    s.archive(A, 'report');
+    // Approved again after Archive, with other content but the same version.
+    const again = propose(s, A, 'report', skillMd('report', '1.0.0', 'Other steps.\n'));
+    s.approve(A, 'report', again.hash);
+    const tri = propose(s, A, 'triage');
+    s.approve(A, 'triage', tri.hash);
     s.archive(A, 'triage');
-    const row = (name: string, version = '1.0.0') => ({ action: 'skill', skill: { name, version }, repoKey: '', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 });
-    const rows = [row('report'), row('triage'), row('report', '0.9.0'), { action: 'merge', prNumber: 7, repoKey: 'k', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 }];
+    const row = (name: string, hash: string) => ({ action: 'skill', skill: { name, version: '1.0.0', hash }, repoKey: '', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 });
+    const rows = [row('report', again.hash), row('triage', tri.hash), row('report', first.hash), { action: 'merge', prNumber: 7, repoKey: 'k', state: 'approved', botId: A, createdAt: 1, updatedAt: 1_000 }];
     const approvals = wakeApprovals({ skills: () => s, approvals: () => rows, botName: () => null } as never, profile(A), 2_000);
     const item = { id: 'w-1', botId: A, workspaceId: WS, reason: { kind: 'human' }, priority: 1, attempts: 1 } as never;
     const text = buildWakePrompt({ item, profile: profile(A), approvals });
     expect(text).toContain('Load the skill report 1.0.0: approved by the owner; loaded');
     expect(text).toContain('Load the skill triage 1.0.0: archived by the owner; do not apply it');
-    expect(text).toContain('Load the skill report 0.9.0: approved, since replaced by a newer approved version');
+    expect(text).toContain('Load the skill report 1.0.0: approved, since replaced by another approved version');
+    // Files changed on disk since approval.
+    fs.writeFileSync(path.join(botSkillsRoot(wmuxDir, A), 'report', 'SKILL.md'), skillMd('report', '1.0.0', 'Edited.\n'));
+    expect(wakeApprovals({ skills: () => s, approvals: () => [rows[0]], botName: () => null } as never, profile(A), 2_000)[0].skill).toBe('changed');
     expect(text).toContain('Merge PR #7: approved by the owner, merging after the Undo window');
     expect(text.match(/Undo window/g)).toHaveLength(1);
   });

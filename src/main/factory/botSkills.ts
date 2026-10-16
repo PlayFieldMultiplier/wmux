@@ -540,6 +540,18 @@ export class BotSkillStore {
     return out;
   }
 
+  /** Where the version approved with content `hash` stands now: loaded,
+   *  archived by the owner, changed on disk since, or replaced by another
+   *  approved version. Null when the store has no such skill. */
+  approvalStatus(botId: string, name: string, hash: string): 'loaded' | 'archived' | 'changed' | 'replaced' | null {
+    const rec = typeof botId === 'string' && BOT_ID_RE.test(botId) && typeof name === 'string' ? this.record(botId, name) : null;
+    if (!rec?.approved) return null;
+    if (rec.state === 'archived') return 'archived';
+    if (rec.state !== 'approved') return null;
+    if (rec.approved.hash !== hash) return 'replaced';
+    return this.verified(botId, name, rec) ? 'loaded' : 'changed';
+  }
+
   /** The skills the owner archived after approving them: no longer loaded,
    *  and the wake says so (an earlier message may still cite them). */
   archivedNames(botId: string): string[] {

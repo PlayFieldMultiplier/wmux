@@ -46,7 +46,7 @@ export interface WakeContextPorts {
   /** The connection library (default: the running one). */
   connectors?: () => Pick<ConnectorStore, 'forBot'> | null;
   /** The bot skills store (default: the running one). */
-  skills?: () => Partial<Pick<BotSkillStore, 'index' | 'archivedNames' | 'list'>> | null;
+  skills?: () => Partial<Pick<BotSkillStore, 'index' | 'archivedNames' | 'approvalStatus'>> | null;
   /** Cards of a room (a thread, or every thread), oldest first: the newest
    *  `limit`, or with `sinceSeq` the first `limit` after it. */
   cards: (workspaceId: string, threadId: ThreadId | null, limit: number, sinceSeq?: number) => readonly RoomCard[];
@@ -55,7 +55,7 @@ export interface WakeContextPorts {
   /** The workspace's approval requests, newest first. */
   approvals?: (workspaceId: string) => ReadonlyArray<{
     action: string; prNumber?: number; issueNumber?: number; repoKey: string; state: string;
-    skill?: { name: string; version: string };
+    skill?: { name: string; version: string; hash?: string };
     botId: string; createdAt: number; updatedAt: number; refusal?: string;
   }>;
   botName: (botId: string) => string | null;
@@ -193,17 +193,12 @@ export function wakeApprovals(ports: WakeContextPorts, profile: BotProfile, now:
     });
 }
 
-/** Where the skill an approved `skill` request loaded stands now: still
- *  that version, archived by the owner, changed on disk, or replaced by a
- *  newer approval. Undefined when the store cannot tell. */
-function approvedSkillStatus(ports: WakeContextPorts, botId: string, skill: { name: string; version: string }): WakeApprovalSummary['skill'] {
+/** Where the skill an approved `skill` request loaded stands now (by its
+ *  content hash): undefined when the store cannot tell. */
+function approvedSkillStatus(ports: WakeContextPorts, botId: string, skill: { name: string; hash?: string }): WakeApprovalSummary['skill'] {
+  if (!skill.hash) return undefined;
   try {
-    const s = (ports.skills ?? getBotSkillStore)()?.list?.(botId).find((x) => x.name === skill.name);
-    if (!s) return undefined;
-    if (s.state === 'archived') return 'archived';
-    if (s.state !== 'approved') return undefined;
-    if (s.version !== skill.version) return 'replaced';
-    return s.changed ? 'changed' : 'loaded';
+    return (ports.skills ?? getBotSkillStore)()?.approvalStatus?.(botId, skill.name, skill.hash) ?? undefined;
   } catch {
     return undefined;
   }

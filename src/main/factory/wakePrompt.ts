@@ -281,7 +281,10 @@ export function buildWakePrompt(input: WakePromptInput): string {
   }
   const archived = input.archivedSkills ?? [];
   if (archived.length > 0) {
-    lines.push(`Archived by the owner, no longer loaded: ${archived.join(', ')}. Do not apply them, even where an earlier message or an open question of yours cites them.`);
+    lines.push(
+      'Skills the owner archived (no longer loaded; do not apply them, even where an earlier message or an open question of yours cites them):',
+      fenceData(archived.join('\n'), 'archived-skills'),
+    );
   }
   if (item.threadId) lines.push(`Thread: ${item.threadId} (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner's eyes).`);
   const thread = input.thread;
@@ -488,8 +491,8 @@ function noticeLines(f: Fact): string[] {
 const SKILL_APPROVED_TEXT: Readonly<Record<NonNullable<WakeApprovalSummary['skill']>, string>> = {
   loaded: 'approved by the owner; loaded',
   archived: 'archived by the owner; do not apply it',
-  changed: 'approved, but its files changed since; not loaded until you propose it again',
-  replaced: 'approved, since replaced by a newer approved version',
+  changed: 'approved, but its files changed since; not loaded unless the owner approves a new proposal of it',
+  replaced: 'approved, since replaced by another approved version',
 };
 
 function approvalStateText(a: Pick<WakeApprovalSummary, 'state' | 'action' | 'skill'>): string {
