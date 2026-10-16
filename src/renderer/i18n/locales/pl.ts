@@ -1552,6 +1552,8 @@ export const pl = {
   'botsPage.profile.workspace': "Obszar roboczy",
   'botsPage.profile.repo': "Repozytorium",
   'botsPage.profile.noRepo': "Brak",
+
+  'botsPage.profile.repoHint': "Folder, którego origin to adres owner/repo w serwisie git, np. GitHub. Ścieżki lokalnej nie można użyć.",
   'botsPage.profile.repoFailed': "Nie udało się zmienić repozytorium.",
   'botsPage.profile.state': "Stan",
   'botsPage.profile.on': "Włączony",

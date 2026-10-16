@@ -1674,6 +1674,8 @@ export const zh = {
   'botsPage.profile.workspace': "工作区",
   'botsPage.profile.repo': "仓库",
   'botsPage.profile.noRepo': "无",
+
+  'botsPage.profile.repoHint': "选择 origin 为 git 托管服务上 owner/repo 地址（例如 GitHub）的文件夹。不能使用本地路径。",
   'botsPage.profile.repoFailed': "无法更改仓库。",
   'botsPage.profile.state': "状态",
   'botsPage.profile.on': "开启",

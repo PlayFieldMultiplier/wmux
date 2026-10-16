@@ -1007,6 +1007,12 @@ export interface SessionData {
   notificationSoundEnabled?: boolean;
   toastEnabled?: boolean;
   notificationRingEnabled?: boolean;
+  /** #2294 — the notification-effect toggles and the unread-glow opacity.
+   *  Absent in older sessions; each then keeps its default (on, on, on, 0.6). */
+  paneRingEnabled?: boolean;
+  paneFlashEnabled?: boolean;
+  taskbarFlashEnabled?: boolean;
+  paneGlowOpacity?: number;
   /** Whether the user opted in to Anthropic usage polling (#896). No credentials are persisted. */
   anthropicUsageEnabled?: boolean;
   /** Arm a pane held at a usage limit to continue after the reset, unless the pane decided otherwise. */

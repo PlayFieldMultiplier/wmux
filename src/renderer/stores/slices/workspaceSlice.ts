@@ -1661,6 +1661,15 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         window.electronAPI.settings.setToastEnabled(data.toastEnabled);
       }
       if (data.notificationRingEnabled != null) state.notificationRingEnabled = data.notificationRingEnabled;
+      // #2294 — only an explicit boolean turns an effect off; a session that
+      // predates the fields keeps the defaults. The opacity is clamped the
+      // same way the setter clamps it.
+      if (typeof data.paneRingEnabled === 'boolean') state.paneRingEnabled = data.paneRingEnabled;
+      if (typeof data.paneFlashEnabled === 'boolean') state.paneFlashEnabled = data.paneFlashEnabled;
+      if (typeof data.taskbarFlashEnabled === 'boolean') state.taskbarFlashEnabled = data.taskbarFlashEnabled;
+      if (typeof data.paneGlowOpacity === 'number' && Number.isFinite(data.paneGlowOpacity)) {
+        state.paneGlowOpacity = Math.min(1, Math.max(0.6, data.paneGlowOpacity));
+      }
       if (typeof data.anthropicUsageEnabled === 'boolean') {
         state.anthropicUsageEnabled = data.anthropicUsageEnabled;
         window.electronAPI.usage.setEnabled(data.anthropicUsageEnabled);

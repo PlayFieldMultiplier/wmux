@@ -1410,6 +1410,8 @@ describe('Bots page', () => {
     act(() => q('[data-bots-pill]')!.click());
     const profile = q(`[data-bots-profile="${LEAD}"]`)!;
     expect(profile.querySelector('[data-bots-profile-repo-key]')?.textContent).toBe('github.com/acme/api');
+    // A linked bot needs no hint about what a repository must be.
+    expect(profile.querySelector('[data-bots-profile-repo-hint]')).toBeNull();
     const change = profile.querySelector<HTMLButtonElement>('[data-testid="bots-profile-repo-change"]')!;
     expect(change.textContent).toBe('Change…');
     await act(async () => change.click());
@@ -1422,6 +1424,19 @@ describe('Bots page', () => {
     pickFolder.mockResolvedValueOnce([]);
     await act(async () => change.click());
     expect(update).toHaveBeenCalledTimes(2);
+  });
+
+  it('the profile of a bot with no repository says what a repository must be', async () => {
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })) } as unknown as FactoryBotPort);
+    bots = bots.map((r) => (r.bot.id === LEAD ? { ...r, bot: { ...r.bot, repo: undefined } } : r));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    const profile = q(`[data-bots-profile="${LEAD}"]`)!;
+    expect(profile.querySelector('[data-bots-profile-repo-key]')?.textContent).toBe('None');
+    expect(profile.querySelector('[data-bots-profile-repo-hint]')?.textContent)
+      .toBe('A folder whose origin is an owner/repo address on a git host, such as GitHub. A local path cannot be used.');
   });
 
   it('the profile shows the template and the job, and edits the job through the bot port', async () => {

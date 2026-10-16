@@ -1738,6 +1738,7 @@ function RepoLine({ row, t, port, pickFolder = pickFolderDialog }: { row: Factor
             </button>
           )}
         </div>
+        {!row.bot.repo && !error && <p data-bots-profile-repo-hint className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.profile.repoHint')}</p>}
         {error && <p role="alert" data-bots-profile-repo-error className="mt-1 text-[11px] text-[var(--accent-red)]">{error}</p>}
       </div>
     </div>
