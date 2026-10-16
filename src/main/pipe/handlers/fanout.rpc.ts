@@ -127,6 +127,7 @@ import { botCwd, getBotRuntime } from '../../factory/BotRuntime';
 import { getWmuxDir } from '../../../daemon/config';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { GENERAL_THREAD, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
+import { normalizeRepoKey } from '../../../shared/repoKey';
 import { getFactorySettings } from '../../factory/factorySettings';
 import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
@@ -1593,6 +1594,10 @@ export function registerFanOutRpc(
       ...(checkout ? { checkout } : {}),
       ...(bot && botWakeThread ? { threadId: botWakeThread } : {}),
       ...(bot && botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+      // The repository a bot's code task runs in: a merged PR ends only a task
+      // of its own repository (factory/taskGate.ts), whatever the bot's
+      // profile names later.
+      ...(bot && !botResearch && normalizeRepoKey(botProfile?.repo?.repoKey) ? { repoKey: normalizeRepoKey(botProfile?.repo?.repoKey) as string } : {}),
       ...(bot && secretNames ? { secretNames } : {}),
       ...(bot && connectors ? { connectors } : {}),
     };

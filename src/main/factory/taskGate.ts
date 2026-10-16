@@ -28,22 +28,27 @@
 // the worker's own review_requested wake (fanoutCallerNotify.ts skips it), so
 // a report is one bot turn, after the gate, never one before it.
 //
-// A merged pull request ends its task too. A reported task whose PR — the
-// newest one opened from the task's own branch on its bot's repository
-// (repo-watch pr.opened facts; never the PR's title, never a fork's) — was
-// merged into origin's default branch (the pr.merged fact's base, the ref the
-// gate is read from) is completed as a gate pass completes it: written as the
-// task's owner, forced with `merged` as the reason (a repository with no gate,
-// or a gate still running, has no pass to complete on), its summary headed
-// `[merged: PR #<n>]` (MERGED_MARK, also where the restart re-wake finds
-// it), one card and one wake the same way. This is the one completion main
-// forces for a bot's code task, and only on what landed on the default
-// branch, which no bot merges past the owner's merge rules. Checked when a
-// pr.merged fact arrives, when a task reports (a PR merged before the report
-// ends it then, with no gate), at install and every MERGE_SWEEP_MS (a merge
-// whose task branch could not be read yet, or whose write failed, is tried
-// again then). A gate still running when the merge lands finds the row moved
-// and settles nothing; the ledger records no gate on an ended row. A PR
+// A merged pull request ends its task too. A reported task is completed when
+// a repo-watch pr.merged fact (never a PR's title) names a PR on the task's
+// own repository (LedgerDispatch.repoKey, recorded at dispatch; never the
+// bot's current profile) from the task's own branch (the fact's head branch,
+// not a fork's), merged into origin's default branch (the fact's base: the
+// ref the gate is read from), and the task worktree's HEAD is the merged head
+// or behind it (commits made after the merge were never merged). It is
+// completed as a gate pass completes it: written as the task's owner, forced
+// with `merged` as the reason (a repository with no gate, or a gate still
+// running, has no pass to complete on), the merge recorded as the row's
+// completion (LedgerEntry.completion, main's own field, which the restart
+// re-wake reads; the summary's `[merged: PR #<n>]` is only its words), one
+// card and one wake the same way. This is the one completion main forces for
+// a bot's code task, and only on what landed on the default branch, which no
+// bot merges past the owner's merge rules. Checked when a pr.merged fact
+// arrives, when a task reports (a PR merged before the report ends it then,
+// with no gate), at install and every MERGE_SWEEP_MS (a merge whose task
+// branch could not be read yet, or whose write failed, is tried again then);
+// one check per task at a time, and a caller that finds one under way waits
+// for its answer. A gate still running when the merge lands finds the row
+// moved and settles nothing; the ledger records no gate on an ended row. A PR
 // closed without a merge leaves the task open, and so does a task still
 // `working` (the ledger has no working → completed move).
 //
@@ -151,46 +156,65 @@ export async function completeCheckedTask(ledger: CheckedTaskLedger, taskId: str
 /** The reason the ledger records on a task its merged pull request ended. */
 export const MERGED_REASON = 'merged';
 
-/** The head of the summary of a task its merged pull request ended. */
+/** The words heading the summary of a task its merged pull request ended
+ *  (display only: LedgerEntry.completion is the record). */
 export function mergedMark(pr: number): string {
   return `[merged: PR #${pr}]`;
 }
 
-const MERGED_MARK_RE = /^\[merged: PR #\d+\]/;
-
-/** Whether a completed row was ended by its merged pull request (main wrote
- *  it as the task's owner, its summary headed by mergedMark). Pure. */
+/** Whether a completed row was ended by its merged pull request: main's own
+ *  completion record, never the summary's words. Pure. */
 export function isMergeCompletion(entry: LedgerEntry): boolean {
-  return entry.status === 'completed' && entry.updatedBy.kind === 'brain' && MERGED_MARK_RE.test(entry.summary ?? '');
+  return entry.status === 'completed' && entry.completion?.source === 'merge';
+}
+
+/** One merge of a pull request from a task's branch. */
+export interface BranchMerge {
+  pr: number;
+  /** The branch it was merged into. */
+  base: string;
+  /** The PR's head when it was merged (as repo-watch read it). */
+  headSha: string;
 }
 
 /**
- * The pull request from `branch` on `repoKey` that was merged: the newest one
- * opened from that branch (not a fork's), with a pr.merged after it, and the
- * base branch that merge named (null when the fact did not say). Null when
- * that PR is open, closed or unknown. Pure over the PR facts, oldest first.
+ * The merges of pull requests from `branch` on `repoKey`, newest first: each
+ * pr.merged fact whose own head branch is `branch` (not a fork's) and that
+ * names its base and head. Selected by the merge fact itself, never by the
+ * PR last seen opened from the branch (the fact log drops a reopened PR's
+ * second pr.opened). Pure over the PR facts, oldest first.
  */
-export function mergedPrOfBranch(facts: readonly Fact[], repoKey: string | null | undefined, branch: string | null | undefined): { pr: number; base: string | null } | null {
+export function mergesOfBranch(facts: readonly Fact[], repoKey: string | null | undefined, branch: string | null | undefined): BranchMerge[] {
   const repo = normalizeRepoKey(repoKey);
-  if (!repo || !branch) return null;
-  let pr: number | null = null;
-  const merged = new Map<number, string | null>();
+  if (!repo || !branch) return [];
+  const out: BranchMerge[] = [];
   for (const f of facts) {
     const n = f.ref?.pr;
-    if (typeof n !== 'number' || normalizeRepoKey(f.repoKey) !== repo) continue;
-    if (f.kind === 'pr.opened') {
-      // A task's branch lives on the repository itself (botTasks.ts indexPrFacts).
-      if (f.payload?.isCrossRepository !== false) continue;
-      merged.delete(n);
-      if (f.payload?.headRefName === branch) pr = n;
-    } else if (f.kind === 'pr.merged') {
-      const base = f.payload?.baseRefName;
-      merged.set(n, typeof base === 'string' && base.length > 0 ? base : null);
-    } else if (f.kind === 'pr.closed') {
-      merged.delete(n);
-    }
+    if (f.kind !== 'pr.merged' || typeof n !== 'number' || normalizeRepoKey(f.repoKey) !== repo) continue;
+    const p = f.payload ?? {};
+    if (p.headRefName !== branch || p.isCrossRepository !== false) continue;
+    const base = typeof p.baseRefName === 'string' ? p.baseRefName : '';
+    const headSha = typeof p.headRefOid === 'string' && p.headRefOid ? p.headRefOid : typeof f.ref?.headSha === 'string' ? f.ref.headSha : '';
+    if (base && headSha) out.push({ pr: n, base, headSha });
   }
-  return pr !== null && merged.has(pr) ? { pr, base: merged.get(pr) ?? null } : null;
+  return out.reverse();
+}
+
+/**
+ * Whether the worktree's HEAD is commit `sha` or an ancestor of it (its work
+ * is all in that commit). False when that cannot be told: not a full commit
+ * id, no HEAD, or the commit not in the repository.
+ */
+export async function worktreeHeadMerged(git: (args: string[], cwd: string) => Promise<{ stdout: string; code: number }>, worktreePath: string, sha: string): Promise<boolean> {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) return false;
+  try {
+    const head = await git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], worktreePath);
+    if (head.code !== 0) return false;
+    if (head.stdout.trim().toLowerCase() === sha.toLowerCase()) return true;
+    return (await git(['merge-base', '--is-ancestor', 'HEAD', sha], worktreePath)).code === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -198,8 +222,9 @@ export function mergedPrOfBranch(facts: readonly Fact[], repoKey: string | null 
  * still in review_requested that the gate would check (not a verify or a
  * research task), written as the task's owner, forced with MERGED_REASON (a
  * merge is not a gate: a repository with no gate, or a gate still running,
- * has no pass to complete on), its summary headed by mergedMark (kept even
- * where the ledger needs no force, a recorded "no gate" skip). One retry on a
+ * has no pass to complete on), the merge recorded as the row's completion and
+ * its summary headed by mergedMark (both kept even where the ledger needs no
+ * force, a recorded "no gate" skip). One retry on a
  * write that landed in between. Never throws; the completed row, or null with
  * why not.
  */
@@ -218,6 +243,7 @@ export async function completeMergedTask(ledger: CheckedTaskLedger, taskId: stri
         summary: `${mergedMark(pr)} ${row.summary ?? ''}`.trim(),
         force: true,
         reason: MERGED_REASON,
+        completion: { source: 'merge', pr },
       });
       if (r.ok) return { entry: r.entry };
       if (r.error !== 'stale_rev') return { entry: null, why: r.message };
@@ -253,6 +279,9 @@ export interface TaskGatePorts {
   /** A task's branch; null when it has none (a detached checkout),
    *  undefined when it cannot be read now. */
   branchOf?: (entry: LedgerEntry) => Promise<string | null | undefined>;
+  /** Whether the worktree's HEAD is `sha` or an ancestor of it (false when
+   *  it cannot be told). */
+  headMerged?: (worktreePath: string, sha: string) => Promise<boolean>;
   /** completeMergedTask over the hosted ledger. */
   completeMerged?: (taskId: string, pr: number) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
   /** How often open reports are checked for a merged PR (default
@@ -388,58 +417,74 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       return [];
     }
   };
-  /** The open reports a merge could end (not a research task: no branch). */
+  const mergeable = (): boolean => !!(ports.branchOf && ports.completeMerged && ports.headMerged);
+  /** The open reports a merge could end: code tasks with their repository recorded. */
   const reportedRows = (): LedgerEntry[] => {
     try {
-      return (ports.openRows?.() ?? []).filter((e) => e.status === 'review_requested' && isTaskGateReport(e, e.status) && !isResearchDispatch(e.dispatch));
+      return (ports.openRows?.() ?? []).filter((e) => e.status === 'review_requested' && isTaskGateReport(e, e.status)
+        && !isResearchDispatch(e.dispatch) && !!normalizeRepoKey(e.dispatch?.repoKey));
     } catch {
       return [];
     }
   };
-  /** The task's PR when it was merged into origin's default branch, else null. */
+  /** The PR whose merge into origin's default branch holds the task's work
+   *  (its worktree's HEAD is that merge's head or behind it), else null. */
   const mergedPrOf = async (row: LedgerEntry, facts: readonly Fact[]): Promise<number | null> => {
-    const repo = ports.bot(row.dispatch?.origin.botId ?? '')?.repo;
-    if (!repo?.repoKey || !repo.repoPath || !ports.branchOf) return null;
+    if (!ports.branchOf || !ports.headMerged) return null;
     const branch = await ports.branchOf(row);
-    const merged = branch ? mergedPrOfBranch(facts, repo.repoKey, branch) : null;
-    if (!merged?.base) return null;
+    const merges = branch ? mergesOfBranch(facts, row.dispatch?.repoKey, branch) : [];
+    if (merges.length === 0) return null;
+    const worktree = await ports.worktreeOf(row);
+    if (!worktree) return null;
     // Only what landed where the gate is read from: a merge into any other
     // base would complete a task no gate checked and main never received.
-    const baseRef = await ports.baseRef(repo.repoPath);
-    return baseRef === `origin/${merged.base}` ? merged.pr : null;
+    const baseRef = await ports.baseRef(worktree);
+    for (const m of merges) {
+      if (baseRef !== `origin/${m.base}`) continue;
+      // Commits made after the merged head were never merged.
+      if (await ports.headMerged(worktree, m.headSha)) return m.pr;
+    }
+    return null;
   };
-  /** Tasks being checked for a merge; one asked for again meanwhile is checked again after. */
-  const merging = new Set<string>();
-  const mergeAgain = new Set<string>();
-  /** End the reported task when its PR was merged: one card, one wake. True when it did. */
-  const endIfMerged = async (taskId: string, facts: readonly Fact[]): Promise<boolean> => {
-    if (!ports.branchOf || !ports.completeMerged || disposed) return false;
-    if (merging.has(taskId)) {
-      mergeAgain.add(taskId);
+  /** End the reported task when its PR was merged: one card, one wake. */
+  const checkMerged = async (taskId: string, facts: readonly Fact[]): Promise<boolean> => {
+    const row = stillReported(taskId);
+    if (!row || isResearchDispatch(row.dispatch) || !ports.completeMerged) return false;
+    let pr: number | null = null;
+    try {
+      pr = await mergedPrOf(row, facts);
+    } catch (err) {
+      log(`[factory] merged PR of task ${taskId} not read: ${String(err)}`);
+    }
+    if (pr === null || disposed) return false;
+    const done = await ports.completeMerged(taskId, pr);
+    if (!done.entry) {
+      log(`[factory] merged PR #${pr} did not complete task ${taskId}: ${done.why}`);
       return false;
     }
-    merging.add(taskId);
+    // Disposed meanwhile: the completion stands; its wake comes again at the
+    // next install (the re-wake reads the row's completion).
+    if (disposed) return true;
+    note(done.entry, `PR #${pr} merged: task completed`, 'The pull request from this task\'s branch was merged, so the task ends without waiting for a gate.', { code: 'task.merged', args: { pr } });
+    wake(done.entry);
+    return true;
+  };
+  /** The merge check under way per task. */
+  const merging = new Map<string, Promise<boolean>>();
+  /** Check the task for a merge, after any check of it already under way
+   *  (that one may end it: its answer is taken). True when it was ended. */
+  const endIfMerged = async (taskId: string, facts: readonly Fact[]): Promise<boolean> => {
+    if (!mergeable()) return false;
+    for (let pending = merging.get(taskId); pending; pending = merging.get(taskId)) {
+      if (await pending.catch(() => false)) return true;
+    }
+    if (disposed) return false;
+    const check = checkMerged(taskId, facts);
+    merging.set(taskId, check);
     try {
-      const row = stillReported(taskId);
-      if (!row || isResearchDispatch(row.dispatch)) return false;
-      let pr: number | null = null;
-      try {
-        pr = await mergedPrOf(row, facts);
-      } catch (err) {
-        log(`[factory] merged PR of task ${taskId} not read: ${String(err)}`);
-      }
-      if (pr === null || disposed) return false;
-      const done = await ports.completeMerged(taskId, pr);
-      if (!done.entry) {
-        log(`[factory] merged PR #${pr} did not complete task ${taskId}: ${done.why}`);
-        return false;
-      }
-      note(done.entry, `PR #${pr} merged: task completed`, 'The pull request from this task\'s branch was merged, so the task ends without waiting for a gate.', { code: 'task.merged', args: { pr } });
-      wake(done.entry);
-      return true;
+      return await check;
     } finally {
-      merging.delete(taskId);
-      if (mergeAgain.delete(taskId) && !disposed) void endIfMerged(taskId, readPrFacts());
+      if (merging.get(taskId) === check) merging.delete(taskId);
     }
   };
   /** Check `rows` one after another (never throws). */
@@ -455,7 +500,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   };
   /** Every open report, against the fact log's window (install and sweep). */
   const sweepMerged = (): void => {
-    if (disposed || !ports.branchOf || !ports.completeMerged) return;
+    if (disposed || !mergeable()) return;
     const rows = reportedRows();
     if (rows.length > 0) void endMerged(rows, readPrFacts());
   };
@@ -537,7 +582,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     if (f.kind !== 'pr.merged') return;
     const repo = normalizeRepoKey(f.repoKey);
     if (!repo) return;
-    const rows = reportedRows().filter((e) => normalizeRepoKey(ports.bot(e.dispatch?.origin.botId ?? '')?.repo?.repoKey) === repo);
+    const rows = reportedRows().filter((e) => normalizeRepoKey(e.dispatch?.repoKey) === repo);
     if (rows.length > 0) void endMerged(rows, [...readPrFacts(), f]);
   });
 
@@ -587,7 +632,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     }
   };
   sweepOpen(0);
-  const mergeSweep = ports.branchOf && ports.completeMerged ? setInterval(sweepMerged, ports.mergeSweepMs ?? MERGE_SWEEP_MS) : null;
+  const mergeSweep = mergeable() ? setInterval(sweepMerged, ports.mergeSweepMs ?? MERGE_SWEEP_MS) : null;
   mergeSweep?.unref?.();
   let all: LedgerEntry[] = [];
   try {

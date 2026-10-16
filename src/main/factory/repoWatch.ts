@@ -102,7 +102,7 @@ export const WATCH_QUERY = `query($owner: String!, $repo: String!) {
       nodes { ${PR_FIELDS} }
     }
     recent: pullRequests(states: [CLOSED, MERGED], first: ${REPO_WATCH_LIMITS.RECENT_CLOSED}, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      nodes { number state baseRefName }
+      nodes { number state baseRefName headRefName headRefOid isCrossRepository }
     }
     issues(states: OPEN, first: ${REPO_WATCH_LIMITS.PAGE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
       totalCount
@@ -150,13 +150,23 @@ export interface WatchIssue {
   labelsTruncated: boolean;
 }
 
+/** A closed PR's branches, read together with its closed state. */
+export interface ClosedPrRefs {
+  baseRefName?: string;
+  headRefName?: string;
+  headRefOid?: string;
+  isCrossRepository?: boolean;
+}
+
 export interface WatchSnapshot {
   prs: WatchPr[];
   prTotal: number;
   /** Closed / merged PRs, newest update first: number → 'CLOSED' | 'MERGED'. */
   recent: Record<string, string>;
-  /** The same PRs' base branches as read with them: number → baseRefName. */
-  recentBase?: Record<string, string>;
+  /** The same PRs' branches as read with their closed state: number → the
+   *  base it was closed on, its head branch and head commit, whether it came
+   *  from a fork (each only when read). */
+  recentRefs?: Record<string, ClosedPrRefs>;
   issues: WatchIssue[];
   issueTotal: number;
 }
@@ -265,13 +275,19 @@ export function mapWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: s
   if (!page || !issuesConn || typeof issuesConn.totalCount !== 'number' || !Array.isArray(issuesConn.nodes)) return null;
   const recentNodes = (repo.recent as { nodes?: unknown } | null | undefined)?.nodes;
   const recent: Record<string, string> = {};
-  const recentBase: Record<string, string> = {};
+  const recentRefs: Record<string, ClosedPrRefs> = {};
   if (Array.isArray(recentNodes)) {
     for (const n of recentNodes) {
-      const r = n as { number?: unknown; state?: unknown; baseRefName?: unknown } | null;
+      const r = n as { number?: unknown; state?: unknown; baseRefName?: unknown; headRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown } | null;
       if (typeof r?.number === 'number' && (r.state === 'MERGED' || r.state === 'CLOSED')) {
         recent[String(r.number)] = r.state;
-        if (typeof r.baseRefName === 'string' && r.baseRefName) recentBase[String(r.number)] = r.baseRefName;
+        const refs: ClosedPrRefs = {
+          ...(str(r.baseRefName) ? { baseRefName: str(r.baseRefName) } : {}),
+          ...(str(r.headRefName) ? { headRefName: str(r.headRefName) } : {}),
+          ...(str(r.headRefOid) ? { headRefOid: str(r.headRefOid) } : {}),
+          ...(typeof r.isCrossRepository === 'boolean' ? { isCrossRepository: r.isCrossRepository } : {}),
+        };
+        if (Object.keys(refs).length > 0) recentRefs[String(r.number)] = refs;
       }
     }
   }
@@ -280,7 +296,7 @@ export function mapWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: s
       prs: page.prs,
       prTotal: page.total,
       recent,
-      recentBase,
+      recentRefs,
       issues: issuesConn.nodes.flatMap((n) => { const i = mapIssue(n); return i ? [i] : []; }),
       issueTotal: issuesConn.totalCount,
     },
@@ -401,16 +417,16 @@ export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, 
         continue;
       }
       const closedAs = snap.recent[n];
-      // The base it was closed on, read with its state (not the last one
-      // seen open: a PR can be retargeted between two polls).
-      const base = snap.recentBase?.[n];
+      // Its branches as read with its closed state (not the last ones seen
+      // open: a PR can be retargeted or pushed to between two polls).
+      const refs = snap.recentRefs?.[n] ?? {};
       drafts.push({
         kind: closedAs === 'MERGED' ? 'pr.merged' : 'pr.closed',
         at: now,
         repoKey,
         ref: { pr: Number(n), headSha: was.headSha },
         actor: github(was.author),
-        payload: { author: was.author, labels: was.labels, ...(base ? { baseRefName: base } : {}), ...(closedAs ? {} : { stateUnknown: true }) },
+        payload: { author: was.author, labels: was.labels, ...refs, ...(closedAs ? {} : { stateUnknown: true }) },
       });
     }
   }

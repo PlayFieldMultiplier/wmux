@@ -298,6 +298,13 @@ describe('task.fanout.start — bot origin', () => {
     expect((r.start.mock.calls[0][0] as FanOutRequest).handoffId).toBe('h-dispatch');
   });
 
+  it('records the repository its code tasks run in, as the factory spells it', async () => {
+    const r = rig('lead');
+    expect(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
+    await r.flush();
+    expect((r.start.mock.calls[0][0] as FanOutRequest).repoKey).toBe('github.com/o/r');
+  });
+
   it('a researcher\'s tasks are tainted even from a clean wake; a developer\'s are not', async () => {
     const researcher = rig('lead', { template: 'researcher' });
     expect(await researcher.call({ idempotencyKey: 'wake:w-1:1', titles: ['look it up'], prompt: 'research', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
@@ -728,6 +735,7 @@ describe('task.fanout.start — bot origin', () => {
       const req = r.start.mock.calls[0][0] as FanOutRequest;
       expect(req.worktree).toBe(false);
       expect(req.repoPath).not.toBe(REPO);
+      expect(req.repoKey).toBeUndefined();
       expect(r.defaultBranchReads).toEqual([]);
     });
 

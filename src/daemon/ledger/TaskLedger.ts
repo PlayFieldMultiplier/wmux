@@ -42,6 +42,7 @@
 
 import * as fs from 'node:fs';
 import { assertNotLiveWmuxPath } from '../../shared/constants';
+import { normalizeRepoKey } from '../../shared/repoKey';
 import * as path from 'node:path';
 import {
   LEDGER_GATE_TAIL_MAX_BYTES,
@@ -54,6 +55,7 @@ import {
   isLedgerStatus,
   isResearchDispatch,
   type LedgerActor,
+  type LedgerCompletion,
   type LedgerDispatch,
   type LedgerEntry,
   type LedgerGateResult,
@@ -114,6 +116,9 @@ export interface LedgerUpdateInput {
   summary?: string;
   force?: boolean;
   reason?: string;
+  /** On a move to `completed` only: what ended it (LedgerEntry.completion).
+   *  Main's own in-process write; no RPC forwards it. */
+  completion?: LedgerCompletion;
 }
 
 export type LedgerUpdateError =
@@ -235,6 +240,8 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
   return {
     origin: { kind: d.origin.kind, ...(d.origin.botId ? { botId: d.origin.botId } : {}), ...(typeof d.origin.tainted === 'boolean' ? { tainted: d.origin.tainted } : {}) },
     ...(d.preset ? { preset: d.preset } : {}),
+    // Only the factory's own spelling of a repository (shared/repoKey.ts).
+    ...(typeof d.repoKey === 'string' && normalizeRepoKey(d.repoKey) === d.repoKey ? { repoKey: d.repoKey } : {}),
     ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
     ...(d.threadId ? { threadId: d.threadId } : {}),
     ...(typeof d.handoffId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(d.handoffId) ? { handoffId: d.handoffId } : {}),
@@ -486,6 +493,9 @@ export class TaskLedger {
       updatedAt: this.now(),
       updatedBy: input.actor,
       ...(summary !== undefined ? { summary } : {}),
+      ...(next === 'completed' && input.completion?.source === 'merge' && Number.isInteger(input.completion.pr) && input.completion.pr > 0
+        ? { completion: { source: 'merge' as const, pr: input.completion.pr } }
+        : {}),
     });
     try {
       await this.append({ op: 'entry', entry: updated });

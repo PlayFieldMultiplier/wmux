@@ -98,6 +98,19 @@ export interface LedgerEntry {
    *  which preset, and on what checkout. Absent on rows registered before it
    *  existed. */
   dispatch?: LedgerDispatch;
+  /** What ended a `completed` row when it was not a gate: `merge` = main
+   *  completed it because the pull request from its branch was merged
+   *  (factory/taskGate.ts). Set only by main's own in-process ledger write
+   *  (LedgerUpdateInput.completion; the ledger RPC never forwards it), never
+   *  by a worker or a brain. Absent otherwise. */
+  completion?: LedgerCompletion;
+}
+
+/** See LedgerEntry.completion. */
+export interface LedgerCompletion {
+  source: 'merge';
+  /** The merged pull request's number. */
+  pr: number;
 }
 
 /** See LedgerEntry.dispatch. */
@@ -109,6 +122,11 @@ export interface LedgerDispatch {
   origin: { kind: string; botId?: string; tainted?: boolean };
   /** The fan-out preset name; absent when none. */
   preset?: string;
+  /** A bot's code task: the repository it was started in (normalized
+   *  `host/owner/repo`, from the bot's profile at dispatch). A merged pull
+   *  request ends only a task of its own repository; absent (a row written
+   *  before it existed, a research task) = none ends it. */
+  repoKey?: string;
   /** Set when the task worktree was created detached at a commit. */
   checkout?: { sha: string; detached: true };
   /** A bot's task: the room thread the bot named when it started it (checked

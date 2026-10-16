@@ -85,7 +85,7 @@ import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../worktask/stopSessionsInDir';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { originDefaultRef, taskFolderFromMissions, worktreeFromMissions } from './verifyPreset';
-import { completeCheckedTask, completeMergedTask, completeResearchTask, gateCardNoted, installTaskGate } from './taskGate';
+import { completeCheckedTask, completeMergedTask, completeResearchTask, gateCardNoted, installTaskGate, worktreeHeadMerged } from './taskGate';
 import { TaskBranchCache, setBotTaskSources } from './botTasks';
 import { installLateStopSweep, setFactoryStopPorts, type FactoryStopPorts } from './factoryStop';
 import { getRoutineStore } from './routines';
@@ -747,6 +747,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
             const known = await branches.branches([entry]);
             return known.has(entry.id) ? known.get(entry.id) ?? null : undefined;
           },
+          headMerged: (worktreePath, sha) => worktreeHeadMerged(git, worktreePath, sha),
           completeMerged: (taskId, pr) => completeMergedTask(ledger, taskId, pr),
           wake: (input) => {
             const q = getWakeQueue();

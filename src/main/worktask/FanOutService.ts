@@ -352,6 +352,10 @@ export interface FanOutRequest {
    *  Recorded on each task's ledger row; see
    *  LedgerDispatch.handoffId. */
   handoffId?: string;
+  /** A bot's code fan-out: the repository it runs in (normalized repo key,
+   *  main settles it). Recorded on each task's ledger row; see
+   *  LedgerDispatch.repoKey. */
+  repoKey?: string;
   /** A bot's fan-out: the stored secrets each worker receives as env vars
    *  (checked by the caller). Each task spawn gets its own single-use grant
    *  (factory/secretGrants.ts); a name no longer stored at launch time leaves
@@ -792,6 +796,7 @@ export class FanOutService {
       ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
       ...(req.threadId ? { threadId: req.threadId } : {}),
       ...(req.handoffId ? { handoffId: req.handoffId } : {}),
+      ...(req.repoKey ? { repoKey: req.repoKey } : {}),
       ...(req.mayLaunch ? { mayLaunch: req.mayLaunch } : {}),
       ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
       ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
@@ -1214,6 +1219,8 @@ export class FanOutService {
     threadId?: string;
     /** See FanOutRequest.handoffId. */
     handoffId?: string;
+    /** See FanOutRequest.repoKey. */
+    repoKey?: string;
     /** See FanOutRequest.mayLaunch. */
     mayLaunch?: () => string | null;
     /** See FanOutRequest.awaitLaunchSlot. */
@@ -1628,6 +1635,7 @@ export class FanOutService {
               dispatch: {
                 origin: { kind: ctx.requester.kind, ...(ctx.requester.botId ? { botId: ctx.requester.botId } : {}), ...(typeof ctx.requester.tainted === 'boolean' ? { tainted: ctx.requester.tainted } : {}) },
                 ...(ctx.preset ? { preset: ctx.preset } : {}),
+                ...(ctx.repoKey ? { repoKey: ctx.repoKey } : {}),
                 ...(ctx.checkout ? { checkout: { sha: ctx.checkout.sha, detached: true as const } } : {}),
                 ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
                 ...(ctx.handoffId ? { handoffId: ctx.handoffId } : {}),
