@@ -4297,9 +4297,10 @@ arrival order (`seq`, increasing; never sort by `at`).
   [Room card notice codes](#room-card-notice-codes), with only the args that
   table lists for it, each of its type (a string at most 500 characters, a
   finite number). `title` and `body` stay the English text on every card:
-  show the `title` for a code the app does not know, and for an arg that
-  names a word (`status`, `cause`, `limit`, `hop`, …) whose value the table
-  does not list.
+  show the `title` for a code the app does not know, for an arg that names
+  a word (`status`, `cause`, `limit`, `hop`, …) whose value the table does
+  not list, and for a template whose placeholder has no arg: a listed arg
+  may be absent (the desktop wrote none, or its value was not of its type).
 - `approvalAction` — on an `approval` card only: the act its request asks
   for — `merge`, `push_default`, `issue_create`, `issue_close`, `comment`,
   `release`, or `skill` (a skill a bot wrote for itself). A `skill`
@@ -4523,7 +4524,10 @@ a client that calls these routes reads replies as room cards by definition.
       report waits for review), `waiting_on_you` (a card in it waits on the
       owner, or its worker asks for input), `done`, `failed`, `stopped`
       (cancelled). The desktop's states map one to one (`needsYou` →
-      `waiting_on_you`, `cancelled` → `stopped`).
+      `waiting_on_you`, `cancelled` → `stopped`). It reads the work's tasks
+      when the desktop lists them within 2 s, else its cards alone, so a
+      busy desktop can serve a reported task whose PR merged as `review`
+      rather than `done` until the next read.
     - `title` — the request's words (the hand-off's title, else the thread's
       title), one line, at most 200 characters; empty when neither is known.
     - `latestCardId` / `latestPreview` — the delegate's newest message in the
