@@ -28,7 +28,7 @@ import { en } from '../../../renderer/i18n/locales/en';
 import { ko } from '../../../renderer/i18n/locales/ko';
 import { buildWakePrompt, skillIndexText } from '../wakePrompt';
 import { excludeLineOnce } from '../../git/infoExclude';
-import { postSkillArchivedCard, reconcileSkillProposals, registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
+import { forgetSkillsOfRemovedBots, postSkillArchivedCard, reconcileSkillProposals, registerSkillHandlers, skillApprovalHost } from '../../pipe/handlers/skill.rpc';
 import { dmThreadId } from '../../../shared/room';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../../shared/phoneBotApprovals';
@@ -424,7 +424,7 @@ describe('line diff', () => {
 
 // ── The owner's approval card ───────────────────────────────────────────────
 
-function approvalRig(botName?: string) {
+function approvalRig(botName?: string, gone: ReadonlySet<string> = new Set()) {
   const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
   const skills = store();
   const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false }]]);
@@ -432,7 +432,7 @@ function approvalRig(botName?: string) {
   const events: string[] = [];
   const svc = new ApprovalService({
     file: path.join(wmuxDir, 'factory', 'approvals.json'),
-    bots: () => ({ listEnabled: () => [profile(A, botName)], get: (id) => (id === A ? profile(A, botName) : null) }),
+    bots: () => ({ listEnabled: () => (gone.has(A) ? [] : [profile(A, botName)]), get: (id) => (id === A && !gone.has(A) ? profile(A, botName) : null) }),
     runningWake: (id) => wakes.get(id) ?? null,
     readPr: async () => { throw new Error('no PR'); },
     ghLogin: async () => null,
@@ -637,6 +637,37 @@ describe('skill_propose → approval card → load', () => {
     const again = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
     expect(again).toMatchObject({ ok: true });
     expect(r.writer.get(WS, r.svc.get(again.approvalId as string)?.cardId as string)).toMatchObject({ kind: 'approval' });
+  });
+
+  it('deleting the bot ends its skill request, drops its skills record and folder, and an approve after it is refused', async () => {
+    const gone = new Set<string>();
+    const r = approvalRig(undefined, gone);
+    r.skills.approve(A, 'triage', propose(r.skills, A, 'triage').hash);
+    const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    const id = res.approvalId as string;
+    gone.add(A);
+    expect(r.svc.botRemoved(A)).toBe(1);
+    expect(r.skills.removeBot(A)).toBe(true);
+    expect(r.svc.get(id)?.state).toBe('expired');
+    expect(r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'not_bot' });
+    expect(r.skills.list(A)).toEqual([]);
+    expect(fs.existsSync(botSkillsRoot(wmuxDir, A))).toBe(false);
+    expect(fs.existsSync(path.join(wmuxDir, 'factory', 'bots', A))).toBe(true);
+    const rec = JSON.parse(fs.readFileSync(path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME), 'utf8'));
+    expect(rec.bots[A]).toBeUndefined();
+    expect(store().list(A)).toEqual([]);
+  });
+
+  it('at start, the skills of a bot the directory no longer has are removed', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    s.approve(B, 'report', propose(s, B, 'report').hash);
+    expect(forgetSkillsOfRemovedBots(s, { get: (id: string) => (id === B ? profile(B) : null) })).toBe(1);
+    expect(s.list(A)).toEqual([]);
+    expect(fs.existsSync(botSkillsRoot(wmuxDir, A))).toBe(false);
+    expect(s.list(B)).toHaveLength(1);
+    // A directory that is not running removes nothing.
+    expect(forgetSkillsOfRemovedBots(s, null)).toBe(0);
   });
 
   it('Approve loads it (approved), and the bot is told; Deny archives it', async () => {

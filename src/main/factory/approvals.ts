@@ -559,9 +559,11 @@ export class ApprovalService {
       if (!login) return refuse('read_failed', 'the gh login could not be read');
       ghLogin = login.toLowerCase();
     }
-    // Re-read the wake after the awaits: a request outlives no turn.
+    // Re-read the wake after the awaits: a request outlives no turn, and
+    // no bot deleted meanwhile.
     const still = this.ports.runningWake(bot.botId);
     if (!still || still.wakeId !== wake.wakeId) return refuse('not_running', 'the wake that asked has ended');
+    if (this.botGone(bot)) return refuse('not_bot', 'this bot was deleted');
     // A request stored while this one read GitHub (a retry, another bot).
     const again = [...this.requests.values()].find((r) => (r.botId === bot.botId && r.clientRequestId === clientRequestId)
       || (headSha !== undefined && r.action === 'merge' && r.repoKey === repoKey && r.prNumber === prNumber && r.headSha === headSha && (r.state === 'pending' || r.state === 'approved')));
@@ -649,6 +651,42 @@ export class ApprovalService {
     }
     this.changed(record.workspaceId);
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
+  }
+
+  /** The bot was deleted: each of its requests still waiting expires and
+   *  its card closes (a skill's proposal is shelved), and so does a merge
+   *  approved but still inside its Undo window. Returns how many. */
+  botRemoved(botId: string): number {
+    let n = 0;
+    for (const r of [...this.requests.values()]) {
+      if (r.botId !== botId) continue;
+      const armed = r.state === 'approved' && r.action === 'merge' && !r.effectId;
+      if (r.state !== 'pending' && !armed) continue;
+      if (this.expireForGoneBot(r)) n += 1;
+    }
+    return n;
+  }
+
+  /** A request whose bot no longer exists: it expires, unanswered. */
+  private expireForGoneBot(r: StoredApproval): boolean {
+    const next: StoredApproval = { ...r, state: 'expired', updatedAt: this.now() };
+    if (!this.put(next)) return false;
+    this.log(`[factory] approval ${r.requestId} expired: bot deleted`);
+    this.clearTimer(r.requestId);
+    this.closeCard(next);
+    if (next.action === 'skill') this.skillDenied(next);
+    this.changed(next.workspaceId);
+    return true;
+  }
+
+  /** The bot that asked was deleted (a directory that is running says so). */
+  private botGone(r: Pick<StoredApproval, 'botId'>): boolean {
+    try {
+      const dir = this.ports.bots();
+      return !!dir && !dir.get(r.botId);
+    } catch {
+      return false;
+    }
   }
 
   /** A pending request whose subject went away (a skill proposal replaced
@@ -769,6 +807,11 @@ export class ApprovalService {
     if (!r) return refuse('not_found', 'no such request');
     this.expire();
     const cur = this.requests.get(r.requestId) as StoredApproval;
+    // A request whose bot was deleted takes no decision (and stops waiting).
+    if (this.botGone(cur)) {
+      if (cur.state === 'pending') this.expireForGoneBot(cur);
+      return refuse('not_bot', 'the bot that asked was deleted');
+    }
     const via = by === 'phone' && deviceId ? `phone, device ${deviceId}` : by;
     switch (p.decision) {
       case 'approve':
@@ -823,6 +866,10 @@ export class ApprovalService {
 
   private approve(cur: StoredApproval, approver: ApprovalApprover, by: string, ruleId?: string, newRule?: ApprovalRule): { ok: true; request: ApprovalView } | Refusal {
     if (cur.state !== 'pending') return refuse('not_pending', `the request is ${cur.state}`);
+    if (this.botGone(cur)) {
+      this.expireForGoneBot(cur);
+      return refuse('not_bot', 'the bot that asked was deleted');
+    }
     const skillHost = cur.action === 'skill' ? this.ports.skills?.() ?? null : null;
     if (cur.action === 'skill' && !skillHost) return refuse('not_started', 'skills are not running yet');
     const at = this.now();
@@ -1007,6 +1054,11 @@ export class ApprovalService {
       this.reloaded.clear();
     }
     this.expire();
+    // A bot deleted while a request of its was still open (its clean-up did
+    // not land): those end now.
+    for (const botId of new Set([...this.requests.values()].filter((r) => r.state === 'pending' || r.state === 'approved').map((r) => r.botId))) {
+      if (this.botGone({ botId })) this.botRemoved(botId);
+    }
     // A request whose merge already ended takes that outcome (a write that
     // failed before the quit included).
     const host = this.ports.merge();
@@ -1070,6 +1122,7 @@ export class ApprovalService {
     const r = typeof e.decisionId === 'string' ? this.requests.get(e.decisionId) : undefined;
     if (!r) return 'approval-missing';
     if (r.state !== 'approved' || r.action !== 'merge') return 'approval-not-approved';
+    if (this.botGone(r)) return 'bot-removed';
     if (r.decidedBy !== e.approvedBy) return 'approval-mismatch';
     if (r.headSha !== e.expectHead || r.prNumber !== e.prNumber || normalizeRepoKey(e.repoKey) !== r.repoKey) return 'approval-mismatch';
     if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';

@@ -143,7 +143,10 @@ describe('bot.remove', () => {
       log: () => undefined,
     } : null;
     const { router, handlers } = captureRouter();
-    registerBotRpcHandlers(router, () => ({ store, runtime, queue: {} as WakeQueue }), undefined, { stopPorts: () => stopPorts as never });
+    registerBotRpcHandlers(router, () => ({ store, runtime, queue: {} as WakeQueue }), undefined, {
+      stopPorts: () => stopPorts as never,
+      afterRemove: async (id: string) => { order.push(`forget ${id === botId ? 'it' : id}`); },
+    });
     const call = (p: Record<string, unknown>) => (handlers.get('bot.remove') as Handler)(p, OPERATOR);
     return { store, botId, order, updates, workersStopped, call };
   }
@@ -154,7 +157,8 @@ describe('bot.remove', () => {
     expect(stored).toEqual(expect.any(Number));
     expect(await r.call({ botId: r.botId, hue: 4 })).toMatchObject({ ok: true, botId: r.botId, stopped: { ok: true, workersStopped: 1, tasksCancelled: 1 } });
     // Off before the stop snapshots, so nothing new starts meanwhile.
-    expect(r.order).toEqual(['off false', 'cancel task-mine', 'remove']);
+    // Then its approval requests and skills are let go of (forgetRemovedBot).
+    expect(r.order).toEqual(['off false', 'cancel task-mine', 'remove', 'forget it']);
     expect(r.updates).toEqual([expect.objectContaining({ id: 'task-mine', status: 'cancelled', summary: 'stopped by owner' })]);
     expect(r.workersStopped).toEqual(['task-mine']);
     expect(r.store.get(r.botId)).toBeNull();
@@ -167,6 +171,7 @@ describe('bot.remove', () => {
     expect(await r.call({ botId: r.botId })).toMatchObject({ ok: false, code: 'stop_failed' });
     expect(r.store.get(r.botId)?.enabled).toBe(false);
     expect(r.order).not.toContain('remove');
+    expect(r.order).not.toContain('forget it');
     expect(r.store.listRemoved()).toEqual([]);
   });
 
@@ -175,7 +180,7 @@ describe('bot.remove', () => {
     expect(await r.call({ botId: r.botId, hue: 8 })).toMatchObject({ ok: false, code: 'invalid_argument' });
     expect(await r.call({ botId: 'bot-ffffffff' })).toMatchObject({ ok: false, code: 'not_found' });
     expect(await r.call({ botId: r.botId })).toMatchObject({ ok: true });
-    expect(r.order).toEqual(['off false', 'remove']);
+    expect(r.order).toEqual(['off false', 'remove', 'forget it']);
   });
 });
 

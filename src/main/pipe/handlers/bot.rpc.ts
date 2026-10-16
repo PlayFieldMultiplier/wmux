@@ -121,6 +121,28 @@ const defaultSetJobPorts: SetJobPorts = {
 /** What bot.remove stops the bot's work through. Overridable for tests. */
 export interface RemovePorts {
   stopPorts: () => FactoryStopPorts | null;
+  /** The bot is gone: its waiting approval requests end and its skills go
+   *  (approvals.ts botRemoved, botSkills.ts removeBot). Best effort. */
+  afterRemove?: (botId: string) => Promise<void>;
+}
+
+/** What else a removed bot leaves behind: its approval requests still
+ *  waiting expire (their cards close), and its skills are dropped. */
+export async function forgetRemovedBot(botId: string): Promise<void> {
+  const [{ getApprovalService }, { getBotSkillStore }] = await Promise.all([
+    import('../../factory/approvals'),
+    import('../../factory/botSkills'),
+  ]);
+  try {
+    getApprovalService()?.botRemoved(botId);
+  } catch (err) {
+    console.warn(`[factory] bot.remove: ${botId}'s approval requests not closed: ${String(err)}`);
+  }
+  try {
+    getBotSkillStore()?.removeBot(botId);
+  } catch (err) {
+    console.warn(`[factory] bot.remove: ${botId}'s skills not removed: ${String(err)}`);
+  }
 }
 
 /** The bot.* handlers over a live-runtime getter. Exported for tests. */
@@ -128,7 +150,7 @@ export function registerBotRpcHandlers(
   router: FactoryRouter,
   live: () => Live | null,
   setJobPorts: SetJobPorts = defaultSetJobPorts,
-  removePorts: RemovePorts = { stopPorts: getFactoryStopPorts },
+  removePorts: RemovePorts = { stopPorts: getFactoryStopPorts, afterRemove: forgetRemovedBot },
 ): void {
   const NOT_STARTED = refuse('not_started', 'the bot runtime is not running');
 
@@ -306,6 +328,7 @@ export function registerBotRpcHandlers(
       if (!stopped.ok) return refuse('stop_failed', 'Some of the bot\'s work could not be stopped; it is off now. Delete it again to retry.');
     }
     if (!l.runtime.remove(botId, rawHue !== undefined ? { hue: rawHue as number } : {})) return refuse('not_found', `no bot ${botId}`);
+    await removePorts.afterRemove?.(botId).catch((err) => console.warn(`[factory] bot.remove: ${botId} not fully forgotten: ${String(err)}`));
     return {
       ok: true,
       botId,

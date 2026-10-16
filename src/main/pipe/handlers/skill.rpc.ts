@@ -141,6 +141,17 @@ export function reconcileSkillProposals(
   return shelved;
 }
 
+/** The skills of every bot the directory no longer has are removed (a
+ *  running directory only). Returns how many bots. */
+export function forgetSkillsOfRemovedBots(store: BotSkillStore | null, bots: { get(botId: string): unknown } | null): number {
+  if (!store || !bots) return 0;
+  let n = 0;
+  for (const botId of store.botIds()) {
+    if (!bots.get(botId) && store.removeBot(botId)) n += 1;
+  }
+  return n;
+}
+
 /** What the approval store's `skill` decisions do. */
 export function skillApprovalHost(store: () => BotSkillStore | null, emit: (payload: BotEventPayload) => void): ApprovalSkillHost {
   return {
@@ -264,6 +275,11 @@ export function createSkillModule(deps: Pick<FactoryHostDeps, 'wmuxDir' | 'getMa
       const shelved = reconcileSkillProposals(getBotSkillStore(), getApprovalService(), emit);
       if (shelved > 0) console.log(`[factory] skills: ${shelved} proposal(s) whose card closed while skills were off shelved`);
       offIpc = registerSkillIpc(deps.getMainWindow, { store: getBotSkillStore, approvals: getApprovalService, emit, noteArchived: noteArchivedInRoom });
+      // A bot deleted while its skills' clean-up did not land: they go now.
+      void import('../../factory/botStore').then(({ getBotDirectory }) => {
+        const n = forgetSkillsOfRemovedBots(getBotSkillStore(), getBotDirectory());
+        if (n > 0) console.log(`[factory] skills: the skills of ${n} deleted bot(s) removed`);
+      }).catch((err) => console.warn(`[factory] skills: deleted bots not checked: ${String(err)}`));
     },
     dispose() {
       offIpc?.();

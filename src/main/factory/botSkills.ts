@@ -379,6 +379,13 @@ export class BotSkillStore {
       }
     };
     set(rec);
+    if (this.save()) return true;
+    set(before);
+    return false;
+  }
+
+  /** Write every record to main's file; false when it did not land. */
+  private save(): boolean {
     try {
       const bots: Record<string, SkillMeta[]> = {};
       for (const [id, map] of this.records) bots[id] = [...map.values()];
@@ -386,7 +393,6 @@ export class BotSkillStore {
       (this.opts.writeRecord ?? atomicWriteJSONSync)(this.file, { version: SKILLS_FILE_VERSION, bots });
       return true;
     } catch {
-      set(before);
       return false;
     }
   }
@@ -706,6 +712,33 @@ export class BotSkillStore {
       ok: true, skill: view(next, changed), hash, version: prep.version, description: prep.description, update: prep.update, diff: prep.diff,
       ...(meta?.proposed?.approvalId ? { replacedApprovalId: meta.proposed.approvalId } : {}),
     };
+  }
+
+  /** Every bot that has a skill record. */
+  botIds(): string[] {
+    return [...this.records.keys()];
+  }
+
+  /** The bot was deleted: its records go, then its skills folder (a
+   *  plain folder of its own; the bot's folder itself is kept). */
+  removeBot(botId: string): boolean {
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return false;
+    const before = this.records.get(botId);
+    if (before) {
+      this.records.delete(botId);
+      if (!this.save()) {
+        this.records.set(botId, before);
+        return false;
+      }
+    }
+    let root: string | null = null;
+    try {
+      root = this.root(botId, false);
+    } catch {
+      root = null;
+    }
+    if (root && lstatOrNull(root)?.isDirectory()) fs.rmSync(root, { recursive: true, force: true });
+    return true;
   }
 
   /** Every waiting proposal that has an approval card, for the skills
