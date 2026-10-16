@@ -645,6 +645,70 @@ describe('one PR is one thread however the caller spells it', () => {
   });
 });
 
+describe('a delegate woken in a thread its dispatch opened posts there', () => {
+  const GROUP = 'group:grp-00000009';
+  async function opened(groupMembers?: (lead: BotProfile, dev: BotProfile) => string[]) {
+    const lead = bot('ws1', 'moa');
+    const dev = bot('ws1', 'lead');
+    const s = setup([lead, dev]);
+    if (groupMembers) {
+      const memberIds = groupMembers(lead, dev);
+      s.ports.groups = { byThread: (ws, th) => (ws === 'ws1' && th === GROUP
+        ? { id: 'grp-00000009', workspaceId: 'ws1', name: 'Ship', memberIds, threadId: GROUP as ThreadId, createdAt: 1, updatedAt: 1 }
+        : null) };
+    }
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    await router.start();
+    setHandoffRouter(router);
+    const said = (groupMembers ? GROUP : `dm:${lead.id}`) as ThreadId;
+    // The coordinator, woken by the owner in its 1:1 or the group, dispatches.
+    s.wake.thread = said;
+    s.wake.id = { wakeId: 'w-lead', attempt: 1 };
+    const d = handleHandoffSend({ kind: 'dispatch', toBotId: dev.id, title: 'Write coord.txt', body: 'b' }, asBot(lead), { router: () => router }) as { ok: true; handoffId: string; threadId: string };
+    expect(d).toMatchObject({ ok: true, threadId: `handoff:${d.handoffId}` });
+    await router.idle();
+    // The delegate runs the dispatch's wake, pinned to the opened thread.
+    s.wake.thread = d.threadId;
+    s.wake.id = { wakeId: 'w-dev', attempt: 1, handoffId: d.handoffId };
+    const post = async (b: BotProfile, threadId?: string) => (await handleRoomPost({ kind: 'status', title: 'Got it: worker starting', ...(threadId ? { threadId } : {}) }, asBot(b), s.deps)) as { ok: boolean; card?: RoomCard };
+    return { lead, dev, s, router, said, thread: d.threadId, post };
+  }
+
+  it('from a coordinator\'s 1:1: by default, and when it names that 1:1, the delegate\'s status lands in the opened thread', async () => {
+    const o = await opened();
+    expect((await o.post(o.dev)).card?.threadId).toBe(o.thread);
+    expect((await o.post(o.dev, o.said)).card?.threadId).toBe(o.thread);
+    // Another thread it names is kept.
+    expect((await o.post(o.dev, 'general')).card?.threadId).toBe('general');
+    expect(o.s.writer.read('ws1', { threadId: o.said }).cards.filter((c) => c.kind === 'status')).toEqual([]);
+    o.router.dispose();
+  });
+
+  it('from a group chat: the delegate naming the group posts in the opened thread', async () => {
+    const o = await opened((lead, dev) => [lead.id, dev.id]);
+    expect((await o.post(o.dev)).card?.threadId).toBe(o.thread);
+    expect((await o.post(o.dev, o.said)).card?.threadId).toBe(o.thread);
+    // A reply it names to the owner's group message moves with it, unlinked.
+    const ask = o.s.writer.append({ workspaceId: 'ws1', threadId: o.said, kind: 'human', actor: { kind: 'human' }, title: 'Write group.txt' })!;
+    const moved = (await handleRoomPost({ kind: 'status', title: 'Handoff received', threadId: o.said, replyTo: ask.id }, asBot(o.dev), o.s.deps)) as { ok: boolean; card?: RoomCard };
+    expect(moved).toMatchObject({ ok: true, card: { threadId: o.thread } });
+    expect(moved.card?.replyTo).toBeUndefined();
+    expect(o.s.writer.read('ws1', { threadId: o.said }).cards.filter((c) => c.kind === 'status')).toEqual([]);
+    o.router.dispose();
+  });
+
+  it('the dispatching bot still speaks in its conversation; a wake in another thread is not redirected', async () => {
+    const o = await opened((lead, dev) => [lead.id, dev.id]);
+    // The coordinator woken in the opened thread (its result) reports to the group.
+    expect((await o.post(o.lead, o.said)).card?.threadId).toBe(o.said);
+    // The delegate woken anywhere else names the group as before.
+    o.s.wake.thread = 'general';
+    o.s.wake.id = { wakeId: 'w-dev-2', attempt: 1 };
+    expect((await o.post(o.dev, o.said)).card?.threadId).toBe(o.said);
+    o.router.dispose();
+  });
+});
+
 describe('room.read / room.threads', () => {
   it('a bot reads its own room; only a Coordinator (Moa) reads another; the operator reads any', async () => {
     const lead = bot('ws1', 'lead');

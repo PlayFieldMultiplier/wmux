@@ -617,6 +617,23 @@ export class HandoffRouter {
     return h ? structuredClone(h) : null;
   }
 
+  /** The thread a bot's room post goes to when it names `named`. A bot
+   *  whose running wake is in a thread wmux opened for a dispatch said in a
+   *  1:1 or a group chat (opensThread, openedIn) and that names that
+   *  conversation posts in the opened thread instead: the work stays folded
+   *  there, as the dispatch that opened it does. The bot that dispatched it
+   *  still speaks in its conversation (its report is for the owner there).
+   *  Any other name is kept. */
+  postThread(botId: string, named: ThreadId | undefined): ThreadId | undefined {
+    if (!named) return named;
+    const wakeThread = runningWakeThread(this.opts.ports(), botId);
+    if (!wakeThread || wakeThread === named || !wakeThread.startsWith('handoff:')) return named;
+    const root = this.records.get(wakeThread.slice('handoff:'.length));
+    if (!root || root.kind !== 'dispatch' || root.opensThread !== true || root.threadId !== wakeThread) return named;
+    if (root.openedIn !== named || (root.from.kind === 'bot' && root.from.botId === botId)) return named;
+    return wakeThread;
+  }
+
   list(params: HandoffListParams = {}): Handoff[] {
     const limit = Math.max(1, Math.min(HANDOFF_STORE_LIMITS.LIST_MAX, Math.floor(params.limit ?? HANDOFF_STORE_LIMITS.LIST_DEFAULT)));
     const statuses = Array.isArray(params.status) ? params.status.filter((s) => oneOf(HANDOFF_STATUSES, s)) : null;
