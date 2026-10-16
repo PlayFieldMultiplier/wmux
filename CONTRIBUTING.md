@@ -41,10 +41,11 @@ probes. `npm test` runs these runtime tests serially after the regular parallel
 suite to avoid cross-test contention.
 
 CI (`.github/workflows/ci.yml`) runs the two halves as parallel jobs:
-`validate` (type checks, builds, `npm run test:parallel`) and
-`validate-runtime` (`npm run test:runtime` against a freshly built daemon
-bundle). A PR needs both green; a branch-protection rule that requires status
-checks must list both.
+`validate` (type checks, builds, `npm run test:parallel` split into two shards,
+`validate (1/2)` and `validate (2/2)`) and `validate-runtime`
+(`npm run test:runtime` against a freshly built daemon bundle). A PR needs all
+three green; a branch-protection rule that requires status checks must list
+all three.
 
 Draft PRs do not run CI: every job skips while the PR is a draft. Mark it
 ready (`gh pr ready`, or "Ready for review") to start CI, and push to a draft

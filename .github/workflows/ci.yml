@@ -21,15 +21,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Two jobs, run in parallel: `validate` (type checks, builds, the unit suite)
-  # and `validate-runtime` (the runtime suite). Together they run exactly what
-  # `npm test` does (test:parallel, then test:runtime), so wall time is the
-  # slower job rather than the sum (#1685).
+  # Three jobs, run in parallel: `validate` (type checks, builds, the unit
+  # suite, split in two shards) and `validate-runtime` (the runtime suite).
+  # Together they run exactly what `npm test` does (test:parallel, then
+  # test:runtime), so wall time is the slowest job rather than the sum (#1685).
   validate:
+    name: validate (${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
-    # validate takes ~10 min; a hung step must not hold a runner for the 6 h default.
+    # The heavier shard takes ~8 min of tests; a hung step must not hold a
+    # runner for the 6 h default.
     timeout-minutes: 35
+    strategy:
+      # Both shards report, so one red shard does not hide the other's failures.
+      fail-fast: false
+      matrix:
+        # The unit suite alone took ~11 min of a ~15 min job on one runner.
+        # Vitest splits files by path hash, not duration, and the heavy git
+        # suites hash into shard 1 (~70% of the test time when measured), so
+        # the checks before the tests run once, on shard 2.
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -61,6 +72,7 @@ jobs:
       # would stay green while the lineage silently regresses. Renormalizing here
       # must be a no-op; a diff means the committed lock was not written by npm 11.
       - name: Lockfile lineage guard (npm 11)
+        if: matrix.shard == 2
         run: |
           npm install --package-lock-only --ignore-scripts
           git diff --exit-code package-lock.json
@@ -73,9 +85,11 @@ jobs:
       # scripts/__tests__/typecheckSlices.test.mjs ties this list to those
       # build steps.
       - name: Type check
+        if: matrix.shard == 2
         run: node scripts/typecheck.mjs --skip mcp,daemon
 
       - name: Build and probe MCP protocol
+        if: matrix.shard == 2
         run: npm run build:mcp && npm run probe:mcp
 
       # The push relay is a separate Cloudflare Worker deployment with its own
@@ -83,6 +97,7 @@ jobs:
       # typecheck here and then fail at the edge), so the root project's
       # `npm run typecheck` above never sees it.
       - name: Type check push relay
+        if: matrix.shard == 2
         run: node_modules/.bin/tsc --noEmit -p relay/tsconfig.json
 
       # #1037 — locale drift ADVISORY, never a gate: lists keys whose English
@@ -93,15 +108,24 @@ jobs:
       # history, so only this step deepens it. If that fetch fails, the script
       # warns "shallow checkout" instead of printing a false all-clear.
       - name: Locale drift advisory (#1037)
+        if: matrix.shard == 2
         continue-on-error: true
         shell: bash
         run: |
           git fetch --unshallow --no-tags --quiet origin HEAD || true
           node scripts/locale-drift-report.mjs --check
 
+      # Lint on the files added by the cross-platform port, which must stay
+      # free of errors and warnings. Lint does not depend on the OS, so it
+      # runs here once instead of on every Baseline leg. Keep it on ONE line:
+      # PowerShell does not honor bash `\` line continuations.
+      - name: ESLint (cross-platform files, strict)
+        if: matrix.shard == 2
+        run: npx eslint --max-warnings=0 src/shared/platform.ts src/shared/__tests__/platform.test.ts src/shared/ShellDetector.ts src/shared/__tests__/ShellDetector.test.ts src/shared/shellResolution.ts src/shared/__tests__/shellResolution.test.ts src/main/notification/__tests__/ToastManager.test.ts
+
       # The runtime suites (`*.runtime.test.*`) run in validate-runtime below.
-      - name: Test (unit suite)
-        run: npm run test:parallel
+      - name: Test (unit suite, shard ${{ matrix.shard }}/2)
+        run: npm run test:parallel -- --shard=${{ matrix.shard }}/2
 
   validate-runtime:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
