@@ -566,6 +566,9 @@ describe('skill_propose → approval card → load', () => {
       { name: 'report', state: 'archived' },
       { name: 'triage', state: 'proposed', proposed: { approvalId: other.approvalId } },
     ]);
+    // A request the approval store no longer keeps can never be approved: shelved too.
+    expect(reconcileSkillProposals(r.skills, { get: () => null } as never, () => undefined)).toBe(1);
+    expect(r.skills.list(A).find((s) => s.name === 'triage')).toMatchObject({ state: 'archived' });
   });
 
   it('an approved skill is not undone from its card; a window that cannot be told does not change the approval', async () => {

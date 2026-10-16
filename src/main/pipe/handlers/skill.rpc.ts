@@ -94,8 +94,11 @@ export function registerSkillHandlers(router: Pick<FactoryRouter, 'register'>, d
 
 /** The skills module's start: a waiting proposal whose card was denied or
  *  expired while the skills were not running (the approval store starts
- *  first and expires lapsed requests then) is shelved, as a Deny would.
- *  An approved request is never undone here. Returns how many. */
+ *  first and expires lapsed requests then) is shelved, as a Deny would; so
+ *  is one whose request the approval store no longer keeps (it prunes only
+ *  settled requests, never a pending or an approved one, so that one can
+ *  no longer be approved). An approved request is never undone here.
+ *  Returns how many. */
 export function reconcileSkillProposals(
   store: BotSkillStore | null,
   approvals: Pick<ApprovalService, 'get'> | null,
@@ -105,8 +108,7 @@ export function reconcileSkillProposals(
   let shelved = 0;
   for (const w of store.waitingProposals()) {
     const r = approvals.get(w.approvalId);
-    if (!r || r.action !== 'skill' || r.skill?.hash !== w.hash) continue;
-    if (r.state === 'pending' || r.state === 'approved') continue;
+    if (r && (r.action !== 'skill' || r.skill?.hash !== w.hash || r.state === 'pending' || r.state === 'approved')) continue;
     if (!store.deny(w.botId, w.name, w.hash).ok) continue;
     shelved += 1;
     try {
