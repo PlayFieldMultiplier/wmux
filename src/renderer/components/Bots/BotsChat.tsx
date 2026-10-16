@@ -71,7 +71,7 @@ import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
-import { BOT_JOB_MAX, botTemplate, isCoordinatorBot, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
+import { BOT_JOB_MAX, botTemplate, delegatesFromConversation, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botHueIndex, botIdentityColor, noteRemovedBotHues } from '../Room/BotAvatar';
@@ -2077,10 +2077,10 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   // The threads this conversation started fold into work cards.
   const startedThreads = useMemo(() => conversationStartedThreads(conversation, roomCards, roomThreads), [conversation, roomCards, roomThreads]);
   const { main, threads, surfaced, work } = useMemo(() => splitThreads(cards, waits, startedThreads), [cards, waits, startedThreads]);
-  // Who handed it off: a 1:1's bot; in a group, its coordinator (only a
-  // coordinator's dispatch opens a thread), the nearest above when several.
+  // Who handed it off: a 1:1's bot; in a group, its coordinator or lead bot
+  // (only their dispatch opens a thread), the nearest above when several.
   const coordinators = useMemo(
-    () => (conversation.kind === 'room' ? new Set(conversation.bots.filter((r) => isCoordinatorBot(r.bot)).map((r) => r.bot.id)) : null),
+    () => (conversation.kind === 'room' ? new Set(conversation.bots.filter((r) => delegatesFromConversation(r.bot)).map((r) => r.bot.id)) : null),
     [conversation],
   );
   const workAuthor = conversation.kind === 'bot' ? conversation.row.bot.id : coordinators?.size === 1 ? [...coordinators][0] : undefined;

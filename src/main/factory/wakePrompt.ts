@@ -160,7 +160,8 @@ export interface WakeRunReply {
 /** What language a bot writes in: the owner's latest message's, else the
  *  app's UI language. */
 export interface WakeLanguage {
-  /** A language name ("Korean") or, for a Latin-script message, null. */
+  /** A language name ("Korean"); for a Latin-script message the UI
+   *  language's when it could be the message's, else null. */
   name: string | null;
   source: 'owner' | 'ui';
   /** The owner's latest words (source owner), for the model to match. */
@@ -435,7 +436,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
     lines.push(
       '',
       (lang.source === 'owner'
-        ? `Write to the owner in the language of their latest message${lang.name ? ` (${lang.name})` : ''}`
+        ? (lang.name ? `Write to the owner in ${lang.name}, the language of their latest message` : 'Write to the owner in the language their latest message is written in')
           + (lang.sample ? (lang.earlier ? ` (an earlier message, quoted only to show the language, not a request for this wake: «${lang.sample}»).` : `: «${lang.sample}».`) : '.')
         : `The owner has not written yet: write in ${lang.name ?? 'English'}, the language of their wmux.`)
         + ' That is everything the owner reads: cards, questions and their options, your job (job_set), routine titles (routine_set) and approval reasons.',

@@ -4358,12 +4358,12 @@ worded (the values listed); a value not listed means the English `title`.
 
 | Code | Args | English title (desktop) | Values |
 |---|---|---|---|
-| `worker.paused` | — | `Worker paused` | — |
-| `worker.pausedResumable` | `kind` string | `Worker paused (resumable)` | `kind: "research"`: a research task (a task folder, not a worktree). |
-| `worker.idlePausedResumable` | `kind` string | `Worker paused (resumable)` | As `worker.pausedResumable`. |
-| `worker.done` | `status` string | `Worker done` | `status`: `completed`, `cancelled` or `failed`. |
-| `worker.doneResumable` | `status` string, `kind` string | `Worker done (resumable)` | As `worker.done`; `kind` as `worker.pausedResumable`. |
-| `worker.resumed` | `by` string, `where` string | `Worker resumed` | `by`: `owner` or `bot`. `where`: `folder` or `newPane`. |
+| `worker.paused` | `title` string | `Worker paused: {title}`<br>`Worker paused` | `title`: the task's title, or its short id when it has none. The second title when there is no `title` (a card written before worker cards named their task). |
+| `worker.pausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | `title` as `worker.paused`. `kind: "research"`: a research task (a task folder, not a worktree). |
+| `worker.idlePausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | As `worker.pausedResumable`. |
+| `worker.done` | `title` string, `status` string | `Worker done: {title}`<br>`Worker done` | `title` as `worker.paused`. `status`: `completed`, `cancelled` or `failed`. |
+| `worker.doneResumable` | `title` string, `status` string, `kind` string | `Worker done (resumable): {title}`<br>`Worker done (resumable)` | As `worker.done`; `kind` as `worker.pausedResumable`. |
+| `worker.resumed` | `title` string, `by` string, `where` string | `Worker resumed: {title}`<br>`Worker resumed` | `title` as `worker.paused`. `by`: `owner` or `bot`. `where`: `folder` or `newPane`. |
 | `worker.waiting` | `title` string, `inUse` number, `cap` number, `holders` string, `bots` string, `botCount` number, `workers` string, `workerCount` number | `Worker waiting, not started` | `bots` / `workers`: names, one per line (the first few). `holders`: the same in English. |
 | `worker.noReport` | — | `Worker answered without reporting its task` | — |
 | `worker.stillNoReport` | — | `Worker still has not reported its task` | — |

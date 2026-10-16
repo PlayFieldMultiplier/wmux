@@ -7,7 +7,8 @@
 //     whom to mention or hand work to, in every workspace);
 //   - bot.status: the operator, or a bot reading its own status;
 //   - bot.setJob: the operator for any bot; a bot for its own job only, and
-//     only while it runs a wake whose reason is the owner's words. Main
+//     only while it runs a wake on the owner's words (their message, or
+//     their answer to its question, untainted). Main
 //     posts a `job_changed` card (with the previous job, for Undo);
 //   - bot.create / update / remove / wake / park / resume / interrupt: the
 //     operator. No bot parks another.
@@ -43,7 +44,10 @@ import { isVerifyReport } from '../../factory/verifyPreset';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { WakeTaskSummary } from '../../factory/wakePrompt';
 import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
-import { getHandoffRouter } from '../../factory/handoffRouter';
+import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
+import { getWakeTaint, type WakeTaint } from '../../factory/wakeTaint';
+import type { Handoff } from '../../../shared/handoff';
+import type { WakeItem } from '../../../shared/wake';
 import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
 
@@ -100,6 +104,33 @@ export interface SetJobPorts {
   /** The bot has a job now (set by itself or the owner): its greeting
    *  question closes (handoffRouter.ts closeIntroQuestions). */
   jobGiven?: (botId: string) => void;
+  /** The running wake carries the owner's own answer to this bot's
+   *  question (wakeOnOwnerAnswer). Missing: no wake does. */
+  ownerAnswer?: (botId: string, wake: Pick<WakeItem, 'reason'>) => boolean;
+}
+
+/** The wake carries the owner's own answer to the bot's question: an
+ *  `answer` handoff from the owner to this bot, replying to a question this
+ *  bot asked that is still on record (a pruned question no longer says
+ *  which hop it resumed), not a question closed without an answer, and not
+ *  one resuming a hop that read outside text (wakeTaint.ts). No taint
+ *  tracker reads as tainted. Pure over its deps. */
+export function wakeOnOwnerAnswer(
+  botId: string,
+  wake: Pick<WakeItem, 'reason'>,
+  deps: { handoff: (id: string) => Handoff | null; taint: Pick<WakeTaint, 'wakeTainted'> | null },
+): boolean {
+  try {
+    if (wake.reason.kind !== 'handoff') return false;
+    const h = deps.handoff(wake.reason.handoffId);
+    if (!h || h.kind !== 'answer' || h.from.kind !== 'human' || h.payload.body === DISMISSED_ANSWER) return false;
+    if (h.to.kind !== 'bot' || h.to.botId !== botId) return false;
+    const ask = h.replyTo ? deps.handoff(h.replyTo) : null;
+    if (!ask || ask.kind !== 'ask_person' || ask.from.kind !== 'bot' || ask.from.botId !== botId) return false;
+    return !!deps.taint && !deps.taint.wakeTainted(wake);
+  } catch {
+    return false;
+  }
 }
 
 const defaultSetJobPorts: SetJobPorts = {
@@ -116,6 +147,7 @@ const defaultSetJobPorts: SetJobPorts = {
   jobGiven: (botId) => {
     void getHandoffRouter()?.closeIntroQuestions(botId).catch(() => undefined);
   },
+  ownerAnswer: (botId, wake) => wakeOnOwnerAnswer(botId, wake, { handoff: (id) => getHandoffRouter()?.get(id) ?? null, taint: getWakeTaint() }),
 };
 
 /** What bot.remove stops the bot's work through. Overridable for tests. */
@@ -177,11 +209,15 @@ export function registerBotRpcHandlers(
     if (!l) return NOT_STARTED;
     if (caller.kind === 'bot') {
       // Only the owner assigns a job: the bot writes it during a wake on the
-      // owner's own words, never on a fact, a handoff or a schedule.
+      // owner's own words (their message, or their answer to its question —
+      // the greeting asks for the job), never on a fact, another bot's
+      // handoff or a schedule.
       const wakeId = setJobPorts.runningWakeId(botId);
       const wake = wakeId ? l.queue?.get(wakeId) ?? null : null;
-      if (!wake || wake.botId !== botId || wake.state !== 'running' || wake.reason.kind !== 'human') {
-        return refuse('not_owner_words', 'a bot sets its job only while it answers the owner\'s own message');
+      const ownerWords = !!wake && wake.botId === botId && wake.state === 'running'
+        && (wake.reason.kind === 'human' || setJobPorts.ownerAnswer?.(botId, wake) === true);
+      if (!ownerWords) {
+        return refuse('not_owner_words', 'a bot sets its job only while it answers the owner\'s own message, or their answer to its question');
       }
     }
     const r = l.store.setJob(botId, job);

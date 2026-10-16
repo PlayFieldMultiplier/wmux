@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { RoomCard, ThreadId } from '../../../shared/room';
 import type { WakeItem } from '../../../shared/wake';
-import { localeLanguageName, scriptLanguage, wakeApprovals, wakeClock, wakeContext, wakeGroup, wakeLanguage, wakeRunReplies, type WakeContextPorts } from '../wakeContext';
+import { latinUiLanguage, localeLanguageName, scriptLanguage, wakeApprovals, wakeClock, wakeContext, wakeGroup, wakeLanguage, wakeRunReplies, type WakeContextPorts } from '../wakeContext';
 
 const me: BotProfile = {
   version: 1, id: 'bot-0000000a', workspaceId: 'ws1', role: 'lead', name: 'Wmux Dev', engine: { kind: 'claude-sdk' }, triggers: [],
@@ -64,6 +64,28 @@ describe('wakeContext', () => {
   it('a bot added after the owner wrote to the other bots follows the owner, not the UI language', () => {
     const cards = [owner('머지할거 머지해', { refs: { botIds: ['bot-0000000b', 'bot-0000000c'] } })];
     expect(wakeLanguage(ports(cards, { uiLocale: () => 'en' }), me, wake({ kind: 'intro' }))).toEqual({ name: 'Korean', source: 'owner', earlier: true });
+  });
+
+  it('names the language of Latin-script words from the UI language when it could be theirs; the owner\'s script always wins', () => {
+    const intro = wake({ kind: 'intro' });
+    // en UI, English words: English (the greeting no longer guesses).
+    expect(wakeLanguage(ports([owner('Hello, nice to meet you')], { uiLocale: () => 'en' }), me, intro))
+      .toEqual({ name: 'English', source: 'owner', sample: 'Hello, nice to meet you', earlier: true });
+    expect(wakeLanguage(ports([], { uiLocale: () => 'en' }), me, wake({ kind: 'human', text: 'Review my PRs', source: 'desktop' })))
+      .toEqual({ name: 'English', source: 'owner', sample: 'Review my PRs' });
+    // ko UI, Korean words: Korean.
+    expect(wakeLanguage(ports([owner('반가워요')], { uiLocale: () => 'ko' }), me, intro)).toEqual({ name: 'Korean', source: 'owner', earlier: true });
+    // en UI, Korean words: the owner's own language, Korean.
+    expect(wakeLanguage(ports([owner('반가워요')], { uiLocale: () => 'en' }), me, intro)).toEqual({ name: 'Korean', source: 'owner', earlier: true });
+    expect(wakeLanguage(ports([], { uiLocale: () => 'en' }), me, wake({ kind: 'human', text: 'PR 리뷰해줘', source: 'desktop' })))
+      .toEqual({ name: 'Korean', source: 'owner', sample: 'PR 리뷰해줘' });
+    // ko UI, Latin-script words: Korean is not theirs, so no name; the sample shows the language.
+    expect(wakeLanguage(ports([owner('Hello there')], { uiLocale: () => 'ko' }), me, intro)).toEqual({ name: null, source: 'owner', sample: 'Hello there', earlier: true });
+    // A script no language is named for that is not Latin (Greek): no name from the UI.
+    expect(wakeLanguage(ports([owner('Γεια σου')], { uiLocale: () => 'en' }), me, intro)).toEqual({ name: null, source: 'owner', sample: 'Γεια σου', earlier: true });
+    expect(latinUiLanguage('de')).toBe('German');
+    expect(latinUiLanguage('ja')).toBeNull();
+    expect(latinUiLanguage('zh-TW')).toBeNull();
   });
 
   it('the owner\'s clock in their zone', () => {

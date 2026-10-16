@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
-import { isCoordinatorBot, isIdentitySlot, type BotProfile, type BotStatus } from '../../shared/bot';
+import { delegatesFromConversation, isIdentitySlot, type BotProfile, type BotStatus } from '../../shared/bot';
 import type { BotTaskView } from '../../shared/botTask';
 import { taskPrUrls, type WorkOwner } from '../../shared/botsWork';
 import type { BotGroup } from '../../shared/botGroup';
@@ -471,9 +471,9 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
     const ws = workspaceName(group.workspaceId);
     const members = group.memberIds.filter((id) => all.some((b) => b.id === id && b.workspaceId === group.workspaceId));
     const scope = groupScope(threads(group.workspaceId), group);
-    // Only a coordinator's dispatch opens a thread from a group: its only
-    // coordinator handed it off, or the nearest of several (BotsChat.tsx).
-    const coordinators = new Set(members.filter((id) => isCoordinatorBot(all.find((b) => b.id === id))));
+    // Only a coordinator's or a lead bot's dispatch opens a thread from a
+    // group: its only one handed it off, or the nearest of several (BotsChat.tsx).
+    const coordinators = new Set(members.filter((id) => delegatesFromConversation(all.find((b) => b.id === id))));
     const author = coordinators.size === 1 ? { workAuthor: [...coordinators][0] } : { workCandidates: coordinators };
     rows.push({
       order: `group:${group.id}`,

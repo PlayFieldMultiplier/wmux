@@ -99,6 +99,26 @@ export function localeLanguageName(locale: string): string {
   return code;
 }
 
+/** Every letter of the text is a Latin-script one (and there is one). Pure. */
+function latinScript(text: string): boolean {
+  const letters = text.match(/\p{L}/gu) ?? [];
+  return letters.length > 0 && letters.every((c) => /\p{Script=Latin}/u.test(c));
+}
+
+/** The UI language's name, for words whose script names no language: a UI
+ *  in a language whose own script scriptLanguage names (Korean, Japanese,
+ *  …) says nothing about Latin-script words, so null then. Pure. */
+export function latinUiLanguage(locale: string): string | null {
+  const code = locale.trim() || 'en';
+  let native: string | undefined;
+  try {
+    native = new Intl.DisplayNames([code], { type: 'language' }).of(code);
+  } catch {
+    return null;
+  }
+  return native && !scriptLanguage(native) ? localeLanguageName(code) : null;
+}
+
 function ownerText(c: RoomCard): string {
   return (c.body?.trim() ? c.body : c.title).trim();
 }
@@ -113,7 +133,9 @@ function isOwnerCard(c: RoomCard): boolean {
  *  after the owner wrote follows the owner too), else the UI language. A
  *  wake on the owner's message carries a sample of its words; any other wake
  *  only when the script does not name the language, marked as a sample
- *  (earlier words must not read as a request for this wake). */
+ *  (earlier words must not read as a request for this wake). Words whose
+ *  script names no language (Latin) take the UI language's name when it
+ *  could be theirs (latinUiLanguage); the owner's script always wins. */
 export function wakeLanguage(ports: WakeContextPorts, profile: BotProfile, item: WakeItem): WakeLanguage | null {
   const human = item.reason.kind === 'human' ? item.reason.text : null;
   let said: string | null = human;
@@ -133,8 +155,10 @@ export function wakeLanguage(ports: WakeContextPorts, profile: BotProfile, item:
     }
   }
   if (said && said.trim()) {
-    const name = scriptLanguage(said);
-    const sample = human || !name ? said.replace(/\s+/g, ' ').trim().slice(0, WAKE_CONTEXT_LIMITS.SAMPLE_MAX) : undefined;
+    const script = scriptLanguage(said);
+    const locale = script ? undefined : ports.uiLocale?.();
+    const name = script ?? (locale && latinScript(said) ? latinUiLanguage(locale) : null);
+    const sample = human || !script ? said.replace(/\s+/g, ' ').trim().slice(0, WAKE_CONTEXT_LIMITS.SAMPLE_MAX) : undefined;
     return { name, source: 'owner', ...(sample ? { sample } : {}), ...(human ? {} : { earlier: true as const }) };
   }
   const locale = ports.uiLocale?.();

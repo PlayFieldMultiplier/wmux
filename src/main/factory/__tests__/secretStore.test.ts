@@ -4,9 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('electron', () => ({ safeStorage: {} }));
+const safeStorage = vi.hoisted(() => ({
+  isEncryptionAvailable: vi.fn(() => true),
+  encryptString: vi.fn((plain: string) => Buffer.from(`enc:${Buffer.from(plain, 'utf8').reverse().toString('hex')}`)),
+  decryptString: vi.fn((cipher: Buffer) => Buffer.from(cipher.toString().slice(4), 'hex').reverse().toString('utf8')),
+}));
+vi.mock('electron', () => ({ safeStorage }));
 
-import { SecretStore, type SecretCrypto, type SecretCryptoState } from '../secretStore';
+import { SecretStore, electronSecretCrypto, type SecretCrypto, type SecretCryptoState } from '../secretStore';
 import {
   __resetRedactedSecretsForTesting,
   redactStoredSecretEdges,
@@ -217,6 +222,56 @@ describe('SecretStore', () => {
       expect(store.storeRefusal()).toMatchObject({ code: 'store_unreadable' });
       expect(fs.readFileSync(file, 'utf8')).toBe(content);
     }
+  });
+
+  describe('keychain use (Electron safeStorage)', () => {
+    beforeEach(() => {
+      safeStorage.isEncryptionAvailable.mockClear().mockReturnValue(true);
+      safeStorage.encryptString.mockClear();
+      safeStorage.decryptString.mockClear();
+    });
+
+    it('a store with no secrets loads without calling safeStorage', () => {
+      for (const content of [null, JSON.stringify({ version: 1, secrets: [] })]) {
+        if (content !== null) {
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, content);
+        }
+        const store = new SecretStore({ file, crypto: electronSecretCrypto() });
+        store.load();
+        expect(store.isLoaded).toBe(true);
+        expect(store.list()).toEqual([]);
+      }
+      expect(safeStorage.isEncryptionAvailable).not.toHaveBeenCalled();
+      expect(safeStorage.decryptString).not.toHaveBeenCalled();
+    });
+
+    it('the first write still checks, and refuses when encryption is unavailable', () => {
+      const store = new SecretStore({ file, crypto: electronSecretCrypto() });
+      store.load();
+      safeStorage.isEncryptionAvailable.mockReturnValue(false);
+      expect(store.set('NPM_TOKEN', VALUE)).toEqual({
+        ok: false,
+        code: 'encryption_unavailable',
+        message: 'This system offers no encrypted storage for wmux, so the key was not saved.',
+      });
+      expect(safeStorage.isEncryptionAvailable).toHaveBeenCalledTimes(1);
+      expect(safeStorage.encryptString).not.toHaveBeenCalled();
+      expect(fs.existsSync(file)).toBe(false);
+    });
+
+    it('a store with secrets still checks once and decrypts them on load', () => {
+      const writer = new SecretStore({ file, crypto: electronSecretCrypto() });
+      writer.load();
+      expect(writer.set('NPM_TOKEN', VALUE).ok).toBe(true);
+      expect(writer.set('GH_TOKEN', `${VALUE}2`).ok).toBe(true);
+      safeStorage.isEncryptionAvailable.mockClear();
+      const store = new SecretStore({ file, crypto: electronSecretCrypto() });
+      store.load();
+      expect(safeStorage.isEncryptionAvailable).toHaveBeenCalledTimes(1);
+      expect(safeStorage.decryptString).toHaveBeenCalledTimes(2);
+      expect(store.values(['NPM_TOKEN', 'GH_TOKEN'])).toEqual({ ok: true, env: { NPM_TOKEN: VALUE, GH_TOKEN: `${VALUE}2` } });
+    });
   });
 
   it('keeps an undecryptable entry listed but unusable', () => {

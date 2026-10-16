@@ -191,12 +191,16 @@ export class SecretStore {
       this.log(`${path.basename(this.opts.file)} is unreadable or of another version; no secrets are loaded and none are saved until it is fixed`);
     }
     const list = readable ? (raw as { secrets: unknown[] }).secrets : [];
-    const canDecrypt = this.storeRefusal() === null;
+    // Asked only once there is a value to decrypt: on macOS the first
+    // safeStorage call goes to the keychain and blocks the main thread while
+    // it answers, so a store with nothing in it never touches it at startup.
+    let decryptable: boolean | undefined;
+    const canDecrypt = () => (decryptable ??= this.storeRefusal() === null);
     for (const item of Array.isArray(list) ? list : []) {
       if (!isStored(item) || this.held.has(item.name)) continue;
       const record = cleanRecord(item);
       let value: string | null = null;
-      if (canDecrypt) {
+      if (canDecrypt()) {
         try {
           value = this.opts.crypto.decrypt(Buffer.from(record.cipher, 'base64'));
         } catch {
@@ -212,7 +216,7 @@ export class SecretStore {
     for (const item of Array.isArray(retired) ? retired.slice(-RETIRED_MAX) : []) {
       if (!isStoredRetired(item) || item.at < since) continue;
       let value: string | null = null;
-      if (canDecrypt) {
+      if (canDecrypt()) {
         try {
           value = this.opts.crypto.decrypt(Buffer.from(item.cipher, 'base64'));
         } catch {
