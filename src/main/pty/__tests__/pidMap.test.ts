@@ -54,6 +54,30 @@ describe('pidMap fs primitives', () => {
     expect(fs.readFileSync(path.join(mapDir, '1234'), 'utf8')).toBe('daemon-abc');
   });
 
+  it('writePidMap keeps one PID per ptyId: an earlier shell of the same pane is removed', () => {
+    // Live repro (Windows, after two daemon restarts): pane daemon-04f1c884
+    // had PIDs 6780 and 13632 before its current shell 7644. Windows then
+    // gave 6780 to a new worker's claude.exe, whose MCP walk matched it and
+    // took the old pane's identity.
+    seed(6780, 'daemon-04f1c884');
+    seed(13632, 'daemon-04f1c884');
+    seed(14932, 'daemon-d1fe97e3');
+    writePidMap(7644, 'daemon-04f1c884');
+    expect(exists(7644)).toBe(true);
+    expect(exists(6780)).toBe(false);
+    expect(exists(13632)).toBe(false);
+    // Other panes' anchors are untouched.
+    expect(fs.readFileSync(path.join(mapDir, '14932'), 'utf8')).toBe('daemon-d1fe97e3');
+  });
+
+  it('writePidMap over a recycled PID of another pane re-points it, leaving that pane\'s other anchors alone', () => {
+    seed(500, 'daemon-old');
+    seed(600, 'daemon-old');
+    writePidMap(500, 'daemon-new');
+    expect(fs.readFileSync(path.join(mapDir, '500'), 'utf8')).toBe('daemon-new');
+    expect(fs.readFileSync(path.join(mapDir, '600'), 'utf8')).toBe('daemon-old');
+  });
+
   it('removePidMapByPtyId deletes EVERY entry whose content matches the ptyId', () => {
     // The accretion case: one ptyId can have multiple PID anchors (shell
     // respawn / reconnect writes a fresh PID without removing the old one).

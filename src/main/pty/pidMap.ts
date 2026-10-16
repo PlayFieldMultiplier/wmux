@@ -21,12 +21,30 @@ import { getPidMapDir } from '../../shared/constants';
  * process lifetime; `a2a.resolve.identity` maps ptyId → the CURRENT owning
  * workspace at lookup time. (Claude Code doesn't propagate env vars to MCP
  * child processes, so this on-disk map is the resolution anchor.)
+ *
+ * A pane has one live shell, so a ptyId keeps exactly one PID: any other file
+ * pointing at the same ptyId is an earlier shell of that pane (a daemon
+ * restart respawns a recovered session with a new PID, and the reconnect
+ * writes it here) and is removed first. Left behind, the OS hands that old PID
+ * to an unrelated process, and an MCP server whose ancestry includes it (a new
+ * worker's own claude.exe) resolves to the old pane's identity.
  */
 export function writePidMap(pid: string | number, ptyId: string): void {
   try {
     const dir = getPidMapDir();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, String(pid)), ptyId, 'utf8');
+    const name = String(pid);
+    if (ptyId) {
+      for (const file of fs.readdirSync(dir)) {
+        if (file === name) continue;
+        try {
+          if (fs.readFileSync(path.join(dir, file), 'utf8').trim() === ptyId) {
+            fs.unlinkSync(path.join(dir, file));
+          }
+        } catch { /* unreadable / racing-unlink — skip */ }
+      }
+    }
+    fs.writeFileSync(path.join(dir, name), ptyId, 'utf8');
   } catch { /* best-effort */ }
 }
 
