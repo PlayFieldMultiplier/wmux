@@ -1574,6 +1574,8 @@ export const en = {
   'botsPage.profile.workspace': "Workspace",
   'botsPage.profile.repo': "Repository",
   'botsPage.profile.noRepo': "None",
+
+  'botsPage.profile.repoHint': "A folder whose origin is an owner/repo address on a git host, such as GitHub. A local path cannot be used.",
   'botsPage.profile.repoFailed': "Could not change the repository.",
   'botsPage.profile.state': "Status",
   'botsPage.profile.on': "On",

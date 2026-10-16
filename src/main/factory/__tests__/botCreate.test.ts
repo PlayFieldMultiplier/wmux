@@ -69,6 +69,13 @@ describe('resolveBotRepo', () => {
     const top = ok('/src/app\n');
     expect(await resolveBotRepo('/src/app', { git: fakeGit(top, fail), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote' });
     expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('/srv/git/app.git\n')), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote' });
+    // The refusal says what origin has to be, not only that it is wrong: the
+    // folder picker is the only way to link, so the fix is in the repository.
+    for (const url of [fail, ok('/srv/git/app.git\n')]) {
+      const r = await resolveBotRepo('/src/app', { git: fakeGit(top, url), realpath: (p) => p });
+      expect(r.ok ? '' : r.message).toMatch(/https:\/\/github\.com\/<owner>\/<repo>\.git/);
+      expect(r.ok ? '' : r.message).toContain('A local path or a bare repository on disk cannot be used.');
+    }
     expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('https://gitlab.example.com/app.git\n')), realpath: (p) => p }))
       .toMatchObject({ ok: false, code: 'no_remote' });
     // A GitLab subgroup project is a repository, keyed by its whole path.

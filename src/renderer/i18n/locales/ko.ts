@@ -1098,6 +1098,8 @@ export const ko = {
   'botsPage.profile.workspace': "워크스페이스",
   'botsPage.profile.repo': "저장소",
   'botsPage.profile.noRepo': "없음",
+
+  'botsPage.profile.repoHint': "origin이 git 호스트의 owner/repo 주소(예: GitHub)인 폴더를 고르세요. 로컬 경로는 쓸 수 없어요.",
   'botsPage.profile.repoFailed': "저장소를 바꾸지 못했어요.",
   'botsPage.profile.state': "상태",
   'botsPage.profile.on': "켜짐",
