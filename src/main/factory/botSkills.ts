@@ -35,6 +35,7 @@ import { atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import { BOT_ID_RE } from '../../shared/bot';
 import { assertNotLiveWmuxPath } from '../../shared/constants';
 import { readVersionedFile } from './versionedFile';
+import { redactStoredSecrets } from './secretRedaction';
 import {
   SKILL_LIMITS,
   SKILL_NAME_RE,
@@ -246,11 +247,13 @@ export function skillFilesDiff(before: SkillFiles | null, after: SkillFiles): st
 }
 
 /** A proposal's files, checked: the front matter (its name is the skill's),
- *  the size limits, the reference names. Pure. */
+ *  the size limits, the reference names, and no stored secret's value in
+ *  them (the secrets held now). */
 export function validateSkillProposal(name: unknown, content: unknown, references: unknown): { ok: true; files: SkillFiles; version: string; description: string } | SkillRefusal {
   if (typeof name !== 'string' || !SKILL_NAME_RE.test(name)) return refuse('invalid', 'name is a lowercase slug (a-z, 0-9, -), at most 64 characters');
   if (typeof content !== 'string' || content.length === 0) return refuse('invalid', 'content is the whole SKILL.md');
   if (Buffer.byteLength(content, 'utf8') > SKILL_LIMITS.BODY_MAX) return refuse('invalid', `SKILL.md is at most ${SKILL_LIMITS.BODY_MAX} bytes`);
+  if (redactStoredSecrets(content) !== content) return refuse('invalid', 'SKILL.md holds the value of a stored secret; refer to the secret by its name instead');
   if (SKILL_CONTROL_RE.test(content)) return refuse('invalid', 'SKILL.md is plain text: no control characters other than tab and newline (use \\n line ends)');
   const fm = parseSkillFrontmatter(content);
   if (!fm.ok) return refuse('invalid', fm.error);
@@ -267,6 +270,7 @@ export function validateSkillProposal(name: unknown, content: unknown, reference
         return refuse('invalid', 'a reference name is a slug ending in .md or .txt (no folder)');
       }
       if (typeof ref.content !== 'string') return refuse('invalid', `reference ${ref.name} needs its content`);
+      if (redactStoredSecrets(ref.content) !== ref.content) return refuse('invalid', `reference ${ref.name} holds the value of a stored secret; refer to the secret by its name instead`);
       if (SKILL_CONTROL_RE.test(ref.content)) return refuse('invalid', `reference ${ref.name} is plain text: no control characters other than tab and newline`);
       const bytes = Buffer.byteLength(ref.content, 'utf8');
       if (bytes > SKILL_LIMITS.REFERENCE_MAX) return refuse('invalid', `reference ${ref.name} is over ${SKILL_LIMITS.REFERENCE_MAX} bytes`);
@@ -687,14 +691,18 @@ export class BotSkillStore {
     // the earlier hash, and files that do not match it never load.
     const restore = (): void => {
       for (const n of [...placed].reverse()) removeQuietly(path.join(d.dir, n));
+      let whole = true;
       for (const n of [...movedAside].reverse()) {
         try {
           fs.renameSync(path.join(backup as string, n), path.join(d.dir, n));
         } catch {
-          /* left in the backup folder, which never loads */
+          whole = false;
         }
       }
-      removeQuietly(backup);
+      // The backup goes only once everything in it is back in place;
+      // otherwise it is the earlier version's copy, and it stays.
+      if (whole) removeQuietly(backup);
+      else console.warn(`[factory] skill ${name}: the earlier approved files are kept in ${path.basename(backup as string)}`);
     };
     try {
       // The approved SKILL.md and references/ are written from the bytes

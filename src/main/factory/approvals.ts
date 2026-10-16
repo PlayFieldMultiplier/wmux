@@ -89,6 +89,7 @@ import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, issueThreadId, parseThreadId,
 import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
 import { fenceFor } from '../../shared/markdownFence';
+import { redactStoredSecrets } from './secretRedaction';
 import { normalizeRepoKey } from './repoWatch';
 import { laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
@@ -617,7 +618,10 @@ export class ApprovalService {
     const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
     if (open >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open} requests already wait for the owner`);
     const skillLines = skillCardLines(input.update, input.diff, ROOM_LIMITS.CARD_BODY_MAX - askLine(profile, reason).length - 1);
-    if (!skillLines) return refuse('invalid', 'the change does not fit on the owner\'s card; propose a shorter skill or a smaller change');
+    // Measured as the room stores it (stored secrets redacted), so the card
+    // the owner reads is the whole change.
+    const posted = skillLines ? redactStoredSecrets([askLine(profile, reason), ...skillLines].join('\n')) : '';
+    if (!skillLines || posted.length > ROOM_LIMITS.CARD_BODY_MAX) return refuse('invalid', 'the change does not fit on the owner\'s card; propose a shorter skill or a smaller change');
     const at = this.now();
     const record: StoredApproval = {
       requestId: newRequestId(),
@@ -637,7 +641,14 @@ export class ApprovalService {
     };
     if (!this.put(record)) return refuse('write_failed', 'the request could not be stored');
     const card = this.postCard(record, profile, wake, skillLines);
-    if (card) this.put({ ...record, cardId: card.id });
+    if (!card || !this.put({ ...record, cardId: card.id })) {
+      // A skill is approved on its card only: without one, nothing waits.
+      const moot: StoredApproval = { ...record, state: 'expired', updatedAt: this.now() };
+      if (!this.put(moot)) this.requests.delete(record.requestId);
+      if (card) this.closeCard({ ...moot, cardId: card.id });
+      this.changed(record.workspaceId);
+      return refuse('write_failed', 'the approval card could not be posted; propose the skill again');
+    }
     this.changed(record.workspaceId);
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
   }

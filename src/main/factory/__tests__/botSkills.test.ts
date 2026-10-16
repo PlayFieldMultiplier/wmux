@@ -18,6 +18,7 @@ import { BOT_APPROVAL_RPC } from '../../../shared/botApproval';
 import type { RpcContext } from '../../../shared/rpc';
 import { BOT_SKILLS_FILENAME, BotSkillStore, botSkillsRoot, installWorkerSkills, skillFilesDiff, skillHash, skillLineDiff, type SkillGitRun } from '../botSkills';
 import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
+import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretRedaction';
 import { ApprovalService, registerApprovalRpc, skillCardLines, type ApprovalWake } from '../approvals';
 import { ROOM_LIMITS } from '../../../shared/room';
 import { RoomWriter } from '../roomWriter';
@@ -51,6 +52,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(wmuxDir, 'factory', 'bots'), { recursive: true });
 });
 afterEach(() => {
+  __resetRedactedSecretsForTesting();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -346,6 +348,7 @@ describe('skill store: main keeps the approval record', () => {
       expect(s.read(A, 'report', 'checklist.md')).toMatchObject({ ok: true, content: '- gate\n' });
     }
     expect(failed).toBeGreaterThanOrEqual(4);
+    expect(fs.readdirSync(skillDir).filter((n) => n.startsWith('.bak-'))).toEqual([]);
     expect(s.read(A, 'report', 'checklist.md')).toMatchObject({ ok: true, version: '1.1.0', content: '- new\n' });
     // A cleanup that fails does not undo an approve that went through.
     const next = propose(s, A, 'report', skillMd('report', '1.2.0', 'Later steps.\n'));
@@ -360,6 +363,42 @@ describe('skill store: main keeps the approval record', () => {
       rm.mockRestore();
     }
     expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.2.0', references: [] });
+  });
+
+  it('when putting the earlier files back fails too, their backup stays and nothing says the new version is live', () => {
+    const s = store();
+    s.approve(A, 'report', propose(s, A, 'report').hash);
+    const up = propose(s, A, 'report', skillMd('report', '1.1.0', 'New steps.\n'));
+    const skillDir = path.join(botSkillsRoot(wmuxDir, A), 'report');
+    const realRename = fsDefault.renameSync;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // The new SKILL.md cannot be put in place, and the earlier one cannot be put back.
+    const spy = vi.spyOn(fsDefault, 'renameSync').mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      const f = String(from);
+      if (f.includes(`${path.sep}.tmp-`) && f.endsWith('SKILL.md')) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      if (f.includes(`${path.sep}.bak-`) && f.endsWith('SKILL.md')) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      return realRename(from, to);
+    }) as typeof fsDefault.renameSync);
+    try {
+      expect(s.approve(A, 'report', up.hash)).toMatchObject({ ok: false, code: 'write_failed' });
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+    const backups = fs.readdirSync(skillDir).filter((n) => n.startsWith('.bak-'));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(skillDir, backups[0], 'SKILL.md'), 'utf8')).toBe(skillMd('report'));
+    expect(s.list(A)).toMatchObject([{ name: 'report', state: 'approved', version: '1.0.0', proposed: { version: '1.1.0' } }]);
+    expect(s.read(A, 'report')).not.toMatchObject({ ok: true, version: '1.1.0' });
+    expect(s.index(A)).toEqual([]);
+  });
+
+  it('refuses a skill that holds the value of a stored secret', () => {
+    setRedactedSecrets([{ name: 'TEST_API_KEY', value: 'abcdefgh' }]);
+    const s = store();
+    expect(s.propose(A, { name: 'report', content: skillMd('report', '1.0.0', 'TEST_API_KEY=abcdefgh\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(s.propose(A, { name: 'report', content: skillMd('report'), references: [{ name: 'a.md', content: 'key abcdefgh' }], reason: 'r' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(s.list(A)).toEqual([]);
   });
 
   it('refuses a proposal whose change would not fit the owner\'s card', () => {
@@ -514,6 +553,30 @@ describe('skill_propose → approval card → load', () => {
     expect(skills.read(A, 'report')).toMatchObject({ ok: true });
     expect(svc.decide({ requestId: req.request.requestId, decision: 'undo' }, 'desktop')).toMatchObject({ ok: false, code: 'too_late' });
     expect(svc.get(req.request.requestId)?.state).toBe('approved');
+  });
+
+  it('the card is measured as the room stores it: a change that grows past the card once redacted is refused', () => {
+    const r = approvalRig();
+    setRedactedSecrets([{ name: 'TEST_API_KEY', value: 'abcdefgh' }]);
+    const diff = `--- SKILL.md\n${Array.from({ length: 600 }, () => '+ abcdefgh').join('\n')}`;
+    // It fits as written; redacted, it would not.
+    expect(skillCardLines(false, diff, ROOM_LIMITS.CARD_BODY_MAX - 400)).not.toBeNull();
+    const res = r.svc.proposeSkill(binding(A), { name: 'report', hash: 'h'.repeat(64), version: '1.0.0', update: false, diff, reason: 'r' });
+    expect(res).toMatchObject({ ok: false, code: 'invalid' });
+    expect(r.svc.listForOperator(WS)).toHaveLength(0);
+  });
+
+  it('a card that cannot be posted leaves nothing waiting, and the same proposal again gets its card', async () => {
+    const r = approvalRig();
+    const post = vi.spyOn(r.writer, 'post').mockReturnValue({ ok: false } as never);
+    const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    post.mockRestore();
+    expect(res).toMatchObject({ ok: false, code: 'write_failed' });
+    expect(r.svc.listForOperator(WS).filter((x) => x.state === 'pending')).toEqual([]);
+    expect(r.skills.list(A)).toEqual([]);
+    const again = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'r' });
+    expect(again).toMatchObject({ ok: true });
+    expect(r.writer.get(WS, r.svc.get(again.approvalId as string)?.cardId as string)).toMatchObject({ kind: 'approval' });
   });
 
   it('Approve loads it (approved), and the bot is told; Deny archives it', async () => {
