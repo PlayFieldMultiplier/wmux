@@ -4402,6 +4402,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `task.failed` | `title` string | `Task failed: {title}` | — |
 | `task.cancelled` | `title` string | `Task cancelled: {title}` | — |
 | `task.stoppedByOwner` | `title` string | `Task cancelled · stopped by owner: {title}` | — |
+| `task.keptFolderCleaned` | `title` string, `days` number, `kind` string | `Removed the kept folder of "{title}"` | A folder kept after the owner stopped the task, removed by wmux after `days` days with no changes. `kind`: `research` for a research task's folder (no branch); absent for a worktree, whose branch stays. |
 | `task.inputRequired` | `title` string, `why` string | `Task needs input: {title}` | `why`: `trustDialog`, `firstRun` or `launchFailed`. |
 | `pr.merged` | `pr` number, `title` string | `PR #{pr} merged: {title}`<br>`PR #{pr} merged` | The second title when there is no `title`. |
 | `pr.closed` | `pr` number, `title` string | `PR #{pr} closed: {title}`<br>`PR #{pr} closed` | As `pr.merged`. |

@@ -11,6 +11,7 @@ import { TaskWorktreeManager } from '../../worktask/TaskWorktreeManager';
 import {
   TASK_FOLDERS_KEPT_MAX,
   TASK_FOLDERS_MAX,
+  TASK_FOLDER_KEPT_TTL_MS,
   TASK_FOLDER_RESTORE_HOLD_MS,
   TaskFolders,
   cleanTaskFolder,
@@ -616,6 +617,124 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolders(p, [], { force: true })).toMatchObject({ removed: 1, failed: 0 });
     expect(fs.existsSync(scratch)).toBe(false);
     expect(await taskFolderUsage(p, [])).toEqual({ bytes: 0, folders: 0, dirty: 0 });
+  });
+});
+
+describe('a folder a stop kept, after 7 days', () => {
+  const DAY = 24 * 3_600_000;
+  const stoppedBy = { summary: 'stopped by owner', updatedBy: { kind: 'system' as const, workspaceId: 'ws-daemon' }, updatedAt: 49_000 };
+  /** One automatic pass (installTaskFolderCleanup runs one at install). */
+  async function pass(p: TaskFolderPorts, rows: LedgerEntry[], settle?: () => void): Promise<void> {
+    const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => rows });
+    if (settle) await vi.waitFor(settle, { timeout: 10_000 });
+    else await new Promise((r) => setTimeout(r, 100));
+    installed.dispose();
+  }
+
+  it('is kept at 6 days; at 7 a clean one is removed (branch kept, one card), a dirty one is kept, a research folder goes too', async () => {
+    const mgr = new TaskWorktreeManager();
+    const cleanWt = await taskWorktree(mgr, 'ttl-11111111');
+    const dirtyWt = await taskWorktree(mgr, 'ttld-22222222');
+    fs.writeFileSync(path.join(dirtyWt, 'draft.txt'), 'unsaved');
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-7', 'task-7');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'notes.md'), 'found it');
+    const missions = new Map<string, TaskMission>([
+      ['wtask-ttl-11111111', { folder: cleanWt, branch: 'wtask/ttl-11111111' }],
+      ['wtask-ttld-22222222', { folder: dirtyWt, branch: 'wtask/ttld-22222222' }],
+      ['wtask-ttlr-33333333', { folder: scratch }],
+    ]);
+    const rows = [
+      row('cancelled', { id: 'wtask-ttl-11111111', title: 'clean one', ...stoppedBy, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', threadId: `dm:${BOT}` } }),
+      row('cancelled', { id: 'wtask-ttld-22222222', title: 'dirty one', ...stoppedBy }),
+      row('cancelled', { id: 'wtask-ttlr-33333333', title: 'research one', ...stoppedBy, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } }),
+    ];
+    let now = 50_000;
+    const keptFolderCleaned = vi.fn();
+    const p = ports({ now: () => now, keptFolderCleaned }, missions);
+    await cleanTaskFolders(p, rows);
+    expect(p.store.get('wtask-ttl-11111111')).toMatchObject({
+      state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'clean one', workspaceId: 'ws-owner', threadId: `dm:${BOT}` },
+    });
+    expect(p.store.get('wtask-ttld-22222222')?.stopped?.threadId).toBe('task:wtask-ttld-22222222');
+
+    now = 50_000 + 6 * DAY;
+    await pass(p, rows);
+    expect(fs.existsSync(cleanWt) && fs.existsSync(dirtyWt) && fs.existsSync(scratch)).toBe(true);
+    expect(keptFolderCleaned).not.toHaveBeenCalled();
+
+    // Day 7: the ledger has pruned the rows (and the daemon the missions).
+    now = 50_000 + TASK_FOLDER_KEPT_TTL_MS;
+    const later = { ...p, missions: async () => new Map<string, TaskMission>() };
+    await pass(later, [], () => {
+      expect(fs.existsSync(cleanWt)).toBe(false);
+      expect(fs.existsSync(scratch)).toBe(false);
+      expect(p.store.get('wtask-ttld-22222222')?.state).toBe('kept_dirty');
+    });
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/ttl-11111111')).toMatch(/^[0-9a-f]{40}$/);
+    expect(p.store.get('wtask-ttl-11111111')?.state).toBe('removed');
+    expect(fs.readFileSync(path.join(dirtyWt, 'draft.txt'), 'utf8')).toBe('unsaved');
+    expect(keptFolderCleaned).toHaveBeenCalledTimes(2);
+    expect(keptFolderCleaned).toHaveBeenCalledWith({
+      taskId: 'wtask-ttl-11111111', botId: BOT, kind: 'worktree', title: 'clean one', days: 7, workspaceId: 'ws-owner', threadId: `dm:${BOT}`,
+    });
+    expect(keptFolderCleaned).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'wtask-ttlr-33333333', kind: 'research', title: 'research one', days: 7 }));
+    // The dirty one is never removed automatically, however long it sits.
+    now += 30 * DAY;
+    await pass(later, []);
+    expect(fs.existsSync(path.join(dirtyWt, 'draft.txt'))).toBe(true);
+    expect(keptFolderCleaned).toHaveBeenCalledTimes(2);
+  });
+
+  it('a resume in between starts the 7 days again; a resumed worker or a session in the folder keeps it', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager(), 'again-44444444');
+    const missions = new Map<string, TaskMission>([['wtask-again-44444444', { folder: wt, branch: 'wtask/again-44444444' }]]);
+    const stopped = row('cancelled', { id: 'wtask-again-44444444', ...stoppedBy });
+    let now = 50_000;
+    let worker: 'stopped' | 'resumed' = 'stopped';
+    let sessions: Array<{ id: string; cwd: string }> = [];
+    const p = ports({ now: () => now, workerState: () => worker, listSessions: async () => sessions }, missions);
+    await cleanTaskFolders(p, [stopped]);
+    // Day 5: resumed (the kept record ends), then stopped again.
+    now = 50_000 + 5 * DAY;
+    await forgetKeptFolder(p, stopped.id);
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 + 5 * DAY });
+    now = 50_000 + 7 * DAY;
+    await pass(p, [stopped]);
+    expect(fs.existsSync(wt)).toBe(true);
+    // Past its new 7 days, but its worker runs again or a pane works there.
+    now = 50_000 + 13 * DAY;
+    worker = 'resumed';
+    await pass(p, [stopped]);
+    expect(fs.existsSync(wt)).toBe(true);
+    worker = 'stopped';
+    sessions = [{ id: 'daemon-1', cwd: wt }];
+    await pass(p, [stopped]);
+    expect(fs.existsSync(wt)).toBe(true);
+    sessions = [];
+    await pass(p, [stopped], () => expect(fs.existsSync(wt)).toBe(false));
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/again-44444444')).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('a kept record whose path is outside the roots is never removed, however old', async () => {
+    const elsewhere = path.join(dir, 'elsewhere', 'batch', 'task');
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, 'keep.txt'), 'mine');
+    const store = TaskFolders.at(wmuxDir);
+    await store.put({ taskId: 'wtask-stray-0000002', kind: 'research', path: elsewhere, state: 'kept_stopped', stopped: { botId: BOT }, at: 1 });
+    // A link inside the research root to a folder outside it.
+    const linked = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-8', 'task-8');
+    fs.mkdirSync(path.dirname(linked), { recursive: true });
+    fs.symlinkSync(path.dirname(elsewhere), linked, 'dir');
+    await store.put({ taskId: 'wtask-link-0000003', kind: 'research', path: linked, state: 'kept_stopped', stopped: { botId: BOT }, at: 1 });
+    const removeDir = vi.fn(async () => undefined);
+    const keptFolderCleaned = vi.fn();
+    const p = ports({ store, removeDir, keptFolderCleaned, now: () => 1 + 30 * DAY });
+    await pass(p, []);
+    expect(removeDir).not.toHaveBeenCalled();
+    expect(keptFolderCleaned).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(elsewhere, 'keep.txt'), 'utf8')).toBe('mine');
   });
 });
 

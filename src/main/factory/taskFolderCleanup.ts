@@ -29,6 +29,16 @@
 //     folder is recorded (`kept_stopped`, with its bot), so Clean up now
 //     and the usage line still find it once the ledger has pruned the
 //     task's row; a removal or a resume of its worker ends that.
+//     Owner decision 2026-10-17: a kept folder that has sat for
+//     TASK_FOLDER_KEPT_TTL_MS (7 days) since it was recorded is removed by
+//     the automatic pass when it is still clean, with every check above
+//     (inside its root through no link, no process or session in it, its
+//     worker not resumed, the branch kept, the keep ref for a detached
+//     HEAD). A dirty one goes to `kept_dirty` and is never removed
+//     automatically. A resume ends the record, so a later stop starts the
+//     7 days again. A removal posts one quiet card in the task's thread
+//     (`task.keptFolderCleaned`): the record keeps the task's title and
+//     thread, since the ledger prunes the row after about as long.
 // What was removed is recorded in `<wmuxDir>/factory/task-folders.json`, with
 // the repository and branch to put it back. A resume of the task's worker
 // (workerReclaim.ts respawn, the owner's Resume or `worker_resume`) puts the
@@ -65,6 +75,11 @@ export const TASK_FOLDER_ATTEMPTS_MAX = 3;
  *  pass: the resumed worker's pane opens in it within that time. */
 export const TASK_FOLDER_RESTORE_HOLD_MS = 5 * 60_000;
 
+/** A folder a stop kept, still clean this long after it was recorded, is
+ *  removed by the automatic pass (owner decision 2026-10-17). */
+export const TASK_FOLDER_KEPT_TTL_MS = 7 * 24 * 3_600_000;
+const DAY_MS = 24 * 3_600_000;
+
 export type TaskFolderKind = 'worktree' | 'research';
 
 /** One bot task's folder, as this module last left it. */
@@ -77,8 +92,10 @@ export interface TaskFolderRecord {
    *  resume · kept because the owner stopped the task. */
   state: 'removing' | 'removed' | 'kept_dirty' | 'restored' | 'kept_stopped';
   /** A folder a stop kept: its task's bot, so Clean up now can look at it
-   *  without the task's ledger row (pruned after a while). */
-  stopped?: { botId: string };
+   *  without the task's ledger row (pruned after a while), and the task's
+   *  title, owner workspace and thread, for the card of a removal after
+   *  TASK_FOLDER_KEPT_TTL_MS. */
+  stopped?: { botId: string; title?: string; workspaceId?: string; threadId?: string };
   /** A worktree's repository, and its branch or (a detached checkout, such
    *  as a verify task's) its commit, recorded before removal. */
   repoRoot?: string;
@@ -244,6 +261,20 @@ export interface TaskFolderPorts {
   log?: (msg: string) => void;
   /** The Bots page re-reads (a task's note). */
   changed?: () => void;
+  /** A folder a stop kept was removed after TASK_FOLDER_KEPT_TTL_MS: one
+   *  card in the task's thread. Absent: no card. */
+  keptFolderCleaned?: (info: KeptFolderCleaned) => void;
+}
+
+/** What the card of a kept folder removed after its TTL says. */
+export interface KeptFolderCleaned {
+  taskId: string;
+  botId: string;
+  kind: TaskFolderKind;
+  title: string;
+  days: number;
+  workspaceId?: string;
+  threadId?: string;
 }
 
 export type TaskFolderOutcome = 'removed' | 'kept_dirty' | 'busy' | 'skipped' | 'failed';
@@ -330,7 +361,7 @@ export function cleanTaskFolder(
   entry: LedgerEntry,
   mission: TaskMission | null,
   sessions: readonly TaskFolderSession[],
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; keptTtl?: boolean } = {},
 ): Promise<TaskFolderOutcome> {
   const prev = folderOps.get(entry.id) ?? Promise.resolve();
   const run = prev.catch(() => undefined).then(() => cleanTaskFolderNow(ports, entry, mission, sessions, opts));
@@ -346,7 +377,7 @@ async function cleanTaskFolderNow(
   entry: LedgerEntry,
   mission: TaskMission | null,
   sessions: readonly TaskFolderSession[],
-  opts: { force?: boolean },
+  opts: { force?: boolean; keptTtl?: boolean },
 ): Promise<TaskFolderOutcome> {
   const now = ports.now ?? Date.now;
   const log = ports.log ?? ((m: string) => console.warn(m));
@@ -357,13 +388,23 @@ async function cleanTaskFolderNow(
   if (!kind) return 'skipped';
   const prior = ports.store.get(entry.id);
   const stoppedByOwner = isStoppedByOwnerRow(entry);
+  // A folder a stop kept, past its TTL: the automatic pass applies the
+  // rules to it (a dirty one is kept, as always).
+  const expired = opts.keptTtl === true && prior?.state === 'kept_stopped' && !!prior.stopped && now() - prior.at >= TASK_FOLDER_KEPT_TTL_MS;
   // A task the owner stopped keeps its folder; Clean up now still applies.
   // It is recorded, so it is found once the ledger has pruned the row.
-  if (stoppedByOwner && opts.force !== true) {
+  if (stoppedByOwner && opts.force !== true && !expired) {
     // A removal that did not finish (its folder still there) is kept again.
     if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && exists(mission.folder)) {
+      const thread = entry.dispatch?.threadId;
       await ports.store.put({
-        taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped', stopped: { botId },
+        taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped',
+        stopped: {
+          botId,
+          ...(entry.title ? { title: entry.title } : {}),
+          ...(entry.ownerWorkspaceId ? { workspaceId: entry.ownerWorkspaceId } : {}),
+          ...(entry.ownerWorkspaceId ? { threadId: typeof thread === 'string' && thread ? thread : `task:${entry.id}` } : {}),
+        },
         ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
         ...(prior?.repoRoot ? { repoRoot: prior.repoRoot } : {}),
         ...(prior?.repoHash ? { repoHash: prior.repoHash } : {}),
@@ -411,6 +452,7 @@ async function cleanTaskFolderNow(
     }
     await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removed', at: now() }).catch(() => undefined);
     removeEmptyResearchBatch(ports.store, path.dirname(mission.folder), root, log);
+    if (expired && prior) noteKeptFolderCleaned(ports, entry, prior, now(), log);
     ports.changed?.();
     return 'removed';
   }
@@ -443,6 +485,7 @@ async function cleanTaskFolderNow(
   const r = await ports.worktrees.removeWorktree(repo.repoRoot, repo.repoHash, mission.folder).catch((err: unknown) => ({ ok: false as const, error: String(err) }));
   if (r.ok) {
     await ports.store.put({ ...base, state: 'removed' }).catch(() => undefined);
+    if (expired && prior) noteKeptFolderCleaned(ports, entry, prior, now(), log);
     ports.changed?.();
     return 'removed';
   }
@@ -453,6 +496,23 @@ async function cleanTaskFolderNow(
   }
   log(`[factory] worktree of ${entry.id} not removed: ${r.error}`);
   return 'failed';
+}
+
+/** The card of a kept folder removed after its TTL. Never throws. */
+function noteKeptFolderCleaned(ports: TaskFolderPorts, entry: LedgerEntry, prior: TaskFolderRecord, at: number, log: (m: string) => void): void {
+  const s = prior.stopped;
+  if (!s || !ports.keptFolderCleaned) return;
+  try {
+    ports.keptFolderCleaned({
+      taskId: entry.id, botId: s.botId, kind: prior.kind,
+      title: (typeof s.title === 'string' && s.title) || entry.title || entry.id,
+      days: Math.floor((at - prior.at) / DAY_MS),
+      ...(typeof s.workspaceId === 'string' && s.workspaceId ? { workspaceId: s.workspaceId } : {}),
+      ...(typeof s.threadId === 'string' && s.threadId ? { threadId: s.threadId } : {}),
+    });
+  } catch (err) {
+    log(`[factory] card for the kept folder of ${entry.id} not posted: ${String(err)}`);
+  }
 }
 
 /**
@@ -686,7 +746,11 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           if (!rec && r.updatedAt < since) return false;
           return (attempts.get(`${r.id}@${r.rev}`) ?? 0) < TASK_FOLDER_ATTEMPTS_MAX;
         });
-        if (due.length === 0) break;
+        // Folders a stop kept that have sat out their TTL (found by their
+        // record: the ledger has usually pruned the row by then).
+        const expired = ports.store.all().filter((rec) => rec.state === 'kept_stopped' && !!rec.stopped
+          && now() - rec.at >= TASK_FOLDER_KEPT_TTL_MS && (attempts.get(`${rec.taskId}@kept`) ?? 0) < TASK_FOLDER_ATTEMPTS_MAX);
+        if (due.length === 0 && expired.length === 0) break;
         let sessions: TaskFolderSession[];
         try {
           sessions = await ports.listSessions();
@@ -701,6 +765,27 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           const r = await cleanTaskFolder(ports, row, missions.get(row.id) ?? null, sessions);
           if (r === 'failed') {
             const key = `${row.id}@${row.rev}`;
+            attempts.set(key, (attempts.get(key) ?? 0) + 1);
+          }
+        }
+        for (const rec of expired) {
+          // With its row still there, its mission says where the folder is
+          // (and whether it was detached); without, its record does.
+          const live = rows.find((r) => r.id === rec.taskId);
+          // A row that is open again is its task's, not a kept folder's.
+          if (live && !isEndedBotTask(live)) continue;
+          let mission: TaskMission | null;
+          if (live) {
+            if (!byOwner.has(live.ownerWorkspaceId)) byOwner.set(live.ownerWorkspaceId, await ports.missions(live.ownerWorkspaceId).catch(() => null));
+            const missions = byOwner.get(live.ownerWorkspaceId);
+            if (!missions) continue;
+            mission = missions.get(live.id) ?? null;
+          } else {
+            mission = { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) };
+          }
+          const r = await cleanTaskFolder(ports, live ?? keptRow(rec), mission, sessions, { keptTtl: true });
+          if (r === 'failed') {
+            const key = `${rec.taskId}@kept`;
             attempts.set(key, (attempts.get(key) ?? 0) + 1);
           }
         }
