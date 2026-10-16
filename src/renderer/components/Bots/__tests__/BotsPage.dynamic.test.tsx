@@ -836,6 +836,20 @@ describe('Bots page', () => {
     expect(q('[data-bots-delivery]')?.textContent).toBe('Sent to Lead');
   });
 
+  it('a bot reply whose body repeats its title, or starts with it, prints once', async () => {
+    cards.push(
+      card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: `dm:${LEAD}`, title: 'Rebased onto main', body: 'Rebased onto main', at: 700 }),
+      card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: `dm:${LEAD}`, title: 'Checked the build', body: 'Checked the build, and the tests pass.', at: 710 }),
+    );
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const chat = q('[data-bots-messages]')?.textContent ?? '';
+    expect(chat.split('Rebased onto main').length - 1).toBe(1);
+    expect(chat.split('Checked the build').length - 1).toBe(1);
+    expect(chat).toContain('Checked the build, and the tests pass.');
+  });
+
   it('a 1:1 and the room are separate: a 1:1 thread shows only in its bot\'s chat, never as a thread chip in the room', async () => {
     cards.push(
       card({ workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', threadId: `dm:${LEAD}`, refs: { botId: LEAD }, title: 'Private ask', at: 700 }),

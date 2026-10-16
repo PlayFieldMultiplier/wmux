@@ -70,7 +70,7 @@ import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
-import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
+import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, onceText, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, delegatesFromConversation, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
@@ -368,8 +368,11 @@ function BotProse({ card, answers, waiting, ctx }: { card: RoomCardData; answers
   useEffect(() => { if (!answers) setEditing(false); }, [answers]);
   const isPlan = card.kind === 'plan';
   const shown = ownerCardText(card, ctx.botNames, ctx.idLabels);
-  const title = isPlan ? planTextWithNames(shown.title, ctx.nameOf, t) : shown.title;
-  const body = (isPlan ? planTextWithNames(shown.body, ctx.nameOf, t) : shown.body).trim();
+  const rawTitle = isPlan ? planTextWithNames(shown.title, ctx.nameOf, t) : shown.title;
+  const rawBody = (isPlan ? planTextWithNames(shown.body, ctx.nameOf, t) : shown.body).trim();
+  // A body that repeats the title is printed once (a card with answers keeps
+  // its body below them, where an edit replaces it).
+  const { title, body } = answers ? { title: rawTitle, body: rawBody } : onceText(rawTitle, rawBody);
   const tone = cardTone(card);
   return (
     <>

@@ -349,6 +349,17 @@ export function ownerCardText(card: Pick<RoomCard, 'kind' | 'title' | 'body' | '
   return { title, body };
 }
 
+/** A card's title and body shown once: a body that repeats its title, or
+ *  starts with it (a bot's turn text whose first line became the title),
+ *  is the whole text, shown alone; any other body is kept. Compared after
+ *  trimming, with runs of white space as one. Pure. */
+export function onceText(title: string, body: string): { title: string; body: string } {
+  const norm = (v: string) => v.replace(/\s+/g, ' ').trim();
+  const head = norm(title);
+  if (!head || !body.trim()) return { title, body };
+  return norm(body).startsWith(head) ? { title: body.trim(), body: '' } : { title, body };
+}
+
 export function roleLabel(role: BotRole, t: T): string {
   return t(`room.role.${role}`);
 }
