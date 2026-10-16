@@ -675,6 +675,47 @@ describe('the last step before a reported worker\'s stop', () => {
     if (last) await t.store.put(last);
   });
 
+  it('a turn that opens in the second pane after the first is stopped leaves the record stopping; the next sweep stops it', async () => {
+    let turnOver = true;
+    const t = twoPanes({ turnEnded: () => turnOver });
+    t.stopAgent.mockImplementation(async (id) => {
+      // Pane B starts a turn while pane A is being stopped; the row is unchanged.
+      if (id === WORKER) turnOver = false;
+      return { ok: true, stopped: true };
+    });
+    const out: { deferred?: boolean } = {};
+    const rec = await reclaimWorker(t.ports, reported(), 'reported', out);
+    expect(t.stopAgent.mock.calls.map((c) => c[0])).toEqual([WORKER]);
+    expect(rec?.state).toBe('stopping');
+    expect(out.deferred).toBe(true);
+    expect(isReclaimedSince(t.store.get(reported().id), reported())).toBe(false);
+    // B's turn ends and it sits idle: the next sweep stops it.
+    turnOver = true;
+    t.stopAgent.mockImplementation(async () => ({ ok: true, stopped: true }));
+    t.ports.listSessions = async () => [{ ...workerSession(), agentProcessAlive: false }, { ...workerSession(), id: SECOND }];
+    t.ports.reportedPanes = () => [SECOND];
+    expect((await reclaimWorker(t.ports, reported(), 'reported'))?.state).toBe('stopped');
+    expect(t.stopAgent.mock.calls.at(-1)?.[0]).toBe(SECOND);
+    const last = t.store.get(reported().id);
+    if (last) await t.store.put(last);
+  });
+
+  it('a row sent back to working after the first stop: the open row counts what still runs', async () => {
+    const t = twoPanes();
+    t.stopAgent.mockImplementation(async (id) => {
+      if (id === WORKER) t.setRow(reported({ status: 'working', rev: 4 }));
+      return { ok: true, stopped: true };
+    });
+    const out: { deferred?: boolean } = {};
+    const rec = await reclaimWorker(t.ports, reported(), 'reported', out);
+    expect(t.stopAgent.mock.calls.map((c) => c[0])).toEqual([WORKER]);
+    // Recorded for that report (the open row is the worker's now), no card, no deferral.
+    expect(rec?.state).toBe('stopped');
+    expect(out.deferred).toBeUndefined();
+    const last = t.store.get(reported().id);
+    if (last) await t.store.put(last);
+  });
+
   it('a confirmation that turns false after the first stop leaves the record stopping', async () => {
     const t = twoPanes();
     let reads = 0;

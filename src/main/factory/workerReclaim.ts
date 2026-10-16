@@ -704,8 +704,8 @@ export const RECLAIM_ATTEMPTS_MAX = 3;
  *  for. An end: its row is open again (it reopened since it ended); a row
  *  that cannot be read is not counted as open. A report: its row is no
  *  longer that report (another status or rev, unreadable) or a turn runs
- *  again in its panes. Pure over its reads. */
-function movedOn(ports: Pick<WorkerReclaimPorts, 'row' | 'turnEnded'>, entry: LedgerEntry, ended: ReclaimedWorker['ended']): boolean {
+ *  again in its panes (`rowOnly`: the row alone). Pure over its reads. */
+function movedOn(ports: Pick<WorkerReclaimPorts, 'row' | 'turnEnded'>, entry: LedgerEntry, ended: ReclaimedWorker['ended'], rowOnly = false): boolean {
   if (ended === 'reported' && !ports.row) return false;
   let now: LedgerEntry | null = null;
   try {
@@ -715,6 +715,7 @@ function movedOn(ports: Pick<WorkerReclaimPorts, 'row' | 'turnEnded'>, entry: Le
   }
   if (ended === 'reported') {
     if (!now || now.status !== 'review_requested' || now.rev !== entry.rev) return true;
+    if (rowOnly) return false;
     try {
       return ports.turnEnded?.(now) === false;
     } catch {
@@ -915,8 +916,15 @@ export async function reclaimWorker(
     // Stopped only once every pane's stop succeeded; else it stays
     // `stopping` (still live for the agent budget) and a later look retries.
     if (failed > 0) return ports.store.get(entry.id);
-    // A pane held back after another was stopped: not stopped yet either.
-    if (heldBack) return ports.store.get(entry.id);
+    // Stopped only when every pane was. A pane left running while the row
+    // itself has not moved on (a stop held back, a turn that opened in it
+    // after another pane was stopped) keeps the record `stopping`, live, and
+    // the next sweep looks again.
+    if (attempted < panes.length && !movedOn(ports, entry, ended, true)) heldBack = true;
+    if (heldBack) {
+      if (out) out.deferred = true;
+      return ports.store.get(entry.id);
+    }
     ports.store.setState(entry.id, 'stopped', now());
     // Reopened part way: the conversation stays recorded, no card (the
     // task is open again, and its open row counts what still runs).
