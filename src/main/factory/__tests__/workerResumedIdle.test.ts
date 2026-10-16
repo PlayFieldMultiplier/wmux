@@ -181,7 +181,7 @@ describe('the idle stop of resumed workers', () => {
     const rec = store.get(TASK)!;
     expect(rec.state).toBe('stopped');
     expect(rec.sessions[0].resumeSessionId).toBe(UUID);
-    expect(r.note).toHaveBeenCalledWith('ws-owner', `task:${TASK}`, 'Worker paused (resumable)', expect.stringContaining('sat idle'), { code: 'worker.idlePausedResumable' }, TASK);
+    expect(r.note).toHaveBeenCalledWith('ws-owner', `task:${TASK}`, 'Worker paused (resumable): perf-A', expect.stringContaining('sat idle'), { code: 'worker.idlePausedResumable', args: { title: 'perf-A' } }, TASK);
     expect(r.changed).toHaveBeenCalled();
   });
 

@@ -87,7 +87,7 @@ export interface RepoWatchFile {
 
 // ── GitHub read ────────────────────────────────────────────────────────────
 
-const PR_FIELDS = `number title createdAt state isDraft headRefOid headRefName baseRefName isCrossRepository mergeStateStatus
+const PR_FIELDS = `number title createdAt state isDraft headRefOid headRefName isCrossRepository mergeStateStatus
       author { login }
       labels(first: ${REPO_WATCH_LIMITS.LABELS}) { totalCount nodes { name } }
       commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }`;
@@ -102,7 +102,7 @@ export const WATCH_QUERY = `query($owner: String!, $repo: String!) {
       nodes { ${PR_FIELDS} }
     }
     recent: pullRequests(states: [CLOSED, MERGED], first: ${REPO_WATCH_LIMITS.RECENT_CLOSED}, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      nodes { number state baseRefName headRefName headRefOid isCrossRepository }
+      nodes { number state }
     }
     issues(states: OPEN, first: ${REPO_WATCH_LIMITS.PAGE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
       totalCount
@@ -131,8 +131,6 @@ export interface WatchPr {
   isDraft: boolean;
   headSha: string;
   headRefName: string;
-  /** The branch it merges into ('' when unread). */
-  baseRefName: string;
   isCrossRepository: boolean;
   mergeStateStatus: string;
   author: string | null;
@@ -150,23 +148,11 @@ export interface WatchIssue {
   labelsTruncated: boolean;
 }
 
-/** A closed PR's branches, read together with its closed state. */
-export interface ClosedPrRefs {
-  baseRefName?: string;
-  headRefName?: string;
-  headRefOid?: string;
-  isCrossRepository?: boolean;
-}
-
 export interface WatchSnapshot {
   prs: WatchPr[];
   prTotal: number;
   /** Closed / merged PRs, newest update first: number → 'CLOSED' | 'MERGED'. */
   recent: Record<string, string>;
-  /** The same PRs' branches as read with their closed state: number → the
-   *  base it was closed on, its head branch and head commit, whether it came
-   *  from a fork (each only when read). */
-  recentRefs?: Record<string, ClosedPrRefs>;
   issues: WatchIssue[];
   issueTotal: number;
 }
@@ -227,7 +213,6 @@ function mapPr(raw: unknown): WatchPr | null {
     isDraft: p.isDraft === true,
     headSha: p.headRefOid,
     headRefName: str(p.headRefName),
-    baseRefName: str(p.baseRefName),
     // Unreadable reads as a fork: the cautious side.
     isCrossRepository: p.isCrossRepository !== false,
     mergeStateStatus: str(p.mergeStateStatus) || 'UNKNOWN',
@@ -275,20 +260,10 @@ export function mapWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: s
   if (!page || !issuesConn || typeof issuesConn.totalCount !== 'number' || !Array.isArray(issuesConn.nodes)) return null;
   const recentNodes = (repo.recent as { nodes?: unknown } | null | undefined)?.nodes;
   const recent: Record<string, string> = {};
-  const recentRefs: Record<string, ClosedPrRefs> = {};
   if (Array.isArray(recentNodes)) {
     for (const n of recentNodes) {
-      const r = n as { number?: unknown; state?: unknown; baseRefName?: unknown; headRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown } | null;
-      if (typeof r?.number === 'number' && (r.state === 'MERGED' || r.state === 'CLOSED')) {
-        recent[String(r.number)] = r.state;
-        const refs: ClosedPrRefs = {
-          ...(str(r.baseRefName) ? { baseRefName: str(r.baseRefName) } : {}),
-          ...(str(r.headRefName) ? { headRefName: str(r.headRefName) } : {}),
-          ...(str(r.headRefOid) ? { headRefOid: str(r.headRefOid) } : {}),
-          ...(typeof r.isCrossRepository === 'boolean' ? { isCrossRepository: r.isCrossRepository } : {}),
-        };
-        if (Object.keys(refs).length > 0) recentRefs[String(r.number)] = refs;
-      }
+      const r = n as { number?: unknown; state?: unknown } | null;
+      if (typeof r?.number === 'number' && (r.state === 'MERGED' || r.state === 'CLOSED')) recent[String(r.number)] = r.state;
     }
   }
   return {
@@ -296,7 +271,6 @@ export function mapWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: s
       prs: page.prs,
       prTotal: page.total,
       recent,
-      recentRefs,
       issues: issuesConn.nodes.flatMap((n) => { const i = mapIssue(n); return i ? [i] : []; }),
       issueTotal: issuesConn.totalCount,
     },
@@ -326,7 +300,6 @@ function prPayload(pr: WatchPr): Record<string, unknown> {
     author: pr.author,
     title: pr.title,
     headRefName: pr.headRefName,
-    ...(pr.baseRefName ? { baseRefName: pr.baseRefName } : {}),
     isCrossRepository: pr.isCrossRepository,
     isDraft: pr.isDraft,
     labels: pr.labels,
@@ -417,16 +390,13 @@ export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, 
         continue;
       }
       const closedAs = snap.recent[n];
-      // Its branches as read with its closed state (not the last ones seen
-      // open: a PR can be retargeted or pushed to between two polls).
-      const refs = snap.recentRefs?.[n] ?? {};
       drafts.push({
         kind: closedAs === 'MERGED' ? 'pr.merged' : 'pr.closed',
         at: now,
         repoKey,
         ref: { pr: Number(n), headSha: was.headSha },
         actor: github(was.author),
-        payload: { author: was.author, labels: was.labels, ...refs, ...(closedAs ? {} : { stateUnknown: true }) },
+        payload: { author: was.author, labels: was.labels, ...(closedAs ? {} : { stateUnknown: true }) },
       });
     }
   }

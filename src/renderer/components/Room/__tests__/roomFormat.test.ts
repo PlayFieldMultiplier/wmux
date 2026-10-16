@@ -289,6 +289,35 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     expect(noticeText(card({ notice: { code: 'worker.doneResumable', args: { status: 'completed', kind: 'quantum' } } }), i18nT)).toBeNull();
   });
 
+  it('a worker card names its task; one written before it did keeps the title it had', () => {
+    const codes = ['worker.paused', 'worker.pausedResumable', 'worker.idlePausedResumable', 'worker.done', 'worker.doneResumable', 'worker.resumed'];
+    const base: Record<string, Record<string, string>> = { 'worker.done': { status: 'cancelled' }, 'worker.doneResumable': { status: 'cancelled' }, 'worker.resumed': { by: 'owner', where: 'newPane' } };
+    for (const loc of ['en', 'ko', 'pl', 'zh'] as const) {
+      setLocale(loc);
+      for (const code of codes) {
+        const args = base[code] ?? {};
+        const named = noticeText(card({ notice: { code, args: { ...args, title: 'Review PR #12' } } }), i18nT)?.title;
+        const old = noticeText(card({ notice: { code, args } }), i18nT)?.title;
+        expect(named, `${loc} ${code}`).toContain('Review PR #12');
+        expect(old, `${loc} ${code}`).toBeTruthy();
+        expect(old, `${loc} ${code}`).not.toContain('{title}');
+        expect(named, `${loc} ${code}`).toContain(old as string);
+      }
+    }
+    setLocale('en');
+    expect(noticeText(card({ notice: { code: 'worker.doneResumable', args: { status: 'cancelled', title: 'Review PR #12' } } }), i18nT)?.title)
+      .toBe('Worker done (resumable): Review PR #12');
+    setLocale('ko');
+    expect(noticeText(card({ notice: { code: 'worker.doneResumable', args: { status: 'cancelled', title: 'Review PR #12' } } }), i18nT)?.title)
+      .toBe('워커 종료됨 (이어서 가능): Review PR #12');
+    setLocale('en');
+    // A title is shown as written, never worded as a template.
+    expect(noticeText(card({ notice: { code: 'worker.done', args: { status: 'completed', title: 'Fix {pane} handling' } } }), i18nT)?.title)
+      .toBe('Worker done: Fix {pane} handling');
+    expect(noticeText(card({ notice: { code: 'worker.resumed', args: { by: 'owner', where: 'folder', title: '{who} {place}' } } }), i18nT)?.title)
+      .toBe('Worker resumed: {who} {place}');
+  });
+
   it('English words match what main writes', () => {
     expect(noticeText(card({ notice: { code: 'worker.done', args: { status: 'failed' } } }), i18nT)?.body)
       .toBe('Task failed: its Claude stopped to free memory. Its pane stays open until you have looked at it, then closes. The worktree is kept; no conversation was recorded to resume.');

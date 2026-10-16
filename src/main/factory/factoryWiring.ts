@@ -740,15 +740,32 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
           },
           complete: (taskId) => completeCheckedTask(ledger, taskId),
           completeResearch: (taskId) => completeResearchTask(ledger, taskId),
-          // A merged PR from a reported task's branch ends that task.
+          // A merged PR from a reported task's branch ends that task: GitHub's
+          // list is the evidence (the repo watch's gh runner and breaker); a
+          // pr.merged fact only checks again sooner.
           onFact: (fn) => getFactLog()?.subscribe(fn) ?? (() => undefined),
-          prFacts: () => prFactsOf(getFactLog()),
+          prsOfBranch: async (repoKey, branch, base) => {
+            const { ghPrReviewService } = await import('../github/GhPrReviewService');
+            const r = await ghPrReviewService.mergedOfBranch(deps.wmuxDir(), repoKey, branch, base);
+            if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+            return r.value;
+          },
+          defaultBranchOf: async (repoKey) => {
+            const { ghPrReviewService } = await import('../github/GhPrReviewService');
+            const r = await ghPrReviewService.defaultBranch(deps.wmuxDir(), repoKey);
+            if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+            return r.value;
+          },
+          headOf: async (worktreePath) => {
+            const r = await git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], worktreePath);
+            return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+          },
           branchOf: async (entry) => {
             const known = await branches.branches([entry]);
             return known.has(entry.id) ? known.get(entry.id) ?? null : undefined;
           },
           headMerged: (worktreePath, sha) => worktreeHeadMerged(git, worktreePath, sha),
-          completeMerged: (taskId, pr) => completeMergedTask(ledger, taskId, pr),
+          completeMerged: (taskId, pr, checkedRev) => completeMergedTask(ledger, taskId, pr, checkedRev),
           // A task with no commits beyond its base is not gated.
           taskBase: (entry, worktreePath) => taskBaseFromStamp(entry, worktreePath),
           recordNoChanges: (taskId, detail) => recordNoChangesGate(ledger, taskId, detail),

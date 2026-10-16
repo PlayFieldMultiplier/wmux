@@ -336,6 +336,23 @@ describe('BotChips', () => {
     expect(document.querySelector('[data-testid="room-bot-menu"]')).toBeNull();
   });
 
+  it('a bot paused during its running turn offers Resume, not Park', async () => {
+    const act$ = vi.fn(async () => ({ ok: true }));
+    const port: FactoryBotPort = { available: true, list: async () => [], subscribe: () => () => undefined, act: act$ };
+    const row: FactoryBotRow = {
+      bot: { ...bot('bot-00000002'), parked: { reason: 'human', at: 1 } },
+      status: { botId: 'bot-00000002', presence: 'running', currentTurn: { wakeId: 'w', startedAt: 1 }, queueDepth: 0, budgetLeft: { turnsHour: 1, turnsDay: 20, workerHoursDay: 1 } },
+    };
+    await render(createElement(BotChips, { rows: [row], t, port }));
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="room-bot-chip"]')!.click());
+    expect(document.querySelector<HTMLButtonElement>('[data-bot-action="park"]')!.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-bot-action="interrupt"]')!.disabled).toBe(false);
+    const resume = document.querySelector<HTMLButtonElement>('[data-bot-action="resume"]')!;
+    expect(resume.disabled).toBe(false);
+    await act(async () => resume.click());
+    expect(act$).toHaveBeenCalledWith('resume', 'bot-00000002');
+  });
+
   it('the menu stays open while another region scrolls, and closes when the strip under it scrolls', async () => {
     const port: FactoryBotPort = { available: true, list: async () => [], subscribe: () => () => undefined, act: vi.fn(async () => ({ ok: true })) };
     await render(createElement('div', null,

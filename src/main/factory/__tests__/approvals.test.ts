@@ -507,6 +507,65 @@ describe('typed approval (the owner\'s own words in the thread)', () => {
   });
 });
 
+describe('a deleted bot\'s requests', () => {
+  function rigWithDeletable() {
+    const gone = new Set<string>();
+    const live = () => [DEV, OTHER].filter((b) => !gone.has(b.id));
+    const r = rig({ bots: () => ({ listEnabled: live, get: (id) => live().find((b) => b.id === id) ?? null }) });
+    return { ...r, gone };
+  }
+
+  it('on delete, each waiting request of the bot expires and its card closes; a later approve is refused', async () => {
+    const r = rigWithDeletable();
+    const merge = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    const other = await r.ask(OTHER, { action: 'merge', prNumber: 2, reason: 'y' });
+    r.gone.add(DEV.id);
+    expect(r.svc.botRemoved(DEV.id)).toBe(1);
+    expect(r.svc.get(merge.requestId)?.state).toBe('expired');
+    expect(r.writer.get(WS, merge.cardId as string)?.state).toBe('resolved');
+    expect(r.svc.decide({ requestId: merge.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: false, code: 'not_bot' });
+    expect(r.svc.get(merge.requestId)?.state).toBe('expired');
+    expect(r.enqueued).toEqual([]);
+    // Another bot's request is untouched.
+    expect(r.svc.get(other.requestId)?.state).toBe('pending');
+  });
+
+  it('a request whose bot is gone is refused even when nothing expired it first', async () => {
+    const r = rigWithDeletable();
+    const merge = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    r.gone.add(DEV.id);
+    for (const decision of ['approve', 'always', 'deny']) {
+      expect(r.svc.decide({ requestId: merge.requestId, decision }, 'desktop')).toMatchObject({ ok: false, code: 'not_bot' });
+    }
+    expect(r.svc.get(merge.requestId)?.state).toBe('expired');
+    expect(r.svc.rulesList()).toEqual([]);
+    expect(r.enqueued).toEqual([]);
+  });
+
+  it('a merge approved but inside its Undo window ends on delete, and no merge effect of a deleted bot is authorized', async () => {
+    const r = rigWithDeletable();
+    const merge = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    expect(r.svc.decide({ requestId: merge.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true, request: { state: 'approved' } });
+    const effect = { decisionId: merge.requestId, approvedBy: 'owner', expectHead: HEAD, prNumber: 1, repoKey: KEY } as unknown as MergeEffect;
+    r.gone.add(DEV.id);
+    expect(r.svc.authorizeEffect(effect)).toBe('bot-removed');
+    expect(r.svc.botRemoved(DEV.id)).toBe(1);
+    expect(r.svc.get(merge.requestId)?.state).toBe('expired');
+    expect(r.svc.authorizeEffect(effect)).toBe('approval-not-approved');
+    r.svc.stop();
+  });
+
+  it('a request still open for a bot deleted earlier ends when the store starts again', async () => {
+    const r = rigWithDeletable();
+    const merge = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    r.gone.add(DEV.id);
+    const again = new ApprovalService(r.ports);
+    again.resume();
+    expect(again.get(merge.requestId)?.state).toBe('expired');
+    again.stop();
+  });
+});
+
 describe('always allow (remembered rules)', () => {
   it('always allow is one write: a failed write leaves neither the rule nor the approval', async () => {
     const r = rig();

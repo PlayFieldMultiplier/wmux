@@ -30,6 +30,10 @@ type TestState = WorkspaceSlice & {
   notificationSoundEnabled: boolean;
   toastEnabled: boolean;
   notificationRingEnabled: boolean;
+  paneRingEnabled: boolean;
+  paneFlashEnabled: boolean;
+  taskbarFlashEnabled: boolean;
+  paneGlowOpacity: number;
   anthropicUsageEnabled: boolean;
   usageLimitAutoResume: boolean;
   claudeResumeOnStart: boolean;
@@ -90,6 +94,10 @@ function createTestStore() {
       notificationSoundEnabled: true,
       toastEnabled: true,
       notificationRingEnabled: true,
+      paneRingEnabled: true,
+      paneFlashEnabled: true,
+      taskbarFlashEnabled: true,
+      paneGlowOpacity: 0.6,
       anthropicUsageEnabled: false,
       usageLimitAutoResume: false,
       claudeResumeOnStart: false,
@@ -564,6 +572,47 @@ describe('loadSession — A2A execute auto-approve', () => {
       a2aAutoApproveExecute: 'true',
     } as unknown as SessionData);
     expect(store.getState().a2aAutoApproveExecute).toBe(false);
+  });
+});
+
+describe('loadSession — notification effects (#2294)', () => {
+  function sessionWith(extra: Record<string, unknown>): SessionData {
+    const ws: Workspace = {
+      id: 'ws-fx',
+      name: 'FX',
+      rootPane: makeBrowserSurfaceTree('https://example.com'),
+      activePaneId: 'pane-root',
+    };
+    return { workspaces: [ws], activeWorkspaceId: ws.id, sidebarVisible: true, ...extra } as unknown as SessionData;
+  }
+
+  it('restores the effects turned off and a non-default glow opacity', () => {
+    const store = createTestStore();
+    store.getState().loadSession(sessionWith({
+      paneRingEnabled: false,
+      paneFlashEnabled: false,
+      taskbarFlashEnabled: false,
+      paneGlowOpacity: 0.85,
+    }));
+    const s = store.getState();
+    expect([s.paneRingEnabled, s.paneFlashEnabled, s.taskbarFlashEnabled, s.paneGlowOpacity]).toEqual([false, false, false, 0.85]);
+  });
+
+  it('keeps the defaults for a session that predates the fields, or holds malformed values', () => {
+    for (const extra of [{}, { paneRingEnabled: 'false', paneFlashEnabled: 0, taskbarFlashEnabled: null, paneGlowOpacity: 'x' }]) {
+      const store = createTestStore();
+      store.getState().loadSession(sessionWith(extra));
+      const s = store.getState();
+      expect([s.paneRingEnabled, s.paneFlashEnabled, s.taskbarFlashEnabled, s.paneGlowOpacity]).toEqual([true, true, true, 0.6]);
+    }
+  });
+
+  it('clamps a persisted opacity the way the setter does', () => {
+    for (const [saved, loaded] of [[0.2, 0.6], [3, 1]] as const) {
+      const store = createTestStore();
+      store.getState().loadSession(sessionWith({ paneGlowOpacity: saved }));
+      expect(store.getState().paneGlowOpacity).toBe(loaded);
+    }
   });
 });
 

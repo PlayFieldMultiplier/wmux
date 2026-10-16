@@ -53,6 +53,10 @@ export type BotRepoResult =
 /** A repository inside WSL (`\\wsl.localhost\<distro>\…`, `\\wsl$\…`): its bot's
  *  task worktrees on Windows are checked by their own path too, so the hint
  *  names wmux's task folder root. */
+/** What a linked repository needs, said with every no_remote refusal. */
+const NEEDS_HOSTED_ORIGIN =
+  'A bot pushes its work to origin and opens pull requests there, so origin must be an https or ssh address of an owner/repo repository, such as https://github.com/<owner>/<repo>.git. A local path or a bare repository on disk cannot be used. Set it with "git remote set-url origin <address>" (or "git remote add origin <address>") and choose the folder again.';
+
 function taskFoldersFor(folder: string): string | undefined {
   return /^(?:\\\\|\/\/)(?:wsl\$|wsl\.localhost)[\\/]/i.test(folder) ? path.join(getWmuxHomeDir(), 'worktrees') : undefined;
 }
@@ -83,9 +87,12 @@ export async function resolveBotRepo(folder: unknown, deps: BotRepoDeps = {}): P
   const url = remote && remote.code === 0 ? remote.stdout.trim() : '';
   const untrustedRoot = !url && remote ? dubiousOwnership(remote.stderr, repoPath) : null;
   if (untrustedRoot) return { ok: false, code: 'repo_untrusted', message: dubiousOwnershipMessage(repoPath, untrustedRoot.command, taskFoldersFor(repoPath)) };
-  if (!url) return { ok: false, code: 'no_remote', message: `${repoPath} has no origin remote.` };
+  // The refusal says what a bot needs, not only what is missing: the folder
+  // picker is the only way to link a repository, so the person has to learn
+  // here that the fix is in the repository's own remote (#2296 E2E, F1).
+  if (!url) return { ok: false, code: 'no_remote', message: `${repoPath} has no origin remote. ${NEEDS_HOSTED_ORIGIN}` };
   const repoKey = normalizeRepoKey(parseRemoteKey(url));
-  if (!repoKey) return { ok: false, code: 'no_remote', message: `The origin remote of ${repoPath} does not name an owner/repo repository.` };
+  if (!repoKey) return { ok: false, code: 'no_remote', message: `The origin remote of ${repoPath} is not an owner/repo address on a git host. ${NEEDS_HOSTED_ORIGIN}` };
   return { ok: true, repo: { repoKey, repoPath } };
 }
 

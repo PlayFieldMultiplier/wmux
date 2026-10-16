@@ -114,7 +114,7 @@ describe('GET /api/bots and POST /api/rooms/:workspaceId/messages', () => {
         void (async () => {
           const result = data.command === 'moa.wake' ? await handlePhoneMoaWake(data.payload)
             : data.command === 'workspaces.list' ? { workspaces: [] }
-              : handlePhoneBotsCommand(data.command, ports);
+              : await handlePhoneBotsCommand(data.command, ports);
           bridge.complete(clientId, { requestId: data.requestId, ok: true, result });
         })();
       });

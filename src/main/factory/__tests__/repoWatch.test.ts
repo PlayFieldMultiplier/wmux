@@ -33,16 +33,14 @@ interface PrSpec {
   labelTotal?: number;
   author?: string;
   createdAt?: number;
-  /** The branch it merges into (absent: not read). */
-  base?: string;
 }
 interface IssueSpec { number: number; labels?: string[]; labelTotal?: number; createdAt?: number; author?: string }
-interface RepoSpec { prs: PrSpec[]; prTotal?: number; recent?: Array<{ number: number; state: 'MERGED' | 'CLOSED'; baseRefName?: string; headRefName?: string; headRefOid?: string; isCrossRepository?: boolean }>; issues?: IssueSpec[]; issueTotal?: number }
+interface RepoSpec { prs: PrSpec[]; prTotal?: number; recent?: Array<{ number: number; state: 'MERGED' | 'CLOSED' }>; issues?: IssueSpec[]; issueTotal?: number }
 
 function prNode(p: PrSpec) {
   return {
     number: p.number, title: `PR ${p.number}`, createdAt: new Date(p.createdAt ?? T0 - 86_400_000).toISOString(),
-    state: 'OPEN', isDraft: false, headRefOid: p.head, headRefName: `b${p.number}`, ...(p.base ? { baseRefName: p.base } : {}), isCrossRepository: false,
+    state: 'OPEN', isDraft: false, headRefOid: p.head, headRefName: `b${p.number}`, isCrossRepository: false,
     mergeStateStatus: 'CLEAN', author: { login: p.author ?? 'owner' },
     labels: { totalCount: p.labelTotal ?? (p.labels ?? []).length, nodes: (p.labels ?? []).map((name) => ({ name })) },
     commits: { nodes: [{ commit: { oid: p.rollupOid ?? p.head, statusCheckRollup: p.rollup === undefined || p.rollup === null ? null : { state: p.rollup } } }] },
@@ -302,29 +300,6 @@ describe('diffRepo — ci, labels, open/close, issues', () => {
     expect(d.drafts.find((f) => f.kind === 'pr.opened')?.payload).toMatchObject({ author: 'ext', isCrossRepository: false });
     expect(d.next.prs['2']).toBeUndefined();
     for (const f of d.drafts) expect(factDedupeKey(f)).not.toBeNull();
-  });
-
-  it('the branches ride on pr.opened, and on pr.merged / pr.closed as read with the closed state', () => {
-    const state = base([{ number: 2, head: 'h2', base: 'main' }, { number: 3, head: 'h3' }, { number: 5, head: 'h5', base: 'main' }]);
-    const d = diffRepo(state, snap({
-      prs: [{ number: 4, head: 'h4', base: 'main' }, { number: 6, head: 'h6' }],
-      // #2 was seen open on main and retargeted before its merge.
-      recent: [
-        { number: 2, state: 'MERGED', baseRefName: 'scratch', headRefName: 'b2', headRefOid: 'm2', isCrossRepository: false },
-        { number: 3, state: 'CLOSED', baseRefName: 'main' },
-        { number: 5, state: 'MERGED' },
-      ],
-    }), KEY, T0 + 1);
-    const payload = (kind: string, n: number) => d.drafts.find((f) => f.kind === kind && f.ref?.pr === n)?.payload;
-    expect(payload('pr.opened', 4)).toMatchObject({ baseRefName: 'main' });
-    expect(payload('pr.opened', 6)?.baseRefName).toBeUndefined();
-    // Pushed to after the last poll: the merged head is the one read with the merge.
-    expect(payload('pr.merged', 2)).toMatchObject({ baseRefName: 'scratch', headRefName: 'b2', headRefOid: 'm2', isCrossRepository: false });
-    expect(d.drafts.find((f) => f.kind === 'pr.merged' && f.ref?.pr === 2)?.ref?.headSha).toBe('h2');
-    expect(payload('pr.closed', 3)).toMatchObject({ baseRefName: 'main' });
-    expect(payload('pr.merged', 5)?.baseRefName).toBeUndefined();
-    expect(payload('pr.merged', 5)?.headRefName).toBeUndefined();
-    expect(payload('pr.merged', 5)?.isCrossRepository).toBeUndefined();
   });
 
   it('issues: opened only when created after the baseline; an older one entering the window is silent; labels emit per added label', () => {

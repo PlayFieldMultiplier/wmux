@@ -13,6 +13,8 @@
 const SENTENCES: Readonly<Record<string, string>> = {
   // Merge lane predicates (moaMergeLane.ts).
   'head-moved': 'The PR\'s head moved after it was checked',
+  // An approval whose bot was deleted (approvals.ts authorizeEffect).
+  'bot-removed': 'The bot that asked for it was deleted',
   'checks-not-on-head': 'The checks GitHub reported are not for this head',
   'checks-truncated': 'GitHub listed too many checks to read them all',
   'no-required-checks': 'The repository has no required checks',

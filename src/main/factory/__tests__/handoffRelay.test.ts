@@ -13,6 +13,7 @@ import type { WakeItem } from '../../../shared/wake';
 import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, forwardKey } from '../handoffRouter';
 import { RoomWriter, writeFactCards, type FactoryRoomPorts, type RunningWake } from '../roomWriter';
 import { WakeTaint } from '../wakeTaint';
+import { startedThreadsOf, threadKey, type WorkOwner } from '../../../shared/botsWork';
 
 let dir = '';
 let now = 1_000_000_000_000;
@@ -665,6 +666,79 @@ describe('the General card that points at a coordinator\'s thread', () => {
     expect(pointers(again, root.threadId).map((c) => c.refs?.handoffId)).toEqual(['h-last']);
     await again.router.idle();
     expect(again.router.get('h-last')).toMatchObject({ status: 'delivered', pointed: true });
+  });
+});
+
+describe('work handed off from a conversation opens its own thread, which the conversation folds', () => {
+  const GROUP = 'group:grp-00000002' as ThreadId;
+  const groupOf = (memberIds: string[]) => ({ byThread: (ws: string, th: ThreadId | null | undefined) => (ws === 'ws1' && th === GROUP
+    ? { id: 'grp-00000002', workspaceId: 'ws1', name: 'Ship', memberIds, threadId: GROUP, createdAt: 1, updatedAt: 1 }
+    : null) });
+  /** The sender, woken by the owner in `thread`, dispatches with `named` as thread_id. */
+  async function dispatchFrom(r: Rig, from: BotProfile, to: BotProfile, thread: ThreadId, named?: ThreadId): Promise<Handoff> {
+    const request = r.rooms.append({ workspaceId: 'ws1', threadId: thread, kind: 'human', actor: { kind: 'human' }, title: 'Add a --version flag', refs: { botId: from.id } })!;
+    r.run(from, owner(), { runId: `run-${request.id}` }, thread);
+    const d = r.router.send(binding(from), { kind: 'dispatch', toBotId: to.id, title: 'Add the flag', body: 'b', ...(named ? { threadId: named } : {}) });
+    if (!d.ok) throw new Error(`refused: ${d.message}`);
+    r.running.delete(from.id);
+    await r.router.idle();
+    return r.router.get(d.handoffId)!;
+  }
+  const folded = (r: Rig, owner: WorkOwner) => startedThreadsOf(owner, r.rooms.read('ws1').cards, { ws1: r.rooms.threads('ws1') });
+
+  it('a coordinator naming its own 1:1 as thread_id opens a thread there, as leaving it out does', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const dm = `dm:${t.lead.id}` as ThreadId;
+    const root = await dispatchFrom(r, t.lead, t.dev, dm, dm);
+    expect(root).toMatchObject({ threadId: `handoff:${root.id}`, opensThread: true, openedIn: dm });
+    expect(folded(r, { botId: t.lead.id })).toEqual(new Set([threadKey('ws1', root.threadId)]));
+  });
+
+  it('a coordinator naming its group chat as thread_id opens a thread there', async () => {
+    const t = team();
+    const r = await rig(t.all, { groups: groupOf([t.lead.id, t.dev.id]) });
+    const root = await dispatchFrom(r, t.lead, t.dev, GROUP, GROUP);
+    expect(root).toMatchObject({ threadId: `handoff:${root.id}`, opensThread: true, openedIn: GROUP });
+    expect(folded(r, { threadId: GROUP })).toEqual(new Set([threadKey('ws1', root.threadId)]));
+  });
+
+  it('a name-only first bot (lead, custom) opens a thread from its 1:1, and its report points back there', async () => {
+    const t = team();
+    const first = bot('lead', 'custom');
+    const r = await rig([first, t.dev]);
+    const dm = `dm:${first.id}` as ThreadId;
+    const root = await dispatchFrom(r, first, t.dev, dm);
+    expect(root).toMatchObject({ threadId: `handoff:${root.id}`, opensThread: true, openedIn: dm });
+    // A lead's chain keeps the depth and the powers of a non-coordinator.
+    expect(root.depth).toBe(1);
+    const res = answer(r, t.dev, root, 'Added');
+    if (!res.ok) throw new Error('refused');
+    await r.router.idle();
+    expect(r.rooms.read('ws1', { threadId: dm }).cards.filter((c) => c.refs?.threadId === root.threadId))
+      .toEqual([expect.objectContaining({ title: 'Finished: Add the flag' })]);
+    expect(folded(r, { botId: first.id })).toEqual(new Set([threadKey('ws1', root.threadId)]));
+    // Its work said in General stays there: only a coordinator's opens a thread from General.
+    const inGeneral = await dispatchFrom(r, first, t.dev, 'general' as ThreadId);
+    expect(inGeneral.threadId).toBe('general');
+    expect(inGeneral.opensThread).toBeUndefined();
+  });
+
+  it('naming a thread other than the wake\'s opens none', async () => {
+    const t = team();
+    const r = await rig(t.all, { groups: groupOf([t.lead.id, t.dev.id]) });
+    const dm = `dm:${t.lead.id}` as ThreadId;
+    const fromDm = await dispatchFrom(r, t.lead, t.dev, dm, 'general' as ThreadId);
+    expect(fromDm.threadId).toBe('general');
+    expect(fromDm.opensThread).toBeUndefined();
+    const fromGeneral = await dispatchFrom(r, t.lead, t.dev, 'general' as ThreadId, dm);
+    expect(fromGeneral.threadId).toBe(dm);
+    expect(fromGeneral.opensThread).toBeUndefined();
+    const toGroup = await dispatchFrom(r, t.lead, t.dev, dm, GROUP);
+    expect(toGroup.threadId).toBe(GROUP);
+    expect(toGroup.opensThread).toBeUndefined();
+    expect(folded(r, { botId: t.lead.id }).size).toBe(0);
+    expect(folded(r, { threadId: GROUP }).size).toBe(0);
   });
 });
 

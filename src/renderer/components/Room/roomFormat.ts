@@ -182,6 +182,15 @@ const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
   ['pr.merged', false], ['pr.closed', false], ['verdict.recorded', false],
   ['handoff.sent', false], ['thread.finished', false], ['thread.stopped', false],
   ['bot.error', false], ['worker.startFailed', false],
+  ['skill.archived', true],
+]);
+
+/** The notice codes whose title names their subject by a `title` arg, with
+ *  an `.untitled` template for a card that has none (a PR with no title
+ *  known, a worker card written before it named its task). */
+const UNTITLED_NOTICE_CODES: ReadonlySet<string> = new Set([
+  'pr.merged', 'pr.closed',
+  'worker.paused', 'worker.pausedResumable', 'worker.idlePausedResumable', 'worker.done', 'worker.doneResumable', 'worker.resumed',
 ]);
 
 /** The notice codes that tell the owner a stopped worker can resume. */
@@ -310,13 +319,12 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
     const hop = t(`room.notice.handoff.${args.hop}`, vars);
     return { title: args.relay ? t('room.notice.handoff.forwarded', { hop }) : hop, body: card.body ?? '' };
   }
-  // A PR closed with no title known says only its number.
-  if ((notice.code === 'pr.merged' || notice.code === 'pr.closed') && args.title === undefined) {
-    return { title: t(`room.notice.${notice.code}.untitled`, vars), body: card.body ?? '' };
-  }
   const key = `room.notice.${notice.code}`;
+  // A PR closed with no title known says only its number; a worker card
+  // written before it named its task says what happened only.
+  const titleKey = UNTITLED_NOTICE_CODES.has(notice.code) && args.title === undefined ? `${key}.untitled` : key;
   const bodyKey = args.kind === 'research' && RESUMABLE_NOTICE_CODES.has(notice.code) ? `${key}.body.research` : `${key}.body`;
-  return { title: t(key, vars), body: wordedBody ? t(bodyKey, vars) : (card.body ?? '') };
+  return { title: t(titleKey, vars), body: wordedBody ? t(bodyKey, vars) : (card.body ?? '') };
 }
 
 /** A card's title and body as the owner reads them: a factory system card
