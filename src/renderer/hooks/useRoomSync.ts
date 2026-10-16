@@ -73,8 +73,12 @@ export const FIRST_READ_RETRY_MS: readonly number[] = [500, 1000, 2000, 4000, 80
 interface RetryLoop {
   /** Ends the current wait, so the next try runs now. */
   wake: () => void;
-  /** The latest caller's: once it aborts, no further try starts. */
-  signal?: AbortSignal;
+  /** The callers' signals: no further try starts once all have aborted. */
+  signals: Set<AbortSignal>;
+  /** A caller passed no signal: only the retry bound ends the loop. */
+  unbound: boolean;
+  /** A refresh was asked for while a read was in flight: read once more. */
+  again: boolean;
 }
 
 /** The retry loop running per read key. */
@@ -85,38 +89,54 @@ export function isTimelineLoaded(tl: { loading?: boolean } | undefined): boolean
   return !!tl && !tl.loading;
 }
 
+const live = (loop: RetryLoop): boolean => loop.unbound || [...loop.signals].some((s) => !s.aborted);
+
+function join(loop: RetryLoop, signal: AbortSignal | undefined): void {
+  if (!signal) {
+    loop.unbound = true;
+    return;
+  }
+  loop.signals.add(signal);
+  signal.addEventListener('abort', () => {
+    if (!live(loop)) loop.wake();
+  }, { once: true });
+}
+
 /** Run `attempt` (true when main answered), and while it fails and `done`
  *  is false, again after each FIRST_READ_RETRY_MS delay. One loop per key:
- *  a call while one runs hands it the caller's `signal` and makes it try
- *  again now; once the signal it holds aborts, no further try starts. */
+ *  a call while one runs joins it and makes it try again now (or, when
+ *  `done` already holds, read once more after the read in flight). The
+ *  loop stops once every caller's signal has aborted. */
 export async function readWithRetry(key: string, attempt: () => Promise<boolean>, done: () => boolean, signal?: AbortSignal): Promise<void> {
   const current = firstReads.get(key);
   if (current) {
-    // A caller without a signal leaves the owner's in place.
-    if (signal || current.signal?.aborted) current.signal = signal;
+    join(current, signal);
+    if (done()) current.again = true;
     current.wake();
     return;
   }
-  const loop: RetryLoop = { wake: () => undefined, signal };
+  const loop: RetryLoop = { wake: () => undefined, signals: new Set(), unbound: false, again: false };
+  join(loop, signal);
   firstReads.set(key, loop);
-  const stopped = () => !!loop.signal?.aborted || done();
   try {
-    for (let i = 0; ; i += 1) {
-      if (await attempt()) return;
-      if (i >= FIRST_READ_RETRY_MS.length || stopped()) return;
+    for (let i = 0; ; ) {
+      const ok = await attempt();
+      if (loop.again && live(loop)) {
+        loop.again = false;
+        continue;
+      }
+      if (ok || i >= FIRST_READ_RETRY_MS.length || !live(loop) || done()) return;
       await new Promise<void>((resolve) => {
-        const sig = loop.signal;
         const finish = (): void => {
           clearTimeout(timer);
-          sig?.removeEventListener('abort', finish);
           resolve();
         };
         const timer = setTimeout(finish, FIRST_READ_RETRY_MS[i]);
         loop.wake = finish;
-        sig?.addEventListener('abort', finish, { once: true });
       });
       loop.wake = () => undefined;
-      if (stopped()) return;
+      i += 1;
+      if (!live(loop) || done()) return;
     }
   } finally {
     if (firstReads.get(key) === loop) firstReads.delete(key);

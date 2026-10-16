@@ -37,6 +37,29 @@ describe('loadWholeThread', () => {
   });
 });
 
+describe('loadWholeThread refresh', () => {
+  it('a refresh asked for while a read is in flight reads once more after it', async () => {
+    useStore.setState({ roomTimelines: {}, roomPushCount: 0, roomPushedAt: {} } as never);
+    useStore.getState().setRoomPage('w1', THREAD, { cards: [card(1, { kind: 'plan', state: 'open' })], nextSinceSeq: 1, hasMore: false }, 'replace');
+    let state: RoomCard['state'] = 'open';
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const read = vi.fn(async () => {
+      const snapshot = card(1, { kind: 'plan', state });
+      if (read.mock.calls.length === 1) await gate;
+      return { ok: true as const, workspaceId: 'w1', threadId: THREAD, cards: [snapshot], nextSinceSeq: 1, hasMore: false };
+    });
+    setRoomsApiForTests({ read } as unknown as RoomsApi);
+    const first = loadWholeThread('w1', THREAD);
+    state = 'resolved';
+    await loadWholeThread('w1', THREAD);
+    release();
+    await first;
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(useStore.getState().roomTimelines[timelineKey('w1', THREAD)].cards[0].state).toBe('resolved');
+  });
+});
+
 describe('threadsToRead', () => {
   const th = (threadId: ThreadSummary['threadId'], over: Partial<ThreadSummary> = {}): ThreadSummary => ({
     threadId, title: 't', lastAt: 1, lastSeq: 1, cardCount: 1, openQuestions: 0, lastKind: 'status', status: 'open', unread: null, ...over,

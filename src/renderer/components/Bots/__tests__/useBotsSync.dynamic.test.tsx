@@ -118,6 +118,17 @@ describe('useBotsSync on a cold start', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('closing the page keeps the rail retrying', async () => {
+    const { main, api } = fakeMain();
+    setRoomsApiForTests(api as unknown as RoomsApi);
+    await render(false);
+    await flush();
+    await act(async () => { root.render(<Sync status={status(false)} focus />); });
+    main.started = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_READ_RETRY_MS[0]); });
+    expect(useStore.getState().roomTimelines[KEY].cards).toHaveLength(19);
+  });
+
   it('unmounting ends the retries: no timer left, no further read', async () => {
     const { api } = fakeMain();
     setRoomsApiForTests(api as unknown as RoomsApi);

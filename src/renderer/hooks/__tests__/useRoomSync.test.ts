@@ -197,20 +197,25 @@ describe('a refused first read (cold start: rooms not started yet)', () => {
     expect(isTimelineLoaded(useStore.getState().roomTimelines[key])).toBe(false);
   });
 
-  it('one loop per timeline: a second call tries again now instead of starting another; an abort ends it', async () => {
+  it('one loop per timeline: a second call joins it and tries again now; it ends once every caller aborted', async () => {
     const room = fakeRoom(3);
     room.raw.read.mockResolvedValue(NOT_STARTED as never);
     setRoomsApiForTests(room.api);
-    const owner = new AbortController();
-    const done = loadRoomTimeline(WS, ALL_THREADS, owner.signal);
+    const rail = new AbortController();
+    const page = new AbortController();
+    const done = loadRoomTimeline(WS, ALL_THREADS, rail.signal);
     await vi.advanceTimersByTimeAsync(0);
-    await loadRoomTimeline(WS, ALL_THREADS);
+    await loadRoomTimeline(WS, ALL_THREADS, page.signal);
     await vi.advanceTimersByTimeAsync(0);
     expect(room.raw.read).toHaveBeenCalledTimes(2);
-    owner.abort();
+    // The page closes; the rail still wants the room.
+    page.abort();
+    await vi.advanceTimersByTimeAsync(FIRST_READ_RETRY_MS[1]);
+    expect(room.raw.read).toHaveBeenCalledTimes(3);
+    rail.abort();
     await done;
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(room.raw.read).toHaveBeenCalledTimes(2);
+    expect(room.raw.read).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
   });
 
