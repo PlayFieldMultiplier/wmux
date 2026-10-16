@@ -216,18 +216,22 @@ describe('skill store: main keeps the approval record', () => {
   });
 
   it('a record that cannot be written leaves the approved files and the waiting proposal as they were', () => {
-    const s = store();
+    let failing = false;
+    const s = new BotSkillStore({
+      wmuxDir, now: () => 1_000,
+      writeRecord: (file, data) => {
+        if (failing) throw new Error('disk full');
+        fs.writeFileSync(file, JSON.stringify(data));
+      },
+    });
     s.approve(A, 'report', propose(s, A, 'report').hash);
     const up = propose(s, A, 'report', skillMd('report', '1.1.0', 'Gate, lint, then report.\n'));
-    // The record file becomes unwritable.
-    const file = path.join(wmuxDir, 'factory', BOT_SKILLS_FILENAME);
-    fs.rmSync(file, { force: true });
-    fs.mkdirSync(path.join(file, 'x'), { recursive: true });
+    failing = true;
     expect(s.approve(A, 'report', up.hash)).toMatchObject({ ok: false, code: 'write_failed' });
     expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.0.0', content: skillMd('report') });
     expect(s.propose(A, { name: 'report', content: skillMd('report', '1.2.0', 'z\n'), reason: 'r' })).toMatchObject({ ok: false, code: 'write_failed' });
     // Writable again: the card's proposal is still there to approve.
-    fs.rmSync(file, { recursive: true, force: true });
+    failing = false;
     expect(s.approve(A, 'report', up.hash)).toMatchObject({ ok: true, skill: { version: '1.1.0' } });
     expect(s.read(A, 'report')).toMatchObject({ ok: true, version: '1.1.0' });
   });

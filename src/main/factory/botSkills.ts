@@ -306,7 +306,7 @@ export class BotSkillStore {
 
   /** Throws when main's record file exists but cannot be read (the skills
    *  module then stays off rather than guess). */
-  constructor(private readonly opts: { wmuxDir: string; now?: () => number }) {
+  constructor(private readonly opts: { wmuxDir: string; now?: () => number; writeRecord?: (file: string, data: unknown) => void }) {
     this.now = opts.now ?? Date.now;
     this.file = path.join(opts.wmuxDir, 'factory', BOT_SKILLS_FILENAME);
     assertNotLiveWmuxPath(this.file);
@@ -354,7 +354,7 @@ export class BotSkillStore {
       const bots: Record<string, SkillMeta[]> = {};
       for (const [id, map] of this.records) bots[id] = [...map.values()];
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      atomicWriteJSONSync(this.file, { version: SKILLS_FILE_VERSION, bots });
+      (this.opts.writeRecord ?? atomicWriteJSONSync)(this.file, { version: SKILLS_FILE_VERSION, bots });
       return true;
     } catch {
       set(before);
