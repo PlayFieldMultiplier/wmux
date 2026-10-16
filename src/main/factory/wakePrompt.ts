@@ -312,10 +312,10 @@ export function buildWakePrompt(input: WakePromptInput): string {
     case 'human':
       lines.push('', `Message from the owner (${r.source}):`, r.text);
       if (r.room) {
-        lines.push('', `The owner wrote to more than one bot${group ? ' in the group' : ''}: each of them got this message and may answer too. Say your own part. When your post speaks to another bot (answers it, asks it, offers it work), put its id in room_post mentions: a name in the text reaches nobody.`);
+        lines.push('', `The owner wrote to more than one bot${group ? ' in the group' : ''}: each of them got this message and may answer too. Say your own part. When your post speaks to another bot (answers it, asks it, offers it work), put its id in room_post mentions: a name in the text reaches nobody. When the message is for another bot (it names that bot, or asks for that bot's work) and you have nothing of your own to add, end the turn with no post and no closing text: words you end a turn with are posted as your message, so silence is an empty ending, not a line saying you will not post.`);
       }
       if (group && !group.spoke) {
-        lines.push('', 'You have not spoken in this group chat yet: begin your answer with one short line that introduces you (your name and what you do), then answer the message.');
+        lines.push('', 'You have not spoken in this group chat yet: when you answer, begin with one short line that introduces you (your name and what you do), then answer the message.');
       }
       break;
     case 'mention': {

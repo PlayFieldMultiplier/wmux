@@ -46,6 +46,9 @@ describe('buildWakePrompt — group rooms and routines', () => {
     expect(text).toContain('Message from the owner (desktop):\nHi');
     expect(text).toMatch(/The owner wrote to more than one bot: each of them got this message/);
     expect(text).toContain('put its id in room_post mentions: a name in the text reaches nobody');
+    // A message for another bot: no post, and no closing words (they would be posted).
+    expect(text).toContain('When the message is for another bot (it names that bot, or asks for that bot\'s work) and you have nothing of your own to add, end the turn with no post and no closing text');
+    expect(text).toContain('silence is an empty ending, not a line saying you will not post');
     expect(text).toContain('Other bots in this room (mention them by id): Wmux Dev = bot-00000002; Wmux Issue x = bot-00000003');
     // A message to this bot alone says nothing of the others.
     expect(buildWakePrompt({ item: item({ kind: 'human', text: 'Hi', source: 'desktop' }), profile, roster })).not.toMatch(/more than one bot/);
@@ -61,7 +64,7 @@ describe('buildWakePrompt — group rooms and routines', () => {
     expect(first).toMatch(/more than one bot in the group/);
     expect(first).toContain('Other bots in this group chat (mention them by id): Wmux Issue x = bot-00000003');
     expect(first).not.toContain('bot-00000002');
-    expect(first).toMatch(/You have not spoken in this group chat yet: begin your answer with one short line that introduces you/);
+    expect(first).toMatch(/You have not spoken in this group chat yet: when you answer, begin with one short line that introduces you/);
     const again = buildWakePrompt({ item: wake, profile, roster, group: { name: '', memberIds: ['bot-00000003'], spoke: true } });
     expect(again).toContain('This thread is the owner\'s group chat; you are one of its bots.');
     expect(again).not.toMatch(/not spoken in this group/);

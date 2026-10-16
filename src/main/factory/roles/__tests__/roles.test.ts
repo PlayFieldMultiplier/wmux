@@ -156,3 +156,13 @@ describe('bot prompts (job, powers and outputs)', () => {
     expect(first(null)).toBe('You are My coordinator, a bot of wmux workspace ws-1. Your repository is github.com/acme/app.');
   });
 });
+
+describe('a bot with nothing to add stays silent', () => {
+  it('every template says ending without posting means ending with no text, never a line about not posting', () => {
+    for (const template of BOT_TEMPLATES) {
+      const text = rolePrompt(profile(template));
+      expect(text).toContain('Ending without posting means ending with no text either');
+      expect(text).toContain('silence is an empty ending, not a line saying you stay silent');
+    }
+  });
+});
