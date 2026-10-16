@@ -1548,7 +1548,7 @@ function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort
   const [busy, setBusy] = useState(false);
   const [pausing, setPausing] = useState(false);
   const stopBot = port.stopBot;
-  const canPause = !!act && row.bot.enabled && botActionsFor(row).park;
+  const canPause = !!act && row.bot.enabled && !row.bot.parked && botActionsFor(row).park;
   if (!stopBot && !canPause) return null;
   const run = async () => {
     if (!stopBot) return;

@@ -38,7 +38,7 @@ export function blockerText(b: BotBlocker, name: string, t: T): string {
   }
 }
 
-function lineText(line: BotTodayLine, t: T, liveWorkers?: number): { label: string; value: string } {
+function lineText(line: BotTodayLine, t: T, liveWorkers?: number, inReviewTasks = 0): { label: string; value: string } {
   switch (line.id) {
     case 'turnsHour': return { label: t('botsPage.profile.today.turnsHour'), value: t('botsPage.profile.turnsTodayValue', { used: line.used, left: line.left }) };
     case 'turnsDay': return { label: t('botsPage.profile.turnsToday'), value: t('botsPage.profile.turnsTodayValue', { used: line.used, left: line.left }) };
@@ -46,9 +46,10 @@ function lineText(line: BotTodayLine, t: T, liveWorkers?: number): { label: stri
     case 'workers': {
       // The cap counts agent slots held, and a task in review whose worker's
       // agent still runs holds one: say how many, so this line and "Workers
-      // now" (live workers only) do not read as a contradiction.
+      // now" (live workers only) do not read as a contradiction. Never more
+      // than the bot's tasks in review (a worker still starting holds one too).
       const parts = [t('botsPage.profile.today.ofMax', { count: line.running, max: line.max })];
-      const inReview = liveWorkers === undefined ? 0 : line.running - liveWorkers;
+      const inReview = liveWorkers === undefined ? 0 : Math.min(line.running - liveWorkers, inReviewTasks);
       if (inReview > 0) parts.push(t('botsPage.profile.today.slotsInReview', { count: inReview }));
       if (line.waiting > 0) parts.push(t('botsPage.profile.today.workersWaiting', { count: line.waiting }));
       return { label: t('botsPage.profile.today.workers'), value: parts.join(' · ') };
@@ -63,7 +64,11 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
   const [busy, setBusy] = useState(false);
   const view = botBudgetView(row.bot, row.status);
   if (!view.blocker && view.lines.length === 0) return null;
-  const canResume = !!act && botActionsFor(row).resume;
+  // Parked during a running turn the runtime reports it running until the
+  // turn ends: the park is what Resume undoes.
+  const canResume = !!act && (botActionsFor(row).resume || !!row.bot.parked);
+  // A task in review (reported, still open) may keep its worker's slot.
+  const inReviewTasks = (row.tasks ?? []).filter((task) => task.stage === 'coded').length;
   const resume = async () => {
     if (!act) return;
     setBusy(true);
@@ -92,7 +97,7 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
         )}
         <ul className="space-y-0.5 tabular-nums">
           {view.lines.map((line) => {
-            const { label, value } = lineText(line, t, liveWorkers);
+            const { label, value } = lineText(line, t, liveWorkers, inReviewTasks);
             return (
               <li
                 key={line.id}

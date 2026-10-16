@@ -58,9 +58,14 @@ describe('BotToday', () => {
   });
 
   it('names the slots held by tasks in review, so the cap line agrees with Workers now', () => {
-    const r = row({ budget: { ...DEFAULT_BOT_BUDGETS.verifier, maxConcurrentWorkers: 3 } }, { queueDepth: 0, usage: { turnsHour: null, turnsDay: 1, workerHoursDay: 1, workersRunning: 2 } });
+    const base = row({ budget: { ...DEFAULT_BOT_BUDGETS.verifier, maxConcurrentWorkers: 3 } }, { queueDepth: 0, usage: { turnsHour: null, turnsDay: 1, workerHoursDay: 1, workersRunning: 2 } });
+    const task = (taskId: string, stage: 'coded' | 'working') => ({ taskId, botId: base.bot.id, title: taskId, stage, taskWorkspaceId: `t-${taskId}`, updatedAt: 1 }) as unknown as NonNullable<FactoryBotRow['tasks']>[number];
+    const r = { ...base, tasks: [task('a', 'coded'), task('b', 'coded')] };
     act(() => root.render(<BotToday row={r} liveWorkers={0} t={t} />));
     expect(host.querySelector('[data-bots-today-line="workers"]')?.textContent).toBe('Worker slots in use2 of 3 · 2 held by tasks in review');
+    // A worker still starting (no live row yet, no task in review) is not called one.
+    act(() => root.render(<BotToday row={{ ...base, tasks: [task('a', 'coded'), task('c', 'working')] }} liveWorkers={0} t={t} />));
+    expect(host.querySelector('[data-bots-today-line="workers"]')?.textContent).toBe('Worker slots in use2 of 3 · 1 held by tasks in review');
     act(() => root.render(<BotToday row={r} liveWorkers={2} t={t} />));
     expect(host.querySelector('[data-bots-today-line="workers"]')?.textContent).toBe('Worker slots in use2 of 3');
   });
@@ -73,6 +78,13 @@ describe('BotToday', () => {
     expect(blocker?.textContent).toContain('Paused by you.');
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
     expect(actFn).toHaveBeenCalledWith('resume', 'bot-0000000a');
+  });
+
+  it('a bot paused during its running turn offers Resume', () => {
+    const r = row({ parked: { reason: 'human', at: 1 } }, { presence: 'running' });
+    act(() => root.render(<BotToday row={r} act={vi.fn(async () => ({ ok: true }))} t={t} />));
+    expect(host.querySelector('[data-bots-profile-parked="human"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="bots-resume-bot"]')).not.toBeNull();
   });
 
   it('a parked bot whose status is not reported yet still says why, with Resume', () => {
