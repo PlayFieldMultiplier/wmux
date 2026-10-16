@@ -4960,6 +4960,10 @@ function registerRpcHandlers(
       // and whether a turn is open (a quiet turn reads `idle` above).
       title: bridge.getTitle().title,
       turnOpen: bridge.isTurnOpen(),
+      // Additive, for main's idle stop of a reported bot worker after an app
+      // restart: how long ago the pane's last result settled (null: none
+      // since its agent started), so its idle window runs from that end.
+      settledAgoMs: bridge.settledAgoMs(),
     };
   });
   // #1594 — what main's terminal_send needs to paste into a session: the agent

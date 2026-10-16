@@ -38,7 +38,9 @@ import {
   isReclaimableReport,
   isReclaimedSince,
   isTaskWorkspaceOf,
+  mergePaneActivity,
   noteWorkerAgentExit,
+  reportedWorkerPanes,
   resumedAgentAlive,
   setResumedLiveCount,
   setWorkerResumePorts,
@@ -202,21 +204,34 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const reconcile = (): void => {
       void clear.reconcile();
     };
-    // A reported worker's pane main has no turn evidence for (after a
-    // restart) is read from the daemon (createDaemonTurnSeed).
+    const workspacePtys = (workspaceId: string): readonly string[] | null => {
+      const entries = mirror.getEntries();
+      if (!entries) return null;
+      const ws = entries.find((e) => e.id === workspaceId);
+      return ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
+    };
+    // A reported task's own worker panes, and the daemon's view of their
+    // turn where main has none (after a restart): createDaemonTurnSeed.
     const turnSeed = createDaemonTurnSeed({
-      panes: () => {
+      tasks: () => {
         const entries = mirror.getEntries();
         if (!entries) return null;
-        const out: Array<{ ptyId: string; reportedAt: number }> = [];
+        const out: Array<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[] }> = [];
         for (const r of ledger.list({ openOnly: true })) {
-          if (!isReclaimableReport(r) || isReclaimedSince(reclaimed.get(r.id), r)) continue;
+          const rec = reclaimed.get(r.id);
+          if (!isReclaimableReport(r) || isReclaimedSince(rec, r)) continue;
           const ws = entries.find((e) => e.id === r.taskWorkspaceId);
-          for (const id of ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : []) out.push({ ptyId: id, reportedAt: r.updatedAt });
+          out.push({
+            taskId: r.id,
+            reportedAt: r.updatedAt,
+            panes: ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [],
+            recorded: rec?.sessions.map((x) => x.sessionId) ?? [],
+          });
         }
         return out;
       },
       ready: () => daemon()?.isConnected === true,
+      listSessions,
       readState: async (id) => (await daemon()?.getAgentState(id, { timeoutMs: TURN_SEED_READ_TIMEOUT_MS })) ?? null,
       liveEvidence: (id) => lastTurnEnd(id) !== undefined || lastHookTurnStart(id) !== undefined,
     });
@@ -227,17 +242,16 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     // viewing a workspace (unknown: not viewing). A turn end or input main
     // saw itself wins over the daemon's.
     const paneActivity = (id: string): PaneActivity => {
-      const seeded = turnSeed.activity(id);
       const status = getLastBroadcastAgentStatus(id);
       const turnStartAt = lastHookTurnStart(id);
-      const turnEndAt = lastTurnEnd(id) ?? seeded?.turnEndAt;
-      const inputAt = lastUserInputAt(id) ?? seeded?.inputAt;
-      return {
+      const turnEndAt = lastTurnEnd(id);
+      const inputAt = lastUserInputAt(id);
+      return mergePaneActivity({
         ...(status !== undefined ? { status } : {}),
         ...(turnStartAt !== undefined ? { turnStartAt } : {}),
         ...(turnEndAt !== undefined ? { turnEndAt } : {}),
         ...(inputAt !== undefined ? { inputAt } : {}),
-      };
+      }, turnSeed.activity(id));
     };
     const viewed = (workspaceId: string): boolean => mirror.getViewed()?.workspaceId === workspaceId
       || mirror.getPanelWorkspaceId() === workspaceId;
@@ -258,24 +272,21 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         reconcile();
       },
       retryMs: RESUMED_SWEEP_MS,
-      // A reported task's worker is stopped once every pane of its
-      // workspace sat idle for the window, counted from the report and from
-      // each pane's own last turn edge and input (workerPanesIdle), and the
-      // owner is not viewing it; only those panes are stopped. Right after a
-      // restart a pane's turn end is the daemon's (turnSeed); a pane neither
-      // main nor the daemon knows the turn of is not idle.
+      // A reported task's worker is stopped once every one of its own worker
+      // panes (turnSeed: a pane of its workspace whose agent runs; never a
+      // plain shell) sat idle for the window, counted from the report and
+      // from each pane's own last turn edge and input (workerPanesIdle), and
+      // the owner is not viewing it; only those panes are stopped. Right
+      // after a restart a pane's turn end is the daemon's; a worker pane that
+      // cannot be identified, or whose turn neither main nor the daemon
+      // knows, is not idle.
       turnEnded: (entry) => {
         if (viewed(entry.taskWorkspaceId)) return false;
-        const ws = mirror.getEntries()?.find((e) => e.id === entry.taskWorkspaceId);
-        const ptys = ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
-        return workerPanesIdle(ptys.map(paneActivity), entry.updatedAt, Date.now(), REPORTED_IDLE_MS);
+        const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
+        return !!panes && workerPanesIdle(panes.map(paneActivity), entry.updatedAt, Date.now(), REPORTED_IDLE_MS);
       },
-      workspacePanes: (workspaceId) => {
-        const entries = mirror.getEntries();
-        if (!entries) return null;
-        const ws = entries.find((e) => e.id === workspaceId);
-        return ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
-      },
+      reportedPanes: (entry) => reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId)),
+      workspacePanes: workspacePtys,
     }));
     // The viewed workspace moving (and every other tree push) may make a
     // deferred clear due; a pass with nothing due reads nothing.

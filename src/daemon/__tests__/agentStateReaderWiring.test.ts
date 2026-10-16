@@ -68,6 +68,7 @@ describe('readDaemonAgentState wiring (#1303)', () => {
     expect(body).toMatch(/keyInputRevision: bridge\.getKeyInputRevision\(\)/);
     expect(body).toMatch(/keyInputQuiet: bridge\.isKeyInputQuiet\(\)/);
     expect(body).toMatch(/hookReports: bridge\.hasHookReports\(\)/);
+    expect(body).toMatch(/settledAgoMs: bridge\.settledAgoMs\(\)/);
   });
 
   // #1307 — scheduled delivery must require agentVerified and re-check the
