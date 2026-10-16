@@ -20,7 +20,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { tokenize, launcherStem } from './agentResume';
+import { tokenize, launcherStem, isPlausibleResumeSessionId, PERMISSION_FLAG, type PermissionMode } from './agentResume';
 import { splitModelEnvMarker } from './workerLaunch';
 import { stripPromptFileArgument } from './promptFileArgument';
 import { wslClaudeHooks } from './wslIntegration';
@@ -403,6 +403,11 @@ export interface BotWorkerSessionRecord {
   /** The bot task whose own fan-out (or resume) launch created this pane;
    *  absent for any other pane of the task's workspace. */
   taskId?: string;
+  /** The conversation the launch line pinned (`--session-id`), and the
+   *  permission mode its flags started it in: what a resume of that
+   *  conversation falls back to when no hook recorded a mode. */
+  launchSessionId?: string;
+  permissionMode?: PermissionMode;
 }
 
 /** The per-launch files under `<dir>/factory/`: only these folders, a JSON
@@ -448,6 +453,8 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
         ...(launch ? { launch } : {}),
         ...(r.wsl === true ? { wsl: true } : {}),
         ...(typeof r.taskId === 'string' && r.taskId.length > 0 && r.taskId.length <= 128 ? { taskId: r.taskId } : {}),
+        ...(typeof r.launchSessionId === 'string' && isPlausibleResumeSessionId('claude', r.launchSessionId) ? { launchSessionId: r.launchSessionId } : {}),
+        ...(typeof r.permissionMode === 'string' && Object.prototype.hasOwnProperty.call(PERMISSION_FLAG, r.permissionMode) ? { permissionMode: r.permissionMode } : {}),
       });
     }
   } catch (err) {

@@ -29,7 +29,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjections';
-import { refreshRoomStatus, type RoomsApi } from '../../hooks/useRoomSync';
+import { isTimelineLoaded, refreshRoomStatus, type RoomsApi } from '../../hooks/useRoomSync';
 import { dmThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
 import { timelineKey } from '../../stores/slices/roomSlice';
 import { FOCUS_RING } from '../focusRing';
@@ -544,6 +544,9 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
 
   const seenAt = useStore((s) => s.botsSeenAt);
   const roomThreads = useStore((s) => s.roomThreads);
+  // `t` is one stable function whatever the language: the rows' previews
+  // are worded again when the language changes.
+  const locale = useStore((s) => s.locale);
   const rows = useMemo(() => model.conversations.map((c) => {
     const since = seenAt[c.id] ?? BOTS_SESSION_START;
     const titleOf = (id: string) => {
@@ -557,7 +560,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
       preview: conversationPreview(c, t, bots, actors, titleOf),
       unread: unreadCount(own, since),
     };
-  }), [model.conversations, nameOf, t, bots, actors, seenAt, everyCard, cardsByWs, roomThreads]);
+  }), [model.conversations, nameOf, t, locale, bots, actors, seenAt, everyCard, cardsByWs, roomThreads]);
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter((r) => r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)) : rows;
 
@@ -628,9 +631,10 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   // older than the room's newest page.
   const removedOpen = selected?.c.kind === 'bot' && selected.c.removed ? selected.c.row.bot : null;
   useEffect(() => {
-    if (removedOpen && !useStore.getState().roomTimelines[timelineKey(removedOpen.workspaceId, dmThreadId(removedOpen.id))]) {
-      void loadWholeThread(removedOpen.workspaceId, dmThreadId(removedOpen.id));
-    }
+    if (!removedOpen || isTimelineLoaded(useStore.getState().roomTimelines[timelineKey(removedOpen.workspaceId, dmThreadId(removedOpen.id))])) return;
+    const reads = new AbortController();
+    void loadWholeThread(removedOpen.workspaceId, dmThreadId(removedOpen.id), reads.signal);
+    return () => reads.abort();
   }, [removedOpen?.id, removedOpen?.workspaceId]);
 
   const selectedKey = starting ? pendingId : selected?.c.id ?? null;

@@ -40,12 +40,15 @@ import { detectRemote } from '../../github/PrProvider';
 import { git } from '../../git/git';
 import { renderBotPrompt } from './common';
 import { templateDefinitionOf } from './templates';
+import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 
 export { TEMPLATE_DEFINITIONS, templateDefinitionOf } from './templates';
 
-/** A bot's system prompt: its job and its powers and outputs. */
+/** A bot's system prompt: its job and its powers and outputs, naming its
+ *  workspace by the owner's name for it. */
 export function rolePrompt(profile: BotProfile): string {
-  return renderBotPrompt(templateDefinitionOf(profile), profile);
+  const workspaceName = getWorkspaceMirror().getEntries()?.find((e) => e.id === profile.workspaceId)?.name ?? null;
+  return renderBotPrompt(templateDefinitionOf(profile), profile, workspaceName);
 }
 
 // ── Default ports ──────────────────────────────────────────────────────────

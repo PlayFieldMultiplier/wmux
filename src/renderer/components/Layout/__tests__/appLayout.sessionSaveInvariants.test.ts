@@ -132,6 +132,32 @@ describe('AppLayout — axis A session-save invariants', () => {
     expect(JSON.parse(JSON.stringify(snapshot)).surfaceDismissedQuestion).toEqual({ 'pty-1': 'Shall I merge?' });
   });
 
+  it('saves the notification effects, including false values and a non-default opacity (#2294)', () => {
+    const tree = ts.createSourceFile('AppLayout.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const builder = tree.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'buildSessionData',
+    );
+    const code = ts.transpileModule(builder!.getText(tree), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const build = new Function('useStore', 'selectPcRailPersisted', `${code}; return buildSessionData(new Map());`);
+    const snapshot = JSON.parse(JSON.stringify(build({ getState: () => ({
+      workspaces: [],
+      archivedWorkspaces: [],
+      orchestratorRoleBindings: {},
+      layoutTemplates: [],
+      recentCommands: [],
+      toolbarSnippets: [],
+      surfaceDismissedQuestion: {},
+      paneRingEnabled: false,
+      paneFlashEnabled: false,
+      taskbarFlashEnabled: false,
+      paneGlowOpacity: 0.85,
+    }) }, selectPcRailPersisted)));
+    expect([snapshot.paneRingEnabled, snapshot.paneFlashEnabled, snapshot.taskbarFlashEnabled, snapshot.paneGlowOpacity])
+      .toEqual([false, false, false, 0.85]);
+  });
+
   it('persists the usage-limit auto-resume setting explicitly, including false', () => {
     expect(source).toMatch(/usageLimitAutoResume:\s*state\.usageLimitAutoResume/);
   });

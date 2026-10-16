@@ -48,13 +48,16 @@
 // (botsNeedsYou). While the bots are paused the page is read-only and
 // nothing on it is counted.
 
-import { dmThreadBot, dmThreadId, groupThreadGroup, groupThreadId, type RoomCard, type ThreadId, type ThreadSummary } from '../../../shared/room';
+import { dmThreadBot, dmThreadId, groupThreadGroup, type RoomCard, type ThreadId, type ThreadSummary } from '../../../shared/room';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { BotGroup } from '../../../shared/botGroup';
 import type { FleetAttentionClass } from '../../stores/selectors/fleet';
 import type { RoomTimeline } from '../../stores/slices/roomSlice';
 import type { FactoryBotRow } from '../Room/factoryPorts';
 import type { BotTaskView } from '../../../shared/botTask';
+import { awaitsApproval, dmStartedThreads, groupStartedThreads, livePlanIds } from '../../../shared/botsWork';
+
+export { awaitsApproval, dmStartedThreads, groupStartedThreads, livePlanIds } from '../../../shared/botsWork';
 
 /** A worker class that is still live on the page (finished ones leave). */
 const LIVE_WORKER: ReadonlySet<FleetAttentionClass> = new Set<FleetAttentionClass>(['running', 'needsYou', 'error']);
@@ -257,69 +260,10 @@ export function isBotConversationCard(card: RoomCard, botId: string, scope?: Bot
 /** What the room summaries say about 1:1 threads, per workspace. */
 type ThreadsByWorkspace = Readonly<Record<string, readonly ThreadSummary[] | undefined>>;
 
-/** The threads a 1:1 started (a coordinator's request thread), by thread
- *  key, to the bot whose 1:1 it is: the thread's summary says so
- *  (`dmBotId`), main's opening hop card links the 1:1 (`refs.threadId`) or
- *  names the owner's request in it (`refs.requestCardId`), or main's pointer
- *  card in the 1:1 links the thread. Only main's own cards count. Pure. */
-export function dmStartedThreads(cards: readonly RoomCard[], threads: ThreadsByWorkspace = {}): Map<string, string> {
-  const byId = new Map(cards.map((c) => [c.id, c]));
-  const out = new Map<string, string>();
-  for (const [workspaceId, list] of Object.entries(threads)) {
-    for (const th of list ?? []) {
-      if (th.dmBotId && !dmThreadBot(th.threadId)) out.set(threadKeyOf({ workspaceId, threadId: th.threadId }), th.dmBotId);
-    }
-  }
-  for (const c of cards) {
-    if (c.actor.kind !== 'system') continue;
-    const inDm = dmThreadBot(c.threadId);
-    const linked = c.refs?.threadId;
-    if (inDm && linked?.startsWith('handoff:')) {
-      out.set(threadKeyOf({ workspaceId: c.workspaceId, threadId: linked }), inDm);
-      continue;
-    }
-    if (!c.threadId.startsWith('handoff:')) continue;
-    const request = c.refs?.requestCardId ? byId.get(c.refs.requestCardId) : undefined;
-    const owner = dmThreadBot(linked) ?? (request && request.workspaceId === c.workspaceId ? dmThreadBot(request.threadId) : null);
-    if (owner) out.set(threadKeyOf(c), owner);
-  }
-  return out;
-}
-
 /** The bot whose 1:1 a card belongs to — it sits in that 1:1's thread or a
  *  thread it started — or null for the room's own cards. */
 function dmOwnerOf(card: RoomCard, started: ReadonlyMap<string, string>): string | null {
   return dmThreadBot(card.threadId) ?? started.get(threadKeyOf(card)) ?? null;
-}
-
-/** The threads a group chat started (a coordinator's request thread opened
- *  there), by thread key, to the group's own thread — known as a 1:1's are
- *  (dmStartedThreads): the summary's `groupId`, main's opening hop linking
- *  the group or naming the owner's request in it, or main's pointer card in
- *  the group. Pure. */
-export function groupStartedThreads(cards: readonly RoomCard[], threads: ThreadsByWorkspace = {}): Map<string, ThreadId> {
-  const byId = new Map(cards.map((c) => [c.id, c]));
-  const out = new Map<string, ThreadId>();
-  for (const [workspaceId, list] of Object.entries(threads)) {
-    for (const th of list ?? []) {
-      if (th.groupId && !groupThreadGroup(th.threadId)) out.set(threadKeyOf({ workspaceId, threadId: th.threadId }), groupThreadId(th.groupId));
-    }
-  }
-  for (const c of cards) {
-    if (c.actor.kind !== 'system') continue;
-    const inGroup = groupThreadGroup(c.threadId) ? c.threadId : null;
-    const linked = c.refs?.threadId;
-    if (inGroup && linked?.startsWith('handoff:')) {
-      out.set(threadKeyOf({ workspaceId: c.workspaceId, threadId: linked }), inGroup);
-      continue;
-    }
-    if (!c.threadId.startsWith('handoff:')) continue;
-    const request = c.refs?.requestCardId ? byId.get(c.refs.requestCardId) : undefined;
-    const owner = groupThreadGroup(linked) ? linked as ThreadId
-      : request && request.workspaceId === c.workspaceId && groupThreadGroup(request.threadId) ? request.threadId : null;
-    if (owner) out.set(threadKeyOf(c), owner);
-  }
-  return out;
 }
 
 /** The group chat thread a card belongs to — its own or one it started —
@@ -456,30 +400,6 @@ export function openQuestionsBy(
     n += 1;
   }
   return n;
-}
-
-/** The plans still waiting on the owner: each bot's newest plan card, when
- *  it is open (an older plan left open is superseded by the newer one).
- *  Pure. */
-export function livePlanIds(cards: readonly RoomCard[]): Set<string> {
-  const newest = new Map<string, RoomCard>();
-  for (const c of cards) {
-    if (c.kind !== 'plan' || c.actor.kind !== 'bot') continue;
-    const prev = newest.get(c.actor.botId);
-    if (!prev || c.at > prev.at || (c.at === prev.at && c.seq > prev.seq)) newest.set(c.actor.botId, c);
-  }
-  const out = new Set<string>();
-  for (const c of newest.values()) if (c.state === 'open') out.add(c.id);
-  return out;
-}
-
-/** Whether a card waits on the owner's Approve / Decline: the live plan or
- *  an open proposal a bot posted. Pure. */
-export function awaitsApproval(card: RoomCard, livePlans: ReadonlySet<string>): boolean {
-  if (card.actor.kind !== 'bot' || card.state !== 'open') return false;
-  // A bot's open key or login request waits on the owner the same way.
-  if (card.kind === 'secret_request' || card.kind === 'login_request') return true;
-  return card.kind === 'proposal' || card.kind === 'approval' || (card.kind === 'plan' && livePlans.has(card.id));
 }
 
 /** The bot's live plan and open proposals. Pure. */

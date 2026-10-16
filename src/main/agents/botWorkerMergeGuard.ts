@@ -51,6 +51,7 @@ import {
   type WorkerWmuxLevel,
 } from '../../shared/botWorkerMcp';
 import type { Connector } from '../../shared/botConnector';
+import type { PermissionMode } from '../../shared/agentResume';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getConnectorStore } from '../factory/connectorStore';
 import { launchesCodex, namesCodex } from '../../shared/codexWorkerGuard';
@@ -504,7 +505,7 @@ export function noteBotWorkerSession(
   dir: string = getWmuxDir(),
   /** What the launch carried: a guarded codex launch's folder and
    *  repository, or a claude launch's files (and whether its shell is WSL). */
-  launch: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string; launch?: BotWorkerLaunchFiles; wsl?: boolean; taskId?: string } = {},
+  launch: { agent?: string; cwd?: string; repoKey?: string; codexHome?: string; launch?: BotWorkerLaunchFiles; wsl?: boolean; conversation?: { sessionId: string; permissionMode?: PermissionMode } | null; taskId?: string } = {},
 ): void {
   const map = loadSessions(dir);
   if (unreadable) throw guardError('PTY_CREATE', `the worker sessions record is unreadable: ${unreadable}`);
@@ -516,6 +517,7 @@ export function noteBotWorkerSession(
     ...(launch.agent && launch.cwd ? { agent: launch.agent, ...(launch.repoKey ? { repoKey: launch.repoKey } : {}), ...(launch.codexHome ? { codexHome: launch.codexHome } : {}) } : {}),
     ...(launch.launch ? { launch: launch.launch } : {}),
     ...(launch.wsl ? { wsl: true } : {}),
+    ...(launch.conversation ? { launchSessionId: launch.conversation.sessionId, ...(launch.conversation.permissionMode ? { permissionMode: launch.conversation.permissionMode } : {}) } : {}),
     ...(launch.taskId ? { taskId: launch.taskId } : {}),
   });
   try {

@@ -63,7 +63,7 @@ import { ENV_KEYS, isBrainPty } from '../../shared/constants';
 import { hasCriticalRiskIn } from '../../shared/criticalPatterns';
 // Pure regex/lookup module (no electron), already imported by src/daemon/index.ts.
 import { agentDisplayToSlug, agentStatusToSignalKind, type AgentEventStatus } from '../../main/pty/AgentDetector';
-import { isPlausibleResumeSessionId, type ResumeBinding, type PermissionMode } from '../../shared/agentResume';
+import { agentSupportsPermissionFlag, isPlausibleResumeSessionId, type ResumeBinding, type PermissionMode } from '../../shared/agentResume';
 import type { ApprovalHookSink, TerminalPromptNote } from '../approvals/types';
 import { claudeQuestionsForm, extractAskUserQuestion } from '../approvals/askUserQuestion';
 import { boundRecordText, isClaudeFamilyAgent, TERMINAL_PROMPT_TOOL_NAME_MAX } from '../approvals/terminalPrompt';
@@ -1163,8 +1163,13 @@ export class HookIngest {
     // notification path but is the EARLIEST point the origin session id is
     // known. agentSessionId is the #12235-safe id (transcript basename) the
     // bridge derived; cwd + permissionMode complete the binding (F5/F7).
+    // A turn start binds too: it carries the mode that turn runs in, and is the
+    // only hook with a mode for a worker whose task ends before its first Stop
+    // (a WSL agent's SessionStart has none). The latest mode wins. Only an
+    // agent with permission modes (Claude): its bridge puts the mode there.
     if (
       (signal.kind === 'agent.session_start'
+        || (signal.kind === 'agent.user_prompt_submit' && agentSupportsPermissionFlag(signal.agent))
         || signal.kind === 'agent.stop'
         || signal.kind === 'agent.subagent_stop')
       && signal.agentSessionId

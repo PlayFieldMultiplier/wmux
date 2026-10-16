@@ -22,6 +22,7 @@
 
 import { getConnectorStore, type ConnectorStore } from './connectorStore';
 import { getBotSkillStore, type BotSkillStore } from './botSkills';
+import { getSecretStore, type DeletedKey, type SecretStore } from './secretStore';
 import type { SkillIndexEntry } from '../../shared/botSkill';
 import type { BotProfile } from '../../shared/bot';
 import type { RoomCard, ThreadId } from '../../shared/room';
@@ -46,7 +47,9 @@ export interface WakeContextPorts {
   /** The connection library (default: the running one). */
   connectors?: () => Pick<ConnectorStore, 'forBot'> | null;
   /** The bot skills store (default: the running one). */
-  skills?: () => Pick<BotSkillStore, 'index'> | null;
+  skills?: () => Partial<Pick<BotSkillStore, 'index' | 'archivedNames' | 'approvalStatus'>> | null;
+  /** The bot key store (default: the running one). */
+  secrets?: () => Pick<SecretStore, 'deletedFor'> | null;
   /** Cards of a room (a thread, or every thread), oldest first: the newest
    *  `limit`, or with `sinceSeq` the first `limit` after it. */
   cards: (workspaceId: string, threadId: ThreadId | null, limit: number, sinceSeq?: number) => readonly RoomCard[];
@@ -55,7 +58,7 @@ export interface WakeContextPorts {
   /** The workspace's approval requests, newest first. */
   approvals?: (workspaceId: string) => ReadonlyArray<{
     action: string; prNumber?: number; issueNumber?: number; repoKey: string; state: string;
-    skill?: { name: string; version: string };
+    skill?: { name: string; version: string; hash?: string };
     botId: string; createdAt: number; updatedAt: number; refusal?: string;
   }>;
   botName: (botId: string) => string | null;
@@ -99,6 +102,26 @@ export function localeLanguageName(locale: string): string {
   return code;
 }
 
+/** Every letter of the text is a Latin-script one (and there is one). Pure. */
+function latinScript(text: string): boolean {
+  const letters = text.match(/\p{L}/gu) ?? [];
+  return letters.length > 0 && letters.every((c) => /\p{Script=Latin}/u.test(c));
+}
+
+/** The UI language's name, for words whose script names no language: a UI
+ *  in a language whose own script scriptLanguage names (Korean, Japanese,
+ *  …) says nothing about Latin-script words, so null then. Pure. */
+export function latinUiLanguage(locale: string): string | null {
+  const code = locale.trim() || 'en';
+  let native: string | undefined;
+  try {
+    native = new Intl.DisplayNames([code], { type: 'language' }).of(code);
+  } catch {
+    return null;
+  }
+  return native && !scriptLanguage(native) ? localeLanguageName(code) : null;
+}
+
 function ownerText(c: RoomCard): string {
   return (c.body?.trim() ? c.body : c.title).trim();
 }
@@ -113,7 +136,9 @@ function isOwnerCard(c: RoomCard): boolean {
  *  after the owner wrote follows the owner too), else the UI language. A
  *  wake on the owner's message carries a sample of its words; any other wake
  *  only when the script does not name the language, marked as a sample
- *  (earlier words must not read as a request for this wake). */
+ *  (earlier words must not read as a request for this wake). Words whose
+ *  script names no language (Latin) take the UI language's name when it
+ *  could be theirs (latinUiLanguage); the owner's script always wins. */
 export function wakeLanguage(ports: WakeContextPorts, profile: BotProfile, item: WakeItem): WakeLanguage | null {
   const human = item.reason.kind === 'human' ? item.reason.text : null;
   let said: string | null = human;
@@ -133,8 +158,10 @@ export function wakeLanguage(ports: WakeContextPorts, profile: BotProfile, item:
     }
   }
   if (said && said.trim()) {
-    const name = scriptLanguage(said);
-    const sample = human || !name ? said.replace(/\s+/g, ' ').trim().slice(0, WAKE_CONTEXT_LIMITS.SAMPLE_MAX) : undefined;
+    const script = scriptLanguage(said);
+    const locale = script ? undefined : ports.uiLocale?.();
+    const name = script ?? (locale && latinScript(said) ? latinUiLanguage(locale) : null);
+    const sample = human || !script ? said.replace(/\s+/g, ' ').trim().slice(0, WAKE_CONTEXT_LIMITS.SAMPLE_MAX) : undefined;
     return { name, source: 'owner', ...(sample ? { sample } : {}), ...(human ? {} : { earlier: true as const }) };
   }
   const locale = ports.uiLocale?.();
@@ -180,14 +207,28 @@ export function wakeApprovals(ports: WakeContextPorts, profile: BotProfile, now:
     .slice(0, WAKE_CONTEXT_LIMITS.APPROVALS)
     .map((r) => {
       const subject = r.skill ? `${r.skill.name} ${r.skill.version}` : r.prNumber !== undefined ? `PR #${r.prNumber}` : r.issueNumber !== undefined ? `issue #${r.issueNumber}` : r.repoKey;
+      const skill = r.action === 'skill' && r.state === 'approved' && r.skill ? approvedSkillStatus(ports, r.botId, r.skill) : undefined;
       return {
         what: `${ACTION_WORDS[r.action] ?? r.action} ${subject}`,
         state: r.state,
+        action: r.action,
         askedBy: r.botId === profile.id ? 'you' : ports.botName(r.botId) ?? r.botId,
         at: r.updatedAt,
         ...(r.refusal ? { refusal: r.refusal } : {}),
+        ...(skill ? { skill } : {}),
       };
     });
+}
+
+/** Where the skill an approved `skill` request loaded stands now (by its
+ *  content hash): undefined when the store cannot tell. */
+function approvedSkillStatus(ports: WakeContextPorts, botId: string, skill: { name: string; hash?: string }): WakeApprovalSummary['skill'] {
+  if (!skill.hash) return undefined;
+  try {
+    return (ports.skills ?? getBotSkillStore)()?.approvalStatus?.(botId, skill.name, skill.hash) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** On an owner message to the whole room: the other bots' cards posted
@@ -224,6 +265,8 @@ export function wakeContext(ports: WakeContextPorts, profile: BotProfile, item: 
     clock: wakeClock(now, ports.timeZone?.()),
     connectors: wakeConnectors(ports, profile),
     skills: wakeSkills(ports, profile),
+    archivedSkills: wakeArchivedSkills(ports, profile),
+    deletedKeys: wakeDeletedKeys(ports, profile),
     group: wakeGroup(ports, profile, item),
     now,
   };
@@ -260,7 +303,26 @@ export function wakeConnectors(ports: WakeContextPorts, profile: BotProfile): Wa
  *  proposal waiting for the owner is never listed. */
 export function wakeSkills(ports: WakeContextPorts, profile: BotProfile): SkillIndexEntry[] {
   try {
-    return (ports.skills ?? getBotSkillStore)()?.index(profile.id) ?? [];
+    return (ports.skills ?? getBotSkillStore)()?.index?.(profile.id) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** The keys the owner deleted that the bot asked for or last used, for its
+ *  wake: names only. */
+export function wakeDeletedKeys(ports: WakeContextPorts, profile: BotProfile): DeletedKey[] {
+  try {
+    return (ports.secrets ?? getSecretStore)()?.deletedFor(profile.id) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** The skills the owner archived after approving them, for its wake. */
+export function wakeArchivedSkills(ports: WakeContextPorts, profile: BotProfile): string[] {
+  try {
+    return (ports.skills ?? getBotSkillStore)()?.archivedNames?.(profile.id) ?? [];
   } catch {
     return [];
   }

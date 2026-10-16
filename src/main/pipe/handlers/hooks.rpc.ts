@@ -54,7 +54,7 @@ import { IPC, dataSuffix } from '../../../shared/constants';
 import { summarizeActivity } from '../../../shared/activitySummary';
 import { assistantPreview, flattenAgentText } from '../../../shared/assistantPreview';
 import type { DaemonClient } from '../../DaemonClient';
-import type { ResumeBinding, PermissionMode } from '../../../shared/agentResume';
+import { agentSupportsPermissionFlag, type ResumeBinding, type PermissionMode } from '../../../shared/agentResume';
 import { readLastAssistantMessage } from '../../claude/lastAssistantMessage';
 import { deliverBrainPtyHookSignal } from '../../deck/brainPtyHookBus';
 import { getWorkspaceMirror, type WorkspaceMirror } from '../../workspace/WorkspaceMirror';
@@ -679,8 +679,11 @@ export function registerHooksRpc(
     // Only for a pane-EXACT route (#1523): this fallback cannot see the pane's
     // current binding, so a workspace/cwd guess could replace another agent's
     // conversation. Skipping it also keeps a guess out of the spool.
+    // A turn start of an agent with permission modes binds too, as on the
+    // daemon's own ingest (HookIngest): it carries the mode the turn runs in.
     if (
       (signal.kind === 'agent.session_start'
+        || (signal.kind === 'agent.user_prompt_submit' && agentSupportsPermissionFlag(signal.agent))
         || signal.kind === 'agent.stop'
         || signal.kind === 'agent.subagent_stop')
       && signal.agentSessionId

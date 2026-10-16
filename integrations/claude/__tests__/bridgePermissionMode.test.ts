@@ -129,8 +129,21 @@ describe('permissionModeForHook', () => {
     expect(forHook('SubagentStop', linuxPath, { permission_mode: 'bypassPermissions' })).toBeUndefined();
   });
 
+  it('takes the mode a turn starts in from the UserPromptSubmit payload, never its transcript', () => {
+    expect(forHook('UserPromptSubmit', linuxPath, { permission_mode: 'bypassPermissions' })).toBe('bypassPermissions');
+    const p = fixture('prompt.jsonl', [{ type: 'permission-mode', permissionMode: 'acceptEdits', sessionId: 's1' }]);
+    expect(forHook('UserPromptSubmit', p, { permission_mode: 'auto' })).toBe('auto');
+    expect(forHook('UserPromptSubmit', p, {})).toBeUndefined();
+  });
+
+  it('takes a SessionStart payload mode when the transcript cannot be read', () => {
+    expect(forHook('SessionStart', linuxPath, { permission_mode: 'bypassPermissions' })).toBe('bypassPermissions');
+    expect(forHook('SessionStart', linuxPath, {})).toBeUndefined();
+  });
+
   it('ignores an unknown payload mode and non-lifecycle hooks', () => {
     expect(forHook('Stop', linuxPath, { permission_mode: 'someFutureMode' })).toBeUndefined();
+    expect(forHook('UserPromptSubmit', linuxPath, { permission_mode: 'someFutureMode' })).toBeUndefined();
     expect(forHook('PreToolUse', null, { permission_mode: 'bypassPermissions' })).toBeUndefined();
   });
 });

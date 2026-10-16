@@ -545,6 +545,38 @@ export function isResumableLaunchCommand(command: string): boolean {
 }
 
 /**
+ * The conversation a Claude launch line pins (`--session-id <uuid>`, see
+ * withLaunchSessionId) and the permission mode its flags start it in
+ * (`--dangerously-skip-permissions`, `--permission-mode <mode>`; the last one
+ * wins, as for Claude Code). Null for a line that is not a Claude launch or
+ * pins no id. Only unquoted words before an unquoted `--` count: a quoted word
+ * is a prompt or a path. The caller unwraps a leading worker model-env marker
+ * first. Pure.
+ */
+export function launchedConversation(command: string): { sessionId: string; permissionMode?: PermissionMode } | null {
+  const tokens = tokenize(command);
+  if (tokens.length === 0 || tokens[0].quoted) return null;
+  const stem = launcherStem(tokens[0].value);
+  const pin = RESUME_BY_LAUNCHER.get(stem)?.pin;
+  if (!pin || !agentSupportsPermissionFlag(stem)) return null;
+  let sessionId: string | undefined;
+  let permissionMode: PermissionMode | undefined;
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.quoted) continue;
+    if (t.value === '--') break;
+    const next = tokens[i + 1];
+    const value = (flag: string): string | undefined => (t.value === flag ? (next && !next.quoted ? next.value : undefined) : t.value.startsWith(`${flag}=`) ? t.value.slice(flag.length + 1) : undefined);
+    const id = value(pin);
+    if (id !== undefined && UUID_RE.test(id)) sessionId = id.toLowerCase();
+    if (t.value === '--dangerously-skip-permissions') permissionMode = 'bypassPermissions';
+    const mode = value('--permission-mode');
+    if (mode !== undefined && Object.prototype.hasOwnProperty.call(PERMISSION_FLAG, mode)) permissionMode = mode as PermissionMode;
+  }
+  return sessionId ? { sessionId, ...(permissionMode ? { permissionMode } : {}) } : null;
+}
+
+/**
  * A1 — pin a FRESH launch of an agent that has a pin flag (Claude
  * `--session-id`, see AgentResumeSpec.pin) to a wmux-minted conversation id
  * (`claude --session-id <id> …`), so the pane's exact id is known from the

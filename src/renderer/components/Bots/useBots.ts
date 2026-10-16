@@ -17,7 +17,7 @@ import { useStore, type StoreState } from '../../stores';
 import { selectWorkspaceAttentionClasses, type FleetAttentionClass } from '../../stores/selectors/fleet';
 import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjections';
 import { ALL_THREADS, timelineKey, type RoomActorEntry, type RoomStatusView } from '../../stores/slices/roomSlice';
-import { CATCH_UP_MAX_PAGES, catchUpRoomTimeline, loadRoomActors, loadRoomThreads, loadRoomTimeline, roomsApi } from '../../hooks/useRoomSync';
+import { CATCH_UP_MAX_PAGES, catchUpRoomTimeline, isTimelineLoaded, loadRoomActors, loadRoomThreads, loadRoomTimeline, readWithRetry, roomsApi } from '../../hooks/useRoomSync';
 import type { ThreadId, ThreadSummary } from '../../../shared/room';
 import { getFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../Room/factoryPorts';
 import { useFactoryBots } from '../Room/useFactoryBots';
@@ -90,29 +90,34 @@ export function useBots(port?: FactoryBotPort, groupPort?: BotGroupPort): BotsSt
 }
 
 /** Read one thread from its first card, page by page (CATCH_UP_MAX_PAGES
- *  at most), into its timeline; pushes that land meanwhile are kept. */
-export async function loadWholeThread(workspaceId: string, threadId: ThreadId): Promise<void> {
+ *  at most), into its timeline; pushes that land meanwhile are kept. A
+ *  refused first page is retried (readWithRetry) while the thread is unread. */
+export async function loadWholeThread(workspaceId: string, threadId: ThreadId, signal?: AbortSignal): Promise<void> {
   const api = roomsApi();
   if (!api || !workspaceId) return;
-  // A placeholder first: the thread counts as read (no second load starts)
-  // and pushes collect in it meanwhile.
-  if (!useStore.getState().roomTimelines[timelineKey(workspaceId, threadId)]) {
+  const key = timelineKey(workspaceId, threadId);
+  // A placeholder first: pushes collect in it meanwhile. It is not a read
+  // thread (isTimelineLoaded) until the first page answers.
+  if (!useStore.getState().roomTimelines[key]) {
     useStore.getState().setRoomPage(workspaceId, threadId, { cards: [], nextSinceSeq: 0, hasMore: false, loading: true }, 'replace');
   }
-  let sinceSeq = 0;
-  for (let page = 0; page < CATCH_UP_MAX_PAGES; page += 1) {
-    const startedAt = useStore.getState().roomPushCount;
-    let r: Awaited<ReturnType<typeof api.read>>;
-    try {
-      r = await api.read({ workspaceId, threadId, sinceSeq });
-    } catch {
-      return;
+  await readWithRetry(key, async () => {
+    let sinceSeq = 0;
+    for (let page = 0; page < CATCH_UP_MAX_PAGES; page += 1) {
+      const startedAt = useStore.getState().roomPushCount;
+      let r: Awaited<ReturnType<typeof api.read>>;
+      try {
+        r = await api.read({ workspaceId, threadId, sinceSeq });
+      } catch {
+        return page > 0;
+      }
+      if (!r.ok) return page > 0;
+      useStore.getState().setRoomPage(workspaceId, threadId, { cards: r.cards, nextSinceSeq: r.nextSinceSeq, hasMore: r.hasMore }, page === 0 ? 'replace' : 'append', startedAt);
+      if (!r.hasMore || r.cards.length === 0) return true;
+      sinceSeq = r.nextSinceSeq;
     }
-    if (!r.ok) return;
-    useStore.getState().setRoomPage(workspaceId, threadId, { cards: r.cards, nextSinceSeq: r.nextSinceSeq, hasMore: r.hasMore }, page === 0 ? 'replace' : 'append', startedAt);
-    if (!r.hasMore || r.cards.length === 0) return;
-    sinceSeq = r.nextSinceSeq;
-  }
+    return true;
+  }, () => isTimelineLoaded(useStore.getState().roomTimelines[key]), signal);
 }
 
 /** The threads to read whole, as timeline keys: per room, each thread
@@ -121,7 +126,7 @@ export async function loadWholeThread(workspaceId: string, threadId: ThreadId): 
 export function threadsToRead(
   rooms: readonly string[],
   roomThreads: Readonly<Record<string, readonly ThreadSummary[] | undefined>>,
-  roomTimelines: Readonly<Record<string, unknown>>,
+  roomTimelines: Readonly<Record<string, { loading?: boolean } | undefined>>,
 ): string[] {
   const out: string[] = [];
   for (const ws of rooms) {
@@ -129,7 +134,7 @@ export function threadsToRead(
     const plan = latestThreadOf(list, 'plan:');
     for (const th of list) {
       const proposal = th.lastKind === 'proposal' && th.status !== 'closed';
-      if ((th.openQuestions > 0 || th === plan || proposal) && !roomTimelines[timelineKey(ws, th.threadId)]) out.push(timelineKey(ws, th.threadId));
+      if ((th.openQuestions > 0 || th === plan || proposal) && !isTimelineLoaded(roomTimelines[timelineKey(ws, th.threadId)])) out.push(timelineKey(ws, th.threadId));
     }
   }
   return out;
@@ -153,6 +158,8 @@ export function useBotsSync(state: Pick<BotsState, 'status' | 'bots' | 'on'>, op
     [known, state.bots, removedRooms],
   );
   const roomsKey = rooms.join('\u0000');
+  // Rooms that start after the page read them (a cold start) are read again.
+  const running = !!state.status?.running;
   // The actors name the deleted bots, whose rooms join the list above: read
   // them even while no live bot gives a room.
   useEffect(() => {
@@ -162,12 +169,13 @@ export function useBotsSync(state: Pick<BotsState, 'status' | 'bots' | 'on'>, op
     const list = roomsKey ? roomsKey.split('\u0000') : [];
     if (list.length === 0) return;
     const st = useStore.getState();
+    const reads = new AbortController();
     void loadRoomActors();
     for (const ws of list) {
-      if (!st.roomThreads[ws]) void loadRoomThreads(ws);
-      if (!st.roomTimelines[timelineKey(ws, ALL_THREADS)]) void loadRoomTimeline(ws, ALL_THREADS);
+      if (!st.roomThreads[ws]) void loadRoomThreads(ws, reads.signal);
+      if (!isTimelineLoaded(st.roomTimelines[timelineKey(ws, ALL_THREADS)])) void loadRoomTimeline(ws, ALL_THREADS, reads.signal);
     }
-    if (!opts.focus) return;
+    if (!opts.focus) return () => reads.abort();
     const onFocus = () => {
       void loadRoomActors();
       for (const ws of list) {
@@ -180,8 +188,11 @@ export function useBotsSync(state: Pick<BotsState, 'status' | 'bots' | 'on'>, op
       }
     };
     window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [roomsKey, opts.focus]);
+    return () => {
+      reads.abort();
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [roomsKey, opts.focus, running]);
 
   // A thread holding an open question, the room's newest plan thread, and a
   // thread whose newest card is a proposal still open there: read them too,
@@ -189,9 +200,11 @@ export function useBotsSync(state: Pick<BotsState, 'status' | 'bots' | 'on'>, op
   // the room's newest page.
   const questionThreads = useStore(useShallow((s) => threadsToRead(rooms, s.roomThreads, s.roomTimelines)));
   useEffect(() => {
+    const reads = new AbortController();
     for (const key of questionThreads) {
       const cut = key.indexOf('\u0000');
-      void loadWholeThread(key.slice(0, cut), key.slice(cut + 1) as ThreadId);
+      void loadWholeThread(key.slice(0, cut), key.slice(cut + 1) as ThreadId, reads.signal);
     }
-  }, [questionThreads]);
+    return () => reads.abort();
+  }, [questionThreads, running]);
 }

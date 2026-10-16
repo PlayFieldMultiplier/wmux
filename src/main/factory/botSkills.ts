@@ -117,6 +117,11 @@ export interface SkillProposal {
   replacedApprovalId?: string;
 }
 
+/** A checked proposal not yet written (prepareProposal → writeProposal). */
+export interface PreparedProposal extends SkillProposal {
+  readonly prepared: { name: string; files: SkillFiles; reason: string; meta: SkillMeta | null; changed: boolean };
+}
+
 export interface ApprovedSkill {
   name: string;
   files: SkillFiles;
@@ -374,6 +379,13 @@ export class BotSkillStore {
       }
     };
     set(rec);
+    if (this.save()) return true;
+    set(before);
+    return false;
+  }
+
+  /** Write every record to main's file; false when it did not land. */
+  private save(): boolean {
     try {
       const bots: Record<string, SkillMeta[]> = {};
       for (const [id, map] of this.records) bots[id] = [...map.values()];
@@ -381,7 +393,6 @@ export class BotSkillStore {
       (this.opts.writeRecord ?? atomicWriteJSONSync)(this.file, { version: SKILLS_FILE_VERSION, bots });
       return true;
     } catch {
-      set(before);
       return false;
     }
   }
@@ -535,6 +546,28 @@ export class BotSkillStore {
     return out;
   }
 
+  /** Where the version approved with content `hash` stands now: loaded,
+   *  archived by the owner, changed on disk since, or replaced by another
+   *  approved version. Null when the store has no such skill. */
+  approvalStatus(botId: string, name: string, hash: string): 'loaded' | 'archived' | 'changed' | 'replaced' | null {
+    const rec = typeof botId === 'string' && BOT_ID_RE.test(botId) && typeof name === 'string' ? this.record(botId, name) : null;
+    if (!rec?.approved) return null;
+    if (rec.state === 'archived') return 'archived';
+    if (rec.state !== 'approved') return null;
+    if (rec.approved.hash !== hash) return 'replaced';
+    return this.verified(botId, name, rec) ? 'loaded' : 'changed';
+  }
+
+  /** The skills the owner archived after approving them: no longer loaded,
+   *  and the wake says so (an earlier message may still cite them). */
+  archivedNames(botId: string): string[] {
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return [];
+    return this.names(botId).filter((name) => {
+      const rec = this.record(botId, name);
+      return rec?.state === 'archived' && !!rec.approved;
+    });
+  }
+
   /** The approved version of every approved skill (for a worker's copy). */
   approved(botId: string): ApprovedSkill[] {
     return this.verifiedAll(botId).map((s) => ({ name: s.name, files: s.files }));
@@ -573,6 +606,16 @@ export class BotSkillStore {
   /** `skill_propose`: write a proposed version of a skill (an update when
    *  the skill exists). Never changes the approved version. */
   propose(botId: string, raw: { name?: unknown; content?: unknown; references?: unknown; reason?: unknown }): SkillProposal | SkillRefusal {
+    const prep = this.prepareProposal(botId, raw);
+    if (!prep.ok || prep.duplicate) return prep;
+    return this.writeProposal(botId, prep);
+  }
+
+  /** A proposal checked and diffed, nothing written: the skills module
+   *  posts its approval card first and writes it only once the card is up,
+   *  so a refused card leaves the proposal waiting before it as it was.
+   *  `duplicate` when the same proposal already waits on disk. */
+  prepareProposal(botId: string, raw: { name?: unknown; content?: unknown; references?: unknown; reason?: unknown }): PreparedProposal | SkillRefusal {
     const checked = validateSkillProposal(raw.name, raw.content, raw.references);
     if (!checked.ok) return checked;
     const name = raw.name as string;
@@ -597,23 +640,36 @@ export class BotSkillStore {
     if (diff.length > SKILL_LIMITS.DIFF_MAX) {
       return refuse('too_large', `the change is ${diff.length} characters and the owner's card shows at most ${SKILL_LIMITS.DIFF_MAX}, all of it; propose a shorter skill or a smaller change (split a long one into two skills)`);
     }
-    const proposedDir = path.join(d.dir, PROPOSED_DIR);
+    const changed = meta?.state === 'approved' && !baseline;
+    const out = {
+      ok: true as const, hash, version: checked.version, description: checked.description, update: meta?.state === 'approved', diff,
+      prepared: { name, files: checked.files, reason, meta, changed },
+    };
     if (meta?.proposed?.hash === hash) {
-      const onDisk = this.readVersion(proposedDir);
+      const onDisk = this.readVersion(path.join(d.dir, PROPOSED_DIR));
       if (onDisk && skillHash(onDisk) === hash) {
-        return {
-          ok: true, skill: view(meta, meta.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: meta.state === 'approved', diff, duplicate: true,
-          ...(meta.proposed.approvalId ? { approvalId: meta.proposed.approvalId } : {}),
-        };
+        return { ...out, skill: view(meta, changed), duplicate: true, ...(meta.proposed.approvalId ? { approvalId: meta.proposed.approvalId } : {}) };
       }
     }
+    return { ...out, skill: meta ? view(meta, changed) : { name, state: 'proposed', updatedAt: this.now() } };
+  }
+
+  /** Write a prepared proposal into proposed/ and record it. Refused as
+   *  stale when the skill's record changed since it was prepared. */
+  writeProposal(botId: string, prep: PreparedProposal): SkillProposal | SkillRefusal {
+    const { name, files, reason, meta, changed } = prep.prepared;
+    const hash = prep.hash;
+    if (this.record(botId, name) !== meta) return refuse('stale', `skill ${name} changed while this proposal was prepared; propose it again`);
+    const d = this.skillDir(botId, name, true);
+    if (!('dir' in d)) return d;
+    const proposedDir = path.join(d.dir, PROPOSED_DIR);
     const at = this.now();
     const next: SkillMeta = {
       version: 1,
       name,
       state: meta?.state ?? 'proposed',
       ...(meta?.approved ? { approved: meta.approved } : {}),
-      proposed: { hash, version: checked.version, description: checked.description, at, reason },
+      proposed: { hash, version: prep.version, description: prep.description, at, reason },
       createdAt: meta?.createdAt ?? at,
       updatedAt: at,
     };
@@ -624,7 +680,7 @@ export class BotSkillStore {
     let setAside = false;
     try {
       if (!lstatOrNull(d.dir)) fs.mkdirSync(d.dir, { mode: 0o700 });
-      tmp = this.writeFresh(d.dir, checked.files);
+      tmp = this.writeFresh(d.dir, files);
       // rmSync on a symlink removes the link, never what it points at.
       fs.rmSync(aside, { recursive: true, force: true });
       if (lstatOrNull(proposedDir)) {
@@ -653,9 +709,48 @@ export class BotSkillStore {
     }
     if (setAside) removeQuietly(aside);
     return {
-      ok: true, skill: view(next, next.state === 'approved' && !baseline), hash, version: checked.version, description: checked.description, update: meta?.state === 'approved', diff,
+      ok: true, skill: view(next, changed), hash, version: prep.version, description: prep.description, update: prep.update, diff: prep.diff,
       ...(meta?.proposed?.approvalId ? { replacedApprovalId: meta.proposed.approvalId } : {}),
     };
+  }
+
+  /** Every bot that has a skill record. */
+  botIds(): string[] {
+    return [...this.records.keys()];
+  }
+
+  /** The bot was deleted: its records go, then its skills folder (a
+   *  plain folder of its own; the bot's folder itself is kept). */
+  removeBot(botId: string): boolean {
+    if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return false;
+    const before = this.records.get(botId);
+    if (before) {
+      this.records.delete(botId);
+      if (!this.save()) {
+        this.records.set(botId, before);
+        return false;
+      }
+    }
+    let root: string | null = null;
+    try {
+      root = this.root(botId, false);
+    } catch {
+      root = null;
+    }
+    if (root && lstatOrNull(root)?.isDirectory()) fs.rmSync(root, { recursive: true, force: true });
+    return true;
+  }
+
+  /** Every waiting proposal that has an approval card, for the skills
+   *  module's start (its card may have been decided while it was off). */
+  waitingProposals(): Array<{ botId: string; name: string; hash: string; approvalId: string }> {
+    const out: Array<{ botId: string; name: string; hash: string; approvalId: string }> = [];
+    for (const [botId, map] of this.records) {
+      for (const rec of map.values()) {
+        if (rec.proposed?.approvalId) out.push({ botId, name: rec.name, hash: rec.proposed.hash, approvalId: rec.proposed.approvalId });
+      }
+    }
+    return out;
   }
 
   /** The proposal `hash` now has its approval card. */
@@ -799,24 +894,6 @@ export class BotSkillStore {
       .map((n) => ({ n, at: lstatOrNull(path.join(deniedRoot, n))?.mtimeMs ?? 0 }))
       .sort((a, b) => b.at - a.at);
     for (const old of kept.slice(DENIED_KEEP)) fs.rmSync(path.join(deniedRoot, old.n), { recursive: true, force: true });
-  }
-
-  /** Drop the proposal `hash` (its card could not be posted). */
-  discardProposal(botId: string, name: string, hash: string): void {
-    const d = this.skillDir(botId, name, false);
-    if (!('dir' in d)) return;
-    const meta = this.record(botId, name);
-    if (!meta?.proposed || meta.proposed.hash !== hash) return;
-    const never = !meta.approved && meta.state === 'proposed';
-    const next: SkillMeta = { ...meta, updatedAt: this.now() };
-    delete next.proposed;
-    if (!this.commit(botId, name, never ? null : next)) return;
-    try {
-      fs.rmSync(path.join(d.dir, PROPOSED_DIR), { recursive: true, force: true });
-      if (never) fs.rmSync(d.dir, { recursive: true, force: true });
-    } catch {
-      /* the next proposal replaces it */
-    }
   }
 }
 

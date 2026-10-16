@@ -68,10 +68,10 @@ import { RoomCard, useIdLabels } from '../Room/RoomCard';
 import { CardAnswers, useWorkspaceNames } from '../Room/CardAnswers';
 import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
-import { PresenceDot, botPresence } from '../Room/BotChips';
+import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
-import { BOT_JOB_MAX, botTemplate, isCoordinatorBot, normalizeBotJob, type BotProfile as BotProfileData } from '../../../shared/bot';
+import { BOT_JOB_MAX, botTemplate, delegatesFromConversation, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botHueIndex, botIdentityColor, noteRemovedBotHues } from '../Room/BotAvatar';
@@ -1196,6 +1196,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     : conversation.kind === 'bot' ? oneToOneRefusal(conversation.row, t)
       : roomCandidates.length === 0 ? t('botsPage.group.noneOn') : null;
 
+  // `t` reads the store's language: callbacks and memos keyed on it also
+  // key on the locale, so they re-word after a language change.
+  const locale = useStore((s) => s.locale);
   const submit = useCallback(async (e?: FormEvent) => {
     e?.preventDefault();
     if (inFlight || refusal) return;
@@ -1230,7 +1233,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     } finally {
       setInFlight(false);
     }
-  }, [api, inFlight, refusal, text, workspaceId, threadId, mentions, picks, t, onSent]);
+  }, [api, inFlight, refusal, text, workspaceId, threadId, mentions, picks, t, locale, onSent]);
 
   // `@` suggestions: typing `@` and the start of a name in a room lists the
   // room's bots that match; Enter or Tab (or a click) puts `@Name ` in its
@@ -1540,14 +1543,18 @@ function ProfileLine({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
-/** Stop: the bot's turn and its workers, after an inline confirm. The
- *  result is a toast. */
-function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: T }) {
+/** Pause (park the bot: it takes no new turn until Resume; reversible, so
+ *  no confirm) beside Stop (the bot's turn and its workers, after an inline
+ *  confirm; the result is a toast). A paused bot shows Resume in Today. */
+function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort; act?: FactoryBotPort['act']; t: T }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const stopBot = port.stopBot;
-  if (!stopBot) return null;
+  const canPause = !!act && row.bot.enabled && botActionsFor(row).park;
+  if (!stopBot && !canPause) return null;
   const run = async () => {
+    if (!stopBot) return;
     setBusy(true);
     try {
       const r = await stopBot(row.bot.id);
@@ -1559,9 +1566,21 @@ function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: 
       setBusy(false);
     }
   };
+  const pause = async () => {
+    if (!act) return;
+    setPausing(true);
+    try {
+      const r = await act('park', row.bot.id);
+      if (!r.ok) useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: r.message ?? '' }), level: 'error' });
+    } catch (err) {
+      useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: err instanceof Error ? err.message : String(err) }), level: 'error' });
+    } finally {
+      setPausing(false);
+    }
+  };
   return (
     <div className="mt-1 border-t border-[var(--stroke)] pt-2" data-bots-stop-bot={row.bot.id}>
-      {confirming ? (
+      {confirming && stopBot ? (
         <InlineConfirm
           text={t('botsPage.stop.botConfirm', { name: row.bot.name })}
           confirmLabel={t('botsPage.stop.bot')}
@@ -1572,7 +1591,10 @@ function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: 
           testId="bots-stop-bot"
         />
       ) : (
-        <Button size="sm" variant="destructive" data-testid="bots-stop-bot" onClick={() => setConfirming(true)}>{t('botsPage.stop.bot')}</Button>
+        <div className="flex items-center gap-2">
+          {canPause && <Button size="sm" variant="secondary" data-testid="bots-pause-bot" disabled={pausing} onClick={() => void pause()}>{t('botsPage.pause.bot')}</Button>}
+          {stopBot && <Button size="sm" variant="destructive" data-testid="bots-stop-bot" onClick={() => setConfirming(true)}>{t('botsPage.stop.bot')}</Button>}
+        </div>
       )}
     </div>
   );
@@ -1738,6 +1760,7 @@ function RepoLine({ row, t, port, pickFolder = pickFolderDialog }: { row: Factor
             </button>
           )}
         </div>
+        {!row.bot.repo && !error && <p data-bots-profile-repo-hint className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.profile.repoHint')}</p>}
         {error && <p role="alert" data-bots-profile-repo-error className="mt-1 text-[11px] text-[var(--accent-red)]">{error}</p>}
       </div>
     </div>
@@ -1813,12 +1836,61 @@ function WorkerEngineLine({ row, t, port }: { row: FactoryBotRow; t: T; port?: P
   );
 }
 
+/** Each bot's last presence the runtime reported while the app runs, and
+ *  when one last reported parked went unreported (its Resume). */
+const lastProfilePresence = new Map<string, BotPresence>();
+const profileResumedAt = new Map<string, number>();
+/** How long a resumed bot reads "Resuming…" at most. */
+export const RESUMING_MAX_MS = 10_000;
+
+/** The profile's state word. A bot the runtime reported parked and now
+ *  reports nothing for (its session attaches on its next turn) was just
+ *  resumed: it reads "Resuming…" until the runtime reports, for at most
+ *  RESUMING_MAX_MS; then it reads as any bot with no turn yet. */
+export function profilePresenceKey(
+  row: FactoryBotRow,
+  now: number = Date.now(),
+  last: Map<string, BotPresence> = lastProfilePresence,
+  resumedAt: Map<string, number> = profileResumedAt,
+): string {
+  const id = row.bot.id;
+  const presence = botPresence(row);
+  if (presence !== 'unknown') {
+    last.set(id, presence);
+    resumedAt.delete(id);
+    return `room.presence.${presence}`;
+  }
+  if (row.bot.enabled && !row.bot.parked) {
+    if (last.get(id) === 'parked') {
+      resumedAt.set(id, now);
+      last.set(id, 'unknown');
+    }
+    const at = resumedAt.get(id);
+    if (at !== undefined && now - at < RESUMING_MAX_MS) return 'botsPage.profile.resuming';
+  }
+  return 'room.presence.unknown';
+}
+
+/** The profile's state line: on/off and presence, re-read when "Resuming…"
+ *  runs out. */
+function ProfileState({ row, t }: { row: FactoryBotRow; t: T }) {
+  const [, expire] = useState(0);
+  const key = profilePresenceKey(row);
+  useEffect(() => {
+    if (key !== 'botsPage.profile.resuming') return;
+    const at = profileResumedAt.get(row.bot.id) ?? Date.now();
+    const h = setTimeout(() => expire((n) => n + 1), Math.max(0, at + RESUMING_MAX_MS - Date.now()));
+    return () => clearTimeout(h);
+  }, [key, row.bot.id]);
+  return <ProfileLine label={t('botsPage.profile.state')} value={<span data-bots-profile-state>{`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(key)}`}</span>} />;
+}
+
 /** The bot's profile under its name pill: template, job (editable),
  *  workspace, repo, the model it thinks on, what its workers run on and
  *  their model, on/off, what it used today of each limit (and what stops
  *  it, with Resume when parked), its routines
  *  (read-only), its connections, then what it can do (the shared powers,
- *  read-only), whom it reports to, its workers now, and Stop. */
+ *  read-only), whom it reports to, its workers now, and Pause and Stop. */
 function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'>; adminPort?: BotAdminPort }) {
   const routines = (useBotRoutines()?.routines ?? []).filter((r) => r.botId === row.bot.id);
   const canDo = botCanDo(row.bot);
@@ -1833,8 +1905,8 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
       <BrainModelLine row={row} t={t} port={jobPort} />
       <WorkerEngineLine row={row} t={t} port={jobPort} />
       <WorkerModelLine row={row} t={t} port={jobPort} />
-      <ProfileLine label={t('botsPage.profile.state')} value={`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(`room.presence.${botPresence(row)}`)}`} />
-      <BotToday row={row} act={adminPort?.act} t={t} />
+      <ProfileState row={row} t={t} />
+      <BotToday row={row} act={adminPort?.act} liveWorkers={workers.length} t={t} />
       {routines.length > 0 && (
         <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-routines>
           <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.routines')}</span>
@@ -1867,7 +1939,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
           )}
         />
       </div>
-      <StopBot row={row} port={stopPort} t={t} />
+      <StopBot row={row} port={stopPort} act={adminPort?.act} t={t} />
       <DeleteBot row={row} port={adminPort} t={t} />
     </div>
   );
@@ -2005,10 +2077,10 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   // The threads this conversation started fold into work cards.
   const startedThreads = useMemo(() => conversationStartedThreads(conversation, roomCards, roomThreads), [conversation, roomCards, roomThreads]);
   const { main, threads, surfaced, work } = useMemo(() => splitThreads(cards, waits, startedThreads), [cards, waits, startedThreads]);
-  // Who handed it off: a 1:1's bot; in a group, its coordinator (only a
-  // coordinator's dispatch opens a thread), the nearest above when several.
+  // Who handed it off: a 1:1's bot; in a group, its coordinator or lead bot
+  // (only their dispatch opens a thread), the nearest above when several.
   const coordinators = useMemo(
-    () => (conversation.kind === 'room' ? new Set(conversation.bots.filter((r) => isCoordinatorBot(r.bot)).map((r) => r.bot.id)) : null),
+    () => (conversation.kind === 'room' ? new Set(conversation.bots.filter((r) => delegatesFromConversation(r.bot)).map((r) => r.bot.id)) : null),
     [conversation],
   );
   const workAuthor = conversation.kind === 'bot' ? conversation.row.bot.id : coordinators?.size === 1 ? [...coordinators][0] : undefined;
@@ -2167,6 +2239,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     shownChat.current.mounted = true;
     return () => { shownChat.current.mounted = false; };
   }, []);
+  const locale = useStore((s) => s.locale);
   const resumeShown = useCallback(async (taskId: string): Promise<void> => {
     const resume = resumePort?.resumeWorker;
     if (!resume) return;
@@ -2177,7 +2250,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         useStore.getState().setBotsWorkerPanel({ workspaceId: r.workspaceId, conversationId });
       }
     }).catch((err: unknown) => useStore.getState().pushToast({ message: String(err), level: 'error' }));
-  }, [resumePort, conversationId, t]);
+  }, [resumePort, conversationId, t, locale]);
   const askedNonce = threadAsk?.nonce;
   useEffect(() => {
     if (threadAsk) onThread(threadAsk.workspaceId, threadAsk.threadId);

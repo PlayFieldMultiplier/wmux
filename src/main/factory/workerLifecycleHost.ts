@@ -269,6 +269,10 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       closePane: async (sessionId) => {
         await rpc('daemon.destroySession', { id: sessionId });
       },
+      launchedConversation: (sessionId) => {
+        const r = botWorkerSessionRecord(sessionId);
+        return r?.launchSessionId ? { sessionId: r.launchSessionId, ...(r.permissionMode ? { permissionMode: r.permissionMode } : {}) } : null;
+      },
       note,
       changed: () => {
         changed();

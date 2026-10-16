@@ -57,7 +57,8 @@ import {
   PROJECT_SUPERVISION_HEALTHY_UPTIME_SEC_MAX,
 } from '../../../shared/wmuxProjectConfig';
 import type { DaemonSupervisionPolicy } from '../../../shared/rpc';
-import type { ResumeBinding } from '../../../shared/agentResume';
+import { launchedConversation, type ResumeBinding } from '../../../shared/agentResume';
+import { splitModelEnvMarker } from '../../../shared/workerLaunch';
 import type { AgentSlug } from '../../../shared/events';
 import { createDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import { isWslShell, type WslTarget } from '../../../shared/wsl';
@@ -199,7 +200,7 @@ function registeredClaudeLevel(): string | null {
  * its wmux level) instead of being spliced on its own, and the hint is
  * dropped. Returns what the guarded launch carried, for its session record.
  */
-async function stageCreate(options: PtyCreateOptions | undefined, botWorker: BotWorkerCreate | null): Promise<{ options: PtyCreateOptions | undefined; launch: ReturnType<typeof guardedLaunchOf> & ReturnType<typeof launchOfCodex> }> {
+async function stageCreate(options: PtyCreateOptions | undefined, botWorker: BotWorkerCreate | null): Promise<{ options: PtyCreateOptions | undefined; launch: ReturnType<typeof guardedLaunchOf> & ReturnType<typeof launchOfCodex> & { conversation?: ReturnType<typeof launchedConversation> } }> {
   // A fan-out line's prompt argument was built for the platform; the pane's
   // shell decides its form (a WSL pane runs bash).
   const shellPath = createShell(options);
@@ -230,7 +231,11 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
   if (botWorker && process.platform === 'win32' && isCmdShellPath(shellPath) && guarded?.initialCommand && !isPlainCmdLaunchLine(guarded.initialCommand)) {
     throw new Error('PTY_CREATE: a bot\'s worker line for a Command Prompt pane holds characters cmd would read as more than one command');
   }
-  return { options: withLaunchSessionPin(guarded), launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded) } };
+  const pinned = withLaunchSessionPin(guarded);
+  // A bot worker's record keeps the conversation its line pinned and the mode
+  // that line starts it in (workerReclaim.ts: a resume with no hook-recorded mode).
+  const conversation = botWorker && pinned?.initialCommand ? launchedConversation(splitModelEnvMarker(pinned.initialCommand).command) : null;
+  return { options: pinned, launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded), ...(conversation ? { conversation } : {}) } };
 }
 
 /** A guarded codex launch's folder and repository, for its session record. */

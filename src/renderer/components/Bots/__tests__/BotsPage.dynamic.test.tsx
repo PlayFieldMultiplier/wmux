@@ -572,6 +572,85 @@ describe('Bots page', () => {
     expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped Lead and 2 of its workers.');
   });
 
+  it('Pause in a bot\'s profile parks it at once (no confirm), and the profile then shows Paused with Resume', async () => {
+    const act$ = vi.fn(async (action: string, botId: string) => {
+      if (action === 'park') {
+        bots = bots.map((b) => (b.bot.id === botId ? { ...b, bot: { ...b.bot, parked: { reason: 'human' as const, at: 1 } }, status: { ...b.status!, presence: 'parked' as const } } : b));
+        for (const fn of notify) fn();
+      }
+      return { ok: true };
+    });
+    const notify: Array<() => void> = [];
+    setFactoryBotPort({ ...port, act: act$, subscribe: (fn) => { notify.push(fn); return () => undefined; } });
+    seedRooms();
+    await render(<BotsPage stop={{ stopBot: vi.fn(async () => ({ ok: true, workersStopped: 0 })) }} />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-profile-parked]')).toBeNull();
+    expect(q('[data-testid="bots-stop-bot"]')).not.toBeNull();
+    await act(async () => { q<HTMLButtonElement>('[data-testid="bots-pause-bot"]')!.click(); });
+    expect(act$).toHaveBeenCalledWith('park', LEAD);
+    for (let i = 0; i < 5 && !q('[data-bots-profile-parked="human"]'); i++) await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-profile-parked="human"]')?.textContent).toContain('Paused by you.');
+    expect(q('[data-testid="bots-resume-bot"]')).not.toBeNull();
+    expect(q('[data-testid="bots-pause-bot"]')).toBeNull();
+  });
+
+  it('right after Resume the profile reads Resuming… until the runtime reports, not Not reported yet', async () => {
+    const notify: Array<() => void> = [];
+    const setLead = (over: Partial<FactoryBotRow['bot']>, presence: 'parked' | 'unknown' | 'idle') => {
+      bots = bots.map((b) => (b.bot.id === LEAD ? { ...b, bot: { ...b.bot, ...over }, status: { ...b.status!, presence } } : b));
+    };
+    setLead({ parked: { reason: 'human', at: 1 } }, 'parked');
+    const act$ = vi.fn(async () => {
+      bots = bots.map((b) => (b.bot.id === LEAD ? { ...b, bot: { ...b.bot, parked: undefined } } : b));
+      setLead({}, 'unknown');
+      for (const fn of notify) fn();
+      return { ok: true };
+    });
+    setFactoryBotPort({ ...port, act: act$, subscribe: (fn) => { notify.push(fn); return () => undefined; } });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Parked');
+    await act(async () => { q<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
+    for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Resuming…'; i++) await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
+    setLead({}, 'idle');
+    await act(async () => { for (const fn of notify) fn(); });
+    for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Idle'; i++) await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Idle');
+  });
+
+  it('Resuming… lasts at most 10 s while the runtime reports nothing, then reads as a bot with no turn yet', async () => {
+    const notify: Array<() => void> = [];
+    bots = bots.map((b) => (b.bot.id === VERIFIER ? { ...b, bot: { ...b.bot, parked: { reason: 'human' as const, at: 1 } }, status: { ...b.status!, presence: 'parked' as const } } : b));
+    const act$ = vi.fn(async () => {
+      bots = bots.map((b) => (b.bot.id === VERIFIER ? { ...b, bot: { ...b.bot, parked: undefined }, status: { ...b.status!, presence: 'unknown' as const } } : b));
+      for (const fn of notify) fn();
+      return { ok: true };
+    });
+    setFactoryBotPort({ ...port, act: act$, subscribe: (fn) => { notify.push(fn); return () => undefined; } });
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Parked');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await act(async () => { q<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
+      for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Resuming…'; i++) await act(async () => { await Promise.resolve(); });
+      expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
+      await act(async () => { vi.advanceTimersByTime(9_000); });
+      expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
+      await act(async () => { vi.advanceTimersByTime(1_000); });
+      expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Not reported yet');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a parked bot\'s profile says why and offers Resume (budget or errors); a bot that is not parked shows none', async () => {
     const act$ = vi.fn(async () => ({ ok: true }));
     bots[1] = { ...bots[1], bot: { ...bots[1].bot, parked: { reason: 'budget', at: 1 } }, status: { ...bots[1].status!, presence: 'parked' } };
@@ -1383,8 +1462,8 @@ describe('Bots page', () => {
     expect(profile.querySelector('[data-bots-profile-workers]')?.textContent).toBe('1 running');
     // Turns used and left today (no hourly cap is shown).
     expect(profile.querySelector('[data-bots-profile-turns]')?.textContent).toBe(`${DEFAULT_BOT_BUDGETS.lead.maxTurnsPerDay - 30} used · 30 left`);
-    // Nothing on it edits the bot's powers.
-    expect(profile.querySelectorAll('input, button, select')).toHaveLength(0);
+    // Nothing on it edits the bot's powers: its one control is Pause.
+    expect([...profile.querySelectorAll('input, button, select')].map((el) => el.getAttribute('data-testid'))).toEqual(['bots-pause-bot']);
 
     act(() => q(`[data-bots-row="bot:${MOA}"]`)!.click());
     act(() => q('[data-bots-pill]')!.click());
@@ -1410,6 +1489,8 @@ describe('Bots page', () => {
     act(() => q('[data-bots-pill]')!.click());
     const profile = q(`[data-bots-profile="${LEAD}"]`)!;
     expect(profile.querySelector('[data-bots-profile-repo-key]')?.textContent).toBe('github.com/acme/api');
+    // A linked bot needs no hint about what a repository must be.
+    expect(profile.querySelector('[data-bots-profile-repo-hint]')).toBeNull();
     const change = profile.querySelector<HTMLButtonElement>('[data-testid="bots-profile-repo-change"]')!;
     expect(change.textContent).toBe('Change…');
     await act(async () => change.click());
@@ -1422,6 +1503,19 @@ describe('Bots page', () => {
     pickFolder.mockResolvedValueOnce([]);
     await act(async () => change.click());
     expect(update).toHaveBeenCalledTimes(2);
+  });
+
+  it('the profile of a bot with no repository says what a repository must be', async () => {
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })) } as unknown as FactoryBotPort);
+    bots = bots.map((r) => (r.bot.id === LEAD ? { ...r, bot: { ...r.bot, repo: undefined } } : r));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    const profile = q(`[data-bots-profile="${LEAD}"]`)!;
+    expect(profile.querySelector('[data-bots-profile-repo-key]')?.textContent).toBe('None');
+    expect(profile.querySelector('[data-bots-profile-repo-hint]')?.textContent)
+      .toBe('A folder whose origin is an owner/repo address on a git host, such as GitHub. A local path cannot be used.');
   });
 
   it('the profile shows the template and the job, and edits the job through the bot port', async () => {
@@ -1873,6 +1967,21 @@ describe('Bots page', () => {
     expect(q(`[data-bots-intro="${NEW}"]`)?.textContent).toContain('Quiet');
     act(() => q('[data-bots-suggestion="botsPage.chat.suggestStatus"]')!.click());
     expect(q<HTMLTextAreaElement>('[data-testid="bots-composer-input"]')?.value).toBe('Give me a status update.');
+  });
+
+  it('a bot row\'s group-chat preview follows a language change', async () => {
+    const G = 'group:grp-000000c1' as const;
+    groups = [{ id: 'grp-000000c1', workspaceId: 'w1', name: 'Team', memberIds: [LEAD, VERIFIER], threadId: G, createdAt: 3_000, updatedAt: 3_000 }];
+    cards = [cards[0], card({ workspaceId: 'w1', actor: by('w1', LEAD), threadId: G, title: 'Lead here', at: 3_200 })];
+    seedRooms();
+    await render(<BotsPage groupPort={groupPort} />);
+    expect(q(`[data-bots-row="bot:${LEAD}"]`)!.textContent).toContain('In Team: Lead here');
+    try {
+      act(() => useStore.getState().setLocale('ko'));
+      expect(q(`[data-bots-row="bot:${LEAD}"]`)!.textContent).toContain('Team에서: Lead here');
+    } finally {
+      act(() => useStore.getState().setLocale('en'));
+    }
   });
 
   it('a bot row whose question is only in a group\'s handoff thread opens that group with the thread beside it', async () => {
