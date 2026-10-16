@@ -29,7 +29,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjections';
-import { refreshRoomStatus, type RoomsApi } from '../../hooks/useRoomSync';
+import { isTimelineLoaded, refreshRoomStatus, type RoomsApi } from '../../hooks/useRoomSync';
 import { dmThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
 import { timelineKey } from '../../stores/slices/roomSlice';
 import { FOCUS_RING } from '../focusRing';
@@ -631,9 +631,10 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   // older than the room's newest page.
   const removedOpen = selected?.c.kind === 'bot' && selected.c.removed ? selected.c.row.bot : null;
   useEffect(() => {
-    if (removedOpen && !useStore.getState().roomTimelines[timelineKey(removedOpen.workspaceId, dmThreadId(removedOpen.id))]) {
-      void loadWholeThread(removedOpen.workspaceId, dmThreadId(removedOpen.id));
-    }
+    if (!removedOpen || isTimelineLoaded(useStore.getState().roomTimelines[timelineKey(removedOpen.workspaceId, dmThreadId(removedOpen.id))])) return;
+    const reads = new AbortController();
+    void loadWholeThread(removedOpen.workspaceId, dmThreadId(removedOpen.id), reads.signal);
+    return () => reads.abort();
   }, [removedOpen?.id, removedOpen?.workspaceId]);
 
   const selectedKey = starting ? pendingId : selected?.c.id ?? null;

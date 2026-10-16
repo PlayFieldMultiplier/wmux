@@ -65,15 +65,78 @@ export async function loadRoomActors(): Promise<void> {
   }
 }
 
-export async function loadRoomThreads(workspaceId: string): Promise<void> {
+/** A first read main refuses is tried again after each of these delays,
+ *  then left for the next trigger. On a cold start the window loads before
+ *  main starts the rooms, and until then every read answers `not_started`. */
+export const FIRST_READ_RETRY_MS: readonly number[] = [500, 1000, 2000, 4000, 8000, 16000];
+
+interface RetryLoop {
+  /** Ends the current wait, so the next try runs now. */
+  wake: () => void;
+  /** The latest caller's: once it aborts, no further try starts. */
+  signal?: AbortSignal;
+}
+
+/** The retry loop running per read key. */
+const firstReads = new Map<string, RetryLoop>();
+
+/** A loaded timeline: its first read answered (a placeholder has not). */
+export function isTimelineLoaded(tl: { loading?: boolean } | undefined): boolean {
+  return !!tl && !tl.loading;
+}
+
+/** Run `attempt` (true when main answered), and while it fails and `done`
+ *  is false, again after each FIRST_READ_RETRY_MS delay. One loop per key:
+ *  a call while one runs hands it the caller's `signal` and makes it try
+ *  again now; once the signal it holds aborts, no further try starts. */
+export async function readWithRetry(key: string, attempt: () => Promise<boolean>, done: () => boolean, signal?: AbortSignal): Promise<void> {
+  const current = firstReads.get(key);
+  if (current) {
+    // A caller without a signal leaves the owner's in place.
+    if (signal || current.signal?.aborted) current.signal = signal;
+    current.wake();
+    return;
+  }
+  const loop: RetryLoop = { wake: () => undefined, signal };
+  firstReads.set(key, loop);
+  const stopped = () => !!loop.signal?.aborted || done();
+  try {
+    for (let i = 0; ; i += 1) {
+      if (await attempt()) return;
+      if (i >= FIRST_READ_RETRY_MS.length || stopped()) return;
+      await new Promise<void>((resolve) => {
+        const sig = loop.signal;
+        const finish = (): void => {
+          clearTimeout(timer);
+          sig?.removeEventListener('abort', finish);
+          resolve();
+        };
+        const timer = setTimeout(finish, FIRST_READ_RETRY_MS[i]);
+        loop.wake = finish;
+        sig?.addEventListener('abort', finish, { once: true });
+      });
+      loop.wake = () => undefined;
+      if (stopped()) return;
+    }
+  } finally {
+    if (firstReads.get(key) === loop) firstReads.delete(key);
+  }
+}
+
+export async function loadRoomThreads(workspaceId: string, signal?: AbortSignal): Promise<void> {
   const api = roomsApi();
   if (!api || !workspaceId) return;
-  try {
-    const r = await api.threads(workspaceId);
-    if (r.ok) useStore.getState().setRoomThreads(workspaceId, r.threads);
-  } catch {
-    // leave the last list
-  }
+  await readWithRetry(`threads\u0001${workspaceId}`, async () => {
+    try {
+      const r = await api.threads(workspaceId);
+      if (!r.ok) return false;
+      useStore.getState().setRoomThreads(workspaceId, r.threads);
+      return true;
+    } catch {
+      // leave the last list
+      return false;
+    }
+  }, () => !!useStore.getState().roomThreads[workspaceId], signal);
 }
 
 function threadParam(thread: TimelineThread): { threadId?: ThreadId } {
@@ -81,21 +144,28 @@ function threadParam(thread: TimelineThread): { threadId?: ThreadId } {
 }
 
 /** First read of a timeline: the newest page. Until it answers, the
- *  timeline is a placeholder that collects pushes, so none is lost. */
-export async function loadRoomTimeline(workspaceId: string, thread: TimelineThread): Promise<void> {
+ *  timeline is a placeholder that collects pushes, so none is lost; a
+ *  refused read is retried (readWithRetry) while it is still one. */
+export async function loadRoomTimeline(workspaceId: string, thread: TimelineThread, signal?: AbortSignal): Promise<void> {
   const api = roomsApi();
   if (!api || !workspaceId) return;
+  const key = timelineKey(workspaceId, thread);
   const st = useStore.getState();
-  if (!st.roomTimelines[timelineKey(workspaceId, thread)]) {
+  if (!st.roomTimelines[key]) {
     st.setRoomPage(workspaceId, thread, { cards: [], nextSinceSeq: 0, hasMore: false, loading: true }, 'replace');
   }
-  const startedAt = useStore.getState().roomPushCount;
-  try {
-    const r = await api.read({ workspaceId, ...threadParam(thread) });
-    if (r.ok) useStore.getState().setRoomPage(workspaceId, thread, { cards: r.cards, nextSinceSeq: r.nextSinceSeq, hasMore: r.hasMore }, 'replace', startedAt);
-  } catch {
-    // leave what is shown
-  }
+  await readWithRetry(key, async () => {
+    const startedAt = useStore.getState().roomPushCount;
+    try {
+      const r = await api.read({ workspaceId, ...threadParam(thread) });
+      if (!r.ok) return false;
+      useStore.getState().setRoomPage(workspaceId, thread, { cards: r.cards, nextSinceSeq: r.nextSinceSeq, hasMore: r.hasMore }, 'replace', startedAt);
+      return true;
+    } catch {
+      // leave what is shown
+      return false;
+    }
+  }, () => isTimelineLoaded(useStore.getState().roomTimelines[key]), signal);
 }
 
 /** Read every card after the timeline's cursor, page by page. A timeline
@@ -105,7 +175,7 @@ export async function catchUpRoomTimeline(workspaceId: string, thread: TimelineT
   if (!api || !workspaceId) return;
   const key = timelineKey(workspaceId, thread);
   const existing = useStore.getState().roomTimelines[key];
-  if (!existing || existing.loading) return loadRoomTimeline(workspaceId, thread);
+  if (!isTimelineLoaded(existing)) return loadRoomTimeline(workspaceId, thread);
   for (let page = 0; page < CATCH_UP_MAX_PAGES; page += 1) {
     const tl = useStore.getState().roomTimelines[key];
     if (!tl) return;
