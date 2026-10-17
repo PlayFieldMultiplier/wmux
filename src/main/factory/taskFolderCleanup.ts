@@ -430,10 +430,12 @@ export async function gitWorktreeRegistered(repoRoot: string, folder: string): P
   } catch {
     return null;
   }
+  // Native: on Windows it also expands 8.3 short names (RUNNER~1), which git
+  // never prints.
   const norm = (p: string): string => {
     let r = path.resolve(p);
     try {
-      r = fs.realpathSync(r);
+      r = fs.realpathSync.native(r);
     } catch {
       /* compared as written */
     }

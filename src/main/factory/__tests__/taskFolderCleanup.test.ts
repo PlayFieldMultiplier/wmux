@@ -829,8 +829,7 @@ describe('a folder a stop kept, after 7 days', () => {
     let stoppedAt = 0; // no stop of a resumed worker yet
     const keptFolderCleaned = vi.fn();
     const p = ports({ now: () => now, workerState: () => worker, workerStoppedAt: () => (worker === 'stopped' ? stoppedAt : undefined), keptFolderCleaned }, missions);
-    await pass(p, [stopped]);
-    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 });
+    await pass(p, [stopped], () => expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 }));
     // Day 2: resumed (the record stays, its clock restarts); a pass while it
     // runs records nothing new and removes nothing.
     now = 50_000 + 2 * DAY;
@@ -907,7 +906,12 @@ describe('a worktree git removed only half way', () => {
     fs.mkdirSync(path.join(wt, 'sub'), { recursive: true });
     dirLink(canary, path.join(wt, 'node_modules'));
     dirLink(canary, path.join(wt, 'sub', 'link'));
-    fs.symlinkSync(path.join(canary, 'deep', 'keep.txt'), path.join(wt, 'file-link'));
+    try {
+      fs.symlinkSync(path.join(canary, 'deep', 'keep.txt'), path.join(wt, 'file-link'));
+    } catch (err) {
+      // A file symlink on Windows needs a privilege the runner may lack.
+      if (process.platform !== 'win32') throw err;
+    }
     const repoRoot = fs.realpathSync(repo);
     expect(await gitWorktreeRegistered(repoRoot, wt)).toBe(true);
     halfRemove(wt);
@@ -1055,7 +1059,10 @@ describe('a worktree git removed only half way', () => {
       stopped: { botId: BOT, workspaceId: 'ws-owner' }, at: 50_000,
     });
     expect(await cleanTaskFolder(p, keptRowOf(stopped.id), { folder: wt, branch: 'wtask/nolist-18181818' }, [], { keptTtl: true })).toBe('failed');
-    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, repoRoot });
+    const rec = p.store.get(stopped.id);
+    expect(rec).toMatchObject({ state: 'kept_stopped', at: 50_000 });
+    // git spells the root its own way (forward slashes, long names on Windows).
+    expect(fs.realpathSync.native(rec?.repoRoot ?? '')).toBe(fs.realpathSync.native(repoRoot));
   });
 
   it('removeTreeNoFollow with a root refuses a folder that resolves elsewhere (a link or mount point at or above it)', async () => {
