@@ -544,7 +544,8 @@ export function AccountsSection(): React.ReactElement | null {
       {/* No heading: the Accounts page title already names this, its only group. */}
       <SettingsSection
         id="claudeacct"
-        description={[t('accounts.scopeLine'), t('accounts.intro'), t('accounts.rotateDesc'), t('accounts.groupsDesc')].join(' ')}
+        // The scope line alone is the visible line; the rest waits behind Learn more.
+      description={`${t('accounts.scopeLine')}\n${[t('accounts.intro'), t('accounts.rotateDesc'), t('accounts.groupsDesc')].join(' ')}`}
       >
         <AccountRotationControls state={rotation.state} reload={rotation.reload} />
         {removeNotice && <p className="settings-note">{removeNotice}</p>}
