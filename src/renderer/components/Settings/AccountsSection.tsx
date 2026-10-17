@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useSyncExternalStore, type CSSProperties } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import type { Account } from '../../../main/account/accountStore';
 import type { CredentialStatus } from '../../../main/ipc/handlers/account.handler';
 import type { AccountUsageEntry } from '../../../main/account/AccountUsageService';
@@ -321,6 +321,15 @@ export function AccountsSection(): React.ReactElement | null {
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+  // After a move the list re-renders in a new order (a group's heading and ⋯
+  // may be gone): focus the moved account's ⋯ once the new rows are in.
+  const focusAfterReload = useRef<string | null>(null);
+  useEffect(() => {
+    const id = focusAfterReload.current;
+    if (!id) return;
+    focusAfterReload.current = null;
+    document.querySelector<HTMLElement>(`[data-account-row="${CSS.escape(id)}"] [data-remote-menu]`)?.focus();
+  }, [rows]);
   // A login finishing (or being cancelled) changes the registry / status badges.
   useEffect(() => subscribeAccountLogins(reload), [reload]);
 
@@ -408,7 +417,9 @@ export function AccountsSection(): React.ReactElement | null {
     const api = window.electronAPI?.accounts;
     closeMove(m);
     if (!api?.setGroup) return;
-    void membersOf(m).reduce<Promise<unknown>>((chain, id) => chain.then(() => api.setGroup({ id, group: to })), Promise.resolve())
+    const ids = membersOf(m);
+    focusAfterReload.current = ids[0] ?? null;
+    void ids.reduce<Promise<unknown>>((chain, id) => chain.then(() => api.setGroup({ id, group: to })), Promise.resolve())
       .then(reload)
       .catch(() => {
         reload();
