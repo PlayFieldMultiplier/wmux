@@ -40,6 +40,7 @@ export type ContinueOnAccountCode =
   | 'still_running'
   | 'diverged'
   | 'copy_failed'
+  | 'save_failed'
   | 'shell_busy';
 
 export type ContinueOnAccountResult =
@@ -67,13 +68,11 @@ export function planTranscriptCopy(
   const projectsDir = path.dirname(projectDir);
   if (file !== `${sessionId}.jsonl` || path.basename(projectsDir) !== 'projects') return { ok: false, code: 'unknown_session' };
   if (!configDir || !path.isAbsolute(configDir) || CONTROL.test(configDir)) return { ok: false, code: 'invalid_account' };
-  let same: boolean;
-  try {
-    same = realpath(path.dirname(projectsDir)) === realpath(configDir);
-  } catch {
-    return { ok: false, code: 'invalid_account' };
-  }
-  if (same) return { ok: false, code: 'same_account' };
+  let sourceRoot: string;
+  let targetRoot: string;
+  try { sourceRoot = realpath(path.dirname(projectsDir)); } catch { return { ok: false, code: 'unknown_session' }; }
+  try { targetRoot = realpath(configDir); } catch { return { ok: false, code: 'invalid_account' }; }
+  if (sourceRoot === targetRoot) return { ok: false, code: 'same_account' };
   return { ok: true, source: transcriptPath, target: path.join(configDir, 'projects', path.basename(projectDir), file) };
 }
 
@@ -102,10 +101,15 @@ async function isBytePrefix(prefix: string, file: string): Promise<boolean> {
  * that already exists is replaced only when it is an earlier state of the same
  * file (a round trip A → B → A); one that holds turns the source lacks is
  * refused. The conversation's sibling folder (`<project>/<sessionId>/`, tool
- * results and subagents) is copied without overwriting anything.
+ * results and subagents) is copied without overwriting anything. A target
+ * folder or file that resolves to the source itself (a linked `projects/`) is
+ * `same`: the rename would replace the original.
  */
-export async function copyTranscript(source: string, target: string): Promise<'copied' | 'diverged'> {
+export async function copyTranscript(source: string, target: string): Promise<'copied' | 'diverged' | 'same'> {
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  const real = (p: string) => fs.realpathSync.native(p);
+  if (real(path.dirname(target)) === real(path.dirname(source))) return 'same';
+  if (fs.existsSync(target) && real(target) === real(source)) return 'same';
   if (fs.existsSync(target) && !(await isBytePrefix(target, source))) return 'diverged';
   const temp = `${target}.wmux-${process.pid}-${Date.now()}.tmp`;
   try {
@@ -154,13 +158,14 @@ export interface ContinueOnAccountDeps {
   /** The pane's turn is over by the daemon's own state. */
   turnClosed: (id: string) => boolean;
   shellKind: (id: string) => ResumeShell | null;
-  stopClaude: (id: string) => Promise<AgentStopResult>;
+  /** Stop the pane's Claude tree; `stillIdle` is asked right before the first signal. */
+  stopClaude: (id: string, stillIdle: () => boolean) => Promise<AgentStopResult>;
   /** The shell runs nothing (no agent, no children). */
   paneFree: (id: string) => Promise<boolean>;
   /** The shell's input revision while it sits at an empty prompt, else null. */
   promptRevision: (id: string) => number | null;
-  /** Bind the pane to `configDir` with its binding now at `transcriptPath`, persisted; returns the undo. */
-  rebind: (id: string, configDir: string, transcriptPath: string) => () => void;
+  /** Bind the pane to `configDir` with `binding` (now at the copy), persisted; the undo, or null when it could not be saved (nothing changed). */
+  rebind: (id: string, configDir: string, binding: ResumeBinding) => (() => void) | null;
   write: (id: string, data: string) => boolean;
   copy?: typeof copyTranscript;
   sleep?: (ms: number) => Promise<void>;
@@ -192,7 +197,8 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   const plan = planTranscriptCopy(binding, configDir);
   if (!plan.ok || !binding) return { ok: false, code: plan.ok ? 'unknown_session' : plan.code };
   const line = relaunchLine(binding, configDir, shell);
-  if (!line) return { ok: false, code: 'unknown_session' };
+  // The id and folder passed their checks above, so an untypeable line is the account folder's.
+  if (!line) return { ok: false, code: 'invalid_account' };
   if (!fs.existsSync(plan.source)) return { ok: false, code: 'unknown_session' };
   try {
     if (!fs.statSync(configDir).isDirectory()) return { ok: false, code: 'invalid_account' };
@@ -201,12 +207,18 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   }
   if (!deps.turnClosed(id)) return { ok: false, code: 'turn_open' };
 
-  // Stop first: Claude may still write to the transcript as it exits.
-  const stop = await deps.stopClaude(id);
+  // Stop first: Claude may still write to the transcript as it exits. The
+  // turn is checked again right before the first signal.
+  const stop = await deps.stopClaude(id, () => deps.turnClosed(id));
   if (!stop.ok) return { ok: false, code: stop.code === 'turn_open' ? 'turn_open' : 'still_running' };
+  // Still the same conversation: a hook may have rebound the pane meanwhile.
+  const stillOwn = () => deps.pane(id)?.resumeBinding?.sessionId === binding.sessionId;
+  if (!stillOwn()) return { ok: false, code: 'unknown_session' };
 
   try {
-    if ((await (deps.copy ?? copyTranscript)(plan.source, plan.target)) === 'diverged') return { ok: false, code: 'diverged' };
+    const copied = await (deps.copy ?? copyTranscript)(plan.source, plan.target);
+    if (copied === 'diverged') return { ok: false, code: 'diverged' };
+    if (copied === 'same') return { ok: false, code: 'same_account' };
   } catch {
     return { ok: false, code: 'copy_failed' };
   }
@@ -220,11 +232,20 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
     await sleep(100);
   }
   if (revision === null) return { ok: false, code: 'shell_busy' };
+  if (!stillOwn()) return { ok: false, code: 'unknown_session' };
 
   // Bound before the line is typed: the new process's first hook is checked
-  // against the pane's account folder.
-  const undo = deps.rebind(id, configDir, plan.target);
-  if (deps.promptRevision(id) !== revision || !deps.write(id, line)) {
+  // against the pane's account folder. A rebind that could not be persisted
+  // is undone and nothing is typed.
+  const undo = deps.rebind(id, configDir, { ...binding, transcriptPath: plan.target });
+  if (!undo) return { ok: false, code: 'save_failed' };
+  let typed = false;
+  try {
+    typed = deps.promptRevision(id) === revision && deps.write(id, line);
+  } catch {
+    typed = false;
+  }
+  if (!typed) {
     undo();
     return { ok: false, code: 'shell_busy' };
   }

@@ -1201,6 +1201,7 @@ export default function SurfaceTabs({
       <UsageLimitChip
         ptyId={surfaces.find((sf) => sf.id === activeSurfaceId)?.ptyId}
         compact={usageLimitCompact}
+        readOnly={readOnly}
       />
       {supervision && (
         <span

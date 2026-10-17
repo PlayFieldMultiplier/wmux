@@ -10,8 +10,8 @@ import { getAccountStore, isAccessibleDir, isUnsafeKey } from './accountStore';
 
 export type ContinuePaneResult = { ok: true } | { ok: false; code: string };
 
-/** Stop grace (5 s) + prompt wait (5 s) + the copy, with room to spare. */
-const CONTINUE_TIMEOUT_MS = 30_000;
+/** Stop grace (5 s) + prompt wait (5 s) + the copy of a large transcript, with room to spare. */
+const CONTINUE_TIMEOUT_MS = 60_000;
 
 export function registerContinueOnAccountHandler(daemonClient: DaemonClient | undefined): () => void {
   ipcMain.removeHandler(IPC.ACCOUNT_CONTINUE_PANE);
@@ -29,8 +29,9 @@ export function registerContinueOnAccountHandler(daemonClient: DaemonClient | un
         { timeoutMs: CONTINUE_TIMEOUT_MS }) as { ok?: unknown; code?: unknown } | null;
       if (res?.ok === true) return { ok: true };
       return { ok: false, code: typeof res?.code === 'string' ? res.code : 'unknown' };
-    } catch {
-      return { ok: false, code: 'unavailable' };
+    } catch (err) {
+      // A timeout is not a refusal: the daemon may still finish the move.
+      return { ok: false, code: err instanceof Error && err.message.startsWith('RPC timeout') ? 'pending' : 'unavailable' };
     }
   });
   return () => { ipcMain.removeHandler(IPC.ACCOUNT_CONTINUE_PANE); };

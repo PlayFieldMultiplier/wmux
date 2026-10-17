@@ -31,12 +31,12 @@ export function useUsageLimitNow(active: boolean): number {
 
 const TEXT_BTN = `ui-icon-btn ${FOCUS_RING} h-6 px-1.5 shrink-0 text-[11px] leading-none whitespace-nowrap`;
 
-export default function UsageLimitChip({ ptyId, compact }: { ptyId: string | undefined; compact: boolean }) {
+export default function UsageLimitChip({ ptyId, compact, readOnly = false }: { ptyId: string | undefined; compact: boolean; readOnly?: boolean }) {
   const t = useT();
   const limit = useStore((s) => (ptyId ? s.usageLimits[ptyId] : undefined));
   const now = useUsageLimitNow(!!limit);
   // Another Claude account can take the conversation over while this one waits.
-  const continueAccount = usePaneContinueOnAccount({ ptyId, allowed: !!limit });
+  const continueAccount = usePaneContinueOnAccount({ ptyId, allowed: !!limit && !readOnly });
   const reloadContinueAccount = continueAccount.reload;
   useEffect(() => { reloadContinueAccount(); }, [reloadContinueAccount]);
   const continueBtnRef = useRef<HTMLButtonElement>(null);

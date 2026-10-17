@@ -8387,10 +8387,11 @@ async function main(): Promise<void> {
           if (shell === 'bash' || shell === 'zsh') return 'posix';
           return process.platform === 'win32' ? null : 'posix';
         },
-        stopClaude: (sid) => stopAgentTree({
+        stopClaude: (sid, stillIdle) => stopAgentTree({
           tree: () => agentProcessTracker.agentProcessTree(sid, 'claude'),
           stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
           kill: (pid, signal) => process.kill(pid, signal),
+          stillIdle,
         }),
         paneFree: async (sid) => {
           const pane = sessionManager.getSession(sid);
@@ -8404,20 +8405,21 @@ async function main(): Promise<void> {
           if (!pane || pane.promptLog.size === 0 || pane.promptLog.isCommandRunning()) return null;
           return pane.bridge.isEmptyShellPrompt() ? pane.bridge.getInputRevision() : null;
         },
-        rebind: (sid, dir, transcriptPath) => {
+        rebind: (sid, dir, binding) => {
           const meta = sessionManager.getSession(sid)?.meta;
-          if (!meta) return () => undefined;
+          if (!meta) return null;
           const before = { env: meta.env, paneAccount: meta.paneAccount, resumeBinding: meta.resumeBinding };
-          meta.env = { ...meta.env, CLAUDE_CONFIG_DIR: dir };
-          meta.paneAccount = { vendor: 'claude' };
-          if (meta.resumeBinding) meta.resumeBinding = { ...meta.resumeBinding, transcriptPath, ts: Date.now() };
-          stateWriter.saveImmediate(buildState(sessionManager));
-          return () => {
+          const restore = () => {
             meta.env = before.env;
             meta.paneAccount = before.paneAccount;
             meta.resumeBinding = before.resumeBinding;
-            stateWriter.saveImmediate(buildState(sessionManager));
           };
+          meta.env = { ...meta.env, CLAUDE_CONFIG_DIR: dir };
+          meta.paneAccount = { vendor: 'claude' };
+          meta.resumeBinding = { ...binding, ts: Date.now() };
+          // Unpersisted, a restart would recover the pane on the old account.
+          if (!stateWriter.saveImmediate(buildState(sessionManager))) { restore(); return null; }
+          return () => { restore(); stateWriter.saveImmediate(buildState(sessionManager)); };
         },
         write: (sid, data) => {
           const pane = sessionManager.getSession(sid);

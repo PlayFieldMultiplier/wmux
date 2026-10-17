@@ -61,6 +61,15 @@ describe('copyTranscript', () => {
     expect(await copyTranscript(source, target)).toBe('diverged');
     expect(fs.readFileSync(source, 'utf8')).toBe('{"turn":1}\n{"turn":2}\n{"turn":3}\n');
   });
+
+  it('refuses a target projects folder linked to the source one, leaving the source as it was', async () => {
+    const linked = path.join(root, 'c');
+    fs.mkdirSync(linked);
+    fs.symlinkSync(path.join(accountA, 'projects'), path.join(linked, 'projects'), process.platform === 'win32' ? 'junction' : 'dir');
+    const before = fs.readFileSync(source, 'utf8');
+    expect(await copyTranscript(source, path.join(linked, 'projects', '-work-repo', `${SID}.jsonl`))).toBe('same');
+    expect(fs.readFileSync(source, 'utf8')).toBe(before);
+  });
 });
 
 describe('relaunchLine', () => {
@@ -81,10 +90,13 @@ describe('continueOnAccount', () => {
       liveAgent: () => 'claude',
       turnClosed: () => true,
       shellKind: () => 'posix',
-      stopClaude: async () => { calls.push('stop'); return { ok: true, stopped: true, pid: 1, killed: 1 }; },
+      stopClaude: async (_id, stillIdle) => {
+        calls.push('stop');
+        return stillIdle() ? { ok: true, stopped: true, pid: 1, killed: 1 } : { ok: false, code: 'turn_open' };
+      },
       paneFree: async () => true,
       promptRevision: () => 7,
-      rebind: () => { calls.push('rebind'); return () => { calls.push('undo'); }; },
+      rebind: (_id, _dir, b) => { calls.push(`rebind:${b.transcriptPath}`); return () => { calls.push('undo'); }; },
       write: (_id, data) => { calls.push(`write:${data}`); return true; },
       copy: async (s, t) => { calls.push('copy'); return copyTranscript(s, t); },
       sleep: async () => undefined,
@@ -96,7 +108,7 @@ describe('continueOnAccount', () => {
     const d = deps();
     const res = await continueOnAccount(d, 'p1', accountB);
     expect(res).toEqual({ ok: true, sessionId: SID, transcriptPath: path.join(accountB, 'projects', '-work-repo', `${SID}.jsonl`) });
-    expect(d.calls.slice(0, 3)).toEqual(['stop', 'copy', 'rebind']);
+    expect(d.calls.slice(0, 3)).toEqual(['stop', 'copy', `rebind:${path.join(accountB, 'projects', '-work-repo', `${SID}.jsonl`)}`]);
     expect(d.calls[3]).toContain(`claude --resume ${SID}`);
     expect(fs.existsSync(source)).toBe(true);
   });
@@ -111,6 +123,12 @@ describe('continueOnAccount', () => {
     const revisions = [7, 8];
     const raced = deps({ promptRevision: vi.fn(() => revisions.shift() ?? null) });
     expect(await continueOnAccount(raced, 'p1', accountB)).toEqual({ ok: false, code: 'shell_busy' });
-    expect(raced.calls).toEqual(['stop', 'copy', 'rebind', 'undo']);
+    expect(raced.calls.map((c) => c.split(':')[0])).toEqual(['stop', 'copy', 'rebind', 'undo']);
+
+    // A hook rebound the pane to another conversation while Claude stopped: nothing is copied or typed.
+    let reads = 0;
+    const rebound = deps({ pane: () => ({ resumeBinding: reads++ === 0 ? binding() : binding({ sessionId: '1b5c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d' }) }) });
+    expect(await continueOnAccount(rebound, 'p1', accountB)).toEqual({ ok: false, code: 'unknown_session' });
+    expect(rebound.calls).toEqual(['stop']);
   });
 });

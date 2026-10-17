@@ -22,7 +22,10 @@ const REFUSAL_KEYS: Record<string, string> = {
   unknown_session: 'pane.continueOnAccountUnknownSession',
   same_account: 'pane.continueOnAccountSameAccount',
   turn_open: 'pane.continueOnAccountTurnOpen',
-  busy: 'pane.continueOnAccountTurnOpen',
+  busy: 'pane.continueOnAccountInProgress',
+  pending: 'pane.continueOnAccountPending',
+  still_running: 'pane.continueOnAccountStillRunning',
+  copy_failed: 'pane.continueOnAccountCopyFailed',
   diverged: 'pane.continueOnAccountDiverged',
   unsupported: 'pane.continueOnAccountUnsupported',
   unavailable: 'pane.continueOnAccountUnsupported',
@@ -68,7 +71,7 @@ export function usePaneContinueOnAccount(opts: {
         pushToast({ level: 'info', message: t('pane.continueOnAccountDone', { name: account.name }) });
         return;
       }
-      pushToast({ level: 'error', message: t(REFUSAL_KEYS[res.code] ?? 'pane.continueOnAccountFailed') });
+      pushToast({ level: res.code === 'pending' ? 'warn' : 'error', message: t(REFUSAL_KEYS[res.code] ?? 'pane.continueOnAccountFailed') });
     } catch {
       pushToast({ level: 'error', message: t('pane.continueOnAccountFailed') });
     }
