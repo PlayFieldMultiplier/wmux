@@ -1,0 +1,119 @@
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import net from 'node:net';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import { DaemonPipeServer } from '../DaemonPipeServer';
+
+// #2349 — pane create/attach have their own per-socket budget, so background
+// polling that fills the global budget cannot refuse a pane the user asked for.
+
+const TOKEN = 'test-token-2349';
+
+function testPipeName(suffix: string): string {
+  const id = crypto.randomUUID().slice(0, 8);
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\wmux-test-${suffix}-${id}`;
+  }
+  return path.join(os.tmpdir(), `wmux-test-${suffix}-${id}.sock`);
+}
+
+type Reply = { id: string; ok: boolean; result?: unknown; error?: string };
+
+// Every request on ONE socket, the way the app multiplexes its RPCs (a socket
+// per request would hit the per-second connection cap instead).
+function sendBatch(pipeName: string, methods: string[]): Promise<Map<string, Reply>> {
+  return new Promise((resolve, reject) => {
+    const replies = new Map<string, Reply>();
+    const client = net.createConnection(pipeName, () => {
+      const lines = methods.map((method, i) => JSON.stringify({ id: String(i), method, params: {}, token: TOKEN }));
+      client.write(lines.join('\n') + '\n');
+    });
+    let buf = '';
+    client.setEncoding('utf8');
+    client.on('data', (chunk: string) => {
+      buf += chunk;
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const reply = JSON.parse(line) as Reply;
+        replies.set(reply.id, reply);
+      }
+      if (replies.size === methods.length) {
+        client.destroy();
+        resolve(replies);
+      }
+    });
+    client.on('error', reject);
+  });
+}
+
+describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
+  let server: DaemonPipeServer;
+  let pipeName: string;
+
+  beforeEach(async () => {
+    // One frozen second: the limiter windows are 1s of Date.now(), and a batch
+    // that straddled a boundary would reset the counts mid-flood.
+    vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    pipeName = testPipeName('rate');
+    server = new DaemonPipeServer(pipeName);
+    server.setAuthToken(TOKEN);
+    server.onRpc('daemon.ping', async () => ({ pong: true }));
+    server.onRpc('task.mission.list', async () => ({ ok: true, tasks: [] }));
+    server.onRpc('daemon.createSession', async () => ({ created: true }));
+    server.onRpc('daemon.attachSession', async () => ({ attached: true }));
+    await server.start();
+  });
+
+  afterEach(async () => {
+    await server.stop();
+    vi.restoreAllMocks();
+  });
+
+  it('dispatches createSession/attachSession after a background flood used up the global budget', async () => {
+    const methods = [
+      ...Array.from({ length: 250 }, () => 'task.mission.list'),
+      'daemon.createSession',
+      'daemon.attachSession',
+    ];
+    const replies = await sendBatch(pipeName, methods);
+    expect(replies.get('250')).toMatchObject({ ok: true, result: { created: true } });
+    expect(replies.get('251')).toMatchObject({ ok: true, result: { attached: true } });
+  });
+
+  it('still refuses background calls past the global limit in the same second', async () => {
+    // Priority, not a raised limit: 200 background calls pass, the rest are
+    // refused, and interactive calls in between do not count against them.
+    const methods = [
+      ...Array.from({ length: 150 }, () => 'task.mission.list'),
+      ...Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? 'daemon.createSession' : 'daemon.attachSession')),
+      ...Array.from({ length: 100 }, () => 'daemon.ping'),
+    ];
+    const replies = await sendBatch(pipeName, methods);
+    const background = methods
+      .map((m, i) => ({ m, r: replies.get(String(i))! }))
+      .filter(({ m }) => m === 'task.mission.list' || m === 'daemon.ping');
+    expect(background.filter(({ r }) => r.ok)).toHaveLength(200);
+    const refused = background.filter(({ r }) => !r.ok);
+    expect(refused).toHaveLength(50);
+    for (const { r } of refused) expect(r.error).toBe('rate limited (global)');
+    const interactive = methods
+      .map((m, i) => ({ m, r: replies.get(String(i))! }))
+      .filter(({ m }) => m === 'daemon.createSession' || m === 'daemon.attachSession');
+    expect(interactive.every(({ r }) => r.ok)).toBe(true);
+  });
+
+  it('bounds interactive calls by their own per-socket cap', async () => {
+    const methods = Array.from({ length: 150 }, (_, i) => (i % 2 === 0 ? 'daemon.createSession' : 'daemon.attachSession'));
+    const replies = await sendBatch(pipeName, methods);
+    const all = [...replies.values()];
+    expect(all.filter((r) => r.ok)).toHaveLength(100);
+    const refused = all.filter((r) => !r.ok);
+    expect(refused).toHaveLength(50);
+    for (const r of refused) expect(r.error).toBe('rate limited (interactive)');
+    // The refused ones are the tail: the first 100 in the second are served.
+    for (let i = 0; i < 100; i++) expect(replies.get(String(i))!.ok).toBe(true);
+  });
+});

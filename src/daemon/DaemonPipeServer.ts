@@ -114,6 +114,8 @@ export class DaemonPipeServer {
   private nextClientId = 1;
   private readonly clientCloseHandlers: ((clientId: string) => void)[] = [];
   private readonly rateLimits = new Map<net.Socket, { count: number; resetAt: number }>();
+  // Per-socket budget for INTERACTIVE_METHODS, separate from `rateLimits`.
+  private readonly interactiveRateLimits = new Map<net.Socket, { count: number; resetAt: number }>();
   private globalRate = { count: 0, resetAt: 0 };
   private connectionRate = { count: 0, resetAt: 0 };
 
@@ -128,6 +130,21 @@ export class DaemonPipeServer {
   // GLOBAL_RATE_LIMIT, which still bounds totals; the per-socket cap is redundant
   // DoS protection for a single trusted local client.
   private static readonly PER_SOCKET_RATE_LIMIT = 200;
+  // Pane create/attach must not lose to background polling (#2349). The app's
+  // one socket also carries every workspace's `task.mission.list` poll, and a
+  // 90-workspace window filled the global budget with those alone, so a pane
+  // the user just asked for was refused with `rate limited (global)`. These
+  // methods get their own per-socket budget instead: they are neither counted
+  // in nor refused by the global and per-socket counters above, so background
+  // traffic is still capped exactly as before and cannot starve them. Only the
+  // two calls that open a pane are here: `pty:create` runs createSession then
+  // attachSession, and `pty:reconnect` ends in attachSession. The cap bounds
+  // each client: 100/s is 4x the attach peak seen restoring ~94 panes.
+  private static readonly INTERACTIVE_METHODS: ReadonlySet<string> = new Set([
+    'daemon.createSession',
+    'daemon.attachSession',
+  ]);
+  private static readonly INTERACTIVE_PER_SOCKET_RATE_LIMIT = 100;
   private static readonly MAX_NEW_CONNECTIONS_PER_SEC = 20;
 
   private activePipeName: string;
@@ -346,6 +363,7 @@ export class DaemonPipeServer {
           this.eventSubscribers.delete(socket);
           this.preSubscribeBacklogs.delete(socket);
           this.rateLimits.delete(socket);
+          this.interactiveRateLimits.delete(socket);
           this.clientIds.delete(socket);
           this.socketsByClientId.delete(clientId);
           this.firstPartyClients.delete(clientId);
@@ -461,6 +479,7 @@ export class DaemonPipeServer {
     this.socketsByClientId.clear();
     this.firstPartyClients.clear();
     this.rateLimits.clear();
+    this.interactiveRateLimits.clear();
     // Forced drop-to-zero — keep idle-window accounting consistent.
     this.lastDisconnectAt = Date.now();
     return newToken;
@@ -636,6 +655,23 @@ export class DaemonPipeServer {
       }
     }
 
+    if (DaemonPipeServer.INTERACTIVE_METHODS.has(method)) {
+      let interactive = this.interactiveRateLimits.get(socket);
+      if (!interactive || now > interactive.resetAt) {
+        interactive = { count: 0, resetAt: now + 1000 };
+        this.interactiveRateLimits.set(socket, interactive);
+      }
+      interactive.count++;
+      if (interactive.count > DaemonPipeServer.INTERACTIVE_PER_SOCKET_RATE_LIMIT) {
+        // Keeps the `rate limited` prefix the pty:create rollback retries on.
+        const res = JSON.stringify({ id: request.id, ok: false, error: 'rate limited (interactive)' });
+        socket.write(res + '\n');
+        return;
+      }
+      this.dispatchAndReply(socket, request);
+      return;
+    }
+
     // Global rate limit
     if (now > this.globalRate.resetAt) {
       this.globalRate = { count: 0, resetAt: now + 1000 };
@@ -660,7 +696,10 @@ export class DaemonPipeServer {
       return;
     }
 
-    // Dispatch to handler
+    this.dispatchAndReply(socket, request);
+  }
+
+  private dispatchAndReply(socket: net.Socket, request: RpcRequest): void {
     this.dispatch(request, this.clientIds.get(socket) ?? '')
       .then((response) => {
         if (!socket.destroyed) {

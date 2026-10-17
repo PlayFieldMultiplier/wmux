@@ -1300,15 +1300,17 @@ export class FanOutService {
         fs.mkdirSync(ctx.output.batchDir, { recursive: true });
         fs.mkdirSync(cwd); // non-recursive: an existing folder is a collision
       } catch (err) {
-        await this.compensate(taskId, ctx.verifiedWorkspaceId);
-        return { ...base, error: `output folder create failed: ${(err as Error).message}` };
+        const error = `output folder create failed: ${(err as Error).message}`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, undefined, { title: ctx.title, reason: error });
+        return { ...base, error };
       }
       base.outputDir = cwd;
     } else {
       const pf = await this.worktrees.preflight(ctx.repoPath, ctx.title, taskId, ctx.branch ? { branch: ctx.branch } : undefined);
       if (!pf.ok) {
-        await this.compensate(taskId, ctx.verifiedWorkspaceId);
-        return { ...base, error: `worktree preflight failed: ${pf.error}` };
+        const error = `worktree preflight failed: ${pf.error}`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, undefined, { title: ctx.title, reason: error });
+        return { ...base, error };
       }
       const pinRefusal = dispatchOriginPinRefusal(ctx.originPin, pf.plan.originPin);
       if (pinRefusal) {
@@ -1320,8 +1322,9 @@ export class FanOutService {
         ? await this.worktrees.createDetachedWorktree(plan, ctx.checkout.sha)
         : await this.worktrees.createWorktree(plan, ctx.baseOid);
       if (!created.ok) {
-        await this.compensate(taskId, ctx.verifiedWorkspaceId);
-        return { ...base, error: `worktree create failed: ${created.error}` };
+        const error = `worktree create failed: ${created.error}`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, undefined, { title: ctx.title, reason: error });
+        return { ...base, error };
       }
       base.worktreePath = plan.worktreePath;
       gitWorktreeDir = created.gitWorktreeDir;
@@ -1336,6 +1339,8 @@ export class FanOutService {
     }
     // A failure after this point keeps the folder: the worktree is preserved
     // for the J3 cleanup; an output folder is never removed by wmux at all.
+    // Except a launch refused before any pane could exist: that worktree is
+    // rolled back (rollbackTaskWorktree, #2349).
     const preserved = plan ? { preservedWorktree: plan.worktreePath } : {};
 
     // 프롬프트 파일(비었으면 생략 — §7 "환경만 조성") + task.json 스탬프를 태스크 메타
@@ -1407,8 +1412,9 @@ export class FanOutService {
       fs.writeFileSync(path.join(metaDir, WORKTASK_META_FILENAME), JSON.stringify(stamp), 'utf8');
     } catch (err) {
       discardTempDir();
-      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
-      return { ...base, error: `prompt file write failed: ${(err as Error).message}`, ...preserved };
+      const error = `prompt file write failed: ${(err as Error).message}`;
+      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
+      return { ...base, error, ...preserved };
     }
 
     // T2 — 태스크 환경 변수(포트). 훅과 에이전트 페인이 같은 값을 본다.
@@ -1434,7 +1440,7 @@ export class FanOutService {
         // 이 태스크만 보상한다 — 훅 타임아웃/실패는 fan-out 전체를 접지 않고,
         // 호출부 루프가 다음 태스크를 그대로 이어간다.
         discardTempDir();
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: `worktree setup hook failed: ${setupRun.error}` });
         // 페인이 뜨지 않았으니 포트는 이 태스크의 것이 아니다 — 결과에서 뺀다
         // (run()이 예약도 함께 반납한다).
         const { port: _unusedPort, ...withoutPort } = base;
@@ -1460,8 +1466,9 @@ export class FanOutService {
       }
       if (!slot.ok) {
         discardTempDir();
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
-        return { ...base, error: `not launched: ${slot.reason}`, ...preserved };
+        const error = `not launched: ${slot.reason}`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
+        return { ...base, error, ...preserved };
       }
       // Released or held once; whatever is left is released on the way out.
       let settled = false;
@@ -1492,8 +1499,10 @@ export class FanOutService {
     if (refusal) {
       releaseSlot();
       discardTempDir();
-      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
-      return { ...base, error: `not launched: ${refusal}`, ...preserved };
+      const error = `not launched: ${refusal}`;
+      const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
+      return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
     }
 
     // A bot's named secrets: one single-use grant for this spawn, which only
@@ -1523,8 +1532,10 @@ export class FanOutService {
       if (!secretGrant) {
         releaseSlot();
         discardTempDir();
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
-        return { ...base, error: 'not launched: a secret it names is not stored any more', ...preserved };
+        const error = 'not launched: a secret it names is not stored any more';
+        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
+        return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
       }
     }
 
@@ -1573,10 +1584,16 @@ export class FanOutService {
         workerPermissionMode: ctx.workerMode,
       });
       if ('error' in spawned) {
+        // The renderer answers with an error only after it rolled its
+        // workspace back (a refused pty:create included), so no pane will
+        // ever work in this worktree. The temp dir still goes to the sweep:
+        // main's own create rollback can fail to destroy a daemon session.
         releaseSlot();
         handOverTempDir(`task:${taskId}`);
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
-        return { ...base, error: `renderer spawn failed: ${spawned.error}`, ...preserved };
+        const error = `renderer spawn failed: ${spawned.error}`;
+        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
+        return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
       }
       workspaceId = spawned.workspaceId;
       // ptyId는 옵셔널(핸드셰이크가 싣지 못하면 부재) — §3 onExhausted 토스트 매핑용.
@@ -1585,11 +1602,14 @@ export class FanOutService {
       // 한다 — 아니면 재발사가 역할의 에이전트·모델을 조용히 잃는다.
       if (spawned.initialCommand) base.initialCommand = spawned.initialCommand;
     } catch (err) {
-      // A timeout does not prove the pane never spawned either.
+      // A timeout does not prove the pane never spawned either: a late pane
+      // is closed when it lands (spawnTaskWorkspace), but the worktree stays,
+      // recorded on the task's ledger row.
       releaseSlot();
       handOverTempDir(`task:${taskId}`);
-      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan);
-      return { ...base, error: `renderer spawn threw: ${(err as Error).message}`, ...preserved };
+      const error = `renderer spawn threw: ${(err as Error).message}`;
+      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
+      return { ...base, error, ...preserved };
     } finally {
       releaseAgyTrust();
       releaseBotSpawn();
@@ -2064,19 +2084,89 @@ export class FanOutService {
   /**
    * 태스크 단위 보상(§2): mission.close(J0 보상 경로 재사용 — 채널 archive 포함).
    * worktree는 **삭제하지 않고** 보존(실패 시점 디스크 상태 파괴가 더 위험 — §2).
-   * close 실패는 무시(best-effort — 태스크는 미물질화 open으로 남아 리포트에 노출).
+   * The few refusals that come before any pane could exist roll their worktree
+   * back first (rollbackTaskWorktree); `failure.outcome` then says so.
+   *
+   * #2349: the task's ledger row is written first and whether or not the close
+   * lands — a close refused in the same RPC storm that refused the spawn used
+   * to leave a folder with no row at all. A failed close is logged, not
+   * swallowed; the task then stays an open, unmaterialized mission, which the
+   * cleanup scan lists.
    */
   private async compensate(
     taskId: string,
     verifiedWorkspaceId: string,
-    _plan?: TaskWorktreePlan,
+    plan: TaskWorktreePlan | undefined,
+    failure: { title: string; reason: string; outcome?: string },
   ): Promise<void> {
+    const outcome = failure.outcome ?? (plan ? `; worktree kept at ${plan.worktreePath}` : '');
+    await this.recordNotLaunched(taskId, verifiedWorkspaceId, failure.title, `${failure.reason}${outcome}`);
     try {
-      const closed = (await this.daemon.rpc('task.mission.close', { taskId, verifiedWorkspaceId })) as { ok?: boolean } | undefined;
+      const closed = (await this.daemon.rpc('task.mission.close', { taskId, verifiedWorkspaceId })) as { ok?: boolean; error?: unknown } | undefined;
       // Lane F: a closed task leaves the ledger `cancelled` right away.
       if (closed?.ok) await noteWorkTaskClosed(taskId);
-    } catch {
+      else console.warn(`[fanout] ${taskId}: mission close after a failed spawn was refused: ${describeErr(closed?.error)}`);
+    } catch (err) {
       // best-effort 보상 — 실패해도 fan-out은 계속한다.
+      console.warn(`[fanout] ${taskId}: mission close after a failed spawn failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * The ledger row of a task that never got its pane: registered and moved
+   * straight to `cancelled`, with why and what became of its folder as the
+   * summary. No task workspace exists, so the row names a placeholder no real
+   * workspace id can equal. It carries no dispatch: a bot already has the
+   * failure in the fan-out result, and a bot-origin row would wake it again.
+   */
+  private async recordNotLaunched(taskId: string, ownerWorkspaceId: string, title: string, summary: string): Promise<void> {
+    try {
+      const ledger = getTaskLedger();
+      await ledger.register({ id: taskId, taskWorkspaceId: `unlaunched:${taskId}`, ownerWorkspaceId, title });
+      await ledger.closeTask(taskId, undefined, summary);
+    } catch (err) {
+      console.warn(`[fanout] ${taskId}: ledger row for a task that did not launch not written: ${String(err)}`);
+    }
+  }
+
+  /**
+   * #2349 — take back the worktree of a spawn that was refused before any pane
+   * could exist (the launch check, a missing secret, or the renderer reporting
+   * that pty:create failed: it rolls its workspace back in that case). Nothing
+   * but wmux's own setup ever wrote there, so the removal is forced. The branch
+   * goes only while it still points at the commit it was created from; a
+   * detached checkout has none. Never throws. `removed: false` keeps the
+   * folder, and `outcome` (the ledger summary's tail) says where and why.
+   */
+  private async rollbackTaskWorktree(
+    plan: TaskWorktreePlan | undefined,
+    ctx: { baseOid?: string; checkout?: { sha: string } },
+  ): Promise<{ removed: boolean; outcome?: string }> {
+    if (!plan) return { removed: false };
+    try {
+      const removed = await this.worktrees.removeWorktree(plan.repoRoot, plan.repoHash, plan.worktreePath, undefined, { force: true });
+      if (!removed.ok) {
+        console.warn(`[fanout] worktree of a spawn that did not launch kept at ${plan.worktreePath}: ${removed.error}`);
+        return { removed: false, outcome: `; worktree kept at ${plan.worktreePath} (${removed.error})` };
+      }
+      try {
+        fs.rmSync(plan.metaDir, { recursive: true, force: true });
+      } catch (err) {
+        console.warn(`[fanout] meta dir ${plan.metaDir} not removed: ${String(err)}`);
+      }
+      if (ctx.checkout) return { removed: true, outcome: '; its worktree was removed' };
+      if (!ctx.baseOid) return { removed: true, outcome: `; its worktree was removed, branch ${plan.branch} kept (its base commit is unknown)` };
+      const branch = await this.worktrees
+        .deleteBranchIfAt(plan.repoRoot, plan.repoHash, plan.branch, ctx.baseOid)
+        .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
+      if (!branch.ok) {
+        console.warn(`[fanout] branch ${plan.branch} kept: ${branch.error}`);
+        return { removed: true, outcome: `; its worktree was removed, branch ${plan.branch} kept` };
+      }
+      return { removed: true, outcome: '; its worktree and branch were removed' };
+    } catch (err) {
+      console.warn(`[fanout] worktree of a spawn that did not launch kept at ${plan.worktreePath}: ${String(err)}`);
+      return { removed: false, outcome: `; worktree kept at ${plan.worktreePath} (${String(err)})` };
     }
   }
 
