@@ -1134,6 +1134,25 @@ describe('a worktree git removed only half way', () => {
     expect(fs.readFileSync(path.join(bound, 'keep.txt'), 'utf8')).toBe('mine');
   });
 
+  it('a mount above the folder, below its root, is refused too: by the mount table or by its device', async () => {
+    const root = path.join(dir, 'root6');
+    const task = path.join(root, 'batch', 'task');
+    fs.mkdirSync(task, { recursive: true });
+    fs.writeFileSync(path.join(task, 'keep.txt'), 'mine');
+    const real = (p: string): string => {
+      const r = fs.realpathSync.native(p);
+      return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r;
+    };
+    await expect(removeTreeNoFollow(task, root, async () => new Set([real(path.join(root, 'batch'))]))).rejects.toBeInstanceOf(MountPointError);
+    const spy = fakeMounts([path.join(root, 'batch')]);
+    try {
+      await expect(removeTreeNoFollow(task, root, async () => new Set())).rejects.toBeInstanceOf(MountPointError);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.readFileSync(path.join(task, 'keep.txt'), 'utf8')).toBe('mine');
+  });
+
   it('parseMountInfo reads the mount points of /proc/self/mountinfo, escapes undone', () => {
     const table = [
       '22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw',

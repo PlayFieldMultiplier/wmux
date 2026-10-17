@@ -365,17 +365,28 @@ export async function removeTreeNoFollow(dir: string, root?: string, readMounts:
   }
   // A volume mounted at the folder itself (its device is not its parent's).
   if (top.isDirectory() && (await fs.promises.lstat(path.dirname(path.resolve(dir)))).dev !== top.dev) throw new MountPointError(dir);
+  // A mount on the same device (a Linux bind mount) keeps the device, the
+  // inode and the real path: only the mount table names it.
+  const mounts = top.isDirectory() ? await readMounts() : new Set<string>();
   let expected: string;
   if (root !== undefined) {
     const rel = path.relative(path.resolve(root), path.resolve(dir));
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`${dir} is not inside ${root}: left alone`);
-    expected = path.join(await realKey(root), foldCase(rel));
+    const rootReal = await realKey(root);
+    expected = path.join(rootReal, foldCase(rel));
+    // Nor a mount on the way down from the root (a folder above `dir`
+    // mounted from elsewhere).
+    const rootDev = (await fs.promises.lstat(root)).dev;
+    let at = path.resolve(root);
+    let key = rootReal;
+    for (const part of rel.split(path.sep)) {
+      at = path.join(at, part);
+      key = path.join(key, foldCase(part));
+      if (mounts.has(key) || (await fs.promises.lstat(at)).dev !== rootDev) throw new MountPointError(at);
+    }
   } else {
     expected = await realKey(dir);
   }
-  // A mount on the same device (a Linux bind mount) keeps the device, the
-  // inode and the real path: only the mount table names it.
-  const mounts = top.isDirectory() ? await readMounts() : new Set<string>();
   await removeEntry(dir, expected, top, mounts);
 }
 
