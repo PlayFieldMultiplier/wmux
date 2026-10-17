@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { defaultGit, pushTaskBranch, readWorkerFile, type TaskPushExec, type TaskPushGit } from '../taskPush';
 import { fetchTaskRefs } from '../taskFetch';
-import { recordedTaskGitWorktreeDir } from '../taskGitCommonDir';
+import { recordedTaskGitCommonDir, recordedTaskGitWorktreeDir } from '../taskGitCommonDir';
 import { liveNoChangesPorts } from '../../factory/noChangesCheck';
 import type { LedgerEntry } from '../../../shared/ledger';
 import {
@@ -110,7 +110,8 @@ describe('relay git: inside WSL', () => {
     const exec: TaskPushExec = async (_file, args, env) => {
       calls.push({ args, env });
       const prog = args[5];
-      if (prog === 'test') return { code: 0, stdout: '', stderr: '' };
+      // No `shallow`; HEAD is a plain file.
+      if (prog === 'test') return { code: args.includes('-e') ? 1 : 0, stdout: '', stderr: '' };
       if (prog === 'timeout') return { code: 0, stdout: 'ref: refs/heads/wtask/one\n', stderr: '' };
       if (prog === 'wslpath') return { code: 0, stdout: `/mnt/c/wmux${String(args[args.length - 1]).slice(root.length).replace(/\\/g, '/')}\n`, stderr: '' };
       if (args.includes('--version')) return { code: 0, stdout: 'git version 2.50.0\n', stderr: '' };
@@ -402,11 +403,71 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     expect(Date.now() - t0).toBeLessThan(5000);
   });
 
-  it('never sets GIT_CONFIG_NOSYSTEM on any call', async () => {
+  it('a file that turns into a FIFO, a symlink or another file after it was checked is refused on the opened handle', async () => {
+    const plain = path.join(root, 'plain');
+    fs.writeFileSync(plain, 'x\n');
+    const plainStat = await fs.promises.lstat(plain);
+    const fifo = path.join(root, 'fifo');
+    execFileSync('mkfifo', [fifo]);
+    fs.symlinkSync(plain, path.join(root, 'link'));
+    fs.writeFileSync(path.join(root, 'another'), 'y\n');
+    // The check saw a plain file; what is opened is not that file.
+    const lstat = vi.spyOn(fs.promises, 'lstat').mockResolvedValue(plainStat);
+    try {
+      const t0 = Date.now();
+      // Opened without blocking, then refused by its type.
+      expect(await readWorkerFile(fifo)).toBeNull();
+      // Not followed.
+      expect(await readWorkerFile(path.join(root, 'link'))).toBeNull();
+      // Another file than the one checked.
+      expect(await readWorkerFile(path.join(root, 'another'))).toBeNull();
+      expect(Date.now() - t0).toBeLessThan(5000);
+    } finally {
+      lstat.mockRestore();
+    }
+    // Grown past the cap after the check.
+    const grown = path.join(root, 'grown');
+    fs.writeFileSync(grown, 'x');
+    const small = await fs.promises.lstat(grown);
+    fs.writeFileSync(grown, 'x'.repeat(5000));
+    const again = vi.spyOn(fs.promises, 'lstat').mockResolvedValue(small);
+    try {
+      expect(await readWorkerFile(grown)).toBeNull();
+    } finally {
+      again.mockRestore();
+    }
+  });
+
+  it('a shallow list that is not a small plain file is refused before git reads it', async () => {
+    const calls: string[][] = [];
+    const spy: TaskPushGit = async (args, cwd, env) => { calls.push(args); return defaultGit(args, cwd, env); };
+    const shallow = path.join(common, 'shallow');
+    execFileSync('mkfifo', [shallow]);
+    const t0 = Date.now();
+    expect(await pushTaskBranch(input(), spy, FILE_OK)).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringContaining('shallow list') });
+    fs.rmSync(shallow);
+    fs.writeFileSync(path.join(root, 'elsewhere'), `${'a'.repeat(40)}\n`);
+    fs.symlinkSync(path.join(root, 'elsewhere'), shallow);
+    expect(await fetchTaskRefs(input(), spy, FILE_OK)).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringContaining('shallow list') });
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(calls.every((a) => a.includes('--version') || a.includes('--list'))).toBe(true);
+  });
+
+  it('never sets GIT_CONFIG_NOSYSTEM on any call, and sets GIT_NO_LAZY_FETCH on every one', async () => {
     const envs: Array<Record<string, string> | undefined> = [];
     const spy: TaskPushGit = async (args, cwd, env) => { envs.push(env); return defaultGit(args, cwd, env); };
     expect(await pushTaskBranch(input(), spy, FILE_OK)).toMatchObject({ ok: true });
+    expect(await fetchTaskRefs(input(), spy, FILE_OK)).toMatchObject({ ok: true });
+    const ports = liveNoChangesPorts({ rpc: () => null, git: spy, wmuxDir: () => path.join(root, 'data'), botRepoKey: () => undefined, botRepoPath: () => repo, gitDeps: FILE_OK });
+    expect(await ports.headOf(work, rowFor())).toBe(git(work, 'rev-parse', 'HEAD'));
+    expect(await ports.branchRef(work, 'wtask/one', rowFor())).toBe(git(work, 'rev-parse', 'HEAD'));
+    expect(await ports.remoteHead(rowFor(), { worktreePath: work, branch: 'wtask/one' })).toMatchObject({ ok: true });
+    // A legacy row: the repository found from the bot's folder.
+    expect(await recordedTaskGitCommonDir({ origin: { kind: 'bot', botId: 'b1' } }, () => repo, spy)).toBe(common);
+    expect(envs.length).toBeGreaterThan(10);
     expect(envs.some((e) => e && 'GIT_CONFIG_NOSYSTEM' in e)).toBe(false);
     expect(envs.some((e) => e && 'GIT_CONFIG_GLOBAL' in e)).toBe(false);
+    // Every call runs with GIT_NO_LAZY_FETCH.
+    expect(envs.every((e) => e?.GIT_NO_LAZY_FETCH === '1')).toBe(true);
   });
 });

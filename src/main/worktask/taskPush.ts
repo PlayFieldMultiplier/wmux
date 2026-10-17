@@ -295,8 +295,27 @@ export async function readWorkerFile(p: string, max = 4096): Promise<string | nu
   }
 }
 
+/** Whether anything is at `p` (a dangling symlink counts); null when that
+ *  cannot be told. */
+async function hostPathPresent(p: string): Promise<boolean | null> {
+  try {
+    await fs.promises.lstat(p);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null;
+  }
+}
+
+async function wslPathPresent(exec: TaskPushExec, distro: string, linuxPath: string): Promise<boolean | null> {
+  const wslExe = wslExePath(process.env.SystemRoot);
+  const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'test', '-e', linuxPath, '-o', '-h', linuxPath], wslEnv());
+  return r.code === 0 ? true : r.code === 1 ? false : null;
+}
+
 /** readWorkerFile inside a WSL distro: a plain file only, at most `max`
- *  bytes, given a few seconds. */
+ *  bytes, given a few seconds. It runs in a child process, so main never
+ *  waits on it past that timeout; callers parse its text strictly and never
+ *  echo it back. */
 async function wslReadFile(exec: TaskPushExec, distro: string, linuxPath: string, max = 4096): Promise<string | null> {
   const wslExe = wslExePath(process.env.SystemRoot);
   const isFile = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'test', '-f', linuxPath, '-a', '!', '-h', linuxPath], wslEnv());
@@ -376,15 +395,16 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   if (objectFormat !== 'sha1' && objectFormat !== 'sha256') return { ok: false, reason: 'config-refused', error: `the repository's object format ${objectFormat} is not one main reads` };
   const idRe = objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : /^[0-9a-f]{40}$/;
   // A shallow repository: the relay reads the boundary commits from its own
-  // `shallow`, so main copies the list there.
-  const isShallow = await local(['rev-parse', '--is-shallow-repository']);
-  const shallowState = isShallow.code === 0 ? isShallow.stdout.trim() : '';
-  if (shallowState !== 'true' && shallowState !== 'false') return fail(`git rev-parse --is-shallow-repository failed: ${isShallow.stderr.trim().slice(0, 300)}`);
+  // `shallow`, so main copies the list there. Main reads `shallow` itself
+  // (readWorkerFile), before any git call that would.
+  const shallowPath = target.kind === 'wsl' ? path.posix.join(common, 'shallow') : path.join(common, 'shallow');
+  const shallowPresent = target.kind === 'wsl' ? await wslPathPresent(wslExec, target.distro, shallowPath) : await hostPathPresent(shallowPath);
+  if (shallowPresent === null) return { ok: false, reason: 'config-refused', error: 'the repository\'s shallow list could not be read' };
   let shallowList = '';
-  if (shallowState === 'true') {
+  if (shallowPresent) {
     const text = target.kind === 'wsl'
-      ? await wslReadFile(wslExec, target.distro, path.posix.join(common, 'shallow'), SHALLOW_MAX)
-      : await readWorkerFile(path.join(common, 'shallow'), SHALLOW_MAX);
+      ? await wslReadFile(wslExec, target.distro, shallowPath, SHALLOW_MAX)
+      : await readWorkerFile(shallowPath, SHALLOW_MAX);
     const ids = (text ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     if (text === null || ids.length === 0 || !ids.every((id) => idRe.test(id))) return { ok: false, reason: 'config-refused', error: 'the repository\'s shallow list could not be read' };
     shallowList = `${[...new Set(ids)].join('\n')}\n`;
@@ -533,7 +553,7 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
   const commit = await repo.local(['rev-parse', '--verify', '--quiet', '--end-of-options', `${head.oid}^{commit}`]);
   const sha = commit.stdout.trim();
   if (commit.code !== 0 || sha !== head.oid) {
-    return { ok: false, reason: 'git-failed', error: `the worktree's HEAD ${head.oid} is not a commit: ${commit.stderr.trim().slice(0, 500)}` };
+    return { ok: false, reason: 'git-failed', error: `the worktree's HEAD ${head.oid} is not a commit in the task's repository` };
   }
   const pushed = await repo.inRelay(origin.url, (run) => run(taskPushArgs(input.branch, origin.url, sha)));
   if (!pushed.ok) return { ok: false, reason: 'git-failed', error: pushed.error };
