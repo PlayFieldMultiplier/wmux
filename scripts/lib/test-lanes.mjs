@@ -1,14 +1,22 @@
 /**
- * Test lanes: which test files touch the operating system ("integration") and
- * which are pure unit tests ("unit").
+ * Test lanes: which test files must run on Windows in a PR's CI
+ * ("integration": they touch the operating system, or they know about
+ * Windows) and which are pure, OS-agnostic unit tests ("unit").
  *
- * Why: CI runs ~2,000 test files on a 4-core Windows runner with one worker
+ * Why: CI ran ~2,000 test files on a 4-core Windows runner with one worker
  * process per core. The files that spawn real processes (git, PowerShell,
  * node), open sockets or pipes, or lean on real temp-dir I/O were every flake
  * of a week, all of the "the runner was slow" kind: they wait on the OS, and
  * the OS is shared with 1,000 other files. vitest.config.ts runs the two lanes
  * as two projects; the integration project gets fewer workers and longer
- * timeouts (see the comment there), and CI runs it as its own job.
+ * timeouts (see the comment there). CI runs it as its own Windows job and runs
+ * the unit lane on Linux, where process and file-system calls are several
+ * times cheaper; a nightly job still runs everything on Windows. The two real
+ * Windows-only failures of the week before the lanes (a `.gitconfig` git
+ * refused on Windows, a WSL path) were both in files rule 2 catches, and over
+ * the 21 PR commits that had run on both OSes, none had failed on Windows
+ * alone — so the unit lane's Linux result is trusted for pure logic, and
+ * anything that so much as names Windows stays on Windows (rule 5).
  *
  * The rule below decides each file's lane from its source. Its result is
  * checked in as vitest.lanes.json (integration files only; every other
@@ -20,7 +28,7 @@
  * THE RULE. A test file is `integration` when any of these holds, else `unit`:
  *
  *   1. Pragma. A line comment `// @wmux-lane integration` or
- *      `// @wmux-lane unit` decides outright, overriding 2-4. Use it when the
+ *      `// @wmux-lane unit` decides outright, overriding 2-5. Use it when the
  *      rule guesses wrong, and say why on the next line.
  *   2. The file imports an OS module itself: `child_process`, `net`, `http`,
  *      `https`, `http2`, `dgram` or `tls`, with or without the `node:` prefix,
@@ -41,6 +49,12 @@
  *      no spawn in the test's own text. Without the `mkdtemp` half the rule
  *      would pull in every test of a pure helper that happens to live in a
  *      module that also spawns.
+ *
+ *   5. The file mentions `win32` anywhere in its text: a platform check, a
+ *      `skipIf`/`runIf`, a comment. A file that knows about Windows must run
+ *      on Windows, whatever it imports; 309 of 2,106 files when measured,
+ *      26 of them running only on win32. The plain substring is the rule, so
+ *      a new spelling cannot slip past it.
  *
  * Out of scope on purpose: fsync-heavy writes on their own. A durable write
  * is slow, not OS-shared state, and the tests that tripped on it were fixed
@@ -89,6 +103,9 @@ const MOCK_CALL = /\bvi\s*\.\s*(?:do)?[mM]ock\s*\(\s*['"]([^'"]+)['"]/g;
 const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm;
 const PRAGMA = /^[ \t]*\/\/[ \t]*@wmux-lane[ \t]+(\S+)/m;
 const MKDTEMP = /\bmkdtemp(?:Sync)?\b/;
+// Rule 5. A substring, not a word: `win32` never appears in this codebase
+// except to mean Windows.
+const WIN32 = /win32/;
 const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts', '/index.tsx', '/index.mjs', '/index.js'];
 
 const toPosix = (p) => p.split(path.sep).join('/');
@@ -207,6 +224,7 @@ export function classifyTestFile(file, { root = ROOT, read = (abs) => fs.readFil
   const mocked = mockedIn(source);
 
   for (const mod of osImports(source, mocked.os)) reasons.push(`imports node:${mod}`);
+  if (WIN32.test(source)) reasons.push('mentions win32');
 
   const usesTempDir = MKDTEMP.test(source);
   const mockedRelative = new Set([...mocked.relative].map((spec) => resolveRelative(abs, spec)).filter(Boolean));

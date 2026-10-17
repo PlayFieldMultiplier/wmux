@@ -28,9 +28,15 @@ jobs:
   validate:
     name: validate (${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: windows-latest
-    # The heavier shard takes ~8 min of tests; a hung step must not hold a
-    # runner for the 6 h default.
+    # The unit lane: pure, OS-agnostic tests (scripts/lib/test-lanes.mjs; every
+    # file that touches the OS or so much as mentions win32 is in the
+    # integration job below, on Windows). Linux spawns and reads files several
+    # times faster than Windows, and over the 21 PR commits that had run on
+    # both OSes before the lanes none failed on Windows alone. windows.yml
+    # still runs every lane on Windows nightly and on each push to main.
+    runs-on: ubuntu-latest
+    # The heavier shard took ~8 min of tests on Windows; a hung step must not
+    # hold a runner for the 6 h default.
     timeout-minutes: 35
     strategy:
       # Both shards report, so one red shard does not hide the other's failures.
@@ -50,7 +56,8 @@ jobs:
           # libuv 1.52.1 without libuv/libuv#5152 and abort on a directory
           # watch under the runner's 8.3 `%TEMP%` (C:\Users\RUNNER~1),
           # killing a vitest fork. 24.21.0 carries the fix. A bare `24` is not
-          # enough: it resolved from the runner's tool cache to 24.19.0.
+          # enough: it resolved from the runner's tool cache to 24.19.0. That
+          # was on Windows; the range stays here so every job runs one Node.
           node-version: '>=24.21.0 <25'
           cache: npm
 
@@ -124,7 +131,7 @@ jobs:
         run: npx eslint --max-warnings=0 src/shared/platform.ts src/shared/__tests__/platform.test.ts src/shared/ShellDetector.ts src/shared/__tests__/ShellDetector.test.ts src/shared/shellResolution.ts src/shared/__tests__/shellResolution.test.ts src/main/notification/__tests__/ToastManager.test.ts
 
       # The runtime suites (`*.runtime.test.*`) run in validate-runtime below.
-      - name: Test (unit suite, shard ${{ matrix.shard }}/2)
+      - name: Test (unit lane, shard ${{ matrix.shard }}/2)
         run: npm run test:unit -- --shard=${{ matrix.shard }}/2
 
   validate-runtime:
@@ -224,23 +231,25 @@ jobs:
         timeout-minutes: 5
         run: node native/computer-use-windows/smoke.mjs native/computer-use-windows/dist/wmux-computer-use.exe --limited native/computer-use-windows/tools/dist/RunLimited.exe --hang native/computer-use-windows/tools/dist/HangWindow.exe --require-full
 
-  # The integration lane: the test files that spawn processes (git, node,
-  # PowerShell), open sockets or pipes, or run such code in a real temp dir
-  # (scripts/lib/test-lanes.mjs decides, vitest.lanes.json lists them). They
-  # used to share validate's shards and runners with ~1,900 pure unit files,
-  # one worker per core, and every flake of a week was one of them waiting on
-  # that crowded OS. Here they run on runners of their own, two files at a
-  # time per runner (the project's maxWorkers is 50% of the 4 vCPUs) with 30 s
-  # timeouts. validate runs `test:unit`, everything else; together the two
-  # jobs run what `npm run test:parallel` runs.
+  # The integration lane, on Windows: the test files that spawn processes
+  # (git, node, PowerShell), open sockets or pipes, run such code in a real
+  # temp dir, or mention win32 at all (scripts/lib/test-lanes.mjs decides,
+  # vitest.lanes.json lists them). They used to share validate's shards and
+  # runners with ~1,700 pure unit files, one worker per core, and every flake
+  # of a week was one of them waiting on that crowded OS. Here they run on
+  # Windows runners of their own, two files at a time per runner (the
+  # project's maxWorkers is 50% of the 4 vCPUs) with 30 s timeouts. This is
+  # the PR's Windows check; validate runs `test:unit`, everything else, on
+  # Linux. Together the two jobs run what `npm run test:parallel` runs.
   integration:
     name: integration (${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
-    # The lane is ~8.6% of the files but ~64% of the unit suite's test time
-    # on windows-latest (main, 2026-10-17: 826 s of 1,287 s). At two workers
-    # that is ~9 min on one runner; two shards keep each near 3-6 min, under
-    # validate's own length. The cap only stops a hang.
+    # Before the win32 rule the lane was ~8.6% of the files but ~64% of the
+    # suite's test time on windows-latest (main, 2026-10-17: 826 s of
+    # 1,287 s); the rule roughly doubles the file count with mostly light
+    # files. At two workers that is ~9-11 min on one runner; two shards keep
+    # each near 4-6 min. The cap only stops a hang.
     timeout-minutes: 30
     strategy:
       fail-fast: false

@@ -52,6 +52,19 @@ describe('the checked-in lanes', () => {
     expect(listed.integration.length).toBeGreaterThan(60);
   });
 
+  it('every test file that mentions win32 runs in the integration lane, on Windows', () => {
+    const inLane = new Set(listed.integration);
+    const offenders = listTestFiles()
+      .filter((file) => /win32/.test(fs.readFileSync(path.join(ROOT, file), 'utf8')))
+      .filter((file) => !inLane.has(file))
+      .map(
+        (file) =>
+          `${file} mentions win32 but is not in the integration lane, so a PR would run it on Linux only: ` +
+          'run `node scripts/test-lanes.mjs --write`, or put `// @wmux-lane unit` in it with a line saying why Windows cannot change its result.',
+      );
+    expect(offenders.join('\n')).toBe('');
+  });
+
   it('walks exactly the files vitest.config.ts includes', () => {
     const unit = project('unit');
     const globbed = fs
@@ -92,6 +105,15 @@ describe('the rule', () => {
     expect(classify({ [T]: `const cp = require("${CP}");\n` }).lane).toBe('integration');
     expect(classify({ [T]: `const net = await import('${NET}');\n` }).reasons).toEqual(['imports node:net']);
     expect(classify({ [T]: `import 'node:${NET}';\n` }).lane).toBe('integration');
+  });
+
+  it('keeps a file that names win32 on Windows, whatever it imports', () => {
+    expect(classify({ [T]: `it.skipIf(process.platform === 'win32')('x', () => {});\n` })).toMatchObject({
+      lane: 'integration',
+      reasons: ['mentions win32'],
+    });
+    expect(classify({ [T]: `// Paths here are POSIX; win32 has its own suite.\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `expect(process.platform).toBeDefined();\n` }).lane).toBe('unit');
   });
 
   it('skips type-only imports and modules the file mocks', () => {
