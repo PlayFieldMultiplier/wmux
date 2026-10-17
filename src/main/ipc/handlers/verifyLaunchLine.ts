@@ -48,6 +48,9 @@ export const LAUNCH_LINE_QUIET_MS = 4_000;
 
 export interface LaunchLineRead {
   events: PromptLineEvent[];
+  /** The session's whole prompt log size; `events` may be only its newest
+   *  page. Absent from an older daemon. */
+  eventCount?: number;
   totalBytesWritten: number;
   sessionFound: boolean;
 }
@@ -138,7 +141,7 @@ export function verifyLaunchLine(opts: VerifyLaunchLineOptions): { cancel: () =>
           try {
             written = await opts.resendIfUnchanged({
               outputBytes: r.totalBytesWritten,
-              markerCount: r.events.length,
+              markerCount: r.eventCount ?? r.events.length,
               lastPromptMarker: last ? { type: last.type, byteOffset: last.byteOffset } : null,
             });
           } catch {

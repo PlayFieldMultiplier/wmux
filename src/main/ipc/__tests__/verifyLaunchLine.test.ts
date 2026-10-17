@@ -35,7 +35,7 @@ function fakeDaemonWrite(live: () => LaunchLineRead | null) {
     const same =
       !!now &&
       now.totalBytesWritten === expect.outputBytes &&
-      now.events.length === expect.markerCount &&
+      (now.eventCount ?? now.events.length) === expect.markerCount &&
       (last?.type ?? null) === (expect.lastPromptMarker?.type ?? null) &&
       (last?.byteOffset ?? null) === (expect.lastPromptMarker?.byteOffset ?? null);
     if (same) writes.push(expect);
@@ -60,7 +60,7 @@ function run(reads: (call: number) => LaunchLineRead | null, nothingRunning = tr
     windowMs: 10_000,
     onDone: (o) => { outcome = o; },
   });
-  return { resend, running, outcome: () => outcome };
+  return { resend, running, daemon, outcome: () => outcome };
 }
 
 describe('verifyLaunchLine', () => {
@@ -170,6 +170,15 @@ describe('verifyLaunchLine', () => {
       lastPromptMarker: { type: 'prompt_end', byteOffset: 180 },
     });
     expect(daemon.writes).toHaveLength(1);
+  });
+
+  it('compares the whole prompt log, not the page it read, when the history is long', async () => {
+    // 33 markers: the read returns the newest 32, the daemon compares all 33.
+    const long = (): LaunchLineRead => ({ ...atPrompt(180), eventCount: 33 });
+    const v = run((n) => (n === 0 ? booting : long()));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(v.resend.count).toBe(1);
+    expect(v.daemon.resendIfUnchanged).toHaveBeenCalledWith(expect.objectContaining({ markerCount: 33 }));
   });
 
   it('never re-sends when the line was echoed after a fresh prompt', async () => {

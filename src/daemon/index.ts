@@ -5334,6 +5334,9 @@ function registerRpcHandlers(
 
     return {
       events,
+      // The whole log's size, not just this page: daemon.writeIfUnchanged
+      // compares against it.
+      eventCount: managed.promptLog.size,
       lastCompletedRange,
       totalBytesWritten,
       sessionFound: true,
