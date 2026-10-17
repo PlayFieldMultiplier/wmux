@@ -171,6 +171,7 @@ import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/h
 import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
+import { ApiErrorTurnEndWatcher } from './transcript/ApiErrorTurnEndWatcher';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
 import { admitCodexCapture, gateCodexStop } from './transcript/codexCapture';
 import { CodexCwdBinder, codexLiveFor, describeCodexPane, readProcessStartMs, type CodexPaneFacts } from './transcript/codexRolloutByCwd';
@@ -322,6 +323,7 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
+let apiErrorTurnEnds: ApiErrorTurnEndWatcher | null = null;
 // Phone native chat bridge (contract v0.3.1). Built in registerRpcHandlers next
 // to the services it wraps; the web server reads it lazily per request.
 let chatBridge: ChatBridge | null = null;
@@ -3886,6 +3888,24 @@ function registerRpcHandlers(
     });
     transcriptActivity.start();
   }
+  // A Claude turn that died on an API error, on an install without the
+  // StopFailure hook: the transcript's error entry stands in for the hook.
+  if (!apiErrorTurnEnds) {
+    apiErrorTurnEnds = new ApiErrorTurnEndWatcher({
+      listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
+      getBinding: (id) => {
+        const session = sessionManager.getSession(id);
+        if (!session || isBrainPty({ id, env: session.meta.env })) return undefined;
+        return currentMoaPane()?.sessionId === id ? undefined : resolveTranscriptBinding(id);
+      },
+      isTurnOpen: (id) => sessionManager.getSession(id)?.bridge.isTurnOpen() === true,
+      emit: (signal) => {
+        log('info', `[hooks] ${signal.ptyId}: API-error turn end (${String(signal.payload.error)}) read from the transcript; no StopFailure hook arrived`);
+        hookIngest?.handle(signal);
+      },
+    });
+    apiErrorTurnEnds.start();
+  }
 
   // Chat View — F9 early availability. Guarded like the projector: a second
   // registerRpcHandlers call must not mint a second searcher, or the first
@@ -4501,6 +4521,7 @@ function registerRpcHandlers(
         projector.nudge(sessionId, kind, agentSessionId);
         // A hook-fed session's own activity line wins over the transcript.
         transcriptActivity?.noteHookSignal(sessionId, kind);
+        apiErrorTurnEnds?.noteHookSignal(sessionId, kind);
         // #782 — phone turn-view nudge. Non-recording: bypasses attentionLog so
         // a busy pane cannot evict a pending approval and blank the badge on
         // replay (CRITICAL 3). Delivered only to devices watching this pane; a
@@ -6410,6 +6431,7 @@ function wireEvents(
     chatSubscribers.delete(payload.id);
     transcriptProjector?.dropPty(payload.id);
     transcriptActivity?.dropSession(payload.id);
+    apiErrorTurnEnds?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
     // …and nothing left to discover a transcript FOR.
     transcriptDiscovery?.cancel(payload.id);
@@ -7030,6 +7052,7 @@ function wireEvents(
     chatSubscribers.delete(payload.id);
     transcriptProjector?.dropPty(payload.id);
     transcriptActivity?.dropSession(payload.id);
+    apiErrorTurnEnds?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
     // …and nothing left to discover a transcript FOR.
     transcriptDiscovery?.cancel(payload.id);
@@ -7272,6 +7295,7 @@ async function shutdown(
   chatPushTimers.clear(); chatSubscribers.clear();
   transcriptProjector?.dispose();
   transcriptActivity?.dispose();
+  apiErrorTurnEnds?.dispose();
   terminalChat?.dispose();
   // Same for the discovery searches — unref'd watch handles and poll timers.
   transcriptDiscovery?.dispose();
