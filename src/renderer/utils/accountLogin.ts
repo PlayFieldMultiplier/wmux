@@ -27,6 +27,8 @@ export interface AccountLoginRequest {
   loginCommand: string;
   /** Set when re-authenticating a registered account; absent for a new one. */
   accountId?: string;
+  /** Group a new account joins once it is registered. */
+  group?: string;
 }
 
 export interface PendingLogin extends AccountLoginRequest {
@@ -206,7 +208,8 @@ async function onLoggedIn(w: Watch): Promise<void> {
     if (entry.accountId) {
       api?.usageRefresh?.(entry.accountId);
     } else {
-      await api?.add({ name: entry.name, vendor: entry.vendor, configDir: entry.configDir });
+      const added = await api?.add({ name: entry.name, vendor: entry.vendor, configDir: entry.configDir });
+      if (added && entry.group) await api?.setGroup?.({ id: added.id, group: entry.group });
     }
   } catch (err) {
     watches.delete(entry.configDir);

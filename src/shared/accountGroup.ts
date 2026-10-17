@@ -39,3 +39,14 @@ export function groupAccounts<T extends { group?: string }>(accounts: readonly T
     .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
     .map(([group, list]) => ({ group, accounts: list }));
 }
+
+/** {@link groupAccounts} with `boundGroup`'s bucket first (the pool the
+ *  workspace rotates in); null keeps name order (nothing is bound). */
+export function groupAccountsBoundFirst<T extends { group?: string }>(
+  accounts: readonly T[],
+  boundGroup: string | null,
+): { group: string; accounts: T[] }[] {
+  const buckets = groupAccounts(accounts);
+  if (boundGroup === null) return buckets;
+  return [...buckets.filter((b) => b.group === boundGroup), ...buckets.filter((b) => b.group !== boundGroup)];
+}
