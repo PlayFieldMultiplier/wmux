@@ -125,7 +125,7 @@ jobs:
 
       # The runtime suites (`*.runtime.test.*`) run in validate-runtime below.
       - name: Test (unit suite, shard ${{ matrix.shard }}/2)
-        run: npm run test:parallel -- --shard=${{ matrix.shard }}/2
+        run: npm run test:unit -- --shard=${{ matrix.shard }}/2
 
   validate-runtime:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -223,3 +223,43 @@ jobs:
       - name: Smoke run (hello, capabilities, listApps with Notepad open)
         timeout-minutes: 5
         run: node native/computer-use-windows/smoke.mjs native/computer-use-windows/dist/wmux-computer-use.exe --limited native/computer-use-windows/tools/dist/RunLimited.exe --hang native/computer-use-windows/tools/dist/HangWindow.exe --require-full
+
+  # The integration lane: the test files that spawn processes (git, node,
+  # PowerShell), open sockets or pipes, or run such code in a real temp dir
+  # (scripts/lib/test-lanes.mjs decides, vitest.lanes.json lists them). They
+  # used to share validate's shards and runners with ~1,900 pure unit files,
+  # one worker per core, and every flake of a week was one of them waiting on
+  # that crowded OS. Here they run on runners of their own, two files at a
+  # time per runner (the project's maxWorkers is 50% of the 4 vCPUs) with 30 s
+  # timeouts. validate runs `test:unit`, everything else; together the two
+  # jobs run what `npm run test:parallel` runs.
+  integration:
+    name: integration (${{ matrix.shard }}/2)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: windows-latest
+    # The lane is ~8.6% of the files but ~64% of the unit suite's test time
+    # on windows-latest (main, 2026-10-17: 826 s of 1,287 s). At two workers
+    # that is ~9 min on one runner; two shards keep each near 3-6 min, under
+    # validate's own length. The cap only stops a hang.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      # Same pins and toolchain as validate; see the comments there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '>=24.21.0 <25'
+          cache: npm
+
+      - name: Use npm 11
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test (integration lane, shard ${{ matrix.shard }}/2)
+        run: npm run test:integration -- --shard=${{ matrix.shard }}/2
