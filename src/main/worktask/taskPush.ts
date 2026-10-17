@@ -212,9 +212,12 @@ function wslExePath(systemRoot: string | undefined): string {
 /** The env of a wsl.exe run: `extra` reaches the distro only by name in
  *  WSLENV (its values are Linux paths and text, so no `/p`). */
 function wslEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-  const base = getExecEnv();
+  // The same variables as main's own git leaves out, and none of git's own
+  // forwarded by an existing WSLENV: the distro's git gets only main's.
+  const base = workerGitEnv(getExecEnv());
+  const forwarded = (base.WSLENV ?? '').split(':').filter((n) => n && !/^GIT_/i.test(n.split('/')[0])).join(':');
   const add = { GIT_TERMINAL_PROMPT: '0', ...extra };
-  return { ...base, ...add, WSL_UTF8: '1', WSLENV: mergeWslEnv(base.WSLENV, Object.keys(add)) };
+  return { ...base, ...add, WSL_UTF8: '1', WSLENV: mergeWslEnv(forwarded, Object.keys(add)) };
 }
 
 /** A TaskPushGit that runs inside a WSL distro on its gitdir (the `cwd` it is
@@ -277,7 +280,8 @@ function hostPathKind(p: string): PathKind {
     const st = fs.lstatSync(p);
     if (st.isSymbolicLink()) return 'symlink';
     if (st.isDirectory()) return 'dir';
-    if (st.isFile()) return 'file';
+    // A file with another name elsewhere is not one main writes to.
+    if (st.isFile()) return st.nlink === 1 ? 'file' : 'other';
     return 'other';
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -304,10 +308,13 @@ function wslRefPorts(distro: string, exec: TaskPushExec, systemRoot: string | un
     join: (...parts) => path.posix.join(...parts),
     caseInsensitive: false,
     kinds: async (paths) => {
-      const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'stat', '--printf=%n\\0%F\\0', '--', ...paths], env);
+      const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'stat', '--printf=%n\\0%F\\0%h\\0', '--', ...paths], env);
       const parts = r.stdout.split('\0');
       const found = new Map<string, PathKind>();
-      for (let i = 0; i + 1 < parts.length; i += 2) found.set(parts[i], STAT_KINDS[parts[i + 1]] ?? 'other');
+      for (let i = 0; i + 2 < parts.length; i += 3) {
+        const kind = STAT_KINDS[parts[i + 1]] ?? 'other';
+        found.set(parts[i], kind === 'file' && parts[i + 2] !== '1' ? 'other' : kind);
+      }
       // A path stat could not read for another reason than its absence is
       // not a folder main writes through.
       const missing = /No such file or directory/;
@@ -373,7 +380,9 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
       }
     };
   }
-  const local = (args: string[]) => raw([...safe, ...args], input.worktreePath);
+  // No object is fetched on demand from a promisor remote during a read.
+  const NO_LAZY = { GIT_NO_LAZY_FETCH: '1' };
+  const local = (args: string[]) => raw([...safe, ...args], input.worktreePath, NO_LAZY);
   const pre = await workerGitPreflight(local);
   if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
   const own = (key: string) => pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === key)?.value;
@@ -381,7 +390,8 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   if (refStorage !== undefined && refStorage.toLowerCase() !== 'files') {
     return { ok: false, reason: 'config-refused', error: 'the repository keeps its refs in a ref store main does not write to' };
   }
-  if (own('extensions.partialclone') !== undefined) return { ok: false, reason: 'config-refused', error: 'the repository is a partial clone' };
+  const promisor = pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && (e.key === 'extensions.partialclone' || /^remote\..+\.promisor$/.test(e.key)));
+  if (promisor) return { ok: false, reason: 'config-refused', error: `the repository is a partial clone (${promisor.key})` };
   const objectFormat = (own('extensions.objectformat') ?? 'sha1').toLowerCase();
   if (objectFormat !== 'sha1' && objectFormat !== 'sha256') return { ok: false, reason: 'config-refused', error: `the repository's object format ${objectFormat} is not one main reads` };
   // A shallow repository: git in a clean dir reads the boundary commits from
@@ -410,7 +420,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
       const gitDir = target.kind === 'wsl' ? (deps.toWslPath ?? toWslPath)(dir) : dir;
       if (!gitDir) return { ok: false, error: `main's folder ${dir} has no path inside WSL` };
       const cleanRaw: TaskPushGit = target.kind === 'wsl' ? wslTaskPushGit(target.distro, gitDir, wslExec) : (args, _cwd, extra) => git([`--git-dir=${gitDir}`, ...args], dir as string, extra);
-      const init = await cleanRaw([...safe, 'init', '-q', '--bare', '--template=', ...(objectFormat === 'sha256' ? ['--object-format=sha256'] : [])], dir);
+      const init = await cleanRaw([...safe, 'init', '-q', '--bare', '--template=', `--object-format=${objectFormat}`], dir);
       if (init.code !== 0) return { ok: false, error: `git init failed: ${init.stderr.trim().slice(0, 300)}` };
       const set = await cleanRaw([...safe, 'config', 'remote.origin.url', url], dir);
       if (set.code !== 0) return { ok: false, error: `git config failed: ${set.stderr.trim().slice(0, 300)}` };
@@ -426,7 +436,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
         if (cleanList.code !== 0) return { ok: false, error: `git config --list failed: ${cleanList.stderr.trim().slice(0, 300)}` };
         owned = transportConfigDiff(context, parseRawGitConfigList(cleanList.stdout));
       }
-      const env = cleanGitEnv(gitDir, objectDir, owned);
+      const env = { ...cleanGitEnv(gitDir, objectDir, owned), ...NO_LAZY };
       const run = (args: string[]) => cleanRaw([...cleanArgs, ...args], dir as string, env);
       return { ok: true, value: await fn(run) };
     } catch (err) {
@@ -442,7 +452,15 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
     }
   };
 
-  const refRefusal = (refname: string) => guardedRefPathRefusal(common, refname, ports);
+  const refRefusal = async (refname: string): Promise<string | null> => {
+    const walk = await guardedRefPathRefusal(common, refname, ports);
+    if (walk) return walk;
+    // A ref, loose or packed, whose name is a folder of this one or under it.
+    const refs = await local(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin/']);
+    if (refs.code !== 0) return `git for-each-ref failed: ${refs.stderr.trim().slice(0, 300)}`;
+    const clash = refs.stdout.split('\n').map((r) => r.trim()).find((r) => r && r !== refname && (refname.startsWith(`${r}/`) || r.startsWith(`${refname}/`)));
+    return clash ? `${clash} is in the way of ${refname}` : null;
+  };
   const writeRef: TaskGitRepo['writeRef'] = async (refname, sha) => {
     if (!SHA_RE.test(sha)) return { ok: false, error: `${sha} is not a commit id` };
     const refused = await refRefusal(refname);
@@ -460,7 +478,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
     repo: {
       entries: pre.entries,
       local,
-      head: (args) => head([...safe, ...args], input.worktreePath),
+      head: (args) => head([...safe, ...args], input.worktreePath, NO_LAZY),
       inClean,
       refRefusal,
       writeRef,

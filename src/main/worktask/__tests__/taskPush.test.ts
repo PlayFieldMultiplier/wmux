@@ -362,7 +362,7 @@ describe('task.push: a repository inside WSL', () => {
         for (const p of paths) {
           try {
             const st = fs.lstatSync(p);
-            stdout += `${p}\0${st.isSymbolicLink() ? 'symbolic link' : st.isDirectory() ? 'directory' : st.isFile() ? 'regular file' : 'fifo'}\0`;
+            stdout += `${p}\0${st.isSymbolicLink() ? 'symbolic link' : st.isDirectory() ? 'directory' : st.isFile() ? 'regular file' : 'fifo'}\0${st.nlink}\0`;
           } catch {
             missing = true;
           }

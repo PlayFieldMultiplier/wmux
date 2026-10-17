@@ -300,7 +300,16 @@ export class TaskWorktreeManager {
     try {
       const { stdout } = await this.runGit(['rev-parse', '--git-common-dir'], realRoot);
       const out = stdout.trim();
-      if (out) gitCommonDir = fs.realpathSync.native(path.resolve(realRoot, out));
+      if (out) {
+        const resolved = path.resolve(realRoot, out);
+        try {
+          gitCommonDir = fs.realpathSync.native(resolved);
+        } catch {
+          // A repository inside a WSL distro, on a share Windows cannot
+          // resolve: the distro resolves the path itself (taskPush.ts).
+          gitCommonDir = process.platform === 'win32' && /^\\\\wsl(?:\$|\.localhost)\\/i.test(resolved) ? resolved : undefined;
+        }
+      }
     } catch {
       gitCommonDir = undefined;
     }

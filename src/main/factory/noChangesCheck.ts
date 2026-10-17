@@ -63,7 +63,7 @@ export interface NoChangesPorts {
   /** The task branch's local ref (`refs/heads/<branch>` in the task's
    *  repository): its commit, null when there is no such ref, `unknown`
    *  when it cannot be read. */
-  branchRef: (worktreePath: string, branch: string) => Promise<string | null | 'unknown'>;
+  branchRef: (worktreePath: string, branch: string, entry: LedgerEntry) => Promise<string | null | 'unknown'>;
   /** Main's record of the commit task.push last published for the task. */
   pushed: (taskId: string) => TaskPushLookup;
   /** The task branch on origin (readTaskRemoteHead). */
@@ -89,7 +89,7 @@ export async function checkNoChanges(ports: NoChangesPorts, entry: LedgerEntry):
       const head = await ports.headOf(mission.worktreePath);
       if (!head || !SHA_RE.test(head)) return unknown(`the worktree's HEAD could not be read${when}`);
       if (!same(head, base)) return { kind: 'changed', why: `the worktree's HEAD is ${head}, not ${base}${when}` };
-      const ref = await ports.branchRef(mission.worktreePath, mission.branch);
+      const ref = await ports.branchRef(mission.worktreePath, mission.branch, entry);
       if (ref === 'unknown' || (ref !== null && !SHA_RE.test(ref))) return unknown(`the task branch ${mission.branch} could not be read${when}`);
       if (ref !== null && !same(ref, base)) return { kind: 'changed', why: `the task branch ${mission.branch} is at ${ref}, not ${base}${when}` };
       const pushed = ports.pushed(entry.id);
@@ -138,9 +138,12 @@ export function liveNoChangesPorts(deps: LiveNoChangesDeps): NoChangesPorts {
       const sha = r.stdout.trim();
       return r.code === 0 && SHA_RE.test(sha) ? sha : null;
     },
-    branchRef: async (wt, branch) => {
-      // The ref's value as stored, in the repository the worktree shares.
-      const r = await deps.git(['--no-replace-objects', 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], wt);
+    branchRef: async (_wt, branch, entry) => {
+      // The ref's value as stored, in the repository main recorded for the
+      // task (never one found through the worktree).
+      const dir = await recordedTaskGitCommonDir(entry.dispatch, deps.botRepoPath ?? (() => undefined));
+      if (!dir) return 'unknown';
+      const r = await deps.git([`--git-dir=${dir}`, '--no-replace-objects', 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], dir);
       const sha = r.stdout.trim();
       if (r.code === 0 && SHA_RE.test(sha)) return sha;
       // `--verify --quiet` exits 1, printing nothing, for a ref that is not there.

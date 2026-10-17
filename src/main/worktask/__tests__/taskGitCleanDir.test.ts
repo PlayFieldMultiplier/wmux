@@ -329,6 +329,29 @@ describe.skipIf(process.platform === 'win32')('clean git dir: real git', () => {
     });
 
 
+    it('a packed ref whose name is a folder of the ref', async () => {
+      git(repo, '-c', 'core.logAllRefUpdates=false', 'update-ref', 'refs/remotes/origin/wtask', git(repo, 'rev-parse', 'main'));
+      git(repo, 'pack-refs', '--all');
+      const before = branches();
+      expect(await pushTaskBranch(input(), undefined, FILE_OK)).toMatchObject({ ok: false, error: expect.stringMatching(/in the way/) });
+      expect(branches()).toBe(before);
+      expect(git(origin, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/main');
+    });
+
+    it('a reflog with a second name elsewhere', async () => {
+      const outside = path.join(root, 'outside.log');
+      fs.writeFileSync(outside, 'kept\n');
+      fs.mkdirSync(path.join(common, 'logs', 'refs', 'remotes', 'origin', 'wtask'), { recursive: true });
+      fs.linkSync(outside, path.join(common, 'logs', 'refs', 'remotes', 'origin', 'wtask', 'one'));
+      expect(await pushTaskBranch(input(), undefined, FILE_OK)).toMatchObject({ ok: false, error: expect.stringMatching(/not a plain file/) });
+      expect(fs.readFileSync(outside, 'utf8')).toBe('kept\n');
+    });
+
+    it('a promisor remote', async () => {
+      git(repo, 'config', 'remote.origin.promisor', 'true');
+      await refusedBoth(/partial clone/);
+    });
+
     it('a partial clone', async () => {
       git(repo, 'config', 'core.repositoryformatversion', '1');
       git(repo, 'config', 'extensions.partialClone', 'origin');
