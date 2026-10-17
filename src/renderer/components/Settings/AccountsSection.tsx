@@ -202,8 +202,8 @@ function GroupPicker({ account, groups, onSet }: {
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          // Enter that ends an IME composition is not a commit.
-          if (e.nativeEvent.isComposing) return;
+          // Enter that ends an IME composition is not a commit (some IMEs send it as keyCode 229).
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === 'Enter') commit();
           if (e.key === 'Escape') setTyping(false);
         }}
