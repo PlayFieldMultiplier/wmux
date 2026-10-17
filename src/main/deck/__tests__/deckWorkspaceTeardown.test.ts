@@ -158,11 +158,13 @@ describe('surfaceStrandedWork shared function', () => {
     };
 
     surfaceStrandedWork('ws-test', work, 'cleared', dir);
-    // Yield for promise resolution of raiseDecision
-    await new Promise((r) => setTimeout(r, 20));
-
-    const decision = loadWorkspaceDecision('ws-test', dir);
-    expect(decision).not.toBeNull();
+    // raiseDecision is fire-and-forget and writes the decision file; a fixed
+    // 20 ms sleep lost that race once on the loaded Windows shard.
+    const decision = await vi.waitFor(() => {
+      const d = loadWorkspaceDecision('ws-test', dir);
+      expect(d).not.toBeNull();
+      return d;
+    }, { timeout: 10_000 });
     expect(decision?.question).toContain('Cancel those tasks, or leave them running?');
     expect(decision?.options).toEqual(['Cancel the old tasks', 'Leave them running']);
   });
