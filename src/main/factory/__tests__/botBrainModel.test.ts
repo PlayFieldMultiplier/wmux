@@ -29,6 +29,10 @@ vi.mock('../../account/AccountRotationService', () => ({
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createDefaultBotEngineFactory } from '../botEngines';
+import { BotRuntime, BotSessionStore, botSessionsPath } from '../BotRuntime';
+import { BotStore, botsFilePath } from '../botStore';
+import { WakeQueue, wakeQueuePath } from '../wakeQueue';
+import { DEFAULT_FACTORY_SETTINGS } from '../factorySettings';
 import { DEFAULT_BOT_BUDGETS, type BotEngine, type BotProfile } from '../../../shared/bot';
 import type { SdkQueryHandle } from '../../deck/ClaudeSdkAdapter';
 
@@ -96,5 +100,70 @@ describe('a bot\'s own model', () => {
   it('a Bedrock ARN is passed through as the model', async () => {
     const arn = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5-v1:0';
     expect((await turnOptions({ kind: 'claude-sdk', model: arn })).model).toBe(arn);
+  });
+});
+
+describe('a bot\'s model pin and its saved conversation', () => {
+  // claude restores a resumed conversation's last model whenever no --model
+  // is given, so a cleared pin must not resume the conversation it ran on.
+  it('pin, turn, clear, turn: the second turn starts a fresh session with no model', async () => {
+    const seen: Record<string, unknown>[] = [];
+    vi.mocked(query).mockImplementation((({ options = {} }: { options?: Record<string, unknown> }) => {
+      seen.push(options);
+      const sessionId = `sess-${seen.length}`;
+      const handle: SdkQueryHandle = {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'result', subtype: 'success', session_id: sessionId };
+        },
+      };
+      return handle;
+    }) as never);
+    const store = new BotStore(botsFilePath(dir), { now: () => 1 });
+    const sessions = new BotSessionStore(botSessionsPath(dir));
+    let runtime: BotRuntime | null = null;
+    const queue = new WakeQueue(wakeQueuePath(dir), {
+      now: () => 1,
+      isBotEnabled: (id) => store.get(id)?.enabled === true,
+      onChange: () => runtime?.kick(),
+    });
+    runtime = new BotRuntime({
+      store, queue, sessions, wmuxDir: dir, now: () => 1,
+      settings: () => ({ ...DEFAULT_FACTORY_SETTINGS, enabled: true, trustedAuthors: [], morning: { hour: 9, weekdays: [] } }),
+      engines: createDefaultBotEngineFactory({ bundlePath: () => '/app/dist/mcp-bundle/index.js', claudeExecutable: () => '/usr/local/bin/claude' }),
+    });
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    };
+    try {
+      const created = store.create({ workspaceId: 'ws-1', role: 'verifier', engine: { kind: 'claude-sdk', model: 'haiku' } });
+      if (!created.ok) throw new Error(created.message);
+      const id = created.bot.id;
+      runtime.wake(id, { text: 'one' });
+      await settle();
+      expect(seen).toHaveLength(1);
+      expect(seen[0].model).toBe('haiku');
+      expect(sessions.get(id)).toMatchObject({ sessionId: 'sess-1', model: 'haiku' });
+
+      expect(store.update(id, { engine: { kind: 'claude-sdk' } }).ok).toBe(true);
+      runtime.profileChanged(id);
+      runtime.wake(id, { text: 'two' });
+      await settle();
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).not.toHaveProperty('model');
+      // The haiku conversation is not resumed: claude would put it back on haiku.
+      expect(seen[1]).not.toHaveProperty('resume');
+      expect(sessions.get(id)).toMatchObject({ sessionId: 'sess-2', model: null });
+
+      // An edit that keeps the pin resumes the conversation.
+      expect(store.update(id, { budget: { maxTurnsPerHour: 9 } }).ok).toBe(true);
+      runtime.profileChanged(id);
+      runtime.wake(id, { text: 'three' });
+      await settle();
+      expect(seen).toHaveLength(3);
+      expect(seen[2].resume).toBe('sess-2');
+    } finally {
+      runtime.dispose();
+      await Promise.all([store.flush(), queue.flush(), sessions.flush()]).catch(() => undefined);
+    }
   });
 });

@@ -173,9 +173,9 @@ export function createDefaultBotEngineFactory(deps: DefaultBotEngineDeps = {}): 
             // No model set (or 'default', or a stored id that fails the brain
             // model rule): pass none, so claude picks its own default and an
             // ANTHROPIC_MODEL the owner set for a gateway or Bedrock still
-            // applies; `--model default` overrode it. The cost: clearing a
-            // bot's model may not move a resumed conversation off the model
-            // it last ran on.
+            // applies; `--model default` overrode it. claude then resumes a
+            // conversation on the model it last ran on, so the runtime starts
+            // a fresh one when the pin changes (BotRuntime session()).
             ...brainModelOption(engine.model),
             ...(narrowEffort(engine.effort) ? { effort: narrowEffort(engine.effort) } : {}),
           }),
