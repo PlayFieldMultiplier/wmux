@@ -1153,6 +1153,16 @@ describe('a worktree git removed only half way', () => {
     expect(fs.readFileSync(path.join(task, 'keep.txt'), 'utf8')).toBe('mine');
   });
 
+  it('a root that is itself a link still has its folders removed', async () => {
+    const realRoot = path.join(dir, 'root7-real');
+    fs.mkdirSync(path.join(realRoot, 'batch', 'task', 'sub'), { recursive: true });
+    const root = path.join(dir, 'root7');
+    dirLink(realRoot, root);
+    await removeTreeNoFollow(path.join(root, 'batch', 'task'), root, async () => new Set());
+    expect(fs.existsSync(path.join(realRoot, 'batch', 'task'))).toBe(false);
+    expect(fs.existsSync(path.join(realRoot, 'batch'))).toBe(true);
+  });
+
   it('parseMountInfo reads the mount points of /proc/self/mountinfo, escapes undone', () => {
     const table = [
       '22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw',

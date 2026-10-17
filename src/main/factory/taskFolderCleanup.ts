@@ -376,7 +376,9 @@ export async function removeTreeNoFollow(dir: string, root?: string, readMounts:
     expected = path.join(rootReal, foldCase(rel));
     // Nor a mount on the way down from the root (a folder above `dir`
     // mounted from elsewhere).
-    const rootDev = (await fs.promises.lstat(root)).dev;
+    // The root's own device: a root that is a link (to another disk) counts
+    // as the folder it leads to.
+    const rootDev = (await fs.promises.stat(root)).dev;
     let at = path.resolve(root);
     let key = rootReal;
     for (const part of rel.split(path.sep)) {
