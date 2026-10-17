@@ -1371,6 +1371,7 @@ export const pl = {
   'accounts.removeDesc': "Folder zostaje na dysku. Obszary robocze powiązane z tym kontem wracają do konta domyślnego.",
   'accounts.otherGroups': "Inne grupy",
   'accounts.moveFailed': "Nie udało się przenieść wszystkich kont. Lista pokazuje, gdzie jest teraz każde z nich.",
+  'accounts.loginGroupFailed': "„{name}” jest zalogowane, ale nie udało się dodać go do grupy „{group}”. Przenieś je w Ustawienia › Konta.",
   'accounts.intro': 'Większości osób wystarczy domyślne logowanie. Dodaj tu konto tylko wtedy, gdy chcesz, by różne obszary robocze korzystały z różnych subskrypcji. Już otwarte terminale zachowują obecne konto, dopóki ich nie otworzysz ponownie.',
   'accounts.loginHowItWorks': 'Po kliknięciu poniżej otworzy się karta terminala i rozpocznie logowanie. Dokończ je w przeglądarce — wmux wykryje nowe logowanie i sam zamknie kartę.',
   'accounts.loginTabTitle': 'Logowanie: {name}',

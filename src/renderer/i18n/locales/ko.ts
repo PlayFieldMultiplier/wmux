@@ -3787,6 +3787,7 @@ export const ko = {
   'accounts.removeDesc': "폴더는 디스크에 남습니다. 이 계정에 바인딩된 워크스페이스는 기본 계정으로 돌아갑니다.",
   'accounts.otherGroups': "다른 그룹",
   'accounts.moveFailed': "일부 계정을 옮기지 못했습니다. 목록에 각 계정의 현재 그룹이 표시됩니다.",
+  'accounts.loginGroupFailed': "“{name}”은(는) 로그인됐지만 “{group}” 그룹에 넣지 못했습니다. 설정 › 계정에서 옮기세요.",
   'accounts.intro': '대부분은 기본 로그인만으로 충분합니다. 워크스페이스마다 다른 구독을 쓰고 싶을 때만 여기서 계정을 추가하세요. 이미 열려 있는 터미널은 다시 열기 전까지 기존 계정을 그대로 씁니다.',
   'accounts.loginHowItWorks': '아래 버튼을 누르면 터미널 탭이 열리고 로그인이 시작됩니다. 브라우저에서 로그인을 마치면 wmux가 이를 감지하고 탭을 알아서 닫습니다.',
   'accounts.loginTabTitle': '로그인: {name}',

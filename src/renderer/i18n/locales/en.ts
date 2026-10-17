@@ -1391,6 +1391,7 @@ export const en = {
   'accounts.removeDesc': "Its folder stays on disk. Workspaces bound to it go back to the default account.",
   'accounts.otherGroups': "Other groups",
   'accounts.moveFailed': "Not every account could be moved. The list shows where each one is now.",
+  'accounts.loginGroupFailed': "“{name}” is logged in, but it could not be put in the group “{group}”. Move it from Settings › Accounts.",
   'accounts.intro': 'Most people only need the default login. Add an account here only when you want different workspaces to use different subscriptions. Terminals that are already open keep their current account until you reopen them.',
   'accounts.loginHowItWorks': 'When you click below, a terminal tab opens and starts the login. Finish it in your browser — wmux spots the new login and closes the tab for you.',
   'accounts.loginTabTitle': 'Log in: {name}',

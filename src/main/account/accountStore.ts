@@ -176,13 +176,23 @@ function sanitizeFile(raw: unknown, knownWorkspaceIds?: ReadonlySet<string>): Ac
  * or write this file. An entry whose account is gone matches nothing (ids are
  * random UUIDs) and is pruned on the next group write.
  */
+interface GroupsFile { version: 1; groups: Record<string, unknown> }
+
+/** A wrong-shaped file (e.g. `{}`) fails here, so the atomic read moves it
+ *  aside and falls back to the newest valid backup instead of reading it as
+ *  "no groups", which the next write would then make permanent. */
+function isGroupsFile(raw: unknown): raw is GroupsFile {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const o = raw as Record<string, unknown>;
+  return o.version === 1 && !!o.groups && typeof o.groups === 'object' && !Array.isArray(o.groups);
+}
+
 function readGroups(filePath: string): Map<string, string> {
   const groups = new Map<string, string>();
-  let raw: unknown = null;
-  try { raw = atomicReadJSONSync<unknown>(filePath); } catch { raw = null; }
-  const entries = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).groups : null;
-  if (!entries || typeof entries !== 'object') return groups;
-  for (const [id, name] of Object.entries(entries as Record<string, unknown>)) {
+  let raw: GroupsFile | null = null;
+  try { raw = atomicReadJSONSync<GroupsFile>(filePath, { validate: isGroupsFile }); } catch { raw = null; }
+  if (!raw) return groups;
+  for (const [id, name] of Object.entries(raw.groups)) {
     const group = normalizeAccountGroup(name);
     if (!isUnsafeKey(id) && group) groups.set(id, group);
   }
@@ -397,7 +407,7 @@ export class AccountStore {
       const known = new Set(file.accounts.map((a) => a.id));
       const out: Record<string, string> = {};
       for (const [accountId, name] of groups) if (known.has(accountId)) out[accountId] = name;
-      await atomicWriteJSON(this.groupsPath, { version: 1, groups: out }, { durable: true });
+      await atomicWriteJSON(this.groupsPath, { version: 1, groups: out }, { durable: true, validate: isGroupsFile });
       this.cache = applyGroups(file, groups);
     });
     this.writeChain = run.catch(() => undefined);

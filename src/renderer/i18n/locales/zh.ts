@@ -567,6 +567,7 @@ export const zh = {
   'accounts.removeDesc': "文件夹仍保留在磁盘上。绑定到该账号的工作区将改回默认账号。",
   'accounts.otherGroups': "其他分组",
   'accounts.moveFailed': "未能移动所有账号。列表显示了每个账号当前所在的分组。",
+  'accounts.loginGroupFailed': "“{name}”已登录，但未能加入分组“{group}”。请在 设置 › 账号 中移动它。",
   'accounts.intro': '大多数人只需要默认登录。只有当你希望不同工作区使用不同订阅时，才需要在这里添加账号。已经打开的终端会继续使用原来的账号，重新打开后才会切换。',
   'accounts.loginHowItWorks': '点击下方按钮后，会打开一个终端标签页并开始登录。在浏览器中完成登录即可——wmux 检测到新的登录后会自动关闭该标签页。',
   'accounts.loginTabTitle': '登录：{name}',

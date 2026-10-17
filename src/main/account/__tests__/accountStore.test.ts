@@ -241,6 +241,14 @@ describe('AccountStore groups (account-groups.json)', () => {
     expect(new AccountStore(dir).getAccount(work.id)?.group).toBeUndefined();
   });
 
+  it('falls back to the backup when the groups file has the wrong shape', async () => {
+    const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
+    const file = path.join(dir, 'account-groups.json');
+    fs.writeFileSync(`${file}.bak`, JSON.stringify({ version: 1, groups: { [a.id]: 'Work' } }));
+    fs.writeFileSync(file, '{}');
+    expect(new AccountStore(dir).getAccount(a.id)?.group).toBe('Work');
+  });
+
   it('prunes a removed account from the groups file on the next group write', async () => {
     const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
     const b = await store.addAccount({ name: 'b', vendor: 'claude', configDir: mkConfigDir('b') });

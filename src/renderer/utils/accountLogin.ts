@@ -209,7 +209,12 @@ async function onLoggedIn(w: Watch): Promise<void> {
       api?.usageRefresh?.(entry.accountId);
     } else {
       const added = await api?.add({ name: entry.name, vendor: entry.vendor, configDir: entry.configDir });
-      if (added && entry.group) await api?.setGroup?.({ id: added.id, group: entry.group });
+      // The account is registered; a group that did not stick is a warning, not a failed login.
+      if (added && entry.group) {
+        await api?.setGroup?.({ id: added.id, group: entry.group }).catch(() => {
+          useStore.getState().pushToast({ level: 'warn', message: t('accounts.loginGroupFailed', { name: entry.name, group: entry.group ?? '' }) });
+        });
+      }
     }
   } catch (err) {
     watches.delete(entry.configDir);
