@@ -31,7 +31,9 @@ import {
   stopTaskWorker,
   taskWakeHandoff,
   threadTail,
+  WorkerStopPendingError,
 } from '../factoryWiring';
+import { setWorkerResumePorts } from '../workerReclaim';
 import { createFactLog, type FactLog } from '../factLog';
 import { WAKE_RECORD_RETAIN_MS, WakeQueue, latestOwnerWakeThread, setWakeQueue, wakeQueuePath } from '../wakeQueue';
 import { TriggerEngine } from '../triggerEngine';
@@ -832,10 +834,62 @@ describe('stopTaskWorker (a stop of a bot task\'s worker)', () => {
       expect(d.calls).toEqual(['stopAgent:wsl', 'destroy:wsl']);
     });
 
-    it('a workspace tree that is not known: no WSL pane is stopped, closed or counted (it may be the owner\'s)', async () => {
-      const d = wslDaemon([worker, { ...worker, id: 'owner-wsl' }]);
-      expect(await stopTaskWorker(entry, d.client, () => null, { platform: 'win32' })).toBe(0);
-      expect(d.calls).toEqual([]);
+    describe('a workspace tree that is not known (#2267)', () => {
+      const recordOf = (named: Record<string, string>) => (id: string) => (id in named ? { taskId: named[id] } : null);
+      const rejection = async (p: Promise<number>) => (await p.catch((e: unknown) => e)) as WorkerStopPendingError;
+      afterEach(() => setWorkerResumePorts(null));
+
+      it('a WSL worker its session record names as the task\'s is stopped now', async () => {
+        const d = wslDaemon([worker]);
+        expect(await stopTaskWorker(entry, d.client, () => null, { platform: 'win32', sessionRecordOf: recordOf({ wsl: 'wtask-1' }) })).toBe(1);
+        expect(d.calls).toEqual(['stopAgent:wsl', 'destroy:wsl']);
+      });
+
+      it('a WSL pane it cannot judge is left alone; the stop is partial and says the app is still loading', async () => {
+        // Another task's record, and none: neither is the task's worker.
+        const d = wslDaemon([worker, { ...worker, id: 'other-task' }, { ...worker, id: 'owner-wsl' }]);
+        const err = await rejection(stopTaskWorker(entry, d.client, () => null, { platform: 'win32', sessionRecordOf: recordOf({ wsl: 'wtask-1', 'other-task': 'wtask-9' }) }));
+        expect(err).toBeInstanceOf(WorkerStopPendingError);
+        expect(err.message).toMatch(/the app is still loading its workspaces; stop again in a moment/);
+        expect(err.pendingSessionIds).toEqual(['other-task', 'owner-wsl']);
+        // The identified worker was stopped, and is counted.
+        expect(err.workers).toBe(1);
+        expect(d.calls).toEqual(['stopAgent:wsl', 'destroy:wsl']);
+      });
+
+      it('a native worker is stopped and counted beside an unjudged WSL pane', async () => {
+        const native = { id: 'native', spawnCwd: 'C:\\Users\\me\\.wmux\\worktrees\\r\\task-1', agentProcessAlive: true };
+        const d = wslDaemon([native, { ...worker, id: 'owner-wsl' }]);
+        const err = await rejection(stopTaskWorker(entry, d.client, () => null, { platform: 'win32', sessionRecordOf: recordOf({}) }));
+        expect(err.workers).toBe(1);
+        expect(err.pendingSessionIds).toEqual(['owner-wsl']);
+        expect(d.calls).toEqual(['stopAgent:native', 'destroy:native']);
+      });
+
+      it('a pane only the reclaim record lists (an owner shell it took in) is not taken for the worker', async () => {
+        setWorkerResumePorts({
+          store: { get: (id: string) => (id === 'wtask-1' ? { taskId: 'wtask-1', sessions: [{ sessionId: 'owner-wsl', cwd: worker.spawnCwd }] } : null), all: () => [] },
+        } as never);
+        const d = wslDaemon([{ ...worker, id: 'owner-wsl' }]);
+        const err = await rejection(stopTaskWorker(entry, d.client, () => null, { platform: 'win32', sessionRecordOf: recordOf({}) }));
+        expect(err).toBeInstanceOf(WorkerStopPendingError);
+        expect(d.calls).toEqual([]);
+      });
+
+      it('a WSL pane in another folder, or a plain WSL shell on an agentsOnly re-stop, does not make the stop partial', async () => {
+        const elsewhere = wslDaemon([{ ...worker, id: 'wsl-task-10', spawnCwd: '/mnt/c/Users/me/.wmux/worktrees/r/task-10' }]);
+        expect(await stopTaskWorker(entry, elsewhere.client, () => null, { platform: 'win32' })).toBe(0);
+        expect(elsewhere.calls).toEqual([]);
+        const shell = wslDaemon([{ ...worker, id: 'wsl-shell', commandRunning: false }]);
+        expect(await stopTaskWorker(entry, shell.client, () => null, { agentsOnly: true, platform: 'win32' })).toBe(0);
+        expect(shell.calls).toEqual([]);
+      });
+
+      it('once the tree is known: the normal path, the task workspace\'s own panes only', async () => {
+        const d = wslDaemon([worker, { ...worker, id: 'owner-wsl' }]);
+        expect(await stopTaskWorker(entry, d.client, (ws) => (ws === 'ws-task' ? ['wsl'] : ['owner-wsl']), { platform: 'win32', sessionRecordOf: recordOf({}) })).toBe(1);
+        expect(d.calls).toEqual(['stopAgent:wsl', 'destroy:wsl']);
+      });
     });
 
     it('agentsOnly: a leftover WSL worker is closed; a plain WSL shell and an exec unit with no agent left stay', async () => {

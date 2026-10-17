@@ -16,7 +16,7 @@ import { findPane } from '../../../shared/paneUtils';
 import PaneDragGrip from './PaneDragGrip';
 import { FOCUS_RING } from '../focusRing';
 import { HIT_TARGET_24 } from '../hitArea';
-import { IconSplitRight, IconSplitDown, IconBrowser, IconExternalLink, IconEyeOff, IconPencil, IconGrid, IconComputer, IconLock } from '../icons';
+import { IconSplitRight, IconSplitDown, IconBrowser, IconExternalLink, IconEyeOff, IconPencil, IconGrid, IconComputer, IconLock, IconBellOff, IconBell } from '../icons';
 import { isPrivateBrowserSurface } from '../../../shared/privateBrowser';
 import { LOCAL_PC_ID, isShadowWorkspaceId } from '../../../shared/pcRail';
 import A2aLinkDialog from '../Remote/A2aLinkDialog';
@@ -88,7 +88,9 @@ export const PANE_ACTIONS_CLUSTER_WIDTH = 142;
 
 /** Pane menu entries a shadow workspace leaves out: its layout belongs to the
  *  host, so no split, no new pane and (by the `snap-` prefix) no layout snap. */
-const HIDDEN_ON_SHADOW: ReadonlySet<string> = new Set(['split-right', 'split-down', 'new-remote', 'split-right-remote', 'split-down-remote']);
+// 'mute-notifications': a shadow pane's notifications come from the remote
+// host's own path, which never reads this pane's mute flag.
+const HIDDEN_ON_SHADOW: ReadonlySet<string> = new Set(['split-right', 'split-down', 'new-remote', 'split-right-remote', 'split-down-remote', 'mute-notifications']);
 
 /** Rendered width (px) of the COLLAPSED cluster: the ⋮ trigger alone, which
  *  opens the same actions as a vertical menu. Same outer box as the full
@@ -666,6 +668,10 @@ export default function SurfaceTabs({
   // surface; the user label (if any) overrides the auto coordinate.
   const leaf = findPane(workspace.rootPane, paneId);
   const paneOrdinal = leaf && leaf.type === 'leaf' ? (leaf.ordinal ?? 0) : 0;
+  const paneMuted = !!(leaf && leaf.type === 'leaf' && leaf.notificationsMuted === true);
+  const togglePaneMuted = useCallback(() => {
+    useStore.getState().setPaneNotificationsMuted(paneId, !paneMuted, workspace.id);
+  }, [paneId, paneMuted, workspace.id]);
   const paneAutoName = computePaneAutoName(workspace.wsOrdinal ?? 0, paneOrdinal, activeSlug);
   const paneDisplay = paneDisplayName(paneLabel, paneAutoName);
   // Mirrors paneDisplayName's own blank-label rule, so "named" here means
@@ -809,6 +815,12 @@ export default function SurfaceTabs({
       onSelect: () => setLinkDialogOpen(true),
     }] : []),
     {
+      key: 'mute-notifications',
+      label: paneMuted ? t('pane.unmuteNotifications') : t('pane.muteNotifications'),
+      icon: paneMuted ? <IconBell size={14} /> : <IconBellOff size={14} />,
+      onSelect: togglePaneMuted,
+    },
+    {
       key: 'stash',
       label: t('pane.stash'),
       shortcut: stashChord ?? undefined,
@@ -845,7 +857,7 @@ export default function SurfaceTabs({
   ].filter((item) => !shadow || !(HIDDEN_ON_SHADOW.has(item.key) || item.key.startsWith('snap-'))), [
     t, onSplitHorizontal, onSplitVertical, onAddBrowser, newBrowserLabel, onAddPrivateBrowser, chromeProfile.mainItems, browserPolicy.mainItems, onAddRemote,
     onSplitHorizontalRemote, onSplitVerticalRemote, startPaneRename,
-    menuTabSurface, startRename, canLinkRemote, continueAccount.mainItems,
+    menuTabSurface, startRename, canLinkRemote, paneMuted, togglePaneMuted, continueAccount.mainItems,
     stashChord, stashDisabled, stashTooltip, stashThisPane, isZoomed, toggleZoom,
     layoutTemplates, shadow,
   ]);
@@ -969,6 +981,19 @@ export default function SurfaceTabs({
           data-protected-pane
         >
           <IconLock size={12} />
+        </span>
+      )}
+
+      {/* Muted pane: one muted bell-off, same weight as the padlock above. */}
+      {paneMuted && !shadow && (
+        <span
+          className="shrink-0 ml-1 flex items-center text-[var(--text-muted)]"
+          role="img"
+          aria-label={t('pane.notificationsMuted')}
+          title={t('pane.notificationsMuted')}
+          data-pane-muted
+        >
+          <IconBellOff size={12} />
         </span>
       )}
 

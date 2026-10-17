@@ -467,6 +467,16 @@ export function createNotificationHandler(deps: NotificationHandlerDeps) {
       windowFocused: deps.isWindowFocused(),
       isActiveSurface: isActive,
       isMutedWorkspace: ws?.metadata?.notificationsMuted === true,
+      // Only a notification the pane itself sent: one without a ptyId is
+      // resolved onto the workspace's ACTIVE pane, and muting that pane must
+      // not silence workspace-level events (`wmux notify`, MCP notify).
+      isMutedPane: !!(
+        ws &&
+        ptyId &&
+        getWorkspaceLeafPanes(ws).some(
+          (l) => l.notificationsMuted === true && l.surfaces.some((s) => s.ptyId === ptyId),
+        )
+      ),
       mutedCategories: state.mutedNotificationCategories,
       paneId: target.paneId ?? null,
       settings: {

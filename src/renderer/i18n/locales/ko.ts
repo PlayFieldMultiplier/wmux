@@ -348,6 +348,9 @@ export const ko = {
   'pane.renameTab': '탭 이름 바꾸기',
 
   'pane.stash': '페인 치우기',
+  'pane.muteNotifications': '알림 끄기',
+  'pane.unmuteNotifications': '알림 켜기',
+  'pane.notificationsMuted': '이 페인의 알림이 꺼져 있음',
   'pane.stashHint': '레이아웃에서 치웁니다 — 세션은 계속 실행됩니다',
   'pane.unstash': '꺼내기',
   'pane.stashed': '{name} 치웠습니다. 세션은 계속 실행 중입니다.',
