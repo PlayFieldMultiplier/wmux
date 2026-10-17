@@ -221,7 +221,7 @@ describe.skipIf(process.platform === 'win32')('task.push and task.fetch: the rec
     repo = path.join(root, 'repo');
     work = path.join(root, 'work');
     fs.mkdirSync(path.dirname(bare), { recursive: true });
-    execFileSync('git', ['init', '-q', '--bare', bare]);
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
     execFileSync('git', ['init', '-q', '-b', 'main', repo]);
     fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
     git(repo, 'add', '.');
@@ -354,11 +354,13 @@ describe.skipIf(process.platform === 'win32')('task.push and task.fetch: the rec
 
   it('a push rewrite for another spelling, and an owner pushurl for origin, do not move the push', async () => {
     const other = otherServer('srv2');
-    const pin = 'https://git.corp.example/acme/App.git';
+    // The pin is spelled as the fake server's path is, so a case-sensitive
+    // file system reaches it too; the respelling differs only in case.
+    const pin = 'https://git.corp.example/acme/app.git';
     git(repo, 'remote', 'add', 'origin', pin);
-    globalConfig(rule('srv', 'https://git.corp.example/') + rule('srv2', 'https://git.corp.example/acme/app', 'pushInsteadOf') + `[remote "origin"]\n\tpushurl = ${fakeSshUrl(other)}\n`);
+    globalConfig(rule('srv', 'https://git.corp.example/') + rule('srv2', 'https://git.corp.example/acme/App', 'pushInsteadOf') + `[remote "origin"]\n\tpushurl = ${fakeSshUrl(other)}\n`);
     // The repository's own origin sets only its URL; the owner's pushurl is not the task's.
-    await assertPinnedUrlUsed(pin, 'https://git.corp.example/acme/app.git', other);
+    await assertPinnedUrlUsed(pin, 'https://git.corp.example/acme/App.git', other);
   });
 
   it('an owner include conditioned on a remote URL is read with the pinned URL, never with a respelled origin', async () => {
