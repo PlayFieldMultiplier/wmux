@@ -163,7 +163,8 @@ export function liveNoChangesPorts(deps: LiveNoChangesDeps): NoChangesPorts {
         branch: mission.branch,
         noHooksDir: path.join(deps.wmuxDir(), 'factory', 'no-hooks'),
         gitCommonDir,
-        cleanRoot: path.join(deps.wmuxDir(), 'factory', 'git-clean'),
+        relayRoot: path.join(deps.wmuxDir(), 'factory', 'git-relay'),
+        taskId: entry.id,
         ...(expectedRepoKey ? { expectedRepoKey } : {}),
       });
     },

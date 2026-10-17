@@ -47,29 +47,35 @@ describe('fetchTaskRefs', () => {
 
   const input = (over: Partial<Parameters<typeof fetchTask>[0]> = {}) => ({
     worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'no-hooks'),
-    gitCommonDir: fs.realpathSync.native(path.join(work, '.git')), cleanRoot: path.join(root, 'clean'), ...over,
+    gitCommonDir: fs.realpathSync.native(path.join(work, '.git')), relayRoot: path.join(root, 'relay'), taskId: 'wtask-1', ...over,
   });
   // The fixtures' origins are local folders: git's `file` transport.
   const fetchTaskRefs = (i: Parameters<typeof fetchTask>[0]) => fetchTask(i, undefined, { protocols: ['https', 'ssh', 'file'] });
+  // The worker runs the returned fetch line in its own worktree.
+  const runFetchLine = (cmd: string) => {
+    const m = /^git fetch --no-tags --no-write-fetch-head '([^']*)' (.+)$/.exec(cmd);
+    if (!m) throw new Error(`unexpected fetch line: ${cmd}`);
+    const refspecs = m[2].split(' ').map((r) => r.replace(/^'(.*)'$/, '$1'));
+    git(work, 'fetch', '--no-tags', m[1], ...refspecs);
+  };
 
-  it('fetches origin\'s default branch into origin/main and leaves the checkout, the branch and origin as they were', async () => {
+  it('fetches origin\'s default branch, leaves the recorded repository untouched, and the worker\'s fetch line brings it in', async () => {
     const head = git(work, 'rev-parse', 'HEAD');
     const originRefs = git(origin, 'for-each-ref', '--format=%(refname) %(objectname)');
+    const refsBefore = git(work, 'for-each-ref', '--format=%(refname) %(objectname)');
     const r = await fetchTaskRefs(input());
-    expect(r).toEqual({ ok: true, remote: 'origin', defaultBranch: 'main', fetched: [{ ref: 'origin/main', sha: git(other, 'rev-parse', 'HEAD') }], missing: ['origin/wtask/one'] });
-    expect(git(work, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(other, 'rev-parse', 'HEAD'));
-    // The checkout, the local branches and the working tree are untouched.
+    expect(r).toMatchObject({ ok: true, remote: 'origin', defaultBranch: 'main', fetched: [{ ref: 'origin/main', sha: git(other, 'rev-parse', 'HEAD') }], missing: ['origin/wtask/one'] });
+    expect(typeof (r as { fetchCommand: string }).fetchCommand).toBe('string');
+    // Main wrote nothing under the recorded repository: no ref, no namespace.
+    expect(git(work, 'for-each-ref', '--format=%(refname) %(objectname)')).toBe(refsBefore);
     expect(git(work, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(work, 'symbolic-ref', '--short', 'HEAD')).toBe('wtask/one');
-    expect(git(work, 'rev-parse', 'refs/heads/main')).not.toBe(git(other, 'rev-parse', 'HEAD'));
     expect(git(work, 'status', '--porcelain')).toBe('');
-    // No tag came along, and nothing was pushed.
-    expect(git(work, 'tag', '--list')).toBe('');
     expect(git(origin, 'for-each-ref', '--format=%(refname) %(objectname)')).toBe(originRefs);
-    // Main's own namespace was never in the repository, and its clean dirs are gone.
-    expect(git(work, 'for-each-ref', 'refs/wmux')).toBe('');
-    expect(fs.readdirSync(path.join(root, 'clean'))).toEqual([]);
-    // The worker can now merge it itself.
+    // The worker runs the returned line, then merges.
+    runFetchLine((r as { fetchCommand: string }).fetchCommand);
+    expect(git(work, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(other, 'rev-parse', 'HEAD'));
+    expect(git(work, 'tag', '--list')).toBe('');
     git(work, 'merge', '-q', '--no-edit', 'origin/main');
     expect(fs.existsSync(path.join(work, 'c.txt'))).toBe(true);
   });
@@ -79,6 +85,8 @@ describe('fetchTaskRefs', () => {
     git(work, 'update-ref', '-d', 'refs/remotes/origin/wtask/one');
     const r = await fetchTaskRefs(input());
     expect(r).toMatchObject({ ok: true, missing: [], fetched: [{ ref: 'origin/main' }, { ref: 'origin/wtask/one', sha: git(work, 'rev-parse', 'HEAD') }] });
+    runFetchLine((r as { fetchCommand: string }).fetchCommand);
+    expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
   });
 
   it('refuses a bot\'s task whose origin is not the bot\'s repository, and a repository with no origin', async () => {
@@ -94,14 +102,14 @@ describe('fetchTaskRefs', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('replaces a symbolic remote-tracking ref instead of following it into a local branch', async () => {
-    const tip = git(work, 'rev-parse', 'HEAD');
-    git(work, 'symbolic-ref', 'refs/remotes/origin/main', 'refs/heads/wtask/one');
+  it('fetches into the relay, not the recorded repository (its objects are unchanged by the fetch)', async () => {
+    const countBefore = git(work, 'count-objects', '-v');
     const r = await fetchTaskRefs(input());
     expect(r).toMatchObject({ ok: true });
-    expect(git(work, 'rev-parse', 'refs/heads/wtask/one')).toBe(tip);
-    expect(git(work, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(other, 'rev-parse', 'HEAD'));
-    expect(() => git(work, 'symbolic-ref', '-q', 'refs/remotes/origin/main')).toThrow();
+    // The new commit is in the relay, not the recorded repository's own store.
+    expect(git(work, 'count-objects', '-v')).toBe(countBefore);
+    const relay = path.join(root, 'relay', 'wtask-1');
+    expect(git(relay, 'cat-file', '-t', git(other, 'rev-parse', 'HEAD'))).toBe('commit');
   });
 
   it('refuses a remote named by origin\'s URL and a bundle URI, and writes nothing', async () => {
@@ -120,10 +128,10 @@ describe('fetchTaskRefs', () => {
     expect(taskFetchConfigRefusal([{ scope: 'global', key: `remote.${origin.toLowerCase()}.url`, value: 'x' }], origin)).toBeNull();
   });
 
-  it('fetches each branch into main\'s own namespace, at origin\'s URL, with no tags, submodules or FETCH_HEAD', () => {
-    expect(taskFetchArgs('https://github.com/o/r.git', ['main', 'wtask/one'], 'refs/wmux/fetch/n')).toEqual([
+  it('fetches each branch into the relay\'s own refs/heads, at origin\'s URL, with no tags, submodules or FETCH_HEAD', () => {
+    expect(taskFetchArgs('https://github.com/o/r.git', ['main', 'wtask/one'])).toEqual([
       'fetch', '--no-tags', '--recurse-submodules=no', '--no-write-fetch-head', '--no-auto-maintenance', '--no-write-commit-graph',
-      '--', 'https://github.com/o/r.git', '+refs/heads/main:refs/wmux/fetch/n/0', '+refs/heads/wtask/one:refs/wmux/fetch/n/1',
+      '--', 'https://github.com/o/r.git', '+refs/heads/main:refs/heads/main', '+refs/heads/wtask/one:refs/heads/wtask/one',
     ]);
     expect(parseLsRemoteHeads(`${'a'.repeat(40)}\trefs/heads/main\n${'b'.repeat(40)}\trefs/tags/v1\n`)).toEqual(new Map([['main', 'a'.repeat(40)]]));
   });
@@ -134,7 +142,7 @@ describe('task.fetch RPC', () => {
   type Rec = { taskId: string; botId: string; ownerWorkspaceId: string };
   const setup = (over: { tasks?: unknown[]; caller?: string | null; botRepo?: string; row?: unknown; ended?: unknown; reclaimed?: (ws: string, pty: string) => Rec | null; exists?: boolean } = {}) => {
     const handlers = new Map<string, Handler>();
-    const fetch = vi.fn(async () => ({ ok: true as const, remote: 'origin' as const, defaultBranch: 'main', fetched: [{ ref: 'origin/main', sha: 'abc' }], missing: [] }));
+    const fetch = vi.fn(async () => ({ ok: true as const, remote: 'origin' as const, defaultBranch: 'main', fetchCommand: 'git fetch --no-tags R +refs/heads/main:refs/remotes/origin/main', fetched: [{ ref: 'origin/main', sha: 'abc' }], missing: [] }));
     const push = vi.fn();
     const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } } : over.row;
     registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {

@@ -30,7 +30,7 @@ export function registerTaskPushTool(server: McpServer, deps: TaskPushToolDeps):
   const resolveSenderPtyId = deps.getSenderPtyId ?? (() => '');
   server.tool(
     'task_push',
-    'Push YOUR fan-out task branch to origin (fast-forward only, origin/<branch> set). Commit first. wmux pushes the branch of the task in your own workspace; there is nothing to name. Then open the PR with gh pr create --head <your branch>.',
+    'Push YOUR fan-out task branch to origin (fast-forward only). Commit first. wmux pushes the branch of the task in your own workspace; there is nothing to name. Then open the PR with gh pr create --head <your branch>.',
     {},
     async () => {
       if (deps.resolveWorkspaceId) {
@@ -65,7 +65,7 @@ export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps)
   const resolveSenderPtyId = deps.getSenderPtyId ?? (() => '');
   server.tool(
     'task_fetch',
-    'Fetch origin\'s default branch and YOUR task branch into origin/<name> with wmux\'s credentials. Fetch only: then git merge origin/<default>.',
+    'Fetch origin\'s default branch and YOUR task branch with wmux\'s credentials. It returns a `git fetch` line: run that line in your shell to bring them into origin/<name>, then git merge origin/<default>.',
     {},
     async () => {
       if (deps.resolveWorkspaceId) {
@@ -79,9 +79,11 @@ export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps)
       const pty = resolveSenderPtyId();
       if (pty) params['senderPtyId'] = pty;
       try {
-        const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean } | undefined;
+        const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean; fetchCommand?: unknown } | undefined;
+        // The fetch line first, verbatim, so the worker runs exactly it.
+        const line = result && typeof result.fetchCommand === 'string' ? `Run this in your shell, then \`git merge origin/<default>\`:\n${result.fetchCommand}\n\n` : '';
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result ?? {}, null, 2) }],
+          content: [{ type: 'text' as const, text: `${line}${JSON.stringify(result ?? {}, null, 2)}` }],
           ...(result && result.ok === false ? { isError: true as const } : {}),
         };
       } catch (err) {

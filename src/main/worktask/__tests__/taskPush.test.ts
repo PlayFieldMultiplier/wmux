@@ -26,41 +26,47 @@ const FILE_OK = { protocols: ['https', 'ssh', 'file'] };
 
 describe('pushTaskBranch', () => {
   let root: string;
+  let repo: string;
+  let repoCommon: string;
   let work: string;
+  let wtGitDir: string;
   let origin: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-'));
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-')));
     origin = path.join(root, 'origin.git');
+    repo = path.join(root, 'repo');
     work = path.join(root, 'work');
     execFileSync('git', ['init', '-q', '--bare', origin]);
-    execFileSync('git', ['init', '-q', '-b', 'main', work]);
-    fs.writeFileSync(path.join(work, 'a.txt'), 'a\n');
-    git(work, 'add', '.');
-    git(work, 'commit', '-qm', 'init');
-    git(work, 'remote', 'add', 'origin', origin);
-    git(work, 'push', '-q', 'origin', 'main');
-    git(work, 'checkout', '-qb', 'wtask/one');
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'init');
+    git(repo, 'remote', 'add', 'origin', origin);
+    git(repo, 'push', '-q', 'origin', 'main');
+    // The task runs in its own linked worktree, as a fan-out task does.
+    git(repo, 'worktree', 'add', '-q', '-b', 'wtask/one', work);
     fs.writeFileSync(path.join(work, 'b.txt'), 'b\n');
     git(work, 'add', '.');
     git(work, 'commit', '-qm', 'work');
+    repoCommon = fs.realpathSync.native(path.join(repo, '.git'));
+    wtGitDir = fs.realpathSync.native(git(work, 'rev-parse', '--path-format=absolute', '--git-dir'));
   });
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
   const input = (branch = 'wtask/one') => ({
     worktreePath: work, branch, defaultBranches: [], noHooksDir: path.join(root, 'no-hooks'),
-    gitCommonDir: fs.realpathSync.native(path.join(work, '.git')), cleanRoot: path.join(root, 'clean'),
+    gitCommonDir: repoCommon, gitWorktreeDir: wtGitDir, relayRoot: path.join(root, 'relay'), taskId: 'wtask-1',
   });
   const pushTaskBranch = (i: Parameters<typeof pushTask>[0], g: Parameters<typeof pushTask>[1] = defaultGit) => pushTask(i, g, FILE_OK);
 
-  it('pushes HEAD to the task branch on origin and sets origin/<branch>, writing no branch config', async () => {
+  it('pushes HEAD to the task branch on origin and writes nothing under the recorded repository', async () => {
+    const refsBefore = git(repo, 'for-each-ref', '--format=%(refname) %(objectname)');
     const r = await pushTaskBranch(input());
     expect(r).toMatchObject({ ok: true, branch: 'wtask/one', remote: 'origin', head: git(work, 'rev-parse', 'HEAD') });
     expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
-    expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
+    // Main sets no remote-tracking ref and no branch config in the repository.
+    expect(git(repo, 'for-each-ref', '--format=%(refname) %(objectname)')).toBe(refsBefore);
     expect(() => git(work, 'config', '--get', 'branch.wtask/one.remote')).toThrow();
-    // No reflog for main's ref write, and main's clean dirs are gone.
-    expect(fs.existsSync(path.join(work, '.git', 'logs', 'refs', 'remotes', 'origin', 'wtask', 'one'))).toBe(false);
-    expect(fs.readdirSync(path.join(root, 'clean'))).toEqual([]);
   });
 
   it('never force-pushes: a rewritten branch is rejected and the remote keeps its tip', async () => {
@@ -82,34 +88,17 @@ describe('pushTaskBranch', () => {
     expect(git(origin, 'tag', '--list')).toBe('');
   });
 
-  it('applies the same remote and ref checks as task_fetch: a remote named by origin\'s URL is refused, a symbolic upstream ref is replaced', async () => {
+  it('refuses a remote named by origin\'s URL, and writes nothing to it', async () => {
     const other = path.join(root, 'other.git');
     execFileSync('git', ['init', '-q', '--bare', other]);
     git(work, 'config', `remote.${origin}.pushurl`, other);
     expect(await pushTaskBranch(input())).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringContaining(`remote.${origin.toLowerCase()}.pushurl`) });
     expect(git(other, 'for-each-ref')).toBe('');
     expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
-    git(work, 'config', '--unset', `remote.${origin}.pushurl`);
-    // origin/<task branch> pointing at a local branch: the push sets the ref itself.
-    const main = git(work, 'rev-parse', 'refs/heads/main');
-    git(work, 'symbolic-ref', 'refs/remotes/origin/wtask/one', 'refs/heads/main');
-    expect(await pushTaskBranch(input())).toMatchObject({ ok: true });
-    expect(git(work, 'rev-parse', 'refs/heads/main')).toBe(main);
-    expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
-    expect(() => git(work, 'symbolic-ref', '-q', 'refs/remotes/origin/wtask/one')).toThrow();
-  });
-
-  it('a locked origin/<branch> leaves the push landed and says the ref was not set', async () => {
-    const main = git(work, 'rev-parse', 'refs/heads/main');
-    git(work, 'symbolic-ref', 'refs/remotes/origin/wtask/one', 'refs/heads/main');
-    fs.writeFileSync(path.join(work, '.git', 'refs', 'remotes', 'origin', 'wtask', 'one.lock'), '');
-    expect(await pushTaskBranch(input())).toMatchObject({ ok: true, output: expect.stringContaining('origin/wtask/one was not set') });
-    expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
-    expect(git(work, 'rev-parse', 'refs/heads/main')).toBe(main);
   });
 
   it('runs none of the worktree\'s own hooks', async () => {
-    const hook = path.join(work, '.git', 'hooks', 'pre-push');
+    const hook = path.join(repoCommon, 'hooks', 'pre-push');
     const marker = path.join(root, 'hook-ran');
     fs.writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
     expect((await pushTaskBranch(input())).ok).toBe(true);
@@ -168,7 +157,6 @@ describe('pushTaskBranch', () => {
     expect(moved).not.toBe(resolved);
     expect(r).toMatchObject({ ok: true, head: resolved });
     expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(resolved);
-    expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(resolved);
   });
 
   it('refuses when the repository config redirects the push or names a program, and runs none of it', async () => {
@@ -251,6 +239,7 @@ describe('task.push: GitLab remotes', () => {
     const subOf = (args: string[]) => args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-c');
     const fake = async (args: string[]) => {
       calls.push(args);
+      if (args.includes('--version')) return { code: 0, stdout: 'git version 2.50.0\n', stderr: '' };
       const sub = subOf(args);
       if (sub === 'config' && args.includes('--list')) return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@gitlab.corp.example:2222/group/sub/proj.git\0', stderr: '' };
       if (sub === 'rev-parse') return { code: 0, stdout: args.includes('--is-shallow-repository') ? 'false\n' : `${'a'.repeat(40)}\n`, stderr: '' };
@@ -262,7 +251,8 @@ describe('task.push: GitLab remotes', () => {
     // GitHub knows nothing of a GitLab project.
     const repoDefaultBranch = vi.fn(async () => null);
     const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-gl-')));
-    const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', gitCommonDir: tmp, cleanRoot: path.join(tmp, 'clean'), repoDefaultBranch };
+    fs.mkdirSync(path.join(tmp, 'worktrees', 'one'), { recursive: true });
+    const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', gitCommonDir: tmp, gitWorktreeDir: path.join(tmp, 'worktrees', 'one'), relayRoot: path.join(tmp, 'relay'), taskId: 'wtask-1', repoDefaultBranch };
     try {
       expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
       // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
@@ -320,132 +310,8 @@ describe('task.push: a repository inside WSL', () => {
     expect(wslGitArgv('D', '/g', ['x'])).toEqual(['-d', 'D', '--cd', '/', '--exec', 'git', '--git-dir=/g', 'x']);
   });
 
-  // The stand-in hands the Linux gitdir straight to this machine's git, which
-  // holds only where host paths are POSIX paths.
-  describe.skipIf(process.platform === 'win32')('end to end, with a stand-in wsl.exe that runs this machine\'s git', () => {
-    let root: string;
-    let work: string;
-    let wt: string;
-    let origin: string;
-    beforeEach(() => {
-      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-wsl-')));
-      origin = path.join(root, 'origin.git');
-      work = path.join(root, 'work');
-      wt = path.join(root, 'wt');
-      execFileSync('git', ['init', '-q', '--bare', origin]);
-      execFileSync('git', ['init', '-q', '-b', 'main', work]);
-      fs.writeFileSync(path.join(work, 'a.txt'), 'a\n');
-      git(work, 'add', '.');
-      git(work, 'commit', '-qm', 'init');
-      git(work, 'remote', 'add', 'origin', origin);
-      git(work, 'push', '-q', 'origin', 'main');
-      git(work, 'worktree', 'add', '-q', '-b', 'wtask/one', wt);
-      fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
-      git(wt, 'add', '.');
-      git(wt, 'commit', '-qm', 'work');
-    });
-    afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
-
-    const gitDir = () => path.join(work, '.git', 'worktrees', 'wt');
-    const recorded = () => `//wsl.localhost/Ubuntu${path.join(work, '.git')}`;
-    const input = (over: Record<string, unknown> = {}) => ({ worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh'), gitCommonDir: recorded(), cleanRoot: path.join(root, 'clean'), ...over });
-    // Runs what wsl.exe would run in the distro on this machine: git with
-    // only the variables WSLENV names, and stat/realpath as GNU prints them.
-    const standIn = (wslCalls: string[][]): TaskPushExec => async (_file, args, env) => {
-      wslCalls.push(args);
-      expect(args.slice(0, 5)).toEqual(['-d', 'Ubuntu', '--cd', '/', '--exec']);
-      const prog = args[5];
-      if (prog === 'stat') {
-        const paths = args.slice(args.indexOf('--') + 1);
-        let stdout = '';
-        let missing = false;
-        for (const p of paths) {
-          try {
-            const st = fs.lstatSync(p);
-            stdout += `${p}\0${st.isSymbolicLink() ? 'symbolic link' : st.isDirectory() ? 'directory' : st.isFile() ? 'regular file' : 'fifo'}\0${st.nlink}\0`;
-          } catch {
-            missing = true;
-          }
-        }
-        return { code: missing ? 1 : 0, stdout, stderr: missing ? 'stat: cannot statx: No such file or directory' : '' };
-      }
-      if (prog === 'realpath') {
-        try {
-          return { code: 0, stdout: `${fs.realpathSync(args[args.length - 1])}\n`, stderr: '' };
-        } catch {
-          return { code: 1, stdout: '', stderr: 'realpath: No such file or directory' };
-        }
-      }
-      expect(prog).toBe('git');
-      const passed: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
-      for (const name of (env.WSLENV ?? '').split(':').filter(Boolean)) passed[name] = env[name];
-      try {
-        const stdout = execFileSync('git', args.slice(6), { cwd: '/', env: passed, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-        return { code: 0, stdout, stderr: '' };
-      } catch (e) {
-        const err = e as { status?: number; stdout?: string; stderr?: string };
-        return { code: err.status ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
-      }
-    };
-    const run = (wslCalls: string[][], hostCalls: string[][]) => ({
-      git: async (args: string[]) => { hostCalls.push(args); return { code: 1, stdout: '', stderr: 'host git' }; },
-      deps: {
-        ...FILE_OK,
-        platform: 'win32' as const,
-        // The worktree's .git as Git for Windows writes it for a repository in a distro.
-        readDotGit: () => `gitdir: //wsl.localhost/Ubuntu${gitDir()}\n`,
-        toWslPath: (p: string) => p,
-        wslExec: standIn(wslCalls),
-      },
-    });
-
-    it('pushes every step through the distro\'s git, hooks from /dev/null, never main\'s', async () => {
-      const wslCalls: string[][] = [];
-      const hostCalls: string[][] = [];
-      const { git: hostGit, deps } = run(wslCalls, hostCalls);
-      const r = await pushTask(input(), hostGit, deps);
-      expect(r).toMatchObject({ ok: true, branch: 'wtask/one', head: git(wt, 'rev-parse', 'HEAD') });
-      expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(wt, 'rev-parse', 'HEAD'));
-      expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(git(wt, 'rev-parse', 'HEAD'));
-      expect(() => git(work, 'config', '--get', 'branch.wtask/one.remote')).toThrow();
-      expect(hostCalls).toEqual([]);
-      const gitCalls = wslCalls.filter((a) => a[5] === 'git');
-      for (const a of gitCalls) expect(a.slice(7, 11)).toEqual(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']);
-      // The repository by its recorded path; the worktree's gitdir for HEAD only.
-      const byDir = (d: string) => gitCalls.filter((a) => a[6] === `--git-dir=${d}`);
-      expect(byDir(path.join(work, '.git')).length).toBeGreaterThan(0);
-      expect(byDir(gitDir()).map((a) => a.slice(11))).toEqual([['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']]);
-      expect(gitCalls.some((a) => a.includes('push') && a[6].startsWith(`--git-dir=${path.join(root, 'clean')}`))).toBe(true);
-    });
-
-    it('checks the config in the same git it pushes with, and keeps every refusal', async () => {
-      const { git: hostGit, deps } = run([], []);
-      git(work, 'config', 'core.sshCommand', 'false');
-      expect(await pushTask(input(), hostGit, deps)).toMatchObject({ ok: false, reason: 'config-refused' });
-      git(work, 'config', '--unset', 'core.sshCommand');
-      expect(await pushTask(input({ expectedRepoKey: 'acme/app' }), hostGit, deps)).toMatchObject({ ok: false, reason: 'remote-refused' });
-      expect(await pushTask(input({ branch: 'main' }), hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
-      // The remote's own HEAD, read through the distro's git, is refused too.
-      git(work, 'push', '-q', 'origin', 'main:develop');
-      execFileSync('git', ['--git-dir', origin, 'symbolic-ref', 'HEAD', 'refs/heads/develop']);
-      expect(await pushTask(input({ branch: 'develop' }), hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
-      expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/develop\nrefs/heads/main');
-      expect(git(origin, 'rev-parse', 'develop')).toBe(git(work, 'rev-parse', 'main'));
-    });
-
-    it('fails closed, with the cause, when the distro cannot be resolved', async () => {
-      const { git: hostGit, deps } = run([], []);
-      const r = await pushTask(input({ gitCommonDir: '//wsl$//home/me/.git' }), hostGit, deps);
-      expect(r).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/inside WSL/) });
-      const gone = await pushTask(input(), hostGit, { ...deps, wslExec: async () => ({ code: 1, stdout: '', stderr: 'There is no distribution with the supplied name.' }) });
-      expect(gone).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/could not be read/) });
-      // A worktree whose gitdir is in another distro than its repository.
-      const elsewhere = await pushTask(input(), hostGit, { ...deps, readDotGit: () => `gitdir: //wsl.localhost/Debian${gitDir()}\n` });
-      expect(elsewhere).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/not in the WSL distro/) });
-      expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
-    });
-  });
 });
+
 
 describe('task.push RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
@@ -597,10 +463,10 @@ describe('task.push RPC', () => {
     expect(await setup({ caller: 'ws-other' }).call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
   });
 
-  it('runs the push on the git dir main recorded, with clean dirs under main\'s folder; a task with none recorded is refused, a bot\'s falls back to its profile', async () => {
+  it('runs the push on the git dir main recorded, with a relay under main\'s folder; a task with none recorded is refused, a bot\'s falls back to its profile', async () => {
     const r = setup();
     expect(await r.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
-    expect(r.push).toHaveBeenCalledWith(expect.objectContaining({ gitCommonDir: '/r/.git', cleanRoot: path.join(r.dir, 'factory', 'git-clean'), worktreePath: '/w/one' }));
+    expect(r.push).toHaveBeenCalledWith(expect.objectContaining({ gitCommonDir: '/r/.git', relayRoot: path.join(r.dir, 'factory', 'git-relay'), taskId: 'wtask-1', worktreePath: '/w/one' }));
     const none = setup({ row: { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app' } } });
     expect(await none.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION', message: expect.stringMatching(/recorded no repository folder/) } });
     expect(none.push).not.toHaveBeenCalled();
@@ -628,18 +494,18 @@ describe('task.push RPC', () => {
     }
   });
 
-  it('sweeps clean git dirs a previous run left, when it registers', () => {
+  it('sweeps relays whose task is no longer open, when it registers', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-sweep-'));
-    const left = path.join(dir, 'factory', 'git-clean', 'c-old');
-    fs.mkdirSync(left, { recursive: true });
-    fs.writeFileSync(path.join(left, 'config'), '[core]\n\tsshCommand = false\n');
-    const old = new Date(Date.now() - process.uptime() * 1000 - 60_000);
-    fs.utimesSync(left, old, old);
-    // One made by this run (a call under way) is kept.
-    const live = path.join(dir, 'factory', 'git-clean', 'c-live');
-    fs.mkdirSync(live);
-    registerTaskPushRpc({ register: () => undefined } as never, { getWindow: () => null, daemon: { rpc: async () => ({}) }, wmuxDir: () => dir });
-    expect(fs.readdirSync(path.join(dir, 'factory', 'git-clean'))).toEqual(['c-live']);
+    const relayRoot = path.join(dir, 'factory', 'git-relay');
+    fs.mkdirSync(path.join(relayRoot, 'wtask-open'), { recursive: true });
+    fs.mkdirSync(path.join(relayRoot, 'wtask-gone'), { recursive: true });
+    registerTaskPushRpc({ register: () => undefined } as never, {
+      getWindow: () => null,
+      daemon: { rpc: async () => ({}) },
+      wmuxDir: () => dir,
+      getLedger: () => ({ get: (id: string) => (id === 'wtask-open' ? { status: 'working' } : undefined) }) as never,
+    });
+    expect(fs.readdirSync(relayRoot).sort()).toEqual(['wtask-open']);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

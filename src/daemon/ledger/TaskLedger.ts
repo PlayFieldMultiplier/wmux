@@ -260,6 +260,7 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     // Only the factory's own spelling of a repository (shared/repoKey.ts).
     ...(typeof d.repoKey === 'string' && normalizeRepoKey(d.repoKey) === d.repoKey ? { repoKey: d.repoKey } : {}),
     ...(isRecordedGitDir(d.gitCommonDir) ? { gitCommonDir: d.gitCommonDir } : {}),
+    ...(isRecordedGitDir(d.gitWorktreeDir) ? { gitWorktreeDir: d.gitWorktreeDir } : {}),
     ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
     ...(typeof d.baseOid === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(d.baseOid) ? { baseOid: d.baseOid } : {}),
     ...(d.threadId ? { threadId: d.threadId } : {}),

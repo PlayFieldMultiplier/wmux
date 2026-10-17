@@ -7,23 +7,25 @@
 //   - WHICH branch: the task's own branch, from main's task record (the
 //     worker's verified pane → its task workspace → the open ledger row →
 //     the WorkTask main created). Never a name from the wire.
-//   - WHICH repository: the git dir main recorded for the task at dispatch
-//     (LedgerDispatch.gitCommonDir). Every git call that reads its config or
-//     writes to it names that path (`--git-dir`); only the worktree's HEAD is
-//     read through the worktree.
+//   - WHICH repository: the git dir and the worktree git dir main recorded for
+//     the task at dispatch (LedgerDispatch.gitCommonDir / gitWorktreeDir).
+//     Main reads the repository config and the worktree's HEAD by those paths
+//     (never discovered through the worktree) and writes nothing under them.
 //   - WHERE: origin's URL, read from that repository's config and pushed to
 //     as a URL (not through the remote's name). Refused when origin sets
 //     anything but its URL and fetch refspec, when any URL rewrite or a
 //     program-running key is set (worktask/workerGit.ts), when the config
 //     defines a remote named by origin's URL (the same remote and ref checks
 //     as task_fetch), and — for a bot's task — when the URL is not a plain
-//     https/ssh address of the bot's own repository. A task of the operator's
-//     goes to the operator's own origin.
-//   - IN WHICH git dir: every network call (the push, each ls-remote) runs in
-//     a clean bare git dir main makes for that call and deletes after it
-//     (shared/taskGitCleanDir.ts), with the recorded repository's objects:
-//     git reads the owner's system and global config there, not the task
-//     repository's.
+//     https/ssh address of the bot's own repository.
+//   - IN WHICH git dir: the push runs in a bare relay repository main owns
+//     (one per task, under <wmux>/factory/git-relay/<taskId>) that borrows the
+//     recorded repository's objects through `objects/info/alternates`. The
+//     pushed commit is read from the recorded objects through that link; main
+//     writes nothing under the recorded repository. git in the relay reads the
+//     owner's system and global config, the relay's own config (origin's URL,
+//     written by main) and the `-c` options below — never the task
+//     repository's config.
 //   - HOW: fast-forward only (no force, no `+`), the branch alone (no tags
 //     follow it, no submodule is pushed), never onto a default branch
 //     (main/master, every default branch main recorded, and the repository's
@@ -32,22 +34,17 @@
 //   - main's git runs with no fsmonitor and the worktree's own hooks do not
 //     run (`core.hooksPath` pointed at an empty folder, `--no-verify`).
 //   - IN WHICH git: on Windows, a task whose recorded repository lives inside
-//     a WSL distro (a `\\wsl$\<distro>\…` or `\\wsl.localhost\<distro>\…`
-//     path) is pushed by that distro's own git, through `wsl.exe -d <distro>
-//     --exec git` (argv only, no shell), so the distro's ssh keys and
-//     credential helpers apply. Every step runs in that one git; the clean
-//     dir is the distro's view of main's folder (`/mnt/<drive>/…`). A path
-//     under a WSL host whose distro or path cannot be read is refused, never
-//     guessed. Any other task is pushed by main's own git.
+//     a WSL distro is pushed by that distro's own git, through `wsl.exe -d
+//     <distro> --exec git` (argv only, no shell); the relay lives on the
+//     distro's view of main's folder. A path under a WSL host whose distro or
+//     path cannot be read is refused, never guessed.
 //   - The repository's own default branch is refused under every name it is
 //     read by: GitHub's (by key), origin/HEAD, and the remote's own HEAD
-//     (`ls-remote --symref` at the pushed URL), which needs no GitHub and no
-//     ref the worker can write.
+//     (`ls-remote --symref` at the pushed URL).
 //
 // Any fan-out worker may call it; for a bot's worker it is the only way to
-// publish. Afterwards main sets origin/<branch> to the pushed commit (the
-// path checked first, shared/taskGitCleanDir.ts guardedRefPathRefusal);
-// `gh pr create --head <branch>` names the pushed branch.
+// publish. Afterwards the worker runs `gh pr create --head <branch>`; main
+// writes no upstream ref.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -61,9 +58,8 @@ import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import {
-  cleanGitConfigArgs, cleanGitEnv, cleanGitSeedPackedRefs, CLEAN_GIT_DEFAULT_PROTOCOLS, CLEAN_GIT_SEED_MAX, guardedRefPathRefusal,
-  parseRawGitConfigList, parseSeedTips, transportConfigDiff, type PathKind, type RefPathPorts,
-} from '../../shared/taskGitCleanDir';
+  RELAY_GIT_DEFAULT_PROTOCOLS, gitVersionRefusal, parseRawGitConfigList, relayGitConfigArgs, transportConfigReplay,
+} from '../../shared/taskGitRelay';
 import { originUrlRepoKey, urlNamedRemoteRefusal, workerGitEnv, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal, type GitConfigEntry } from './workerGit';
 
 const execFileP = promisify(execFile);
@@ -78,15 +74,20 @@ export type TaskPushGit = (args: string[], cwd: string, env?: Record<string, str
 
 /** Where main's git finds the task's repository: main's records only. */
 export interface TaskGitRepoInput {
-  /** The task's worktree (main's record); only its HEAD is read there. */
+  /** The task's worktree (main's record). */
   worktreePath: string;
   /** The task repository's git dir main recorded at dispatch (its common
    *  dir, resolved). */
   gitCommonDir: string;
+  /** The task worktree's own git dir main recorded at dispatch
+   *  (`<common>/worktrees/<id>`); needed only to read HEAD for a push. */
+  gitWorktreeDir?: string;
   /** An empty folder for `core.hooksPath`. */
   noHooksDir: string;
-  /** Main's folder for clean git dirs (`<wmux>/factory/git-clean`). */
-  cleanRoot: string;
+  /** Main's folder for relay repositories (`<wmux>/factory/git-relay`). */
+  relayRoot: string;
+  /** The task's id (names its relay). */
+  taskId: string;
 }
 
 export interface TaskPushInput extends TaskGitRepoInput {
@@ -131,13 +132,12 @@ export function taskPushBranchRefusal(branch: string, defaultBranches: readonly 
 }
 
 /** The git argv of main's push (after the safe `-c` options): the commit
- *  `sha` HEAD was resolved to, never `HEAD` itself, so what lands is what
- *  main read and records even if HEAD moves meanwhile. Pure. */
+ *  `sha` HEAD was resolved to, never `HEAD` itself. Pure. */
 export function taskPushArgs(branch: string, url: string, sha: string): string[] {
   return ['push', '--no-verify', '--no-follow-tags', '--recurse-submodules=no', '--porcelain', '--', url, `${sha}:refs/heads/${branch}`];
 }
 
-/** Which git pushes a worktree: main's own, or a WSL distro's. */
+/** Which git serves a task: main's own, or a WSL distro's. */
 export type TaskPushGitTarget =
   | { kind: 'host' }
   | { kind: 'wsl'; distro: string; gitDir: string }
@@ -145,7 +145,7 @@ export type TaskPushGitTarget =
 
 const WSL_GITDIR_RE = /^(?:\\\\|\/\/)(?:wsl\$|wsl\.localhost)[\\/]([^\\/]*)(.*)$/i;
 
-/** The git that pushes a worktree, from its `.git` file's text (null: a
+/** The git that serves a worktree, from its `.git` file's text (null: a
  *  `.git` folder or none). Only on Windows is a gitdir under a WSL host a
  *  distro's; its Linux path must be absolute and plain. Pure. */
 export function taskPushGitTarget(dotGit: string | null, platform: NodeJS.Platform = process.platform): TaskPushGitTarget {
@@ -179,9 +179,6 @@ export function taskGitDirTarget(dir: string, platform: NodeJS.Platform = proces
 export type TaskPushExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<GitOut>;
 
 async function defaultWslExec(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<GitOut> {
-  // The Linux child's bytes are UTF-8 (a NUL in `config -z` is data). wsl.exe's
-  // own failure text may be UTF-16 and lands on stdout or stderr; it is read
-  // from stdout only when the run failed with nothing on stderr.
   const opts = { cwd: os.homedir(), env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024, encoding: 'buffer' as const };
   try {
     const { stdout, stderr } = await execFileP(file, args, opts);
@@ -198,26 +195,23 @@ async function defaultWslExec(file: string, args: string[], env: NodeJS.ProcessE
   }
 }
 
-/** The wsl.exe argv that runs `git <args>` on a gitdir inside a distro.
- *  `--exec` runs git with no shell; `--cd /` keeps the worktree's folder out
- *  of it. Pure. */
-export function wslGitArgv(distro: string, gitDir: string, args: readonly string[]): string[] {
-  return ['-d', distro, '--cd', '/', '--exec', 'git', `--git-dir=${gitDir}`, ...args];
-}
-
 function wslExePath(systemRoot: string | undefined): string {
   return path.win32.join(systemRoot || 'C:\\Windows', 'System32', 'wsl.exe');
 }
 
 /** The env of a wsl.exe run: `extra` reaches the distro only by name in
- *  WSLENV (its values are Linux paths and text, so no `/p`). */
+ *  WSLENV (its values are Linux paths and text, so no `/p`), and git's own
+ *  variables are never forwarded from main's environment. */
 function wslEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-  // The same variables as main's own git leaves out, and none of git's own
-  // forwarded by an existing WSLENV: the distro's git gets only main's.
   const base = workerGitEnv(getExecEnv());
   const forwarded = (base.WSLENV ?? '').split(':').filter((n) => n && !/^GIT_/i.test(n.split('/')[0])).join(':');
   const add = { GIT_TERMINAL_PROMPT: '0', ...extra };
   return { ...base, ...add, WSL_UTF8: '1', WSLENV: mergeWslEnv(forwarded, Object.keys(add)) };
+}
+
+/** The wsl.exe argv that runs `git <args>` on a gitdir inside a distro. Pure. */
+export function wslGitArgv(distro: string, gitDir: string, args: readonly string[]): string[] {
+  return ['-d', distro, '--cd', '/', '--exec', 'git', `--git-dir=${gitDir}`, ...args];
 }
 
 /** A TaskPushGit that runs inside a WSL distro on its gitdir (the `cwd` it is
@@ -238,14 +232,13 @@ export function readDotGitFile(worktreePath: string): string | null {
 
 export interface TaskPushDeps {
   platform?: NodeJS.Platform;
-  /** The worktree's `.git` file text, or null (a folder, or none). */
-  readDotGit?: (worktreePath: string) => string | null;
   /** Runs wsl.exe (a WSL distro's git). */
   wslExec?: TaskPushExec;
   /** The transports a network call may use (default https and ssh). */
   protocols?: readonly string[];
-  /** A Windows path as a WSL distro sees it (default `/mnt/<drive>/…`). */
-  toWslPath?: (windowsPath: string) => string | null;
+  /** A Windows path as the task's WSL distro sees it (default: ask the distro
+   *  with `wslpath`). */
+  toWslPath?: (windowsPath: string) => string | Promise<string | null> | null;
 }
 
 /** `ls-remote --symref` output → the remote HEAD's branch, or null. Pure. */
@@ -254,39 +247,49 @@ export function parseLsRemoteHead(stdout: string): string | null {
   return m ? m[1] : null;
 }
 
-/** Main's git on a task's recorded repository. */
+/** Main's git on a task's recorded repository and its relay. */
 export interface TaskGitRepo {
   /** The repository config, read through `--git-dir` (includes resolved). */
   entries: GitConfigEntry[];
-  /** git on the recorded repository (`--git-dir`). */
+  /** A read on the recorded repository (`--git-dir`, no object or ref write). */
   local: (args: string[]) => Promise<GitOut>;
-  /** git in the worktree: for its HEAD only. */
+  /** The worktree's HEAD, read through the recorded worktree git dir; fails
+   *  when main recorded none. */
   head: (args: string[]) => Promise<GitOut>;
-  /** `fn` runs git in a fresh clean dir whose origin is `url` (seeded with
-   *  the repository's recent commits when `seed`); the dir is deleted after
-   *  it. Never throws. */
-  inClean: <T>(url: string, opts: { seed?: boolean }, fn: (run: (args: string[]) => Promise<GitOut>) => Promise<T>) => Promise<{ ok: true; value: T } | { ok: false; error: string }>;
-  /** Why main will not write `refname` in the repository, or null. */
-  refRefusal: (refname: string) => Promise<string | null>;
-  /** Writes `refname` to `sha` in the repository, after the path and the
-   *  commit are checked. */
-  writeRef: (refname: string, sha: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** `fn` runs git in the task's relay (origin set to `url`, objects borrowed
+   *  from the recorded repository). Never throws. */
+  inRelay: <T>(url: string, fn: (run: (args: string[]) => Promise<GitOut>) => Promise<T>) => Promise<{ ok: true; value: T } | { ok: false; error: string }>;
+  /** The relay path the worker's shell reads it by (a Linux path in WSL). */
+  relayShellPath: string;
+  /** The platform whose shell runs the fetch line (a WSL distro is 'linux'). */
+  workerShellPlatform: NodeJS.Platform;
 }
 
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const TASK_ID_RE = /^[A-Za-z0-9_.-]+$/;
 
-function hostPathKind(p: string): PathKind {
+/** Serializes calls that touch one relay (the no-changes check and task_fetch
+ *  can reach the same relay at once). */
+const relayLocks = new Map<string, Promise<unknown>>();
+function withRelayLock<T>(relayHostPath: string, fn: () => Promise<T>): Promise<T> {
+  const prior = relayLocks.get(relayHostPath) ?? Promise.resolve();
+  const next = prior.then(fn, fn);
+  relayLocks.set(relayHostPath, next.then(() => undefined, () => undefined));
+  return next;
+}
+
+function hostReadFile(p: string): string | null {
   try {
-    const st = fs.lstatSync(p);
-    if (st.isSymbolicLink()) return 'symlink';
-    if (st.isDirectory()) return 'dir';
-    // A file with another name elsewhere is not one main writes to.
-    if (st.isFile()) return st.nlink === 1 ? 'file' : 'other';
-    return 'other';
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code === 'ENOENT' ? 'missing' : 'other';
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    return null;
   }
+}
+
+async function wslReadFile(exec: TaskPushExec, distro: string, linuxPath: string): Promise<string | null> {
+  const wslExe = wslExePath(process.env.SystemRoot);
+  const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'cat', '--', linuxPath], wslEnv());
+  return r.code === 0 ? r.stdout : null;
 }
 
 function hostRealpath(p: string): string | null {
@@ -297,210 +300,166 @@ function hostRealpath(p: string): string | null {
   }
 }
 
-const STAT_KINDS: Record<string, PathKind> = { directory: 'dir', 'regular file': 'file', 'regular empty file': 'file', 'symbolic link': 'symlink' };
-
-/** RefPathPorts inside a WSL distro: `stat` and `realpath`, argv only. */
-function wslRefPorts(distro: string, exec: TaskPushExec, systemRoot: string | undefined): RefPathPorts {
-  const wslExe = wslExePath(systemRoot);
-  // English messages: a missing path is told apart by stat's own words.
-  const env = wslEnv({ LC_ALL: 'C' });
-  return {
-    join: (...parts) => path.posix.join(...parts),
-    caseInsensitive: false,
-    kinds: async (paths) => {
-      const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'stat', '--printf=%n\\0%F\\0%h\\0', '--', ...paths], env);
-      const parts = r.stdout.split('\0');
-      const found = new Map<string, PathKind>();
-      for (let i = 0; i + 2 < parts.length; i += 3) {
-        const kind = STAT_KINDS[parts[i + 1]] ?? 'other';
-        found.set(parts[i], kind === 'file' && parts[i + 2] !== '1' ? 'other' : kind);
-      }
-      // A path stat could not read for another reason than its absence is
-      // not a folder main writes through.
-      const missing = /No such file or directory/;
-      return paths.map((p) => found.get(p) ?? (r.code === 0 || missing.test(r.stderr) ? 'missing' : 'other'));
-    },
-    realpath: async (p) => {
-      const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'realpath', '-e', '--', p], env);
-      const out = r.stdout.replace(/\r?\n$/, '');
-      return r.code === 0 && out.startsWith('/') ? out : null;
-    },
-  };
-}
-
 /**
- * Main's git on the task's recorded repository, after the repository config
- * check (workerGitPreflight): refused for a ref store other than files or a
- * partial clone. A shallow repository's boundary list is copied into each
- * clean dir. Never throws.
+ * Main's git on the task's recorded repository, after the version floor and
+ * the repository config check (workerGitPreflight): refused for a ref store
+ * other than files or a partial clone. Never throws.
  */
 export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit = defaultGit, deps: TaskPushDeps = {}): Promise<{ ok: true; repo: TaskGitRepo } | { ok: false; reason: 'git-failed' | 'config-refused'; error: string }> {
   const platform = deps.platform ?? process.platform;
   const fail = (error: string) => ({ ok: false as const, reason: 'git-failed' as const, error });
+  if (!TASK_ID_RE.test(input.taskId)) return fail('the task id is not a plain name');
   const target = taskGitDirTarget(input.gitCommonDir, platform);
   if (target.kind === 'refused') return fail(target.error);
   const wslExec = deps.wslExec ?? defaultWslExec;
-  // In a distro the hooks folder is a Linux path; /dev/null holds no hook.
   const safe = workerGitSafeArgs(target.kind === 'wsl' ? '/dev/null' : path.resolve(input.noHooksDir));
-  let common: string;
-  let ports: RefPathPorts;
-  let readShallow: () => Promise<string | null>;
-  let raw: TaskPushGit;
-  let head: TaskPushGit;
+  const NO_LAZY = { GIT_NO_LAZY_FETCH: '1' };
+  // The stable cwd for host git: never discovered from, always overridden by
+  // --git-dir or GIT_DIR.
+  const hostCwd = os.homedir();
+
+  // exec(args, env): git on the right target, env added.
+  let exec: (args: string[], env: Record<string, string>) => Promise<GitOut>;
+  let common: string; // the recorded common git dir, in the serving git's spelling
+  let toLinux: ((winPath: string) => Promise<string | null>) | null = null;
   if (target.kind === 'wsl') {
-    ports = wslRefPorts(target.distro, wslExec, process.env.SystemRoot);
-    const real = await ports.realpath(target.gitDir);
-    if (!real) return fail(`the task's repository ${input.gitCommonDir} could not be read`);
-    common = real;
-    raw = wslTaskPushGit(target.distro, common, wslExec);
-    // The worktree's HEAD: through its own gitdir, in the same distro.
-    const wt = taskPushGitTarget((deps.readDotGit ?? readDotGitFile)(input.worktreePath), platform);
-    if (wt.kind !== 'wsl' || wt.distro.toLowerCase() !== target.distro.toLowerCase()) {
-      return fail('the task\'s worktree is not in the WSL distro of its repository');
-    }
-    head = wslTaskPushGit(target.distro, wt.gitDir, wslExec);
-    readShallow = async () => {
-      const r = await wslExec(wslExePath(process.env.SystemRoot), ['-d', target.distro, '--cd', '/', '--exec', 'cat', '--', path.posix.join(common, 'shallow')], wslEnv());
-      return r.code === 0 ? r.stdout : null;
-    };
+    common = target.gitDir;
+    const wslExe = wslExePath(process.env.SystemRoot);
+    exec = (args, env) => wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], wslEnv(env));
+    toLinux = deps.toWslPath
+      ? async (p) => deps.toWslPath!(p)
+      : async (p) => {
+        const r = await wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'wslpath', '-u', '--', p], wslEnv());
+        const out = r.stdout.replace(/\r?\n$/, '');
+        return r.code === 0 && out.startsWith('/') ? out : null;
+      };
   } else {
-    ports = { join: (...p) => path.join(...p), caseInsensitive: platform === 'win32', kinds: async (ps) => ps.map(hostPathKind), realpath: async (p) => hostRealpath(p) };
     if (!path.isAbsolute(input.gitCommonDir)) return fail('the task\'s recorded repository is not an absolute path');
     const real = hostRealpath(input.gitCommonDir);
     const same = real !== null && (platform === 'win32' ? real.toLowerCase() === input.gitCommonDir.toLowerCase() : real === input.gitCommonDir);
     if (!same) return fail(`the task's repository ${input.gitCommonDir} no longer resolves to itself`);
     common = input.gitCommonDir;
-    raw = (args, _cwd, extra) => git([`--git-dir=${common}`, ...args], common, extra);
-    head = git;
-    readShallow = async () => {
-      try {
-        return fs.readFileSync(path.join(common, 'shallow'), 'utf8');
-      } catch {
-        return null;
-      }
-    };
+    exec = (args, env) => git(args, hostCwd, env);
   }
-  // No object is fetched on demand from a promisor remote during a read.
-  const NO_LAZY = { GIT_NO_LAZY_FETCH: '1' };
-  const local = (args: string[]) => raw([...safe, ...args], input.worktreePath, NO_LAZY);
+
+  // The version floor: defence in depth for GIT_NO_LAZY_FETCH.
+  const ver = await exec(['--version'], {});
+  if (ver.code !== 0) return fail(`git --version failed: ${ver.stderr.trim().slice(0, 300)}`);
+  const verRefusal = gitVersionRefusal(ver.stdout);
+  if (verRefusal) return { ok: false, reason: 'config-refused', error: verRefusal };
+
+  const local = (args: string[]) => exec([`--git-dir=${common}`, ...safe, ...args], { ...NO_LAZY, GIT_COMMON_DIR: common });
   const pre = await workerGitPreflight(local);
   if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
   const own = (key: string) => pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === key)?.value;
   const refStorage = own('extensions.refstorage');
   if (refStorage !== undefined && refStorage.toLowerCase() !== 'files') {
-    return { ok: false, reason: 'config-refused', error: 'the repository keeps its refs in a ref store main does not write to' };
+    return { ok: false, reason: 'config-refused', error: 'the repository keeps its refs in a ref store main does not read' };
   }
   const promisor = pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && (e.key === 'extensions.partialclone' || /^remote\..+\.promisor$/.test(e.key)));
   if (promisor) return { ok: false, reason: 'config-refused', error: `the repository is a partial clone (${promisor.key})` };
   const objectFormat = (own('extensions.objectformat') ?? 'sha1').toLowerCase();
   if (objectFormat !== 'sha1' && objectFormat !== 'sha256') return { ok: false, reason: 'config-refused', error: `the repository's object format ${objectFormat} is not one main reads` };
-  // A shallow repository: git in a clean dir reads the boundary commits from
-  // the clean dir's own `shallow`, so main copies the list there.
+  // A shallow repository: the relay reads the boundary commits from its own
+  // `shallow`, so main copies the list there.
   const isShallow = await local(['rev-parse', '--is-shallow-repository']);
   const shallowState = isShallow.code === 0 ? isShallow.stdout.trim() : '';
   if (shallowState !== 'true' && shallowState !== 'false') return fail(`git rev-parse --is-shallow-repository failed: ${isShallow.stderr.trim().slice(0, 300)}`);
   let shallowList = '';
   if (shallowState === 'true') {
-    const text = await readShallow();
+    const text = target.kind === 'wsl'
+      ? await wslReadFile(wslExec, target.distro, path.posix.join(common, 'shallow'))
+      : hostReadFile(path.join(common, 'shallow'));
     const idRe = objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : /^[0-9a-f]{40}$/;
     const ids = (text ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     if (text === null || ids.length === 0 || !ids.every((id) => idRe.test(id))) return { ok: false, reason: 'config-refused', error: 'the repository\'s shallow list could not be read' };
     shallowList = `${[...new Set(ids)].join('\n')}\n`;
   }
-  const context = parseRawGitConfigList(pre.stdout);
-  const objectDir = target.kind === 'wsl' ? path.posix.join(common, 'objects') : path.join(common, 'objects');
-  const cleanArgs = cleanGitConfigArgs(safe, deps.protocols ?? CLEAN_GIT_DEFAULT_PROTOCOLS);
-  let owned: Array<[string, string]> | null = null;
 
-  const inClean: TaskGitRepo['inClean'] = async (url, opts, fn) => {
-    let dir: string | null = null;
-    try {
-      fs.mkdirSync(input.cleanRoot, { recursive: true, mode: 0o700 });
-      dir = fs.mkdtempSync(path.join(input.cleanRoot, 'c-'));
-      const gitDir = target.kind === 'wsl' ? (deps.toWslPath ?? toWslPath)(dir) : dir;
-      if (!gitDir) return { ok: false, error: `main's folder ${dir} has no path inside WSL` };
-      const cleanRaw: TaskPushGit = target.kind === 'wsl' ? wslTaskPushGit(target.distro, gitDir, wslExec) : (args, _cwd, extra) => git([`--git-dir=${gitDir}`, ...args], dir as string, extra);
-      const init = await cleanRaw([...safe, 'init', '-q', '--bare', '--template=', `--object-format=${objectFormat}`], dir);
-      if (init.code !== 0) return { ok: false, error: `git init failed: ${init.stderr.trim().slice(0, 300)}` };
-      const set = await cleanRaw([...safe, 'config', 'remote.origin.url', url], dir);
-      if (set.code !== 0) return { ok: false, error: `git config failed: ${set.stderr.trim().slice(0, 300)}` };
-      if (shallowList) fs.writeFileSync(path.join(dir, 'shallow'), shallowList);
-      if (opts.seed) {
-        const tips = await local(['--no-replace-objects', 'for-each-ref', '--sort=-committerdate', `--count=${CLEAN_GIT_SEED_MAX}`, '--format=%(objectname) %(objecttype)', 'refs/remotes/origin', 'refs/heads']);
-        if (tips.code === 0) fs.writeFileSync(path.join(dir, 'packed-refs'), cleanGitSeedPackedRefs(parseSeedTips(tips.stdout)));
-      }
-      if (!owned) {
-        // The owner's transport settings an include adds for the recorded
-        // repository's path, which the clean dir's path does not match.
-        const cleanList = await cleanRaw([...safe, 'config', '-z', '--list', '--show-scope'], dir);
-        if (cleanList.code !== 0) return { ok: false, error: `git config --list failed: ${cleanList.stderr.trim().slice(0, 300)}` };
-        owned = transportConfigDiff(context, parseRawGitConfigList(cleanList.stdout));
-      }
-      const env = { ...cleanGitEnv(gitDir, objectDir, owned), ...NO_LAZY };
-      const run = (args: string[]) => cleanRaw([...cleanArgs, ...args], dir as string, env);
-      return { ok: true, value: await fn(run) };
-    } catch (err) {
-      return { ok: false, error: `main's clean git dir failed: ${err instanceof Error ? err.message : String(err)}` };
-    } finally {
-      if (dir) {
-        try {
-          fs.rmSync(dir, { recursive: true, force: true });
-        } catch {
-          // Swept at the next start (sweepTaskGitCleanDirs).
-        }
-      }
+  // The recorded worktree git dir, for HEAD (a push only).
+  let worktreeGitDir: string | null = null;
+  if (input.gitWorktreeDir) {
+    if (target.kind === 'wsl') {
+      const wt = taskGitDirTarget(input.gitWorktreeDir, platform);
+      if (wt.kind === 'wsl' && wt.distro.toLowerCase() === target.distro.toLowerCase() && path.posix.dirname(path.posix.dirname(wt.gitDir)) === common) worktreeGitDir = wt.gitDir;
+    } else {
+      const real = hostRealpath(input.gitWorktreeDir);
+      if (real && path.dirname(path.dirname(real)) === common) worktreeGitDir = real;
     }
-  };
+  }
+  const head = (args: string[]) => worktreeGitDir
+    ? exec([...safe, ...args], { ...NO_LAZY, GIT_DIR: worktreeGitDir, GIT_COMMON_DIR: common })
+    : Promise.resolve({ code: 1, stdout: '', stderr: 'main recorded no worktree git dir for this task' });
 
-  const refRefusal = async (refname: string): Promise<string | null> => {
-    const walk = await guardedRefPathRefusal(common, refname, ports);
-    if (walk) return walk;
-    // A ref, loose or packed, whose name is a folder of this one or under it.
-    const refs = await local(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin/']);
-    if (refs.code !== 0) return `git for-each-ref failed: ${refs.stderr.trim().slice(0, 300)}`;
-    const clash = refs.stdout.split('\n').map((r) => r.trim()).find((r) => r && r !== refname && (refname.startsWith(`${r}/`) || r.startsWith(`${refname}/`)));
-    return clash ? `${clash} is in the way of ${refname}` : null;
-  };
-  const writeRef: TaskGitRepo['writeRef'] = async (refname, sha) => {
-    if (!SHA_RE.test(sha)) return { ok: false, error: `${sha} is not a commit id` };
-    const refused = await refRefusal(refname);
-    if (refused) return { ok: false, error: refused };
-    const there = await local(['--no-replace-objects', 'cat-file', '-e', `${sha}^{commit}`]);
-    if (there.code !== 0) return { ok: false, error: `the repository does not hold commit ${sha}` };
-    // The ref itself (a symbolic ref there is replaced, never followed), and
-    // no reflog entry.
-    const set = await local(['-c', 'core.logAllRefUpdates=false', 'update-ref', '--no-deref', refname, sha]);
-    return set.code === 0 ? { ok: true } : { ok: false, error: `git update-ref ${refname} failed: ${set.stderr.trim().slice(0, 300)}` };
-  };
+  // The relay: a bare repository main owns, objects borrowed from the recorded
+  // repository, origin set to the verified URL. Reused across calls.
+  const relayHostPath = path.join(input.relayRoot, input.taskId);
+  const context = parseRawGitConfigList(pre.stdout);
+  const protocols = deps.protocols ?? RELAY_GIT_DEFAULT_PROTOCOLS;
+  const relayShellPath = target.kind === 'wsl' ? (await (toLinux as (p: string) => Promise<string | null>)(relayHostPath)) ?? '' : relayHostPath;
 
-  return {
-    ok: true,
-    repo: {
-      entries: pre.entries,
-      local,
-      head: (args) => head([...safe, ...args], input.worktreePath, NO_LAZY),
-      inClean,
-      refRefusal,
-      writeRef,
-    },
-  };
+  const inRelay: TaskGitRepo['inRelay'] = (url, fn) => withRelayLock(relayHostPath, async () => {
+    try {
+      if (!relayShellPath) return { ok: false as const, error: `main's relay folder ${relayHostPath} has no path inside WSL` };
+      const linuxObjects = target.kind === 'wsl' ? path.posix.join(common, 'objects') : path.join(common, 'objects');
+      const relayArg = `--git-dir=${relayShellPath}`;
+      const relayGit = (args: string[], extra: Record<string, string> = {}) => exec([relayArg, ...args], { ...NO_LAZY, ...extra });
+      // Create once; refresh the borrowed objects, origin and shallow each time
+      // (the worker can change them between calls).
+      const fresh = !fs.existsSync(path.join(relayHostPath, 'HEAD'));
+      if (fresh) {
+        fs.mkdirSync(relayHostPath, { recursive: true, mode: 0o700 });
+        const init = await relayGit([...safe, 'init', '-q', '--bare', '--template=', `--object-format=${objectFormat}`]);
+        if (init.code !== 0) return { ok: false as const, error: `git init failed: ${init.stderr.trim().slice(0, 300)}` };
+      }
+      fs.mkdirSync(path.join(relayHostPath, 'objects', 'info'), { recursive: true });
+      fs.writeFileSync(path.join(relayHostPath, 'objects', 'info', 'alternates'), `${linuxObjects}\n`);
+      if (shallowList) fs.writeFileSync(path.join(relayHostPath, 'shallow'), shallowList);
+      else fs.rmSync(path.join(relayHostPath, 'shallow'), { force: true });
+      const setUrl = await relayGit([...safe, 'config', 'remote.origin.url', url]);
+      if (setUrl.code !== 0) return { ok: false as const, error: `git config failed: ${setUrl.stderr.trim().slice(0, 300)}` };
+      // The owner's transport config for the recorded repository, reset and
+      // replayed so the relay matches it.
+      const relayList = await relayGit([...safe, 'config', '-z', '--list', '--show-scope']);
+      if (relayList.code !== 0) return { ok: false as const, error: `git config --list failed: ${relayList.stderr.trim().slice(0, 300)}` };
+      const replay = transportConfigReplay(context, parseRawGitConfigList(relayList.stdout)).flatMap((kv) => ['-c', kv]);
+      const relayArgs = relayGitConfigArgs(safe, protocols);
+      const run = (args: string[]) => relayGit([...relayArgs, ...replay, ...args]);
+      return { ok: true as const, value: await fn(run) };
+    } catch (err) {
+      return { ok: false as const, error: `main's relay git dir failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  });
+
+  const workerShellPlatform: NodeJS.Platform = target.kind === 'wsl' ? 'linux' : platform;
+  return { ok: true, repo: { entries: pre.entries, local, head, inRelay, relayShellPath, workerShellPlatform } };
 }
 
-/** Removes clean git dirs a previous run left behind (main's start): only
- *  ones older than this process, so a call already under way keeps its own. */
-export function sweepTaskGitCleanDirs(cleanRoot: string, startedAt = Date.now() - process.uptime() * 1000): void {
+/** Removes the relay of a task that has closed. */
+export function removeTaskRelay(relayRoot: string, taskId: string): void {
+  if (!TASK_ID_RE.test(taskId)) return;
+  try {
+    fs.rmSync(path.join(relayRoot, taskId), { recursive: true, force: true });
+  } catch {
+    // Swept at the next start (sweepTaskGitRelays).
+  }
+}
+
+/** Removes relays whose task is no longer open (main's start, and when a task
+ *  closes). */
+export function sweepTaskGitRelays(relayRoot: string, isOpen: (taskId: string) => boolean): void {
   let names: string[];
   try {
-    names = fs.readdirSync(cleanRoot);
+    names = fs.readdirSync(relayRoot);
   } catch {
     return;
   }
   for (const name of names) {
-    const p = path.join(cleanRoot, name);
+    if (isOpen(name)) continue;
     try {
-      if (fs.lstatSync(p).mtimeMs < startedAt) fs.rmSync(p, { recursive: true, force: true });
+      fs.rmSync(path.join(relayRoot, name), { recursive: true, force: true });
     } catch {
-      // Best-effort: each call makes its own fresh dir.
+      // Best-effort.
     }
   }
 }
@@ -526,45 +485,33 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }
-  // The repository's own default branch, under every name it is read by:
-  // GitHub's by the key, origin/HEAD, and the remote's HEAD at the pushed URL
-  // (the one answer no worker-written ref can change, and no GitHub needed).
+  // The repository's own default branch, under every name it is read by.
   const own: string[] = [];
   const byKey = key && input.repoDefaultBranch ? await input.repoDefaultBranch(key).catch(() => null) : null;
   if (byKey) own.push(byKey);
   const ref = await repo.local(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
   const name = ref.code === 0 ? ref.stdout.trim() : '';
   if (name.startsWith('refs/remotes/origin/')) own.push(name.slice('refs/remotes/origin/'.length));
-  const remote = await repo.inClean(origin.url, {}, (run) => run(['ls-remote', '--symref', '--', origin.url, 'HEAD']));
+  const remote = await repo.inRelay(origin.url, (run) => run(['ls-remote', '--symref', '--', origin.url, 'HEAD']));
   const remoteHead = remote.ok && remote.value.code === 0 ? parseLsRemoteHead(remote.value.stdout) : null;
   if (remoteHead) own.push(remoteHead);
   if (own.length > 0) {
     const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, ...own]);
     if (refusal) return { ok: false, reason: 'branch-refused', error: refusal };
   }
-  // HEAD is resolved once: that commit is what is pushed, set as
-  // origin/<branch> and reported (and recorded by task.push), even if HEAD
-  // moves.
+  // HEAD is resolved once, through the recorded worktree git dir.
   const head = await repo.head(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   const sha = head.stdout.trim();
   if (head.code !== 0 || !SHA_RE.test(sha)) {
     return { ok: false, reason: 'git-failed', error: `git rev-parse HEAD failed: ${head.stderr.trim().slice(0, 500)}` };
   }
-  // origin/<branch> is checked before the push, so a push never lands with a
-  // path main will not write to.
-  const upstream = `refs/remotes/origin/${input.branch}`;
-  const refused = await repo.refRefusal(upstream);
-  if (refused) return { ok: false, reason: 'config-refused', error: `main will not write ${upstream}: ${refused}` };
-  const pushed = await repo.inClean(origin.url, {}, (run) => run(taskPushArgs(input.branch, origin.url, sha)));
+  const pushed = await repo.inRelay(origin.url, (run) => run(taskPushArgs(input.branch, origin.url, sha)));
   if (!pushed.ok) return { ok: false, reason: 'git-failed', error: pushed.error };
   const res = pushed.value;
   const output = `${res.stdout}\n${res.stderr}`.trim().slice(0, 2000);
   if (res.code !== 0) {
-    // --porcelain marks a refused ref with `!` (non-fast-forward, remote hook).
     const rejected = /^!\t/m.test(res.stdout);
     return { ok: false, reason: rejected ? 'rejected' : 'git-failed', error: output || `git push exited ${res.code}` };
   }
-  // origin/<branch>, as a push to origin would set it.
-  const set = await repo.writeRef(upstream, sha);
-  return { ok: true, branch: input.branch, remote: 'origin', head: sha, output: set.ok ? output : `${output}\norigin/${input.branch} was not set: ${set.error}`.trim() };
+  return { ok: true, branch: input.branch, remote: 'origin', head: sha, output };
 }

@@ -63,17 +63,21 @@ export interface TaskCloseServiceOptions {
   worktrees: TaskWorktreeManager;
   /** Stops the panes running inside the worktree; called only after the unpushed and dirty checks pass. */
   stopPanesIn?: (worktreePath: string) => Promise<void>;
+  /** Removes the task's relay repository (task_push/task_fetch); called on every close. */
+  removeRelay?: (taskId: string) => void;
 }
 
 export class TaskCloseService {
   private readonly daemon: CloseDaemonPort;
   private readonly worktrees: TaskWorktreeManager;
   private readonly stopPanesIn?: (worktreePath: string) => Promise<void>;
+  private readonly removeRelay?: (taskId: string) => void;
 
   constructor(opts: TaskCloseServiceOptions) {
     this.daemon = opts.daemon;
     this.worktrees = opts.worktrees;
     this.stopPanesIn = opts.stopPanesIn;
+    this.removeRelay = opts.removeRelay;
   }
 
   async closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
@@ -169,6 +173,11 @@ export class TaskCloseService {
         // Lane F: the task ledger learns about the close now, not on the
         // next reconcile pass (an open row would hold the brain's Stop gate).
         await noteWorkTaskClosed(taskId);
+        try {
+          this.removeRelay?.(taskId);
+        } catch {
+          // Best-effort: a leftover relay is swept at the next start.
+        }
         return { ok: true, archivePending: res.archivePending === true };
       }
       return { ok: false, error: res?.error?.message ?? 'task.mission.close failed' };

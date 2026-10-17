@@ -97,31 +97,34 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
   };
   let root = '';
   let origin = '';
+  let repo = '';
   let work = '';
   let dataDir = '';
   let base = '';
   let ledger: TaskLedger;
   beforeEach(async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-no-changes-'));
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-no-changes-')));
     origin = path.join(root, 'origin.git');
+    repo = path.join(root, 'repo');
     work = path.join(root, 'work');
     dataDir = path.join(root, 'data');
     execFileSync('git', ['init', '-q', '--bare', origin]);
-    execFileSync('git', ['init', '-q', '-b', 'main', work]);
-    fs.writeFileSync(path.join(work, 'a.txt'), 'a\n');
-    run(work, 'add', '.');
-    run(work, 'commit', '-qm', 'init');
-    run(work, 'remote', 'add', 'origin', origin);
-    run(work, 'push', '-q', 'origin', 'main');
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    run(repo, 'add', '.');
+    run(repo, 'commit', '-qm', 'init');
+    run(repo, 'remote', 'add', 'origin', origin);
+    run(repo, 'push', '-q', 'origin', 'main');
     // Main's network git allows https and ssh only: origin is reached over a
     // stand-in ssh the owner's global config names.
-    run(work, 'remote', 'set-url', 'origin', fakeSshUrl(origin));
+    run(repo, 'remote', 'set-url', 'origin', fakeSshUrl(origin));
     fs.writeFileSync(path.join(os.homedir(), '.gitconfig'), `[core]\n\tsshCommand = ${writeFakeSsh(root)}\n`);
-    run(work, 'checkout', '-qb', 'wtask/one');
+    run(repo, 'worktree', 'add', '-q', '-b', 'wtask/one', work);
     base = run(work, 'rev-parse', 'HEAD');
-    gitCommonDir = fs.realpathSync.native(path.join(work, '.git'));
+    gitCommonDir = fs.realpathSync.native(path.join(repo, '.git'));
+    gitWorktreeDir = fs.realpathSync.native(run(work, 'rev-parse', '--path-format=absolute', '--git-dir'));
     ledger = new TaskLedger({ dir: path.join(root, 'ledger') });
-    await ledger.register({ id: 't1', taskWorkspaceId: 'ws-t', ownerWorkspaceId: 'ws-o', title: 't', dispatch: { origin: { kind: 'operator' }, baseOid: base, gitCommonDir } });
+    await ledger.register({ id: 't1', taskWorkspaceId: 'ws-t', ownerWorkspaceId: 'ws-o', title: 't', dispatch: { origin: { kind: 'operator' }, baseOid: base, gitCommonDir, gitWorktreeDir } });
     const r = await ledger.update({ id: 't1', status: 'review_requested', actor: { kind: 'worker', workspaceId: 'ws-t' }, expectedRev: 1, summary: 'read the API, nothing to commit' });
     if (!r.ok) throw new Error(r.message);
   });
@@ -130,7 +133,8 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
     fs.rmSync(path.join(os.homedir(), '.gitconfig'), { force: true });
   });
   let gitCommonDir = '';
-  const at = () => ({ worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'nh'), gitCommonDir, cleanRoot: path.join(root, 'clean') });
+  let gitWorktreeDir = '';
+  const at = () => ({ worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'nh'), gitCommonDir, gitWorktreeDir, relayRoot: path.join(root, 'relay'), taskId: 't1' });
 
   const check = () => liveNoChangesCheck({
     rpc: () => async () => ({ ok: true, tasks: [{ id: 't1', worktreePath: work, branch: 'wtask/one' }] }),
@@ -220,7 +224,7 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
     const c = run(work, 'rev-parse', 'HEAD');
     // The base "has" the new commit as its parent, as far as this repository says.
     run(work, 'replace', '--graft', base, c);
-    fs.writeFileSync(path.join(work, '.git', 'info', 'grafts'), `${base} ${c}\n`);
+    fs.writeFileSync(path.join(gitCommonDir, 'info', 'grafts'), `${base} ${c}\n`);
     expect(run(work, 'merge-base', '--is-ancestor', c, base)).toBe('');
     expect(await check()(row())).toMatchObject({ kind: 'changed', why: expect.stringContaining(c) });
     expect(await complete()).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION' } });

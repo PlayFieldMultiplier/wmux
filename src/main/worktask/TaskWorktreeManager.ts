@@ -148,7 +148,7 @@ export type PreflightResult =
   | { ok: false; error: string };
 
 export type CreateResult =
-  | { ok: true; worktreePath: string; branch: string }
+  | { ok: true; worktreePath: string; branch: string; gitWorktreeDir?: string }
   | { ok: false; error: string };
 
 /**
@@ -528,13 +528,28 @@ export class TaskWorktreeManager {
       } catch (err) {
         return { ok: false, error: `createWorktree: git worktree add --detach failed: ${(err as Error).message}` };
       }
+      const gitWorktreeDir = await this.worktreeGitDir(safePath);
       try {
         this.onCreated?.(plan.repoRoot);
       } catch {
         /* best-effort: never fails a created worktree */
       }
-      return { ok: true, worktreePath: safePath, branch: '' };
+      return { ok: true, worktreePath: safePath, branch: '', ...(gitWorktreeDir ? { gitWorktreeDir } : {}) };
     });
+  }
+
+  /** The new worktree's own git dir (`<common>/worktrees/<id>`), read right
+   *  after `git worktree add` (no worker exists yet), resolved. Undefined when
+   *  it cannot be read: task_push then derives it from the recorded common dir. */
+  private async worktreeGitDir(worktreePath: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await this.runGit(['rev-parse', '--path-format=absolute', '--git-dir'], worktreePath);
+      const dir = stdout.trim();
+      if (!dir) return undefined;
+      return fs.realpathSync.native(dir);
+    } catch {
+      return undefined;
+    }
   }
 
   /** `rev-parse --verify --quiet <ref>^{commit}` — the commit OID, or undefined. */
@@ -576,12 +591,13 @@ export class TaskWorktreeManager {
       } catch (err) {
         return { ok: false, error: `createWorktree: git worktree add failed: ${(err as Error).message}` };
       }
+      const gitWorktreeDir = await this.worktreeGitDir(safePath);
       try {
         this.onCreated?.(plan.repoRoot);
       } catch {
         /* best-effort: never fails a created worktree */
       }
-      return { ok: true, worktreePath: safePath, branch: safeBranch };
+      return { ok: true, worktreePath: safePath, branch: safeBranch, ...(gitWorktreeDir ? { gitWorktreeDir } : {}) };
     });
   }
 
