@@ -9,7 +9,6 @@ import fsDefault from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { parse as parseYaml } from 'yaml';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, BrowserWindow: class {} }));
 
@@ -80,11 +79,13 @@ const CLAUDE_CODE_READERS = [
   /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/,
   /^\s*---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/,
 ];
+// The top-level YAML keys of a front matter: the fixtures hold only
+// `key: value` lines at column 0, and indented lines under them.
 function claudeCodeKeys(text: string): string[][] {
   return CLAUDE_CODE_READERS.map((re) => {
     const m = re.exec(text.replace(/^\uFEFF/, ''));
-    const doc: unknown = m ? parseYaml(m[1]) : null;
-    return doc && typeof doc === 'object' ? Object.keys(doc).sort() : [];
+    if (!m) return [];
+    return m[1].split(/\r?\n/).flatMap((line) => /^([A-Za-z_][A-Za-z0-9_-]*):/.exec(line)?.[1] ?? []).sort();
   });
 }
 const ALLOWED = [...SKILL_FRONTMATTER_KEYS].sort();
@@ -984,7 +985,7 @@ describe('a worker gets the approved skills, out of git', () => {
     expect(written).toBe(`---\nname: "body-keys"\ndescription: "Ship it: # now"\nversion: "1.2.3"\n---\n${body}`);
     expect(claudeCodeKeys(written)).toEqual([ALLOWED, ALLOWED, ALLOWED]);
     const m = CLAUDE_CODE_READERS[0].exec(written) as RegExpExecArray;
-    expect(parseYaml(m[1])).toEqual({ name: 'body-keys', description: 'Ship it: # now', version: '1.2.3' });
+    expect(m[1]).toBe('name: "body-keys"\ndescription: "Ship it: # now"\nversion: "1.2.3"\n');
     const crlf = fs.readFileSync(path.join(repo, '.claude', 'skills', 'bot-crlf', 'SKILL.md'), 'utf8');
     expect(crlf).toBe('---\nname: "crlf"\ndescription: "d"\nversion: "1.0.0"\n---\nStep.\n');
     expect(workerSkillFile(SMUGGLED)).toBeNull();
