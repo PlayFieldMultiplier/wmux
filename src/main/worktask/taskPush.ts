@@ -70,7 +70,7 @@ type GitOut = { code: number; stdout: string; stderr: string };
 
 /** Runs git in `cwd` with `env` added; resolves with the exit code and
  *  output, never throws. */
-export type TaskPushGit = (args: string[], cwd: string, env?: Record<string, string>) => Promise<GitOut>;
+export type TaskPushGit = (args: string[], cwd: string, env?: Record<string, string>, opts?: { timeoutMs?: number }) => Promise<GitOut>;
 
 /** Where main's git finds the task's repository: main's records only. */
 export interface TaskGitRepoInput {
@@ -108,10 +108,11 @@ export type TaskPushResult =
   | { ok: true; branch: string; remote: 'origin'; head: string; output: string }
   | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'rejected' | 'git-failed'; error: string };
 
-export async function defaultGit(args: string[], cwd: string, extra?: Record<string, string>): Promise<GitOut> {
+export async function defaultGit(args: string[], cwd: string, extra?: Record<string, string>, opts?: { timeoutMs?: number }): Promise<GitOut> {
   const env = { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra };
   try {
-    const { stdout, stderr } = await execFileP('git', args, { cwd, env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024 });
+    const timeout = Math.max(1, Math.min(opts?.timeoutMs ?? TASK_PUSH_TIMEOUT_MS, TASK_PUSH_TIMEOUT_MS));
+    const { stdout, stderr } = await execFileP('git', args, { cwd, env, timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
     return { code: 0, stdout: String(stdout), stderr: String(stderr) };
   } catch (err) {
     const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: string };
@@ -333,76 +334,107 @@ function hostRealpath(p: string): string | null {
   }
 }
 
-/** How long the GIT_NO_LAZY_FETCH capability check may run, all its git
- *  calls together. */
+/** How long the GIT_NO_LAZY_FETCH capability check may run, everything it
+ *  runs together. */
 export const LAZY_FETCH_PROBE_TIMEOUT_MS = 20_000;
+
+/** How long removing the check's temp folder may take. */
+const LAZY_FETCH_PROBE_CLEANUP_MS = 10_000;
 
 /** The sha1 empty tree (git knows it without reading any object). */
 const EMPTY_TREE_SHA1 = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
-/** What the capability check runs with: the task's own runner. */
+/** What the capability check runs with: the task's own runner. Each call is
+ *  given the time it has left and stops (its process killed) after it. */
 export interface LazyFetchProbeIo {
   /** Which runner: `host`, or `wsl:<distro>`. Part of the cache key. */
   runner: string;
   /** git through that runner, `env` added to taskGitEnv. Never throws. */
-  git: (args: string[], env: Record<string, string>) => Promise<GitOut>;
+  git: (args: string[], env: Record<string, string>, timeoutMs: number) => Promise<GitOut>;
+  /** git's own binary in `execPath` (`git --exec-path`) as device, inode,
+   *  size and modification time, or null when it cannot be read. */
+  binaryId: (execPath: string, timeoutMs: number) => Promise<string | null>;
   /** A new empty folder that git sees, or null when none could be made. */
-  makeTempDir: () => Promise<string | null>;
+  makeTempDir: (timeoutMs: number) => Promise<string | null>;
   /** Removes that folder, and nothing else. Never throws. */
-  removeTempDir: (dir: string) => Promise<void>;
+  removeTempDir: (dir: string, timeoutMs: number) => Promise<void>;
 }
 
-/** Accepted checks (and checks in flight), by runner, git's exec path and
- *  `git --version` text. A refusal is dropped once it resolves, so a fixed
- *  git is checked again on the next call. */
+/** Accepted checks (and checks in flight), by runner, git's exec path, the
+ *  identity of the git binary there and the `git --version` text. A refusal
+ *  is dropped once it resolves, so a fixed git is checked again on the next
+ *  call. */
 const lazyFetchChecks = new Map<string, Promise<string | null>>();
+
+/** `p`, or `late` once `ms` have passed. */
+async function within<T>(p: Promise<T>, ms: number, late: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(late), Math.max(0, ms));
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * The capability check for a git whose version is not one known to honour
  * GIT_NO_LAZY_FETCH (gitVersionRefusal): null when it does, else why main
  * will not run a task's git with it. Offline: a throwaway bare repository in a
- * temp folder the runner made, a promisor remote at a path inside it that does
- * not exist, and GIT_ALLOW_PROTOCOL=file. Its last call is a diff that needs a
- * blob only the promisor has; `diff -p` prefetches through the promisor code
- * on every version (`cat-file` does not reach it from 2.45.1 on, where
+ * temp folder the runner made, read with no system or global config, a
+ * promisor remote at a path inside it that does not exist, and
+ * GIT_ALLOW_PROTOCOL=file. Its last call is a diff that needs a blob only the
+ * promisor has; `diff -p` prefetches through the promisor code on every
+ * version (`cat-file` does not reach it from 2.45.1 on, where
  * GIT_NO_LAZY_FETCH skips the promisor before it is asked). Cached for main's
  * lifetime once accepted. Never throws.
  */
 export async function gitLazyFetchRefusal(io: LazyFetchProbeIo, versionStdout: string, safe: readonly string[]): Promise<string | null> {
   const ver = versionStdout.trim().slice(0, 80) || 'git';
-  const execPath = await io.git(['--exec-path'], {});
-  if (execPath.code !== 0) return `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (git --exec-path failed)`;
-  const key = [io.runner, execPath.stdout.trim(), versionStdout.trim()].join('\0');
-  let check = lazyFetchChecks.get(key);
-  if (!check) {
-    check = runLazyFetchProbe(io, versionStdout, safe).catch((err) => `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (${err instanceof Error ? err.message : String(err)})`);
-    lazyFetchChecks.set(key, check);
-    void check.then((r) => { if (r !== null) lazyFetchChecks.delete(key); });
-  }
-  return check;
-}
-
-async function runLazyFetchProbe(io: LazyFetchProbeIo, versionStdout: string, safe: readonly string[]): Promise<string | null> {
-  const ver = versionStdout.trim().slice(0, 80) || 'git';
   const unchecked = (why: string) => `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (${why})`;
   const deadline = Date.now() + LAZY_FETCH_PROBE_TIMEOUT_MS;
-  const dir = await io.makeTempDir();
+  const left = () => deadline - Date.now();
+  try {
+    const execPath = await within(io.git(['--exec-path'], {}, left()), left(), null);
+    const dir = execPath?.code === 0 ? execPath.stdout.trim() : '';
+    if (!dir) return unchecked('git --exec-path failed');
+    const id = await within(io.binaryId(dir, left()), left(), null);
+    // Without the binary's identity the check runs every time.
+    if (id === null) return await runLazyFetchProbe(io, versionStdout, safe, deadline);
+    const key = [io.runner, dir, id, versionStdout.trim()].join('\0');
+    let check = lazyFetchChecks.get(key);
+    if (!check) {
+      check = runLazyFetchProbe(io, versionStdout, safe, deadline);
+      lazyFetchChecks.set(key, check);
+      void check.then((r) => { if (r !== null) lazyFetchChecks.delete(key); }, () => lazyFetchChecks.delete(key));
+    }
+    return await check;
+  } catch (err) {
+    return unchecked(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function runLazyFetchProbe(io: LazyFetchProbeIo, versionStdout: string, safe: readonly string[], deadline: number): Promise<string | null> {
+  const ver = versionStdout.trim().slice(0, 80) || 'git';
+  const unchecked = (why: string) => `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (${why})`;
+  const left = () => deadline - Date.now();
+  const dir = await within(io.makeTempDir(left()), left(), null);
   if (!dir) return unchecked('no temp folder could be made');
   try {
-    // Every call: the probe repository only, English messages, and no
-    // transport but a local path whatever the owner's protocol config says.
-    const g = async (args: string[]): Promise<GitOut | null> => {
-      let timer: NodeJS.Timeout | undefined;
-      const late = new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
-        timer.unref?.();
-      });
-      try {
-        return await Promise.race([io.git([`--git-dir=${dir}`, ...safe, ...args], { LC_ALL: 'C', GIT_ALLOW_PROTOCOL: 'file' }), late]);
-      } finally {
-        clearTimeout(timer);
-      }
+    // Every call: the probe repository only, read with no system or global
+    // config (files that do not exist, inside the probe folder), English
+    // messages, and no transport but a local path.
+    const env = {
+      LC_ALL: 'C',
+      GIT_ALLOW_PROTOCOL: 'file',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_SYSTEM: `${dir}/no-system-config`,
+      GIT_CONFIG_GLOBAL: `${dir}/no-global-config`,
     };
+    const g = (args: string[]) => within(io.git([`--git-dir=${dir}`, ...safe, ...args], env, left()), left(), null);
     const step = async (args: string[]): Promise<GitOut | string> => {
       const r = await g(args);
       if (!r) return unchecked(`git ${args[0]} did not finish in time`);
@@ -427,11 +459,15 @@ async function runLazyFetchProbe(io: LazyFetchProbeIo, versionStdout: string, sa
     const judged = await g(['diff-tree', '-p', '--no-ext-diff', '--no-textconv', '--no-renames', EMPTY_TREE_SHA1, treeOid]);
     return lazyFetchProbeRefusal(versionStdout, judged ?? { code: -1, stderr: '', timedOut: true });
   } finally {
-    await io.removeTempDir(dir);
+    await within(io.removeTempDir(dir, LAZY_FETCH_PROBE_CLEANUP_MS), LAZY_FETCH_PROBE_CLEANUP_MS, undefined);
   }
 }
 
-/** A folder `mktemp -d /tmp/wmux-git-probe.XXXXXXXX` printed. */
+/** `timeout` argv (coreutils) for a call inside WSL with `ms` left. */
+function wslTimeoutArgv(ms: number): string[] {
+  return ['timeout', '-k', '1', String(Math.max(1, Math.ceil(ms / 1000)))];
+}
+
 const WSL_PROBE_DIR_RE = /^\/tmp\/wmux-git-probe\.[A-Za-z0-9]{8}$/;
 
 /**
@@ -483,22 +519,38 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   const ver = await exec(['--version'], {});
   if (ver.code !== 0) return fail(`git --version failed: ${ver.stderr.trim().slice(0, 300)}`);
   if (gitVersionRefusal(ver.stdout)) {
+    const wslExe = wslExePath(process.env.SystemRoot);
+    const inDistro = (distro: string, ms: number, argv: string[], env: Record<string, string> = {}) =>
+      wslExec(wslExe, ['-d', distro, '--cd', '/', '--exec', ...wslTimeoutArgv(ms), ...argv], wslEnv(env));
     const probeIo: LazyFetchProbeIo = target.kind === 'wsl'
       ? {
         runner: `wsl:${target.distro.toLowerCase()}`,
-        git: exec,
-        makeTempDir: async () => {
-          const r = await wslExec(wslExePath(process.env.SystemRoot), ['-d', target.distro, '--cd', '/', '--exec', 'mktemp', '-d', '/tmp/wmux-git-probe.XXXXXXXX'], wslEnv());
+        git: (args, env, ms) => inDistro(target.distro, ms, ['git', ...args], taskGitEnv(env)),
+        binaryId: async (execPath, ms) => {
+          const r = await inDistro(target.distro, ms, ['stat', '-L', '-c', '%d:%i:%s:%Y', '--', path.posix.join(execPath, 'git')]);
+          const out = r.stdout.trim();
+          return r.code === 0 && /^\d+:\d+:\d+:\d+$/.test(out) ? out : null;
+        },
+        makeTempDir: async (ms) => {
+          const r = await inDistro(target.distro, ms, ['mktemp', '-d', '/tmp/wmux-git-probe.XXXXXXXX']);
           const out = r.stdout.replace(/\r?\n$/, '');
           return r.code === 0 && WSL_PROBE_DIR_RE.test(out) ? out : null;
         },
-        removeTempDir: async (dir) => {
-          if (WSL_PROBE_DIR_RE.test(dir)) await wslExec(wslExePath(process.env.SystemRoot), ['-d', target.distro, '--cd', '/', '--exec', 'rm', '-r', '-f', '--', dir], wslEnv());
+        removeTempDir: async (dir, ms) => {
+          if (WSL_PROBE_DIR_RE.test(dir)) await inDistro(target.distro, ms, ['rm', '-r', '-f', '--', dir]);
         },
       }
       : {
         runner: 'host',
-        git: exec,
+        git: (args, env, ms) => git(args, hostCwd, taskGitEnv(env), { timeoutMs: ms }),
+        binaryId: async (execPath) => {
+          try {
+            const st = fs.statSync(path.join(execPath, platform === 'win32' ? 'git.exe' : 'git'));
+            return `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+          } catch {
+            return null;
+          }
+        },
         makeTempDir: async () => {
           try {
             return fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-git-probe-'));
