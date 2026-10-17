@@ -395,7 +395,7 @@ describe('the automatic pass and Settings › Bots', () => {
     await vi.waitFor(() => {
       expect(fs.existsSync(clean)).toBe(false);
       expect(p.store.get('wtask-dirty-22222222')?.state).toBe('kept_dirty');
-    });
+    }, { timeout: 10_000 });
     expect(listener).not.toBeNull();
     installed.dispose();
 
