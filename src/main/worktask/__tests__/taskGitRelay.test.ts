@@ -275,7 +275,9 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     expect(fs.readFileSync(extLog, 'utf8')).toBe(extBefore);
     expect(fs.readdirSync(extPack)).toEqual(extPackBefore);
     // The fetch kept what it received as a pack in the relay: no loose object
-    // was written, so none was freshened through the alternate.
+    // was written, so none was freshened through the alternate. atime is not
+    // asserted: index-pack reads an object it already has through the
+    // alternate to compare it with the one received.
     expect(fs.statSync(extObj).mtimeMs).toBe(old.getTime());
     const relayObjects = path.join(root, 'relay', 'wtask-1', 'objects');
     expect(fs.readdirSync(relayObjects).filter((d) => /^[0-9a-f]{2}$/.test(d))).toEqual([]);
