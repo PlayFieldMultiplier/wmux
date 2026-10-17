@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('electron', () => ({
   BrowserWindow: class {},
+  // The confirmed turn end fans out to ToastManager.showDirect; no OS toasts here.
+  Notification: class { static isSupported() { return false; } },
 }));
 
 vi.mock('../../ipc/handlers/metadata.handler', () => ({
