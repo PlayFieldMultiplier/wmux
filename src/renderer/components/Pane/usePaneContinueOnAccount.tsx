@@ -12,6 +12,7 @@ import { useT } from '../../hooks/useT';
 import { useDaemonModeActive } from '../../hooks/useDaemonMode';
 import { IconUsers } from '../icons';
 import type { PaneActionItem } from './PaneActionsMenu';
+import { agentRow } from '../../../shared/agentIdentity';
 
 /** Key of the main-menu item that opens the account submenu. */
 export const PANE_CONTINUE_ACCOUNT_KEY = 'continue-on-account';
@@ -48,7 +49,7 @@ export function usePaneContinueOnAccount(opts: {
   const { ptyId, allowed, openSubmenu } = opts;
   const t = useT();
   const daemon = useDaemonModeActive();
-  const isClaude = useStore((s) => (ptyId ? s.surfaceAgent[ptyId]?.slug === 'claude' : false));
+  const isClaude = useStore((s) => (ptyId ? !!agentRow(s.surfaceAgent[ptyId]?.slug)?.continueOnAccount : false));
   const [accounts, setAccounts] = useState<{ id: string; name: string }[]>([]);
   const ready = allowed && daemon && isClaude && !!ptyId && !!window.electronAPI?.accounts?.continuePane;
 
@@ -57,7 +58,7 @@ export function usePaneContinueOnAccount(opts: {
     const api = window.electronAPI?.accounts;
     if (!api || !ready) return;
     void api.list().then((res) => {
-      setAccounts(res.accounts.filter((a) => a.vendor === 'claude').map((a) => ({ id: a.id, name: a.name })));
+      setAccounts(res.accounts.filter((a) => agentRow(a.vendor)?.continueOnAccount).map((a) => ({ id: a.id, name: a.name })));
     }).catch(() => { /* menu keeps the last rows */ });
   }, [ready]);
 

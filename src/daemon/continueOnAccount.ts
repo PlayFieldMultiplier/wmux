@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CHATV2_PROVIDER_SESSION_ID } from '../shared/chatv2/ipc';
 import { permissionFlagFor, type ResumeBinding } from '../shared/agentResume';
+import { agentRow } from '../shared/agentIdentity';
 import { inResumeCwd, type ResumeShell } from './chat/v2/handoff';
 import { withChosenAccountEnv } from './phone/paneAccountSpawn';
 import type { AgentStopResult } from './agentStop';
@@ -57,7 +58,7 @@ export function planTranscriptCopy(
   realpath: (p: string) => string = (p) => fs.realpathSync.native(p),
 ): { ok: true; source: string; target: string } | { ok: false; code: 'not_claude' | 'unknown_session' | 'invalid_account' | 'same_account' } {
   if (!binding) return { ok: false, code: 'unknown_session' };
-  if (binding.agent !== 'claude') return { ok: false, code: 'not_claude' };
+  if (!agentRow(binding.agent)?.continueOnAccount) return { ok: false, code: 'not_claude' };
   const { sessionId, transcriptPath } = binding;
   if (!CHATV2_PROVIDER_SESSION_ID.test(sessionId) || !transcriptPath || !path.isAbsolute(transcriptPath)) {
     return { ok: false, code: 'unknown_session' };
@@ -192,7 +193,7 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   const shell = deps.shellKind(id);
   if (!shell) return { ok: false, code: 'unsupported' };
   const live = deps.liveAgent(id);
-  if (live !== undefined && live !== 'claude') return { ok: false, code: 'not_claude' };
+  if (live !== undefined && !agentRow(live)?.continueOnAccount) return { ok: false, code: 'not_claude' };
   const binding = pane.resumeBinding;
   const plan = planTranscriptCopy(binding, configDir);
   if (!plan.ok || !binding) return { ok: false, code: plan.ok ? 'unknown_session' : plan.code };

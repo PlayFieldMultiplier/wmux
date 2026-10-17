@@ -7,6 +7,7 @@ import { ipcMain } from 'electron';
 import { IPC } from '../../shared/constants';
 import type { DaemonClient } from '../DaemonClient';
 import { getAccountStore, isAccessibleDir, isUnsafeKey } from './accountStore';
+import { agentRow } from '../../shared/agentIdentity';
 
 export type ContinuePaneResult = { ok: true } | { ok: false; code: string };
 
@@ -20,7 +21,7 @@ export function registerContinueOnAccountHandler(daemonClient: DaemonClient | un
     const accountId = typeof args?.accountId === 'string' && !isUnsafeKey(args.accountId) ? args.accountId : '';
     if (!ptyId || !accountId) return { ok: false, code: 'invalid' };
     const account = getAccountStore().getAccount(accountId);
-    if (!account || account.vendor !== 'claude') return { ok: false, code: 'invalid_account' };
+    if (!account || !agentRow(account.vendor)?.continueOnAccount) return { ok: false, code: 'invalid_account' };
     if (!isAccessibleDir(account.configDir)) return { ok: false, code: 'invalid_account' };
     // Local PTY mode has no daemon to own the stop and the relaunch.
     if (!daemonClient?.isConnected) return { ok: false, code: 'unavailable' };
