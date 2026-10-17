@@ -7,13 +7,13 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultGit, pushTaskBranch, readWorkerFile, type TaskPushExec, type TaskPushGit } from '../taskPush';
+import { defaultGit, openTaskGitRepo, pushTaskBranch, readWorkerFile, type TaskPushExec, type TaskPushGit } from '../taskPush';
 import { fetchTaskRefs } from '../taskFetch';
 import { recordedTaskGitCommonDir, recordedTaskGitWorktreeDir } from '../taskGitCommonDir';
 import { liveNoChangesPorts } from '../../factory/noChangesCheck';
 import type { LedgerEntry } from '../../../shared/ledger';
 import {
-  fetchCommandFor, gitVersionRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, shellQuote, transportConfigReplay,
+  fetchCommandFor, gitVersionRefusal, lazyFetchProbeRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, shellQuote, transportConfigReplay,
 } from '../../../shared/taskGitRelay';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -73,6 +73,21 @@ describe('relay git: argv, env and config replay', () => {
     for (const ok of ['2.43.4', '2.43.7', '2.44.1', '2.45.1', '2.46.0', '2.50.1 (Apple Git-155)', '3.0.0']) expect(gitVersionRefusal(`git version ${ok}`), ok).toBeNull();
     for (const bad of ['2.43.3', '2.44.0', '2.45.0', '2.39.5', '1.9.9']) expect(gitVersionRefusal(`git version ${bad}`), bad).toMatch(/is not one a task's network git runs with/);
     expect(gitVersionRefusal('nonsense')).toMatch(/could not be read/);
+  });
+
+  it('the capability check accepts only a lazy fetch git stopped for GIT_NO_LAZY_FETCH', () => {
+    const v = 'git version 2.43.0\n';
+    expect(lazyFetchProbeRefusal(v, { code: 128, stderr: 'warning: lazy fetching disabled; some objects may not be available\nfatal: unable to read 1234\n' })).toBeNull();
+    for (const out of [
+      // git tried to fetch from the promisor remote.
+      { code: 128, stderr: "fatal: '/tmp/p/missing' does not appear to be a git repository\nfatal: Could not read from remote repository.\n" },
+      { code: 128, stderr: "fatal: transport 'file' not allowed\nfatal: unable to read 1234\n" },
+      // Another error, or no error at all.
+      { code: 128, stderr: 'fatal: unable to read 1234\n' },
+      { code: 0, stderr: '' },
+      // A timeout, whatever was printed before it.
+      { code: -1, stderr: 'warning: lazy fetching disabled; some objects may not be available\n', timedOut: true },
+    ]) expect(lazyFetchProbeRefusal(v, out), JSON.stringify(out)).toMatch(/^git version 2\.43\.0 does not honour GIT_NO_LAZY_FETCH/);
   });
 
   it('reads a HEAD file strictly: a full commit id of the object format, or a plain branch ref', () => {
@@ -158,6 +173,63 @@ describe('relay git: inside WSL', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('relay git: the capability check inside WSL', () => {
+  const PROBE = '/tmp/wmux-git-probe.AbCd1234';
+  const fakeDistro = (diff: { code: number; stdout: string; stderr: string }) => {
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const exec: TaskPushExec = async (_file, args, env) => {
+      calls.push({ args, env });
+      const prog = args[5];
+      if (prog === 'test') return { code: args.includes('-e') ? 1 : 0, stdout: '', stderr: '' };
+      if (prog === 'mktemp') return { code: 0, stdout: `${PROBE}\n`, stderr: '' };
+      if (prog === 'rm') return { code: 0, stdout: '', stderr: '' };
+      if (prog === 'wslpath') return { code: 0, stdout: '/mnt/c/wmux/relay\n', stderr: '' };
+      if (args.includes('--version')) return { code: 0, stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args.includes('--exec-path')) return { code: 0, stdout: '/usr/lib/git-core\n', stderr: '' };
+      if (args.includes('write-tree')) return { code: 0, stdout: `${'c'.repeat(40)}\n`, stderr: '' };
+      if (args.includes('diff-tree')) return diff;
+      if (args.includes('--list')) return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@github.com/acme/app.git\0', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { calls, exec };
+  };
+  const input = (distro: string) => ({
+    worktreePath: 'C:\\w', noHooksDir: 'C:\\nh', gitCommonDir: `\\\\wsl.localhost\\${distro}\\home\\me\\repo\\.git`, relayRoot: 'C:\\relay', taskId: 'wtask-1',
+  });
+  const hostGit: TaskPushGit = async () => ({ code: 1, stdout: '', stderr: 'host git' });
+
+  it('runs in the distro: a temp folder mktemp made there, offline, English, then that folder alone removed; accepted once, then cached', async () => {
+    const { calls, exec } = fakeDistro({ code: 128, stdout: '', stderr: 'warning: lazy fetching disabled; some objects may not be available\nfatal: unable to read 1234\n' });
+    const r = await openTaskGitRepo(input('ProbeOk'), hostGit, { platform: 'win32', wslExec: exec });
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
+    const mk = calls.filter((c) => c.args[5] === 'mktemp');
+    expect(mk.map((c) => c.args)).toEqual([['-d', 'ProbeOk', '--cd', '/', '--exec', 'mktemp', '-d', '/tmp/wmux-git-probe.XXXXXXXX']]);
+    const probeCalls = calls.filter((c) => c.args[5] === 'git' && c.args[6] === `--git-dir=${PROBE}`);
+    expect(probeCalls.map((c) => c.args.find((a) => ['init', 'update-index', 'write-tree', 'config', 'diff-tree'].includes(a))))
+      .toEqual(['init', 'update-index', 'write-tree', 'config', 'config', 'config', 'config', 'diff-tree']);
+    expect(probeCalls.find((c) => c.args.includes('remote.probe.url'))?.args.slice(-2)).toEqual(['remote.probe.url', `${PROBE}/missing`]);
+    for (const c of probeCalls) {
+      expect(c.args).toContain('core.hooksPath=/dev/null');
+      expect(c.env).toMatchObject({ GIT_NO_LAZY_FETCH: '1', LC_ALL: 'C', GIT_ALLOW_PROTOCOL: 'file' });
+      expect(String(c.env.WSLENV).split(':')).toEqual(expect.arrayContaining(['GIT_NO_LAZY_FETCH', 'LC_ALL', 'GIT_ALLOW_PROTOCOL']));
+    }
+    expect(calls.filter((c) => c.args[5] === 'rm').map((c) => c.args.slice(5))).toEqual([['rm', '-r', '-f', '--', PROBE]]);
+    // The same distro, git and version: no second check.
+    const before = calls.length;
+    expect(await openTaskGitRepo(input('ProbeOk'), hostGit, { platform: 'win32', wslExec: exec })).toMatchObject({ ok: true });
+    expect(calls.slice(before).some((c) => c.args[5] === 'mktemp')).toBe(false);
+  });
+
+  it('refuses a git that tried to fetch, and still removes its temp folder; a refusal is not cached', async () => {
+    const { calls, exec } = fakeDistro({ code: 128, stdout: '', stderr: `fatal: '${PROBE}/missing' does not appear to be a git repository\n` });
+    const r = await openTaskGitRepo(input('ProbeBad'), hostGit, { platform: 'win32', wslExec: exec });
+    expect(r).toEqual({ ok: false, reason: 'config-refused', error: 'git version 2.43.0 does not honour GIT_NO_LAZY_FETCH' });
+    expect(calls.filter((c) => c.args[5] === 'rm').map((c) => c.args.slice(5))).toEqual([['rm', '-r', '-f', '--', PROBE]]);
+    await openTaskGitRepo(input('ProbeBad'), hostGit, { platform: 'win32', wslExec: exec });
+    expect(calls.filter((c) => c.args[5] === 'mktemp')).toHaveLength(2);
   });
 });
 
@@ -453,6 +525,29 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     expect(await fetchTaskRefs(input(), spy, FILE_OK)).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringContaining('shallow list') });
     expect(Date.now() - t0).toBeLessThan(5000);
     expect(calls.every((a) => a.includes('--version') || a.includes('--list'))).toBe(true);
+  });
+
+  it('a git below the known versions runs the capability check with the same git: accepted, its temp folder removed, then cached', async () => {
+    const version = `git version 2.43.0 (wmux test ${process.pid})`;
+    const probeDirs = new Set<string>();
+    let diffTree: { code: number; stderr: string } | undefined;
+    const spy: TaskPushGit = async (args, cwd, env) => {
+      if (args[0] === '--version') return { code: 0, stdout: `${version}\n`, stderr: '' };
+      const dir = args.find((a) => a.startsWith('--git-dir=') && a.includes('wmux-git-probe-'));
+      if (dir) probeDirs.add(dir.slice('--git-dir='.length));
+      const r = await defaultGit(args, cwd, env);
+      if (dir && args.includes('diff-tree')) diffTree = r;
+      return r;
+    };
+    expect(await pushTaskBranch(input(), spy, FILE_OK)).toMatchObject({ ok: true });
+    expect(diffTree?.code).toBe(128);
+    expect(diffTree?.stderr).toContain('lazy fetching disabled');
+    expect(probeDirs.size).toBe(1);
+    for (const d of probeDirs) expect(fs.existsSync(d)).toBe(false);
+    // Cached for this git and version: the next call runs no check.
+    probeDirs.clear();
+    expect(await fetchTaskRefs(input(), spy, FILE_OK)).toMatchObject({ ok: true });
+    expect(probeDirs.size).toBe(0);
   });
 
   it('never sets GIT_CONFIG_NOSYSTEM on any call, and sets GIT_NO_LAZY_FETCH on every one', async () => {

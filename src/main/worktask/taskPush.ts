@@ -47,6 +47,7 @@
 // writes no upstream ref.
 
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,7 +58,7 @@ import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import {
-  RELAY_GIT_DEFAULT_PROTOCOLS, gitVersionRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, taskGitEnv, transportConfigReplay,
+  RELAY_GIT_DEFAULT_PROTOCOLS, gitVersionRefusal, lazyFetchProbeRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, taskGitEnv, transportConfigReplay,
 } from '../../shared/taskGitRelay';
 import { originUrlRepoKey, urlNamedRemoteRefusal, workerGitEnv, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal, type GitConfigEntry } from './workerGit';
 
@@ -332,9 +333,110 @@ function hostRealpath(p: string): string | null {
   }
 }
 
+/** How long the GIT_NO_LAZY_FETCH capability check may run, all its git
+ *  calls together. */
+export const LAZY_FETCH_PROBE_TIMEOUT_MS = 20_000;
+
+/** The sha1 empty tree (git knows it without reading any object). */
+const EMPTY_TREE_SHA1 = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+/** What the capability check runs with: the task's own runner. */
+export interface LazyFetchProbeIo {
+  /** Which runner: `host`, or `wsl:<distro>`. Part of the cache key. */
+  runner: string;
+  /** git through that runner, `env` added to taskGitEnv. Never throws. */
+  git: (args: string[], env: Record<string, string>) => Promise<GitOut>;
+  /** A new empty folder that git sees, or null when none could be made. */
+  makeTempDir: () => Promise<string | null>;
+  /** Removes that folder, and nothing else. Never throws. */
+  removeTempDir: (dir: string) => Promise<void>;
+}
+
+/** Accepted checks (and checks in flight), by runner, git's exec path and
+ *  `git --version` text. A refusal is dropped once it resolves, so a fixed
+ *  git is checked again on the next call. */
+const lazyFetchChecks = new Map<string, Promise<string | null>>();
+
 /**
- * Main's git on the task's recorded repository, after the version floor and
- * the repository config check (workerGitPreflight): refused for a ref store
+ * The capability check for a git whose version is not one known to honour
+ * GIT_NO_LAZY_FETCH (gitVersionRefusal): null when it does, else why main
+ * will not run a task's git with it. Offline: a throwaway bare repository in a
+ * temp folder the runner made, a promisor remote at a path inside it that does
+ * not exist, and GIT_ALLOW_PROTOCOL=file. Its last call is a diff that needs a
+ * blob only the promisor has; `diff -p` prefetches through the promisor code
+ * on every version (`cat-file` does not reach it from 2.45.1 on, where
+ * GIT_NO_LAZY_FETCH skips the promisor before it is asked). Cached for main's
+ * lifetime once accepted. Never throws.
+ */
+export async function gitLazyFetchRefusal(io: LazyFetchProbeIo, versionStdout: string, safe: readonly string[]): Promise<string | null> {
+  const ver = versionStdout.trim().slice(0, 80) || 'git';
+  const execPath = await io.git(['--exec-path'], {});
+  if (execPath.code !== 0) return `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (git --exec-path failed)`;
+  const key = [io.runner, execPath.stdout.trim(), versionStdout.trim()].join('\0');
+  let check = lazyFetchChecks.get(key);
+  if (!check) {
+    check = runLazyFetchProbe(io, versionStdout, safe).catch((err) => `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (${err instanceof Error ? err.message : String(err)})`);
+    lazyFetchChecks.set(key, check);
+    void check.then((r) => { if (r !== null) lazyFetchChecks.delete(key); });
+  }
+  return check;
+}
+
+async function runLazyFetchProbe(io: LazyFetchProbeIo, versionStdout: string, safe: readonly string[]): Promise<string | null> {
+  const ver = versionStdout.trim().slice(0, 80) || 'git';
+  const unchecked = (why: string) => `${ver}: whether it honours GIT_NO_LAZY_FETCH could not be checked (${why})`;
+  const deadline = Date.now() + LAZY_FETCH_PROBE_TIMEOUT_MS;
+  const dir = await io.makeTempDir();
+  if (!dir) return unchecked('no temp folder could be made');
+  try {
+    // Every call: the probe repository only, English messages, and no
+    // transport but a local path whatever the owner's protocol config says.
+    const g = async (args: string[]): Promise<GitOut | null> => {
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+        timer.unref?.();
+      });
+      try {
+        return await Promise.race([io.git([`--git-dir=${dir}`, ...safe, ...args], { LC_ALL: 'C', GIT_ALLOW_PROTOCOL: 'file' }), late]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const step = async (args: string[]): Promise<GitOut | string> => {
+      const r = await g(args);
+      if (!r) return unchecked(`git ${args[0]} did not finish in time`);
+      return r.code === 0 ? r : unchecked(`git ${args[0]} failed: ${r.stderr.trim().slice(0, 200)}`);
+    };
+    // The objects first, in a plain repository: a tree naming a blob that
+    // is in no repository.
+    const blob = crypto.randomBytes(20).toString('hex');
+    for (const args of [['init', '-q', '--bare', '--template=', '--object-format=sha1'], ['update-index', '--add', '--cacheinfo', `100644,${blob},f`]]) {
+      const r = await step(args);
+      if (typeof r === 'string') return r;
+    }
+    const tree = await step(['write-tree', '--missing-ok']);
+    if (typeof tree === 'string') return tree;
+    const treeOid = tree.stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(treeOid)) return unchecked('git write-tree printed no tree id');
+    // Then a partial clone whose promisor remote does not exist.
+    for (const [key, value] of [['core.repositoryformatversion', '1'], ['extensions.partialClone', 'probe'], ['remote.probe.url', `${dir}/missing`], ['remote.probe.promisor', 'true']]) {
+      const r = await step(['config', key, value]);
+      if (typeof r === 'string') return r;
+    }
+    const judged = await g(['diff-tree', '-p', '--no-ext-diff', '--no-textconv', '--no-renames', EMPTY_TREE_SHA1, treeOid]);
+    return lazyFetchProbeRefusal(versionStdout, judged ?? { code: -1, stderr: '', timedOut: true });
+  } finally {
+    await io.removeTempDir(dir);
+  }
+}
+
+/** A folder `mktemp -d /tmp/wmux-git-probe.XXXXXXXX` printed. */
+const WSL_PROBE_DIR_RE = /^\/tmp\/wmux-git-probe\.[A-Za-z0-9]{8}$/;
+
+/**
+ * Main's git on the task's recorded repository, after the capability check
+ * and the repository config check (workerGitPreflight): refused for a ref store
  * other than files or a partial clone. Never throws.
  */
 export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit = defaultGit, deps: TaskPushDeps = {}): Promise<{ ok: true; repo: TaskGitRepo } | { ok: false; reason: 'git-failed' | 'config-refused'; error: string }> {
@@ -375,11 +477,46 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   }
   const exec = (args: string[], env: Record<string, string>) => run(args, taskGitEnv(env));
 
-  // The version floor: defence in depth for GIT_NO_LAZY_FETCH.
+  // The capability check: every call sets GIT_NO_LAZY_FETCH, so git must
+  // honour it. A version known to is taken as is; any other is checked once
+  // with this same runner (gitLazyFetchRefusal).
   const ver = await exec(['--version'], {});
   if (ver.code !== 0) return fail(`git --version failed: ${ver.stderr.trim().slice(0, 300)}`);
-  const verRefusal = gitVersionRefusal(ver.stdout);
-  if (verRefusal) return { ok: false, reason: 'config-refused', error: verRefusal };
+  if (gitVersionRefusal(ver.stdout)) {
+    const probeIo: LazyFetchProbeIo = target.kind === 'wsl'
+      ? {
+        runner: `wsl:${target.distro.toLowerCase()}`,
+        git: exec,
+        makeTempDir: async () => {
+          const r = await wslExec(wslExePath(process.env.SystemRoot), ['-d', target.distro, '--cd', '/', '--exec', 'mktemp', '-d', '/tmp/wmux-git-probe.XXXXXXXX'], wslEnv());
+          const out = r.stdout.replace(/\r?\n$/, '');
+          return r.code === 0 && WSL_PROBE_DIR_RE.test(out) ? out : null;
+        },
+        removeTempDir: async (dir) => {
+          if (WSL_PROBE_DIR_RE.test(dir)) await wslExec(wslExePath(process.env.SystemRoot), ['-d', target.distro, '--cd', '/', '--exec', 'rm', '-r', '-f', '--', dir], wslEnv());
+        },
+      }
+      : {
+        runner: 'host',
+        git: exec,
+        makeTempDir: async () => {
+          try {
+            return fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-git-probe-'));
+          } catch {
+            return null;
+          }
+        },
+        removeTempDir: async (dir) => {
+          try {
+            fs.rmSync(dir, { recursive: true, force: true });
+          } catch {
+            // Best-effort: a folder under the OS temp folder.
+          }
+        },
+      };
+    const refusal = await gitLazyFetchRefusal(probeIo, ver.stdout, safe);
+    if (refusal) return { ok: false, reason: 'config-refused', error: refusal };
+  }
 
   const local = (args: string[]) => exec([`--git-dir=${common}`, ...safe, ...args], { GIT_COMMON_DIR: common });
   const pre = await workerGitPreflight(local);

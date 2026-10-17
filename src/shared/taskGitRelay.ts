@@ -135,15 +135,36 @@ export function transportConfigReplay(context: readonly RawGitConfigEntry[], rel
   return out;
 }
 
-/** Why main will not run a task's git with this version, or null. `stdout` is
- *  `git --version` output. Accepted: the patched releases from 2.43.4 on
- *  (2.43.4+, 2.44.1+, 2.45.1+) and 2.46 or later. Pure. */
+/** Why this version is not one known to honour GIT_NO_LAZY_FETCH, or null.
+ *  `stdout` is `git --version` output. Known: the releases from 2.43.4 on
+ *  (2.43.4+, 2.44.1+, 2.45.1+) and 2.46 or later. Any other version runs the
+ *  capability check (taskPush.ts gitLazyFetchRefusal). Pure. */
 export function gitVersionRefusal(stdout: string): string | null {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(stdout);
   if (!m) return `git's version could not be read (${stdout.trim().slice(0, 80)})`;
   const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
   const ok = maj > 2 || (maj === 2 && (min >= 46 || (min === 45 && pat >= 1) || (min === 44 && pat >= 1) || (min === 43 && pat >= 4)));
   return ok ? null : `git ${maj}.${min}.${pat} is not one a task's network git runs with (${TASK_GIT_VERSION_FLOOR}, 2.44.1, 2.45.1, or 2.46 and later)`;
+}
+
+/** What git prints when GIT_NO_LAZY_FETCH stops a lazy fetch: "lazy fetching
+ *  disabled; some objects may not be available" (promisor-remote.c, the same
+ *  text from the 2.39.4 backport through 2.46 and later). The message is
+ *  translated, so the capability check runs git with LC_ALL=C. */
+export const LAZY_FETCH_DISABLED_TEXT = 'lazy fetching disabled';
+
+/** What git prints when it went on to fetch from the promisor remote. */
+const LAZY_FETCH_ATTEMPT_RE = /does not appear to be a git repository|transport '[^']*' not allowed|could not read from remote/i;
+
+/** The capability check's verdict on its last git call (a diff that needs a
+ *  blob only the promisor remote has): null when git stopped the fetch for
+ *  GIT_NO_LAZY_FETCH, else why main will not run a task's git with it.
+ *  `versionStdout` is `git --version` output. Pure. */
+export function lazyFetchProbeRefusal(versionStdout: string, out: { code: number; stderr: string; timedOut?: boolean }): string | null {
+  const honoured = !out.timedOut && out.code !== 0 && out.stderr.includes(LAZY_FETCH_DISABLED_TEXT) && !LAZY_FETCH_ATTEMPT_RE.test(out.stderr);
+  if (honoured) return null;
+  const ver = versionStdout.trim().slice(0, 80) || 'git';
+  return `${ver} does not honour GIT_NO_LAZY_FETCH${out.timedOut ? ' (its check did not finish in time)' : ''}`;
 }
 
 /** A shell word for the worker's shell, or null when it cannot be written as
