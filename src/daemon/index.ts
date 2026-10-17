@@ -171,7 +171,7 @@ import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/h
 import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
-import { ApiErrorTurnEndWatcher } from './transcript/ApiErrorTurnEndWatcher';
+import { ApiErrorTurnEnds, stopFailureSignal } from './transcript/apiErrorTurnEnd';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
 import { admitCodexCapture, gateCodexStop } from './transcript/codexCapture';
 import { CodexCwdBinder, codexLiveFor, describeCodexPane, readProcessStartMs, type CodexPaneFacts } from './transcript/codexRolloutByCwd';
@@ -323,7 +323,7 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
-let apiErrorTurnEnds: ApiErrorTurnEndWatcher | null = null;
+let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
 // Phone native chat bridge (contract v0.3.1). Built in registerRpcHandlers next
 // to the services it wraps; the web server reads it lazily per request.
 let chatBridge: ChatBridge | null = null;
@@ -3871,6 +3871,32 @@ function registerRpcHandlers(
     pipeServer.onClientClose((clientId) => projectorForClose.dropClient(clientId));
   }
   const projector = transcriptProjector;
+  // A Claude turn that died on an API error, on an install without the
+  // StopFailure hook: the transcript's error entry stands in for the hook. It
+  // reads the activity watcher's tail, never a file of its own.
+  if (!apiErrorTurnEnds) {
+    apiErrorTurnEnds = new ApiErrorTurnEnds({
+      isCurrentOpenTurn: (id, at) => {
+        const bridge = sessionManager.getSession(id)?.bridge;
+        return !!bridge && bridge.isTurnOpen() && bridge.turnAt(at)?.current === true;
+      },
+      // Only the pane's own session, read from the file its binding names and
+      // that file still passing the same check the hook's path had to.
+      signalFor: (id, path, end) => {
+        const session = sessionManager.getSession(id);
+        const binding = resolveTranscriptBinding(id);
+        if (!session || isBrainPty({ id, env: session.meta.env })) return null;
+        if (binding?.agent !== 'claude' || binding.transcriptPath !== path) return null;
+        if (!checkNativeTranscriptPath('claude', path, binding.sessionId, session.meta.env).ok) return null;
+        return stopFailureSignal(id, binding, end);
+      },
+      emit: (signal) => {
+        log('info', `[hooks] ${signal.ptyId}: API-error turn end (${String(signal.payload.error)}) read from the transcript; no StopFailure hook arrived`);
+        hookIngest?.handle(signal);
+      },
+    });
+  }
+  const turnEnds = apiErrorTurnEnds;
   if (!transcriptActivity) {
     transcriptActivity = new TranscriptActivityWatcher({
       listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
@@ -3885,26 +3911,10 @@ function registerRpcHandlers(
         const event: DaemonEvent = { type: 'agent.transcriptActivity', sessionId, data: { activity } };
         pipeServer.broadcast(event);
       },
+      onClaudeLine: (sessionId, path, line) => turnEnds.noteLine(sessionId, path, line),
+      afterTick: () => turnEnds.settle(),
     });
     transcriptActivity.start();
-  }
-  // A Claude turn that died on an API error, on an install without the
-  // StopFailure hook: the transcript's error entry stands in for the hook.
-  if (!apiErrorTurnEnds) {
-    apiErrorTurnEnds = new ApiErrorTurnEndWatcher({
-      listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
-      getBinding: (id) => {
-        const session = sessionManager.getSession(id);
-        if (!session || isBrainPty({ id, env: session.meta.env })) return undefined;
-        return currentMoaPane()?.sessionId === id ? undefined : resolveTranscriptBinding(id);
-      },
-      isTurnOpen: (id) => sessionManager.getSession(id)?.bridge.isTurnOpen() === true,
-      emit: (signal) => {
-        log('info', `[hooks] ${signal.ptyId}: API-error turn end (${String(signal.payload.error)}) read from the transcript; no StopFailure hook arrived`);
-        hookIngest?.handle(signal);
-      },
-    });
-    apiErrorTurnEnds.start();
   }
 
   // Chat View — F9 early availability. Guarded like the projector: a second
@@ -7295,7 +7305,6 @@ async function shutdown(
   chatPushTimers.clear(); chatSubscribers.clear();
   transcriptProjector?.dispose();
   transcriptActivity?.dispose();
-  apiErrorTurnEnds?.dispose();
   terminalChat?.dispose();
   // Same for the discovery searches — unref'd watch handles and poll timers.
   transcriptDiscovery?.dispose();

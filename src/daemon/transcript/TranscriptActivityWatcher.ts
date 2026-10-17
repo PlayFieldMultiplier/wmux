@@ -123,6 +123,15 @@ export interface TranscriptActivityDeps {
   isAgentAlive: (sessionId: string) => boolean | undefined;
   /** Report a line ('' clears) for the session. */
   emit: (sessionId: string, activity: string) => void;
+  /**
+   * Every complete line read from a Claude transcript, in file order, with the
+   * file it came from (the API-error turn end reads it; see apiErrorTurnEnd).
+   * A new watch also replays its last JUMP_WINDOW_BYTES here once, so the
+   * entry of a turn that failed before the watch existed is not lost.
+   */
+  onClaudeLine?: (sessionId: string, path: string, line: string) => void;
+  /** Runs at the end of every tick. */
+  afterTick?: () => void;
   now?: () => number;
   pollMs?: number;
   minGapMs?: number;
@@ -281,6 +290,7 @@ export class TranscriptActivityWatcher {
         this.watches.delete(id);
       }
     }
+    this.deps.afterTick?.();
   }
 
   /** One transcript, one pane: the pane whose agent spoke last keeps it. */
@@ -297,8 +307,12 @@ export class TranscriptActivityWatcher {
 
   private reconcile(id: string): void {
     const binding = this.hookFed.has(id) || !this.agentAlive(id) ? undefined : this.deps.getBinding(id);
-    const parse = binding ? PARSERS[binding.agent] : undefined;
+    const agentParse = binding ? PARSERS[binding.agent] : undefined;
     const path = binding?.transcriptPath;
+    const onLine = binding?.agent === 'claude' ? this.deps.onClaudeLine : undefined;
+    const parse: ParseLine | undefined = agentParse && onLine && path
+      ? (line, offset) => { onLine(id, path, line); return agentParse(line, offset); }
+      : agentParse;
     const current = this.watches.get(id);
     if (!parse || !path) {
       this.watches.delete(id);
@@ -312,6 +326,7 @@ export class TranscriptActivityWatcher {
     }
     // Start at the end: only what the agent writes from now on.
     this.watches.set(id, { path, parse, ino: stat.ino, offset: stat.size, sentAt: 0 });
+    if (onLine) readTranscriptPage(path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, path, line); return []; } });
   }
 
   private read(id: string, watch: Watch): void {
