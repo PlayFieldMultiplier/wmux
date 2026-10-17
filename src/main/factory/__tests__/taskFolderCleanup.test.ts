@@ -23,6 +23,7 @@ import {
   installTaskFolderCleanup,
   noteKeptFolderStopped,
   removeTreeNoFollow,
+  MountPointError,
   removeEmptyResearchBatch,
   restoreTaskFolder,
   taskFolderKind,
@@ -675,6 +676,8 @@ describe('a folder a stop kept, after 7 days', () => {
       expect(fs.existsSync(cleanWt)).toBe(false);
       expect(fs.existsSync(scratch)).toBe(false);
       expect(p.store.get('wtask-ttld-22222222')?.state).toBe('kept_dirty');
+      // The card follows the removal's record.
+      expect(keptFolderCleaned).toHaveBeenCalledTimes(2);
     });
     expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/ttl-11111111')).toMatch(/^[0-9a-f]{40}$/);
     expect(p.store.get('wtask-ttl-11111111')?.state).toBe('removed');
@@ -850,7 +853,8 @@ describe('a folder a stop kept, after 7 days', () => {
     expect(fs.existsSync(wt)).toBe(true);
     // Seven days after the second stop, with the row pruned by then.
     now = 50_000 + 16 * DAY;
-    await pass({ ...p, missions: async () => new Map<string, TaskMission>() }, [], () => expect(fs.existsSync(wt)).toBe(false));
+    await pass({ ...p, missions: async () => new Map<string, TaskMission>() }, [], () => expect(keptFolderCleaned).toHaveBeenCalled());
+    expect(fs.existsSync(wt)).toBe(false);
     expect(keptFolderCleaned).toHaveBeenCalledWith(expect.objectContaining({ taskId: stopped.id, days: 7 }));
     expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/run-77777777')).toMatch(/^[0-9a-f]{40}$/);
   });
@@ -1079,6 +1083,53 @@ describe('a worktree git removed only half way', () => {
     fs.mkdirSync(path.join(root, 'real', 'task', 'sub'), { recursive: true });
     await removeTreeNoFollow(path.join(root, 'real', 'task'), root);
     expect(fs.existsSync(path.join(root, 'real', 'task'))).toBe(false);
+  });
+
+  /** lstat as the OS gives it, but with the folders in `mounted` (and what
+   *  is below them) on another device, as a mounted volume is. */
+  function fakeMounts(mounted: string[]) {
+    const real = fs.promises.lstat.bind(fs.promises);
+    return vi.spyOn(fs.promises, 'lstat').mockImplementation((async (p: fs.PathLike, ...rest: unknown[]) => {
+      const st = await (real as (...a: unknown[]) => Promise<fs.Stats>)(p, ...rest);
+      const at = path.resolve(String(p));
+      if (mounted.some((m) => at === m || at.startsWith(m + path.sep))) Object.defineProperty(st, 'dev', { value: st.dev + 1 });
+      return st;
+    }) as never);
+  }
+
+  it('removeTreeNoFollow never enters a mount point below the folder: it stays whole, the rest goes, and it is reported', async () => {
+    const top = path.join(dir, 'mnt-top');
+    const mnt = path.join(top, 'sub', 'volume');
+    fs.mkdirSync(path.join(mnt, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(mnt, 'deep', 'keep.txt'), 'mine');
+    fs.mkdirSync(path.join(top, 'other'), { recursive: true });
+    fs.writeFileSync(path.join(top, 'other', 'gone.txt'), 'x');
+    const spy = fakeMounts([mnt]);
+    try {
+      await expect(removeTreeNoFollow(top)).rejects.toBeInstanceOf(MountPointError);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.readFileSync(path.join(mnt, 'deep', 'keep.txt'), 'utf8')).toBe('mine');
+    expect(fs.existsSync(path.join(top, 'other'))).toBe(false);
+  });
+
+  it('a task folder that is itself a mount point is left whole, and Clean up now names it with the reason', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-11', 'task-11');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'keep.txt'), 'mine');
+    const done = row('completed', { id: 'wtask-mnt-00000011', dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } });
+    const p = ports({}, new Map([[done.id, { folder: scratch }]]));
+    const spy = fakeMounts([scratch]);
+    let r: Awaited<ReturnType<typeof cleanTaskFolders>>;
+    try {
+      r = await cleanTaskFolders(p, [done], { force: true });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.failed).toBe(1);
+    expect(r.notRemoved).toEqual([{ path: scratch, reason: expect.stringContaining('mount point') }]);
+    expect(fs.readFileSync(path.join(scratch, 'keep.txt'), 'utf8')).toBe('mine');
   });
 
   it('removeTreeNoFollow unlinks a link given to it, never its target', async () => {

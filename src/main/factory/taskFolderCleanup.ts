@@ -347,7 +347,10 @@ function foldCase(p: string): string {
  *  after, and before anything in it goes, the OS must resolve it to exactly
  *  where it sits under `dir` (no link on the way, no Windows mount point,
  *  which lstat reports as a plain folder; nothing swapped in meanwhile);
- *  otherwise it throws and that part is left. With `root`, `dir` itself
+ *  otherwise it throws and that part is left. A folder on another device
+ *  than the one it sits in (a mount point, `dir` itself included) is never
+ *  entered: it is left with everything in it, the rest is removed, and it
+ *  throws MountPointError. With `root`, `dir` itself
  *  must resolve to where it sits under the root's real path (a mount point
  *  or a link at `dir` or above it, below the root, is refused). A swap
  *  racing between a check and the removal it guards is not ruled out (Node
@@ -359,6 +362,8 @@ export async function removeTreeNoFollow(dir: string, root?: string): Promise<vo
     await unlinkLink(dir);
     return;
   }
+  // A volume mounted at the folder itself (its device is not its parent's).
+  if (top.isDirectory() && (await fs.promises.lstat(path.dirname(path.resolve(dir)))).dev !== top.dev) throw new MountPointError(dir);
   let expected: string;
   if (root !== undefined) {
     const rel = path.relative(path.resolve(root), path.resolve(dir));
@@ -377,6 +382,14 @@ async function unlinkLink(p: string): Promise<void> {
     if (process.platform !== 'win32') throw err;
     await fs.promises.rmdir(p);
   });
+}
+
+/** A folder that is a mount point (another device than the folder it sits
+ *  in): never entered, left with everything in it. */
+export class MountPointError extends Error {
+  constructor(readonly at: string) {
+    super(`${at} is a mount point: left alone`);
+  }
 }
 
 /** One entry of removeTreeNoFollow: `expected` is the real path it must
@@ -403,6 +416,8 @@ async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<v
   await where();
   const names = await fs.promises.readdir(p);
   await where();
+  // Mount points met below: left, the rest still removed, then reported.
+  let mount: MountPointError | null = null;
   for (const name of names) {
     const child = path.join(p, name);
     let cst: fs.Stats;
@@ -412,10 +427,22 @@ async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<v
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw err;
     }
+    // Another device: a volume mounted there (POSIX keeps its real path and
+    // inode steady, so only the device tells).
+    if (cst.isDirectory() && !cst.isSymbolicLink() && cst.dev !== st.dev) {
+      mount ??= new MountPointError(child);
+      continue;
+    }
     // The folder it sits in is still this one, right before it goes.
     await where();
-    await removeEntry(child, path.join(expected, foldCase(name)), cst);
+    try {
+      await removeEntry(child, path.join(expected, foldCase(name)), cst);
+    } catch (err) {
+      if (!(err instanceof MountPointError)) throw err;
+      mount ??= err;
+    }
   }
+  if (mount) throw mount;
   await where();
   await fs.promises.rmdir(p);
 }

@@ -41,7 +41,7 @@ let dir: string;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-idle-'));
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
 
 describe('workerPanesIdle', () => {
   const ended = (over: Partial<PaneActivity> = {}): PaneActivity => ({ status: 'complete', turnStartAt: 0, turnEndAt: 0, ...over });
