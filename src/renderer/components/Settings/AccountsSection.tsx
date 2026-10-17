@@ -553,7 +553,7 @@ function MoveDialog({ move, impact, onApply, onCancel }: {
   const affected = to || move.to !== null ? impact(to) : [];
   const title = move.kind === 'rename' ? t('accounts.renameGroupTitle', { group: move.from })
     : move.kind === 'ungroup' ? t('accounts.ungroupTitle', { group: move.from })
-      : t('accounts.moveTitle');
+      : move.to === null ? t('accounts.moveTitle') : t('accounts.moveTo', { group: move.to || t('accounts.noGroup') });
   const canApply = move.to !== null || (to !== '' && to !== move.from);
   return (
     <Dialog onClose={onCancel} width={420}>
