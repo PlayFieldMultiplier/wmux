@@ -4,9 +4,10 @@
 //   node scripts/check-changelog-fragments.mjs              check changelog.d/
 //   node scripts/check-changelog-fragments.mjs --json       machine-readable output
 //   node scripts/check-changelog-fragments.mjs --dir <path> check another folder
+//   node scripts/check-changelog-fragments.mjs --no-history skip the git-history PR-number check
 //
 // Prints `file:line: error|warning: message` and exits 1 when any error is
-// found, 0 otherwise. Errors are what the fold would get wrong (lost text,
+// found, 2 when the folder does not exist, 0 otherwise. Errors are what the fold would get wrong (lost text,
 // unknown sections, duplicated notes); warnings are the style rules of
 // changelog.d/README.md and what cannot be confirmed offline.
 //
@@ -16,6 +17,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ROOT, FRAGMENT_DIR, SECTIONS, fragmentFiles, scanFragment } from './lib/changelog-fragments.mjs';
 
 /** Every `#<n>` mentioned in this checkout's history, or null when git cannot say. */
@@ -39,10 +41,26 @@ const flatten = (text) => text.replace(/\s+/g, ' ').trim();
 // The `(#684)` / `(#2248, refs #1950)` citation that closes an entry.
 const CITATION = /\(([^()]*#\d+[^()]*)\)\.?$/;
 
-/** What two entries must share to count as the same note, PR citation aside. */
-const entryKey = (flat) => flat.replace(/^-\s*/, '').replace(CITATION, '').trim().toLowerCase();
+/** Lowercase everything but code spans: `PATH` and `path` are different code. */
+const foldCase = (text) =>
+  text
+    .split(/(`[^`]*`)/)
+    .map((part, i) => (i % 2 ? part : part.toLowerCase()))
+    .join('');
 
-function checkFragments(files, { history = referencedNumbers() } = {}) {
+/** What two entries must share to count as the same note, PR citation aside. */
+const entryKey = (flat) => foldCase(flat.replace(/^-\s*/, '').replace(CITATION, '').trim());
+
+// A section name behind a malformed heading: `###Fixed`, ` ### Fixed`. A
+// wrapped line that starts with `#1029` names no section and is not one.
+const LOOSE_HEADING = new RegExp(`^\\s*#+\\s*(${SECTIONS.join('|')})\\b`, 'i');
+
+/**
+ * Check fragment files and return their problems, files in the given order and
+ * top to bottom within each. `history: false` skips the git-history PR-number
+ * check; a Set of numbers stands in for `git log`.
+ */
+export function checkFragments(files, { history = referencedNumbers() } = {}) {
   const problems = [];
   const seenEntries = new Map();
   const seenClaims = new Map();
@@ -70,8 +88,13 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
     const flagged = new Set();
     for (const [i, line] of text.replace(/\r\n/g, '\n').split('\n').entries()) {
       const depth = /^(#+)\s/.exec(line)?.[1].length;
+      const loose = !depth && LOOSE_HEADING.exec(line);
       if (depth && depth !== 3) {
         report(file, i + 1, 'error', 'heading-level', `only "### Section" headings are allowed, not ${'#'.repeat(depth)}`);
+        flagged.add(i + 1);
+      } else if (loose) {
+        const name = SECTIONS.find((s) => s.toLowerCase() === loose[1].toLowerCase());
+        report(file, i + 1, 'error', 'heading-format', `"${line.trim()}" is not a heading; the fold glues it to the text above. Write "### ${name}" at the start of the line`);
         flagged.add(i + 1);
       }
     }
@@ -93,10 +116,9 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
       }
     }
 
-    // File order, so "below" and "above" mean what the author saw.
-    const ordered = Object.values(entries)
-      .flat()
-      .sort((a, b) => a.line - b.line);
+    // Fold order: sections in Keep a Changelog order, file order within each,
+    // so "below" and "above" mean what the release notes will show.
+    const ordered = SECTIONS.flatMap((s) => entries[s] ?? []);
     const local = new Map();
     for (const [i, entry] of ordered.entries()) {
       const flat = flatten(entry.text);
@@ -110,7 +132,7 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
       for (const m of prose.matchAll(/\bsee (below|above)\b/gi)) {
         const below = m[1].toLowerCase() === 'below';
         if (below ? i === ordered.length - 1 : i === 0) {
-          report(file, entry.line, 'error', 'see-direction', `"${m[0]}" but no entry is ${m[1].toLowerCase()} it in this fragment; the fold reorders fragments, so name what it refers to`);
+          report(file, entry.line, 'error', 'see-direction', `"${m[0]}" but no entry of this fragment is ${m[1].toLowerCase()} it once folded (sections print in Keep a Changelog order, and other fragments interleave), so name what it refers to`);
         }
       }
 
@@ -124,12 +146,14 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
         seenEntries.set(key, where);
       }
 
-      // `2**31` inside a code span is not the end of the bold claim.
-      const bold = /^- \*\*(.+?)\*\*(.*)$/.exec(flat.replace(/`[^`]*`/g, '`code`'));
+      // `2**31` inside a code span is not the end of the bold claim. The mask
+      // keeps every offset, so the claim itself is cut from the real text.
+      const bold = /^- \*\*(.+?)\*\*/.exec(flat.replace(/`[^`]*`/g, (code) => 'x'.repeat(code.length)));
       if (!bold) {
         report(file, entry.line, 'warning', 'bold-claim', 'entry should open with a "**Short bold claim.**"');
       } else {
-        const [, claim, rest] = bold;
+        const claim = flat.slice(4, 4 + bold[1].length);
+        const rest = flat.slice(bold[0].length);
         if (!/[.!?]$/.test(claim)) {
           report(file, entry.line, 'warning', 'bold-claim', 'the bold claim should end with a full stop inside the bold');
         }
@@ -137,7 +161,7 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
           report(file, entry.line, 'warning', 'no-paragraph', 'the bold claim should be followed by a paragraph saying what changed');
         }
         // A duplicated entry is already an error; its claim would only repeat it.
-        const claimKey = claim.toLowerCase();
+        const claimKey = foldCase(claim);
         if (!earlier && seenClaims.has(claimKey)) {
           report(file, entry.line, 'warning', 'duplicate-claim', `same bold claim as ${seenClaims.get(claimKey)}`);
         } else if (!earlier) {
@@ -152,12 +176,13 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
         report(file, entry.line, 'warning', 'pr-citation', `entry cites (${cited[1]}) but the fragment is for #${pr}`);
       }
 
-      if (/[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(flat)) {
+      // Quoted UI text and code may be another language; the prose may not.
+      if (/[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(prose)) {
         report(file, entry.line, 'warning', 'not-english', 'repo artifacts are English; this entry has CJK text');
       }
     }
 
-    if (pr !== null) {
+    if (pr !== null && history !== false) {
       if (history === null) {
         report(file, 1, 'warning', 'pr-unknown', `cannot confirm #${pr} offline: git log is unavailable`);
       } else if (!history.has(pr)) {
@@ -180,8 +205,13 @@ function main() {
     process.exit(2);
   }
 
+  if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+    console.error(`check-changelog-fragments: no such folder: ${dirAt === -1 ? dir : args[dirAt + 1]}`);
+    process.exit(2);
+  }
+
   const files = fragmentFiles(dir);
-  const problems = checkFragments(files);
+  const problems = checkFragments(files, args.includes('--no-history') ? { history: false } : {});
   const errors = problems.filter((p) => p.severity === 'error').length;
   const warnings = problems.length - errors;
 
@@ -194,4 +224,5 @@ function main() {
   process.exitCode = errors > 0 ? 1 : 0;
 }
 
-main();
+// Run only as a command: scripts/collect-changelog.mjs imports checkFragments.
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) main();
