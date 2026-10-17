@@ -3485,7 +3485,7 @@ export const en = {
   'daemon.linkReconnected': "Reconnected to the background daemon.",
   'daemon.linkGaveUp': "wmux could not reconnect to the background daemon. This pane is disconnected.",
   'daemon.linkGaveUpHint': "Quit and reopen wmux to reconnect it. Panes you open now run without the daemon.",
-  'daemon.linkInputLostWhileDown': "What you type here now will not reach the shell.",
+  'daemon.linkInputLostWhileDown': "What you type here now may not reach the shell.",
   'daemon.linkInputLost': "Input you typed while it was disconnected may not have reached the shell. Check the screen before typing it again.",
   'daemon.linkDismiss': "Dismiss",
   'update.refusedInstall':

@@ -2877,7 +2877,7 @@ export const ko = {
   'daemon.linkReconnected': "백그라운드 데몬에 다시 연결했습니다.",
   'daemon.linkGaveUp': "wmux가 백그라운드 데몬에 다시 연결하지 못했습니다. 이 판은 연결이 끊긴 상태입니다.",
   'daemon.linkGaveUpHint': "wmux를 종료했다가 다시 열면 다시 연결됩니다. 지금 새로 여는 판은 데몬 없이 실행됩니다.",
-  'daemon.linkInputLostWhileDown': "지금 여기에 입력하는 내용은 셸에 전달되지 않습니다.",
+  'daemon.linkInputLostWhileDown': "지금 여기에 입력하는 내용은 셸에 전달되지 않을 수 있습니다.",
   'daemon.linkInputLost': "연결이 끊긴 동안 입력한 내용이 셸에 전달되지 않았을 수 있습니다. 다시 입력하기 전에 화면을 확인하세요.",
   'daemon.linkDismiss': "닫기",
   'update.refusedInstall':
