@@ -105,9 +105,9 @@ export default function WorkspaceAccountMenu({
                 {buckets.map(({ group, accounts }) => (
                   <Fragment key={group}>
                   {sectioned && (
-                    <div className="px-3 pt-1.5 pb-0.5 text-[10px] text-[var(--text-muted)] truncate" data-account-menu-group={group}>
-                      {group || t('accounts.noGroup')}
-                      {bound && group !== accountGroupOf(bound) && ` · ${t('accounts.differentGroup')}`}
+                    <div className="flex px-3 pt-1.5 pb-0.5 text-[10px] text-[var(--text-muted)]" data-account-menu-group={group}>
+                      <span className="truncate">{group || t('accounts.noGroup')}</span>
+                      {bound && group !== accountGroupOf(bound) && <span className="shrink-0">&nbsp;· {t('accounts.differentGroup')}</span>}
                     </div>
                   )}
                   {accounts.map((r) => (

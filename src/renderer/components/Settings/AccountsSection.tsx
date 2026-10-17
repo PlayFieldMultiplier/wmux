@@ -201,7 +201,12 @@ function GroupPicker({ account, groups, onSet }: {
         maxLength={MAX_ACCOUNT_GROUP_CHARS}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setTyping(false); }}
+        onKeyDown={(e) => {
+          // Enter that ends an IME composition is not a commit.
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') setTyping(false);
+        }}
         onBlur={commit}
         autoFocus
       />

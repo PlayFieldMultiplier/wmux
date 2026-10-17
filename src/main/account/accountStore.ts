@@ -44,7 +44,8 @@ export interface Account {
   configDir: string;
   createdAt: number;
   /** Account group ("work", "personal"); absent = ungrouped. Automatic picks
-   *  never leave the bound account's group (src/shared/accountGroup.ts). */
+   *  never leave the bound account's group (src/shared/accountGroup.ts).
+   *  Stored in account-groups.json, not accounts.json (see readGroups). */
   group?: string;
 }
 
@@ -124,15 +125,12 @@ function sanitizeAccount(raw: unknown): Account | null {
   if (typeof o.name !== 'string' || !o.name.trim()) return null;
   if (!isVendor(o.vendor)) return null;
   if (typeof o.configDir !== 'string' || !o.configDir) return null;
-  // An invalid group reads as ungrouped; the key is only written when set.
-  const group = normalizeAccountGroup(o.group);
   return {
     id: o.id,
     name: o.name.slice(0, MAX_NAME_CHARS),
     vendor: o.vendor,
     configDir: o.configDir,
     createdAt: typeof o.createdAt === 'number' ? o.createdAt : 0,
-    ...(group ? { group } : {}),
   };
 }
 
@@ -169,6 +167,37 @@ function sanitizeFile(raw: unknown, knownWorkspaceIds?: ReadonlySet<string>): Ac
   return { version: SCHEMA_VERSION, accounts, bindings };
 }
 
+/**
+ * Groups live in their own file, `account-groups.json`
+ * (`{ version: 1, groups: { [accountId]: name } }`), because every older
+ * build rebuilds accounts.json rows from a fixed field list on each write:
+ * a group kept there would be dropped silently by one account change on an
+ * older wmux, and rotation would cross groups again. Older builds never read
+ * or write this file. An entry whose account is gone matches nothing (ids are
+ * random UUIDs) and is pruned on the next group write.
+ */
+function readGroups(filePath: string): Map<string, string> {
+  const groups = new Map<string, string>();
+  let raw: unknown = null;
+  try { raw = atomicReadJSONSync<unknown>(filePath); } catch { raw = null; }
+  const entries = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).groups : null;
+  if (!entries || typeof entries !== 'object') return groups;
+  for (const [id, name] of Object.entries(entries as Record<string, unknown>)) {
+    const group = normalizeAccountGroup(name);
+    if (!isUnsafeKey(id) && group) groups.set(id, group);
+  }
+  return groups;
+}
+
+function applyGroups(file: AccountsFile, groups: ReadonlyMap<string, string>): AccountsFile {
+  for (const account of file.accounts) {
+    const group = groups.get(account.id);
+    if (group) account.group = group;
+    else delete account.group;
+  }
+  return file;
+}
+
 export class AccountError extends Error {
   readonly code: 'duplicate-dir' | 'not-found' | 'limit' | 'invalid';
   constructor(code: AccountError['code'], message: string) {
@@ -185,12 +214,14 @@ export class AccountError extends Error {
  */
 export class AccountStore {
   private readonly filePath: string;
+  private readonly groupsPath: string;
   private cache: AccountsFile | null = null;
   /** Serialized write chain — every mutation awaits the previous one. */
   private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(dir?: string) {
     this.filePath = getAccountsPath(dir);
+    this.groupsPath = path.join(path.dirname(this.filePath), 'account-groups.json');
   }
 
   /** Load (or reload) from disk into the cache. A missing/corrupt file loads as
@@ -202,7 +233,7 @@ export class AccountStore {
     } catch {
       raw = null;
     }
-    this.cache = sanitizeFile(raw, knownWorkspaceIds);
+    this.cache = applyGroups(sanitizeFile(raw, knownWorkspaceIds), readGroups(this.groupsPath));
     return this.cache;
   }
 
@@ -294,8 +325,9 @@ export class AccountStore {
       try { raw = atomicReadJSONSync<unknown>(this.filePath); } catch { raw = null; }
       const file = sanitizeFile(raw);
       const result = fn(file);
+      // Written before the groups are merged in: accounts.json never holds one.
       await atomicWriteJSON(this.filePath, file, { durable: true });
-      this.cache = file;
+      this.cache = applyGroups(file, readGroups(this.groupsPath));
       return result;
     });
     // Keep the chain alive even if this mutation rejected.
@@ -349,16 +381,27 @@ export class AccountStore {
     });
   }
 
-  /** Put an account in a group; '' (or only spaces) makes it ungrouped. */
+  /** Put an account in a group; '' (or only spaces) makes it ungrouped.
+   *  Writes only account-groups.json, on the same write chain. */
   async setAccountGroup(id: string, group: string): Promise<void> {
     const normalized = normalizeAccountGroup(group);
     if (normalized === null) throw new AccountError('invalid', 'invalid group name');
-    await this.mutate((file) => {
-      const account = file.accounts.find((a) => a.id === id);
-      if (!account) throw new AccountError('not-found', `account not found: ${id}`);
-      if (normalized) account.group = normalized;
-      else delete account.group;
+    const run = this.writeChain.then(async () => {
+      let raw: unknown = null;
+      try { raw = atomicReadJSONSync<unknown>(this.filePath); } catch { raw = null; }
+      const file = sanitizeFile(raw);
+      if (!file.accounts.some((a) => a.id === id)) throw new AccountError('not-found', `account not found: ${id}`);
+      const groups = readGroups(this.groupsPath);
+      if (normalized) groups.set(id, normalized);
+      else groups.delete(id);
+      const known = new Set(file.accounts.map((a) => a.id));
+      const out: Record<string, string> = {};
+      for (const [accountId, name] of groups) if (known.has(accountId)) out[accountId] = name;
+      await atomicWriteJSON(this.groupsPath, { version: 1, groups: out }, { durable: true });
+      this.cache = applyGroups(file, groups);
     });
+    this.writeChain = run.catch(() => undefined);
+    await run;
   }
 
   /**

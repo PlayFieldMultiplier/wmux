@@ -194,9 +194,10 @@ export class AccountRotationService {
     if (!this.getSettings()[vendor]) return { kind: 'keep' };
     const registered = this.accounts(vendor);
     if (registered.length === 0) return { kind: 'keep' };
-    const bound = workspaceId
+    const bindingOf = () => (workspaceId
       ? (this.deps.getBinding ? this.deps.getBinding(workspaceId, vendor) : getAccountStore().getBinding(workspaceId, vendor))
-      : undefined;
+      : undefined);
+    const bound = bindingOf();
     // An unbound workspace runs on the CLI's default login, which is not a
     // registered account wmux can measure: leave it alone.
     if (!bound || !registered.some((a) => a.id === bound)) return { kind: 'keep' };
@@ -221,7 +222,8 @@ export class AccountRotationService {
     // Groups as they are now: an account moved out of the group during the
     // reads is no longer a candidate, and one moved in was not measured.
     const groupNow = new Map(this.accounts(vendor).map((a) => [a.id, accountGroupOf(a)]));
-    if (groupNow.get(bound) !== group) return { kind: 'keep' };
+    // A workspace rebound meanwhile is decided by its next launch, not from the old group.
+    if (bindingOf() !== bound || groupNow.get(bound) !== group) return { kind: 'keep' };
     const groupSize = [...groupNow.values()].filter((g) => g === group).length;
     // Only a measured account is a switch target; an unmeasured one (no
     // reading, or a Claude account whose last probe failed) is never picked.
