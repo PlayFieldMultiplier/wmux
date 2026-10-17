@@ -65,7 +65,7 @@ export default function WorkspaceAccountMenu({
         if (vendorRows.length === 0) return null;
         const boundId = bindings[vendor];
         // Group sections once any account has a group; a pick outside the bound
-        // account's group is allowed and says so.
+        // account's group is allowed, and that section's heading says so.
         const buckets = groupAccounts(vendorRows);
         const sectioned = buckets.some((b) => b.group !== '');
         const bound = vendorRows.find((r) => r.id === boundId);
@@ -106,6 +106,7 @@ export default function WorkspaceAccountMenu({
                   sectioned && (
                     <div key={`group:${group}`} className="px-3 pt-1.5 pb-0.5 text-[10px] text-[var(--text-muted)] truncate" data-account-menu-group={group}>
                       {group || t('accounts.noGroup')}
+                      {bound && group !== accountGroupOf(bound) && ` · ${t('accounts.differentGroup')}`}
                     </div>
                   ),
                   ...accounts.map((r) => (
@@ -120,9 +121,6 @@ export default function WorkspaceAccountMenu({
                   >
                     <span className="w-3 text-[var(--accent-amber)]">{boundId === r.id ? '●' : ''}</span>
                     <span className="truncate flex-1">{r.name}</span>
-                    {bound && accountGroupOf(r) !== accountGroupOf(bound) && (
-                      <span className="text-[10px] text-[var(--text-muted)] shrink-0">{t('accounts.differentGroup')}</span>
-                    )}
                     {!r.status.loggedIn && (
                       <span className="text-[10px] text-[var(--accent-red)] shrink-0">{t('accounts.loggedOut')}</span>
                     )}

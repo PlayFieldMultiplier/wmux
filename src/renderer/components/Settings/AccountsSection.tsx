@@ -413,7 +413,7 @@ export function AccountsSection(): React.ReactElement | null {
           ) : (
             <button
               type="button"
-              className={`flex-1 min-w-0 text-left text-[13px] font-medium text-[var(--text-main)] truncate hover:underline rounded ${FOCUS_RING}`}
+              className={`flex-1 min-w-24 text-left text-[13px] font-medium text-[var(--text-main)] truncate hover:underline rounded ${FOCUS_RING}`}
               onClick={() => { setEditingId(r.id); setEditName(r.name); }}
             >
               {r.name}
