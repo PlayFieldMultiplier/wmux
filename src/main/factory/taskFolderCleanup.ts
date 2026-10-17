@@ -426,13 +426,24 @@ async function cleanTaskFolderNow(
         ...(prior?.repoHash ? { repoHash: prior.repoHash } : {}),
         ...(prior?.head ? { head: prior.head } : {}),
         ...(prior?.keepRef ? { keepRef: prior.keepRef } : {}),
-        at: restopped ?? now(),
+        // A folder already recorded (a removal that did not finish) keeps
+        // its clock.
+        at: restopped ?? (prior?.stopped ? prior.at : now()),
       }).catch((err: unknown) => log(`[factory] kept folder of ${entry.id} not recorded: ${String(err)}`));
     }
     return 'skipped';
   }
   // Every later record of a folder a stop kept says so (Clean up now finds it).
-  const stoppedMark = stoppedByOwner || prior?.stopped ? { stopped: { botId } } : {};
+  const stoppedMark = prior?.stopped ? { stopped: prior.stopped } : stoppedByOwner ? { stopped: { botId } } : {};
+  // A folder a stop kept keeps its clock through a removal that does not
+  // finish; any other record says when it was written.
+  const keptAt = prior?.stopped && (prior.state === 'kept_stopped' || prior.state === 'removing' || prior.state === 'kept_dirty')
+    ? Math.max(prior.at, stopAt ?? -Infinity) : undefined;
+  // A removal after the TTL that failed is kept again as it was, so the next
+  // pass tries it again (TASK_FOLDER_ATTEMPTS_MAX).
+  const keepAgain = async (): Promise<void> => {
+    if (expired && prior) await ports.store.put({ ...prior, state: 'kept_stopped', at: keptAt ?? prior.at }).catch(() => undefined);
+  };
   if ((folderHolds.get(entry.id) ?? 0) > 0) return 'skipped';
   if (prior?.state === 'removed') return 'skipped';
   if (prior?.state === 'kept_dirty' && opts.force !== true) return 'skipped';
@@ -460,10 +471,11 @@ async function cleanTaskFolderNow(
   if (kind === 'research') {
     try {
       if (!fs.lstatSync(mission.folder).isDirectory()) return 'skipped';
-      await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', ...stoppedMark, at: now() });
+      await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', ...stoppedMark, at: keptAt ?? now() });
       await (ports.removeDir ?? ((d: string) => fs.promises.rm(d, { recursive: true })))(mission.folder);
     } catch (err) {
       log(`[factory] research folder of ${entry.id} not removed: ${String(err)}`);
+      if (fs.existsSync(mission.folder)) await keepAgain();
       return 'failed';
     }
     await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removed', at: now() }).catch(() => undefined);
@@ -489,7 +501,7 @@ async function cleanTaskFolderNow(
   const base = {
     taskId: entry.id, kind, path: mission.folder, repoRoot: repo.repoRoot, repoHash: repo.repoHash,
     ...(mission.branch ? { branch: mission.branch } : {}), ...(repo.head ? { head: repo.head } : {}),
-    ...(kept ? { keepRef: kept } : prior?.keepRef ? { keepRef: prior.keepRef } : {}), ...stoppedMark, at: now(),
+    ...(kept ? { keepRef: kept } : prior?.keepRef ? { keepRef: prior.keepRef } : {}), ...stoppedMark, at: keptAt ?? now(),
   };
   // How to put it back is on disk before the folder goes.
   try {
@@ -500,7 +512,7 @@ async function cleanTaskFolderNow(
   }
   const r = await ports.worktrees.removeWorktree(repo.repoRoot, repo.repoHash, mission.folder).catch((err: unknown) => ({ ok: false as const, error: String(err) }));
   if (r.ok) {
-    await ports.store.put({ ...base, state: 'removed' }).catch(() => undefined);
+    await ports.store.put({ ...base, state: 'removed', at: now() }).catch(() => undefined);
     if (expired && prior) noteKeptFolderCleaned(ports, entry, prior, now(), log);
     ports.changed?.();
     return 'removed';
@@ -511,6 +523,7 @@ async function cleanTaskFolderNow(
     return 'kept_dirty';
   }
   log(`[factory] worktree of ${entry.id} not removed: ${r.error}`);
+  if (exists(mission.folder)) await keepAgain();
   return 'failed';
 }
 

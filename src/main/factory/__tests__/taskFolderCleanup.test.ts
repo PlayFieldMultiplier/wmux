@@ -718,6 +718,54 @@ describe('a folder a stop kept, after 7 days', () => {
     expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/again-44444444')).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it('a removal after the TTL that fails is kept again with its clock, tried again on the next pass, and bounded', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-9', 'task-9');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'notes.md'), 'found it');
+    const stopped = row('cancelled', { id: 'wtask-busy-00000009', ...stoppedBy, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } });
+    let now = 50_000;
+    const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    let failing = true;
+    const removeDir = vi.fn(async (d: string) => {
+      if (failing) throw busy;
+      await fs.promises.rm(d, { recursive: true });
+    });
+    const p = ports({ now: () => now, removeDir }, new Map([[stopped.id, { folder: scratch }]]));
+    await cleanTaskFolders(p, [stopped]);
+    now = 50_000 + TASK_FOLDER_KEPT_TTL_MS;
+    // One install, several passes (the attempts are counted per install).
+    const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped] });
+    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } });
+    // The ordinary pass over its row records nothing new.
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)?.at).toBe(50_000);
+    installed.kick();
+    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(2));
+    installed.kick();
+    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(3));
+    // Bounded: no fourth try from this install.
+    installed.kick();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(removeDir).toHaveBeenCalledTimes(3);
+    installed.dispose();
+    expect(fs.existsSync(path.join(scratch, 'notes.md'))).toBe(true);
+    // A later start tries again, and it goes.
+    failing = false;
+    await pass(p, [stopped], () => expect(fs.existsSync(scratch)).toBe(false));
+  });
+
+  it('a removal that did not finish (a crash after its record) keeps the folder\'s clock when its row records it again', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-10', 'task-10');
+    fs.mkdirSync(scratch, { recursive: true });
+    const stopped = row('cancelled', { id: 'wtask-crash-0000010', ...stoppedBy, dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' } });
+    const p = ports({ now: () => 50_000 + 9 * DAY }, new Map([[stopped.id, { folder: scratch }]]));
+    await p.store.put({ taskId: stopped.id, kind: 'research', path: scratch, state: 'removing', stopped: { botId: BOT, workspaceId: 'ws-owner' }, at: 50_000 });
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000 });
+  });
+
   it('a kept record whose path is outside the roots is never removed, however old', async () => {
     const elsewhere = path.join(dir, 'elsewhere', 'batch', 'task');
     fs.mkdirSync(elsewhere, { recursive: true });
