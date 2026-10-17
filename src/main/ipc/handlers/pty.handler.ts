@@ -37,6 +37,7 @@ import { withDaemonCreateRollback } from './daemonCreateRollback';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getWmuxDir } from '../../../daemon/config';
 import { scheduleInitialCommand } from './scheduleInitialCommand';
+import { verifyLaunchLine, type LaunchLineRead } from './verifyLaunchLine';
 import {
   createSessionDataDispatcher,
   type SessionDataDispatcher,
@@ -730,8 +731,30 @@ export function registerPTYHandlers(
       // is a no-op (its onFirstData stays a harmless call below).
       // A bot worker's line clears the screen first (clearedLaunchLine).
       const typedLine = execCommand !== undefined ? undefined : options?.initialCommand;
+      const writeLaunchLine = (cmd: string) => daemonClient.writeToSession(sessionId, sanitizePtyText(cmd) + '\r');
+      // F26 — a fan-out task pane's line is checked once written, and written
+      // once more if the shell never read it (verifyLaunchLine.ts).
+      const verifyTaskLine = !!botWorker || !!options?.fanoutTaskOf;
+      let verifying = false;
       const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(typedLine, shell) : typedLine, {
-        write: (cmd) => daemonClient.writeToSession(sessionId, sanitizePtyText(cmd) + '\r'),
+        write: (cmd) => {
+          const delivered = writeLaunchLine(cmd);
+          if (delivered && verifyTaskLine && !verifying) {
+            verifying = true;
+            verifyLaunchLine({
+              // A slow read is skipped, not waited on (the default RPC bound is 10 s).
+              read: async () => (await daemonClient.rpc('daemon.readPromptEvents', { sessionId, limit: 32 }, { timeoutMs: 2_000 })) as LaunchLineRead,
+              resend: () => {
+                console.warn(`[pty:create] ${sessionId}: the shell never read the launch line; writing it once more`);
+                return writeLaunchLine(cmd);
+              },
+              onDone: (outcome) => {
+                if (outcome === 'gave-up') console.warn(`[pty:create] ${sessionId}: the shell did not read the launch line after a second write`);
+              },
+            });
+          }
+          return delivered;
+        },
         onExhausted: () => {
           console.warn(
             `[pty:create] startup command for ${sessionId} not delivered after ` +

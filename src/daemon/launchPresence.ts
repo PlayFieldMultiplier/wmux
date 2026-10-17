@@ -28,6 +28,12 @@
  * bash), the launcher was not found (127), or the agent already exited with
  * an error. A slow start never looks like that: while the agent loads, bash
  * is not at a prompt.
+ *
+ * F26 — and a second one: the launch line never reached bash at all. Its
+ * first prompt is drawn, no line was ever read (no command-start, no return
+ * to a prompt after one) and nothing has been written since that prompt
+ * (shared/promptLineState.ts). A line bash took would have been echoed; an
+ * agent running under a bash without PS0 writes its screen.
  */
 
 export type LaunchPresence = 'running' | 'absent' | 'unknown';
@@ -40,6 +46,7 @@ export type LaunchPresenceReason =
   | 'exec-pane'
   | 'wsl-pane'
   | 'wsl-launch-failed'
+  | 'wsl-line-never-read'
   | 'foreground-command'
   | 'not-probed'
   | 'shell-has-children'
@@ -71,6 +78,9 @@ export interface LaunchPresenceInputs {
   /** PromptEventLog.exitAfterPrompt: the status the shell came back to its
    *  prompt with after a command line, nothing running since. */
   exitAfterPrompt?: number;
+  /** F26 — promptLineState is 'idle-at-prompt': the shell sits at its first
+   *  prompt and never read a line. */
+  lineNeverRead?: boolean;
   /** The process-table read; undefined = not taken (cheap mode). */
   idleShell?: IdleShellRead;
 }
@@ -94,6 +104,9 @@ export function decideLaunchPresence(inputs: LaunchPresenceInputs): LaunchPresen
   if (inputs.isWsl) {
     if (inputs.exitAfterPrompt !== undefined && inputs.exitAfterPrompt !== 0 && inputs.commandRunning !== true) {
       return { presence: 'absent', reason: 'wsl-launch-failed' };
+    }
+    if (inputs.lineNeverRead === true && inputs.commandRunning !== true) {
+      return { presence: 'absent', reason: 'wsl-line-never-read' };
     }
     return { presence: 'unknown', reason: 'wsl-pane' };
   }

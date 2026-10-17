@@ -130,6 +130,7 @@ import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
 import { CommandStartAgentProbe } from './commandStartAgentProbe';
 import { resolveCanonicalAgentIdentity, detectorSuppressedBy, reportedAgentName, provesLiveAgent, type CanonicalAgentIdentity } from './canonicalAgent';
 import { decideLaunchPresence, launchPresenceNeedsProcessRead, type IdleShellRead } from './launchPresence';
+import { promptLineState } from '../shared/promptLineState';
 import { Watchdog } from './Watchdog';
 import { selectRecoverableSessions, startLeftoverShellReaps } from './recoverySelector';
 import { isShutdownKillExit, SHUTDOWN_KILL_RECLASSIFY_MS } from './shutdownKill';
@@ -4929,6 +4930,7 @@ function registerRpcHandlers(
       isExec: !!session?.meta.exec,
       isWsl: !!session?.meta.wslTarget,
       exitAfterPrompt: session?.promptLog.exitAfterPrompt(),
+      lineNeverRead: !!session && promptLineState(session.promptLog.snapshot(), session.ringBuffer.totalBytesWritten) === 'idle-at-prompt',
     };
     let idleShell: IdleShellRead | undefined;
     if (session && params['probeProcess'] === true && launchPresenceNeedsProcessRead(inputs)) {
