@@ -24,7 +24,7 @@ function gate(opts: { turnOpen?: boolean } = {}) {
   const turnEnds = new ApiErrorTurnEnds({
     // The pane's open turn started at TURN_OPENED_AT.
     isCurrentOpenTurn: (_id, at) => (opts.turnOpen ?? true) && at >= TURN_OPENED_AT,
-    signalFor: (id, _path, end) => stopFailureSignal(id, { sessionId: 's', cwd: '/w' }, end, now),
+    signalFor: (id, _path, end) => stopFailureSignal(id, { agent: 'claude', sessionId: 's', cwd: '/w' }, end, now),
     emit: (signal) => sent.push(signal),
     now: () => now,
   });

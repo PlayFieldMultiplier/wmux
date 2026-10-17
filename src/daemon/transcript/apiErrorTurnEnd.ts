@@ -27,7 +27,7 @@
 //     in the turn that is open now (`isCurrentOpenTurn`), so an error from an
 //     earlier turn, or one a new prompt has already moved past, closes nothing.
 
-import type { AgentSignal } from '../../shared/hooks/signal-types';
+import type { AgentSignal, AgentSlug } from '../../shared/hooks/signal-types';
 
 /** How long the real hook gets to arrive before the transcript speaks. A hook
  *  fires right after Claude Code writes the entry and runs on a 2s budget. */
@@ -153,13 +153,13 @@ export class ApiErrorTurnEnds {
 /** The `agent.stop_failure` a StopFailure hook would have sent for `end`. */
 export function stopFailureSignal(
   ptyId: string,
-  binding: { sessionId: string; cwd: string },
+  binding: { agent: AgentSlug; sessionId: string; cwd: string },
   end: ApiErrorTurnEnd,
   ts: number,
 ): AgentSignal {
   return {
     kind: 'agent.stop_failure',
-    agent: 'claude',
+    agent: binding.agent,
     agentSessionId: binding.sessionId,
     cwd: binding.cwd,
     ptyId,

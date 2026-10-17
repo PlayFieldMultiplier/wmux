@@ -38,6 +38,7 @@ import { parseCodexLineDetailed } from './parseCodexEntry';
 import { isLineBoundary, readTranscriptDelta, readTranscriptPage, statTranscript } from './readTail';
 import { HOOK_ACTIVITY_KINDS } from '../../shared/hooks/hookActivityKinds';
 import { MAX_RAW_LEN, summarizeActivity } from '../../shared/activitySummary';
+import { agentRow } from '../../shared/agentIdentity';
 
 /** Most bytes read for one session in one tick. */
 export const READ_CAP_BYTES = 256 * 1024;
@@ -321,12 +322,12 @@ export class TranscriptActivityWatcher {
     // A hook-fed Claude pane is still read for its lines (an API-error turn
     // end has no hook on an install without StopFailure), never for activity.
     if (fed && this.deps.onClaudeLine && this.agentAlive(id)) {
-      const claude = this.deps.getBinding(id);
-      if (claude?.agent === 'claude') binding = claude;
+      const own = this.deps.getBinding(id);
+      if (agentRow(own?.agent)?.apiErrorTurnEnd) binding = own;
     }
     const agentParse = binding ? PARSERS[binding.agent] : undefined;
     const path = binding?.transcriptPath;
-    const onLine = binding?.agent === 'claude' ? this.deps.onClaudeLine : undefined;
+    const onLine = agentRow(binding?.agent)?.apiErrorTurnEnd ? this.deps.onClaudeLine : undefined;
     const parse: ParseLine | undefined = agentParse && onLine && path
       ? (line, offset) => { onLine(id, path, line); return agentParse(line, offset); }
       : agentParse;

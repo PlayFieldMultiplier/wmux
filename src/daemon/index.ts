@@ -159,7 +159,7 @@ import { monitorEventLoopDelay, performance as nodePerformance } from 'node:perf
 import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, isBrainPty } from '../shared/constants';
 import { toResumeCommand, resumeGrammarFor, resumeOfferForRecovered, mergeResumeBinding, isProvisionalCapture, transcriptRelocated, normalizeResumeCwd, isUsableResumeBinding, isPlausibleResumeSessionId } from '../shared/agentResume';
 import type { ResumeBinding } from '../shared/agentResume';
-import { agentDisplayToSlug, AGENT_SLUG_SET, isAgentSlug } from '../shared/agentIdentity';
+import { agentDisplayToSlug, agentRow, AGENT_SLUG_SET, isAgentSlug } from '../shared/agentIdentity';
 import type { AgentEventStatus } from '../main/pty/AgentDetector';
 import { HookIngest, identifiedAgentPid, type HookArbitration } from './hooks/HookIngest';
 import { DetectionAgreementLog } from './diagnostics/detectionAgreementLog';
@@ -3886,9 +3886,10 @@ function registerRpcHandlers(
         const session = sessionManager.getSession(id);
         const binding = resolveTranscriptBinding(id);
         if (!session || isBrainPty({ id, env: session.meta.env })) return null;
-        if (binding?.agent !== 'claude' || binding.transcriptPath !== path) return null;
-        if (!checkNativeTranscriptPath('claude', path, binding.sessionId, session.meta.env).ok) return null;
-        return stopFailureSignal(id, binding, end, Date.now());
+        const agent = agentRow(binding?.agent);
+        if (!binding || !agent?.apiErrorTurnEnd || binding.transcriptPath !== path) return null;
+        if (!checkNativeTranscriptPath(agent.slug, path, binding.sessionId, session.meta.env).ok) return null;
+        return stopFailureSignal(id, { agent: agent.slug, sessionId: binding.sessionId, cwd: binding.cwd }, end, Date.now());
       },
       emit: (signal) => {
         log('info', `[hooks] ${signal.ptyId}: API-error turn end (${String(signal.payload.error)}) read from the transcript; no StopFailure hook arrived`);
