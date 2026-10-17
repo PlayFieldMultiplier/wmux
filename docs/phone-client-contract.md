@@ -4506,7 +4506,9 @@ a client that calls these routes reads replies as room cards by definition.
     writes "You: …" for the owner and, in a group, "<bot name>: …".
   - `unread` — cards after the owner's read position in its own thread, or
     `null` when none is known (not zero).
-  - `openQuestions` — questions asked in it that are not answered yet.
+  - `openQuestions` — questions asked in its own thread that are not answered
+    yet. Questions in the threads it started (`work`) are not counted: the
+    phone cannot answer there.
   - `work` — the work this conversation handed off: one entry per thread it
     started (a coordinator's request thread, `handoff:<id>`), the card the
     desktop draws in its place, newest first, at most 20. Absent when there
