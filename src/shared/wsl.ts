@@ -103,18 +103,29 @@ export async function resolveWslCwd(
         execFile(shell, args, { encoding: 'buffer', timeout: WSL_PROBE_TIMEOUT_MS,
           maxBuffer: 16_384, windowsHide: true, cwd: os.homedir(),
         }, (error, stdout, stderr) => {
-          if (error) reject(new Error(decodeWslOutput(stderr).trim() || error.message));
-          else resolve(stdout.toString('utf8'));
+          if (!error) { resolve(stdout.toString('utf8')); return; }
+          const text = decodeWslOutput(stderr).trim();
+          // F26 — node's own message is `Command failed: <argv>`, and argv
+          // holds WSL_CWD_PROBE, marker literal included. It is a fallback for
+          // what to SHOW, never what the miss check reads (probeStderr). A
+          // killed probe (the timeout) is unknown, not missing: say which.
+          const timedOut = (error as { killed?: boolean }).killed === true;
+          const shown = timedOut ? `wsl.exe did not answer within ${WSL_PROBE_TIMEOUT_MS / 1000}s` : text || error.message;
+          reject(Object.assign(new Error(shown), { probeStderr: timedOut ? '' : text }));
         });
       }));
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       const where = targetArgs[1] || 'the default distro';
+      // Only the probe's own stderr can say the directory is gone. An injected
+      // probe (tests, other callers) reports through its message instead.
+      const probeStderr = (error as { probeStderr?: unknown } | null)?.probeStderr;
+      const said = typeof probeStderr === 'string' ? probeStderr : detail;
       // #1305 — a gone directory is not a "check the distro and retry" failure:
       // retrying it fails identically for as long as the directory is missing,
       // which is what left a recovered pane with no way out but closing it.
       // Say so, and flag it for the caller that can offer one.
-      if (detail.includes(WSL_CWD_MISSING_MARKER)) {
+      if (said.includes(WSL_CWD_MISSING_MARKER)) {
         throw Object.assign(
           new Error(`The directory ${JSON.stringify(requested)} no longer exists in ${where}. Restore it and retry, or start fresh in your home directory.`),
           { wslCwdMissing: true },
