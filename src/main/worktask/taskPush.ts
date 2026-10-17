@@ -52,7 +52,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
-import { toWslPath } from '../../shared/imagePaste';
 import { mergeWslEnv } from '../../shared/wsl';
 import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';

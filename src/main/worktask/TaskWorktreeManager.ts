@@ -546,7 +546,13 @@ export class TaskWorktreeManager {
       const { stdout } = await this.runGit(['rev-parse', '--path-format=absolute', '--git-dir'], worktreePath);
       const dir = stdout.trim();
       if (!dir) return undefined;
-      return fs.realpathSync.native(dir);
+      try {
+        return fs.realpathSync.native(dir);
+      } catch {
+        // A repository inside a WSL distro, on a share Windows cannot resolve:
+        // the distro resolves the path itself (taskPush.ts).
+        return process.platform === 'win32' && /^\\\\wsl(?:\$|\.localhost)\\/i.test(dir) ? dir : undefined;
+      }
     } catch {
       return undefined;
     }

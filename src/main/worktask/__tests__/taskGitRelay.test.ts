@@ -84,7 +84,7 @@ describe('relay git: inside WSL', () => {
     const exec: TaskPushExec = async (_file, args, env) => {
       calls.push({ args, env });
       const prog = args[5];
-      if (prog === 'wslpath') return { code: 0, stdout: `/mnt/c/wmux${String(args[args.length - 1]).slice(root.length)}\n`, stderr: '' };
+      if (prog === 'wslpath') return { code: 0, stdout: `/mnt/c/wmux${String(args[args.length - 1]).slice(root.length).replace(/\\/g, '/')}\n`, stderr: '' };
       if (args.includes('--version')) return { code: 0, stdout: 'git version 2.50.0\n', stderr: '' };
       if (args.includes('--list')) return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@github.com/acme/app.git\0', stderr: '' };
       if (args.includes('--is-shallow-repository')) return { code: 0, stdout: 'false\n', stderr: '' };
@@ -183,9 +183,9 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     return out.join('\n');
   };
   const runFetchLine = (cmd: string) => {
-    const m = /^git fetch --no-tags --no-write-fetch-head '([^']*)' (.+)$/.exec(cmd)!;
-    const refspecs = m[2].split(' ').map((r) => r.replace(/^'(.*)'$/, '$1'));
-    git(work, 'fetch', '--no-tags', m[1], ...refspecs);
+    const m = /^git fetch --no-tags --no-write-fetch-head (['"])(.*?)\1 (.+)$/.exec(cmd)!;
+    const refspecs = m[3].split(' ').map((r) => r.replace(/^(['"])(.*)\1$/, '$2'));
+    git(work, 'fetch', '--no-tags', m[2], ...refspecs);
   };
 
   it('tree-hash invariant: push and fetch leave the recorded repository byte-identical, with objects/pack and a reflog leaf symlinked out', async () => {

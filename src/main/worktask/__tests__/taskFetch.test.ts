@@ -53,10 +53,10 @@ describe('fetchTaskRefs', () => {
   const fetchTaskRefs = (i: Parameters<typeof fetchTask>[0]) => fetchTask(i, undefined, { protocols: ['https', 'ssh', 'file'] });
   // The worker runs the returned fetch line in its own worktree.
   const runFetchLine = (cmd: string) => {
-    const m = /^git fetch --no-tags --no-write-fetch-head '([^']*)' (.+)$/.exec(cmd);
+    const m = /^git fetch --no-tags --no-write-fetch-head (['"])(.*?)\1 (.+)$/.exec(cmd);
     if (!m) throw new Error(`unexpected fetch line: ${cmd}`);
-    const refspecs = m[2].split(' ').map((r) => r.replace(/^'(.*)'$/, '$1'));
-    git(work, 'fetch', '--no-tags', m[1], ...refspecs);
+    const refspecs = m[3].split(' ').map((r) => r.replace(/^(['"])(.*)\1$/, '$2'));
+    git(work, 'fetch', '--no-tags', m[2], ...refspecs);
   };
 
   it('fetches origin\'s default branch, leaves the recorded repository untouched, and the worker\'s fetch line brings it in', async () => {
