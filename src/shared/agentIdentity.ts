@@ -159,6 +159,11 @@ export interface AgentIdentityRow {
   readonly terminalChat?: AgentTerminalChatSpec;
   /** Multi-account support; see {@link AgentAccountsKind}. */
   readonly accounts?: AgentAccountsKind;
+  /** A conversation can continue on another account-store account: its
+   *  transcript is one `<configDir>/projects/<project>/<id>.jsonl`, and the
+   *  exact resume under that account's CLAUDE_CONFIG_DIR picks the copy up
+   *  (src/daemon/continueOnAccount.ts). */
+  readonly continueOnAccount?: true;
   /** Listed in Settings -> Token usage (activeProviders). */
   readonly tokenUsage?: true;
   /** Has a model discovery source (modelCatalog). */
@@ -195,6 +200,7 @@ export const AGENT_IDENTITIES = [
     sendQueue: true,
     terminalChat: { send: true, cancel: true, images: true, queue: true },
     accounts: 'account-store',
+    continueOnAccount: true,
     tokenUsage: true,
     modelCatalog: true,
   },

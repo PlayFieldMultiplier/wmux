@@ -736,6 +736,11 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.ACCOUNT_CREDENTIAL_STATUS, args) as Promise<
         import('../main/ipc/handlers/account.handler').CredentialStatus
       >,
+    // Continue the pane's own Claude conversation on another account (same pane).
+    continuePane: (args: { ptyId: string; accountId: string }) =>
+      ipcRenderer.invoke(IPC.ACCOUNT_CONTINUE_PANE, args) as Promise<
+        import('../main/account/continueOnAccount.handler').ContinuePaneResult
+      >,
     // M2 — per-account usage (hook-gated, opt-in). usageList() pulls the current
     // cache on mount; usageRefresh(accountId) forces a manual probe (explicit
     // user action); onUsageUpdate() subscribes to per-account pushes.

@@ -25,6 +25,7 @@ import { workspaceColorHex } from '../../../shared/workspaceColors';
 import PaneActionsMenu, { PANE_ACTIONS_MENU_WIDTH, type PaneActionItem } from './PaneActionsMenu';
 import { PANE_BROWSER_PROFILE_KEY, usePaneChromeProfileMenu } from './usePaneChromeProfileMenu';
 import { usePaneBrowserPolicyMenu } from './usePaneBrowserPolicyMenu';
+import { PANE_CONTINUE_ACCOUNT_KEY, usePaneContinueOnAccount } from './usePaneContinueOnAccount';
 import BrowserPolicyDialog from './BrowserPolicyDialog';
 import {
   bindingEnforcesModel, bindingEnforcesSkipPermissions, bindingSkipPermissionsFlag, type RoleBinding,
@@ -509,7 +510,7 @@ export default function SurfaceTabs({
   >(null);
   // 'main' is the action list; 'browser-profile' its Chrome profile submenu,
   // shown in the same popover (the Moa header menu's Model/Mode idiom).
-  const [menu, setMenu] = useState<null | 'main' | 'browser-profile' | 'browser-profile-new'>(null);
+  const [menu, setMenu] = useState<null | 'main' | 'browser-profile' | 'browser-profile-new' | 'continue-account'>(null);
   const menuOpen = menu !== null;
   // Where focus was when the menu opened. The submenu remounts the popover, so
   // its own "focus on open" is a main-menu item that is gone by close time.
@@ -531,6 +532,12 @@ export default function SurfaceTabs({
   // Escape in the submenu steps back to the main menu, on the item that opened it.
   const backToMainMenu = useCallback(() => {
     setMenuFocusKey(PANE_BROWSER_PROFILE_KEY);
+    setMenu('main');
+  }, []);
+  const openContinueAccountMenu = useCallback(() => setMenu('continue-account'), []);
+  const closeContinueAccountSubmenu = useCallback(() => setMenu((m) => (m === 'continue-account' ? null : m)), []);
+  const backFromContinueAccount = useCallback(() => {
+    setMenuFocusKey(PANE_CONTINUE_ACCOUNT_KEY);
     setMenu('main');
   }, []);
 
@@ -723,11 +730,19 @@ export default function SurfaceTabs({
     openDialog: openPolicyDialog,
   });
   const reloadBrowserPolicy = browserPolicy.reload;
+  // Continue the pane's Claude conversation on another account (the hook gates itself).
+  const continueAccount = usePaneContinueOnAccount({
+    ptyId: activeSurfacePtyId,
+    allowed: !readOnly,
+    openSubmenu: openContinueAccountMenu,
+  });
+  const reloadContinueAccount = continueAccount.reload;
   useEffect(() => {
     if (menu !== 'main') return;
     reloadChromeProfiles();
     reloadBrowserPolicy();
-  }, [menu, reloadChromeProfiles, reloadBrowserPolicy]);
+    reloadContinueAccount();
+  }, [menu, reloadChromeProfiles, reloadBrowserPolicy, reloadContinueAccount]);
   // PC rail: with another computer on screen (or in its shadow workspace) a
   // new browser still opens on this one, so its label says so.
   const shadow = isShadowWorkspaceId(workspace.id);
@@ -792,6 +807,7 @@ export default function SurfaceTabs({
       icon: <IconPencil size={14} />,
       onSelect: startPaneRename,
     },
+    ...continueAccount.mainItems,
     ...(canLinkRemote ? [{
       key: 'link-remote-pane',
       label: t('a2aLink.menu'),
@@ -841,7 +857,7 @@ export default function SurfaceTabs({
   ].filter((item) => !shadow || !(HIDDEN_ON_SHADOW.has(item.key) || item.key.startsWith('snap-'))), [
     t, onSplitHorizontal, onSplitVertical, onAddBrowser, newBrowserLabel, onAddPrivateBrowser, chromeProfile.mainItems, browserPolicy.mainItems, onAddRemote,
     onSplitHorizontalRemote, onSplitVerticalRemote, startPaneRename,
-    menuTabSurface, startRename, canLinkRemote, paneMuted, togglePaneMuted,
+    menuTabSurface, startRename, canLinkRemote, paneMuted, togglePaneMuted, continueAccount.mainItems,
     stashChord, stashDisabled, stashTooltip, stashThisPane, isZoomed, toggleZoom,
     layoutTemplates, shadow,
   ]);
@@ -1210,6 +1226,7 @@ export default function SurfaceTabs({
       <UsageLimitChip
         ptyId={surfaces.find((sf) => sf.id === activeSurfaceId)?.ptyId}
         compact={usageLimitCompact}
+        readOnly={readOnly}
       />
       {supervision && (
         <span
@@ -1387,9 +1404,9 @@ export default function SurfaceTabs({
           key={menu}
           anchor={menuAnchor}
           triggerRef={overflowBtnRef}
-          items={menu === 'browser-profile' ? chromeProfile.subItems : menu === 'browser-profile-new' ? [] : menuItems}
-          onClose={menu === 'main' ? closeMenu : menu === 'browser-profile' ? closeProfileSubmenu : closeSubmenu}
-          onEscape={menu === 'main' ? undefined : menu === 'browser-profile-new' ? openBrowserProfileMenu : backToMainMenu}
+          items={menu === 'browser-profile' ? chromeProfile.subItems : menu === 'continue-account' ? continueAccount.subItems : menu === 'browser-profile-new' ? [] : menuItems}
+          onClose={menu === 'main' ? closeMenu : menu === 'browser-profile' ? closeProfileSubmenu : menu === 'continue-account' ? closeContinueAccountSubmenu : closeSubmenu}
+          onEscape={menu === 'main' ? undefined : menu === 'browser-profile-new' ? openBrowserProfileMenu : menu === 'continue-account' ? backFromContinueAccount : backToMainMenu}
           initialFocusKey={menu === 'main' ? menuFocusKey : undefined}
           restoreFocusTo={menuOpenerRef}
         >
