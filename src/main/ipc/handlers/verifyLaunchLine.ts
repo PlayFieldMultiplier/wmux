@@ -20,10 +20,12 @@
  *   - that output standing still for `quietMs`;
  *   - the daemon's word that nothing runs in the pane (`nothingRunning`: no
  *     agent, no foreground command, and a process-table read showing the
- *     shell with no child process), with the pane read once more right before
- *     the write and found unchanged since the decision. No probe lists a WSL
- *     shell's Linux children, so a WSL pane is never written to twice: its
- *     lost line is left to the launch check (launchPresenceAllowsResend).
+ *     shell with no child process); and the pane still exactly as it was in
+ *     the snapshot the decision was made on. That last check and the write
+ *     are one step in the daemon (daemon.writeIfUnchanged), so an echo or a
+ *     command-start that lands meanwhile stops the write. No probe lists a
+ *     WSL shell's Linux children, so a WSL pane is never written to twice:
+ *     its lost line is left to the launch check (launchPresenceAllowsResend).
  *
  * A prompt drawn before the write proves nothing: a shell that shows no
  * command-start (macOS /bin/bash 3.2 has no PS0) reads the line and runs it
@@ -50,13 +52,21 @@ export interface LaunchLineRead {
   sessionFound: boolean;
 }
 
+/** The pane as the decision saw it (daemon/writeIfUnchanged.ts). */
+export interface LaunchLineExpectation {
+  outputBytes: number;
+  markerCount: number;
+  lastPromptMarker: { type: string; byteOffset: number } | null;
+}
+
 export type LaunchLineOutcome = 'read' | 'resent' | 'gave-up' | 'unverified' | 'gone';
 
 export interface VerifyLaunchLineOptions {
   /** The pane's prompt events and output size; null when the read failed. */
   read: () => Promise<LaunchLineRead | null>;
-  /** Write the launch line again (the same bytes the first write sent). */
-  resend: () => boolean | void;
+  /** Write the launch line again (the same bytes the first write sent), only
+   *  if the pane still matches `expect`; resolves whether it was written. */
+  resendIfUnchanged: (expect: LaunchLineExpectation) => Promise<boolean>;
   /** True only on the daemon's positive evidence that nothing runs in the
    *  pane (daemon.getLaunchPresence `absent`); anything else is false. */
   nothingRunning: () => Promise<boolean>;
@@ -120,28 +130,23 @@ export function verifyLaunchLine(opts: VerifyLaunchLineOptions): { cancel: () =>
         }
         if (finished) return;
         if (quiet) {
-          // The daemon decided on state it read before its process walk: a
-          // launch that began meanwhile would make its `absent` stale. Read
-          // the pane again, right before writing; anything that moved since
-          // the decision means no second line.
-          const again = await safeRead();
-          if (finished) return;
-          const lastAgain = again?.events[again.events.length - 1];
-          const unchanged =
-            !!again &&
-            again.sessionFound &&
-            again.totalBytesWritten === r.totalBytesWritten &&
-            again.events.length === r.events.length &&
-            lastAgain?.type === prompt?.type &&
-            lastAgain?.byteOffset === prompt?.byteOffset &&
-            promptLineState(again.events, again.totalBytesWritten) === 'idle-at-prompt';
-          if (!unchanged) return finish('unverified');
-          resent = true;
+          // The daemon decided on state it read before its process walk, and
+          // the shell may take the first line at any moment: write only if the
+          // pane still matches the snapshot this decision started from.
+          const last = r.events[r.events.length - 1];
+          let written = false;
           try {
-            if (opts.resend() === false) return finish('gave-up');
+            written = await opts.resendIfUnchanged({
+              outputBytes: r.totalBytesWritten,
+              markerCount: r.events.length,
+              lastPromptMarker: last ? { type: last.type, byteOffset: last.byteOffset } : null,
+            });
           } catch {
-            return finish('gave-up');
+            written = false;
           }
+          if (finished) return;
+          if (!written) return finish('unverified');
+          resent = true;
         }
       }
     } else {

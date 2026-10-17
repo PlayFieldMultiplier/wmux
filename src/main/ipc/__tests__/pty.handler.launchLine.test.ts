@@ -18,7 +18,7 @@ describe('pty:create launch-line check', () => {
     const body = src.slice(at, src.indexOf('onExhausted', at));
     expect(body).toMatch(/const delivered = writeLaunchLine\(cmd\);/);
     expect(body).toMatch(/if \(delivered && verifyTaskLine && !verifying\) \{\s*verifying = true;\s*verifyLaunchLine\(\{/);
-    expect(body).toMatch(/return writeLaunchLine\(cmd\);/);
+    expect(body).toMatch(/daemonClient\.rpc\('daemon\.writeIfUnchanged', \{ sessionId, data: sanitizePtyText\(cmd\) \+ '\\r', expect \}/);
     expect(body).toMatch(/daemonClient\.rpc\('daemon\.readPromptEvents', \{ sessionId, limit: 32 \}, \{ timeoutMs: 2_000 \}\)/);
   });
 

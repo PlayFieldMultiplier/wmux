@@ -746,9 +746,13 @@ export function registerPTYHandlers(
             verifyLaunchLine({
               // A slow read is skipped, not waited on (the default RPC bound is 10 s).
               read: async () => (await daemonClient.rpc('daemon.readPromptEvents', { sessionId, limit: 32 }, { timeoutMs: 2_000 })) as LaunchLineRead,
-              resend: () => {
-                console.warn(`[pty:create] ${sessionId}: the shell never read the launch line; writing it once more`);
-                return writeLaunchLine(cmd);
+              // The same bytes the first write sent, compared and written in one
+              // daemon step (daemon/writeIfUnchanged.ts).
+              resendIfUnchanged: async (expect) => {
+                const res = (await daemonClient.rpc('daemon.writeIfUnchanged', { sessionId, data: sanitizePtyText(cmd) + '\r', expect }, { timeoutMs: 5_000 })) as { written?: unknown } | null;
+                const written = res?.written === true;
+                if (written) console.warn(`[pty:create] ${sessionId}: the shell never read the launch line; wrote it once more`);
+                return written;
               },
               // The fan-out launch check's own question, process read included:
               // only its process-table `absent` is evidence that nothing runs
