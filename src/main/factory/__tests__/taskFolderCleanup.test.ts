@@ -887,6 +887,8 @@ describe('a folder a stop kept, after 7 days', () => {
 });
 
 describe('a worktree git removed only half way', () => {
+  const keptRowOf = (id: string): LedgerEntry => row('cancelled', { id, summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000 });
+  const stoppedBy = { summary: 'stopped by owner', updatedBy: { kind: 'system' as const, workspaceId: 'ws-daemon' }, updatedAt: 49_000 };
   /** A link that is a junction on Windows and a symlink elsewhere. */
   const dirLink = (target: string, at: string): void => fs.symlinkSync(target, at, process.platform === 'win32' ? 'junction' : 'dir');
   /** What git leaves when it stops part way: the folder without its .git
@@ -1008,6 +1010,52 @@ describe('a worktree git removed only half way', () => {
     expect(await cleanTaskFolder(p, busyRow, { folder: real }, [{ id: 'daemon-1', cwd: real }])).toBe('busy');
     expect(removeDir).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('removeTreeNoFollow leaves a folder swapped for a link while it is being listed, and what the link points at', async () => {
+    const top = path.join(dir, 'swap-top');
+    const victim = path.join(top, 'victim');
+    fs.mkdirSync(victim, { recursive: true });
+    fs.writeFileSync(path.join(victim, 'a.txt'), 'x');
+    const canary = path.join(dir, 'canary4');
+    fs.mkdirSync(canary, { recursive: true });
+    fs.writeFileSync(path.join(canary, 'a.txt'), 'mine');
+    const real = fs.promises.readdir.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'readdir').mockImplementation((async (p: fs.PathLike, ...rest: unknown[]) => {
+      const out = await (real as (...a: unknown[]) => Promise<string[]>)(p, ...rest);
+      if (String(p) === victim) {
+        fs.renameSync(victim, path.join(dir, 'victim-moved'));
+        dirLink(canary, victim);
+      }
+      return out;
+    }) as never);
+    try {
+      await expect(removeTreeNoFollow(top)).rejects.toThrow(/left alone/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.readFileSync(path.join(canary, 'a.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('git unable to list its worktrees after a partial removal: the kept folder is kept again and tried later', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr, 'nolist-18181818');
+    const repoRoot = fs.realpathSync(repo);
+    const stopped = row('cancelled', { id: 'wtask-nolist-18181818', ...stoppedBy });
+    const worktrees = {
+      removeWorktree: vi.fn(async () => {
+        halfRemove(wt);
+        return { ok: false as const, error: 'removeWorktree: git worktree remove failed: Invalid argument' };
+      }),
+      restoreWorktree: vi.fn(async () => ({ ok: true as const })),
+    };
+    const p = ports({ worktrees, worktreeRegistered: async () => null, now: () => 50_000 + TASK_FOLDER_KEPT_TTL_MS }, new Map());
+    await p.store.put({
+      taskId: stopped.id, kind: 'worktree', path: wt, branch: 'wtask/nolist-18181818', state: 'kept_stopped',
+      stopped: { botId: BOT, workspaceId: 'ws-owner' }, at: 50_000,
+    });
+    expect(await cleanTaskFolder(p, keptRowOf(stopped.id), { folder: wt, branch: 'wtask/nolist-18181818' }, [], { keptTtl: true })).toBe('failed');
+    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, repoRoot });
   });
 
   it('removeTreeNoFollow unlinks a link given to it, never its target', async () => {

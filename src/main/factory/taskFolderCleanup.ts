@@ -329,31 +329,79 @@ function folderInUse(folder: string, sessions: readonly TaskFolderSession[]): bo
 /** taskId → why its folder's last removal failed (read right after it). */
 const folderFailures = new Map<string, string>();
 
+/** The real path of a folder as the OS resolves it (native: on Windows a
+ *  junction or a volume mount point resolves to its target), compared
+ *  without case on Windows and macOS. */
+async function realKey(p: string): Promise<string> {
+  const r = await fs.promises.realpath(p);
+  return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r;
+}
+
 /** Remove a folder and everything in it without ever following a link: each
  *  entry is lstat'ed; a symlink or a junction (a link to lstat on Windows) is
  *  unlinked, never entered; files go, then their folders, bottom up. A
- *  read-only file is made writable first. */
+ *  read-only file is made writable first. Before a folder is listed and
+ *  after, and before anything in it goes, the OS must resolve it to exactly
+ *  where it sits under `dir` (no link on the way, no Windows mount point,
+ *  which lstat reports as a plain folder; nothing swapped in meanwhile);
+ *  otherwise it throws and that part is left. */
 export async function removeTreeNoFollow(dir: string): Promise<void> {
-  const st = await fs.promises.lstat(dir);
+  const top = await fs.promises.lstat(dir);
+  if (top.isSymbolicLink()) {
+    await unlinkLink(dir);
+    return;
+  }
+  await removeEntry(dir, await realKey(dir), top);
+}
+
+async function unlinkLink(p: string): Promise<void> {
+  await fs.promises.unlink(p).catch(async (err: NodeJS.ErrnoException) => {
+    // A directory junction or link on Windows may need rmdir, which removes
+    // the link itself, never its target.
+    if (process.platform !== 'win32') throw err;
+    await fs.promises.rmdir(p);
+  });
+}
+
+/** One entry of removeTreeNoFollow: `expected` is the real path it must
+ *  resolve to when it is a folder. */
+async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<void> {
   if (st.isSymbolicLink()) {
-    await fs.promises.unlink(dir).catch(async (err: NodeJS.ErrnoException) => {
-      // A directory junction or link on Windows may need rmdir, which removes
-      // the link itself, never its target.
-      if (process.platform !== 'win32') throw err;
-      await fs.promises.rmdir(dir);
-    });
+    await unlinkLink(p);
     return;
   }
   if (!st.isDirectory()) {
-    await fs.promises.unlink(dir).catch(async (err: NodeJS.ErrnoException) => {
+    await fs.promises.unlink(p).catch(async (err: NodeJS.ErrnoException) => {
       if (err.code !== 'EPERM' && err.code !== 'EACCES') throw err;
-      await fs.promises.chmod(dir, 0o666);
-      await fs.promises.unlink(dir);
+      await fs.promises.chmod(p, 0o666);
+      await fs.promises.unlink(p);
     });
     return;
   }
-  for (const name of await fs.promises.readdir(dir)) await removeTreeNoFollow(path.join(dir, name));
-  await fs.promises.rmdir(dir);
+  const where = async (): Promise<void> => {
+    const now = await fs.promises.lstat(p);
+    if (!now.isDirectory() || now.isSymbolicLink() || now.ino !== st.ino || now.dev !== st.dev || (await realKey(p)) !== expected) {
+      throw new Error(`${p} is not the folder it was (a link, a mount point or a swap): left alone`);
+    }
+  };
+  await where();
+  const names = await fs.promises.readdir(p);
+  await where();
+  for (const name of names) {
+    const child = path.join(p, name);
+    let cst: fs.Stats;
+    try {
+      cst = await fs.promises.lstat(child);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    // The folder it sits in is still this one, right before it goes.
+    await where();
+    await removeEntry(child, path.join(expected, process.platform === 'win32' || process.platform === 'darwin' ? name.toLowerCase() : name), cst);
+  }
+  await where();
+  await fs.promises.rmdir(p);
 }
 
 /** Whether git has `folder` as a working tree of `repoRoot` now
@@ -569,13 +617,17 @@ async function cleanTaskFolderNow(
    *  following a link. The branch stays. null: not such a folder. */
   const finishUnregistered = async (rec: { repoRoot: string; repoHash?: string; head?: string; keepRef?: string }): Promise<TaskFolderOutcome | null> => {
     if (exists(path.join(mission.folder, '.git'))) return null;
-    const registered = await (ports.worktreeRegistered ?? gitWorktreeRegistered)(rec.repoRoot, mission.folder).catch(() => null);
-    if (registered === null) return fail('its repository could not be read');
-    if (registered) return null;
     const learned = {
       repoRoot: rec.repoRoot, ...(rec.repoHash ? { repoHash: rec.repoHash } : {}), ...(rec.head ? { head: rec.head } : {}),
       ...(rec.keepRef ? { keepRef: rec.keepRef } : {}), ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
     };
+    const registered = await (ports.worktreeRegistered ?? gitWorktreeRegistered)(rec.repoRoot, mission.folder).catch(() => null);
+    if (registered === null) {
+      // Kept as it was, so a later pass asks git again.
+      await keepAgain(learned);
+      return fail('its repository could not be read');
+    }
+    if (registered) return null;
     try {
       await ports.store.put({ taskId: entry.id, kind, path: mission.folder, ...learned, ...stoppedMark, state: 'removing', at: keptAt ?? now() });
       await (ports.removeDir ?? removeTreeNoFollow)(mission.folder);
