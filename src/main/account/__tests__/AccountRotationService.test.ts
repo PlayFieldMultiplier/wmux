@@ -10,7 +10,9 @@ import type { RolloutLimits } from '../../quota/codexRollout';
 const NOW = Date.parse('2026-10-02T12:00:00Z');
 const RESET_SEC = Math.floor((NOW + 3 * 3600_000) / 1000);
 
-const acct = (id: string, vendor: 'claude' | 'codex'): Account => ({ id, name: id, vendor, configDir: `/acc/${id}`, createdAt: 0 });
+const acct = (id: string, vendor: 'claude' | 'codex', group?: string): Account => ({
+  id, name: id, vendor, configDir: `/acc/${id}`, createdAt: 0, ...(group ? { group } : {}),
+});
 
 function usage(id: string, sessionPct: number, fetchedAtMs = NOW): AccountUsageEntry {
   return {
@@ -145,6 +147,26 @@ describe('AccountRotationService', () => {
     codex[path.join('/acc/x', 'sessions')] = limits(100);
     codex[path.join('/acc/y', 'sessions')] = limits(99);
     expect(await s.prepareLaunch('codex', 'ws')).toEqual({ kind: 'hold', availableAtMs: NOW + 3600_000 });
+  });
+
+  it('rotates only inside the bound account\'s group', async () => {
+    const s = make([acct('w1', 'claude', 'work'), acct('p1', 'claude', 'personal'), acct('w2', 'claude', 'work'), acct('u1', 'claude')]);
+    await s.setEnabled('claude', true);
+    bindings['ws:claude'] = 'w1';
+    usageEntries = [usage('w1', 99), usage('p1', 5), usage('w2', 60), usage('u1', 5)];
+    expect(await s.prepareLaunch('claude', 'ws')).toEqual({ kind: 'switch', accountId: 'w2', env: { CLAUDE_CONFIG_DIR: '/acc/w2' } });
+    // Ungrouped accounts are one pool of their own, never a fallback for a group.
+    bindings['ws2:claude'] = 'u1';
+    usageEntries = [usage('w1', 5), usage('p1', 5), usage('w2', 5), usage('u1', 99)];
+    expect(await s.prepareLaunch('claude', 'ws2')).toMatchObject({ kind: 'hold' });
+  });
+
+  it('holds when the whole group is out instead of crossing into another group', async () => {
+    const s = make([acct('w1', 'claude', 'work'), acct('w2', 'claude', 'work'), acct('p1', 'claude', 'personal')]);
+    await s.setEnabled('claude', true);
+    bindings['ws:claude'] = 'w1';
+    usageEntries = [usage('w1', 100), usage('w2', 99), usage('p1', 0)];
+    expect(await s.prepareLaunch('claude', 'ws')).toEqual({ kind: 'hold', availableAtMs: RESET_SEC * 1000, grouped: true });
   });
 
   it('switches a Codex pane via CODEX_HOME', async () => {

@@ -4,6 +4,7 @@ import { IconChevron } from '../icons';
 import { useT } from '../../hooks/useT';
 import type { Account } from '../../../main/account/accountStore';
 import type { CredentialStatus } from '../../../main/ipc/handlers/account.handler';
+import { accountGroupOf, groupAccounts } from '../../../shared/accountGroup';
 
 type Vendor = 'claude' | 'codex';
 type AccountRow = Account & { status: CredentialStatus };
@@ -63,6 +64,11 @@ export default function WorkspaceAccountMenu({
         const vendorRows = rows.filter((r) => r.vendor === vendor);
         if (vendorRows.length === 0) return null;
         const boundId = bindings[vendor];
+        // Group sections once any account has a group; a pick outside the bound
+        // account's group is allowed and says so.
+        const buckets = groupAccounts(vendorRows);
+        const sectioned = buckets.some((b) => b.group !== '');
+        const bound = vendorRows.find((r) => r.id === boundId);
         return (
           <div
             key={vendor}
@@ -96,7 +102,13 @@ export default function WorkspaceAccountMenu({
                   <span className="w-3 text-[var(--accent-amber)]">{!boundId ? '●' : ''}</span>
                   <span className="text-[var(--text-muted)]">{t('accounts.defaultAccount')}</span>
                 </button>
-                {vendorRows.map((r) => (
+                {buckets.map(({ group, accounts }) => [
+                  sectioned && (
+                    <div key={`group:${group}`} className="px-3 pt-1.5 pb-0.5 text-[10px] text-[var(--text-muted)] truncate" data-account-menu-group={group}>
+                      {group || t('accounts.noGroup')}
+                    </div>
+                  ),
+                  ...accounts.map((r) => (
                   <button
                     key={r.id}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
@@ -108,6 +120,9 @@ export default function WorkspaceAccountMenu({
                   >
                     <span className="w-3 text-[var(--accent-amber)]">{boundId === r.id ? '●' : ''}</span>
                     <span className="truncate flex-1">{r.name}</span>
+                    {bound && accountGroupOf(r) !== accountGroupOf(bound) && (
+                      <span className="text-[10px] text-[var(--text-muted)] shrink-0">{t('accounts.differentGroup')}</span>
+                    )}
                     {!r.status.loggedIn && (
                       <span className="text-[10px] text-[var(--accent-red)] shrink-0">{t('accounts.loggedOut')}</span>
                     )}
@@ -115,7 +130,8 @@ export default function WorkspaceAccountMenu({
                       <span className="text-[10px] text-[var(--text-subtle)] shrink-0">{r.status.subscriptionType}</span>
                     )}
                   </button>
-                ))}
+                  )),
+                ])}
                 <div className="px-3 pt-1 mt-1 border-t border-[var(--bg-overlay)] text-[10px] text-[var(--text-muted)] leading-snug">
                   {t('accounts.newTerminalsNote')}
                 </div>

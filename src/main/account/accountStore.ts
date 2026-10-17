@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicReadJSONSync, atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import type { AgentSlug } from '../../shared/agentIdentity';
+import { normalizeAccountGroup } from '../../shared/accountGroup';
 
 // TODO(#1904): the registry rows with `accounts: 'account-store'`. Not derived
 // yet: the store's config-dir handling (CLAUDE_CONFIG_DIR / CODEX_HOME) is
@@ -42,6 +43,9 @@ export interface Account {
    *  CODEX_HOME target). Physical identity — resolved at registration. */
   configDir: string;
   createdAt: number;
+  /** Account group ("work", "personal"); absent = ungrouped. Automatic picks
+   *  never leave the bound account's group (src/shared/accountGroup.ts). */
+  group?: string;
 }
 
 /** Per-workspace, per-vendor account binding. A workspace may bind one claude
@@ -120,12 +124,15 @@ function sanitizeAccount(raw: unknown): Account | null {
   if (typeof o.name !== 'string' || !o.name.trim()) return null;
   if (!isVendor(o.vendor)) return null;
   if (typeof o.configDir !== 'string' || !o.configDir) return null;
+  // An invalid group reads as ungrouped; the key is only written when set.
+  const group = normalizeAccountGroup(o.group);
   return {
     id: o.id,
     name: o.name.slice(0, MAX_NAME_CHARS),
     vendor: o.vendor,
     configDir: o.configDir,
     createdAt: typeof o.createdAt === 'number' ? o.createdAt : 0,
+    ...(group ? { group } : {}),
   };
 }
 
@@ -339,6 +346,18 @@ export class AccountStore {
       const account = file.accounts.find((a) => a.id === id);
       if (!account) throw new AccountError('not-found', `account not found: ${id}`);
       account.name = trimmed.slice(0, MAX_NAME_CHARS);
+    });
+  }
+
+  /** Put an account in a group; '' (or only spaces) makes it ungrouped. */
+  async setAccountGroup(id: string, group: string): Promise<void> {
+    const normalized = normalizeAccountGroup(group);
+    if (normalized === null) throw new AccountError('invalid', 'invalid group name');
+    await this.mutate((file) => {
+      const account = file.accounts.find((a) => a.id === id);
+      if (!account) throw new AccountError('not-found', `account not found: ${id}`);
+      if (normalized) account.group = normalized;
+      else delete account.group;
     });
   }
 

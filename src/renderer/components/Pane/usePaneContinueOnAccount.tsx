@@ -13,6 +13,7 @@ import { useDaemonModeActive } from '../../hooks/useDaemonMode';
 import { IconUsers } from '../icons';
 import type { PaneActionItem } from './PaneActionsMenu';
 import { agentRow } from '../../../shared/agentIdentity';
+import { accountGroupOf, groupAccounts } from '../../../shared/accountGroup';
 
 /** Key of the main-menu item that opens the account submenu. */
 export const PANE_CONTINUE_ACCOUNT_KEY = 'continue-on-account';
@@ -38,6 +39,10 @@ export function usePaneContinueOnAccount(opts: {
   ptyId: string | undefined;
   /** False for a read-only mirror, whose ptyIds are not this main's panes. */
   allowed: boolean;
+  /** The pane's workspace: its bound Claude account's group is the one an
+   *  account outside it is marked against (the pane itself may run on a
+   *  rotated account of that group). */
+  workspaceId?: string;
   /** Switch the open menu to the account submenu (pane menu only). */
   openSubmenu?: () => void;
 }): {
@@ -46,11 +51,13 @@ export function usePaneContinueOnAccount(opts: {
   mainItems: PaneActionItem[];
   subItems: PaneActionItem[];
 } {
-  const { ptyId, allowed, openSubmenu } = opts;
+  const { ptyId, allowed, openSubmenu, workspaceId } = opts;
   const t = useT();
   const daemon = useDaemonModeActive();
   const isClaude = useStore((s) => (ptyId ? !!agentRow(s.surfaceAgent[ptyId]?.slug)?.continueOnAccount : false));
-  const [accounts, setAccounts] = useState<{ id: string; name: string }[]>([]);
+  const [accounts, setAccounts] = useState<{ id: string; name: string; group?: string }[]>([]);
+  /** The bound account's group; null when the workspace binds none. */
+  const [boundGroup, setBoundGroup] = useState<string | null>(null);
   const ready = allowed && daemon && isClaude && !!ptyId && !!window.electronAPI?.accounts?.continuePane;
 
   // Fetched when a menu opens, not per pane mount.
@@ -58,9 +65,12 @@ export function usePaneContinueOnAccount(opts: {
     const api = window.electronAPI?.accounts;
     if (!api || !ready) return;
     void api.list().then((res) => {
-      setAccounts(res.accounts.filter((a) => agentRow(a.vendor)?.continueOnAccount).map((a) => ({ id: a.id, name: a.name })));
+      const rows = res.accounts.filter((a) => agentRow(a.vendor)?.continueOnAccount);
+      setAccounts(groupAccounts(rows).flatMap((b) => b.accounts).map((a) => ({ id: a.id, name: a.name, group: a.group })));
+      const bound = workspaceId ? rows.find((a) => a.id === res.bindings[workspaceId]?.claude) : undefined;
+      setBoundGroup(bound ? accountGroupOf(bound) : null);
     }).catch(() => { /* menu keeps the last rows */ });
-  }, [ready]);
+  }, [ready, workspaceId]);
 
   const continueOn = useCallback(async (account: { id: string; name: string }) => {
     const api = window.electronAPI?.accounts;
@@ -88,11 +98,24 @@ export function usePaneContinueOnAccount(opts: {
     onSelect: openSubmenu,
   }] : []), [enabled, openSubmenu, t]);
 
-  const subItems: PaneActionItem[] = useMemo(() => accounts.map((account) => ({
-    key: `continue-account:${account.id}`,
-    label: t('pane.continueOnAccountNamed', { name: account.name }),
-    onSelect: () => { void continueOn(account); },
-  })), [accounts, continueOn, t]);
+  // Group sections once any account has a group: a divider between groups,
+  // the group under each name, and a note on a group other than the bound one.
+  const subItems: PaneActionItem[] = useMemo(() => {
+    const sectioned = accounts.some((a) => accountGroupOf(a) !== '');
+    return accounts.map((account, i) => {
+      const group = accountGroupOf(account);
+      const other = boundGroup !== null && group !== boundGroup;
+      return {
+        key: `continue-account:${account.id}`,
+        label: t('pane.continueOnAccountNamed', { name: account.name }),
+        onSelect: () => { void continueOn(account); },
+        ...(sectioned ? {
+          detail: [group || t('accounts.noGroup'), other ? t('accounts.differentGroup') : ''].filter(Boolean).join(' · '),
+          separatorBefore: i > 0 && accountGroupOf(accounts[i - 1]) !== group,
+        } : {}),
+      };
+    });
+  }, [accounts, boundGroup, continueOn, t]);
 
   return { enabled, reload, mainItems, subItems };
 }

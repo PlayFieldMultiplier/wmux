@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import type { Account } from '../../../main/account/accountStore';
 import type { CredentialStatus } from '../../../main/ipc/handlers/account.handler';
 import type { AccountUsageEntry } from '../../../main/account/AccountUsageService';
+import { accountGroupOf, groupAccounts, MAX_ACCOUNT_GROUP_CHARS } from '../../../shared/accountGroup';
 import { t } from '../../i18n';
 import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
@@ -11,6 +12,7 @@ import Button from '../ui/Button';
 import Checkbox from '../ui/Checkbox';
 import Input from '../ui/Input';
 import SegmentedControl from '../ui/SegmentedControl';
+import Select from '../ui/Select';
 import { SettingsSection } from './SettingsLayout';
 import { AccountRotationControls, RotationQuotaBit, useAccountRotation } from './AccountRotationControls';
 import {
@@ -173,6 +175,55 @@ function PendingLoginRow({ entry }: { entry: PendingLogin }): React.ReactElement
   );
 }
 
+/** The picker option that swaps it for a name field; a group name cannot hold a control character. */
+const NEW_GROUP = '\u0000new';
+
+/** One account's group: an existing group, none, or a new name typed in place. */
+function GroupPicker({ account, groups, onSet }: {
+  account: AccountRow;
+  groups: string[];
+  onSet: (group: string) => void;
+}): React.ReactElement {
+  const t = useT();
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState('');
+  const label = t('accounts.groupFor', { name: account.name });
+  if (typing) {
+    const commit = () => {
+      setTyping(false);
+      if (draft.trim()) onSet(draft.trim());
+    };
+    return (
+      <Input
+        className="settings-input shrink-0 w-[140px]"
+        aria-label={label}
+        placeholder={t('accounts.groupPlaceholder')}
+        maxLength={MAX_ACCOUNT_GROUP_CHARS}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setTyping(false); }}
+        onBlur={commit}
+        autoFocus
+      />
+    );
+  }
+  return (
+    <Select
+      className="settings-select shrink-0"
+      aria-label={label}
+      data-account-group-picker={account.id}
+      value={accountGroupOf(account)}
+      onChange={(e) => {
+        if (e.target.value === NEW_GROUP) { setDraft(''); setTyping(true); } else onSet(e.target.value);
+      }}
+    >
+      <option value="">{t('accounts.noGroup')}</option>
+      {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+      <option value={NEW_GROUP}>{t('accounts.newGroup')}</option>
+    </Select>
+  );
+}
+
 function AddAccountWizard({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }): React.ReactElement {
   const t = useT();
   const [vendor, setVendor] = useState<Vendor>('claude');
@@ -320,17 +371,33 @@ export function AccountsSection(): React.ReactElement | null {
     }
     setEditingId(null);
   };
+  const setGroup = (id: string, group: string) => {
+    const api = window.electronAPI?.accounts;
+    if (api?.setGroup) void api.setGroup({ id, group }).then(reload).catch(() => { /* useIpc surfaces the error */ });
+  };
+  // Rows in group order; each group gets a heading once any account has one,
+  // so a registry with no groups looks as it always did.
+  const buckets = groupAccounts(rows);
+  const groupNames = buckets.map((b) => b.group).filter(Boolean);
+  const orderedRows = buckets.flatMap((b) => b.accounts);
+  const groupLabel = (i: number) => {
+    const group = accountGroupOf(orderedRows[i]);
+    if (groupNames.length === 0 || (i > 0 && accountGroupOf(orderedRows[i - 1]) === group)) return null;
+    return <p key={`group:${group}`} className="settings-note" data-account-group={group}>{group || t('accounts.noGroup')}</p>;
+  };
 
   return (
     // No heading: the Accounts page title already names this, its only group.
     <SettingsSection id="claudeacct">
       <p className="settings-note">{t('accounts.intro')}</p>
       <AccountRotationControls state={rotation.state} reload={rotation.reload} />
+      <p className="settings-note">{t('accounts.groupsDesc')}</p>
       {removeNotice && <p className="settings-note">{removeNotice}</p>}
       {loaded && rows.length === 0 && !adding && (
         <p className="settings-note">{t('accounts.empty')}</p>
       )}
-      {rows.map((r) => (
+      {orderedRows.map((r, i) => [
+        groupLabel(i),
         <div key={r.id} className="ui-row" data-account-row={r.id}>
           <Badge className="shrink-0">{r.vendor}</Badge>
           {editingId === r.id ? (
@@ -352,6 +419,7 @@ export function AccountsSection(): React.ReactElement | null {
               {r.name}
             </button>
           )}
+          <GroupPicker account={r} groups={groupNames} onSet={(group) => setGroup(r.id, group)} />
           {statusBadge(r.status)}
           {(!r.status.loggedIn || usage.get(r.id)?.status === 'unauthorized')
             && !pending.some((p) => p.configDir === r.configDir) && (
@@ -393,8 +461,8 @@ export function AccountsSection(): React.ReactElement | null {
               <IconX size={12} />
             </Button>
           )}
-        </div>
-      ))}
+        </div>,
+      ])}
       {pending.map((p) => <PendingLoginRow key={p.configDir} entry={p} />)}
       {adding ? (
         <AddAccountWizard onDone={() => { setAdding(false); reload(); }} onCancel={() => setAdding(false)} />

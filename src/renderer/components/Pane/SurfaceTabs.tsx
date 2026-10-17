@@ -734,6 +734,7 @@ export default function SurfaceTabs({
   const continueAccount = usePaneContinueOnAccount({
     ptyId: activeSurfacePtyId,
     allowed: !readOnly,
+    workspaceId: workspace.id,
     openSubmenu: openContinueAccountMenu,
   });
   const reloadContinueAccount = continueAccount.reload;
@@ -1227,6 +1228,7 @@ export default function SurfaceTabs({
         ptyId={surfaces.find((sf) => sf.id === activeSurfaceId)?.ptyId}
         compact={usageLimitCompact}
         readOnly={readOnly}
+        workspaceId={workspace.id}
       />
       {supervision && (
         <span
