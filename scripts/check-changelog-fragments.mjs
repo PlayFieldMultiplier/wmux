@@ -41,12 +41,20 @@ const flatten = (text) => text.replace(/\s+/g, ' ').trim();
 // The `(#684)` / `(#2248, refs #1950)` citation that closes an entry.
 const CITATION = /\(([^()]*#\d+[^()]*)\)\.?$/;
 
+// A Markdown code span: a run of backticks closed by a run of the same length,
+// so ``a `b` c`` is one span.
+const CODE_SPAN = /(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+
 /** Lowercase everything but code spans: `PATH` and `path` are different code. */
-const foldCase = (text) =>
-  text
-    .split(/(`[^`]*`)/)
-    .map((part, i) => (i % 2 ? part : part.toLowerCase()))
-    .join('');
+function foldCase(text) {
+  let out = '';
+  let at = 0;
+  for (const m of text.matchAll(CODE_SPAN)) {
+    out += text.slice(at, m.index).toLowerCase() + m[0];
+    at = m.index + m[0].length;
+  }
+  return out + text.slice(at).toLowerCase();
+}
 
 /** What two entries must share to count as the same note, PR citation aside. */
 const entryKey = (flat) => foldCase(flat.replace(/^-\s*/, '').replace(CITATION, '').trim());
@@ -128,7 +136,7 @@ export function checkFragments(files, { history = referencedNumbers() } = {}) {
       }
 
       // A quoted "see below" is a mention of the phrase, not a reference.
-      const prose = flat.replace(/`[^`]*`|"[^"]*"|“[^”]*”/g, '');
+      const prose = flat.replace(new RegExp(`${CODE_SPAN.source}|"[^"]*"|“[^”]*”`, 'g'), '');
       for (const m of prose.matchAll(/\bsee (below|above)\b/gi)) {
         const below = m[1].toLowerCase() === 'below';
         if (below ? i === ordered.length - 1 : i === 0) {
@@ -148,7 +156,7 @@ export function checkFragments(files, { history = referencedNumbers() } = {}) {
 
       // `2**31` inside a code span is not the end of the bold claim. The mask
       // keeps every offset, so the claim itself is cut from the real text.
-      const bold = /^- \*\*(.+?)\*\*/.exec(flat.replace(/`[^`]*`/g, (code) => 'x'.repeat(code.length)));
+      const bold = /^- \*\*(.+?)\*\*/.exec(flat.replace(CODE_SPAN, (code) => 'x'.repeat(code.length)));
       if (!bold) {
         report(file, entry.line, 'warning', 'bold-claim', 'entry should open with a "**Short bold claim.**"');
       } else {
