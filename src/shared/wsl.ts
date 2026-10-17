@@ -110,7 +110,7 @@ export async function resolveWslCwd(
           // what to SHOW, never what the miss check reads (probeStderr). A
           // killed probe (the timeout) is unknown, not missing: say which.
           const timedOut = (error as { killed?: boolean }).killed === true;
-          const shown = timedOut ? `wsl.exe did not answer within ${WSL_PROBE_TIMEOUT_MS / 1000}s` : text || error.message;
+          const shown = timedOut ? `wsl.exe did not answer within ${WSL_PROBE_TIMEOUT_MS / 1000}s` : text || silentFailure(error);
           reject(Object.assign(new Error(shown), { probeStderr: timedOut ? '' : text }));
         });
       }));
@@ -143,6 +143,16 @@ export async function resolveWslCwd(
   if (!probe) inFlight.set(key, operation);
   try { return await operation; }
   finally { if (inFlight.get(key) === operation) inFlight.delete(key); }
+}
+
+/** What to show for a probe that failed with nothing on stderr. Never node's
+ *  `Command failed: <argv>`: argv is the whole probe script, which then lands
+ *  on the owner's card and in a bot's reason. A spawn error (ENOENT) keeps
+ *  its own short message. */
+function silentFailure(error: Error & { code?: unknown; signal?: unknown }): string {
+  if (typeof error.code === 'number') return `wsl.exe exited with code ${error.code}`;
+  if (typeof error.signal === 'string' && error.signal) return `wsl.exe was stopped by ${error.signal}`;
+  return error.message.startsWith('Command failed') ? 'wsl.exe failed without a message' : error.message;
 }
 
 /** Preserve Linux paths through daemon restart; Windows stat cannot test them. */

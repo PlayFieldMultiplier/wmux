@@ -114,7 +114,26 @@ describe('a missing working directory', () => {
 
     const error = await caught;
     expect(isWslCwdMissingError(error)).toBe(false);
+    expect((error as Error).message).toContain('wsl.exe exited with code 1');
     expect((error as Error).message).toContain('Check the distro and directory, then retry');
+  });
+
+  // What is shown reaches the owner's card and a bot's reason: node's
+  // `Command failed: <argv>` would put the whole probe script there.
+  it.each([
+    ['an exit code', { killed: false, code: 1 }, 'wsl.exe exited with code 1'],
+    ['a signal', { killed: false, code: null, signal: 'SIGKILL' }, 'wsl.exe was stopped by SIGKILL'],
+    ['neither', { killed: false, code: null }, 'wsl.exe failed without a message'],
+    ['the timeout', { killed: true, code: null, signal: 'SIGTERM' }, 'did not answer within'],
+  ])('never shows the probe script for a silent failure with %s', async (_label, extra, expected) => {
+    const caught = resolveWslCwd('wsl.exe', 'C:\\work\\task').catch((error: Error) => error.message);
+    respond(0, Buffer.alloc(0), Buffer.alloc(0), commandFailed(extra));
+
+    const message = await caught;
+    expect(message).toContain(expected);
+    expect(message).not.toContain('Command failed');
+    expect(message).not.toContain(WSL_CWD_MISSING_MARKER);
+    expect(message).not.toContain('set -eu');
   });
 
   it('is still concluded from the probe\'s own report on a real exit', async () => {
