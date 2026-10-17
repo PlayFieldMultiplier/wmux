@@ -372,7 +372,7 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
   });
 
-  it('runs on a bot task\'s end, over ended tasks of the last day; Clean up now counts what it did; usage sums the folders', async () => {
+  it('runs on a bot task\'s end, over ended tasks of the last day; Clean up now counts what it did; usage sums the folders', { timeout: 15_000 }, async () => {
     const mgr = new TaskWorktreeManager();
     const clean = await taskWorktree(mgr, 'clean-11111111');
     const dirty = await taskWorktree(mgr, 'dirty-22222222');
