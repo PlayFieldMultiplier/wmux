@@ -19,6 +19,7 @@ vi.mock('os', async (orig) => {
 
 import { launchQuick } from '../index';
 import type { FanOutService } from '../../worktask/FanOutService';
+import { SPAWN_TIMEOUT_MS } from '../../worktask/createFanOutService';
 
 const ws = { id: 'ws-1', name: 'Repo', cwd: '/repo' };
 const deps = { getMainWindow: () => null, fanOutService: {} as FanOutService };
@@ -62,6 +63,15 @@ describe('launchQuick', () => {
     // on POSIX, `Get-Content -LiteralPath '…'` in PowerShell on Windows.
     const file = /(?:cat|-LiteralPath) '([^']+)'/.exec(params.initialCommand)?.[1];
     expect(file && fs.readFileSync(file, 'utf8')).toBe('fix it');
+  });
+
+  it('waits for the current checkout as long as a fan-out spawn does, covering a slow WSL start', async () => {
+    await launchQuick({ prompt: 'fix it', workspaceId: 'ws-1', agent: { kind: 'default' }, checkout: 'current' }, deps);
+    const [, method, , opts] = h.sendToRenderer.mock.calls[1];
+    expect(method).toBe('fanout.spawnWorkspace');
+    // The old fixed 30 s gave up on WSL panes still starting, and the pane
+    // then ran its agent unseen after the person was told it failed.
+    expect(opts.timeoutMs).toBeGreaterThanOrEqual(SPAWN_TIMEOUT_MS);
   });
 
   it('refuses a workspace without a folder', async () => {

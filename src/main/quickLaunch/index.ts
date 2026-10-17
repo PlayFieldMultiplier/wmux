@@ -38,6 +38,7 @@ import {
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { startGuiFanOut } from '../ipc/handlers/fanout.handler';
 import { workerLaunchCommand, type FanOutService } from '../worktask/FanOutService';
+import { spawnTaskWorkspace } from '../worktask/createFanOutService';
 import { readQuickLaunchConfig, writeQuickLaunchConfig } from './config';
 import { QuickLaunchHotkey } from './hotkey';
 import { destroyQuickLaunch, fitQuickLaunch, hideQuickLaunch, prepareQuickLaunch, quickLaunchWindow, setQuickLaunchQuitting, toggleQuickLaunch } from './window';
@@ -140,9 +141,11 @@ export async function launchQuick(
   const launch = workerLaunchCommand('claude', promptPath);
   const env = firstRunEnvForAgent(agentChoice?.agent ?? 'claude');
   try {
-    const spawned = (await sendToRenderer(
+    // The fan-out's spawn budget (it covers a slow WSL start), and a pane that
+    // still comes up after the give-up is closed: the person was told it
+    // failed, so no agent may go on running unseen in their own checkout.
+    const spawned = (await spawnTaskWorkspace(
       deps.getMainWindow,
-      'fanout.spawnWorkspace',
       {
         name: `quick: ${title.slice(0, 32)}`,
         cwd: ws.cwd,
@@ -155,7 +158,6 @@ export async function launchQuick(
         nestUnder: ws.id,
         fanoutOrigin: { kind: 'gui' },
       },
-      { timeoutMs: 30_000 },
     )) as { error?: string } | null;
     if (spawned && typeof spawned.error === 'string') return { ok: false, error: spawned.error };
   } catch (err) {
