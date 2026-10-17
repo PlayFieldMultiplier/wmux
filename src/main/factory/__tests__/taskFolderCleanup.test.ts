@@ -1058,6 +1058,22 @@ describe('a worktree git removed only half way', () => {
     expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, repoRoot });
   });
 
+  it('removeTreeNoFollow with a root refuses a folder that resolves elsewhere (a link or mount point at or above it)', async () => {
+    const root = path.join(dir, 'root5');
+    const elsewhere = path.join(dir, 'elsewhere5', 'task');
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, 'keep.txt'), 'mine');
+    fs.mkdirSync(root, { recursive: true });
+    dirLink(path.dirname(elsewhere), path.join(root, 'h'));
+    await expect(removeTreeNoFollow(path.join(root, 'h', 'task'), root)).rejects.toThrow(/left alone/);
+    await expect(removeTreeNoFollow(elsewhere, root)).rejects.toThrow(/not inside/);
+    expect(fs.readFileSync(path.join(elsewhere, 'keep.txt'), 'utf8')).toBe('mine');
+    // Where it sits: removed.
+    fs.mkdirSync(path.join(root, 'real', 'task', 'sub'), { recursive: true });
+    await removeTreeNoFollow(path.join(root, 'real', 'task'), root);
+    expect(fs.existsSync(path.join(root, 'real', 'task'))).toBe(false);
+  });
+
   it('removeTreeNoFollow unlinks a link given to it, never its target', async () => {
     const canary = path.join(dir, 'canary3');
     fs.mkdirSync(canary, { recursive: true });

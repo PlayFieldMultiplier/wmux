@@ -333,8 +333,11 @@ const folderFailures = new Map<string, string>();
  *  junction or a volume mount point resolves to its target), compared
  *  without case on Windows and macOS. */
 async function realKey(p: string): Promise<string> {
-  const r = await fs.promises.realpath(p);
-  return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r;
+  return foldCase(await fs.promises.realpath(p));
+}
+
+function foldCase(p: string): string {
+  return process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p;
 }
 
 /** Remove a folder and everything in it without ever following a link: each
@@ -344,14 +347,27 @@ async function realKey(p: string): Promise<string> {
  *  after, and before anything in it goes, the OS must resolve it to exactly
  *  where it sits under `dir` (no link on the way, no Windows mount point,
  *  which lstat reports as a plain folder; nothing swapped in meanwhile);
- *  otherwise it throws and that part is left. */
-export async function removeTreeNoFollow(dir: string): Promise<void> {
+ *  otherwise it throws and that part is left. With `root`, `dir` itself
+ *  must resolve to where it sits under the root's real path (a mount point
+ *  or a link at `dir` or above it, below the root, is refused). A swap
+ *  racing between a check and the removal it guards is not ruled out (Node
+ *  has no openat); it needs another process changing the folder while
+ *  nothing of wmux runs in it. */
+export async function removeTreeNoFollow(dir: string, root?: string): Promise<void> {
   const top = await fs.promises.lstat(dir);
   if (top.isSymbolicLink()) {
     await unlinkLink(dir);
     return;
   }
-  await removeEntry(dir, await realKey(dir), top);
+  let expected: string;
+  if (root !== undefined) {
+    const rel = path.relative(path.resolve(root), path.resolve(dir));
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`${dir} is not inside ${root}: left alone`);
+    expected = path.join(await realKey(root), foldCase(rel));
+  } else {
+    expected = await realKey(dir);
+  }
+  await removeEntry(dir, expected, top);
 }
 
 async function unlinkLink(p: string): Promise<void> {
@@ -398,7 +414,7 @@ async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<v
     }
     // The folder it sits in is still this one, right before it goes.
     await where();
-    await removeEntry(child, path.join(expected, process.platform === 'win32' || process.platform === 'darwin' ? name.toLowerCase() : name), cst);
+    await removeEntry(child, path.join(expected, foldCase(name)), cst);
   }
   await where();
   await fs.promises.rmdir(p);
@@ -600,7 +616,7 @@ async function cleanTaskFolderNow(
     try {
       if (!fs.lstatSync(mission.folder).isDirectory()) return 'skipped';
       await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', ...stoppedMark, at: keptAt ?? now() });
-      await (ports.removeDir ?? removeTreeNoFollow)(mission.folder);
+      await (ports.removeDir ?? ((d: string) => removeTreeNoFollow(d, root)))(mission.folder);
     } catch (err) {
       if (fs.existsSync(mission.folder)) await keepAgain();
       return fail(String(err));
@@ -630,7 +646,7 @@ async function cleanTaskFolderNow(
     if (registered) return null;
     try {
       await ports.store.put({ taskId: entry.id, kind, path: mission.folder, ...learned, ...stoppedMark, state: 'removing', at: keptAt ?? now() });
-      await (ports.removeDir ?? removeTreeNoFollow)(mission.folder);
+      await (ports.removeDir ?? ((d: string) => removeTreeNoFollow(d, root)))(mission.folder);
     } catch (err) {
       if (exists(mission.folder)) await keepAgain(learned);
       return fail(`git left the folder half removed, and finishing it failed: ${String(err)}`);
