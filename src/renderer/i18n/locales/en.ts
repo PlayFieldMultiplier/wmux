@@ -2084,6 +2084,7 @@ export const en = {
   'settings.factory.taskFolders.unknown': "Not available while the bots are not running",
   'settings.factory.taskFolders.clean': "Clean up now",
   'settings.factory.taskFolders.cleaned': "Removed {removed}. Kept {kept} with uncommitted changes and {busy} still in use.",
+  'settings.factory.taskFolders.notRemoved': "Not removed: {list}",
   'settings.factory.taskFolders.cleanFailed': "Could not clean up: {message}",
   'settings.factory.phoneBotAuto': "Automatic (the Coordinator, else the HQ room's first bot)",
   'settings.factory.keys': "Keys",

@@ -42,6 +42,14 @@
 //     stop, or written then if it is missing. A removal posts one quiet card in the task's thread
 //     (`task.keptFolderCleaned`): the record keeps the task's title and
 //     thread, since the ledger prunes the row after about as long.
+// git can stop part way through `git worktree remove` (a locked file) or
+// leave files behind (a node_modules junction): the folder then has no .git
+// and git's list of the repository's worktrees no longer names it. Such a
+// folder (its repository recorded, inside its root through no link, nothing
+// running in it) is finished without git, never following a link
+// (removeTreeNoFollow); the branch stays. A removal that failed is tried
+// again only on the retry timer, TASK_FOLDER_ATTEMPTS_MAX times a start, and
+// Clean up now names each folder it could not remove, with why.
 // What was removed is recorded in `<wmuxDir>/factory/task-folders.json`, with
 // the repository and branch to put it back. A resume of the task's worker
 // (workerReclaim.ts respawn, the owner's Resume or `worker_resume`) puts the
@@ -259,8 +267,10 @@ export interface TaskFolderPorts {
   /** Whether a task gate's process runs for this task now (its own spawn,
    *  not a daemon session). Absent: none. */
   gateRunning?: (taskId: string) => boolean;
-  /** Default: fs. */
+  /** Default: removeTreeNoFollow. */
   removeDir?: (dir: string) => Promise<void>;
+  /** Default: gitWorktreeRegistered. */
+  worktreeRegistered?: (repoRoot: string, folder: string) => Promise<boolean | null>;
   makeDir?: (dir: string) => Promise<void>;
   exists?: (p: string) => boolean;
   now?: () => number;
@@ -314,6 +324,66 @@ function folderInUse(folder: string, sessions: readonly TaskFolderSession[]): bo
     const host = sessionHostDir(d, s);
     return isInside(host, folder) || isInside(host, real);
   }));
+}
+
+/** taskId → why its folder's last removal failed (read right after it). */
+const folderFailures = new Map<string, string>();
+
+/** Remove a folder and everything in it without ever following a link: each
+ *  entry is lstat'ed; a symlink or a junction (a link to lstat on Windows) is
+ *  unlinked, never entered; files go, then their folders, bottom up. A
+ *  read-only file is made writable first. */
+export async function removeTreeNoFollow(dir: string): Promise<void> {
+  const st = await fs.promises.lstat(dir);
+  if (st.isSymbolicLink()) {
+    await fs.promises.unlink(dir).catch(async (err: NodeJS.ErrnoException) => {
+      // A directory junction or link on Windows may need rmdir, which removes
+      // the link itself, never its target.
+      if (process.platform !== 'win32') throw err;
+      await fs.promises.rmdir(dir);
+    });
+    return;
+  }
+  if (!st.isDirectory()) {
+    await fs.promises.unlink(dir).catch(async (err: NodeJS.ErrnoException) => {
+      if (err.code !== 'EPERM' && err.code !== 'EACCES') throw err;
+      await fs.promises.chmod(dir, 0o666);
+      await fs.promises.unlink(dir);
+    });
+    return;
+  }
+  for (const name of await fs.promises.readdir(dir)) await removeTreeNoFollow(path.join(dir, name));
+  await fs.promises.rmdir(dir);
+}
+
+/** Whether git has `folder` as a working tree of `repoRoot` now
+ *  (`git worktree list --porcelain`; one git calls prunable, its folder or
+ *  its .git gone, is not). null when git cannot tell. */
+export async function gitWorktreeRegistered(repoRoot: string, folder: string): Promise<boolean | null> {
+  let out: string;
+  try {
+    out = (await execFileAsync('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'], { timeout: 30_000, windowsHide: true, env: getExecEnv() })).stdout;
+  } catch {
+    return null;
+  }
+  const norm = (p: string): string => {
+    let r = path.resolve(p);
+    try {
+      r = fs.realpathSync(r);
+    } catch {
+      /* compared as written */
+    }
+    return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r;
+  };
+  const want = [norm(folder), process.platform === 'win32' || process.platform === 'darwin' ? path.resolve(folder).toLowerCase() : path.resolve(folder)];
+  for (const block of out.replace(/\r\n/g, '\n').split('\n\n')) {
+    const lines = block.split('\n');
+    const head = lines.find((l) => l.startsWith('worktree '));
+    if (!head) continue;
+    if (!want.includes(norm(head.slice('worktree '.length)))) continue;
+    return !lines.some((l) => l === 'prunable' || l.startsWith('prunable '));
+  }
+  return false;
 }
 
 /** taskId → the cleanup running on its folder (one at a time per task). */
@@ -413,6 +483,9 @@ async function cleanTaskFolderNow(
     }
     if (prior?.state !== 'kept_stopped' && prior?.state !== 'removed' && worker !== 'resumed' && worker !== 'stopping' && exists(mission.folder)) {
       const thread = entry.dispatch?.threadId;
+      // A worktree's repository is recorded now, while the folder is still a
+      // worktree: a removal that git leaves half done is finished from it.
+      const repoNow = kind === 'worktree' && !prior?.repoRoot ? await ports.repoInfo(mission.folder).catch(() => null) : null;
       await ports.store.put({
         taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped',
         stopped: {
@@ -422,9 +495,9 @@ async function cleanTaskFolderNow(
           ...(entry.ownerWorkspaceId ? { threadId: typeof thread === 'string' && thread ? thread : `task:${entry.id}` } : {}),
         },
         ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
-        ...(prior?.repoRoot ? { repoRoot: prior.repoRoot } : {}),
-        ...(prior?.repoHash ? { repoHash: prior.repoHash } : {}),
-        ...(prior?.head ? { head: prior.head } : {}),
+        ...(prior?.repoRoot ? { repoRoot: prior.repoRoot } : repoNow ? { repoRoot: repoNow.repoRoot } : {}),
+        ...(prior?.repoHash ? { repoHash: prior.repoHash } : repoNow ? { repoHash: repoNow.repoHash } : {}),
+        ...(prior?.head ? { head: prior.head } : repoNow?.head ? { head: repoNow.head } : {}),
         ...(prior?.keepRef ? { keepRef: prior.keepRef } : {}),
         // A folder already recorded (a removal that did not finish) keeps
         // its clock.
@@ -441,8 +514,15 @@ async function cleanTaskFolderNow(
     ? Math.max(prior.at, stopAt ?? -Infinity) : undefined;
   // A removal after the TTL that failed is kept again as it was, so the next
   // pass tries it again (TASK_FOLDER_ATTEMPTS_MAX).
-  const keepAgain = async (): Promise<void> => {
-    if (expired && prior) await ports.store.put({ ...prior, state: 'kept_stopped', at: keptAt ?? prior.at }).catch(() => undefined);
+  // What it learned of the folder's repository is kept with it.
+  const keepAgain = async (learned: Partial<TaskFolderRecord> = {}): Promise<void> => {
+    if (expired && prior) await ports.store.put({ ...prior, ...learned, state: 'kept_stopped', stopped: prior.stopped, at: keptAt ?? prior.at }).catch(() => undefined);
+  };
+  /** A removal that did not happen, and why (Clean up now names it). */
+  const fail = (reason: string): 'failed' => {
+    log(`[factory] folder of ${entry.id} not removed: ${reason}`);
+    folderFailures.set(entry.id, reason);
+    return 'failed';
   };
   if ((folderHolds.get(entry.id) ?? 0) > 0) return 'skipped';
   if (prior?.state === 'removed') return 'skipped';
@@ -472,11 +552,10 @@ async function cleanTaskFolderNow(
     try {
       if (!fs.lstatSync(mission.folder).isDirectory()) return 'skipped';
       await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', ...stoppedMark, at: keptAt ?? now() });
-      await (ports.removeDir ?? ((d: string) => fs.promises.rm(d, { recursive: true })))(mission.folder);
+      await (ports.removeDir ?? removeTreeNoFollow)(mission.folder);
     } catch (err) {
-      log(`[factory] research folder of ${entry.id} not removed: ${String(err)}`);
       if (fs.existsSync(mission.folder)) await keepAgain();
-      return 'failed';
+      return fail(String(err));
     }
     await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removed', at: now() }).catch(() => undefined);
     removeEmptyResearchBatch(ports.store, path.dirname(mission.folder), root, log);
@@ -484,20 +563,45 @@ async function cleanTaskFolderNow(
     ports.changed?.();
     return 'removed';
   }
+  /** A folder git no longer has as a worktree of `repoRoot` and that holds no
+   *  `.git` (git removed it and stopped half way: a locked file, files left
+   *  behind such as a node_modules junction): finished without git, never
+   *  following a link. The branch stays. null: not such a folder. */
+  const finishUnregistered = async (rec: { repoRoot: string; repoHash?: string; head?: string; keepRef?: string }): Promise<TaskFolderOutcome | null> => {
+    if (exists(path.join(mission.folder, '.git'))) return null;
+    const registered = await (ports.worktreeRegistered ?? gitWorktreeRegistered)(rec.repoRoot, mission.folder).catch(() => null);
+    if (registered === null) return fail('its repository could not be read');
+    if (registered) return null;
+    const learned = {
+      repoRoot: rec.repoRoot, ...(rec.repoHash ? { repoHash: rec.repoHash } : {}), ...(rec.head ? { head: rec.head } : {}),
+      ...(rec.keepRef ? { keepRef: rec.keepRef } : {}), ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
+    };
+    try {
+      await ports.store.put({ taskId: entry.id, kind, path: mission.folder, ...learned, ...stoppedMark, state: 'removing', at: keptAt ?? now() });
+      await (ports.removeDir ?? removeTreeNoFollow)(mission.folder);
+    } catch (err) {
+      if (exists(mission.folder)) await keepAgain(learned);
+      return fail(`git left the folder half removed, and finishing it failed: ${String(err)}`);
+    }
+    await ports.store.put({ taskId: entry.id, kind, path: mission.folder, ...learned, ...stoppedMark, state: 'removed', at: now() }).catch(() => undefined);
+    if (expired && prior) noteKeptFolderCleaned(ports, entry, prior, now(), log);
+    ports.changed?.();
+    return 'removed';
+  };
+  // A folder whose repository is recorded: git's own list says whether it is
+  // still a worktree (the folder's own .git may be gone).
+  if (prior?.repoRoot) {
+    const finished = await finishUnregistered(prior as typeof prior & { repoRoot: string });
+    if (finished) return finished;
+  }
   const repo = await ports.repoInfo(mission.folder).catch(() => null);
   // A detached checkout comes back on its commit, so it needs one.
-  if (!repo || (!mission.branch && !repo.head)) {
-    log(`[factory] worktree of ${entry.id} not removed: its repository could not be read`);
-    return 'failed';
-  }
+  if (!repo || (!mission.branch && !repo.head)) return fail(prior?.repoRoot ? 'its repository could not be read' : 'it is no longer a worktree, and its repository was not recorded');
   if ((folderHolds.get(entry.id) ?? 0) > 0) return 'skipped';
   // Commits made on a detached HEAD are held by no branch: a ref keeps them
   // before the worktree (and with it HEAD's reflog) goes.
   const kept = await keepDetachedCommits(repo.repoRoot, mission.folder, entry.id, mission.branch, repo.head, entry.dispatch?.checkout?.sha);
-  if (kept === null) {
-    log(`[factory] worktree of ${entry.id} not removed: whether its commits are kept could not be read`);
-    return 'failed';
-  }
+  if (kept === null) return fail('whether its commits are kept could not be read');
   const base = {
     taskId: entry.id, kind, path: mission.folder, repoRoot: repo.repoRoot, repoHash: repo.repoHash,
     ...(mission.branch ? { branch: mission.branch } : {}), ...(repo.head ? { head: repo.head } : {}),
@@ -507,8 +611,7 @@ async function cleanTaskFolderNow(
   try {
     await ports.store.put({ ...base, state: 'removing' });
   } catch (err) {
-    log(`[factory] worktree of ${entry.id} not removed: its record could not be written: ${String(err)}`);
-    return 'failed';
+    return fail(`its record could not be written: ${String(err)}`);
   }
   const r = await ports.worktrees.removeWorktree(repo.repoRoot, repo.repoHash, mission.folder).catch((err: unknown) => ({ ok: false as const, error: String(err) }));
   if (r.ok) {
@@ -522,9 +625,13 @@ async function cleanTaskFolderNow(
     if (prior?.state !== 'kept_dirty') ports.changed?.();
     return 'kept_dirty';
   }
-  log(`[factory] worktree of ${entry.id} not removed: ${r.error}`);
-  if (exists(mission.folder)) await keepAgain();
-  return 'failed';
+  // git may have stopped half way (a locked file) or left files behind.
+  if (exists(mission.folder)) {
+    const finished = await finishUnregistered(base);
+    if (finished) return finished;
+    await keepAgain({ repoRoot: base.repoRoot, repoHash: base.repoHash, ...(base.head ? { head: base.head } : {}), ...(base.keepRef ? { keepRef: base.keepRef } : {}) });
+  }
+  return fail(r.error);
 }
 
 /** The card of a kept folder removed after its TTL. Never throws. */
@@ -581,6 +688,9 @@ export interface TaskFolderSweep {
   keptDirty: number;
   busy: number;
   failed: number;
+  /** The folders that could not be removed, and why (in English). Absent:
+   *  none. */
+  notRemoved?: Array<{ path: string; reason: string }>;
 }
 
 /** Apply the rules to these rows (ended bot tasks; anything else is
@@ -592,24 +702,28 @@ export async function cleanTaskFolders(ports: TaskFolderPorts, rows: readonly Le
   if (ended.length === 0 && keptRecords(ports.store).length === 0) return out;
   const sessions = await ports.listSessions();
   const byOwner = new Map<string, Map<string, TaskMission> | null>();
-  const count = (r: TaskFolderOutcome): void => {
+  const count = (r: TaskFolderOutcome, taskId: string, folder: string | undefined): void => {
     if (r === 'removed') out.removed++;
     else if (r === 'kept_dirty') out.keptDirty++;
     else if (r === 'busy') out.busy++;
-    else if (r === 'failed') out.failed++;
+    else if (r === 'failed') {
+      out.failed++;
+      (out.notRemoved ??= []).push({ path: folder ?? taskId, reason: folderFailures.get(taskId) ?? 'it could not be removed' });
+    }
+    folderFailures.delete(taskId);
   };
   const handled = new Set<string>();
   for (const row of ended) {
     if (!byOwner.has(row.ownerWorkspaceId)) byOwner.set(row.ownerWorkspaceId, await ports.missions(row.ownerWorkspaceId).catch(() => null));
     const mission = byOwner.get(row.ownerWorkspaceId)?.get(row.id) ?? null;
     if (mission) handled.add(row.id);
-    count(await cleanTaskFolder(ports, row, mission, sessions, opts));
+    count(await cleanTaskFolder(ports, row, mission, sessions, opts), row.id, mission?.folder);
   }
   // A folder a stop kept whose row (or mission) is gone — the ledger prunes
   // ended rows after a while: its record says where it is.
   for (const rec of keptRecords(ports.store)) {
     if (handled.has(rec.taskId)) continue;
-    count(await cleanTaskFolder(ports, keptRow(rec), { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) }, sessions, opts));
+    count(await cleanTaskFolder(ports, keptRow(rec), { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) }, sessions, opts), rec.taskId, rec.path);
   }
   return out;
 }
@@ -753,7 +867,9 @@ export async function taskFolderUsage(ports: TaskFolderPorts, rows: readonly Led
 
 /** Install the automatic pass: on a bot task's end, on `kick` (a workspace
  *  closed) and every `retryMs`, over the tasks that ended in the last day
- *  and the folders put back for a resume. One pass at a time. Returns the
+ *  and the folders put back for a resume. One pass at a time. A removal
+ *  that failed is tried again only by the `retryMs` timer, so its
+ *  TASK_FOLDER_ATTEMPTS_MAX attempts are that far apart. Returns the
  *  unsubscribe. */
 export function installTaskFolderCleanup(ports: TaskFolderPorts & {
   onTransition: (fn: (t: { entry: LedgerEntry; to: string }) => void) => () => void;
@@ -764,15 +880,27 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
   const attempts = new Map<string, number>();
   let running = false;
   let again = false;
-  const pass = async (): Promise<void> => {
+  let againTimer = false;
+  const pass = async (timerPass: boolean): Promise<void> => {
     if (running) {
       again = true;
+      againTimer ||= timerPass;
       return;
     }
     running = true;
     try {
+      let onTimer = timerPass;
       do {
+        if (again) {
+          onTimer = againTimer;
+          againTimer = false;
+        }
         again = false;
+        /** A first attempt at any pass; another one on the timer only. */
+        const mayTry = (key: string): boolean => {
+          const n = attempts.get(key) ?? 0;
+          return n < TASK_FOLDER_ATTEMPTS_MAX && (n === 0 || onTimer);
+        };
         let rows: LedgerEntry[] = [];
         try {
           rows = ports.allRows();
@@ -788,10 +916,8 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           // its row last changed: its folder is recorded at that stop.
           const restopped = isStoppedByOwnerRow(r) && ports.workerState(r.id) === 'stopped' && (ports.workerStoppedAt?.(r.id) ?? -Infinity) > r.updatedAt;
           if (!rec && r.updatedAt < since && !restopped) return false;
-          return (attempts.get(`${r.id}@${r.rev}`) ?? 0) < TASK_FOLDER_ATTEMPTS_MAX;
+          return mayTry(`${r.id}@${r.rev}`);
         });
-        // Folders a stop kept that have sat out their TTL (found by their
-        // record: the ledger has usually pruned the row by then).
         // A kept folder whose resumed worker stopped again: its 7 days start
         // at that stop.
         for (const rec of ports.store.all()) {
@@ -799,8 +925,10 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           const stopAt = ports.workerStoppedAt?.(rec.taskId);
           if (stopAt !== undefined && stopAt > rec.at) await ports.store.put({ ...rec, at: stopAt }).catch(() => undefined);
         }
+        // Folders a stop kept that have sat out their TTL (found by their
+        // record: the ledger has usually pruned the row by then).
         const expired = ports.store.all().filter((rec) => rec.state === 'kept_stopped' && !!rec.stopped
-          && now() - rec.at >= TASK_FOLDER_KEPT_TTL_MS && (attempts.get(`${rec.taskId}@kept`) ?? 0) < TASK_FOLDER_ATTEMPTS_MAX);
+          && now() - rec.at >= TASK_FOLDER_KEPT_TTL_MS && mayTry(`${rec.taskId}@kept`));
         if (due.length === 0 && expired.length === 0) break;
         let sessions: TaskFolderSession[];
         try {
@@ -814,6 +942,7 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           const missions = byOwner.get(row.ownerWorkspaceId);
           if (!missions) continue;
           const r = await cleanTaskFolder(ports, row, missions.get(row.id) ?? null, sessions);
+          folderFailures.delete(row.id);
           if (r === 'failed') {
             const key = `${row.id}@${row.rev}`;
             attempts.set(key, (attempts.get(key) ?? 0) + 1);
@@ -836,6 +965,7 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           const mission: TaskMission | null = missions.get(rec.taskId)
             ?? (live ? null : { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) });
           const r = await cleanTaskFolder(ports, live ?? keptRow(rec), mission, sessions, { keptTtl: true });
+          folderFailures.delete(rec.taskId);
           if (r === 'failed') {
             const key = `${rec.taskId}@kept`;
             attempts.set(key, (attempts.get(key) ?? 0) + 1);
@@ -846,16 +976,17 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
       running = false;
     }
   };
-  const kick = (): void => {
-    void pass().catch((err) => (ports.log ?? console.warn)(`[factory] task folder pass failed: ${String(err)}`));
+  const run = (timerPass: boolean): void => {
+    void pass(timerPass).catch((err) => (ports.log ?? console.warn)(`[factory] task folder pass failed: ${String(err)}`));
   };
+  const kick = (): void => run(false);
   const off = ports.onTransition((t) => {
     if (isEndedBotTask({ status: t.to as LedgerEntry['status'], dispatch: t.entry.dispatch })) kick();
   });
   kick();
   let timer: ReturnType<typeof setInterval> | null = null;
   if (ports.retryMs && ports.retryMs > 0) {
-    timer = setInterval(kick, ports.retryMs);
+    timer = setInterval(() => run(true), ports.retryMs);
     timer.unref?.();
   }
   return {

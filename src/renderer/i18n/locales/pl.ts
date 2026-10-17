@@ -2062,6 +2062,7 @@ export const pl = {
   'settings.factory.taskFolders.unknown': "Niedostępne, gdy boty nie działają",
   'settings.factory.taskFolders.clean': "Wyczyść teraz",
   'settings.factory.taskFolders.cleaned': "Usunięto: {removed}. Zachowano z niezatwierdzonymi zmianami: {kept}, nadal w użyciu: {busy}.",
+  'settings.factory.taskFolders.notRemoved': "Nie usunięto: {list}",
   'settings.factory.taskFolders.cleanFailed': "Nie udało się wyczyścić: {message}",
   'settings.factory.phoneBotAuto': "Automatycznie (Koordynator, a bez niego pierwszy bot pokoju HQ)",
   'settings.factory.keys': "Klucze",

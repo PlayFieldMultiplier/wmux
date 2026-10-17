@@ -1608,6 +1608,7 @@ export const ko = {
   'settings.factory.taskFolders.unknown': "봇이 실행 중이 아닐 때는 볼 수 없어요",
   'settings.factory.taskFolders.clean': "지금 정리",
   'settings.factory.taskFolders.cleaned': "{removed}개를 지웠어요. 커밋 안 된 변경으로 {kept}개, 사용 중이라 {busy}개를 남겼어요.",
+  'settings.factory.taskFolders.notRemoved': "지우지 못함: {list}",
   'settings.factory.taskFolders.cleanFailed': "정리하지 못했어요: {message}",
   'settings.factory.phoneBotAuto': "자동 (코디네이터, 없으면 HQ 방의 첫 봇)",
   'settings.factory.keys': "키",

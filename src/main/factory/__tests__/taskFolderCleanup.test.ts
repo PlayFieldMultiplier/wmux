@@ -19,8 +19,10 @@ import {
   forgetKeptFolder,
   gitRepoInfo,
   holdTaskFolder,
+  gitWorktreeRegistered,
   installTaskFolderCleanup,
   noteKeptFolderStopped,
+  removeTreeNoFollow,
   removeEmptyResearchBatch,
   restoreTaskFolder,
   taskFolderKind,
@@ -607,7 +609,9 @@ describe('the automatic pass and Settings › Bots', () => {
     // Past retention (no row), the folder held open: the removal fails.
     const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
     const failing = { ...p, removeDir: vi.fn(async () => { throw busy; }) };
-    expect(await cleanTaskFolders(failing, [], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 0, failed: 1 });
+    expect(await cleanTaskFolders(failing, [], { force: true })).toEqual({
+      removed: 0, keptDirty: 0, busy: 0, failed: 1, notRemoved: [{ path: scratch, reason: 'Error: EBUSY: resource busy or locked' }],
+    });
     expect(fs.existsSync(path.join(scratch, 'notes.md'))).toBe(true);
     expect(p.store.get(stopped.id)).toMatchObject({ state: 'removing', stopped: { botId: BOT } });
     // Still found: counted, and the automatic pass does not take it as gone.
@@ -733,23 +737,36 @@ describe('a folder a stop kept, after 7 days', () => {
     const p = ports({ now: () => now, removeDir }, new Map([[stopped.id, { folder: scratch }]]));
     await cleanTaskFolders(p, [stopped]);
     now = 50_000 + TASK_FOLDER_KEPT_TTL_MS;
-    // One install, several passes (the attempts are counted per install).
-    const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped] });
+    // One install; a failed removal is tried again only on the retry timer,
+    // never on a kick (a ledger change, a workspace closing).
+    const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped], retryMs: 150 });
     await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 20));
     expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } });
     // The ordinary pass over its row records nothing new.
     await cleanTaskFolders(p, [stopped]);
     expect(p.store.get(stopped.id)?.at).toBe(50_000);
+    const times: number[] = [];
+    removeDir.mockImplementation(async () => {
+      times.push(Date.now());
+      throw busy;
+    });
+    for (let i = 0; i < 5; i++) installed.kick();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(removeDir).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(3), { timeout: 5_000 });
+    // Bounded: no fourth try from this install, kicked or timed.
     installed.kick();
-    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(2));
-    installed.kick();
-    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(3));
-    // Bounded: no fourth try from this install.
-    installed.kick();
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 400));
     expect(removeDir).toHaveBeenCalledTimes(3);
     installed.dispose();
+    // The retries came a timer period apart.
+    expect(times).toHaveLength(2);
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(100);
+    removeDir.mockImplementation(async (d: string) => {
+      if (failing) throw busy;
+      await removeTreeNoFollow(d);
+    });
     expect(fs.existsSync(path.join(scratch, 'notes.md'))).toBe(true);
     // A later start tries again, and it goes.
     failing = false;
@@ -866,6 +883,142 @@ describe('a folder a stop kept, after 7 days', () => {
       state: 'kept_stopped', at: 50_000 + 9 * DAY - 60_000, stopped: { botId: BOT, title: 'lost one', workspaceId: 'ws-owner' },
     }));
     expect(fs.existsSync(wt)).toBe(true);
+  });
+});
+
+describe('a worktree git removed only half way', () => {
+  /** A link that is a junction on Windows and a symlink elsewhere. */
+  const dirLink = (target: string, at: string): void => fs.symlinkSync(target, at, process.platform === 'win32' ? 'junction' : 'dir');
+  /** What git leaves when it stops part way: the folder without its .git
+   *  and its admin entry pruned, with one file it could not delete. */
+  function halfRemove(wt: string): void {
+    fs.rmSync(path.join(wt, '.git'));
+    git(repo, 'worktree', 'prune');
+  }
+
+  it('a folder with no .git that git no longer lists is finished without git: links unlinked, never followed; the branch stays', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr, 'half-12121212');
+    const canary = path.join(dir, 'canary');
+    fs.mkdirSync(path.join(canary, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(canary, 'deep', 'keep.txt'), 'mine');
+    fs.mkdirSync(path.join(wt, 'sub'), { recursive: true });
+    dirLink(canary, path.join(wt, 'node_modules'));
+    dirLink(canary, path.join(wt, 'sub', 'link'));
+    fs.symlinkSync(path.join(canary, 'deep', 'keep.txt'), path.join(wt, 'file-link'));
+    const repoRoot = fs.realpathSync(repo);
+    expect(await gitWorktreeRegistered(repoRoot, wt)).toBe(true);
+    halfRemove(wt);
+    expect(await gitWorktreeRegistered(repoRoot, wt)).toBe(false);
+    const done = row('completed', { id: 'wtask-half-12121212' });
+    const p = ports({}, new Map());
+    await p.store.put({ taskId: done.id, kind: 'worktree', path: wt, branch: 'wtask/half-12121212', repoRoot, repoHash: 'h', state: 'removing', at: 1 });
+    expect(await cleanTaskFolder(p, done, { folder: wt, branch: 'wtask/half-12121212' }, [])).toBe('removed');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(fs.readFileSync(path.join(canary, 'deep', 'keep.txt'), 'utf8')).toBe('mine');
+    expect(git(repo, 'rev-parse', '--verify', 'refs/heads/wtask/half-12121212')).toMatch(/^[0-9a-f]{40}$/);
+    expect(p.store.get(done.id)?.state).toBe('removed');
+  });
+
+  it('files git left behind (a node_modules link) are finished in the same removal', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr, 'left-13131313');
+    const canary = path.join(dir, 'canary2');
+    fs.mkdirSync(canary, { recursive: true });
+    fs.writeFileSync(path.join(canary, 'pkg.json'), '{}');
+    const done = row('completed', { id: 'wtask-left-13131313' });
+    // git removes the worktree but a link it would not delete stays.
+    const worktrees = {
+      removeWorktree: vi.fn(async (root: string, hash: string, folder: string) => {
+        const r = await mgr.removeWorktree(root, hash, folder);
+        if (!r.ok) return r;
+        fs.mkdirSync(folder);
+        dirLink(canary, path.join(folder, 'node_modules'));
+        return { ok: false as const, error: 'removeWorktree: files were left behind in the worktree folder' };
+      }),
+      restoreWorktree: vi.fn(async () => ({ ok: true as const })),
+    };
+    const p = ports({ worktrees });
+    expect(await cleanTaskFolder(p, done, { folder: wt, branch: 'wtask/left-13131313' }, [])).toBe('removed');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(fs.readFileSync(path.join(canary, 'pkg.json'), 'utf8')).toBe('{}');
+  });
+
+  it('a lock that outlives a pass: kept and named by Clean up now; once released, the next pass finishes it', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr, 'lock-14141414');
+    const repoRoot = fs.realpathSync(repo);
+    halfRemove(wt);
+    const done = row('completed', { id: 'wtask-lock-14141414', updatedAt: 49_000 });
+    let locked = true;
+    const removeDir = vi.fn(async (d: string) => {
+      if (locked) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      await removeTreeNoFollow(d);
+    });
+    const missions = new Map<string, TaskMission>([[done.id, { folder: wt, branch: 'wtask/lock-14141414' }]]);
+    const p = ports({ removeDir }, missions);
+    await p.store.put({ taskId: done.id, kind: 'worktree', path: wt, branch: 'wtask/lock-14141414', repoRoot, repoHash: 'h', state: 'removing', at: 1 });
+    const r = await cleanTaskFolders(p, [done], { force: true });
+    expect(r.failed).toBe(1);
+    expect(r.notRemoved).toEqual([{ path: wt, reason: expect.stringContaining('half removed') }]);
+    expect(p.store.get(done.id)).toMatchObject({ state: 'removing', repoRoot });
+    locked = false;
+    expect(await cleanTaskFolders(p, [done], { force: true })).toMatchObject({ removed: 1, failed: 0 });
+    expect(fs.existsSync(wt)).toBe(false);
+  });
+
+  it('a registered worktree still goes through git (its dirty check too), and its .git keeps it from the link-safe removal', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr, 'reg-15151515');
+    fs.writeFileSync(path.join(wt, 'draft.txt'), 'unsaved');
+    const repoRoot = fs.realpathSync(repo);
+    const removeDir = vi.fn(async () => undefined);
+    const worktreeRegistered = vi.fn(async () => false);
+    const done = row('completed', { id: 'wtask-reg-15151515' });
+    const p = ports({ removeDir, worktreeRegistered });
+    await p.store.put({ taskId: done.id, kind: 'worktree', path: wt, branch: 'wtask/reg-15151515', repoRoot, repoHash: 'h', state: 'removing', at: 1 });
+    // Even a git list that does not name it (a path spelled otherwise) is not
+    // enough while its .git is there.
+    expect(await cleanTaskFolder(p, done, { folder: wt, branch: 'wtask/reg-15151515' }, [])).toBe('kept_dirty');
+    expect(removeDir).not.toHaveBeenCalled();
+    expect(worktreeRegistered).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(wt, 'draft.txt'), 'utf8')).toBe('unsaved');
+  });
+
+  it('never outside the roots, through a link, or while a session works in it', async () => {
+    const outside = path.join(dir, 'outside-wt', 'h', 'x-16161616');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'mine');
+    const removeDir = vi.fn(async () => undefined);
+    const worktreeRegistered = vi.fn(async () => false);
+    const done = row('completed', { id: 'wtask-x-16161616' });
+    const p = ports({ removeDir, worktreeRegistered });
+    await p.store.put({ taskId: done.id, kind: 'worktree', path: outside, repoRoot: repo, repoHash: 'h', state: 'removing', at: 1 });
+    expect(await cleanTaskFolder(p, done, { folder: outside }, [])).toBe('skipped');
+    // A link inside the worktree root to that folder.
+    const linked = path.join(home, 'worktrees', 'h', 'x-16161616');
+    fs.mkdirSync(path.dirname(linked), { recursive: true });
+    dirLink(outside, linked);
+    expect(await cleanTaskFolder(p, done, { folder: linked }, [])).toBe('skipped');
+    // A real half-removed folder that a pane still works in.
+    const real = path.join(home, 'worktrees', 'h', 'busy-17171717');
+    fs.mkdirSync(real, { recursive: true });
+    const busyRow = row('completed', { id: 'wtask-busy-17171717' });
+    await p.store.put({ taskId: busyRow.id, kind: 'worktree', path: real, repoRoot: repo, repoHash: 'h', state: 'removing', at: 1 });
+    expect(await cleanTaskFolder(p, busyRow, { folder: real }, [{ id: 'daemon-1', cwd: real }])).toBe('busy');
+    expect(removeDir).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('removeTreeNoFollow unlinks a link given to it, never its target', async () => {
+    const canary = path.join(dir, 'canary3');
+    fs.mkdirSync(canary, { recursive: true });
+    fs.writeFileSync(path.join(canary, 'keep.txt'), 'mine');
+    const link = path.join(dir, 'link3');
+    dirLink(canary, link);
+    await removeTreeNoFollow(link);
+    expect(fs.existsSync(link)).toBe(false);
+    expect(fs.readFileSync(path.join(canary, 'keep.txt'), 'utf8')).toBe('mine');
   });
 });
 

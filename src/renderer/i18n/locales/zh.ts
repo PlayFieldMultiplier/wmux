@@ -2159,6 +2159,7 @@ export const zh = {
   'settings.factory.taskFolders.unknown': "机器人未运行时不可用",
   'settings.factory.taskFolders.clean': "立即清理",
   'settings.factory.taskFolders.cleaned': "已删除 {removed} 个。因有未提交的更改保留 {kept} 个，仍在使用中 {busy} 个。",
+  'settings.factory.taskFolders.notRemoved': "未删除：{list}",
   'settings.factory.taskFolders.cleanFailed': "无法清理：{message}",
   'settings.factory.phoneBotAuto': "自动（协调者，否则为 HQ 房间的第一个机器人）",
   'settings.factory.keys': "密钥",
