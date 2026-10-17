@@ -13,7 +13,7 @@ import Field from '../ui/Field';
 import Input from '../ui/Input';
 import SegmentedControl from '../ui/SegmentedControl';
 import Select from '../ui/Select';
-import { SettingsSection } from './SettingsLayout';
+import { SettingsSection, useOwnedDialog } from './SettingsLayout';
 import { AccountRotationControls, RotationQuotaBit, useAccountRotation } from './AccountRotationControls';
 import RemoteRowMenu, { type RemoteRowMenuItem } from '../Remote/RemoteRowMenu';
 import { useStore } from '../../stores';
@@ -307,6 +307,8 @@ export function AccountsSection(): React.ReactElement | null {
   const [bindings, setBindings] = useState<Record<string, Partial<Record<Vendor, string>>>>({});
   const [move, setMove] = useState<PendingMove | null>(null);
   const workspaces = useStore((s) => s.workspaces);
+  // Settings closes on Escape unless something it opened owns the key.
+  useOwnedDialog(move !== null || confirmRemove !== null);
   const [removeNotice, setRemoveNotice] = useState<string | null>(null);
   const [usage, setUsage] = useState<Map<string, AccountUsageEntry>>(new Map());
   const pending = useSyncExternalStore(subscribeAccountLogins, getPendingAccountLogins);
@@ -361,6 +363,10 @@ export function AccountsSection(): React.ReactElement | null {
   // Hidden when the preload predates multi-account.
   if (!window.electronAPI?.accounts) return null;
 
+  const closeRemove = (id: string) => {
+    setConfirmRemove(null);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-account-row="${id}"] [data-remote-menu]`)?.focus());
+  };
   const remove = (id: string) => {
     const api = window.electronAPI?.accounts;
     if (api) {
@@ -377,16 +383,21 @@ export function AccountsSection(): React.ReactElement | null {
     }
     setConfirmRemove(null);
   };
+  /** A group-wide move takes the group's members as they are now, not when it was asked for. */
+  const membersOf = (m: PendingMove): string[] => (m.kind === 'move'
+    ? m.ids
+    : rows.filter((r) => accountGroupOf(r) === m.from).map((r) => r.id));
   /** Workspaces whose rotation pool a move changes, and the pool they move to. */
   const moveImpact = (m: PendingMove, to: string): string[] => {
-    const moved = rows.filter((r) => m.ids.includes(r.id));
+    const ids = membersOf(m);
+    const moved = rows.filter((r) => ids.includes(r.id));
     const names = new Set<string>();
     for (const vendor of ['claude', 'codex'] as const) {
       const movedHere = moved.filter((r) => r.vendor === vendor);
-      const ids = (list: AccountRow[]) => list.map((r) => r.id).sort().join('|');
+      const key = (list: AccountRow[]) => list.map((r) => r.id).sort().join('|');
       const before = rows.filter((r) => r.vendor === vendor && accountGroupOf(r) === m.from);
-      const after = [...rows.filter((r) => r.vendor === vendor && accountGroupOf(r) === to && !m.ids.includes(r.id)), ...movedHere];
-      if (movedHere.length === 0 || ids(before) === ids(after)) continue;
+      const after = [...rows.filter((r) => r.vendor === vendor && accountGroupOf(r) === to && !ids.includes(r.id)), ...movedHere];
+      if (movedHere.length === 0 || key(before) === key(after)) continue;
       for (const [wsId, perVendor] of Object.entries(bindings)) {
         if (movedHere.some((r) => r.id === perVendor[vendor])) names.add(workspaces.find((w) => w.id === wsId)?.name ?? wsId);
       }
@@ -395,10 +406,20 @@ export function AccountsSection(): React.ReactElement | null {
   };
   const applyMove = (m: PendingMove, to: string) => {
     const api = window.electronAPI?.accounts;
-    setMove(null);
+    closeMove(m);
     if (!api?.setGroup) return;
-    void m.ids.reduce<Promise<unknown>>((chain, id) => chain.then(() => api.setGroup({ id, group: to })), Promise.resolve())
-      .then(reload).catch(() => { reload(); /* useIpc surfaces the error */ });
+    void membersOf(m).reduce<Promise<unknown>>((chain, id) => chain.then(() => api.setGroup({ id, group: to })), Promise.resolve())
+      .then(reload)
+      .catch(() => {
+        reload();
+        useStore.getState().pushToast({ level: 'error', message: t('accounts.moveFailed') });
+      });
+  };
+  /** Focus goes back to the ⋯ the move came from (its menu item is gone). */
+  const closeMove = (m: PendingMove) => {
+    setMove(null);
+    const selector = m.kind === 'move' ? `[data-account-row="${m.ids[0]}"] [data-remote-menu]` : `[data-account-group="${CSS.escape(m.from)}"] [data-remote-menu]`;
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
   };
   /** A move that changes no workspace's pool applies at once; else it asks first. */
   const requestMove = (m: PendingMove) => {
@@ -426,7 +447,7 @@ export function AccountsSection(): React.ReactElement | null {
       <div className="flex items-center gap-2 min-h-[36px] px-[14px] text-[13px] text-[var(--text-sub)]" data-account-group={group}>
         <span className="flex-1 min-w-0 truncate">{group || t('accounts.noGroup')}</span>
         {group && (
-          <RemoteRowMenu
+          <AccountMenu
             label={t('accounts.groupMenu', { group })}
             items={[
               { id: 'rename', label: t('accounts.renameGroup'), onSelect: () => setMove({ ids, from: group, to: null, kind: 'rename' }) },
@@ -441,7 +462,7 @@ export function AccountsSection(): React.ReactElement | null {
     const from = accountGroupOf(r);
     return [
       ...groupNames.filter((g) => g !== from).map((g) => ({
-        id: `move:${g}`, label: t('accounts.moveTo', { group: g }), onSelect: () => requestMove({ ids: [r.id], from, to: g, kind: 'move' }),
+        id: `to-group:${g}`, label: t('accounts.moveTo', { group: g }), onSelect: () => requestMove({ ids: [r.id], from, to: g, kind: 'move' }),
       })),
       ...(from ? [{ id: 'move:none', label: t('accounts.moveToNoGroup'), onSelect: () => requestMove({ ids: [r.id], from, to: '', kind: 'move' }) }] : []),
       { id: 'move:new', label: t('accounts.moveToNewGroup'), onSelect: () => setMove({ ids: [r.id], from, to: null, kind: 'move' }) },
@@ -480,19 +501,19 @@ export function AccountsSection(): React.ReactElement | null {
           ) : (
             <span className="min-w-0 text-[13px] font-medium text-[var(--text-main)] truncate">{r.name}</span>
           )}
-          <span className="justify-self-end">
+          <span className="justify-self-end min-w-0 max-w-full overflow-hidden">
             <LoginState
               row={r}
               expired={usage.get(r.id)?.status === 'unauthorized'}
               pending={pending.some((p) => p.configDir === r.configDir)}
             />
           </span>
-          <span className="justify-self-end">
+          <span className="justify-self-end min-w-0 max-w-full overflow-hidden">
             {r.vendor === 'codex'
               ? <RotationQuotaBit row={rotation.state?.rows.find((x) => x.accountId === r.id)} />
               : <UsageBit entry={usage.get(r.id)} />}
           </span>
-          <RemoteRowMenu label={t('accounts.rowMenu', { name: r.name })} items={rowMenu(r)} />
+          <AccountMenu label={t('accounts.rowMenu', { name: r.name })} items={rowMenu(r)} />
         </div>
         </Fragment>
       ))}
@@ -512,12 +533,12 @@ export function AccountsSection(): React.ReactElement | null {
           </Button>
         </div>
       )}
-      {move && <MoveDialog move={move} impact={(to) => moveImpact(move, to)} onApply={(to) => applyMove(move, to)} onCancel={() => setMove(null)} />}
+      {move && <MoveDialog move={move} impact={(to) => moveImpact(move, to)} onApply={(to) => applyMove(move, to)} onCancel={() => closeMove(move)} />}
       {confirmRemove && (
-        <Dialog onClose={() => setConfirmRemove(null)} width={420}>
+        <Dialog onClose={() => closeRemove(confirmRemove.id)} width={420}>
           <DialogHeader title={t('accounts.removeTitle', { name: confirmRemove.name })} description={t('accounts.removeDesc')} closeLabel={t('common.cancel')} />
           <DialogFooter>
-            <Button variant="ghost" size="md" onClick={() => setConfirmRemove(null)}>{t('common.cancel')}</Button>
+            <Button variant="ghost" size="md" onClick={() => closeRemove(confirmRemove.id)}>{t('common.cancel')}</Button>
             <Button variant="danger" size="md" onClick={() => remove(confirmRemove.id)}>{t('common.remove')}</Button>
           </DialogFooter>
         </Dialog>
@@ -528,7 +549,14 @@ export function AccountsSection(): React.ReactElement | null {
 
 /** Shared column tracks (vendor · name · login · quota · ⋯) so a row that
  *  shows less than another does not shift its neighbours. */
-const ROW_TRACKS: CSSProperties = { display: 'grid', gridTemplateColumns: '64px minmax(96px, 1fr) 112px 176px 28px' };
+const ROW_TRACKS: CSSProperties = { display: 'grid', gridTemplateColumns: '64px minmax(64px, 1fr) minmax(0, 112px) minmax(0, 176px) 28px' };
+
+/** A ⋯ menu that holds Escape while open, so Settings does not close under it. */
+function AccountMenu(props: { label: string; items: RemoteRowMenuItem[] }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  useOwnedDialog(open);
+  return <RemoteRowMenu {...props} onOpenChange={setOpen} />;
+}
 
 interface PendingMove {
   ids: string[];
