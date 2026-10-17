@@ -212,6 +212,8 @@ import { classifyTasklistOutput, classifyKillOutcome, lockOwnerIsReclaimable, ty
 import { deliverScheduledPrompt, deliveryInputFence, type ScheduledPromptDeliveryDeps } from './sessionPromptDelivery';
 import { deliverCallerNudge } from './callerNudgeDelivery';
 import { paneTurnClosed, stopAgentTree } from './agentStop';
+import { continueOnAccount } from './continueOnAccount';
+import { classifyShell } from './shell-integration';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -8344,6 +8346,87 @@ async function main(): Promise<void> {
         kill: (pid, signal) => process.kill(pid, signal),
         ...(stillIdle ? { stillIdle } : {}),
       });
+    } catch {
+      return { ok: false, code: 'unknown' };
+    }
+  });
+  // The user's "Continue on <account>": the pane's own Claude conversation is
+  // copied to the account's config dir and resumed there in the same pane
+  // (continueOnAccount.ts). main resolves the account to its directory.
+  pipeServer.onRpc('session.continueOnAccount', async (rawParams, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false, code: 'not_authorized' };
+    const p = rawParams as { sessionId?: unknown; configDir?: unknown };
+    const id = typeof p.sessionId === 'string' ? p.sessionId : '';
+    const configDir = typeof p.configDir === 'string' ? p.configDir : '';
+    if (!id || !sessionManager.getSession(id)) return { ok: false, code: 'no_session' };
+    try {
+      return await continueOnAccount({
+        pane: (sid) => sessionManager.getSession(sid)?.meta,
+        // The pane's agent as the canonical tiers name it; none once the shell
+        // is back at its prompt with no live agent process (#1392).
+        liveAgent: (sid) => {
+          const pane = sessionManager.getSession(sid);
+          if (!pane) return undefined;
+          const rawName = pane.bridge.getLastAgent();
+          const canonical = canonicalIdentityFor(agentProcessTracker, sid, rawName ? agentDisplayToSlug(rawName) : undefined);
+          if (!canonical) return undefined;
+          const live = provesLiveAgent(agentProcessTracker.identityFor(sid), canonical.slug);
+          return pane.promptLog.commandRunningIfKnown() === false && !live ? undefined : canonical.slug;
+        },
+        turnClosed: (sid) => {
+          const bridge = sessionManager.getSession(sid)?.bridge;
+          if (!bridge) return false;
+          const status = bridge.getAgentStatus();
+          return bridge.isTurnOpen() !== true && status !== 'running' && status !== 'awaiting_input';
+        },
+        shellKind: (sid) => {
+          const pane = sessionManager.getSession(sid);
+          if (!pane || pane.meta.wslTarget) return null;
+          const shell = classifyShell(pane.meta.cmd ?? '');
+          if (shell === 'pwsh') return 'pwsh';
+          if (shell === 'bash' || shell === 'zsh') return 'posix';
+          return process.platform === 'win32' ? null : 'posix';
+        },
+        stopClaude: (sid) => stopAgentTree({
+          tree: () => agentProcessTracker.agentProcessTree(sid, 'claude'),
+          stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
+          kill: (pid, signal) => process.kill(pid, signal),
+        }),
+        paneFree: async (sid) => {
+          const pane = sessionManager.getSession(sid);
+          if (!pane) return false;
+          const pid = agentProcessTracker.pidFor(sid);
+          if (pid !== undefined && await ProcessMonitor.isRunning(pid)) return false;
+          return (await agentProcessTracker.idleShellState(pane.meta.pid, pane.meta.env, true)).ok;
+        },
+        promptRevision: (sid) => {
+          const pane = sessionManager.getSession(sid);
+          if (!pane || pane.promptLog.size === 0 || pane.promptLog.isCommandRunning()) return null;
+          return pane.bridge.isEmptyShellPrompt() ? pane.bridge.getInputRevision() : null;
+        },
+        rebind: (sid, dir, transcriptPath) => {
+          const meta = sessionManager.getSession(sid)?.meta;
+          if (!meta) return () => undefined;
+          const before = { env: meta.env, paneAccount: meta.paneAccount, resumeBinding: meta.resumeBinding };
+          meta.env = { ...meta.env, CLAUDE_CONFIG_DIR: dir };
+          meta.paneAccount = { vendor: 'claude' };
+          if (meta.resumeBinding) meta.resumeBinding = { ...meta.resumeBinding, transcriptPath, ts: Date.now() };
+          stateWriter.saveImmediate(buildState(sessionManager));
+          return () => {
+            meta.env = before.env;
+            meta.paneAccount = before.paneAccount;
+            meta.resumeBinding = before.resumeBinding;
+            stateWriter.saveImmediate(buildState(sessionManager));
+          };
+        },
+        write: (sid, data) => {
+          const pane = sessionManager.getSession(sid);
+          if (!pane) return false;
+          pane.ptyProcess.write(data);
+          pane.bridge.noteInput(data);
+          return true;
+        },
+      }, id, configDir);
     } catch {
       return { ok: false, code: 'unknown' };
     }

@@ -250,6 +250,9 @@ export const IPC = {
   ACCOUNT_REMOVE: 'account:remove',
   ACCOUNT_SET_BINDING: 'account:set-binding',
   ACCOUNT_CREDENTIAL_STATUS: 'account:credential-status',
+  // Continue a pane's Claude conversation on another account (invoke,
+  // renderer → main → daemon `session.continueOnAccount`).
+  ACCOUNT_CONTINUE_PANE: 'account:continue-pane',
   // M2 — per-account usage (hook-gated, opt-in). LIST pulls the current cache on
   // Settings mount; REFRESH (renderer → main) forces a manual probe for one
   // account (explicit user action, bypasses the opt-in/cooldown gates); UPDATE
