@@ -1,6 +1,7 @@
 // F15 — the marker main attaches and the renderer takes off again. Both
 // processes handle this string, so the contract is tested once, here.
 
+import { spawnSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
 import {
   FANOUT_WORKER_ALLOWED_TOOLS,
@@ -29,6 +30,20 @@ describe('MODEL_ENV_MARKER', () => {
     // A gateway needs its own model name; unsetting it makes claude ask that
     // endpoint for a default claude-* model it does not serve.
     expect(MODEL_ENV_MARKER).toContain(`-n "$${WORKER_GATEWAY_ENV}"`);
+  });
+
+  // What a model-less worker's shell keeps, run through the marker itself.
+  const modelAfterMarker = (env: Record<string, string>): string =>
+    spawnSync('sh', ['-c', `${MODEL_ENV_MARKER}printf %s "$${WORKER_MODEL_ENV}"`], {
+      env: { PATH: process.env.PATH ?? '', [WORKER_MODEL_ENV]: 'provider-model', ...env },
+      encoding: 'utf8',
+    }).stdout;
+
+  it.skipIf(process.platform === 'win32')('keeps the model on Bedrock or Vertex, which set no base URL', () => {
+    expect(modelAfterMarker({ CLAUDE_CODE_USE_BEDROCK: '1' })).toBe('provider-model');
+    expect(modelAfterMarker({ CLAUDE_CODE_USE_VERTEX: '1' })).toBe('provider-model');
+    expect(modelAfterMarker({ [WORKER_GATEWAY_ENV]: 'https://gateway.example' })).toBe('provider-model');
+    expect(modelAfterMarker({})).toBe('');
   });
 });
 
