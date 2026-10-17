@@ -33,6 +33,7 @@ import {
   type TaskMission,
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const BOT = 'bot-0000000a';
 const UUID = '2eca904b-b4cc-4243-81d3-67a121351892';
@@ -477,7 +478,7 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(usage.bytes).toBeGreaterThan(500);
     // The automatic pass still leaves them alone.
     const installed = installTaskFolderCleanup({ ...later, onTransition: () => () => undefined, allRows: () => [] });
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'negative: the automatic pass leaves kept folders alone');
     installed.dispose();
     expect(fs.existsSync(cleanWt) && fs.existsSync(scratch)).toBe(true);
 
@@ -634,7 +635,7 @@ describe('a folder a stop kept, after 7 days', () => {
   async function pass(p: TaskFolderPorts, rows: LedgerEntry[], settle?: () => void): Promise<void> {
     const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => rows });
     if (settle) await vi.waitFor(settle, { timeout: 10_000 });
-    else await new Promise((r) => setTimeout(r, 100));
+    else await deliberateSleep(100, 'negative: one automatic pass, for callers that assert nothing happened');
     installed.dispose();
   }
 
@@ -745,8 +746,7 @@ describe('a folder a stop kept, after 7 days', () => {
     // never on a kick (a ledger change, a workspace closing).
     const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped], retryMs: 150 });
     await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } });
+    await vi.waitFor(() => expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } }), { timeout: 10_000 });
     // The ordinary pass over its row records nothing new.
     await cleanTaskFolders(p, [stopped]);
     expect(p.store.get(stopped.id)?.at).toBe(50_000);
@@ -756,12 +756,12 @@ describe('a folder a stop kept, after 7 days', () => {
       throw busy;
     });
     for (let i = 0; i < 5; i++) installed.kick();
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'negative: kicks do not retry a failed removal');
     expect(removeDir).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(3), { timeout: 5_000 });
     // Bounded: no fourth try from this install, kicked or timed.
     installed.kick();
-    await new Promise((r) => setTimeout(r, 400));
+    await deliberateSleep(400, 'negative: no fourth try, kicked or timed');
     expect(removeDir).toHaveBeenCalledTimes(3);
     installed.dispose();
     // The retries came a timer period apart.

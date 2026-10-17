@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => '/repo', getPath: () => '/home' },
@@ -1526,7 +1527,7 @@ describe('the foreign-turn-START notification', () => {
     await turn;
 
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'do it' } }));
-    await new Promise((r) => setTimeout(r, 5));
+    await deliberateSleep(5, 'clock: two prompt submits at distinct times');
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'no, do it this way' } }));
     expect(onForeignTurnStart).toHaveBeenCalledTimes(2);
     expect(onForeignTurnStart).toHaveBeenNthCalledWith(2, 'no, do it this way');
@@ -1551,7 +1552,7 @@ describe('the foreign-turn-START notification', () => {
     await turn;
 
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'do it' } }));
-    await new Promise((r) => setTimeout(r, 5));
+    await deliberateSleep(5, 'clock: two prompt submits at distinct times');
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'do it' } }));
     expect(onForeignTurnStart).toHaveBeenCalledTimes(1);
     adapter.dispose();

@@ -15,6 +15,7 @@ import { TERMINAL_PROMPT_WEB_ANSWER, type ApprovalEvent, type ApprovalRequest, t
 import type { PendingToolUse } from '../../transcript/pendingToolUse';
 import { buildApprovalPushPayload } from '../../push/approvalPushPayload';
 import { ApprovalPushRouter } from '../../push/approvalPushRouter';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // A real Claude Code permission dialog (a `permissions.ask` rule hit in a
 // bypassPermissions session), as the bottom of the visible grid. Placeholders
@@ -579,7 +580,7 @@ describe('terminal_prompt creation races and cooldown', () => {
       });
       await expect(h.registry.noteTerminalPrompt({ sessionId: 'pty-a', agent: 'claude', source: 'detector' }))
         .resolves.toBeUndefined();
-      await new Promise((r) => setTimeout(r, 10));
+      await deliberateSleep(10, 'negative: a failed record leaves no unhandled rejection');
       expect(unhandled).toEqual([]);
       expect(h.logs.some((l) => l.includes('terminal prompt record failed'))).toBe(true);
     } finally {

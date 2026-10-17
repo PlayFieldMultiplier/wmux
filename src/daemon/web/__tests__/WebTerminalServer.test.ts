@@ -26,6 +26,7 @@ import { generateSnapshotUnqueued } from '../../HeadlessSnapshot';
 import { Terminal } from '@xterm/headless';
 import { applyUnicodeWidthModel } from '../../../shared/terminalUnicode';
 import type { TurnFailure } from '../../../shared/phoneTurnFailure';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // Passes through to the real parse; the stream tests below hold it (handoff)
 // or fail it (the raw-window fallback) on purpose.
@@ -1067,8 +1068,7 @@ describe('WebTerminalServer', () => {
     const ac = new AbortController();
     const sse = await fetch(`${base()}/api/stream?session=s1&token=${encodeURIComponent(token)}`, { signal: ac.signal });
     expect(sse.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
-    expect(bridge.listenerCount('data')).toBe(1);
+    await vi.waitFor(() => expect(bridge.listenerCount('data')).toBe(1), { timeout: 10_000 });
     expect(bridge.listenerCount('exit')).toBe(1);
 
     // Stop → every SSE client detached, all bridge listeners removed.
@@ -1183,7 +1183,7 @@ describe('WebTerminalServer', () => {
       { signal: ac.signal },
     );
     expect(sse.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets the SSE stream attach; nothing polled');
 
     const em = sessionManager as unknown as EventEmitter;
     em.emit('session:critical', {
@@ -1273,7 +1273,7 @@ describe('WebTerminalServer', () => {
       { signal: ac.signal },
     );
     expect(sse.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets the SSE stream attach; nothing polled');
 
     // Emit fleet-wide events; they must reach the stream even though it watches s1.
     (sessionManager as unknown as EventEmitter).emit('session:critical', {
@@ -2531,7 +2531,7 @@ describe('WebTerminalServer', () => {
       signal: ac.signal,
     });
     expect(sse.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets the SSE stream attach; nothing polled');
 
     emitApproval('create', mkApproval({ id: 'ap-pane' }));
     // A `critical` still rides the pane stream (back-compat), so waiting for it
@@ -3159,7 +3159,7 @@ describe('WebTerminalServer', () => {
     expect(victimPane.res.status).toBe(200);
     expect(victimAttn.res.status).toBe(200);
     expect(bystanderPane.res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets the streams attach; nothing polled');
 
     // The store's half of a revoke (Worker A persists first); then the seam the
     // daemon calls to make it immediate rather than eventual.
@@ -3607,8 +3607,7 @@ describe('WebTerminalServer', () => {
         signal: ac.signal,
       });
       expect(pane.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
-      expect([...server.liveDeviceIds()]).toEqual([phone.deviceId]);
+      await vi.waitFor(() => expect([...server.liveDeviceIds()]).toEqual([phone.deviceId]), { timeout: 10_000 });
       server.disconnectDevice(phone.deviceId);
       expect(server.liveDeviceIds().size).toBe(0);
       ac.abort();
@@ -3627,8 +3626,7 @@ describe('WebTerminalServer', () => {
         });
         expect(pane.status).toBe(200);
       }
-      await new Promise((r) => setTimeout(r, 30));
-      expect([...server.liveSessionsByDevice()]).toEqual([[phone.deviceId, ['s1']]]);
+      await vi.waitFor(() => expect([...server.liveSessionsByDevice()]).toEqual([[phone.deviceId, ['s1']]]), { timeout: 10_000 });
       server.disconnectDevice(phone.deviceId);
       expect(server.liveSessionsByDevice().size).toBe(0);
       ac.abort();
@@ -3641,7 +3639,7 @@ describe('WebTerminalServer', () => {
       let release: () => void = () => undefined;
       deviceBox.mintGate = new Promise<void>((r) => { release = r; });
       const redeeming = fetch(`${base()}/api/pair?code=${phone.code}`);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'not yet converted (#2363): lets the redemption reach the mint gate; nothing polled');
       // The phone code is already claimed: a second redemption loses, and the
       // computer card may start while the mint is still in flight.
       expect((await fetch(`${base()}/api/pair?code=${phone.code}`)).status).toBe(403);
@@ -3668,7 +3666,7 @@ describe('WebTerminalServer', () => {
       deviceBox.mintGate = new Promise<void>((r) => { release = r; });
       deviceBox.mintThrows = true;
       const redeeming = fetch(`${base()}/api/pair?code=${phone.code}`);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'not yet converted (#2363): lets the redemption reach the mint gate; nothing polled');
       const computer = server.startPairing({ name: 'Computer', flow: 'computer' });
       if (!computer.ok) throw new Error(computer.error);
       release();
@@ -3815,7 +3813,7 @@ describe('WebTerminalServer', () => {
     });
     expect(pane.status).toBe(200);
     const reader = (pane.body as ReadableStream<Uint8Array>).getReader();
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets the stream attach; nothing polled');
 
     deviceRoster.get(victim.deviceId)!.revoked = true;
     expect(server.disconnectDevice(victim.deviceId)).toBe(1);
@@ -3868,7 +3866,7 @@ describe('WebTerminalServer', () => {
     const device = await pairDevice('Phone');
     const pane = await openStream(device.token);
     expect(pane.res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets the stream attach; nothing polled');
 
     await server.stop();
     expect(await closedWithin(pane.reader!, 1000)).toBe(true);
@@ -4017,8 +4015,7 @@ describe('WebTerminalServer', () => {
     try {
       const sse = await fetch(`${base()}/api/stream?session=s1&token=${encodeURIComponent(token)}`, { signal: ac.signal });
       expect(sse.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
-      expect(activate).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1), { timeout: 10_000 });
       expect(activate).toHaveBeenCalledWith('s1');
       // Listening BEFORE the activation, so the held output it releases
       // reaches this viewer.
@@ -4029,7 +4026,7 @@ describe('WebTerminalServer', () => {
       // An active pane is not activated again.
       const again = await fetch(`${base()}/api/stream?session=s1&token=${encodeURIComponent(token)}`, { signal: ac.signal });
       expect(again.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'negative: an active pane is not activated again');
       expect(activate).toHaveBeenCalledTimes(1);
     } finally {
       ac.abort();
@@ -4064,7 +4061,7 @@ describe('WebTerminalServer', () => {
     try {
       const sse = await fetch(`${base()}/api/stream?session=s1&token=${encodeURIComponent(token)}`, { signal: ac.signal });
       expect(sse.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'not yet converted (#2363): lets the stream attach; nothing polled');
       const res = await postResize('s1', token, { cols: 65, rows: 50 });
       expect(res.status).toBe(200);
       expect(resizeCalls).toEqual([{ id: 's1', cols: 65, rows: 50 }]);
@@ -6213,7 +6210,7 @@ describe('WebTerminalServer', () => {
     const b = getDiff('s1', token);
     const c = getDiff('s2', token);
     // Let the three requests reach the handler before the fourth.
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'not yet converted (#2363): lets three requests reach the handler; nothing polled');
     const d = getDiff('s3', token);
     const dRes = await d;
     expect(dRes.status).toBe(429);
@@ -7135,9 +7132,10 @@ describe('WebTerminalServer', () => {
         expect(off.status).toBe(200);
         expect((await off.json()).gateEnabled).toBe(false);
 
-        await new Promise((r) => setTimeout(r, 150));
-        expect(wire).toContain('event: gate.state');
-        expect(wire).toContain('"gateEnabled":false');
+        await vi.waitFor(() => {
+          expect(wire).toContain('event: gate.state');
+          expect(wire).toContain('"gateEnabled":false');
+        }, { timeout: 10_000 });
 
         // ...and the next client to ask reads the new state rather than the
         // default it would have had to guess.
@@ -11032,11 +11030,10 @@ describe('WebTerminalServer', () => {
         );
         await vi.waitFor(() => expect(generateSnapshotUnqueued).toHaveBeenCalled());
         ac.abort();
-        await new Promise((r) => setTimeout(r, 50));
+        await deliberateSleep(50, 'not yet converted (#2363): lets the abort land before release; nothing polled');
         release();
         await vi.waitFor(() => expect(rendered).toBe(true));
-        await new Promise((r) => setTimeout(r, 20));
-        expect(listeners()).toEqual(before);
+        await vi.waitFor(() => expect(listeners()).toEqual(before), { timeout: 10_000 });
       });
     });
 
@@ -11119,7 +11116,7 @@ describe('WebTerminalServer', () => {
 
         // Two accepted resizes one limiter-interval apart still merge…
         bridge.emit('resize');
-        await new Promise((r) => setTimeout(r, 260));
+        await deliberateSleep(260, 'real timer: one resize-limiter interval must pass');
         bridge.emit('resize');
         await s.pump(1200);
         expect(metas(s.body())).toHaveLength(2);
@@ -11155,7 +11152,7 @@ describe('WebTerminalServer', () => {
         ac.abort();
         const atAbort = reads;
         // Long enough for the debounce to have fired twice over.
-        await new Promise((r) => setTimeout(r, 1200));
+        await deliberateSleep(1200, 'negative: nothing wakes behind the closed stream');
 
         expect(reads).toBe(atAbort); // nothing woke up behind the closed stream
         expect(bridge.listenerCount('resize')).toBe(0);

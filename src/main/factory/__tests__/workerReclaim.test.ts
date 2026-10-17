@@ -42,6 +42,7 @@ import { taskFolderFromMissions } from '../verifyPreset';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { holdsUnsettledRunningClaim } from '../../notification/turnSettle';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // The status funnel main keeps per pane (metadata.handler.ts), in memory: the
 // real module pulls in electron.
@@ -201,7 +202,7 @@ describe('installWorkerReclaim', () => {
     fire(row('review_requested'), 'review_requested');
     fire(row('input_required'), 'input_required');
     fire(row('working'), 'working');
-    await new Promise((r) => setTimeout(r, 10));
+    await deliberateSleep(10, 'negative: non-final states stop nothing');
     expect(stopAgent).not.toHaveBeenCalled();
     fire(row('completed'), 'completed');
     await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(1));
@@ -453,7 +454,7 @@ describe('a reported task whose worker sat idle (refused or failed gate)', () =>
       const { ports, stopAgent } = reclaimPorts(store, [session()], { allRows: () => [current], row: () => current, turnEnded });
       // Inside the window: nothing yet.
       let off = installWorkerReclaim({ ...ports, now: () => 1_000 + 4 * 60_000 });
-      await new Promise((r) => setTimeout(r, 10));
+      await deliberateSleep(10, 'negative: nothing is stopped inside the window');
       expect(stopAgent).not.toHaveBeenCalled();
       off();
       off = installWorkerReclaim({ ...ports, now: () => 1_000 + 5 * 60_000 + 1 });
@@ -494,13 +495,13 @@ describe('a reported task whose worker sat idle (refused or failed gate)', () =>
     // A turn still runs: nothing is stopped.
     ended = false;
     let off = installWorkerReclaim(ports);
-    await new Promise((r) => setTimeout(r, 10));
+    await deliberateSleep(10, 'negative: nothing is stopped while a turn runs');
     expect(stopAgent).not.toHaveBeenCalled();
     off();
     // Not idle long enough: nothing either.
     ended = true;
     off = installWorkerReclaim({ ...ports, reportedIdleMs: 10_000 });
-    await new Promise((r) => setTimeout(r, 10));
+    await deliberateSleep(10, 'negative: nothing is stopped before the idle bound');
     expect(stopAgent).not.toHaveBeenCalled();
     off();
     off = installWorkerReclaim(ports);
@@ -824,7 +825,7 @@ describe('reclaim state and reopen (review fixes, PR #2164)', () => {
     fire(row('failed', { updatedAt: 1_000 }), 'failed');
     await vi.waitFor(() => expect(store.get(ID)?.state).toBe('stopped'));
     fire(row('failed', { updatedAt: 1_000 }), 'failed');
-    await new Promise((r) => setTimeout(r, 10));
+    await deliberateSleep(10, 'negative: a repeated end stops once');
     expect(stopAgent).toHaveBeenCalledTimes(1);
     fire(row('completed', { rev: 7, updatedAt: 6_000 }), 'completed');
     await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(2));
@@ -1050,7 +1051,7 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     // The reclaim's catch-up leaves the resumed worker running.
     const { ports, stopAgent } = reclaimPorts(store, [session({ id: 'daemon-9' })], { allRows: () => ledger.list({}), row: (id) => ledger.get(id) });
     const off = installWorkerReclaim(ports);
-    await new Promise((r) => setTimeout(r, 10));
+    await deliberateSleep(10, 'negative: the catch-up leaves a resumed worker running');
     off();
     expect(stopAgent).not.toHaveBeenCalled();
     expect(store.get(ID)?.state).toBe('resumed');
@@ -1242,7 +1243,7 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(1));
     // Stale again past the bound: once per end, not on every look.
     now += 2 * STOPPING_SETTLE_MS;
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'negative: stopped once per end, not on every look');
     off();
     expect(stopAgent).toHaveBeenCalledTimes(1);
     expect(store.get(TASK)?.state).toBe('stopping');
@@ -1251,7 +1252,7 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     await inReview.put(stopping({ ended: 'reported' }));
     const review = reclaimPorts(inReview, [session()], { row: () => row('review_requested'), allRows: () => [] });
     const offReview = installWorkerReclaim({ ...review.ports, now: () => 5_000 });
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'negative: a task in review is not stopped');
     offReview();
     expect(review.stopAgent).not.toHaveBeenCalled();
     expect(inReview.get(TASK)?.state).toBe('stopping');
@@ -1268,12 +1269,12 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
       row: () => row('review_requested'), allRows: () => [], workspacePanes: () => panes,
     });
     let off = installWorkerReclaim({ ...ports, now: () => 5_000 });
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'negative: the record stays stopping');
     off();
     expect(store.get(TASK)?.state).toBe('stopping');
     panes = null;
     off = installWorkerReclaim({ ...ports, listSessions: async () => [], now: () => 5_000 });
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'negative: the record stays stopping');
     off();
     expect(store.get(TASK)?.state).toBe('stopping');
     panes = ['daemon-1'];

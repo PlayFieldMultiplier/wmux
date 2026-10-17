@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RemoteAttentionGate, formatRemoteAttention } from '../remoteAttention';
 import { RemoteAttentionSubscriber } from '../RemoteAttentionSubscriber';
 import type { RemoteHost } from '../../../shared/remoteHosts';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 function frame(event: string, body: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(body)}\n\n`;
@@ -270,7 +271,7 @@ describe('RemoteAttentionSubscriber', () => {
     const before = h.scheduled.length;
     // A timer that fires after stop() must not restart the loop.
     for (const t of h.scheduled) t.cb();
-    await new Promise((r) => setTimeout(r, 10));
+    await deliberateSleep(10, 'negative: a timer after stop() does not restart the loop');
     expect(h.scheduled.length).toBe(before);
     expect(seen).toEqual(['one']);
   });

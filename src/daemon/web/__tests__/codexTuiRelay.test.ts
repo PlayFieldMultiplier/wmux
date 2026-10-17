@@ -9,6 +9,7 @@ import {describe,it,expect,vi} from 'vitest';
 import {createCodexTuiRelay,CodexRelayUnavailableError,CodexUpstreamError,type CodexRelayPolicy,type CodexDecisionSettledReason} from '../codexTuiRelay';
 import type {CodexDecisionRequest} from '../codexDecisions';
 import {threadIdentityEnv} from '../codexRelayPolicy';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 const threadId='01234567-89ab-4cde-8123-456789abcdef';
 const systemThreadId='11111111-89ab-4cde-8123-456789abcdef';
 const otherThreadId='22222222-89ab-4cde-8123-456789abcdef';
@@ -196,7 +197,7 @@ describe.skipIf(process.platform === 'win32')('pane-owned Codex Unix relay',()=>
       refuse=true;
       const closed=new Promise<void>(resolve=>client.once('close',()=>resolve()));
       client.send(JSON.stringify({id:2,method:'thread/resume',params:{}}));
-      await closed;await new Promise<void>(resolve=>setTimeout(resolve,50));
+      await closed;await deliberateSleep(50, 'negative: the refused request never reaches the account server');
       // The stale hint is dropped first; the request that would invalidate it
       // never reaches the account server when that drop cannot be persisted.
       expect(observed).toEqual(['none',threadId,'none','none']);
@@ -311,7 +312,7 @@ describe.skipIf(process.platform === 'win32')('relay request policy',()=>{
     try {
       const client=await f.connect();
       let got=reply(client);client.send(JSON.stringify([{id:1,method:'thread/list'}]));
-      await new Promise(r=>setTimeout(r,100));
+      await deliberateSleep(100, 'not yet converted (#2363): lets the batch be answered before the next send; nothing polled');
       got=reply(client);client.send(JSON.stringify({id:2,method:'thread/secretNewThing',params:{}}));
       expect(await got).toMatchObject({id:2,error:{}});
       got=reply(client);client.send(JSON.stringify({id:3,method:'turn/start',params:{threadId:otherThreadId,input:[]}}));
@@ -358,8 +359,7 @@ describe.skipIf(process.platform === 'win32')('relay request policy',()=>{
       const got=reply(client);
       client.send(JSON.stringify({id:1,method:'thread/start',params:{}}));
       expect(await got).toMatchObject({id:1,error:{}});
-      await new Promise(r=>setTimeout(r,50));
-      expect(f.relay.retired()).toBe(true);
+      await vi.waitFor(()=>expect(f.relay.retired()).toBe(true), { timeout: 10_000 });
       expect(seen.some(r=>r.method==='thread/start')).toBe(false);
     } finally { await f.cleanup(); }
   }, 10000);
@@ -373,8 +373,7 @@ describe.skipIf(process.platform === 'win32')('relay request policy',()=>{
       const client=await f.connect();
       client.send(JSON.stringify({id:0,method:'thread/start',params:{}}));
       for (let i=1;i<=70;i++) client.send(JSON.stringify({id:i,method:'model/list',params:{}}));
-      await new Promise(r=>setTimeout(r,200));
-      expect(f.relay.retired()).toBe(true);
+      await vi.waitFor(()=>expect(f.relay.retired()).toBe(true), { timeout: 10_000 });
       release(ID);
     } finally { await f.cleanup(); }
   });
@@ -478,12 +477,11 @@ describe.skipIf(process.platform === 'win32')('relay client responses',()=>{
       client.send(JSON.stringify({id:8,method:'thread/start',params:{}}));
       await deliver(approval(5));
       client.send(JSON.stringify({id:5,result:{decision:'accept'}}));
-      await new Promise(r=>setTimeout(r,50));
+      await deliberateSleep(50, 'ordering: the answer must arrive while the request still waits');
       await deliver(resolved(5));
       identity=ID;
       await started;
-      await new Promise(r=>setTimeout(r,50));
-      expect(answers).toEqual([{id:5,result:{decision:'accept'}}]);
+      await vi.waitFor(()=>expect(answers).toEqual([{id:5,result:{decision:'accept'}}]), { timeout: 10_000 });
     } finally { client.terminate();await f.cleanup(); }
   });
 
@@ -609,7 +607,7 @@ describe.skipIf(process.platform === 'win32')('phone answers to Codex approvals'
     try {
       await t.deliver(request(12));
       const answered=t.f.relay.answer(owned,'12','cancel');
-      await new Promise(r=>setTimeout(r,20));
+      await deliberateSleep(20, 'ordering: drop the link while the answer is still in flight');
       t.f.upstream()!.terminate();
       await expect(answered).resolves.toBe('uncertain');
       expect(t.settled).toEqual([{requestId:'12',threadId:owned,reason:'prompt-gone'}]);
@@ -734,8 +732,7 @@ describe.skipIf(process.platform === 'win32')('phone answers to Codex approvals'
       await t.deliver(request(10));
       const closed=new Promise<void>(resolve=>t.client.once('close',()=>resolve()));
       t.client.terminate();await closed;
-      await new Promise(r=>setTimeout(r,20));
-      expect(t.settled.at(-1)).toEqual({requestId:'10',threadId:owned,reason:'pane-gone'});
+      await vi.waitFor(()=>expect(t.settled.at(-1)).toEqual({requestId:'10',threadId:owned,reason:'pane-gone'}), { timeout: 10_000 });
       await expect(t.f.relay.answer(owned,'10','accept')).resolves.toBe('not-found');
     } finally { await t.f.cleanup(); }
   });
@@ -902,13 +899,13 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
       await f.down();await gone;
       // A first attempt the TUI gives up on leaves the endpoint.
       const impatient=await f.connect();
-      await new Promise(r=>setTimeout(r,80));
+      await deliberateSleep(80, 'ordering: an impatient TUI gives up after 80ms');
       impatient.terminate();await closed(impatient);
-      await new Promise(r=>setTimeout(r,20));
+      await deliberateSleep(20, 'negative: the relay is not retired by a TUI giving up');
       expect(f.relay.retired()).toBe(false);
       const back=await f.connect();
       const answered=resume(back,2);
-      await new Promise(r=>setTimeout(r,150));
+      await deliberateSleep(150, 'negative: one runtime check per loss, not one per attempt');
       expect(ensure).toHaveBeenCalledOnce();
       await f.up();
       await expect(answered).resolves.toMatchObject({id:2,result:{thread:{id:threadId}}});
@@ -941,8 +938,7 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
       await writeFile(f.upstreamPath,'not a socket');
       const back=await f.connect();
       const answered=resume(back,4);
-      await new Promise(r=>setTimeout(r,150));
-      expect(f.relay.disconnected()).toBe(true);
+      await vi.waitFor(()=>expect(f.relay.disconnected()).toBe(true), { timeout: 10_000 });
       await unlink(f.upstreamPath);
       await f.up();
       await expect(answered).resolves.toMatchObject({id:4,result:{thread:{id:threadId}}});
@@ -955,7 +951,7 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
     try {
       const client=await f.connect();
       client.send(JSON.stringify({id:5,method:'thread/resume',params:{threadId}}));
-      await new Promise(r=>setTimeout(r,50));
+      await deliberateSleep(50, 'negative: an unanswered selection binds nothing');
       expect(f.relay.current()).toBeUndefined();
       const gone=closed(client);
       await f.down();await gone;
@@ -980,7 +976,7 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
       await f.down();await gone;
       const back=await f.connect();
       const answered=resume(back,2);
-      await new Promise(r=>setTimeout(r,100));
+      await deliberateSleep(100, 'ordering: the resume waits on a down server before it comes back');
       await f.up();
       await expect(answered).resolves.toMatchObject({id:2,result:{thread:{id:threadId}}});
       expect(refusals).toEqual([]);
@@ -994,7 +990,7 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
       const gone=closed(client);
       await f.down();await gone;
       const waiting=await f.connect();
-      await new Promise(r=>setTimeout(r,60));
+      await deliberateSleep(60, 'ordering: close while a TUI waits on a down server');
       await f.relay.close();
       await closed(waiting);
       expect(f.relay.retired()).toBe(true);

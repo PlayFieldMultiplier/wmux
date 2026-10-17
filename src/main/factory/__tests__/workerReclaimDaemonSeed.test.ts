@@ -31,6 +31,7 @@ import {
   type WorkerReclaimPorts,
   type WorkerSessionInfo,
 } from '../workerReclaim';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const BOT = 'bot-0000000a';
 const UUID = '2eca904b-b4cc-4243-81d3-67a121351892';
@@ -149,7 +150,7 @@ async function reclaimLook(
     confirmIdle: async (e) => (await main.seed.confirmIdle(main.ownPanes(e) ?? [])) && main.idleAt(at, e),
     workspacePanes: () => [WORKER, SHELL],
   });
-  await new Promise((r) => setTimeout(r, 50));
+  await deliberateSleep(50, 'ordering: let the first pass start; the waitFor below would pass on the initial state');
   await vi.waitFor(() => expect(store.get(entry.id)?.state ?? 'none').not.toBe('stopping'));
   off();
   const rec = store.get(entry.id);

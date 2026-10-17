@@ -22,6 +22,7 @@ import {
   type ResumedIdlePorts,
   type WorkerSessionInfo,
 } from '../workerReclaim';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const BOT = 'bot-0000000a';
 const TASK = 'wtask-abc-12345678';
@@ -112,7 +113,7 @@ describe('the reported-task stop counts idle from the pane, not the row', () => 
     const look = async (t: number): Promise<void> => {
       at = t;
       const off = install();
-      await new Promise((r) => setTimeout(r, 10));
+      await deliberateSleep(10, 'negative: one bounded look; callers assert what it did not stop');
       off();
     };
     // The owner prompts the reported worker at T+6; its answer ends at T+6:30.

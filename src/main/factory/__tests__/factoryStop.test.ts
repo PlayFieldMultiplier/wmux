@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 
@@ -171,7 +172,7 @@ describe('stopFactoryWork', () => {
     // Past the window a new task is the bot's own new work.
     now += 10 * 60_000;
     await task('t-next', LEAD);
-    await new Promise((res) => setTimeout(res, 30));
+    await deliberateSleep(30, 'negative: new work past the window is not cancelled');
     expect(ledger.get('t-next')?.status).toBe('working');
     off();
   });
@@ -232,7 +233,7 @@ describe('stopFactoryWork', () => {
     // The turn ended (no current turn): the owner may ask for work again at once.
     r.runtime.interrupt(LEAD);
     await task('t-after', LEAD);
-    await new Promise((res) => setTimeout(res, 30));
+    await deliberateSleep(30, 'negative: work after the turn ended is not cancelled');
     expect(ledger.get('t-after')?.status).toBe('working');
     off();
   });
@@ -363,7 +364,7 @@ describe('late stops and stopped wakes (review fixes, PR #2164)', () => {
     await task('t-late', LEAD);
     await task('t-new', LEAD);
     await vi.waitFor(() => expect(ledger.get('t-late')?.status).toBe('cancelled'));
-    await new Promise((res) => setTimeout(res, 30));
+    await deliberateSleep(30, 'negative: new work after the stop is not cancelled');
     expect(ledger.get('t-new')?.status).toBe('working');
     off();
   });
@@ -427,7 +428,7 @@ describe('stop hardening (owner decision 2026-10-15)', () => {
     await vi.waitFor(() => expect(ledger.get('t-delayed')).toMatchObject({ status: 'cancelled', summary: STOPPED_BY_OWNER }));
     isOff = false;
     await task('t-after', LEAD);
-    await new Promise((res) => setTimeout(res, 30));
+    await deliberateSleep(30, 'negative: work after the switch-on is not cancelled');
     expect(ledger.get('t-after')?.status).toBe('working');
     offSweep();
   });
@@ -446,7 +447,7 @@ describe('"Run bots" off stops the work (factorySettingsSetHandler)', () => {
       get: () => ({ ...current }),
       update: vi.fn(async (patch: unknown) => {
         current = { ...current, ...(patch as Partial<FactorySettings>) };
-        await new Promise((res) => setTimeout(res, 5));
+        await deliberateSleep(5, 'stub latency: a slow settings write');
         return { ...current };
       }),
     };
@@ -479,7 +480,7 @@ describe('"Run bots" off stops the work (factorySettingsSetHandler)', () => {
     await task('t-gated', LEAD, 'review_requested');
     const s = settingsStore(true);
     // A slow worker stop: the switch-on and new work land while the stop runs.
-    const r = ports({ stopWorker: vi.fn(async () => { await new Promise((res) => setTimeout(res, 20)); return 1; }) });
+    const r = ports({ stopWorker: vi.fn(async () => { await deliberateSleep(20, 'stub latency: a slow worker stop'); return 1; }) });
     const set = factorySettingsSetHandler(() => win, s.handle, () => r.p);
     const offing = set(ok, { enabled: false });
     const onRes = await set(ok, { enabled: true });

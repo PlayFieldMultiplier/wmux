@@ -33,6 +33,7 @@ import type { ChatSkillCatalog } from '../../../shared/transcript/chatSkills';
 import type { ChatCancelProgress } from '../../../shared/phoneChatCancelOutcome';
 import type { CodexAccountStatus } from '../../../shared/phoneCodexAccountStatus';
 import type { TurnFailure } from '../../../shared/phoneTurnFailure';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 /**
  * Phone native chat routes (contract v0.3.1) against a FAKE ChatBridge: the
@@ -1474,7 +1475,7 @@ describe('native chat routes (contract v0.3.1)', () => {
         const request: ApprovalRequest = { id: 'ap-b', sessionId: 'brain-1', agent: 'claude', kind: 'awaiting_input', createdAt: 1, state: 'pending' };
         for (const l of approvalListeners) l({ type: 'create', request });
         server.emitTranscriptNudge('brain-1');
-        await new Promise((r) => setTimeout(r, 1300));
+        await deliberateSleep(1300, 'negative: a blocked chat is neither resolved nor announced');
         expect(chat.resolve).not.toHaveBeenCalledWith('brain-1');
         expect(chat.blocked).not.toHaveBeenCalled();
         expect(events.box.wire).not.toContain('chat.');
@@ -1736,7 +1737,7 @@ describe('native chat routes (contract v0.3.1)', () => {
         const frame = events.box.wire.slice(events.box.wire.indexOf('event: chat.queue'));
         expect(JSON.parse(frame.split('\n')[1].slice('data: '.length))).toEqual({ sessionId: 's1', clientMessageId: cmid, state: 'canceled', reason: 'user', at: 5 });
         expect(events.box.wire).not.toMatch(/id: [^\n]*\nevent: chat\.queue/);
-        await new Promise((r) => setTimeout(r, 50));
+        await deliberateSleep(50, 'negative: other watchers do not get the queue event');
         expect(otherWatcher.box.wire).not.toContain('chat.queue');
         expect(notWatching.box.wire).not.toContain('chat.queue');
         const backlog = await (await fetch(`${base()}/api/events`, { headers: mine })).json();
@@ -1940,7 +1941,7 @@ describe('native chat routes (contract v0.3.1)', () => {
         await until(() => events.box.wire.split('event: chat.cancel').length === 3);
         const second = events.box.wire.slice(events.box.wire.lastIndexOf('event: chat.cancel'));
         expect(JSON.parse(second.split('\n')[1].slice('data: '.length))).toEqual({ sessionId: 's1', clientCancelId: cid, state: 'not-ended', at: 10 });
-        await new Promise((r) => setTimeout(r, 50));
+        await deliberateSleep(50, 'negative: other watchers do not get the cancel event');
         expect(otherWatcher.box.wire).not.toContain('chat.cancel');
         expect(notWatching.box.wire).not.toContain('chat.cancel');
         const backlog = await (await fetch(`${base()}/api/events`, { headers: mine })).json();

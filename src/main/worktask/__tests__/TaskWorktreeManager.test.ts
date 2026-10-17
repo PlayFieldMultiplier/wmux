@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { RunGitOptions } from '../TaskWorktreeManager';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 let home: string;
 let prevHome: string | undefined;
@@ -342,7 +343,7 @@ describe('per-repo 직렬 큐 (§3 index.lock 경합 차단)', () => {
         if (args[0] === 'worktree' && args[1] === 'add') {
           active++;
           maxActive = Math.max(maxActive, active);
-          await new Promise((r) => setTimeout(r, 10));
+          await deliberateSleep(10, 'stub latency: overlapping worktree adds would show in maxActive');
           active--;
         }
         return { stdout: '', stderr: '' };

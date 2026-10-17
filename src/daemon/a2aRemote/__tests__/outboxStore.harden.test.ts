@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 let release: (() => void) | null = null;
 const calls: string[] = [];
@@ -39,7 +40,7 @@ describe('OutboxStore re-harden', () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     let idle = false;
     const done = outbox.idle().then(() => { idle = true; });
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'negative: idle() does not resolve while a write runs');
     expect(idle).toBe(false);
     release!();
     await vi.waitFor(() => expect(calls).toHaveLength(2)); // the second write's run
