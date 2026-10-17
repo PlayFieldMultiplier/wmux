@@ -239,31 +239,32 @@ describe('a shown worker is protected only for 30 minutes after the owner\'s las
     expect(viewProtects(undefined, [21 * MIN], 31 * MIN)).toBe(true);
   });
 
-  it('createViewAttention: becoming the active workspace or a pane focus restarts the clock; the Bots panel never does', () => {
+  it('createViewAttention: becoming the active workspace, a pane focus or the Bots panel opening restarts the clock; closing the panel does not', () => {
     const a = createViewAttention();
     a.observe({ workspaceId: 'ws-task', paneId: 'p1' }, null, 0);
     a.observe({ workspaceId: 'ws-task', paneId: 'p1' }, null, 10 * MIN);
     expect(a.focusedAt('ws-task')).toBe(0);
     a.observe({ workspaceId: 'ws-task', paneId: 'p2' }, null, 20 * MIN);
     expect(a.focusedAt('ws-task')).toBe(20 * MIN);
-    // The panel opening and closing over the active workspace changes nothing.
+    // The panel opens on the active workspace (a focus), then closes (none).
     a.observe({ workspaceId: 'ws-task', paneId: 'p2' }, 'ws-task', 22 * MIN);
+    expect(a.focusedAt('ws-task')).toBe(22 * MIN);
     a.observe({ workspaceId: 'ws-task', paneId: 'p2' }, null, 24 * MIN);
-    expect(a.focusedAt('ws-task')).toBe(20 * MIN);
-    // Another workspace becomes active while the panel still shows this one:
-    // its last focus stands; showing it again in the panel is no focus.
+    expect(a.focusedAt('ws-task')).toBe(22 * MIN);
+    // Opened again while another workspace becomes active: a focus, which
+    // stands while it stays in the panel.
     a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, 'ws-task', 25 * MIN);
-    expect(a.focusedAt('ws-task')).toBe(20 * MIN);
-    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, null, 26 * MIN);
+    expect(a.focusedAt('ws-task')).toBe(25 * MIN);
+    a.observe({ workspaceId: 'ws-other', paneId: 'p8' }, 'ws-task', 40 * MIN);
+    expect(a.focusedAt('ws-task')).toBe(25 * MIN);
+    // Closed: no longer shown, forgotten. Opened again: a focus.
+    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, null, 41 * MIN);
     expect(a.focusedAt('ws-task')).toBeUndefined();
-    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, 'ws-task', 27 * MIN);
-    expect(a.focusedAt('ws-task')).toBeUndefined();
-    // Back to it as the active workspace: a focus.
-    a.observe({ workspaceId: 'ws-task', paneId: 'p2' }, 'ws-task', 40 * MIN);
-    expect(a.focusedAt('ws-task')).toBe(40 * MIN);
+    a.observe({ workspaceId: 'ws-other', paneId: 'p9' }, 'ws-task', 45 * MIN);
+    expect(a.focusedAt('ws-task')).toBe(45 * MIN);
   });
 
-  describe('the idle stop of a resumed worker the owner focused', () => {
+  describe('the idle stop of a resumed worker shown in the Bots panel', () => {
     let store: ReclaimedWorkers;
     beforeEach(async () => {
       store = ReclaimedWorkers.at(dir);
@@ -273,12 +274,13 @@ describe('a shown worker is protected only for 30 minutes after the owner\'s las
       });
     });
 
-    /** Focused at 0 (made the active workspace); its turn ended a minute in. */
-    function rig(focus = true) {
+    /** Opened in the Bots panel at 0 (a focus) while another workspace is
+     *  active; its turn ended a minute in. */
+    function rig() {
       let at = 0;
       const pane: PaneActivity = { status: 'idle', turnEndAt: MIN };
       const attention = createViewAttention();
-      attention.observe(focus ? { workspaceId: 'ws-task', paneId: 'p0' } : { workspaceId: 'ws-owner', paneId: 'p0' }, 'ws-task', 0);
+      attention.observe({ workspaceId: 'ws-owner', paneId: 'p0' }, 'ws-task', 0);
       const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
       // As the lifecycle host words it.
       const sweep = createResumedIdleSweep({
@@ -294,12 +296,23 @@ describe('a shown worker is protected only for 30 minutes after the owner\'s las
       return { pane, stopAgent, attention, sweep: (t: number) => { at = t; return sweep.sweep(live); } };
     }
 
-    it('shown in the Bots panel with no focus or input: stopped once idle; typing in it protects it', async () => {
-      const r = rig(false);
-      r.pane.inputAt = 0;
+    it('closing the panel grants no more time; opening it again restarts the 30 minutes', async () => {
+      const r = rig();
+      // Closed at 20 and the workspace made active at once: protected until 30
+      // by that focus, never past it by the close.
+      r.attention.observe({ workspaceId: 'ws-task', paneId: 'p1' }, 'ws-task', 0);
+      r.attention.observe({ workspaceId: 'ws-task', paneId: 'p1' }, null, 20 * MIN);
       expect(await r.sweep(29 * MIN)).toEqual([]);
-      r.pane.inputAt = undefined;
-      expect(await r.sweep(29 * MIN)).toEqual([TASK]);
+      expect(await r.sweep(31 * MIN)).toEqual([TASK]);
+    });
+
+    it('opened again in the panel after 31 minutes: protected for 30 more', async () => {
+      const r = rig();
+      r.attention.observe({ workspaceId: 'ws-owner', paneId: 'p0' }, null, 25 * MIN);
+      r.attention.observe({ workspaceId: 'ws-owner', paneId: 'p0' }, 'ws-task', 26 * MIN);
+      expect(await r.sweep(31 * MIN)).toEqual([]);
+      expect(await r.sweep(55 * MIN)).toEqual([]);
+      expect(await r.sweep(57 * MIN)).toEqual([TASK]);
     });
 
     it('shown 29 minutes with no input: not stopped; 31 minutes, idle: stopped', async () => {

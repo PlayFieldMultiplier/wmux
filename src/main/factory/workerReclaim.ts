@@ -487,9 +487,10 @@ export function workerPanesIdle(panes: readonly PaneActivity[], floor: number, n
 export const VIEWED_ATTENTION_MS = 30 * 60_000;
 
 /** Whether being shown still protects a worker at `now`: the owner focused
- *  it (`focusedAt`: it became the active workspace, or its active pane
- *  changed) or typed into one of its panes (`inputAts`) within `ms`. Being
- *  shown alone, or the Bots panel opening or closing, is no focus. After
+ *  it (`focusedAt`: it became the active workspace, its active pane changed,
+ *  or the Bots panel opened on it) or typed into one of its panes
+ *  (`inputAts`) within `ms`. Staying shown, or the panel closing, is no
+ *  focus. After
  *  that the usual idle test decides; it never stops a pane with a live turn
  *  or a prompt waiting (workerPanesIdle). Pure. */
 export function viewProtects(focusedAt: number | undefined, inputAts: ReadonlyArray<number | undefined>, now: number, ms: number = VIEWED_ATTENTION_MS): boolean {
@@ -498,9 +499,9 @@ export function viewProtects(focusedAt: number | undefined, inputAts: ReadonlyAr
 }
 
 /** When the owner last focused each shown workspace, from the renderer's
- *  pushes: the viewed (active) workspace and its active pane changing. The
- *  Bots panel's workspace counts as shown but never as focused. A workspace
- *  no longer shown is forgotten. */
+ *  pushes: the viewed (active) workspace or its active pane changing, or the
+ *  Bots panel opening (or showing again) on it. The panel closing is no
+ *  focus. A workspace no longer shown is forgotten. */
 export interface ViewAttention {
   observe(viewed: { workspaceId: string; paneId: string | null } | null, panelWorkspaceId: string | null, at: number): void;
   /** Undefined: not focused while shown. */
@@ -510,10 +511,13 @@ export interface ViewAttention {
 export function createViewAttention(): ViewAttention {
   const focused = new Map<string, number>();
   let last: { workspaceId: string; paneId: string | null } | null = null;
+  let lastPanel: string | null = null;
   return {
     observe(viewed, panelWorkspaceId, at) {
       if (viewed?.workspaceId && (viewed.workspaceId !== last?.workspaceId || viewed.paneId !== last.paneId)) focused.set(viewed.workspaceId, at);
+      if (panelWorkspaceId && panelWorkspaceId !== lastPanel) focused.set(panelWorkspaceId, at);
       last = viewed?.workspaceId ? { workspaceId: viewed.workspaceId, paneId: viewed.paneId } : null;
+      lastPanel = panelWorkspaceId || null;
       for (const id of [...focused.keys()]) if (id !== viewed?.workspaceId && id !== panelWorkspaceId) focused.delete(id);
     },
     focusedAt(workspaceId) {

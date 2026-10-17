@@ -332,9 +332,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       }, turnSeed.activity(id));
     };
     // Shown protects a worker only while the owner typed into it or focused
-    // it (it became the active workspace, its active pane changed) in the
-    // last VIEWED_ATTENTION_MS; the Bots panel showing it is no focus. Then
-    // the usual idle test applies.
+    // it (it became the active workspace, its active pane changed, the Bots
+    // panel opened on it) in the last VIEWED_ATTENTION_MS; the panel closing
+    // is no focus. Then the usual idle test applies.
     const attention = createViewAttention();
     const observeView = (): void => attention.observe(mirror.getViewed(), mirror.getPanelWorkspaceId(), Date.now());
     observeView();
