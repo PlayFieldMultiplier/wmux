@@ -1,5 +1,5 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/app/shell/Sidebar.tsx), MIT License, Copyright (c) 2026 Nick
-import { useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback } from 'react';
 import { IconChevron } from '../icons';
 import { useT } from '../../hooks/useT';
 import type { Account } from '../../../main/account/accountStore';
@@ -102,14 +102,15 @@ export default function WorkspaceAccountMenu({
                   <span className="w-3 text-[var(--accent-amber)]">{!boundId ? '●' : ''}</span>
                   <span className="text-[var(--text-muted)]">{t('accounts.defaultAccount')}</span>
                 </button>
-                {buckets.map(({ group, accounts }) => [
-                  sectioned && (
-                    <div key={`group:${group}`} className="px-3 pt-1.5 pb-0.5 text-[10px] text-[var(--text-muted)] truncate" data-account-menu-group={group}>
+                {buckets.map(({ group, accounts }) => (
+                  <Fragment key={group}>
+                  {sectioned && (
+                    <div className="px-3 pt-1.5 pb-0.5 text-[10px] text-[var(--text-muted)] truncate" data-account-menu-group={group}>
                       {group || t('accounts.noGroup')}
                       {bound && group !== accountGroupOf(bound) && ` · ${t('accounts.differentGroup')}`}
                     </div>
-                  ),
-                  ...accounts.map((r) => (
+                  )}
+                  {accounts.map((r) => (
                   <button
                     key={r.id}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
@@ -128,8 +129,9 @@ export default function WorkspaceAccountMenu({
                       <span className="text-[10px] text-[var(--text-subtle)] shrink-0">{r.status.subscriptionType}</span>
                     )}
                   </button>
-                  )),
-                ])}
+                  ))}
+                  </Fragment>
+                ))}
                 <div className="px-3 pt-1 mt-1 border-t border-[var(--bg-overlay)] text-[10px] text-[var(--text-muted)] leading-snug">
                   {t('accounts.newTerminalsNote')}
                 </div>

@@ -54,7 +54,7 @@ export interface RotationAccountRow {
 export type RotationDecision =
   | { kind: 'keep' }
   | { kind: 'switch'; accountId: string; env: Record<string, string> }
-  /** `grouped`: the bound account is in a named group, and only that group was out. */
+  /** `grouped`: only the bound account's group was out; accounts in other groups were not considered. */
   | { kind: 'hold'; availableAtMs: number | null; grouped?: true };
 
 export interface AccountRotationDeps {
@@ -218,16 +218,23 @@ export class AccountRotationService {
     ];
     // ...or while the others were.
     if (!this.getSettings()[vendor]) return { kind: 'keep' };
+    // Groups as they are now: an account moved out of the group during the
+    // reads is no longer a candidate, and one moved in was not measured.
+    const groupNow = new Map(this.accounts(vendor).map((a) => [a.id, accountGroupOf(a)]));
+    if (groupNow.get(bound) !== group) return { kind: 'keep' };
+    const groupSize = [...groupNow.values()].filter((g) => g === group).length;
     // Only a measured account is a switch target; an unmeasured one (no
     // reading, or a Claude account whose last probe failed) is never picked.
     const candidates = read
+      .filter(({ a }) => groupNow.get(a.id) === group)
       .filter(({ a, reading }) => a.id === bound || reading !== null)
       .map(({ a, reading }) => ({ id: a.id, current: a.id === bound, verdict: evaluateQuota(reading, now) }));
     const choice = chooseByQuota(candidates);
     if (choice.kind === 'hold') {
       // "Every account is out" is only true when every account was measured.
-      if (candidates.length < pool.length) return { kind: 'keep' };
-      return { kind: 'hold', availableAtMs: choice.availableAtMs, ...(group ? { grouped: true as const } : {}) };
+      if (candidates.length < groupSize) return { kind: 'keep' };
+      // Other accounts were left out by group, so "every account" would be wrong.
+      return { kind: 'hold', availableAtMs: choice.availableAtMs, ...(groupSize < groupNow.size ? { grouped: true as const } : {}) };
     }
     if (choice.kind === 'keep') return { kind: 'keep' };
     const account = pool.find((a) => a.id === choice.id);

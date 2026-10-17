@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { Fragment, useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import type { Account } from '../../../main/account/accountStore';
 import type { CredentialStatus } from '../../../main/ipc/handlers/account.handler';
 import type { AccountUsageEntry } from '../../../main/account/AccountUsageService';
@@ -383,7 +383,7 @@ export function AccountsSection(): React.ReactElement | null {
   const groupLabel = (i: number) => {
     const group = accountGroupOf(orderedRows[i]);
     if (groupNames.length === 0 || (i > 0 && accountGroupOf(orderedRows[i - 1]) === group)) return null;
-    return <p key={`group:${group}`} className="settings-note" data-account-group={group}>{group || t('accounts.noGroup')}</p>;
+    return <p className="settings-note" data-account-group={group}>{group || t('accounts.noGroup')}</p>;
   };
 
   return (
@@ -396,9 +396,10 @@ export function AccountsSection(): React.ReactElement | null {
       {loaded && rows.length === 0 && !adding && (
         <p className="settings-note">{t('accounts.empty')}</p>
       )}
-      {orderedRows.map((r, i) => [
-        groupLabel(i),
-        <div key={r.id} className="ui-row" data-account-row={r.id}>
+      {orderedRows.map((r, i) => (
+        <Fragment key={r.id}>
+        {groupLabel(i)}
+        <div className="ui-row" data-account-row={r.id}>
           <Badge className="shrink-0">{r.vendor}</Badge>
           {editingId === r.id ? (
             <Input
@@ -461,8 +462,9 @@ export function AccountsSection(): React.ReactElement | null {
               <IconX size={12} />
             </Button>
           )}
-        </div>,
-      ])}
+        </div>
+        </Fragment>
+      ))}
       {pending.map((p) => <PendingLoginRow key={p.configDir} entry={p} />)}
       {adding ? (
         <AddAccountWizard onDone={() => { setAdding(false); reload(); }} onCancel={() => setAdding(false)} />

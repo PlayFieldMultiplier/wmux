@@ -158,7 +158,19 @@ describe('AccountRotationService', () => {
     // Ungrouped accounts are one pool of their own, never a fallback for a group.
     bindings['ws2:claude'] = 'u1';
     usageEntries = [usage('w1', 5), usage('p1', 5), usage('w2', 5), usage('u1', 99)];
-    expect(await s.prepareLaunch('claude', 'ws2')).toMatchObject({ kind: 'hold' });
+    expect(await s.prepareLaunch('claude', 'ws2')).toMatchObject({ kind: 'hold', grouped: true });
+  });
+
+  it('drops an account moved to another group while the quota reads ran', async () => {
+    const accounts = [acct('w1', 'claude', 'work'), acct('w2', 'claude', 'work')];
+    const s = make(accounts);
+    await s.setEnabled('claude', true);
+    bindings['ws:claude'] = 'w1';
+    usageEntries = [usage('w1', 99, NOW - 60 * 60_000), usage('w2', 10)];
+    // The store hands out new records after a write, as setAccountGroup does.
+    refreshNow.mockImplementation(async () => { accounts[1] = acct('w2', 'claude', 'personal'); });
+    // w2 had quota but is personal now: the work group (w1 alone) is out.
+    expect(await s.prepareLaunch('claude', 'ws')).toEqual({ kind: 'hold', availableAtMs: RESET_SEC * 1000, grouped: true });
   });
 
   it('holds when the whole group is out instead of crossing into another group', async () => {
