@@ -41,16 +41,14 @@ import {
   SKILL_NAME_RE,
   SKILL_REFERENCE_NAME_RE,
   WORKER_SKILLS_EXCLUDE_LINE,
-  parseSkillFrontmatter,
-  serializeSkillFrontmatter,
   skillVersionNewer,
   workerSkillDirName,
-  workerSkillFile,
   type BotSkillView,
   type SkillIndexEntry,
   type SkillReferenceInput,
   type SkillState,
 } from '../../shared/botSkill';
+import { parseSkillFrontmatter, serializeSkillFrontmatter, workerSkillFile } from './skillFrontmatter';
 
 /** Main's record of every bot's skills, under `<wmuxDir>/factory/`. */
 export const BOT_SKILLS_FILENAME = 'bot-skills.json';
@@ -284,9 +282,6 @@ export function validateSkillProposal(name: unknown, content: unknown, reference
   if (!fm.ok) return refuse('invalid', fm.error);
   if (fm.frontmatter.name !== name) return refuse('invalid', `the front matter's name (${fm.frontmatter.name}) is not ${name}`);
   if (!fm.body.trim()) return refuse('invalid', 'SKILL.md needs the procedure after its front matter');
-  // A dashes-only line in the body reads as a front matter marker to some
-  // readers (right after the front matter, as a second block): none is taken.
-  if (/^[ \t]*-{3,}[ \t]*$/m.test(fm.body)) return refuse('invalid', 'the procedure holds no line of only dashes (it reads as a front matter marker); use *** for a rule');
   const refs: SkillReferenceInput[] = [];
   if (references !== undefined) {
     if (!Array.isArray(references)) return refuse('invalid', 'references is a list of {name, content}');

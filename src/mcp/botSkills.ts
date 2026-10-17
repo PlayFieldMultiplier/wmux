@@ -27,7 +27,7 @@ registerToolModule({
       {
         name: NAME,
         content: z.string().min(1).max(SKILL_LIMITS.BODY_MAX)
-          .describe('The whole SKILL.md: line 1 exactly ---, then exactly name, description (one line: when to use it) and version (1.0.0), one key: value line each, then a line exactly --- (no indent), then the procedure. No --- anywhere in the values, and no line of only dashes in the procedure (use *** for a rule).'),
+          .describe('The whole SKILL.md: a --- line, then exactly name, description (one line: when to use it) and version (1.0.0) as YAML, one key: value line each (no anchors, aliases or tags), then a --- line, then the procedure. The front matter ends at its first ---, so none goes in a value.'),
         references: z.array(z.object({
           name: z.string().regex(SKILL_REFERENCE_NAME_RE),
           content: z.string().max(SKILL_LIMITS.REFERENCE_MAX),
