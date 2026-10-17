@@ -105,7 +105,9 @@ function checkFragments(files, { history = referencedNumbers() } = {}) {
         continue;
       }
 
-      for (const m of flat.matchAll(/\bsee (below|above)\b/gi)) {
+      // A quoted "see below" is a mention of the phrase, not a reference.
+      const prose = flat.replace(/`[^`]*`|"[^"]*"|“[^”]*”/g, '');
+      for (const m of prose.matchAll(/\bsee (below|above)\b/gi)) {
         const below = m[1].toLowerCase() === 'below';
         if (below ? i === ordered.length - 1 : i === 0) {
           report(file, entry.line, 'error', 'see-direction', `"${m[0]}" but no entry is ${m[1].toLowerCase()} it in this fragment; the fold reorders fragments, so name what it refers to`);

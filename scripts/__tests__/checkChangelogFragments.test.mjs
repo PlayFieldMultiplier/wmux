@@ -70,7 +70,7 @@ describe('check-changelog-fragments', () => {
     expect(dups[1].message).toContain('2329.md:3');
   });
 
-  it('fails "see below" with nothing below it, and accepts "see above" with an entry above', () => {
+  it('fails "see below" with nothing below it, and accepts "see above" with an entry above or a quoted phrase', () => {
     expect(check('see-below')).toMatchObject({ status: 1, errors: ['see-direction'] });
     expect(check('good').errors).toEqual([]);
   });
