@@ -148,6 +148,10 @@ interface Watch {
   sentAt: number;
   /** A line held back by the gap, sent on a later tick. */
   pending?: string;
+  /** Hands its Claude lines to `onClaudeLine`. */
+  lines: boolean;
+  /** Hook-fed: read only for `onClaudeLine`, never for the activity line. */
+  linesOnly: boolean;
 }
 
 /**
@@ -224,7 +228,13 @@ export class TranscriptActivityWatcher {
     if (LIVE_HOOK_KINDS.has(kind) || HOOK_ACTIVITY_KINDS.has(kind)) this.liveHookAt.set(sessionId, at);
     if (HOOK_ACTIVITY_KINDS.has(kind)) {
       this.hookFed.add(sessionId);
-      this.watches.delete(sessionId);
+      // The hook owns the activity line now; the Claude lines still matter.
+      const watch = this.watches.get(sessionId);
+      if (watch?.lines) {
+        watch.linesOnly = true;
+        watch.sent = undefined;
+        watch.pending = undefined;
+      } else this.watches.delete(sessionId);
     } else if (kind === 'agent.session_start') {
       this.sessionStartAt.set(sessionId, at);
       this.hookFed.delete(sessionId);
@@ -306,7 +316,14 @@ export class TranscriptActivityWatcher {
   }
 
   private reconcile(id: string): void {
-    const binding = this.hookFed.has(id) || !this.agentAlive(id) ? undefined : this.deps.getBinding(id);
+    const fed = this.hookFed.has(id);
+    let binding = fed || !this.agentAlive(id) ? undefined : this.deps.getBinding(id);
+    // A hook-fed Claude pane is still read for its lines (an API-error turn
+    // end has no hook on an install without StopFailure), never for activity.
+    if (fed && this.deps.onClaudeLine && this.agentAlive(id)) {
+      const claude = this.deps.getBinding(id);
+      if (claude?.agent === 'claude') binding = claude;
+    }
     const agentParse = binding ? PARSERS[binding.agent] : undefined;
     const path = binding?.transcriptPath;
     const onLine = binding?.agent === 'claude' ? this.deps.onClaudeLine : undefined;
@@ -318,14 +335,17 @@ export class TranscriptActivityWatcher {
       this.watches.delete(id);
       return;
     }
-    if (current && current.path === path) return;
+    if (current && current.path === path) {
+      current.linesOnly = this.hookFed.has(id);
+      return;
+    }
     const stat = statTranscript(path);
     if (!stat) {
       this.watches.delete(id);
       return;
     }
     // Start at the end: only what the agent writes from now on.
-    this.watches.set(id, { path, parse, ino: stat.ino, offset: stat.size, sentAt: 0 });
+    this.watches.set(id, { path, parse, ino: stat.ino, offset: stat.size, sentAt: 0, lines: !!onLine, linesOnly: this.hookFed.has(id) });
     if (onLine) readTranscriptPage(path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, path, line); return []; } });
   }
 
@@ -357,6 +377,7 @@ export class TranscriptActivityWatcher {
         watch.offset = delta.cursor.tailOffset;
       }
     }
+    if (watch.linesOnly) return;
     if (events.some((event) => event.kind === 'user_text')) watch.sent = undefined;
     const { line, quiet } = readBatch(events);
     // A turn that moved past its tools must not have a held-back line sent

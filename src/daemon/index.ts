@@ -3888,7 +3888,7 @@ function registerRpcHandlers(
         if (!session || isBrainPty({ id, env: session.meta.env })) return null;
         if (binding?.agent !== 'claude' || binding.transcriptPath !== path) return null;
         if (!checkNativeTranscriptPath('claude', path, binding.sessionId, session.meta.env).ok) return null;
-        return stopFailureSignal(id, binding, end);
+        return stopFailureSignal(id, binding, end, Date.now());
       },
       emit: (signal) => {
         log('info', `[hooks] ${signal.ptyId}: API-error turn end (${String(signal.payload.error)}) read from the transcript; no StopFailure hook arrived`);

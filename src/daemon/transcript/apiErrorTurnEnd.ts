@@ -17,8 +17,10 @@
 // `agent.stop_failure` the hook would have sent.
 //
 // Rules, each from a way this could go wrong:
-//   - The hook wins. A StopFailure or Stop hook for the pane within GRACE_MS
-//     of the entry means the install has the hook: nothing is sent.
+//   - The hook wins. A StopFailure or Stop hook for the pane that arrived no
+//     earlier than the entry was written, and after the turn's prompt, means
+//     the install has the hook: nothing is sent. The previous turn's Stop
+//     does not count.
 //   - Only a turn end. A later assistant or user entry before the grace runs
 //     out means the turn went on, so the entry was not its end.
 //   - Only the pane's current open turn. The entry's own timestamp must fall
@@ -98,7 +100,7 @@ interface Pending {
 
 export class ApiErrorTurnEnds {
   private readonly pending = new Map<string, Pending>();
-  /** Newest turn-closing hook (Stop / StopFailure) per pane. */
+  /** Newest turn-closing hook (Stop / StopFailure) since the pane's last prompt. */
   private readonly turnEndHookAt = new Map<string, number>();
   private readonly now: () => number;
 
@@ -116,8 +118,13 @@ export class ApiErrorTurnEnds {
   /** Every resolved hook signal for the session. */
   noteHookSignal(sessionId: string, kind: string): void {
     if (kind === 'agent.stop' || kind === 'agent.stop_failure') this.turnEndHookAt.set(sessionId, this.now());
+    // A new turn: the last turn's end hook speaks for nothing in it.
+    else if (kind === 'agent.user_prompt_submit') this.turnEndHookAt.delete(sessionId);
     // A new session: whatever the old one wrote is not this pane's turn now.
-    else if (kind === 'agent.session_start') this.pending.delete(sessionId);
+    else if (kind === 'agent.session_start') {
+      this.pending.delete(sessionId);
+      this.turnEndHookAt.delete(sessionId);
+    }
   }
 
   /** The pane closed or its PTY died. */
@@ -132,9 +139,10 @@ export class ApiErrorTurnEnds {
     for (const [id, p] of [...this.pending]) {
       if (now - p.seenAt < GRACE_MS) continue;
       this.pending.delete(id);
-      // A turn-end hook around the entry is the installed hook speaking for it.
+      // A turn-end hook that came after the entry was written is the installed
+      // hook speaking for it (the hook fires right after the write).
       const hookEnd = this.turnEndHookAt.get(id);
-      if (hookEnd !== undefined && hookEnd >= p.seenAt - GRACE_MS) continue;
+      if (hookEnd !== undefined && hookEnd >= p.end.at) continue;
       if (!this.deps.isCurrentOpenTurn(id, p.end.at)) continue;
       const signal = this.deps.signalFor(id, p.path, p.end);
       if (signal) this.deps.emit(signal);
@@ -147,6 +155,7 @@ export function stopFailureSignal(
   ptyId: string,
   binding: { sessionId: string; cwd: string },
   end: ApiErrorTurnEnd,
+  ts: number,
 ): AgentSignal {
   return {
     kind: 'agent.stop_failure',
@@ -154,8 +163,8 @@ export function stopFailureSignal(
     agentSessionId: binding.sessionId,
     cwd: binding.cwd,
     ptyId,
-    // The entry's time, so the failure is filed under the turn it ended.
-    ts: end.at,
+    // Sent now: the turn it ends was already matched on the entry's own time.
+    ts,
     payload: { error: end.error, last_assistant_message: end.message },
   };
 }
