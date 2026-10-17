@@ -173,7 +173,7 @@ export function registerTaskPushRpc(router: RpcRouter, deps: TaskPushRpcDeps): v
     // The repository's git dir, as main recorded it (never the worktree's).
     const gitCommonDir = await recordedTaskGitCommonDir(own.dispatch, deps.botRepoPath ?? ((id: string) => getBotStore()?.get(id)?.repo?.repoPath), deps.git);
     if (!gitCommonDir) return deny('FAILED_PRECONDITION', `${method}: wmux recorded no repository folder for this task ${words.repo}; start a new task`);
-    const gitWorktreeDir = recordedTaskGitWorktreeDir(own.dispatch, gitCommonDir, task.worktreePath);
+    const gitWorktreeDir = await recordedTaskGitWorktreeDir(own.dispatch, gitCommonDir, task.worktreePath);
     return { ok: true, row: own, task: { branch: task.branch, worktreePath: task.worktreePath }, dir, gitCommonDir, gitWorktreeDir, ...(expectedRepoKey ? { expectedRepoKey } : {}) };
   };
 

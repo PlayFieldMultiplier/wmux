@@ -88,13 +88,6 @@ describe('checkNoChanges', () => {
 describe.skipIf(process.platform === 'win32')('the no-changes check over real git, task.push and ledger.update', () => {
   const run = (cwd: string, ...args: string[]): string =>
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8' }).trim();
-  const plainGit = async (args: string[], cwd: string) => {
-    try {
-      return { stdout: execFileSync('git', args, { cwd, encoding: 'utf8' }), code: 0 };
-    } catch (err) {
-      return { stdout: '', code: (err as { status?: number }).status ?? 1 };
-    }
-  };
   let root = '';
   let origin = '';
   let repo = '';
@@ -138,7 +131,6 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
 
   const check = () => liveNoChangesCheck({
     rpc: () => async () => ({ ok: true, tasks: [{ id: 't1', worktreePath: work, branch: 'wtask/one' }] }),
-    git: plainGit,
     wmuxDir: () => dataDir,
     botRepoKey: () => undefined,
   });
@@ -260,7 +252,6 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
     await skip();
     const live = liveNoChangesPorts({
       rpc: () => async () => ({ ok: true, tasks: [{ id: 't1', worktreePath: work, branch: 'wtask/one' }] }),
-      git: plainGit,
       wmuxDir: () => dataDir,
       botRepoKey: () => undefined,
     });

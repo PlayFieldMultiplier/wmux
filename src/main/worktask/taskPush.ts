@@ -57,7 +57,7 @@ import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import {
-  RELAY_GIT_DEFAULT_PROTOCOLS, gitVersionRefusal, parseRawGitConfigList, relayGitConfigArgs, transportConfigReplay,
+  RELAY_GIT_DEFAULT_PROTOCOLS, gitVersionRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, taskGitEnv, transportConfigReplay,
 } from '../../shared/taskGitRelay';
 import { originUrlRepoKey, urlNamedRemoteRefusal, workerGitEnv, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal, type GitConfigEntry } from './workerGit';
 
@@ -220,15 +220,6 @@ export function wslTaskPushGit(distro: string, gitDir: string, exec: TaskPushExe
   return (args, _cwd, extra) => exec(wslExe, wslGitArgv(distro, gitDir, args), wslEnv(extra));
 }
 
-export function readDotGitFile(worktreePath: string): string | null {
-  try {
-    const p = path.join(worktreePath, '.git');
-    return fs.statSync(p).isFile() ? fs.readFileSync(p, 'utf8') : null;
-  } catch {
-    return null;
-  }
-}
-
 export interface TaskPushDeps {
   platform?: NodeJS.Platform;
   /** Runs wsl.exe (a WSL distro's git). */
@@ -252,9 +243,11 @@ export interface TaskGitRepo {
   entries: GitConfigEntry[];
   /** A read on the recorded repository (`--git-dir`, no object or ref write). */
   local: (args: string[]) => Promise<GitOut>;
-  /** The worktree's HEAD, read through the recorded worktree git dir; fails
-   *  when main recorded none. */
-  head: (args: string[]) => Promise<GitOut>;
+  /** The commit the worktree's HEAD names: its HEAD file in the recorded
+   *  worktree git dir, read strictly (parseTaskHead), a branch resolved in
+   *  the recorded repository's refs. No object is read. Fails when main
+   *  recorded no worktree git dir. */
+  headOid: () => Promise<{ ok: true; oid: string } | { ok: false; error: string }>;
   /** `fn` runs git in the task's relay (origin set to `url`, objects borrowed
    *  from the recorded repository). Never throws. */
   inRelay: <T>(url: string, fn: (run: (args: string[]) => Promise<GitOut>) => Promise<T>) => Promise<{ ok: true; value: T } | { ok: false; error: string }>;
@@ -264,8 +257,10 @@ export interface TaskGitRepo {
   workerShellPlatform: NodeJS.Platform;
 }
 
-const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const TASK_ID_RE = /^[A-Za-z0-9_.-]+$/;
+
+/** The most of a shallow list main reads (about 25,000 boundary commits). */
+const SHALLOW_MAX = 1024 * 1024;
 
 /** Serializes calls that touch one relay (the no-changes check and task_fetch
  *  can reach the same relay at once). */
@@ -277,18 +272,37 @@ function withRelayLock<T>(relayHostPath: string, fn: () => Promise<T>): Promise<
   return next;
 }
 
-function hostReadFile(p: string): string | null {
+/** A small file a worker can write (HEAD, a worktree's `gitdir`, the
+ *  shallow list), read without waiting on it: a plain file only (lstat, then
+ *  fstat on the opened handle, same file), opened non-blocking and with no
+ *  symlink followed, at most `max` bytes. Null for anything else. Never
+ *  throws. */
+export async function readWorkerFile(p: string, max = 4096): Promise<string | null> {
+  let fh: fs.promises.FileHandle | undefined;
   try {
-    return fs.readFileSync(p, 'utf8');
+    const st = await fs.promises.lstat(p);
+    if (!st.isFile() || st.size > max) return null;
+    fh = await fs.promises.open(p, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = await fh.stat();
+    if (!opened.isFile() || opened.ino !== st.ino || opened.dev !== st.dev) return null;
+    const buf = Buffer.alloc(max + 1);
+    const { bytesRead } = await fh.read(buf, 0, max + 1, 0);
+    return bytesRead > max ? null : buf.subarray(0, bytesRead).toString('utf8');
   } catch {
     return null;
+  } finally {
+    await fh?.close().catch(() => undefined);
   }
 }
 
-async function wslReadFile(exec: TaskPushExec, distro: string, linuxPath: string): Promise<string | null> {
+/** readWorkerFile inside a WSL distro: a plain file only, at most `max`
+ *  bytes, given a few seconds. */
+async function wslReadFile(exec: TaskPushExec, distro: string, linuxPath: string, max = 4096): Promise<string | null> {
   const wslExe = wslExePath(process.env.SystemRoot);
-  const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'cat', '--', linuxPath], wslEnv());
-  return r.code === 0 ? r.stdout : null;
+  const isFile = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'test', '-f', linuxPath, '-a', '!', '-h', linuxPath], wslEnv());
+  if (isFile.code !== 0) return null;
+  const r = await exec(wslExe, ['-d', distro, '--cd', '/', '--exec', 'timeout', '5', 'head', '-c', String(max + 1), '--', linuxPath], wslEnv());
+  return r.code === 0 && Buffer.byteLength(r.stdout, 'utf8') <= max ? r.stdout : null;
 }
 
 function hostRealpath(p: string): string | null {
@@ -312,19 +326,19 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   if (target.kind === 'refused') return fail(target.error);
   const wslExec = deps.wslExec ?? defaultWslExec;
   const safe = workerGitSafeArgs(target.kind === 'wsl' ? '/dev/null' : path.resolve(input.noHooksDir));
-  const NO_LAZY = { GIT_NO_LAZY_FETCH: '1' };
   // The stable cwd for host git: never discovered from, always overridden by
   // --git-dir or GIT_DIR.
   const hostCwd = os.homedir();
 
-  // exec(args, env): git on the right target, env added.
-  let exec: (args: string[], env: Record<string, string>) => Promise<GitOut>;
+  // run(args, env): git on the right target, env added. Called only through
+  // exec below, so every call runs with taskGitEnv.
+  let run: (args: string[], env: Record<string, string>) => Promise<GitOut>;
   let common: string; // the recorded common git dir, in the serving git's spelling
   let toLinux: ((winPath: string) => Promise<string | null>) | null = null;
   if (target.kind === 'wsl') {
     common = target.gitDir;
     const wslExe = wslExePath(process.env.SystemRoot);
-    exec = (args, env) => wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], wslEnv(env));
+    run = (args, env) => wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], wslEnv(env));
     toLinux = deps.toWslPath
       ? async (p) => deps.toWslPath!(p)
       : async (p) => {
@@ -338,8 +352,9 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
     const same = real !== null && (platform === 'win32' ? real.toLowerCase() === input.gitCommonDir.toLowerCase() : real === input.gitCommonDir);
     if (!same) return fail(`the task's repository ${input.gitCommonDir} no longer resolves to itself`);
     common = input.gitCommonDir;
-    exec = (args, env) => git(args, hostCwd, env);
+    run = (args, env) => git(args, hostCwd, env);
   }
+  const exec = (args: string[], env: Record<string, string>) => run(args, taskGitEnv(env));
 
   // The version floor: defence in depth for GIT_NO_LAZY_FETCH.
   const ver = await exec(['--version'], {});
@@ -347,7 +362,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   const verRefusal = gitVersionRefusal(ver.stdout);
   if (verRefusal) return { ok: false, reason: 'config-refused', error: verRefusal };
 
-  const local = (args: string[]) => exec([`--git-dir=${common}`, ...safe, ...args], { ...NO_LAZY, GIT_COMMON_DIR: common });
+  const local = (args: string[]) => exec([`--git-dir=${common}`, ...safe, ...args], { GIT_COMMON_DIR: common });
   const pre = await workerGitPreflight(local);
   if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
   const own = (key: string) => pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === key)?.value;
@@ -359,6 +374,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   if (promisor) return { ok: false, reason: 'config-refused', error: `the repository is a partial clone (${promisor.key})` };
   const objectFormat = (own('extensions.objectformat') ?? 'sha1').toLowerCase();
   if (objectFormat !== 'sha1' && objectFormat !== 'sha256') return { ok: false, reason: 'config-refused', error: `the repository's object format ${objectFormat} is not one main reads` };
+  const idRe = objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : /^[0-9a-f]{40}$/;
   // A shallow repository: the relay reads the boundary commits from its own
   // `shallow`, so main copies the list there.
   const isShallow = await local(['rev-parse', '--is-shallow-repository']);
@@ -367,9 +383,8 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   let shallowList = '';
   if (shallowState === 'true') {
     const text = target.kind === 'wsl'
-      ? await wslReadFile(wslExec, target.distro, path.posix.join(common, 'shallow'))
-      : hostReadFile(path.join(common, 'shallow'));
-    const idRe = objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : /^[0-9a-f]{40}$/;
+      ? await wslReadFile(wslExec, target.distro, path.posix.join(common, 'shallow'), SHALLOW_MAX)
+      : await readWorkerFile(path.join(common, 'shallow'), SHALLOW_MAX);
     const ids = (text ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     if (text === null || ids.length === 0 || !ids.every((id) => idRe.test(id))) return { ok: false, reason: 'config-refused', error: 'the repository\'s shallow list could not be read' };
     shallowList = `${[...new Set(ids)].join('\n')}\n`;
@@ -386,9 +401,19 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
       if (real && path.dirname(path.dirname(real)) === common) worktreeGitDir = real;
     }
   }
-  const head = (args: string[]) => worktreeGitDir
-    ? exec([...safe, ...args], { ...NO_LAZY, GIT_DIR: worktreeGitDir, GIT_COMMON_DIR: common })
-    : Promise.resolve({ code: 1, stdout: '', stderr: 'main recorded no worktree git dir for this task' });
+  const headOid: TaskGitRepo['headOid'] = async () => {
+    if (!worktreeGitDir) return { ok: false, error: 'main recorded no worktree git dir for this task' };
+    const text = target.kind === 'wsl'
+      ? await wslReadFile(wslExec, target.distro, path.posix.join(worktreeGitDir, 'HEAD'))
+      : await readWorkerFile(path.join(worktreeGitDir, 'HEAD'));
+    if (text === null) return { ok: false, error: 'the worktree\'s HEAD is not a small plain file' };
+    const parsed = parseTaskHead(text, objectFormat);
+    if (!parsed) return { ok: false, error: 'the worktree\'s HEAD names neither a commit id nor a plain branch' };
+    if (parsed.kind === 'oid') return { ok: true, oid: parsed.oid };
+    const r = await local(['rev-parse', '--verify', '--quiet', '--end-of-options', parsed.ref]);
+    const oid = r.stdout.trim();
+    return r.code === 0 && idRe.test(oid) ? { ok: true, oid } : { ok: false, error: `${parsed.ref} could not be read` };
+  };
 
   // The relay: a bare repository main owns, objects borrowed from the recorded
   // repository, origin set to the verified URL. Reused across calls.
@@ -402,7 +427,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
       if (!relayShellPath) return { ok: false as const, error: `main's relay folder ${relayHostPath} has no path inside WSL` };
       const linuxObjects = target.kind === 'wsl' ? path.posix.join(common, 'objects') : path.join(common, 'objects');
       const relayArg = `--git-dir=${relayShellPath}`;
-      const relayGit = (args: string[], extra: Record<string, string> = {}) => exec([relayArg, ...args], { ...NO_LAZY, ...extra });
+      const relayGit = (args: string[]) => exec([relayArg, ...args], {});
       // Create once; refresh the borrowed objects, origin and shallow each time
       // (the worker can change them between calls).
       const fresh = !fs.existsSync(path.join(relayHostPath, 'HEAD'));
@@ -431,7 +456,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   });
 
   const workerShellPlatform: NodeJS.Platform = target.kind === 'wsl' ? 'linux' : platform;
-  return { ok: true, repo: { entries: pre.entries, local, head, inRelay, relayShellPath, workerShellPlatform } };
+  return { ok: true, repo: { entries: pre.entries, local, headOid, inRelay, relayShellPath, workerShellPlatform } };
 }
 
 /** Removes the relay of a task that has closed, after any call on it ends. */
@@ -501,11 +526,14 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
     const refusal = taskPushBranchRefusal(input.branch, [...input.defaultBranches, ...own]);
     if (refusal) return { ok: false, reason: 'branch-refused', error: refusal };
   }
-  // HEAD is resolved once, through the recorded worktree git dir.
-  const head = await repo.head(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
-  const sha = head.stdout.trim();
-  if (head.code !== 0 || !SHA_RE.test(sha)) {
-    return { ok: false, reason: 'git-failed', error: `git rev-parse HEAD failed: ${head.stderr.trim().slice(0, 500)}` };
+  // HEAD is resolved once, through the recorded worktree git dir, to a
+  // commit id; git is handed that id, never the HEAD text.
+  const head = await repo.headOid();
+  if (!head.ok) return { ok: false, reason: 'git-failed', error: head.error };
+  const commit = await repo.local(['rev-parse', '--verify', '--quiet', '--end-of-options', `${head.oid}^{commit}`]);
+  const sha = commit.stdout.trim();
+  if (commit.code !== 0 || sha !== head.oid) {
+    return { ok: false, reason: 'git-failed', error: `the worktree's HEAD ${head.oid} is not a commit: ${commit.stderr.trim().slice(0, 500)}` };
   }
   const pushed = await repo.inRelay(origin.url, (run) => run(taskPushArgs(input.branch, origin.url, sha)));
   if (!pushed.ok) return { ok: false, reason: 'git-failed', error: pushed.error };

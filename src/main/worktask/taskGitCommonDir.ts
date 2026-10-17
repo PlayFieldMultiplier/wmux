@@ -11,7 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { LedgerDispatch } from '../../shared/ledger';
-import { defaultGit, type TaskPushGit } from './taskPush';
+import { taskGitEnv } from '../../shared/taskGitRelay';
+import { defaultGit, readWorkerFile, type TaskPushGit } from './taskPush';
 
 function realOrNull(p: string): string | null {
   try {
@@ -31,7 +32,7 @@ export async function recordedTaskGitCommonDir(
   const botId = dispatch?.origin.kind === 'bot' ? dispatch.origin.botId : undefined;
   const repoPath = botId ? botRepoPath(botId) : undefined;
   if (!repoPath || !path.isAbsolute(repoPath)) return null;
-  const r = await git(['rev-parse', '--git-common-dir'], repoPath);
+  const r = await git(['rev-parse', '--git-common-dir'], repoPath, taskGitEnv());
   const out = r.code === 0 ? r.stdout.trim() : '';
   if (!out) return null;
   return realOrNull(path.resolve(repoPath, out));
@@ -44,11 +45,11 @@ export async function recordedTaskGitCommonDir(
  * the recorded worktree. Returns null (fail closed) when none, or more than
  * one, matches. Never throws.
  */
-export function recordedTaskGitWorktreeDir(
+export async function recordedTaskGitWorktreeDir(
   dispatch: LedgerDispatch | undefined,
   commonDir: string,
   worktreePath: string,
-): string | null {
+): Promise<string | null> {
   if (dispatch?.gitWorktreeDir) return dispatch.gitWorktreeDir;
   // Legacy: scan the common dir's worktree gitdirs for the one whose `gitdir`
   // file names this worktree's `.git`.
@@ -64,12 +65,8 @@ export function recordedTaskGitWorktreeDir(
   const matches: string[] = [];
   for (const name of names) {
     const dir = path.join(commonDir, 'worktrees', name);
-    let pointer: string;
-    try {
-      pointer = fs.readFileSync(path.join(dir, 'gitdir'), 'utf8').trim();
-    } catch {
-      continue;
-    }
+    const pointer = (await readWorkerFile(path.join(dir, 'gitdir')))?.trim();
+    if (!pointer) continue;
     const pointerReal = realOrNull(pointer);
     if (pointerReal && pointerReal === want) matches.push(dir);
   }

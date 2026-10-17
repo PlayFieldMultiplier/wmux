@@ -7,12 +7,14 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultGit, pushTaskBranch, type TaskPushExec, type TaskPushGit } from '../taskPush';
+import { defaultGit, pushTaskBranch, readWorkerFile, type TaskPushExec, type TaskPushGit } from '../taskPush';
 import { fetchTaskRefs } from '../taskFetch';
+import { recordedTaskGitWorktreeDir } from '../taskGitCommonDir';
+import { liveNoChangesPorts } from '../../factory/noChangesCheck';
+import type { LedgerEntry } from '../../../shared/ledger';
 import {
-  fetchCommandFor, gitVersionRefusal, parseRawGitConfigList, relayGitConfigArgs, shellQuote, transportConfigReplay,
+  fetchCommandFor, gitVersionRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, shellQuote, transportConfigReplay,
 } from '../../../shared/taskGitRelay';
-import { writeFakeSsh } from '../../../test-utils/fakeSsh';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -22,10 +24,11 @@ const git = (cwd: string, ...args: string[]): string =>
 const FILE_OK = { protocols: ['https', 'ssh', 'file'] };
 
 describe('relay git: argv, env and config replay', () => {
-  it('forces no gc, no maintenance, no commit-graph or multi-pack index, and the given transports', () => {
+  it('forces no gc, no maintenance, no commit-graph or multi-pack index, fetched objects kept as a pack, and the given transports', () => {
     expect(relayGitConfigArgs(['-c', 'core.fsmonitor=false'])).toEqual([
       '-c', 'core.fsmonitor=false',
       '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.commitGraph=false', '-c', 'core.multiPackIndex=false',
+      '-c', 'fetch.unpackLimit=1', '-c', 'transfer.unpackLimit=1',
       '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always',
     ]);
   });
@@ -72,6 +75,21 @@ describe('relay git: argv, env and config replay', () => {
     expect(gitVersionRefusal('nonsense')).toMatch(/could not be read/);
   });
 
+  it('reads a HEAD file strictly: a full commit id of the object format, or a plain branch ref', () => {
+    const a = 'a'.repeat(40);
+    expect(parseTaskHead(`${a}\n`, 'sha1')).toEqual({ kind: 'oid', oid: a });
+    expect(parseTaskHead(`${'b'.repeat(64)}\n`, 'sha256')).toEqual({ kind: 'oid', oid: 'b'.repeat(64) });
+    expect(parseTaskHead('ref: refs/heads/wtask/one\n', 'sha1')).toEqual({ kind: 'ref', ref: 'refs/heads/wtask/one' });
+    for (const bad of [
+      `${'b'.repeat(64)}\n`, `${a.toUpperCase()}\n`, `${a}\n\n`, ` ${a}`, a.slice(1),
+      'ref: refs/heads/x^{blob}\n', 'ref: refs/heads/x~1', 'ref: refs/heads/x:y', 'ref: refs/heads/x?', 'ref: refs/heads/x*',
+      'ref: refs/heads/x[1]', 'ref: refs/heads/x\\y', 'ref: refs/heads/x@{1}', 'ref: refs/heads/x y', 'ref: refs/heads/x\ty',
+      'ref: refs/heads/-x', 'ref: refs/heads/a..b', 'ref: refs/heads/a.lock/b', 'ref: refs/heads/a/', 'ref: refs/heads/',
+      'ref: refs/tags/v1', 'ref: refs/remotes/origin/main', 'ref:refs/heads/x', 'ref: refs/heads/x\nref: refs/heads/y',
+    ]) expect(parseTaskHead(bad, 'sha1'), JSON.stringify(bad)).toBeNull();
+    expect(parseTaskHead(`${a}\n`, 'other')).toBeNull();
+  });
+
   it('quotes the fetch line for the worker\'s shell', () => {
     expect(shellQuote("a b", 'linux')).toBe("'a b'");
     expect(shellQuote("a'b", 'darwin')).toBe("'a'\\''b'");
@@ -92,6 +110,8 @@ describe('relay git: inside WSL', () => {
     const exec: TaskPushExec = async (_file, args, env) => {
       calls.push({ args, env });
       const prog = args[5];
+      if (prog === 'test') return { code: 0, stdout: '', stderr: '' };
+      if (prog === 'timeout') return { code: 0, stdout: 'ref: refs/heads/wtask/one\n', stderr: '' };
       if (prog === 'wslpath') return { code: 0, stdout: `/mnt/c/wmux${String(args[args.length - 1]).slice(root.length).replace(/\\/g, '/')}\n`, stderr: '' };
       if (args.includes('--version')) return { code: 0, stdout: 'git version 2.50.0\n', stderr: '' };
       if (args.includes('--list')) return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@github.com/acme/app.git\0', stderr: '' };
@@ -119,10 +139,21 @@ describe('relay git: inside WSL', () => {
       expect(calls.some((c) => 'GIT_CONFIG_NOSYSTEM' in c.env)).toBe(false);
       // The borrowed objects are named by the alternates file (a Linux path).
       expect(fs.readFileSync(path.join(relayRoot, 'wtask-1', 'objects', 'info', 'alternates'), 'utf8')).toBe('/home/me/repo/.git/objects\n');
-      // HEAD is read through the recorded worktree git dir, by env.
-      const head = calls.find((c) => c.args.includes('HEAD^{commit}')) as { args: string[]; env: NodeJS.ProcessEnv };
-      expect(head.env.GIT_DIR).toBe('/home/me/repo/.git/worktrees/t');
-      expect(head.env.GIT_COMMON_DIR).toBe('/home/me/repo/.git');
+      // HEAD is the recorded worktree git dir's HEAD file, read bounded in the
+      // distro; its branch is resolved in the recorded repository's refs.
+      const read = calls.find((c) => c.args[5] === 'timeout') as { args: string[] };
+      expect(read.args.slice(5)).toEqual(['timeout', '5', 'head', '-c', '4097', '--', '/home/me/repo/.git/worktrees/t/HEAD']);
+      const ref = calls.find((c) => c.args.includes('refs/heads/wtask/one') && c.args.includes('rev-parse')) as { args: string[]; env: NodeJS.ProcessEnv };
+      expect(ref.args).toContain('--git-dir=/home/me/repo/.git');
+      expect(ref.env.GIT_COMMON_DIR).toBe('/home/me/repo/.git');
+      expect(calls.some((c) => c.args.includes(`${sha}^{commit}`))).toBe(true);
+      // Every git call runs with GIT_NO_LAZY_FETCH, named in WSLENV.
+      const gitCalls = calls.filter((c) => c.args[5] === 'git');
+      expect(gitCalls.length).toBeGreaterThan(3);
+      for (const c of gitCalls) {
+        expect(c.env.GIT_NO_LAZY_FETCH).toBe('1');
+        expect(String(c.env.WSLENV).split(':')).toContain('GIT_NO_LAZY_FETCH');
+      }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -215,6 +246,16 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     git(mover, 'commit', '-qm', 'moved');
     git(mover, 'push', '-q', 'origin', 'main');
 
+    // And a loose-object path for an object the fetch will receive, symlinked
+    // out to a file with old times.
+    const blob = git(mover, 'rev-parse', 'HEAD:c.txt');
+    const extObj = path.join(root, 'ext-obj');
+    fs.copyFileSync(path.join(mover, '.git', 'objects', blob.slice(0, 2), blob.slice(2)), extObj);
+    fs.mkdirSync(path.join(common, 'objects', blob.slice(0, 2)), { recursive: true });
+    fs.symlinkSync(extObj, path.join(common, 'objects', blob.slice(0, 2), blob.slice(2)));
+    const old = new Date('2020-01-01T00:00:00Z');
+    fs.utimesSync(extObj, old, old);
+
     const before = hashTree(common);
     const extBefore = fs.readFileSync(extLog, 'utf8');
     const extPackBefore = fs.readdirSync(extPack);
@@ -232,6 +273,11 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     expect(hashTree(common)).toBe(before);
     expect(fs.readFileSync(extLog, 'utf8')).toBe(extBefore);
     expect(fs.readdirSync(extPack)).toEqual(extPackBefore);
+    // The fetch kept what it received as a pack in the relay: no loose object
+    // was written, so none was freshened through the alternate.
+    expect(fs.statSync(extObj).mtimeMs).toBe(old.getTime());
+    const relayObjects = path.join(root, 'relay', 'wtask-1', 'objects');
+    expect(fs.readdirSync(relayObjects).filter((d) => /^[0-9a-f]{2}$/.test(d))).toEqual([]);
 
     // The worker's fetch line brings the branch in, from the relay.
     runFetchLine((fetched as { fetchCommand: string }).fetchCommand);
@@ -294,6 +340,66 @@ describe.skipIf(process.platform === 'win32')('relay git: real git', () => {
     const second = await fetchTaskRefs(sInput, undefined, FILE_OK);
     expect(second).toMatchObject({ ok: true });
     expect(hashTree(sCommon)).toBe(before);
+  });
+
+  const rowFor = (over: Record<string, unknown> = {}): LedgerEntry => ({
+    id: 'wtask-1', taskWorkspaceId: 'ws-t', ownerWorkspaceId: 'ws-o', title: 't', status: 'review_requested', rev: 1, updatedAt: 1,
+    dispatch: { origin: { kind: 'operator' }, baseOid: 'a'.repeat(40), gitCommonDir: common, gitWorktreeDir: wtGitDir, ...over },
+  }) as LedgerEntry;
+  const noChangesPorts = () => liveNoChangesPorts({ rpc: () => null, wmuxDir: () => path.join(root, 'data'), botRepoKey: () => undefined, gitDeps: FILE_OK });
+
+  it('a HEAD that is not a commit id or a plain branch ref is refused: git is never handed it, and the recorded repository is unchanged', async () => {
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/wtask/one^{blob}\n');
+    const before = hashTree(common);
+    const calls: string[][] = [];
+    const spy: TaskPushGit = async (args, cwd, env) => { calls.push(args); return defaultGit(args, cwd, env); };
+    expect(await pushTaskBranch(input(), spy, FILE_OK)).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringContaining('neither a commit id nor a plain branch') });
+    expect(await noChangesPorts().headOf(work, rowFor())).toBeNull();
+    expect(calls.some((a) => a.some((x) => x.includes('^{blob}')))).toBe(false);
+    expect(git(origin, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/main');
+    expect(hashTree(common)).toBe(before);
+  });
+
+  it('a partial clone with a missing object is refused before any object is read: nothing is fetched, the recorded repository is unchanged', async () => {
+    git(repo, 'config', 'core.repositoryformatversion', '1');
+    git(repo, 'config', 'extensions.partialclone', 'origin');
+    git(repo, 'config', 'remote.origin.promisor', 'true');
+    const blob = git(work, 'rev-parse', 'HEAD:b.txt');
+    fs.rmSync(path.join(common, 'objects', blob.slice(0, 2), blob.slice(2)));
+    const before = hashTree(common);
+    const calls: string[][] = [];
+    const spy: TaskPushGit = async (args, cwd, env) => { calls.push(args); return defaultGit(args, cwd, env); };
+    expect(await pushTaskBranch(input(), spy, FILE_OK)).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringContaining('partial clone') });
+    expect(await fetchTaskRefs(input(), spy, FILE_OK)).toMatchObject({ ok: false, reason: 'config-refused' });
+    const ports = noChangesPorts();
+    expect(await ports.headOf(work, rowFor())).toBeNull();
+    expect(await ports.branchRef(work, 'wtask/one', rowFor())).toBe('unknown');
+    // Only the version and the config list ran: no ref or object was read.
+    expect(calls.every((a) => a.includes('--version') || a.includes('--list'))).toBe(true);
+    expect(hashTree(common)).toBe(before);
+    expect(git(origin, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/main');
+  });
+
+  it('worker-writable files are read only as small plain files: a FIFO, a symlink or a large file is refused at once', async () => {
+    const fifo = path.join(root, 'fifo');
+    execFileSync('mkfifo', [fifo]);
+    const t0 = Date.now();
+    expect(await readWorkerFile(fifo)).toBeNull();
+    fs.symlinkSync(path.join(wtGitDir, 'HEAD'), path.join(root, 'link'));
+    expect(await readWorkerFile(path.join(root, 'link'))).toBeNull();
+    fs.writeFileSync(path.join(root, 'big'), 'x'.repeat(5000));
+    expect(await readWorkerFile(path.join(root, 'big'))).toBeNull();
+    expect(await readWorkerFile(path.join(wtGitDir, 'HEAD'))).toBe('ref: refs/heads/wtask/one\n');
+    // HEAD and a legacy row's gitdir as FIFOs: refused, promptly.
+    fs.rmSync(path.join(wtGitDir, 'HEAD'));
+    execFileSync('mkfifo', [path.join(wtGitDir, 'HEAD')]);
+    expect(await noChangesPorts().headOf(work, rowFor())).toBeNull();
+    expect(await pushTaskBranch(input(), undefined, FILE_OK)).toMatchObject({ ok: false, error: expect.stringContaining('not a small plain file') });
+    expect(await recordedTaskGitWorktreeDir({ origin: { kind: 'operator' } }, common, work)).toBe(wtGitDir);
+    fs.rmSync(path.join(wtGitDir, 'gitdir'));
+    execFileSync('mkfifo', [path.join(wtGitDir, 'gitdir')]);
+    expect(await recordedTaskGitWorktreeDir({ origin: { kind: 'operator' } }, common, work)).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(5000);
   });
 
   it('never sets GIT_CONFIG_NOSYSTEM on any call', async () => {

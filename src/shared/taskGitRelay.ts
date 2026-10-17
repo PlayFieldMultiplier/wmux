@@ -12,21 +12,33 @@
 //
 // Pure, and shared: the daemon's phone path builds the same argv and env.
 
+import { isDenyableBranchName } from './botWorkerGuard';
+
 /** Transports a relay call may use. */
 export const RELAY_GIT_DEFAULT_PROTOCOLS: readonly string[] = ['https', 'ssh'];
 
 /** The lowest git version main runs a task's network git with. */
 export const TASK_GIT_VERSION_FLOOR = '2.43.4';
 
+/** The env every git call main makes on a task's recorded repository or its
+ *  relay runs with: `extra`, and git never fetches a missing object on its
+ *  own. */
+export function taskGitEnv(extra: Record<string, string> = {}): Record<string, string> {
+  return { ...extra, GIT_NO_LAZY_FETCH: '1' };
+}
+
 /** `-c` options on every relay call (after `safe`, main's own safe options):
  *  no automatic gc or maintenance, no commit-graph or multi-pack index read
- *  or written, and only the listed transports. */
+ *  or written, a fetch keeps what it receives as a pack (never written out
+ *  as loose objects), and only the listed transports. */
 export function relayGitConfigArgs(safe: readonly string[], protocols: readonly string[] = RELAY_GIT_DEFAULT_PROTOCOLS): string[] {
   const forced = [
     'gc.auto=0',
     'maintenance.auto=false',
     'core.commitGraph=false',
     'core.multiPackIndex=false',
+    'fetch.unpackLimit=1',
+    'transfer.unpackLimit=1',
     'protocol.allow=never',
     ...protocols.map((p) => `protocol.${p}.allow=always`),
   ];
@@ -153,4 +165,28 @@ export function fetchCommandFor(relayPath: string, refspecs: readonly string[], 
   // updated, and a sandboxed worker (codexWorkerGuard) can write the common
   // dir's objects, refs and logs but not a FETCH_HEAD beside them.
   return ['git', 'fetch', '--no-tags', '--no-write-fetch-head', ...(words as string[])].join(' ');
+}
+
+/** A branch name main hands git as a plain ref name: git's own branch-name
+ *  rules (`git check-ref-format --branch`), plus no whitespace, quote or
+ *  revision-syntax character. Pure. */
+export function isPlainTaskBranchName(name: string): boolean {
+  return isDenyableBranchName(name) && !name.split('/').some((c) => c.endsWith('.lock'));
+}
+
+/** What a worktree's HEAD file holds, read strictly. */
+export type TaskHead = { kind: 'oid'; oid: string } | { kind: 'ref'; ref: string };
+
+/** A worktree HEAD file's text → a full commit id of the repository's object
+ *  format, or `refs/heads/<name>` with a plain branch name; null for anything
+ *  else. Git writes HEAD as exactly one of those and a newline. Pure. */
+export function parseTaskHead(text: string, objectFormat: string): TaskHead | null {
+  const body = text.endsWith('\n') ? text.slice(0, -1) : text;
+  const hex = objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : objectFormat === 'sha1' ? /^[0-9a-f]{40}$/ : null;
+  if (!hex) return null;
+  if (hex.test(body)) return { kind: 'oid', oid: body };
+  const prefix = 'ref: refs/heads/';
+  if (!body.startsWith(prefix)) return null;
+  const name = body.slice(prefix.length);
+  return isPlainTaskBranchName(name) ? { kind: 'ref', ref: `refs/heads/${name}` } : null;
 }

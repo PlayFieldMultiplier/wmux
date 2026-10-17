@@ -252,6 +252,7 @@ describe('task.push: GitLab remotes', () => {
     const repoDefaultBranch = vi.fn(async () => null);
     const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-gl-')));
     fs.mkdirSync(path.join(tmp, 'worktrees', 'one'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'worktrees', 'one', 'HEAD'), `${'a'.repeat(40)}\n`);
     const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', gitCommonDir: tmp, gitWorktreeDir: path.join(tmp, 'worktrees', 'one'), relayRoot: path.join(tmp, 'relay'), taskId: 'wtask-1', repoDefaultBranch };
     try {
       expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
