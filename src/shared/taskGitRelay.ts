@@ -62,74 +62,95 @@ function groupInOrder(entries: readonly RawGitConfigEntry[]): Map<string, string
   return out;
 }
 
+/** Credential keys: git gathers every `credential.helper` and
+ *  `credential.<url>.helper` into one ordered list, and an empty value clears
+ *  the list gathered so far. */
+const isCredential = (key: string) => /^credential\./i.test(key);
+/** A list key whose empty value clears it (`http.extraHeader`, also per URL). */
+const isClearableList = (key: string) => /^http\.(?:.+\.)?extraheader$/i.test(key);
+const isUrlRewrite = (key: string) => /^url\./i.test(key);
+
 /**
  * The `-c key=value` settings that make the relay's owner transport config
- * match the recorded repository's for every transport key that differs
- * between them (`context`: the config read with the recorded git dir;
- * `relay`: the config read in the relay). Only the owner scopes count (the
- * recorded repository's own config never carries over).
+ * match the recorded repository's (`context`: the config read with the
+ * recorded git dir; `relay`: the config read in the relay). Only the owner
+ * scopes count (the recorded repository's own config never carries over).
  *
- * A URL rewrite (`url.<base>.insteadOf`, `pushInsteadOf`) is only added, never
- * reset: an empty rewrite base matches every URL. Every other transport key is
- * reset (`key=`) and then replayed in the recorded order, so a value the owner
- * cleared for the repository is cleared in the relay too.
+ *  - Credential keys are one ordered list: when it differs, it is cleared
+ *    (`credential.helper=`) and replayed in the recorded order.
+ *  - `http.extraHeader` (also per URL) is cleared and replayed when it
+ *    differs, and cleared when only the relay has it.
+ *  - A URL rewrite is only added, never reset: an empty rewrite base matches
+ *    every URL.
+ *  - Every other key holds one value, the last one read: the recorded values
+ *    are replayed, so the last recorded value wins.
  */
 export function transportConfigReplay(context: readonly RawGitConfigEntry[], relay: readonly RawGitConfigEntry[]): string[] {
-  const ctx = groupInOrder(ownerTransport(context));
-  const rel = groupInOrder(ownerTransport(relay));
+  const ctxAll = ownerTransport(context);
+  const relAll = ownerTransport(relay);
   const out: string[] = [];
+  const sameEntries = (a: readonly RawGitConfigEntry[], b: readonly RawGitConfigEntry[]) =>
+    a.length === b.length && a.every((e, i) => e.key.toLowerCase() === b[i].key.toLowerCase() && e.value === b[i].value);
+  const ctxCred = ctxAll.filter((e) => isCredential(e.key));
+  const relCred = relAll.filter((e) => isCredential(e.key));
+  if (!sameEntries(ctxCred, relCred)) {
+    out.push('credential.helper=');
+    for (const e of ctxCred) out.push(`${e.key}=${e.value}`);
+  }
+  const ctx = groupInOrder(ctxAll.filter((e) => !isCredential(e.key)));
+  const rel = groupInOrder(relAll.filter((e) => !isCredential(e.key)));
   const same = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
   for (const [key, values] of ctx) {
     const have = rel.get(key) ?? [];
     if (same(values, have)) continue;
-    if (/^url\./i.test(key)) {
-      // Additive only: the recorded values the relay does not already have.
+    if (isUrlRewrite(key)) {
       const missing = [...values];
       for (const v of have) {
         const i = missing.indexOf(v);
         if (i >= 0) missing.splice(i, 1);
       }
       for (const v of missing) out.push(`${key}=${v}`);
-    } else {
+    } else if (isClearableList(key)) {
       out.push(`${key}=`);
+      for (const v of values) out.push(`${key}=${v}`);
+    } else {
       for (const v of values) out.push(`${key}=${v}`);
     }
   }
-  // A key the relay has and the recorded repository does not (not from the
-  // recorded owner config): reset it, except a URL rewrite.
   for (const [key] of rel) {
-    if (!ctx.has(key) && !/^url\./i.test(key)) out.push(`${key}=`);
+    if (!ctx.has(key) && isClearableList(key)) out.push(`${key}=`);
   }
   return out;
 }
 
 /** Why main will not run a task's git with this version, or null. `stdout` is
- *  `git --version` output. Pure. */
-export function gitVersionRefusal(stdout: string, floor: string = TASK_GIT_VERSION_FLOOR): string | null {
+ *  `git --version` output. Accepted: the patched releases from 2.43.4 on
+ *  (2.43.4+, 2.44.1+, 2.45.1+) and 2.46 or later. Pure. */
+export function gitVersionRefusal(stdout: string): string | null {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(stdout);
   if (!m) return `git's version could not be read (${stdout.trim().slice(0, 80)})`;
-  const have = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const want = floor.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if (have[i] > want[i]) return null;
-    if (have[i] < want[i]) return `git ${have.join('.')} is older than ${floor}, which a task's network git needs`;
-  }
-  return null;
+  const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const ok = maj > 2 || (maj === 2 && (min >= 46 || (min === 45 && pat >= 1) || (min === 44 && pat >= 1) || (min === 43 && pat >= 4)));
+  return ok ? null : `git ${maj}.${min}.${pat} is not one a task's network git runs with (${TASK_GIT_VERSION_FLOOR}, 2.44.1, 2.45.1, or 2.46 and later)`;
 }
 
-/** A shell word for the worker's shell: single-quoted on posix (a WSL distro
- *  included), double-quoted on a Windows host. Pure. */
-export function shellQuote(word: string, platform: NodeJS.Platform): string {
-  if (platform === 'win32') return `"${word.replace(/(["%])/g, '^$1')}"`;
+/** A shell word for the worker's shell, or null when it cannot be written as
+ *  one safely: single-quoted on posix (a WSL distro included); on a Windows
+ *  host double-quoted, and refused when it holds a character cmd or
+ *  PowerShell would expand inside double quotes. Pure. */
+export function shellQuote(word: string, platform: NodeJS.Platform): string | null {
+  if (platform === 'win32') return /["%!$`]/.test(word) ? null : `"${word}"`;
   return `'${word.replace(/'/g, "'\\''")}'`;
 }
 
 /** The `git fetch` line the worker runs in its own shell to bring the fetched
- *  branches into its `refs/remotes/origin/*` from the relay. Pure. */
-export function fetchCommandFor(relayPath: string, refspecs: readonly string[], platform: NodeJS.Platform): string {
-  const q = (w: string) => shellQuote(w, platform);
+ *  branches into its `refs/remotes/origin/*` from the relay, or null when a
+ *  word cannot be quoted for that shell. Pure. */
+export function fetchCommandFor(relayPath: string, refspecs: readonly string[], platform: NodeJS.Platform): string | null {
+  const words = [relayPath, ...refspecs].map((w) => shellQuote(w, platform));
+  if (words.some((w) => w === null)) return null;
   // `--no-write-fetch-head`: the worker only wants its `refs/remotes/origin/*`
   // updated, and a sandboxed worker (codexWorkerGuard) can write the common
   // dir's objects, refs and logs but not a FETCH_HEAD beside them.
-  return ['git', 'fetch', '--no-tags', '--no-write-fetch-head', q(relayPath), ...refspecs.map(q)].join(' ');
+  return ['git', 'fetch', '--no-tags', '--no-write-fetch-head', ...(words as string[])].join(' ');
 }

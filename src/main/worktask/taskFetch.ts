@@ -24,6 +24,7 @@
 //   - Never a push.
 
 import { fetchCommandFor } from '../../shared/taskGitRelay';
+import { toWslPath } from '../../shared/imagePaste';
 import { isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import { defaultGit, openTaskGitRepo, parseLsRemoteHead, type TaskGitRepo, type TaskGitRepoInput, type TaskPushDeps, type TaskPushGit } from './taskPush';
@@ -43,7 +44,15 @@ export interface TaskFetchInput extends TaskGitRepoInput {
 export interface TaskFetchedRef { ref: string; sha: string }
 
 export type TaskFetchResult =
-  | { ok: true; remote: 'origin'; defaultBranch: string; fetchCommand: string; fetched: TaskFetchedRef[]; missing: string[] }
+  | {
+    ok: true; remote: 'origin'; defaultBranch: string;
+    /** The line the worker runs in its own shell (the repository's platform). */
+    fetchCommand: string;
+    /** On a Windows host: the same line for a WSL shell (the relay by its
+     *  `/mnt/<drive>/…` path). */
+    fetchCommandWsl?: string;
+    fetched: TaskFetchedRef[]; missing: string[];
+  }
   | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'no-default-branch' | 'git-failed'; error: string };
 
 /** `ls-remote --heads` output → branch name → commit. Pure. */
@@ -178,5 +187,13 @@ export async function fetchTaskRefs(input: TaskFetchInput, git: TaskPushGit = de
   }
   const refspecs = present.map((b) => `+refs/heads/${b}:refs/remotes/origin/${b}`);
   const fetchCommand = fetchCommandFor(repo.relayShellPath, refspecs, repo.workerShellPlatform);
-  return { ok: true, remote: 'origin', defaultBranch, fetchCommand, fetched, missing: wanted.filter((b) => !there.has(b)).map((b) => `origin/${b}`) };
+  if (!fetchCommand) return { ok: false, reason: 'git-failed', error: `main's relay path ${repo.relayShellPath} cannot be written as a shell word` };
+  // A WSL pane on a Windows-drive repository reads the relay by its drvfs path.
+  const wslRelay = repo.workerShellPlatform === 'win32' ? toWslPath(repo.relayShellPath) : null;
+  const fetchCommandWsl = wslRelay ? fetchCommandFor(wslRelay, refspecs, 'linux') : null;
+  return {
+    ok: true, remote: 'origin', defaultBranch, fetchCommand,
+    ...(fetchCommandWsl ? { fetchCommandWsl } : {}),
+    fetched, missing: wanted.filter((b) => !there.has(b)).map((b) => `origin/${b}`),
+  };
 }

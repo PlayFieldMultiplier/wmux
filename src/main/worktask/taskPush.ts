@@ -434,14 +434,17 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   return { ok: true, repo: { entries: pre.entries, local, head, inRelay, relayShellPath, workerShellPlatform } };
 }
 
-/** Removes the relay of a task that has closed. */
-export function removeTaskRelay(relayRoot: string, taskId: string): void {
-  if (!TASK_ID_RE.test(taskId)) return;
-  try {
-    fs.rmSync(path.join(relayRoot, taskId), { recursive: true, force: true });
-  } catch {
-    // Swept at the next start (sweepTaskGitRelays).
-  }
+/** Removes the relay of a task that has closed, after any call on it ends. */
+export function removeTaskRelay(relayRoot: string, taskId: string): Promise<void> {
+  if (!TASK_ID_RE.test(taskId)) return Promise.resolve();
+  const dir = path.join(relayRoot, taskId);
+  return withRelayLock(dir, async () => {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Swept at the next start (sweepTaskGitRelays).
+    }
+  });
 }
 
 /** Removes relays whose task is no longer open (main's start, and when a task

@@ -25,6 +25,7 @@ import type { RpcMethod } from '../../../shared/rpc';
 import { TaskWorktreeManager, metaDirForWorktree } from '../../worktask/TaskWorktreeManager';
 import { removeTaskRelay } from '../../worktask/taskPush';
 import { getWmuxDir } from '../../../daemon/config';
+import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
 import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
@@ -88,6 +89,10 @@ export function registerWorktaskHandlers(
     daemon: daemonPort,
     worktrees,
     removeRelay: (taskId) => removeTaskRelay(path.join(getWmuxDir(), 'factory', 'git-relay'), taskId),
+    pushedHead: (taskId) => {
+      const v = taskPushRecordOf(getWmuxDir()).get(taskId);
+      return typeof v === 'string' && v !== 'unknown' ? v : null;
+    },
     // A pane still running inside the worktree holds files that make the removal partial on Windows.
     stopPanesIn: async (worktreePath) => {
       const dc = getDaemonClient();

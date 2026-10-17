@@ -79,9 +79,10 @@ export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps)
       const pty = resolveSenderPtyId();
       if (pty) params['senderPtyId'] = pty;
       try {
-        const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean; fetchCommand?: unknown } | undefined;
+        const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean; fetchCommand?: unknown; fetchCommandWsl?: unknown } | undefined;
         // The fetch line first, verbatim, so the worker runs exactly it.
-        const line = result && typeof result.fetchCommand === 'string' ? `Run this in your shell, then \`git merge origin/<default>\`:\n${result.fetchCommand}\n\n` : '';
+        const wsl = result && typeof result.fetchCommandWsl === 'string' ? `In a WSL shell, run this instead:\n${result.fetchCommandWsl}\n` : '';
+        const line = result && typeof result.fetchCommand === 'string' ? `Run this in your shell, then \`git merge origin/<default>\`:\n${result.fetchCommand}\n${wsl}\n` : '';
         return {
           content: [{ type: 'text' as const, text: `${line}${JSON.stringify(result ?? {}, null, 2)}` }],
           ...(result && result.ok === false ? { isError: true as const } : {}),

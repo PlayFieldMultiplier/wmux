@@ -32,37 +32,43 @@ describe('relay git: argv, env and config replay', () => {
 
   const list = (rows: Array<[string, string, string]>) => rows.map(([scope, key, value]) => `${scope}\0${key}\n${value}\0`).join('');
 
-  it('resets then replays a transport key the owner changed for the repository, and only adds a URL rewrite', () => {
+  it('matches the owner\'s transport config: credentials as one ordered list, extraHeader cleared and replayed, single values replayed, URL rewrites only added', () => {
     const relay = parseRawGitConfigList(list([
       ['global', 'http.sslVerify', 'false'],
       ['global', 'credential.helper', 'store'],
+      ['global', 'http.extraHeader', 'X-A: 1'],
     ]));
     const context = parseRawGitConfigList(list([
       ['global', 'http.sslVerify', 'false'],
       ['global', 'credential.helper', 'store'],
+      ['global', 'http.extraHeader', 'X-A: 1'],
       // Added for the recorded repository by an includeIf gitdir: rule.
       ['global', 'http.sslVerify', 'true'],
+      ['global', 'credential.https://work.example.helper', 'work-helper'],
       ['global', 'credential.helper', ''],
+      ['global', 'http.extraHeader', ''],
       ['global', 'url.git@work:Team/.insteadOf', 'https://work/Team/'],
       ['global', 'core.sshcommand', 'ssh -i key'],
     ]));
     expect(transportConfigReplay(context, relay)).toEqual([
-      'http.sslVerify=', 'http.sslVerify=false', 'http.sslVerify=true',
-      'credential.helper=', 'credential.helper=store', 'credential.helper=',
+      // One cleared and replayed list, URL-scoped helpers in their place.
+      'credential.helper=', 'credential.helper=store', 'credential.https://work.example.helper=work-helper', 'credential.helper=',
+      // A single value: the last recorded one wins, no empty reset.
+      'http.sslVerify=false', 'http.sslVerify=true',
+      'http.extraHeader=', 'http.extraHeader=X-A: 1', 'http.extraHeader=',
       'url.git@work:Team/.insteadOf=https://work/Team/',
-      'core.sshcommand=', 'core.sshcommand=ssh -i key',
+      'core.sshcommand=ssh -i key',
     ]);
     expect(transportConfigReplay(relay, relay)).toEqual([]);
-    // A URL rewrite is never reset (an empty base matches every URL).
-    expect(transportConfigReplay(context, relay).some((kv) => kv === 'url.git@work:Team/.insteadOf=')).toBe(false);
+    // A URL rewrite is never reset; a single value only the relay has is left
+    // alone (an empty value would not mean "unset"); a relay-only extraHeader is cleared.
+    const relayOnly = parseRawGitConfigList(list([['global', 'http.sslVerify', 'true'], ['global', 'http.extraHeader', 'X-B: 2'], ['global', 'url.x.insteadOf', 'y']]));
+    expect(transportConfigReplay([], relayOnly)).toEqual(['http.extraHeader=']);
   });
 
-  it('reads the version floor', () => {
-    expect(gitVersionRefusal('git version 2.50.1 (Apple Git-155)')).toBeNull();
-    expect(gitVersionRefusal('git version 2.43.4')).toBeNull();
-    expect(gitVersionRefusal('git version 2.43.3')).toMatch(/older than 2\.43\.4/);
-    expect(gitVersionRefusal('git version 2.39.0')).toMatch(/older than/);
-    expect(gitVersionRefusal('git version 3.0.0')).toBeNull();
+  it('accepts only the patched releases from 2.43.4 on', () => {
+    for (const ok of ['2.43.4', '2.43.7', '2.44.1', '2.45.1', '2.46.0', '2.50.1 (Apple Git-155)', '3.0.0']) expect(gitVersionRefusal(`git version ${ok}`), ok).toBeNull();
+    for (const bad of ['2.43.3', '2.44.0', '2.45.0', '2.39.5', '1.9.9']) expect(gitVersionRefusal(`git version ${bad}`), bad).toMatch(/is not one a task's network git runs with/);
     expect(gitVersionRefusal('nonsense')).toMatch(/could not be read/);
   });
 
@@ -70,6 +76,8 @@ describe('relay git: argv, env and config replay', () => {
     expect(shellQuote("a b", 'linux')).toBe("'a b'");
     expect(shellQuote("a'b", 'darwin')).toBe("'a'\\''b'");
     expect(shellQuote('a b', 'win32')).toBe('"a b"');
+    for (const w of ['a$b', 'a%b', 'a"b', 'a!b', 'a`b']) expect(shellQuote(w, 'win32'), w).toBeNull();
+    expect(fetchCommandFor('C:\\data%x\\relay', ['+refs/heads/main:refs/remotes/origin/main'], 'win32')).toBeNull();
     expect(fetchCommandFor('/r e/relay', ['+refs/heads/main:refs/remotes/origin/main'], 'linux'))
       .toBe("git fetch --no-tags --no-write-fetch-head '/r e/relay' '+refs/heads/main:refs/remotes/origin/main'");
   });
