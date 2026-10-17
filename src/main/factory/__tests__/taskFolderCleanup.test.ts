@@ -24,6 +24,7 @@ import {
   noteKeptFolderStopped,
   removeTreeNoFollow,
   MountPointError,
+  parseMountInfo,
   removeEmptyResearchBatch,
   restoreTaskFolder,
   taskFolderKind,
@@ -1112,6 +1113,36 @@ describe('a worktree git removed only half way', () => {
     }
     expect(fs.readFileSync(path.join(mnt, 'deep', 'keep.txt'), 'utf8')).toBe('mine');
     expect(fs.existsSync(path.join(top, 'other'))).toBe(false);
+  });
+
+  it('a mount the mount table lists on the same device (a bind mount) is never entered, at the folder or below it', async () => {
+    const top = path.join(dir, 'bind-top');
+    const bound = path.join(top, 'sub', 'bound');
+    fs.mkdirSync(bound, { recursive: true });
+    fs.writeFileSync(path.join(bound, 'keep.txt'), 'mine');
+    fs.mkdirSync(path.join(top, 'other'), { recursive: true });
+    fs.writeFileSync(path.join(top, 'other', 'gone.txt'), 'x');
+    const real = (p: string): string => {
+      const r = fs.realpathSync.native(p);
+      return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r;
+    };
+    await expect(removeTreeNoFollow(top, undefined, async () => new Set([real(bound)]))).rejects.toBeInstanceOf(MountPointError);
+    expect(fs.readFileSync(path.join(bound, 'keep.txt'), 'utf8')).toBe('mine');
+    expect(fs.existsSync(path.join(top, 'other'))).toBe(false);
+    // At the folder itself: nothing is removed.
+    await expect(removeTreeNoFollow(top, undefined, async () => new Set([real(top)]))).rejects.toBeInstanceOf(MountPointError);
+    expect(fs.readFileSync(path.join(bound, 'keep.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('parseMountInfo reads the mount points of /proc/self/mountinfo, escapes undone', () => {
+    const table = [
+      '22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw',
+      '45 22 8:1 /home/u/src /tmp/wt/h/task\\040one rw,relatime shared:1 - ext4 /dev/sda1 rw',
+      '',
+    ].join('\n');
+    const m = parseMountInfo(table);
+    expect(m.has('/')).toBe(true);
+    expect(m.has('/tmp/wt/h/task one')).toBe(true);
   });
 
   it('a task folder that is itself a mount point is left whole, and Clean up now names it with the reason', async () => {

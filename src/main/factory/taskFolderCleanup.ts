@@ -348,7 +348,8 @@ function foldCase(p: string): string {
  *  where it sits under `dir` (no link on the way, no Windows mount point,
  *  which lstat reports as a plain folder; nothing swapped in meanwhile);
  *  otherwise it throws and that part is left. A folder on another device
- *  than the one it sits in (a mount point, `dir` itself included) is never
+ *  than the one it sits in, or listed as a mount point (`readMounts`: a
+ *  Linux bind mount keeps the device), `dir` itself included, is never
  *  entered: it is left with everything in it, the rest is removed, and it
  *  throws MountPointError. With `root`, `dir` itself
  *  must resolve to where it sits under the root's real path (a mount point
@@ -356,7 +357,7 @@ function foldCase(p: string): string {
  *  racing between a check and the removal it guards is not ruled out (Node
  *  has no openat); it needs another process changing the folder while
  *  nothing of wmux runs in it. */
-export async function removeTreeNoFollow(dir: string, root?: string): Promise<void> {
+export async function removeTreeNoFollow(dir: string, root?: string, readMounts: () => Promise<ReadonlySet<string>> = mountPoints): Promise<void> {
   const top = await fs.promises.lstat(dir);
   if (top.isSymbolicLink()) {
     await unlinkLink(dir);
@@ -372,7 +373,31 @@ export async function removeTreeNoFollow(dir: string, root?: string): Promise<vo
   } else {
     expected = await realKey(dir);
   }
-  await removeEntry(dir, expected, top);
+  // A mount on the same device (a Linux bind mount) keeps the device, the
+  // inode and the real path: only the mount table names it.
+  const mounts = top.isDirectory() ? await readMounts() : new Set<string>();
+  await removeEntry(dir, expected, top, mounts);
+}
+
+/** Every mount point, as real paths (case folded like realKey): on Linux
+ *  from /proc/self/mountinfo, which also lists bind mounts. Elsewhere none
+ *  (a mount there is another device, which the walk checks). Throws when
+ *  Linux's table cannot be read, so nothing is removed blind. */
+export async function mountPoints(): Promise<ReadonlySet<string>> {
+  if (process.platform !== 'linux') return new Set();
+  return parseMountInfo(await fs.promises.readFile('/proc/self/mountinfo', 'utf8'));
+}
+
+/** The mount points of a mountinfo table (its fifth field, octal escapes
+ *  such as \040 for a space undone). Pure. */
+export function parseMountInfo(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of text.split('\n')) {
+    const f = line.split(' ');
+    if (f.length < 5 || !f[4]) continue;
+    out.add(foldCase(f[4].replace(/\\([0-7]{3})/g, (_m, o: string) => String.fromCharCode(parseInt(o, 8)))));
+  }
+  return out;
 }
 
 async function unlinkLink(p: string): Promise<void> {
@@ -394,7 +419,7 @@ export class MountPointError extends Error {
 
 /** One entry of removeTreeNoFollow: `expected` is the real path it must
  *  resolve to when it is a folder. */
-async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<void> {
+async function removeEntry(p: string, expected: string, st: fs.Stats, mounts: ReadonlySet<string>): Promise<void> {
   if (st.isSymbolicLink()) {
     await unlinkLink(p);
     return;
@@ -407,6 +432,7 @@ async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<v
     });
     return;
   }
+  if (mounts.has(expected)) throw new MountPointError(p);
   const where = async (): Promise<void> => {
     const now = await fs.promises.lstat(p);
     if (!now.isDirectory() || now.isSymbolicLink() || now.ino !== st.ino || now.dev !== st.dev || (await realKey(p)) !== expected) {
@@ -436,7 +462,7 @@ async function removeEntry(p: string, expected: string, st: fs.Stats): Promise<v
     // The folder it sits in is still this one, right before it goes.
     await where();
     try {
-      await removeEntry(child, path.join(expected, foldCase(name)), cst);
+      await removeEntry(child, path.join(expected, foldCase(name)), cst, mounts);
     } catch (err) {
       if (!(err instanceof MountPointError)) throw err;
       mount ??= err;
