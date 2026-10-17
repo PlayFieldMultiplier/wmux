@@ -84,7 +84,8 @@ describe('checkNoChanges', () => {
 
 });
 
-describe('the no-changes check over real git, task.push and ledger.update', () => {
+// The stand-in ssh origin is a /bin/sh script.
+describe.skipIf(process.platform === 'win32')('the no-changes check over real git, task.push and ledger.update', () => {
   const run = (cwd: string, ...args: string[]): string =>
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8' }).trim();
   const plainGit = async (args: string[], cwd: string) => {
