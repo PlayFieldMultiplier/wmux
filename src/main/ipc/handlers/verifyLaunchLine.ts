@@ -19,7 +19,11 @@
  *     line the shell took is echoed there;
  *   - that output standing still for `quietMs`;
  *   - the daemon's word that nothing runs in the pane (`nothingRunning`: no
- *     agent, no foreground command, and the shell has no child process).
+ *     agent, no foreground command, and a process-table read showing the
+ *     shell with no child process), with the pane read once more right before
+ *     the write and found unchanged since the decision. No probe lists a WSL
+ *     shell's Linux children, so a WSL pane is never written to twice: its
+ *     lost line is left to the launch check (launchPresenceAllowsResend).
  *
  * A prompt drawn before the write proves nothing: a shell that shows no
  * command-start (macOS /bin/bash 3.2 has no PS0) reads the line and runs it
@@ -116,6 +120,22 @@ export function verifyLaunchLine(opts: VerifyLaunchLineOptions): { cancel: () =>
         }
         if (finished) return;
         if (quiet) {
+          // The daemon decided on state it read before its process walk: a
+          // launch that began meanwhile would make its `absent` stale. Read
+          // the pane again, right before writing; anything that moved since
+          // the decision means no second line.
+          const again = await safeRead();
+          if (finished) return;
+          const lastAgain = again?.events[again.events.length - 1];
+          const unchanged =
+            !!again &&
+            again.sessionFound &&
+            again.totalBytesWritten === r.totalBytesWritten &&
+            again.events.length === r.events.length &&
+            lastAgain?.type === prompt?.type &&
+            lastAgain?.byteOffset === prompt?.byteOffset &&
+            promptLineState(again.events, again.totalBytesWritten) === 'idle-at-prompt';
+          if (!unchanged) return finish('unverified');
           resent = true;
           try {
             if (opts.resend() === false) return finish('gave-up');

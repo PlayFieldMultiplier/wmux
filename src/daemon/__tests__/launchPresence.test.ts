@@ -6,9 +6,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   decideLaunchPresence,
+  launchPresenceAllowsResend,
   launchPresenceNeedsProcessRead,
   type LaunchPresenceInputs,
 } from '../launchPresence';
+import { promptLineState } from '../../shared/promptLineState';
 
 const base: LaunchPresenceInputs = {
   sessionExists: true,
@@ -115,6 +117,28 @@ describe('decideLaunchPresence', () => {
     expect(decideLaunchPresence({ ...base, isWsl: true, lineNeverRead: true, trackerAlive: true }).presence).toBe('running');
     expect(decideLaunchPresence({ ...base, isWsl: true, lineNeverRead: true, commandRunning: true }).presence).toBe('unknown');
     expect(decideLaunchPresence({ ...base, isWsl: true, lineNeverRead: false }).reason).toBe('wsl-pane');
+  });
+
+  // F26 review — a second launch line is typed only on a process-table read
+  // of an idle shell. A WSL verdict is read from the prompt markers alone.
+  it('allows a re-sent launch line only on an idle-shell process read', () => {
+    expect(launchPresenceAllowsResend(decideLaunchPresence({ ...base, idleShell: { ok: true } }))).toBe(true);
+    expect(launchPresenceAllowsResend(decideLaunchPresence({ ...base, idleShell: { ok: false, reason: 'shell-has-children' } }))).toBe(false);
+    expect(launchPresenceAllowsResend(decideLaunchPresence({ ...base, idleShell: 'error' }))).toBe(false);
+    expect(launchPresenceAllowsResend(decideLaunchPresence({ ...base, isWsl: true, exitAfterPrompt: 2 }))).toBe(false);
+    // WSL bash without command-start: the prompt and the launch line's echo
+    // land in one chunk, so the prompt's offset is the end of the output and
+    // the markers say "never read" while the worker runs. The verdict is
+    // `absent`, and it must still not allow a second line.
+    const coalesced = [
+      { type: 'command_end', byteOffset: 40 },
+      { type: 'prompt_start', byteOffset: 40 },
+      { type: 'prompt_end', byteOffset: 420 },
+    ];
+    const lineNeverRead = promptLineState(coalesced, 420) === 'idle-at-prompt';
+    const verdict = decideLaunchPresence({ ...base, isWsl: true, lineNeverRead, idleShell: { ok: true } });
+    expect(verdict.presence).toBe('absent');
+    expect(launchPresenceAllowsResend(verdict)).toBe(false);
   });
 
   it('the failing return counts only in a WSL pane (others read the process table)', () => {

@@ -39,6 +39,7 @@ import { getWmuxDir } from '../../../daemon/config';
 import { scheduleInitialCommand } from './scheduleInitialCommand';
 import { verifyLaunchLine, type LaunchLineRead } from './verifyLaunchLine';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS } from '../../worktask/fanoutLaunchProbe';
+import { launchPresenceAllowsResend, type LaunchPresenceVerdict } from '../../../daemon/launchPresence';
 import {
   createSessionDataDispatcher,
   type SessionDataDispatcher,
@@ -750,10 +751,11 @@ export function registerPTYHandlers(
                 return writeLaunchLine(cmd);
               },
               // The fan-out launch check's own question, process read included:
-              // only `absent` is evidence that nothing runs in the pane.
+              // only its process-table `absent` is evidence that nothing runs
+              // in the pane (never a WSL pane's; launchPresenceAllowsResend).
               nothingRunning: async () => {
-                const res = (await daemonClient.rpc('daemon.getLaunchPresence', { id: sessionId, probeProcess: true }, { timeoutMs: LAUNCH_PROBE_CONFIRM_TIMEOUT_MS })) as { presence?: unknown } | null;
-                return res?.presence === 'absent';
+                const res = (await daemonClient.rpc('daemon.getLaunchPresence', { id: sessionId, probeProcess: true }, { timeoutMs: LAUNCH_PROBE_CONFIRM_TIMEOUT_MS })) as { presence?: unknown; reason?: unknown } | null;
+                return !!res && launchPresenceAllowsResend(res as Pick<LaunchPresenceVerdict, 'presence' | 'reason'>);
               },
               onDone: (outcome) => {
                 if (outcome === 'gave-up') console.warn(`[pty:create] ${sessionId}: the shell did not read the launch line after a second write`);

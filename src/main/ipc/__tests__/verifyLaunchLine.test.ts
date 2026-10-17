@@ -74,6 +74,53 @@ describe('verifyLaunchLine', () => {
     expect(v.outcome()).toBe('unverified');
   });
 
+  it('never re-sends when the pane moved while the daemon was deciding', async () => {
+    // getLaunchPresence reads the markers, then walks the process table; the
+    // launch starts during the walk, and the answer comes back `absent`.
+    let started = false;
+    let answer!: (v: boolean) => void;
+    const resend = vi.fn(() => true);
+    let outcome: LaunchLineOutcome | undefined;
+    let call = 0;
+    verifyLaunchLine({
+      read: async () => (call++ === 0 ? booting : started ? atPrompt(260) : atPrompt(180)),
+      resend,
+      nothingRunning: () => new Promise<boolean>((resolve) => { answer = resolve; }),
+      pollMs: 100,
+      quietMs: 1_000,
+      windowMs: 10_000,
+      onDone: (o) => { outcome = o; },
+    });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(answer).toBeTypeOf('function');
+    started = true; // the echo lands before the stale verdict does
+    answer(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(resend).not.toHaveBeenCalled();
+    expect(outcome).toBe('unverified');
+  });
+
+  it('never re-sends when a command-start arrived while the daemon was deciding', async () => {
+    let started = false;
+    let answer!: (v: boolean) => void;
+    const resend = vi.fn(() => true);
+    let call = 0;
+    verifyLaunchLine({
+      // Same output size: only the marker moved.
+      read: async () => (call++ === 0 ? booting : started ? withRead(180) : atPrompt(180)),
+      resend,
+      nothingRunning: () => new Promise<boolean>((resolve) => { answer = resolve; }),
+      pollMs: 100,
+      quietMs: 1_000,
+      windowMs: 10_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_500);
+    started = true;
+    answer(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(resend).not.toHaveBeenCalled();
+  });
+
   it('never re-sends when the line was echoed after a fresh prompt', async () => {
     // The typed-ahead line reached bash after its prompt: the echo is output.
     const v = run((n) => (n === 0 ? booting : atPrompt(180 + 120)));

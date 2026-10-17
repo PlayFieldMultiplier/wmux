@@ -26,7 +26,7 @@ describe('pty:create launch-line check', () => {
     const at = src.indexOf('const verifyTaskLine');
     const body = src.slice(at, src.indexOf('onExhausted', at));
     expect(body).toMatch(/daemonClient\.rpc\('daemon\.getLaunchPresence', \{ id: sessionId, probeProcess: true \}/);
-    expect(body).toMatch(/return res\?\.presence === 'absent';/);
+    expect(body).toMatch(/return !!res && launchPresenceAllowsResend\(/);
     expect(body).toMatch(/outcome === 'unverified'/);
   });
 });

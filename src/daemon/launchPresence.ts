@@ -90,6 +90,19 @@ export interface LaunchPresenceVerdict {
   reason: LaunchPresenceReason;
 }
 
+/**
+ * F26 — may a launch line be typed into this pane a second time? Only on a
+ * process-table read that saw the pane's shell with no child process
+ * (`idle-shell`). Every other `absent` is a verdict about a launch that
+ * failed, not proof that nothing runs: `wsl-line-never-read` is read from the
+ * prompt markers alone, and a prompt and the line's echo arriving in one
+ * chunk leave it no output to see. No probe lists the Linux processes of a
+ * WSL pane's shell, so a WSL pane never qualifies.
+ */
+export function launchPresenceAllowsResend(verdict: Pick<LaunchPresenceVerdict, 'presence' | 'reason'>): boolean {
+  return verdict.presence === 'absent' && verdict.reason === 'idle-shell';
+}
+
 /** Whether the verdict can still be decided without reading the process table. */
 export function launchPresenceNeedsProcessRead(inputs: Omit<LaunchPresenceInputs, 'idleShell'>): boolean {
   return decideLaunchPresence(inputs).reason === 'not-probed';
