@@ -5,7 +5,7 @@
 // for a worker's copy. Main only: it pulls in the `yaml` parser, which the
 // MCP bundle and the renderer never need.
 
-import { isMap, isScalar, parse as parseYaml, parseAllDocuments } from 'yaml';
+import { isMap, isScalar, isSeq, parseAllDocuments, parseDocument } from 'yaml';
 import {
   SKILL_FRONTMATTER_KEYS,
   SKILL_LIMITS,
@@ -24,9 +24,10 @@ export const CLAUDE_CODE_FRONTMATTER_RE = /^---\s*\n([\s\S]*?)---\s*\n?/;
  *  holding one of these is quoted, and the block parsed again. */
 const CLAUDE_CODE_LOSSY_VALUE_RE = /[{}[\]*&#!|>%@`]|: /;
 
-/** YAML 1.2 with the core schema (what Claude Code's Bun parser reads), no
- *  merge keys, and a key given twice is an error. */
-const YAML_OPTIONS = { version: '1.2', schema: 'core', merge: false, uniqueKeys: true } as const;
+/** YAML 1.2 with the core schema (what Claude Code's Bun parser reads) and
+ *  no merge keys. A key given twice parses, as it does for Bun, and the
+ *  vetting refuses it: only a syntax error may start Claude Code's fallback. */
+const YAML_OPTIONS = { version: '1.2', schema: 'core', merge: false, uniqueKeys: false } as const;
 
 /** Characters a parsed value never holds: line breaks (a description is one
  *  line of the wake's skill list), other C0 and C1 controls, bidi overrides,
@@ -46,9 +47,8 @@ function quoteLossyValues(text: string): string {
     const [, key, value] = m;
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith('\'') && value.endsWith('\''))) return line;
     if (value.startsWith('[') && value.endsWith(']')) {
-      try {
-        if (Array.isArray(parseYaml(value, YAML_OPTIONS))) return line;
-      } catch { /* not a list: quoted below when lossy */ }
+      const list = parseDocument(value, YAML_OPTIONS);
+      if (list.errors.length === 0 && isSeq(list.contents)) return line;
     }
     if (!CLAUDE_CODE_LOSSY_VALUE_RE.test(value)) return line;
     return `${key}: "${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
@@ -66,8 +66,10 @@ function vetYaml(text: string): Vetted {
   if (docs.length === 0) return { ok: true, fields: {} };
   if (docs.length > 1) return { ok: false, parsed: true, error: 'the front matter is one YAML document (no ... or --- inside it)' };
   const doc = docs[0];
-  const problem = [...doc.errors, ...doc.warnings][0];
-  if (problem) return { ok: false, parsed: false, error: `the front matter is not YAML: ${problem.message.split('\n')[0]}` };
+  // An error is what makes Bun's parser throw; a warning (an unknown tag)
+  // does not, so it is refused below, never a reason for the fallback.
+  const error = doc.errors[0];
+  if (error) return { ok: false, parsed: false, error: `the front matter is not YAML: ${error.message.split('\n')[0]}` };
   const root = doc.contents;
   if (root === null) return { ok: true, fields: {} };
   if (!isMap(root) || root.flow || root.anchor || root.tag) {
@@ -95,6 +97,8 @@ function vetYaml(text: string): Vetted {
     if (typeof value.value !== 'string') return { ok: false, parsed: true, error: `front matter ${name} is text; quote it` };
     fields[name] = value.value;
   }
+  const warning = doc.warnings[0];
+  if (warning) return { ok: false, parsed: true, error: `the front matter is not plain YAML: ${warning.message.split('\n')[0]}` };
   return { ok: true, fields };
 }
 
