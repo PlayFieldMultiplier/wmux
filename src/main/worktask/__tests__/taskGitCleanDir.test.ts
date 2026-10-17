@@ -118,7 +118,7 @@ describe('clean git dir: inside WSL', () => {
           platform: 'win32',
           readDotGit: () => 'gitdir: //wsl.localhost/Ubuntu/home/me/repo/.git/worktrees/t\n',
           wslExec: exec,
-          toWslPath: (p) => `/mnt/c/wmux${p.slice(root.length)}`,
+          toWslPath: (p) => `/mnt/c/wmux${p.slice(root.length).replace(/\\/g, '/')}`,
         },
       );
       expect(r).toMatchObject({ ok: true, head: sha });
