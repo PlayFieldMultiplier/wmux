@@ -153,6 +153,8 @@ interface Watch {
   lines: boolean;
   /** Hook-fed: read only for `onClaudeLine`, never for the activity line. */
   linesOnly: boolean;
+  /** The one-time `onClaudeLine` replay of the window before `offset` is still owed. */
+  replay?: boolean;
 }
 
 /**
@@ -346,11 +348,17 @@ export class TranscriptActivityWatcher {
       return;
     }
     // Start at the end: only what the agent writes from now on.
-    this.watches.set(id, { path, parse, ino: stat.ino, offset: stat.size, sentAt: 0, lines: !!onLine, linesOnly: this.hookFed.has(id) });
-    if (onLine) readTranscriptPage(path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, path, line); return []; } });
+    this.watches.set(id, { path, parse, ino: stat.ino, offset: stat.size, sentAt: 0, lines: !!onLine, linesOnly: this.hookFed.has(id), replay: !!onLine });
   }
 
   private read(id: string, watch: Watch): void {
+    // Here, after dropSharedTranscripts: a pane that lost a shared file is
+    // recreated by every reconcile, and must not replay it every tick.
+    const onLine = this.deps.onClaudeLine;
+    if (watch.replay && onLine) {
+      watch.replay = false;
+      readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, watch.path, line); return []; } });
+    }
     const stat = statTranscript(watch.path);
     if (!stat) {
       this.watches.delete(id);

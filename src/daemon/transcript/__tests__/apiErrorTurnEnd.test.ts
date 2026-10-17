@@ -128,4 +128,23 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     expect(lines).toEqual([apiError('oauth_org_not_allowed', NOTICE), turnDuration, reply, turnDuration]);
     expect(ticks).toBe(4);
   });
+
+  it('replays a transcript two panes share once, for the pane that keeps it', () => {
+    const file = path.join(dir, 's.jsonl');
+    fs.writeFileSync(file, `${apiError('oauth_org_not_allowed', NOTICE)}\n${turnDuration}\n`);
+    const binding: ResumeBinding = { agent: 'claude', sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+    const counts: Record<string, number> = {};
+    const watcher = new TranscriptActivityWatcher({
+      listSessionIds: () => ['pty-old', 'pty-new'],
+      getBinding: () => binding,
+      isAgentAlive: () => true,
+      emit: () => undefined,
+      onClaudeLine: (id) => { counts[id] = (counts[id] ?? 0) + 1; },
+      minGapMs: 0,
+    });
+    watcher.noteHookSignal('pty-new', 'agent.session_start');
+    for (let i = 0; i < 5; i++) watcher.tick();
+    expect(watcher.watchedSessions()).toEqual(['pty-new']);
+    expect(counts).toEqual({ 'pty-new': 2 });
+  });
 });
