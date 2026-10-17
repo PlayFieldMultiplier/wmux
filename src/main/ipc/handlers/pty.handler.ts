@@ -38,6 +38,7 @@ import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getWmuxDir } from '../../../daemon/config';
 import { scheduleInitialCommand } from './scheduleInitialCommand';
 import { verifyLaunchLine, type LaunchLineRead } from './verifyLaunchLine';
+import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS } from '../../worktask/fanoutLaunchProbe';
 import {
   createSessionDataDispatcher,
   type SessionDataDispatcher,
@@ -748,8 +749,16 @@ export function registerPTYHandlers(
                 console.warn(`[pty:create] ${sessionId}: the shell never read the launch line; writing it once more`);
                 return writeLaunchLine(cmd);
               },
+              // The fan-out launch check's own question, process read included:
+              // only `absent` is evidence that nothing runs in the pane.
+              nothingRunning: async () => {
+                const res = (await daemonClient.rpc('daemon.getLaunchPresence', { id: sessionId, probeProcess: true }, { timeoutMs: LAUNCH_PROBE_CONFIRM_TIMEOUT_MS })) as { presence?: unknown } | null;
+                return res?.presence === 'absent';
+              },
               onDone: (outcome) => {
                 if (outcome === 'gave-up') console.warn(`[pty:create] ${sessionId}: the shell did not read the launch line after a second write`);
+                // No evidence either way: not re-sent; the fan-out launch check decides.
+                if (outcome === 'unverified') console.warn(`[pty:create] ${sessionId}: launch line unverified (no sign the shell read it, and none that it did not)`);
               },
             });
           }
