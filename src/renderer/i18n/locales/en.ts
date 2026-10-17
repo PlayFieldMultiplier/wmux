@@ -1370,7 +1370,7 @@ export const en = {
   'accounts.noGroup': 'No group',
   'accounts.newGroup': 'New group…',
   'accounts.groupPlaceholder': 'Group name (e.g. Work)',
-  'accounts.scopeLine': "When the bound account runs out, new sessions use the same-provider account with the most quota left in the same group.",
+  'accounts.scopeLine': "When an account runs out, new sessions switch to the one with the most quota left in its group.",
   'accounts.rowMenu': "{name}: more actions",
   'accounts.groupMenu': "{group}: more actions",
   'accounts.moveTo': "Move to {group}",

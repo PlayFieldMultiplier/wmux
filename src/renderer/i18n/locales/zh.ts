@@ -546,7 +546,7 @@ export const zh = {
   'accounts.noGroup': '未分组',
   'accounts.newGroup': '新建分组…',
   'accounts.groupPlaceholder': '分组名称（例如 工作）',
-  'accounts.scopeLine': "绑定的账号额度用尽时，新会话会在同一分组内改用同一提供商中剩余额度最多的账号。",
+  'accounts.scopeLine': "账号额度用尽时，新会话会切换到同组中剩余额度最多的账号。",
   'accounts.rowMenu': "{name}：更多操作",
   'accounts.groupMenu': "{group}：更多操作",
   'accounts.moveTo': "移到 {group}",

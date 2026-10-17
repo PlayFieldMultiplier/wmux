@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useRef, useSyncExternalStore, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import type { Account } from '../../../main/account/accountStore';
 import type { CredentialStatus } from '../../../main/ipc/handlers/account.handler';
 import type { AccountUsageEntry } from '../../../main/account/AccountUsageService';
@@ -449,22 +449,23 @@ export function AccountsSection(): React.ReactElement | null {
   const buckets = groupAccounts(rows);
   const groupNames = buckets.map((b) => b.group).filter(Boolean);
   const orderedRows = buckets.flatMap((b) => b.accounts);
-  // A quiet heading; a named group's ⋯ renames or ungroups it.
-  const groupLabel = (i: number) => {
-    const group = accountGroupOf(orderedRows[i]);
-    if (groupNames.length === 0 || (i > 0 && accountGroupOf(orderedRows[i - 1]) === group)) return null;
-    const ids = orderedRows.filter((r) => accountGroupOf(r) === group).map((r) => r.id);
+  // A heading above its group's own container: small, muted, no fill. A
+  // named group's ⋯ (rename, ungroup) shows on hover, focus or while open.
+  const groupHeading = (group: string, accounts: AccountRow[]) => {
+    const ids = accounts.map((r) => r.id);
     return (
-      <div className="flex items-center gap-2 min-h-[36px] px-[14px] text-[13px] text-[var(--text-sub)]" data-account-group={group}>
+      <div className="group/heading flex items-center gap-2 min-h-[26px] px-[14px] text-[12px] leading-4 text-[var(--text-sub)]" data-account-group={group}>
         <span className="flex-1 min-w-0 truncate">{group || t('accounts.noGroup')}</span>
         {group && (
-          <AccountMenu
-            label={t('accounts.groupMenu', { group })}
-            items={[
-              { id: 'rename', label: t('accounts.renameGroup'), onSelect: () => setMove({ ids, from: group, to: null, kind: 'rename' }) },
-              { id: 'ungroup', label: t('accounts.ungroup'), onSelect: () => requestMove({ ids, from: group, to: '', kind: 'ungroup' }) },
-            ]}
-          />
+          <span className="flex opacity-0 group-hover/heading:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+            <AccountMenu
+              label={t('accounts.groupMenu', { group })}
+              items={[
+                { id: 'rename', label: t('accounts.renameGroup'), onSelect: () => setMove({ ids, from: group, to: null, kind: 'rename' }) },
+                { id: 'ungroup', label: t('accounts.ungroup'), onSelect: () => requestMove({ ids, from: group, to: '', kind: 'ungroup' }) },
+              ]}
+            />
+          </span>
         )}
       </div>
     );
@@ -483,51 +484,39 @@ export function AccountsSection(): React.ReactElement | null {
     ];
   };
 
-  return (
-    // No heading: the Accounts page title already names this, its only group.
-    <SettingsSection
-      id="claudeacct"
-      description={[t('accounts.scopeLine'), t('accounts.intro'), t('accounts.rotateDesc'), t('accounts.groupsDesc')].join(' ')}
-    >
-      <AccountRotationControls state={rotation.state} reload={rotation.reload} />
-      {removeNotice && <p className="settings-note">{removeNotice}</p>}
-      {loaded && rows.length === 0 && !adding && (
-        <p className="settings-note">{t('accounts.empty')}</p>
+  const renderRow = (r: AccountRow) => (
+    <div key={r.id} className="ui-row" style={ROW_TRACKS} data-account-row={r.id}>
+      <Badge className="justify-self-start">{r.vendor}</Badge>
+      {editingId === r.id ? (
+        <Input
+          className="settings-input min-w-0"
+          aria-label={t('accounts.namePlaceholder')}
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') rename(r.id); if (e.key === 'Escape') setEditingId(null); }}
+          onBlur={() => rename(r.id)}
+          autoFocus
+        />
+      ) : (
+        <span className="min-w-0 text-[13px] font-medium text-[var(--text-main)] truncate">{r.name}</span>
       )}
-      {orderedRows.map((r, i) => (
-        <Fragment key={r.id}>
-        {groupLabel(i)}
-        <div className="ui-row" style={ROW_TRACKS} data-account-row={r.id}>
-          <Badge className="justify-self-start">{r.vendor}</Badge>
-          {editingId === r.id ? (
-            <Input
-              className="settings-input min-w-0"
-              aria-label={t('accounts.namePlaceholder')}
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') rename(r.id); if (e.key === 'Escape') setEditingId(null); }}
-              onBlur={() => rename(r.id)}
-              autoFocus
-            />
-          ) : (
-            <span className="min-w-0 text-[13px] font-medium text-[var(--text-main)] truncate">{r.name}</span>
-          )}
-          <span className="justify-self-end min-w-0 max-w-full overflow-hidden">
-            <LoginState
-              row={r}
-              expired={usage.get(r.id)?.status === 'unauthorized'}
-              pending={pending.some((p) => p.configDir === r.configDir)}
-            />
-          </span>
-          <span className="justify-self-end min-w-0 max-w-full overflow-hidden">
-            {r.vendor === 'codex'
-              ? <RotationQuotaBit row={rotation.state?.rows.find((x) => x.accountId === r.id)} />
-              : <UsageBit entry={usage.get(r.id)} />}
-          </span>
-          <AccountMenu label={t('accounts.rowMenu', { name: r.name })} items={rowMenu(r)} />
-        </div>
-        </Fragment>
-      ))}
+      <span className="justify-self-end min-w-0 max-w-full overflow-hidden">
+        <LoginState
+          row={r}
+          expired={usage.get(r.id)?.status === 'unauthorized'}
+          pending={pending.some((p) => p.configDir === r.configDir)}
+        />
+      </span>
+      <span className="justify-self-end min-w-0 max-w-full overflow-hidden">
+        {r.vendor === 'codex'
+          ? <RotationQuotaBit row={rotation.state?.rows.find((x) => x.accountId === r.id)} />
+          : <UsageBit entry={usage.get(r.id)} />}
+      </span>
+      <AccountMenu label={t('accounts.rowMenu', { name: r.name })} items={rowMenu(r)} />
+    </div>
+  );
+  const tail = (
+    <>
       {pending.map((p) => <PendingLoginRow key={p.configDir} entry={p} />)}
       {adding ? (
         <AddAccountWizard groups={groupNames} onDone={() => { setAdding(false); reload(); }} onCancel={() => setAdding(false)} />
@@ -544,6 +533,38 @@ export function AccountsSection(): React.ReactElement | null {
           </Button>
         </div>
       )}
+    </>
+  );
+  // Rows sit in the section's container until any account has a group; then
+  // each group gets its own container under a heading.
+  const grouped = groupNames.length > 0;
+
+  return (
+    <>
+      {/* No heading: the Accounts page title already names this, its only group. */}
+      <SettingsSection
+        id="claudeacct"
+        description={[t('accounts.scopeLine'), t('accounts.intro'), t('accounts.rotateDesc'), t('accounts.groupsDesc')].join(' ')}
+      >
+        <AccountRotationControls state={rotation.state} reload={rotation.reload} />
+        {removeNotice && <p className="settings-note">{removeNotice}</p>}
+        {loaded && rows.length === 0 && !adding && (
+          <p className="settings-note">{t('accounts.empty')}</p>
+        )}
+        {!grouped && orderedRows.map(renderRow)}
+        {!grouped && tail}
+      </SettingsSection>
+      {grouped && (
+        <div className="flex flex-col gap-4" data-account-groups>
+          {buckets.map(({ group, accounts }) => (
+            <div key={group || 'ungrouped'} className="flex flex-col gap-1">
+              {groupHeading(group, accounts)}
+              <div className="ui-group">{accounts.map(renderRow)}</div>
+            </div>
+          ))}
+          <div className="ui-group">{tail}</div>
+        </div>
+      )}
       {move && <MoveDialog move={move} impact={(to) => moveImpact(move, to)} onApply={(to) => applyMove(move, to)} onCancel={() => closeMove(move)} />}
       {confirmRemove && (
         <Dialog onClose={() => closeRemove(confirmRemove.id)} width={420}>
@@ -554,7 +575,7 @@ export function AccountsSection(): React.ReactElement | null {
           </DialogFooter>
         </Dialog>
       )}
-    </SettingsSection>
+    </>
   );
 }
 

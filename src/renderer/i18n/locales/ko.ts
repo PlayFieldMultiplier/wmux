@@ -3766,7 +3766,7 @@ export const ko = {
   'accounts.noGroup': '그룹 없음',
   'accounts.newGroup': '새 그룹…',
   'accounts.groupPlaceholder': '그룹 이름 (예: 회사)',
-  'accounts.scopeLine': "바인딩된 계정이 소진되면 새 세션은 같은 그룹 안에서 할당량이 가장 많이 남은 같은 제공사 계정을 씁니다.",
+  'accounts.scopeLine': "계정이 소진되면 새 세션은 같은 그룹에서 할당량이 가장 많이 남은 계정으로 넘어갑니다.",
   'accounts.rowMenu': "{name}: 더 보기",
   'accounts.groupMenu': "{group}: 더 보기",
   'accounts.moveTo': "{group}(으)로 이동",

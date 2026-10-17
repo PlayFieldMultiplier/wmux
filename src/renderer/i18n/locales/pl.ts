@@ -1350,7 +1350,7 @@ export const pl = {
   'accounts.noGroup': 'Bez grupy',
   'accounts.newGroup': 'Nowa grupa…',
   'accounts.groupPlaceholder': 'Nazwa grupy (np. Praca)',
-  'accounts.scopeLine': "Gdy powiązane konto się wyczerpie, nowe sesje używają konta tego samego dostawcy z największym zapasem limitu w tej samej grupie.",
+  'accounts.scopeLine': "Gdy konto się wyczerpie, nowe sesje przechodzą na konto z największym limitem w jego grupie.",
   'accounts.rowMenu': "{name}: więcej działań",
   'accounts.groupMenu': "{group}: więcej działań",
   'accounts.moveTo': "Przenieś do {group}",
