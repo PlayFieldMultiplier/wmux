@@ -138,6 +138,9 @@ export interface TaskWorktreePlan {
   branch: string;
   /** 프롬프트 등 메타 파일 디렉토리(worktree 밖 — diff 청정성 §4). */
   metaDir: string;
+  /** The repository's common git dir, resolved; absent when it could not be
+   *  read. Recorded on the task's ledger row (LedgerDispatch.gitCommonDir). */
+  gitCommonDir?: string;
 }
 
 export type PreflightResult =
@@ -291,6 +294,16 @@ export class TaskWorktreeManager {
       realRoot = repoRoot;
     }
     const repoHash = crypto.createHash('sha256').update(realRoot).digest('hex').slice(0, 12);
+    // The git dir task_push and task_fetch later run on, read here before
+    // any worker exists.
+    let gitCommonDir: string | undefined;
+    try {
+      const { stdout } = await this.runGit(['rev-parse', '--git-common-dir'], realRoot);
+      const out = stdout.trim();
+      if (out) gitCommonDir = fs.realpathSync.native(path.resolve(realRoot, out));
+    } catch {
+      gitCommonDir = undefined;
+    }
 
     // 경로 파생.
     const taskSlug = buildTaskSlug(title, taskId);
@@ -337,7 +350,7 @@ export class TaskWorktreeManager {
       }
     }
 
-    return { ok: true, plan: { repoRoot: realRoot, repoHash, taskSlug, worktreePath, branch, metaDir } };
+    return { ok: true, plan: { repoRoot: realRoot, repoHash, taskSlug, worktreePath, branch, metaDir, ...(gitCommonDir ? { gitCommonDir } : {}) } };
   }
 
   /**

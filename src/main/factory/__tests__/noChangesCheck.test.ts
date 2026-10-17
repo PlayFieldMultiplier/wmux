@@ -18,6 +18,7 @@ import { pushTaskBranch } from '../../worktask/taskPush';
 import { readTaskRemoteHead } from '../../worktask/taskFetch';
 import { TASK_PUSHES_FILENAME, taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { registerLedgerRpc } from '../../pipe/handlers/ledger.rpc';
+import { fakeSshUrl, writeFakeSsh } from '../../../test-utils/fakeSsh';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -111,14 +112,24 @@ describe('the no-changes check over real git, task.push and ledger.update', () =
     run(work, 'commit', '-qm', 'init');
     run(work, 'remote', 'add', 'origin', origin);
     run(work, 'push', '-q', 'origin', 'main');
+    // Main's network git allows https and ssh only: origin is reached over a
+    // stand-in ssh the owner's global config names.
+    run(work, 'remote', 'set-url', 'origin', fakeSshUrl(origin));
+    fs.writeFileSync(path.join(os.homedir(), '.gitconfig'), `[core]\n\tsshCommand = ${writeFakeSsh(root)}\n`);
     run(work, 'checkout', '-qb', 'wtask/one');
     base = run(work, 'rev-parse', 'HEAD');
+    gitCommonDir = fs.realpathSync.native(path.join(work, '.git'));
     ledger = new TaskLedger({ dir: path.join(root, 'ledger') });
-    await ledger.register({ id: 't1', taskWorkspaceId: 'ws-t', ownerWorkspaceId: 'ws-o', title: 't', dispatch: { origin: { kind: 'operator' }, baseOid: base } });
+    await ledger.register({ id: 't1', taskWorkspaceId: 'ws-t', ownerWorkspaceId: 'ws-o', title: 't', dispatch: { origin: { kind: 'operator' }, baseOid: base, gitCommonDir } });
     const r = await ledger.update({ id: 't1', status: 'review_requested', actor: { kind: 'worker', workspaceId: 'ws-t' }, expectedRev: 1, summary: 'read the API, nothing to commit' });
     if (!r.ok) throw new Error(r.message);
   });
-  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(path.join(os.homedir(), '.gitconfig'), { force: true });
+  });
+  let gitCommonDir = '';
+  const at = () => ({ worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'nh'), gitCommonDir, cleanRoot: path.join(root, 'clean') });
 
   const check = () => liveNoChangesCheck({
     rpc: () => async () => ({ ok: true, tasks: [{ id: 't1', worktreePath: work, branch: 'wtask/one' }] }),
@@ -148,7 +159,7 @@ describe('the no-changes check over real git, task.push and ledger.update', () =
     fs.writeFileSync(path.join(work, 'b.txt'), 'b\n');
     run(work, 'add', '.');
     run(work, 'commit', '-qm', 'work');
-    const pushed = await pushTaskBranch({ worktreePath: work, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') });
+    const pushed = await pushTaskBranch({ ...at(), defaultBranches: [] });
     if (!pushed.ok) throw new Error(pushed.error);
     if (record) taskPushRecordOf(dataDir).record('t1', pushed.head);
     run(work, 'reset', '-q', '--hard', base);
@@ -174,15 +185,15 @@ describe('the no-changes check over real git, task.push and ledger.update', () =
     expect(taskPushRecordOf(dataDir).get('t1')).toBeNull();
     // The worker also deletes the remote-tracking ref main set: it is not read.
     run(work, 'update-ref', '-d', 'refs/remotes/origin/wtask/one');
-    expect(await readTaskRemoteHead({ worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'nh') })).toEqual({ ok: true, sha: pushed });
+    expect(await readTaskRemoteHead(at())).toEqual({ ok: true, sha: pushed });
     expect(await check()(row())).toMatchObject({ kind: 'changed', why: expect.stringContaining(`origin's wtask/one is at ${pushed}`) });
     expect(await complete()).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION' } });
   });
 
   it('origin unreachable: unknown, so the gate would run, and the completion is refused', async () => {
     await skip();
-    run(work, 'remote', 'set-url', 'origin', path.join(root, 'gone.git'));
-    expect((await readTaskRemoteHead({ worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'nh') })).ok).toBe(false);
+    run(work, 'remote', 'set-url', 'origin', fakeSshUrl(path.join(root, 'gone.git')));
+    expect((await readTaskRemoteHead(at())).ok).toBe(false);
     expect(await check()(row())).toMatchObject({ kind: 'unknown', why: expect.stringContaining('could not be read') });
     expect(await complete()).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION' } });
   });

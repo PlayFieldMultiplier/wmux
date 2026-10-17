@@ -1201,6 +1201,7 @@ registerLedgerRpc(rpcRouter, () => mainWindow, {
     git: gitRun,
     wmuxDir: getWmuxDir,
     botRepoKey: (botId) => getBotStore()?.get(botId)?.repo?.repoKey,
+    botRepoPath: (botId) => getBotStore()?.get(botId)?.repo?.repoPath,
   }),
 });
 registerTaskPushRpc(rpcRouter, {

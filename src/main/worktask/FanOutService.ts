@@ -1637,6 +1637,8 @@ export class FanOutService {
                 origin: { kind: ctx.requester.kind, ...(ctx.requester.botId ? { botId: ctx.requester.botId } : {}), ...(typeof ctx.requester.tainted === 'boolean' ? { tainted: ctx.requester.tainted } : {}) },
                 ...(ctx.preset ? { preset: ctx.preset } : {}),
                 ...(ctx.repoKey ? { repoKey: ctx.repoKey } : {}),
+                // The git dir task_push and task_fetch run on.
+                ...(plan?.gitCommonDir ? { gitCommonDir: plan.gitCommonDir } : {}),
                 ...(ctx.checkout ? { checkout: { sha: ctx.checkout.sha, detached: true as const } } : {}),
                 // The commit the task branch was created from: the no-changes
                 // check's base (main's record, not the worktree's task.json).

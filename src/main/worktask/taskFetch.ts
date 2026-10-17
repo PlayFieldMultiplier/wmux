@@ -7,36 +7,34 @@
 // task.push would push with (main's own, or the repository's WSL distro's),
 // under the same config checks:
 //
-//   - WHICH repository: the task's worktree, from main's task record; for a
-//     bot's task, origin must be a plain https/ssh address of the bot's own
-//     repository.
+//   - WHICH repository: the git dir main recorded for the task (never one
+//     found through the worktree); for a bot's task, origin must be a plain
+//     https/ssh address of the bot's own repository.
 //   - WHAT: the repository's default branch (the remote's HEAD, else GitHub's
 //     by key, else origin/HEAD) and the task branch, each into its own
 //     remote-tracking ref (refs/remotes/origin/<name>). No tag, no submodule,
 //     no local branch, and the checkout is never touched: the worker merges
 //     itself (`git merge origin/<default>`).
-//   - HOW: fetched into a namespace of main's own (refs/wmux/fetch/<nonce>/)
-//     with no FETCH_HEAD, no auto maintenance and no commit-graph write, then
-//     set as the remote-tracking ref itself (`update-ref --no-deref`, so a
-//     symbolic ref there is replaced, never followed) and the namespace
-//     dropped. Refused when the repository config defines a remote named by
-//     origin's URL (git would read the URL as that remote) or a bundle URI.
+//   - HOW: every network call (each ls-remote, the fetch) runs in a clean
+//     bare git dir main makes for that call (taskPush.ts openTaskGitRepo),
+//     with the recorded repository's objects, so the fetched objects land
+//     there; the fetch is seeded with the repository's recent commits, writes
+//     no FETCH_HEAD, runs no maintenance and writes no commit-graph. Each
+//     branch is then set as its remote-tracking ref in the recorded
+//     repository (`update-ref --no-deref`, no reflog), after the ref's path
+//     and the commit are checked. Refused when the repository config defines
+//     a remote named by origin's URL (git would read the URL as that remote)
+//     or a bundle URI.
 //   - Never a push.
 
-import crypto from 'node:crypto';
-import path from 'node:path';
 import { isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
-import { defaultGit, parseLsRemoteHead, readDotGitFile, taskPushGitTarget, wslTaskPushGit, type TaskPushDeps, type TaskPushGit } from './taskPush';
-import { originUrlRepoKey, urlNamedRemoteRefusal, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal, type GitConfigEntry } from './workerGit';
+import { defaultGit, openTaskGitRepo, parseLsRemoteHead, type TaskGitRepo, type TaskGitRepoInput, type TaskPushDeps, type TaskPushGit } from './taskPush';
+import { originUrlRepoKey, urlNamedRemoteRefusal, workerOriginRefusal, type GitConfigEntry } from './workerGit';
 
-export interface TaskFetchInput {
-  /** The task's worktree (main's record). */
-  worktreePath: string;
+export interface TaskFetchInput extends TaskGitRepoInput {
   /** The task's branch (main's record). */
   branch: string;
-  /** An empty folder for `core.hooksPath`. */
-  noHooksDir: string;
   /** A bot's task: the repository origin must be. Absent for a task of the
    *  operator's. */
   expectedRepoKey?: string;
@@ -84,27 +82,22 @@ export function taskFetchArgs(url: string, branches: readonly string[], ns: stri
 
 type TaskRemoteFailure = Extract<TaskFetchResult, { ok: false }>;
 
-/** The git main reads origin with for a task (main's own, or the
+/** Main's git on the task's recorded repository (main's own, or the
  *  repository's WSL distro's), after the push's and the fetch's config
  *  checks, and origin's URL and key. Never throws. */
 async function openTaskRemote(
-  input: Pick<TaskFetchInput, 'worktreePath' | 'noHooksDir' | 'expectedRepoKey'>,
+  input: Pick<TaskFetchInput, keyof TaskGitRepoInput | 'expectedRepoKey'>,
   git: TaskPushGit,
   deps: TaskPushDeps,
-): Promise<{ ok: true; run: (args: string[]) => ReturnType<TaskPushGit>; url: string; key: string | null } | TaskRemoteFailure> {
-  const platform = deps.platform ?? process.platform;
-  const target = taskPushGitTarget(platform === 'win32' ? (deps.readDotGit ?? readDotGitFile)(input.worktreePath) : null, platform);
-  if (target.kind === 'refused') return { ok: false, reason: 'git-failed', error: target.error };
-  const safe = workerGitSafeArgs(target.kind === 'wsl' ? '/dev/null' : path.resolve(input.noHooksDir));
-  const runner = target.kind === 'wsl' ? wslTaskPushGit(target.distro, target.gitDir, deps.wslExec) : git;
-  const run = (args: string[]) => runner([...safe, ...args], input.worktreePath);
-  const pre = await workerGitPreflight(run);
-  if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
-  const origin = workerOriginRefusal(pre.entries);
+): Promise<{ ok: true; repo: TaskGitRepo; url: string; key: string | null } | TaskRemoteFailure> {
+  const opened = await openTaskGitRepo(input, git, deps);
+  if (!opened.ok) return opened;
+  const { repo } = opened;
+  const origin = workerOriginRefusal(repo.entries);
   if ('error' in origin) {
     return { ok: false, reason: /no origin remote/.test(origin.error) ? 'no-origin' : 'remote-refused', error: origin.error };
   }
-  const fetchRefusal = taskFetchConfigRefusal(pre.entries, origin.url);
+  const fetchRefusal = taskFetchConfigRefusal(repo.entries, origin.url);
   if (fetchRefusal) return { ok: false, reason: 'config-refused', error: fetchRefusal };
   const key = originUrlRepoKey(origin.url);
   if (input.expectedRepoKey !== undefined) {
@@ -113,7 +106,7 @@ async function openTaskRemote(
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }
-  return { ok: true, run, url: origin.url, key };
+  return { ok: true, repo, url: origin.url, key };
 }
 
 export type TaskRemoteHeadResult = { ok: true; sha: string | null } | TaskRemoteFailure;
@@ -126,16 +119,17 @@ export type TaskRemoteHeadResult = { ok: true; sha: string | null } | TaskRemote
  * Never throws.
  */
 export async function readTaskRemoteHead(
-  input: Pick<TaskFetchInput, 'worktreePath' | 'branch' | 'noHooksDir' | 'expectedRepoKey'>,
+  input: Pick<TaskFetchInput, keyof TaskGitRepoInput | 'branch' | 'expectedRepoKey'>,
   git: TaskPushGit = defaultGit,
   deps: TaskPushDeps = {},
 ): Promise<TaskRemoteHeadResult> {
   if (!isDenyableBranchName(input.branch)) return { ok: false, reason: 'branch-refused', error: 'the task branch name cannot be read as itself' };
   const remote = await openTaskRemote(input, git, deps);
   if (!remote.ok) return remote;
-  const heads = await remote.run(['ls-remote', '--heads', '--', remote.url, `refs/heads/${input.branch}`]);
-  if (heads.code !== 0) return { ok: false, reason: 'git-failed', error: `git ls-remote failed: ${heads.stderr.trim().slice(0, 500)}` };
-  return { ok: true, sha: parseLsRemoteHeads(heads.stdout).get(input.branch) ?? null };
+  const heads = await remote.repo.inClean(remote.url, {}, (run) => run(['ls-remote', '--heads', '--', remote.url, `refs/heads/${input.branch}`]));
+  if (!heads.ok) return { ok: false, reason: 'git-failed', error: heads.error };
+  if (heads.value.code !== 0) return { ok: false, reason: 'git-failed', error: `git ls-remote failed: ${heads.value.stderr.trim().slice(0, 500)}` };
+  return { ok: true, sha: parseLsRemoteHeads(heads.value.stdout).get(input.branch) ?? null };
 }
 
 /** Fetch the default branch and the task branch. Never throws. */
@@ -143,15 +137,18 @@ export async function fetchTaskRefs(input: TaskFetchInput, git: TaskPushGit = de
   if (!isDenyableBranchName(input.branch)) return { ok: false, reason: 'branch-refused', error: 'the task branch name cannot be fetched as itself' };
   const opened = await openTaskRemote(input, git, deps);
   if (!opened.ok) return opened;
-  const { run, key } = opened;
-  const origin = { url: opened.url };
+  const { repo, key, url } = opened;
+  const lsRemote = async (args: string[]) => {
+    const r = await repo.inClean(url, {}, (run) => run(['ls-remote', ...args]));
+    return r.ok ? r.value : { code: 1, stdout: '', stderr: r.error };
+  };
   // The default branch: the remote's own HEAD, else GitHub's by key, else
   // origin/HEAD.
-  const remote = await run(['ls-remote', '--symref', '--', origin.url, 'HEAD']);
+  const remote = await lsRemote(['--symref', '--', url, 'HEAD']);
   let defaultBranch = remote.code === 0 ? parseLsRemoteHead(remote.stdout) : null;
   if (!defaultBranch && key && input.repoDefaultBranch) defaultBranch = await input.repoDefaultBranch(key).catch(() => null);
   if (!defaultBranch) {
-    const ref = await run(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+    const ref = await repo.local(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
     const name = ref.code === 0 ? ref.stdout.trim() : '';
     if (name.startsWith('refs/remotes/origin/')) defaultBranch = name.slice('refs/remotes/origin/'.length);
   }
@@ -161,32 +158,38 @@ export async function fetchTaskRefs(input: TaskFetchInput, git: TaskPushGit = de
   // Only branches the remote has: a task branch not pushed yet is reported
   // missing, not an error.
   const wanted = [...new Set([defaultBranch, input.branch])];
-  const heads = await run(['ls-remote', '--heads', '--', origin.url, ...wanted.map((b) => `refs/heads/${b}`)]);
+  const heads = await lsRemote(['--heads', '--', url, ...wanted.map((b) => `refs/heads/${b}`)]);
   if (heads.code !== 0) return { ok: false, reason: 'git-failed', error: `git ls-remote failed: ${heads.stderr.trim().slice(0, 500)}` };
   const there = parseLsRemoteHeads(heads.stdout);
   if (!there.has(defaultBranch)) return { ok: false, reason: 'no-default-branch', error: `origin has no branch ${defaultBranch}` };
   const present = wanted.filter((b) => there.has(b));
-  const ns = `refs/wmux/fetch/${crypto.randomBytes(8).toString('hex')}`;
-  const drop = async (): Promise<void> => {
-    for (let i = 0; i < present.length; i++) await run(['update-ref', '--no-deref', '-d', `${ns}/${i}`]);
-  };
-  const res = await run(taskFetchArgs(origin.url, present, ns));
-  if (res.code !== 0) {
-    await drop();
-    return { ok: false, reason: 'git-failed', error: `${res.stdout}\n${res.stderr}`.trim().slice(0, 2000) || `git fetch exited ${res.code}` };
+  // Each remote-tracking ref's path is checked before anything is fetched.
+  for (const b of present) {
+    const refused = await repo.refRefusal(`refs/remotes/origin/${b}`);
+    if (refused) return { ok: false, reason: 'config-refused', error: `main will not write refs/remotes/origin/${b}: ${refused}` };
   }
+  const ns = 'refs/wmux/fetch';
+  const res = await repo.inClean(url, { seed: true }, async (run): Promise<{ error: string } | { shas: string[] }> => {
+    const f = await run(taskFetchArgs(url, present, ns));
+    if (f.code !== 0) return { error: `${f.stdout}\n${f.stderr}`.trim().slice(0, 2000) || `git fetch exited ${f.code}` };
+    const shas: string[] = [];
+    for (const i of present.keys()) {
+      const sha = await run(['rev-parse', '--verify', '--quiet', `${ns}/${i}^{commit}`]);
+      shas.push(sha.code === 0 ? sha.stdout.trim() : '');
+    }
+    return { shas };
+  });
+  if (!res.ok) return { ok: false, reason: 'git-failed', error: res.error };
+  if ('error' in res.value) return { ok: false, reason: 'git-failed', error: res.value.error };
+  const { shas } = res.value;
   const fetched: TaskFetchedRef[] = [];
   for (const [i, b] of present.entries()) {
-    const sha = await run(['rev-parse', '--verify', '--quiet', `${ns}/${i}^{commit}`]);
-    const commit = sha.code === 0 ? sha.stdout.trim() : '';
-    // The remote-tracking ref itself, never what a symbolic ref there names.
-    const set = commit ? await run(['update-ref', '--no-deref', '-m', 'wmux task_fetch', `refs/remotes/origin/${b}`, commit]) : null;
-    if (!set || set.code !== 0) {
-      await drop();
-      return { ok: false, reason: 'git-failed', error: `origin/${b} could not be set after the fetch${set ? `: ${set.stderr.trim().slice(0, 300)}` : ''}` };
+    const sha = shas[i] ?? '';
+    const set = sha ? await repo.writeRef(`refs/remotes/origin/${b}`, sha) : null;
+    if (!set || !set.ok) {
+      return { ok: false, reason: 'git-failed', error: `origin/${b} could not be set after the fetch${set ? `: ${set.error}` : ''}` };
     }
-    fetched.push({ ref: `origin/${b}`, sha: commit });
+    fetched.push({ ref: `origin/${b}`, sha });
   }
-  await drop();
   return { ok: true, remote: 'origin', defaultBranch, fetched, missing: wanted.filter((b) => !there.has(b)).map((b) => `origin/${b}`) };
 }

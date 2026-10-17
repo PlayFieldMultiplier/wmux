@@ -773,6 +773,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
             git,
             wmuxDir: deps.wmuxDir,
             botRepoKey: (botId) => getBotDirectory()?.get(botId)?.repo?.repoKey,
+            botRepoPath: (botId) => getBotDirectory()?.get(botId)?.repo?.repoPath,
           }),
           recordNoChanges: (taskId, detail, headSha) => recordNoChangesGate(ledger, taskId, detail, Date.now, headSha),
           wake: (input) => {

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fetchTaskRefs, parseLsRemoteHeads, taskFetchArgs, taskFetchConfigRefusal } from '../taskFetch';
+import { fetchTaskRefs as fetchTask, parseLsRemoteHeads, taskFetchArgs, taskFetchConfigRefusal } from '../taskFetch';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -45,7 +45,12 @@ describe('fetchTaskRefs', () => {
   });
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-  const input = (over: Partial<Parameters<typeof fetchTaskRefs>[0]> = {}) => ({ worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'no-hooks'), ...over });
+  const input = (over: Partial<Parameters<typeof fetchTask>[0]> = {}) => ({
+    worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'no-hooks'),
+    gitCommonDir: fs.realpathSync.native(path.join(work, '.git')), cleanRoot: path.join(root, 'clean'), ...over,
+  });
+  // The fixtures' origins are local folders: git's `file` transport.
+  const fetchTaskRefs = (i: Parameters<typeof fetchTask>[0]) => fetchTask(i, undefined, { protocols: ['https', 'ssh', 'file'] });
 
   it('fetches origin\'s default branch into origin/main and leaves the checkout, the branch and origin as they were', async () => {
     const head = git(work, 'rev-parse', 'HEAD');
@@ -61,8 +66,9 @@ describe('fetchTaskRefs', () => {
     // No tag came along, and nothing was pushed.
     expect(git(work, 'tag', '--list')).toBe('');
     expect(git(origin, 'for-each-ref', '--format=%(refname) %(objectname)')).toBe(originRefs);
-    // Main's own namespace is gone again.
+    // Main's own namespace was never in the repository, and its clean dirs are gone.
     expect(git(work, 'for-each-ref', 'refs/wmux')).toBe('');
+    expect(fs.readdirSync(path.join(root, 'clean'))).toEqual([]);
     // The worker can now merge it itself.
     git(work, 'merge', '-q', '--no-edit', 'origin/main');
     expect(fs.existsSync(path.join(work, 'c.txt'))).toBe(true);
@@ -130,7 +136,7 @@ describe('task.fetch RPC', () => {
     const handlers = new Map<string, Handler>();
     const fetch = vi.fn(async () => ({ ok: true as const, remote: 'origin' as const, defaultBranch: 'main', fetched: [{ ref: 'origin/main', sha: 'abc' }], missing: [] }));
     const push = vi.fn();
-    const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app' } } : over.row;
+    const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } } : over.row;
     registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
       getWindow: () => null,
       daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: over.tasks ?? [{ id: 'wtask-1', status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
@@ -161,13 +167,13 @@ describe('task.fetch RPC', () => {
     expect(await none.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION', message: expect.stringMatching(/recorded no origin/) } });
     expect(none.fetch).not.toHaveBeenCalled();
     // A bot's task: its dispatch's repository first, over the bot's profile now.
-    const bot = setup({ row: { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' } }, botRepo: 'github.com/acme/other' });
+    const bot = setup({ row: { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } }, botRepo: 'github.com/acme/other' });
     await bot.call({ senderPtyId: 'pty-1' }, local);
     expect(bot.fetch).toHaveBeenCalledWith(expect.objectContaining({ expectedRepoKey: 'github.com/acme/app' }));
   });
 
   it('a bot\'s worker resumed after its task ended fetches from its recorded pane, for that task only', async () => {
-    const ended = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', status: 'completed', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' } };
+    const ended = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', status: 'completed', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } };
     const rec = { taskId: 'wtask-1', botId: 'bot-1', ownerWorkspaceId: 'ws-owner' };
     const reclaimed = (ws: string, pty: string) => (ws === 'ws-task' && pty === 'pty-1' ? rec : null);
     const closed = [{ id: 'wtask-1', status: 'closed', branch: 'wtask/one', worktreePath: '/w/one' }];
@@ -207,7 +213,7 @@ describe('task.fetch RPC', () => {
   });
 
   it('pins a bot\'s task to the bot\'s repository', async () => {
-    const row = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' } } };
+    const row = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, gitCommonDir: '/r/.git' } };
     const pinned = setup({ row, botRepo: 'github.com/acme/app' });
     await pinned.call({ senderPtyId: 'pty-1' }, local);
     expect(pinned.fetch).toHaveBeenCalledWith(expect.objectContaining({ expectedRepoKey: 'github.com/acme/app' }));

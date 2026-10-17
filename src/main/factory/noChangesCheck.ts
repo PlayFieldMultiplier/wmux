@@ -36,6 +36,7 @@
 import path from 'node:path';
 import type { LedgerEntry } from '../../shared/ledger';
 import { readTaskRemoteHead, type TaskRemoteHeadResult } from '../worktask/taskFetch';
+import { recordedTaskGitCommonDir } from '../worktask/taskGitCommonDir';
 import { taskPushRecordOf, type TaskPushLookup } from '../worktask/taskPushRecord';
 import { taskMissionFromMissions } from './verifyPreset';
 
@@ -116,6 +117,9 @@ export interface LiveNoChangesDeps {
   wmuxDir: () => string;
   /** A bot's repository (its profile), for a task whose dispatch names none. */
   botRepoKey: (botId: string) => string | undefined;
+  /** A bot's repository folder (its profile), for a task whose dispatch
+   *  records no git dir. */
+  botRepoPath?: (botId: string) => string | undefined;
 }
 
 /** The check over main's own records, git and origin. */
@@ -148,10 +152,15 @@ export function liveNoChangesPorts(deps: LiveNoChangesDeps): NoChangesPorts {
       const expectedRepoKey = entry.dispatch?.repoKey ?? (origin?.kind === 'bot' && origin.botId ? deps.botRepoKey(origin.botId) : undefined);
       // A bot's task is read only from its own repository.
       if (origin?.kind === 'bot' && !expectedRepoKey) return { ok: false, reason: 'remote-refused', error: 'the task names no repository' };
+      // Read in the repository main recorded, never one found through the worktree.
+      const gitCommonDir = await recordedTaskGitCommonDir(entry.dispatch, deps.botRepoPath ?? (() => undefined));
+      if (!gitCommonDir) return { ok: false, reason: 'git-failed', error: 'wmux recorded no repository folder for the task' };
       return readTaskRemoteHead({
         worktreePath: mission.worktreePath,
         branch: mission.branch,
         noHooksDir: path.join(deps.wmuxDir(), 'factory', 'no-hooks'),
+        gitCommonDir,
+        cleanRoot: path.join(deps.wmuxDir(), 'factory', 'git-clean'),
         ...(expectedRepoKey ? { expectedRepoKey } : {}),
       });
     },

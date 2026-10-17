@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultGit, parseLsRemoteHead, pushTaskBranch, taskPushArgs, taskPushBranchRefusal, taskPushGitTarget, wslGitArgv, wslTaskPushGit, type TaskPushExec } from '../taskPush';
+import { defaultGit, parseLsRemoteHead, pushTaskBranch as pushTask, taskPushArgs, taskPushBranchRefusal, taskPushGitTarget, wslGitArgv, wslTaskPushGit, type TaskPushExec } from '../taskPush';
 import { originUrlRepoKey, runWorkerGitRead } from '../workerGit';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
 import { TASK_PUSHES_FILENAME, TaskPushRecord, taskPushRecordOf } from '../taskPushRecord';
@@ -19,6 +19,10 @@ vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
 const git = (cwd: string, ...args: string[]): string =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8' }).trim();
+
+// The fixtures' origins are local folders: git's `file` transport, which
+// main's own calls never allow.
+const FILE_OK = { protocols: ['https', 'ssh', 'file'] };
 
 describe('pushTaskBranch', () => {
   let root: string;
@@ -42,13 +46,21 @@ describe('pushTaskBranch', () => {
   });
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-  const input = (branch = 'wtask/one') => ({ worktreePath: work, branch, defaultBranches: [], noHooksDir: path.join(root, 'no-hooks') });
+  const input = (branch = 'wtask/one') => ({
+    worktreePath: work, branch, defaultBranches: [], noHooksDir: path.join(root, 'no-hooks'),
+    gitCommonDir: fs.realpathSync.native(path.join(work, '.git')), cleanRoot: path.join(root, 'clean'),
+  });
+  const pushTaskBranch = (i: Parameters<typeof pushTask>[0], g: Parameters<typeof pushTask>[1] = defaultGit) => pushTask(i, g, FILE_OK);
 
-  it('pushes HEAD to the task branch on origin and sets the upstream', async () => {
+  it('pushes HEAD to the task branch on origin and sets origin/<branch>, writing no branch config', async () => {
     const r = await pushTaskBranch(input());
     expect(r).toMatchObject({ ok: true, branch: 'wtask/one', remote: 'origin', head: git(work, 'rev-parse', 'HEAD') });
     expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
-    expect(git(work, 'config', '--get', 'branch.wtask/one.remote')).toBe('origin');
+    expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
+    expect(() => git(work, 'config', '--get', 'branch.wtask/one.remote')).toThrow();
+    // No reflog for main's ref write, and main's clean dirs are gone.
+    expect(fs.existsSync(path.join(work, '.git', 'logs', 'refs', 'remotes', 'origin', 'wtask', 'one'))).toBe(false);
+    expect(fs.readdirSync(path.join(root, 'clean'))).toEqual([]);
   });
 
   it('never force-pushes: a rewritten branch is rejected and the remote keeps its tip', async () => {
@@ -87,12 +99,12 @@ describe('pushTaskBranch', () => {
     expect(() => git(work, 'symbolic-ref', '-q', 'refs/remotes/origin/wtask/one')).toThrow();
   });
 
-  it('stops before pushing when a symbolic upstream ref cannot be dropped', async () => {
+  it('a locked origin/<branch> leaves the push landed and says the ref was not set', async () => {
     const main = git(work, 'rev-parse', 'refs/heads/main');
     git(work, 'symbolic-ref', 'refs/remotes/origin/wtask/one', 'refs/heads/main');
     fs.writeFileSync(path.join(work, '.git', 'refs', 'remotes', 'origin', 'wtask', 'one.lock'), '');
-    expect(await pushTaskBranch(input())).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringContaining('update-ref -d refs/remotes/origin/wtask/one') });
-    expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
+    expect(await pushTaskBranch(input())).toMatchObject({ ok: true, output: expect.stringContaining('origin/wtask/one was not set') });
+    expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(work, 'rev-parse', 'HEAD'));
     expect(git(work, 'rev-parse', 'refs/heads/main')).toBe(main);
   });
 
@@ -143,13 +155,13 @@ describe('pushTaskBranch', () => {
   it('HEAD moving during the push: the commit pushed, set upstream and reported is the one resolved first', async () => {
     const resolved = git(work, 'rev-parse', 'HEAD');
     // A git that commits in the worktree (moving HEAD) right before it pushes.
-    const moving = async (args: string[], cwd: string) => {
+    const moving = async (args: string[], cwd: string, env?: Record<string, string>) => {
       if (args.includes('push')) {
         fs.writeFileSync(path.join(work, 'late.txt'), 'late\n');
         git(work, 'add', '.');
         git(work, 'commit', '-qm', 'late');
       }
-      return defaultGit(args, cwd);
+      return defaultGit(args, cwd, env);
     };
     const r = await pushTaskBranch(input(), moving);
     const moved = git(work, 'rev-parse', 'HEAD');
@@ -235,11 +247,13 @@ describe('task.push: GitLab remotes', () => {
 
   it('a bot\'s GitLab task pushes to its own project and to no other', async () => {
     const calls: string[][] = [];
+    // The subcommand: the first argument that is neither an option nor a `-c` value.
+    const subOf = (args: string[]) => args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-c');
     const fake = async (args: string[]) => {
       calls.push(args);
-      const sub = args[args.indexOf('-c', 2) + 2];
-      if (sub === 'config') return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@gitlab.corp.example:2222/group/sub/proj.git\0', stderr: '' };
-      if (sub === 'rev-parse') return { code: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+      const sub = subOf(args);
+      if (sub === 'config' && args.includes('--list')) return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@gitlab.corp.example:2222/group/sub/proj.git\0', stderr: '' };
+      if (sub === 'rev-parse') return { code: 0, stdout: args.includes('--is-shallow-repository') ? 'false\n' : `${'a'.repeat(40)}\n`, stderr: '' };
       if (sub === 'ls-remote') return { code: 0, stdout: 'ref: refs/heads/develop\tHEAD\nabc\tHEAD\n', stderr: '' };
       // A worker-written origin/HEAD naming some other branch.
       if (sub === 'symbolic-ref') return { code: 0, stdout: 'refs/remotes/origin/elsewhere\n', stderr: '' };
@@ -247,17 +261,22 @@ describe('task.push: GitLab remotes', () => {
     };
     // GitHub knows nothing of a GitLab project.
     const repoDefaultBranch = vi.fn(async () => null);
-    const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', repoDefaultBranch };
-    expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
-    // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
-    // refused; so is origin/HEAD's branch.
-    expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);
-    expect(await pushTaskBranch({ ...base, branch: 'develop', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
-    expect(await pushTaskBranch({ ...base, branch: 'elsewhere', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
-    expect(await pushTaskBranch({ ...base, branch: 'develop', expectedRepoKey: key, repoDefaultBranch: async () => 'main' }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
-    expect(await readRepoDefaultBranchByKey(key, { run: async () => { throw new Error('gh asked'); } })).toBeNull();
-    expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/other' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
-    expect(await pushTaskBranch({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/proj' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-gl-')));
+    const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', gitCommonDir: tmp, cleanRoot: path.join(tmp, 'clean'), repoDefaultBranch };
+    try {
+      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
+      // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
+      // refused; so is origin/HEAD's branch.
+      expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);
+      expect(await pushTask({ ...base, branch: 'develop', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      expect(await pushTask({ ...base, branch: 'elsewhere', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      expect(await pushTask({ ...base, branch: 'develop', expectedRepoKey: key, repoDefaultBranch: async () => 'main' }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      expect(await readRepoDefaultBranchByKey(key, { run: async () => { throw new Error('gh asked'); } })).toBeNull();
+      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/other' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
+      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/proj' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
     expect(parseLsRemoteHead('ref: refs/heads/main\tHEAD\r\n0123\tHEAD\n')).toBe('main');
     expect(parseLsRemoteHead('0123\tHEAD\n')).toBeNull();
   });
@@ -328,23 +347,55 @@ describe('task.push: a repository inside WSL', () => {
     afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
     const gitDir = () => path.join(work, '.git', 'worktrees', 'wt');
+    const recorded = () => `//wsl.localhost/Ubuntu${path.join(work, '.git')}`;
+    const input = (over: Record<string, unknown> = {}) => ({ worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh'), gitCommonDir: recorded(), cleanRoot: path.join(root, 'clean'), ...over });
+    // Runs what wsl.exe would run in the distro on this machine: git with
+    // only the variables WSLENV names, and stat/realpath as GNU prints them.
+    const standIn = (wslCalls: string[][]): TaskPushExec => async (_file, args, env) => {
+      wslCalls.push(args);
+      expect(args.slice(0, 5)).toEqual(['-d', 'Ubuntu', '--cd', '/', '--exec']);
+      const prog = args[5];
+      if (prog === 'stat') {
+        const paths = args.slice(args.indexOf('--') + 1);
+        let stdout = '';
+        let missing = false;
+        for (const p of paths) {
+          try {
+            const st = fs.lstatSync(p);
+            stdout += `${p}\0${st.isSymbolicLink() ? 'symbolic link' : st.isDirectory() ? 'directory' : st.isFile() ? 'regular file' : 'fifo'}\0`;
+          } catch {
+            missing = true;
+          }
+        }
+        return { code: missing ? 1 : 0, stdout, stderr: missing ? 'stat: cannot statx: No such file or directory' : '' };
+      }
+      if (prog === 'realpath') {
+        try {
+          return { code: 0, stdout: `${fs.realpathSync(args[args.length - 1])}\n`, stderr: '' };
+        } catch {
+          return { code: 1, stdout: '', stderr: 'realpath: No such file or directory' };
+        }
+      }
+      expect(prog).toBe('git');
+      const passed: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+      for (const name of (env.WSLENV ?? '').split(':').filter(Boolean)) passed[name] = env[name];
+      try {
+        const stdout = execFileSync('git', args.slice(6), { cwd: '/', env: passed, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        return { code: 0, stdout, stderr: '' };
+      } catch (e) {
+        const err = e as { status?: number; stdout?: string; stderr?: string };
+        return { code: err.status ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
+      }
+    };
     const run = (wslCalls: string[][], hostCalls: string[][]) => ({
       git: async (args: string[]) => { hostCalls.push(args); return { code: 1, stdout: '', stderr: 'host git' }; },
       deps: {
+        ...FILE_OK,
         platform: 'win32' as const,
         // The worktree's .git as Git for Windows writes it for a repository in a distro.
         readDotGit: () => `gitdir: //wsl.localhost/Ubuntu${gitDir()}\n`,
-        wslExec: (async (_file, args) => {
-          wslCalls.push(args);
-          expect(args.slice(0, 7)).toEqual(['-d', 'Ubuntu', '--cd', '/', '--exec', 'git', `--git-dir=${gitDir()}`]);
-          try {
-            const stdout = execFileSync('git', args.slice(6), { cwd: '/', encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-            return { code: 0, stdout, stderr: '' };
-          } catch (e) {
-            const err = e as { status?: number; stdout?: string; stderr?: string };
-            return { code: err.status ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
-          }
-        }) as TaskPushExec,
+        toWslPath: (p: string) => p,
+        wslExec: standIn(wslCalls),
       },
     });
 
@@ -352,44 +403,46 @@ describe('task.push: a repository inside WSL', () => {
       const wslCalls: string[][] = [];
       const hostCalls: string[][] = [];
       const { git: hostGit, deps } = run(wslCalls, hostCalls);
-      const r = await pushTaskBranch({ worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') }, hostGit, deps);
+      const r = await pushTask(input(), hostGit, deps);
       expect(r).toMatchObject({ ok: true, branch: 'wtask/one', head: git(wt, 'rev-parse', 'HEAD') });
       expect(git(origin, 'rev-parse', 'refs/heads/wtask/one')).toBe(git(wt, 'rev-parse', 'HEAD'));
-      expect(git(work, 'config', '--get', 'branch.wtask/one.remote')).toBe('origin');
+      expect(git(work, 'rev-parse', 'refs/remotes/origin/wtask/one')).toBe(git(wt, 'rev-parse', 'HEAD'));
+      expect(() => git(work, 'config', '--get', 'branch.wtask/one.remote')).toThrow();
       expect(hostCalls).toEqual([]);
-      for (const a of wslCalls) expect(a.slice(7, 11)).toEqual(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']);
+      const gitCalls = wslCalls.filter((a) => a[5] === 'git');
+      for (const a of gitCalls) expect(a.slice(7, 11)).toEqual(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']);
+      // The repository by its recorded path; the worktree's gitdir for HEAD only.
+      const byDir = (d: string) => gitCalls.filter((a) => a[6] === `--git-dir=${d}`);
+      expect(byDir(path.join(work, '.git')).length).toBeGreaterThan(0);
+      expect(byDir(gitDir()).map((a) => a.slice(11))).toEqual([['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']]);
+      expect(gitCalls.some((a) => a.includes('push') && a[6].startsWith(`--git-dir=${path.join(root, 'clean')}`))).toBe(true);
     });
 
     it('checks the config in the same git it pushes with, and keeps every refusal', async () => {
       const { git: hostGit, deps } = run([], []);
       git(work, 'config', 'core.sshCommand', 'false');
-      const input = { worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') };
-      expect(await pushTaskBranch(input, hostGit, deps)).toMatchObject({ ok: false, reason: 'config-refused' });
+      expect(await pushTask(input(), hostGit, deps)).toMatchObject({ ok: false, reason: 'config-refused' });
       git(work, 'config', '--unset', 'core.sshCommand');
-      expect(await pushTaskBranch({ ...input, expectedRepoKey: 'acme/app' }, hostGit, deps)).toMatchObject({ ok: false, reason: 'remote-refused' });
-      expect(await pushTaskBranch({ ...input, branch: 'main' }, hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      expect(await pushTask(input({ expectedRepoKey: 'acme/app' }), hostGit, deps)).toMatchObject({ ok: false, reason: 'remote-refused' });
+      expect(await pushTask(input({ branch: 'main' }), hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
       // The remote's own HEAD, read through the distro's git, is refused too.
       git(work, 'push', '-q', 'origin', 'main:develop');
       execFileSync('git', ['--git-dir', origin, 'symbolic-ref', 'HEAD', 'refs/heads/develop']);
-      expect(await pushTaskBranch({ ...input, branch: 'develop' }, hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
+      expect(await pushTask(input({ branch: 'develop' }), hostGit, deps)).toMatchObject({ ok: false, reason: 'branch-refused' });
       expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/develop\nrefs/heads/main');
       expect(git(origin, 'rev-parse', 'develop')).toBe(git(work, 'rev-parse', 'main'));
     });
 
     it('fails closed, with the cause, when the distro cannot be resolved', async () => {
       const { git: hostGit, deps } = run([], []);
-      const r = await pushTaskBranch(
-        { worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') },
-        hostGit,
-        { ...deps, readDotGit: () => 'gitdir: //wsl$//home/me/.git/worktrees/wt' },
-      );
+      const r = await pushTask(input({ gitCommonDir: '//wsl$//home/me/.git' }), hostGit, deps);
       expect(r).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/inside WSL/) });
-      const gone = await pushTaskBranch(
-        { worktreePath: wt, branch: 'wtask/one', defaultBranches: [], noHooksDir: path.join(root, 'nh') },
-        hostGit,
-        { ...deps, wslExec: async () => ({ code: 1, stdout: '', stderr: 'There is no distribution with the supplied name.' }) },
-      );
-      expect(gone).toMatchObject({ ok: false, reason: 'config-refused', error: expect.stringMatching(/no distribution/) });
+      const gone = await pushTask(input(), hostGit, { ...deps, wslExec: async () => ({ code: 1, stdout: '', stderr: 'There is no distribution with the supplied name.' }) });
+      expect(gone).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/could not be read/) });
+      // A worktree whose gitdir is in another distro than its repository.
+      const elsewhere = await pushTask(input(), hostGit, { ...deps, readDotGit: () => `gitdir: //wsl.localhost/Debian${gitDir()}\n` });
+      expect(elsewhere).toMatchObject({ ok: false, reason: 'git-failed', error: expect.stringMatching(/not in the WSL distro/) });
+      expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
     });
   });
 });
@@ -402,7 +455,7 @@ describe('task.push RPC', () => {
     const push = vi.fn(async (i: { branch: string }) => (over.fail
       ? { ok: false as const, reason: 'rejected' as const, error: 'non-fast-forward' }
       : { ok: true as const, branch: i.branch, remote: 'origin' as const, head: over.head ?? 'abc', output: '' }));
-    const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app' } } : over.row;
+    const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } } : over.row;
     registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
       getWindow: () => null,
       daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: over.tasks ?? [{ id: 'wtask-1', status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
@@ -423,7 +476,7 @@ describe('task.push RPC', () => {
   const local = { origin: 'local' };
 
   it('refuses a push while the task\'s report stands checked as making no changes; one sent back pushes', async () => {
-    const reported = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app' }, status: 'review_requested', reportedAtRev: 2, gate: { exitCode: 0, tail: '', at: 1, command: 'none', skipped: 'no_changes', recordedBy: 'system', reportRev: 2 } };
+    const reported = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' }, status: 'review_requested', reportedAtRev: 2, gate: { exitCode: 0, tail: '', at: 1, command: 'none', skipped: 'no_changes', recordedBy: 'system', reportRev: 2 } };
     const held = setup({ row: reported });
     expect(await held.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION', message: expect.stringMatching(/no changes/) } });
     expect(held.push).not.toHaveBeenCalled();
@@ -439,7 +492,7 @@ describe('task.push RPC', () => {
   it('a resumed worker of a task completed as making no changes cannot push; one of a task completed on a passing gate still can', async () => {
     const ended = (gate: Record<string, unknown>) => ({
       id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', status: 'completed',
-      dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' },
+      dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' },
       reportedAtRev: 2, gate,
     });
     const resumedPush = async (row: Record<string, unknown>) => {
@@ -471,7 +524,7 @@ describe('task.push RPC', () => {
     try {
       const ledger = new TaskLedger({ dir: ledgerDir });
       const id = 'wtask-1';
-      await ledger.register({ id, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, preset: 'default', repoKey: 'github.com/acme/app' } });
+      await ledger.register({ id, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, preset: 'default', repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } });
       const step = async (status: string, actor: { kind: 'worker' | 'brain'; workspaceId: string }): Promise<void> => {
         const r = await ledger.update({ id, status, actor, expectedRev: (ledger.get(id) as { rev: number }).rev });
         if (!r.ok) throw new Error(r.message);
@@ -544,6 +597,52 @@ describe('task.push RPC', () => {
     expect(await setup({ caller: 'ws-other' }).call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
   });
 
+  it('runs the push on the git dir main recorded, with clean dirs under main\'s folder; a task with none recorded is refused, a bot\'s falls back to its profile', async () => {
+    const r = setup();
+    expect(await r.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
+    expect(r.push).toHaveBeenCalledWith(expect.objectContaining({ gitCommonDir: '/r/.git', cleanRoot: path.join(r.dir, 'factory', 'git-clean'), worktreePath: '/w/one' }));
+    const none = setup({ row: { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app' } } });
+    expect(await none.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION', message: expect.stringMatching(/recorded no repository folder/) } });
+    expect(none.push).not.toHaveBeenCalled();
+    // A bot's row from before the record: the bot's own repository folder.
+    const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-botrepo-')));
+    try {
+      execFileSync('git', ['init', '-q', repo]);
+      const handlers = new Map<string, Handler>();
+      const push = vi.fn(async (i: { branch: string }) => ({ ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'abc', output: '' }));
+      const row = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' } };
+      registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
+        getWindow: () => null,
+        daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id: 'wtask-1', status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
+        getLedger: () => ({ findOpenByTaskWorkspace: () => row, get: () => row }) as never,
+        resolveCallerWorkspace: async () => 'ws-task',
+        wmuxDir: () => r.dir,
+        push: push as never,
+        repoDefaultBranch: async () => 'main',
+        botRepoPath: (id) => (id === 'bot-1' ? repo : undefined),
+      });
+      expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
+      expect(push).toHaveBeenCalledWith(expect.objectContaining({ gitCommonDir: path.join(repo, '.git') }));
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('sweeps clean git dirs a previous run left, when it registers', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-sweep-'));
+    const left = path.join(dir, 'factory', 'git-clean', 'c-old');
+    fs.mkdirSync(left, { recursive: true });
+    fs.writeFileSync(path.join(left, 'config'), '[core]\n\tsshCommand = false\n');
+    const old = new Date(Date.now() - process.uptime() * 1000 - 60_000);
+    fs.utimesSync(left, old, old);
+    // One made by this run (a call under way) is kept.
+    const live = path.join(dir, 'factory', 'git-clean', 'c-live');
+    fs.mkdirSync(live);
+    registerTaskPushRpc({ register: () => undefined } as never, { getWindow: () => null, daemon: { rpc: async () => ({}) }, wmuxDir: () => dir });
+    expect(fs.readdirSync(path.join(dir, 'factory', 'git-clean'))).toEqual(['c-live']);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('hands the push a reader of the repository\'s own default branch, for any task', async () => {
     const { call, push } = setup({ repoDefault: 'trunk' });
     await call({ senderPtyId: 'pty-1' }, local);
@@ -557,7 +656,7 @@ describe('task.push RPC', () => {
     const none = setup({ row: { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task' } });
     expect(await none.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION', message: expect.stringMatching(/recorded no origin/) } });
     expect(none.push).not.toHaveBeenCalled();
-    const ended = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' } };
+    const ended = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } };
     const reclaimed = (ws: string, pty: string) => (ws === 'ws-task' && pty === 'pty-1' ? { taskId: 'wtask-1', botId: 'bot-1', ownerWorkspaceId: 'ws-owner' } : null);
     const tasks = [{ id: 'wtask-1', status: 'closed', branch: 'wtask/one', worktreePath: '/w/one' }];
     const resumed = setup({ row: null, ended, reclaimed, tasks });
@@ -567,7 +666,7 @@ describe('task.push RPC', () => {
   });
 
   it('pins a bot\'s task to the bot\'s repository, and refuses a bot that names none', async () => {
-    const botRow = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', dispatch: { origin: { kind: 'bot', botId: 'bot-1', tainted: false } } };
+    const botRow = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', dispatch: { origin: { kind: 'bot', botId: 'bot-1', tainted: false }, gitCommonDir: '/r/.git' } };
     const pinned = setup({ row: botRow, botRepo: 'acme/app' });
     await pinned.call({ senderPtyId: 'pty-1' }, local);
     expect(pinned.push).toHaveBeenCalledWith(expect.objectContaining({ expectedRepoKey: 'acme/app' }));
