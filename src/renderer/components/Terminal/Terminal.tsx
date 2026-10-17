@@ -540,8 +540,11 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
           up, attention for input that may not have reached the shell. */}
       {!recoveryError && linkNotice && ownerSurfaceId && (
         <div role={linkNotice.state === 'reconnecting' ? 'status' : 'alert'} aria-live={linkNotice.state === 'reconnecting' ? 'polite' : undefined}
-          className="absolute inset-x-2 top-2 z-20 flex items-start gap-3 rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
-          <div className="min-w-0 flex-1">
+          className="absolute inset-x-2 top-2 z-20 flex flex-wrap items-start gap-3 rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
+          {/* The text keeps at least ~14rem and never shrinks below its
+              longest word, so a narrow pane wraps Dismiss onto its own row
+              instead of squeezing the text into a column that breaks words. */}
+          <div className="flex-1 basis-56">
             <p className={`break-words ${linkNotice.state === 'reconnecting' ? 'text-[var(--text-muted)]' : linkNotice.state === 'gave-up' ? 'text-[var(--accent-red)]' : ''}`}>
               {linkNotice.state === 'reconnecting'
                 ? (linkNotice.attempt > 0 ? t('daemon.linkReconnectingAttempt', { attempt: linkNotice.attempt }) : t('daemon.linkReconnecting'))
