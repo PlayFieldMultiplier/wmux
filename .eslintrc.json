@@ -115,6 +115,29 @@
           }
         ]
       }
+    },
+    {
+      "files": [
+        "**/__tests__/**",
+        "**/*.test.*"
+      ],
+      "rules": {
+        "no-restricted-syntax": [
+          "error",
+          {
+            "selector": "AwaitExpression:not(:matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > IfStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > IfStatement > BlockStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > TryStatement > CatchClause > BlockStatement > ExpressionStatement > AwaitExpression) > NewExpression[callee.name='Promise'] > :matches(ArrowFunctionExpression, FunctionExpression) > CallExpression.body[callee.name='setTimeout'][arguments.length=2]:not([arguments.1.value=0])",
+            "message": "Fixed sleep in a test. It guesses how long something else takes, and on the loaded Windows CI runner the guess loses. Waiting until something happens: await vi.waitFor(() => expect(...), { timeout: 10_000 }) (5_000 for in-memory state). Letting a timer elapse: vi.useFakeTimers() + await vi.advanceTimersByTimeAsync(ms). A genuine negative check (\"still nothing after 200ms\"), a real timer fake timers cannot drive, or latency inside a stub: await deliberateSleep(ms, 'why') from src/test-utils/waitFor. Not flagged: setTimeout(r, 0) yields, and a sleep that is the poll interval of a loop."
+          },
+          {
+            "selector": "AwaitExpression:not(:matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > IfStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > IfStatement > BlockStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > TryStatement > CatchClause > BlockStatement > ExpressionStatement > AwaitExpression) > NewExpression[callee.name='Promise'] > :matches(ArrowFunctionExpression, FunctionExpression) > BlockStatement[body.length=1] > ExpressionStatement > CallExpression.expression[callee.name='setTimeout'][arguments.length=2]:not([arguments.1.value=0])",
+            "message": "Fixed sleep in a test. It guesses how long something else takes, and on the loaded Windows CI runner the guess loses. Waiting until something happens: await vi.waitFor(() => expect(...), { timeout: 10_000 }) (5_000 for in-memory state). Letting a timer elapse: vi.useFakeTimers() + await vi.advanceTimersByTimeAsync(ms). A genuine negative check (\"still nothing after 200ms\"), a real timer fake timers cannot drive, or latency inside a stub: await deliberateSleep(ms, 'why') from src/test-utils/waitFor. Not flagged: setTimeout(r, 0) yields, and a sleep that is the poll interval of a loop."
+          },
+          {
+            "selector": "AwaitExpression:not(:matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > IfStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > IfStatement > BlockStatement > ExpressionStatement > AwaitExpression, :matches(WhileStatement, DoWhileStatement, ForStatement, ForInStatement, ForOfStatement) > BlockStatement > TryStatement > CatchClause > BlockStatement > ExpressionStatement > AwaitExpression) > CallExpression.argument[callee.name=/^(?:sleep|delay|wait)$/][arguments.length=1]:not([arguments.0.value=0]):not([arguments.0.type='ObjectExpression'])",
+            "message": "Fixed sleep in a test. It guesses how long something else takes, and on the loaded Windows CI runner the guess loses. Waiting until something happens: await vi.waitFor(() => expect(...), { timeout: 10_000 }) (5_000 for in-memory state). Letting a timer elapse: vi.useFakeTimers() + await vi.advanceTimersByTimeAsync(ms). A genuine negative check (\"still nothing after 200ms\"), a real timer fake timers cannot drive, or latency inside a stub: await deliberateSleep(ms, 'why') from src/test-utils/waitFor. Not flagged: setTimeout(r, 0) yields, and a sleep that is the poll interval of a loop."
+          }
+        ]
+      }
     }
   ]
 }
