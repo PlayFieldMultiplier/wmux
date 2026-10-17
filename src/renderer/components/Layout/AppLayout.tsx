@@ -327,6 +327,7 @@ function cloneStashedPanes(
           type: 'leaf',
           activeSurfaceId: pane.activeSurfaceId,
           ordinal: pane.ordinal,
+          ...(pane.notificationsMuted ? { notificationsMuted: true } : {}),
           // `metadata` rides along here and NOT in cloneWithScrollback, which
           // strips it on purpose (MetadataStore owns pane labels). This path is
           // the opposite case: the normal serializer just failed, so anything

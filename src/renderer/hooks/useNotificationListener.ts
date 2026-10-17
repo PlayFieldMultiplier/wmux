@@ -467,6 +467,11 @@ export function createNotificationHandler(deps: NotificationHandlerDeps) {
       windowFocused: deps.isWindowFocused(),
       isActiveSurface: isActive,
       isMutedWorkspace: ws?.metadata?.notificationsMuted === true,
+      isMutedPane: !!(
+        ws &&
+        target.paneId &&
+        getWorkspaceLeafPanes(ws).some((l) => l.id === target.paneId && l.notificationsMuted === true)
+      ),
       mutedCategories: state.mutedNotificationCategories,
       paneId: target.paneId ?? null,
       settings: {

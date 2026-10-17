@@ -155,6 +155,14 @@ export interface PaneLeaf {
    * live construction path assigns one via `assignPaneOrdinals`.
    */
   ordinal?: number;
+  /**
+   * Per-pane notification mute. Same contract as the workspace flag
+   * (WorkspaceMetadata.notificationsMuted): the notification is still
+   * recorded and the sidebar still shows the pane's state, but toast, sound,
+   * ring, taskbar flash and OS toast are skipped. Layout state like `ordinal`,
+   * so it persists via the `...pane` spread. undefined === false.
+   */
+  notificationsMuted?: boolean;
 }
 
 // === Pane Metadata: optional descriptive labels for external tooling ===
