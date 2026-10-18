@@ -147,7 +147,7 @@ describe('task workspace liveness (#2387)', () => {
     expect(w.warn).not.toHaveBeenCalled();
   });
 
-  it('an empty workspace list or an empty session list is not kept: the last good read still holds its agents', async () => {
+  it('an empty workspace list is not kept: the restored tree is read at once', async () => {
     const w = world({
       'ws-agent': { id: 't-agent', status: 'completed', pty: 'p-agent' },
       'ws-gone': { id: 't-gone', status: 'completed', pty: 'p-gone' },
@@ -160,11 +160,6 @@ describe('task workspace liveness (#2387)', () => {
     w.open();
     await w.liveness.refresh();
     expect(w.reads).toHaveBeenCalledTimes(1);
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-agent']);
-    // The daemon answers with no sessions while panes are listed (still restoring).
-    w.state.sessions = [];
-    w.t.now += REFRESH_MS + 1;
-    await refreshDormantTaskWorkspaces();
     expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-agent']);
     expect(w.warn).not.toHaveBeenCalled();
   });

@@ -68,13 +68,7 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     // as live until the following read, so it fails and is not kept.
     const entries = ports.entries();
     if (!entries || entries.length === 0) throw new Error('the workspace list is not available yet');
-    const sessions = await ports.listSessions();
-    // Panes listed with no session at all is a daemon still restoring, not
-    // every agent gone: kept, it would drop the last good read's agents.
-    if (sessions.length === 0 && entries.some((e) => Array.isArray(e.ptyIds) && e.ptyIds.length > 0)) {
-      throw new Error('the daemon lists no sessions yet');
-    }
-    const byId = new Map(sessions.map((x) => [x.id, x]));
+    const byId = new Map((await ports.listSessions()).map((x) => [x.id, x]));
     const next = new Set<string>();
     const busy = new Set<string>();
     const endedNoAgent = new Set<string>();
