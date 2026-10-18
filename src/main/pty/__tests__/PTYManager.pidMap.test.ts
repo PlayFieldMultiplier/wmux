@@ -134,4 +134,17 @@ describe('PTYManager pid-map anchors', () => {
       expect(fs.existsSync(mapDir) ? fs.readdirSync(mapDir) : []).toEqual([]);
     } finally { manager.disposeAll(); }
   });
+
+  it('reports a cancel, not the spawn error, when a disposed create then fails to spawn', async () => {
+    const failed = deferredPty();
+    spawn.mockImplementationOnce(() => failed as never);
+    const manager = new PTYManager();
+    try {
+      const pending = manager.createAsync({});
+      await new Promise<void>((r) => setImmediate(r));
+      manager.dispose('pty-1');
+      failed.fail(87);
+      await expect(pending).rejects.toThrow(/^PTY creation cancelled$/);
+    } finally { manager.disposeAll(); }
+  });
 });

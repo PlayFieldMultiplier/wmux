@@ -33,6 +33,7 @@ vi.mock('../phantomExit', async (importOriginal) => ({
 }));
 
 import { DaemonSessionManager } from '../DaemonSessionManager';
+import { createDefaultConfig } from '../config';
 
 const flush = () => new Promise<void>((r) => setImmediate(r));
 
@@ -103,5 +104,27 @@ describe('createSessionAsync registers only a PTY whose pid is known (#2398)', (
     expect(spawned[0].kill).toHaveBeenCalled();
     expect(manager.getSession('sync-zero')).toBeUndefined();
     expect(created).toHaveLength(0);
+  });
+
+  it('counts a create whose pid is pending against maxSessions', async () => {
+    const cfg = createDefaultConfig();
+    cfg.session.maxSessions = 1;
+    manager.setConfig(cfg);
+    const first = manager.createSessionAsync({ id: 'cap-1', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    await expect(manager.createSessionAsync({ id: 'cap-2', cmd: process.execPath, cwd: process.cwd() }))
+      .rejects.toThrow(/^Cannot create new terminal: 1 active sessions/);
+    expect(spawned).toHaveLength(1);
+    spawned[0].connect(7171);
+    await first;
+    expect(manager.getSession('cap-2')).toBeUndefined();
+  });
+
+  it('reports a cancel, not the spawn error, when a cancelled create then fails to spawn', async () => {
+    const pending = manager.createSessionAsync({ id: 'closed', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    manager.destroySession('closed');
+    spawned[0].emit('exit', { exitCode: 87 });
+    await expect(pending).rejects.toThrow(/^Session creation cancelled$/);
   });
 });

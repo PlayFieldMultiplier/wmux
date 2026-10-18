@@ -288,6 +288,12 @@ export class DaemonSessionManager extends EventEmitter {
 
   private pendingRecovery = new Map<string, DaemonSession>();
   private pendingCreates = new Map<string, symbol>();
+  /**
+   * Ids whose PTY is spawned but whose pid is still pending (#2398). They
+   * count against maxSessions, so overlapping creates cannot all pass the
+   * cap before any of them registers.
+   */
+  private spawningIds = new Set<string>();
 
   cancelPendingCreates(): void { this.pendingCreates.clear(); }
 
@@ -380,16 +386,24 @@ export class DaemonSessionManager extends EventEmitter {
         : undefined;
       if (this.pendingCreates.get(params.id) !== token) throw new Error('Session creation cancelled');
       const prepared = this.prepareSpawn({ ...params, cmd }, wsl);
+      const cancelled = (): boolean => this.pendingCreates.get(params.id) !== token || this.sessions.has(params.id);
       let conptyBackend: ConptyBackend = 'inbox';
       let ptyProcess: IPty;
+      this.spawningIds.add(params.id);
       try {
         ptyProcess = await spawnPty(this.spawnRequest(prepared, (backend) => { conptyBackend = backend; }));
       } catch (err) {
+        // A create cancelled while its pid was pending reports the cancel, not
+        // the spawn error: a supervised restart restores the old tombstone on
+        // any other error, which would bring a closed pane back.
+        if (cancelled()) throw new Error('Session creation cancelled');
         throw this.spawnFailure(prepared, err);
+      } finally {
+        this.spawningIds.delete(params.id);
       }
       // Re-checked after the await: the create may have been cancelled, or the
       // id taken, while the pid was pending. Never keep a half-made session.
-      if (this.pendingCreates.get(params.id) !== token || this.sessions.has(params.id)) {
+      if (cancelled()) {
         try { ptyProcess.kill(); } catch { /* already gone */ }
         throw new Error('Session creation cancelled');
       }
@@ -543,7 +557,7 @@ export class DaemonSessionManager extends EventEmitter {
     // map (it is a disk-only state the shutdown path demotes live sessions to
     // before persisting, and recovery re-creates them as `detached`).
     const maxSessions = cfg.session.maxSessions;
-    let liveCount = 0;
+    let liveCount = this.spawningIds.size;
     for (const m of this.sessions.values()) {
       if (m.meta.state === 'attached' || m.meta.state === 'detached') liveCount++;
     }

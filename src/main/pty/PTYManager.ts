@@ -210,6 +210,8 @@ export class PTYManager {
       try {
         ptyProcess = await spawnPty(this.spawnRequest(prepared));
       } catch (err) {
+        // A cancelled create reports the cancel, not the spawn error.
+        if (cancelled()) throw new Error('PTY creation cancelled');
         throw this.spawnFailure(prepared, err);
       }
       // Re-checked after the await. Never keep a half-made pane.
