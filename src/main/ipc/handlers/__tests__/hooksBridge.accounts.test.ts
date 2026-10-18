@@ -108,9 +108,14 @@ describe('account folders in the hook-set check', () => {
     expect(fs.readFileSync(base.settingsPath, 'utf8')).toBe(defaultBefore);
   });
 
-  it('refuses anything but a known Claude account id', async () => {
-    accounts.list = [account('x', path.join(tmp, 'codex'), 'codex')];
+  it('refuses anything but a known Claude account id with a wmux install to update', async () => {
+    const bare = path.join(tmp, 'acct-bare');
+    fs.mkdirSync(bare);
+    fs.writeFileSync(path.join(bare, 'settings.json'), '{}', 'utf8');
+    accounts.list = [account('x', path.join(tmp, 'codex'), 'codex'), account('bare', bare)];
     const update = handlerFor(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT);
+    await expect(update({}, 'bare')).rejects.toThrow();
+    expect(fs.readFileSync(path.join(bare, 'settings.json'), 'utf8')).toBe('{}');
     await expect(update({}, path.join(tmp, 'acct-a'))).rejects.toThrow();
     await expect(update({}, 'x')).rejects.toThrow();
     await expect(update({}, 42)).rejects.toThrow();

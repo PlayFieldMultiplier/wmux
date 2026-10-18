@@ -165,6 +165,9 @@ export function registerHooksBridgeHandlers(): void {
         : undefined;
       const paths = account ? ownAccountSettings(account, defaultPaths()) : null;
       if (!paths) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no Claude account with its own local settings');
+      // An Update, never an install: only a folder the status lists (a wmux
+      // install there already) is written.
+      if (!computeInstalled(statusHooks(paths))) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no wmux hooks in that account to update');
       return updateHooks(paths);
     }),
   );
