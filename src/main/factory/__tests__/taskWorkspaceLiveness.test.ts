@@ -4,7 +4,7 @@ import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
-import { AGENT_GONE_FILENAME, AGENT_GONE_MAX, AgentGoneFacts, LAUNCH_SETTLE_MS, noteTaskPanesStopped, noteTaskWorkerLaunched, setAgentGoneFacts } from '../agentGoneFacts';
+import { AGENT_GONE_FILENAME, AGENT_GONE_MAX, AgentGoneFacts, LAUNCH_SETTLE_MS, noteSessionAgentLaunched, noteSessionInput, noteTaskPanesStopped, noteTaskWorkerLaunched, setAgentGoneFacts } from '../agentGoneFacts';
 import { createTaskWorkspaceLiveness, parseSessionRead, type TaskWorkspaceLivenessPorts } from '../taskWorkspaceLiveness';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
 import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setDormantTaskWorkspaces } from '../../worktask/fanoutGuards';
@@ -381,6 +381,32 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     expect(w.facts.get('t-x')).not.toBeNull();
   });
 
+  it('a read that saw the old agent running before a launch does not settle that launch', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.state.sessions = [running('p-x')];
+    const reading = w.liveness.refresh();
+    w.t.now += 1;
+    w.facts.sessionLaunched('p-x');
+    await reading;
+    // The daemon still reports the previous agent's exit.
+    w.t.now += REFRESH_MS + 1;
+    w.state.sessions = [exited('p-x')];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).toBeNull();
+  });
+
+  it('an open workspace that lists no pane is no proof while the task\'s recorded worker still runs', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.state.entries = (w.state.entries ?? []).map((e) => ({ ...e, ptyIds: [] }));
+    w.state.records = [{ taskId: 't-x', state: 'stopping', taskWorkspaceId: 'ws-x', sessions: [{ sessionId: 'p-x', cwd: '/w' }] } as unknown as ReclaimedWorker];
+    w.state.sessions = [running('p-x')];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).toBeNull();
+    expect(w.liveness.goneTasks().size).toBe(0);
+  });
+
   it('a read that saw the agent running before a close stopped the panes leaves the close\'s fact', async () => {
     const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
     w.open();
@@ -453,6 +479,30 @@ describe('agent-gone facts file', () => {
       expect(facts.get('t-a')).toEqual({ taskId: 't-a', taskWorkspaceId: 'ws-a', sessions: ['p-a'], at: 5 });
       noteTaskWorkerLaunched('t-a');
       expect(facts.get('t-a')).toBeNull();
+    } finally {
+      setAgentGoneFacts(null);
+    }
+  });
+
+  it('a launch line staged for the owner\'s Enter clears the fact, and that Enter starts the launch window again', () => {
+    let now = 1_000;
+    const facts = new AgentGoneFacts(nodePath.join(tmpDir(), 'factory', AGENT_GONE_FILENAME), () => undefined, () => now);
+    facts.load();
+    setAgentGoneFacts(facts);
+    try {
+      facts.note({ taskId: 't-a', taskWorkspaceId: 'ws-a', sessions: ['p-a'], at: now });
+      noteSessionAgentLaunched('p-a', false);
+      expect(facts.get('t-a')).toBeNull();
+      // The owner presses Enter much later.
+      now += LAUNCH_SETTLE_MS + 10;
+      noteSessionInput('p-a', 'x');
+      noteSessionInput('p-a', '\r');
+      now += 1;
+      facts.note({ taskId: 't-a', taskWorkspaceId: 'ws-a', sessions: ['p-a'], at: now });
+      expect(facts.get('t-a')).toBeNull();
+      now += LAUNCH_SETTLE_MS;
+      facts.note({ taskId: 't-a', taskWorkspaceId: 'ws-a', sessions: ['p-a'], at: now });
+      expect(facts.get('t-a')).not.toBeNull();
     } finally {
       setAgentGoneFacts(null);
     }

@@ -103,7 +103,17 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     // writes nothing. Once recovery is done, an empty list is the truth.
     if (!reply.recoveryDone) throw new Error('the daemon is still restoring its sessions');
     const byId = new Map(reply.sessions.map((x) => [x.id, x]));
-    for (const x of reply.sessions) if (x.agentProcessAlive === true) ports.facts?.sessionAgentSeen(x.id);
+    for (const x of reply.sessions) if (x.agentProcessAlive === true) ports.facts?.sessionAgentSeen(x.id, at);
+    // A session no open workspace holds is at work: the tree may have come
+    // back without some workspaces or panes while they still run.
+    const inTree = new Set(entries.flatMap((e) => (Array.isArray(e.ptyIds) ? e.ptyIds : [])));
+    const outsideAtWork = reply.sessions.some((x) => !inTree.has(x.id) && paneShowsWork(x));
+    /** Whether one of the task's own panes, wherever it is, still runs its agent. */
+    const ownAgentRuns = (taskId: string): boolean => {
+      const recorded = ports.recordedSessions(taskId);
+      const own = reply.sessions.filter((x) => isTaskOwnWorkerPane(x, taskId, recorded, ports.sessionRecordOf)).map((x) => x.id);
+      return endedTaskAgentRuns(own, taskId, recorded, byId, ports.sessionRecordOf);
+    };
     const next = new Set<string>();
     const busy = new Set<string>();
     const endedNoAgent = new Set<string>();
@@ -123,21 +133,22 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
         if (row) ports.facts?.seenRunning(row.id, at);
       } else if (row && isEndedStatus(row.status) && !endedTaskAgentRuns(ptys, row.id, recorded, byId, ports.sessionRecordOf)) {
         endedNoAgent.add(e.id);
-        if (!resumed(row.id)) ports.facts?.note({ taskId: row.id, taskWorkspaceId: e.id, sessions: [...ptys], at });
+        // Written only while none of the task's own panes runs its agent
+        // anywhere, and, for a workspace that lists no pane, while nothing
+        // outside the tree is at work.
+        if (!resumed(row.id) && !ownAgentRuns(row.id) && (ptys.length > 0 || !outsideAtWork)) {
+          ports.facts?.note({ taskId: row.id, taskWorkspaceId: e.id, sessions: [...ptys], at });
+        }
       }
     }
     // An ended task whose workspace is closed: its panes are gone. Not when
     // a session no open workspace holds is at work (a tree that came back
     // without its workspaces, the panes still running), nor while one of the
     // task's own panes still runs its agent.
-    const inTree = new Set(entries.flatMap((e) => (Array.isArray(e.ptyIds) ? e.ptyIds : [])));
-    if (!reply.sessions.some((x) => !inTree.has(x.id) && paneShowsWork(x))) {
+    if (!outsideAtWork) {
       const open = new Set(entries.map((e) => e.id));
       for (const row of ports.endedRows()) {
-        if (!isEndedStatus(row.status) || open.has(row.taskWorkspaceId) || resumed(row.id)) continue;
-        const recorded = ports.recordedSessions(row.id);
-        const own = reply.sessions.filter((x) => isTaskOwnWorkerPane(x, row.id, recorded, ports.sessionRecordOf)).map((x) => x.id);
-        if (endedTaskAgentRuns(own, row.id, recorded, byId, ports.sessionRecordOf)) continue;
+        if (!isEndedStatus(row.status) || open.has(row.taskWorkspaceId) || resumed(row.id) || ownAgentRuns(row.id)) continue;
         ports.facts?.note({ taskId: row.id, taskWorkspaceId: row.taskWorkspaceId, sessions: [], at });
       }
     }

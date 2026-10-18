@@ -150,10 +150,12 @@ export class AgentGoneFacts {
     }
   }
 
-  /** A read saw an agent running in the session: a launch there is settled,
-   *  and a later exit is a real one. */
-  sessionAgentSeen(sessionId: string): void {
-    this.launchedAt.delete(sessionId);
+  /** A read that started at `at` saw an agent running in the session: a
+   *  launch there before that read is settled, and a later exit is a real
+   *  one. A launch since is not. */
+  sessionAgentSeen(sessionId: string, at: number): void {
+    const launched = this.launchedAt.get(sessionId);
+    if (launched !== undefined && launched < at) this.launchedAt.delete(sessionId);
   }
 
   /** Resolves once the writes scheduled so far are on disk (or failed). */
@@ -206,8 +208,38 @@ export function noteTaskPanesStopped(taskId: string, taskWorkspaceId: string, se
   }
 }
 
-/** An agent launch line was submitted in `sessionId` (pty:write-launch). Never throws. */
-export function noteSessionAgentLaunched(sessionId: string): void {
+/** Sessions an agent launch line was typed into without Enter
+ *  (pty:write-launch, submit false): the Enter the owner types later starts it. */
+const stagedLaunches = new Set<string>();
+const STAGED_LAUNCHES_MAX = 200;
+
+/** An agent launch line was typed into `sessionId` (pty:write-launch):
+ *  submitted, or staged for the owner's Enter. Either way its fact goes and
+ *  the launch window starts; a staged one starts again at that Enter
+ *  (noteSessionInput). Never throws. */
+export function noteSessionAgentLaunched(sessionId: string, submitted: boolean): void {
+  try {
+    if (submitted) stagedLaunches.delete(sessionId);
+    else {
+      stagedLaunches.delete(sessionId);
+      stagedLaunches.add(sessionId);
+      while (stagedLaunches.size > STAGED_LAUNCHES_MAX) {
+        const oldest = stagedLaunches.values().next();
+        if (oldest.done) break;
+        stagedLaunches.delete(oldest.value);
+      }
+    }
+    hosted?.sessionLaunched(sessionId);
+  } catch {
+    /* best effort: the next good read decides */
+  }
+}
+
+/** Input typed into a session (pty:write): an Enter in one holding a staged
+ *  launch line submits it. Cheap when none is staged. Never throws. */
+export function noteSessionInput(sessionId: string, data: string): void {
+  if (stagedLaunches.size === 0 || !stagedLaunches.has(sessionId) || !data.includes('\r')) return;
+  stagedLaunches.delete(sessionId);
   try {
     hosted?.sessionLaunched(sessionId);
   } catch {
