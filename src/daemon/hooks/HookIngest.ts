@@ -182,6 +182,13 @@ export interface HookAgentEventData extends HookArbitration {
   signal: AgentSignal;
 }
 
+/**
+ * Second look at the grid after a PermissionRequest confirmation found no
+ * dialog. Claude shows the dialog only once every PermissionRequest hook has
+ * returned, so a slow third-party hook can leave the first read empty.
+ */
+export const DIALOG_RECHECK_MS = 1_500;
+
 export interface HookIngestDeps {
   /** Live daemon sessions, re-read per signal (topology changes constantly). */
   listLiveSessions: () => HookIngestSession[];
@@ -720,6 +727,15 @@ export class HookIngest {
    * the oldest go first; a request is answered once.
    */
   private readonly answeredRequests = new Set<string>();
+  /**
+   * Per pane, bumped by every cue that settles or supersedes a dialog
+   * (answered, stop, session boundary, a new prompt). A deferred
+   * PermissionRequest confirmation compares the value it captured before its
+   * screen read with the current one and stands down if they differ: the
+   * read can outlast an answer or a turn end, and the alarm's own `pending`
+   * is already gone by then, so this is the only cancel left.
+   */
+  private readonly dialogEpoch = new Map<string, number>();
   /** #1823: panes already logged for a provider mismatch (log once per pane). */
   private readonly mismatchLogged = new Set<string>();
   /** Foreign-process senders already logged (`pane|reason`), bounded like the rest. */
@@ -1128,6 +1144,7 @@ export class HookIngest {
     // User answered a pending approval locally — no turn boundary, just expire the request.
     // The alarm is fed FIRST: an `answered` cue cancels a pending ATTENTION
     // window, and these kinds return before any other cue-feeding site below.
+    this.bumpDialogEpoch(sessionId);
     this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
     if (signal.kind === 'agent.input_answered') {
       const permId = openCodeRequestId(signal);
@@ -1291,6 +1308,7 @@ export class HookIngest {
       // completion window and arm the turn gate), session_start is a SESSION
       // boundary (resets the gate so a fresh session must work before any
       // stop can announce).
+      if (signal.kind === 'agent.session_start' || signal.kind === 'agent.user_prompt_submit') this.bumpDialogEpoch(sessionId);
       this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
       // M2: a fresh session on this pane means the question the PREVIOUS
       // session asked will never be answered — the same reasoning that makes
@@ -1338,6 +1356,8 @@ export class HookIngest {
     // status dot and nothing else, and a later same-turn candidate can still
     // arbitrate cleanly instead of finding a ghost 'emit'.
     const cue = normalizeHookCue(signal);
+    if (cue.class === 'stop' && !cue.child) this.bumpDialogEpoch(sessionId);
+    if (signal.kind === 'agent.stop_failure') this.bumpDialogEpoch(sessionId);
     if (signal.kind === 'agent.subagent_stop') {
       // Never a lead-turn end, and never a verdict about one: the cue is a
       // NO-OP in the alarm — it leaves a window the lead turn's own stop
@@ -1428,18 +1448,7 @@ export class HookIngest {
       && signal.kind === 'agent.awaiting_input'
       && signal.payload?.['hook_event_name'] === 'PermissionRequest'
       && isClaudeFamilyAgent(signal.agent)
-      ? () => {
-        void verifyOnScreen(sessionId).then((up) => {
-          if (up === false) {
-            this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no dialog on screen at confirmation`);
-            return;
-          }
-          fanOut();
-        }).catch((err) => {
-          this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
-          fanOut();
-        });
-      }
+      ? () => { this.confirmAgainstScreen(sessionId, verifyOnScreen, fanOut); }
       : fanOut;
     const outcome = this.alarm.observe(sessionId, signal.agent, cue, resume);
     if (outcome === 'hold') {
@@ -1790,7 +1799,74 @@ export class HookIngest {
    * accumulate dead-id entries, and so a reused id starts from the detector
    * backstop rather than an inherited hook veto.
    */
+  private bumpDialogEpoch(sessionId: string): void {
+    this.dialogEpoch.set(sessionId, (this.dialogEpoch.get(sessionId) ?? 0) + 1);
+  }
+
+  /**
+   * A PermissionRequest attention window has confirmed; fan it out only if
+   * the dialog is really on the screen.
+   *
+   *   - The read is asynchronous and the alarm has already closed its window,
+   *     so an answer, a turn end or a new prompt that lands meanwhile is
+   *     honoured here: the epoch captured first must still be current when
+   *     the read returns, else nothing is sent (the reviewer's race: a
+   *     "needs you" landing after the Stop that ended the turn).
+   *   - One miss is not proof. Claude draws the dialog only after every
+   *     PermissionRequest hook has returned, so a slow third-party hook can
+   *     leave the grid dialog-free at confirmation. A miss is re-read once
+   *     after DIALOG_RECHECK_MS; only a second miss drops the alarm. The
+   *     module's rule stands: missed beats early, but never silently lost
+   *     on one frame.
+   *   - `null` (unreadable grid) and a thrown check trust the hook.
+   */
+  private confirmAgainstScreen(
+    sessionId: string,
+    verifyOnScreen: NonNullable<HookIngestDeps['dialogOnScreen']>,
+    fanOut: () => unknown,
+  ): void {
+    const epoch = this.dialogEpoch.get(sessionId) ?? 0;
+    const stale = (): boolean => (this.dialogEpoch.get(sessionId) ?? 0) !== epoch;
+    const send = (): void => {
+      if (stale()) {
+        this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} stood down: answered or superseded during the screen read`);
+        return;
+      }
+      try {
+        fanOut();
+      } catch (err) {
+        this.deps.log?.('warn', `[hooks] awaiting_input fan-out for ${sessionId} threw: ${String(err)}`);
+      }
+    };
+    const read = (attempt: 1 | 2): void => {
+      if (stale()) return;
+      let result: Promise<boolean | null>;
+      try {
+        result = verifyOnScreen(sessionId);
+      } catch (err) {
+        this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
+        send();
+        return;
+      }
+      result.then((up) => {
+        if (up !== false) { send(); return; }
+        if (stale()) return;
+        if (attempt === 1) {
+          const t = setTimeout(() => read(2), DIALOG_RECHECK_MS);
+          t.unref?.();
+          return;
+        }
+        this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no dialog on screen at confirmation or ${DIALOG_RECHECK_MS}ms later`);
+      }, (err: unknown) => {
+        this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
+        send();
+      });
+    };
+    read(1);
+  }
+
   dropPty(sessionId: string): void {
+    this.dialogEpoch.delete(sessionId);
     this.router.dropPty(sessionId);
     this.leadTurnEnded.delete(sessionId);
     this.lastPromptAt.delete(sessionId);
