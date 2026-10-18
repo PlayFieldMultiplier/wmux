@@ -25,6 +25,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { atomicReadJSONSync } from '../../daemon/util/atomicWrite';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 
 export const AGENT_GONE_FILENAME = 'agent-gone.json';
@@ -108,10 +109,11 @@ export class AgentGoneFacts {
     }
   }
 
-  /** Whether the file parses and names a version above this one's. */
+  /** Whether what the reader recovers (the file, or its backup when the
+   *  file is broken) names a version above this one's. */
   private newerVersionOnDisk(): boolean {
     try {
-      const v = (JSON.parse(fs.readFileSync(this.file, 'utf8')) as { version?: unknown } | null)?.version;
+      const v = atomicReadJSONSync<{ version?: unknown }>(this.file)?.version;
       return typeof v === 'number' && v > AGENT_GONE_VERSION;
     } catch {
       return false;

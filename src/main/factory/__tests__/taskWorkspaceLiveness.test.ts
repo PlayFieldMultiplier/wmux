@@ -490,6 +490,22 @@ describe('agent-gone facts file', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(foreign);
   });
 
+  it('a broken file whose backup a newer version wrote is refused like the newer file itself', async () => {
+    const dir = tmpDir();
+    const file = nodePath.join(dir, 'factory', AGENT_GONE_FILENAME);
+    fs.mkdirSync(nodePath.dirname(file), { recursive: true });
+    const newer = JSON.stringify({ version: 2, facts: [] });
+    fs.writeFileSync(file, '{not json');
+    fs.writeFileSync(`${file}.bak`, newer);
+    const facts = new AgentGoneFacts(file, () => undefined, () => 7);
+    facts.load();
+    facts.note({ taskId: 't-b', taskWorkspaceId: 'ws-b', sessions: ['p-b'], at: 2 });
+    facts.note({ taskId: 't-c', taskWorkspaceId: 'ws-c', sessions: ['p-c'], at: 3 });
+    await facts.written();
+    expect(fs.existsSync(`${file}.unreadable-7`)).toBe(false);
+    expect(fs.readFileSync(`${file}.bak`, 'utf8')).toBe(newer);
+  });
+
   it('a file no version can read is moved aside, and facts are kept on disk again', async () => {
     const dir = tmpDir();
     const file = nodePath.join(dir, 'factory', AGENT_GONE_FILENAME);
