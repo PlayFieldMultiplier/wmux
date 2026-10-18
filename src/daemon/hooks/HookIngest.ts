@@ -1428,7 +1428,9 @@ export class HookIngest {
     // status dot and nothing else, and a later same-turn candidate can still
     // arbitrate cleanly instead of finding a ghost 'emit'.
     const cue = normalizeHookCue(signal);
-    if (cue.class === 'stop' && !cue.child) this.bumpDialogEpoch(sessionId);
+    // Only a stop that ends the turn: one with background work still running
+    // (#1096) is not, and a background agent's dialog may be up behind it.
+    if (cue.class === 'stop' && !cue.child && cue.leftoverWork === 0) this.bumpDialogEpoch(sessionId);
     if (signal.kind === 'agent.stop_failure') this.bumpDialogEpoch(sessionId);
     if (signal.kind === 'agent.subagent_stop') {
       // Never a lead-turn end, and never a verdict about one: the cue is a

@@ -491,6 +491,17 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     }
   });
 
+  it('a lead Stop with background work still running does not void the request', async () => {
+    const screen = vi.fn(async () => true);
+    const f = makeIngest(screen);
+    f.ingest.handle(makeSignal());
+    f.advance(3_000);
+    f.ingest.handle(makeSignal({ kind: 'agent.stop', payload: { wmux_leftover_work: 1 }, ts: 4_000 }));
+    await runSecondLayer(f);
+    expect(screen).toHaveBeenCalled();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
   it('the Notification landing during the read leaves exactly one alarm', async () => {
     let resolve: (up: boolean | null) => void = () => undefined;
     const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
