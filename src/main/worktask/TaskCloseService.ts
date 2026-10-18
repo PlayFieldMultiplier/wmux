@@ -85,6 +85,11 @@ export interface TaskCloseServiceOptions {
   pushedHead?: (taskId: string) => string | null;
   /** Close and keep folder: forget what earlier stops of the folder left. */
   forgetStops?: (folder: string) => void;
+  /** Close and keep folder of a bot's task: hold its folder against the
+   *  bots' task folder cleanup (waiting for one under way), and mark it
+   *  kept once the task closed (holdTaskFolder, noteTaskFolderKept). */
+  holdTaskFolder?: (taskId: string) => Promise<() => void>;
+  noteFolderKept?: (taskId: string) => void;
 }
 
 export class TaskCloseService {
@@ -95,9 +100,13 @@ export class TaskCloseService {
   private readonly removeRelay?: (taskId: string) => void | Promise<void>;
   private readonly pushedHead?: (taskId: string) => string | null;
   private readonly forgetStops?: (folder: string) => void;
+  private readonly holdTaskFolder?: (taskId: string) => Promise<() => void>;
+  private readonly noteFolderKept?: (taskId: string) => void;
 
   constructor(opts: TaskCloseServiceOptions) {
     this.forgetStops = opts.forgetStops;
+    this.holdTaskFolder = opts.holdTaskFolder;
+    this.noteFolderKept = opts.noteFolderKept;
     this.daemon = opts.daemon;
     this.worktrees = opts.worktrees;
     this.stopPanesIn = opts.stopPanesIn;
@@ -139,14 +148,25 @@ export class TaskCloseService {
       // closes, so no restart finds a removal queued for a folder that was
       // kept; when that cannot be written, the task stays open.
       let release: () => void = () => undefined;
+      let releaseTask: () => void = () => undefined;
       try {
         if (folder) {
           release = this.worktrees.holdFolder(folder);
+          // A bot's task: its folder cleanup (one under way is waited for)
+          // leaves the folder alone from here on.
+          if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
           await this.worktrees.forgetPendingRemoval(folder);
         }
         const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
         if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-        if (folder) this.forgetFolderStops(folder);
+        if (folder) {
+          this.forgetFolderStops(folder);
+          try {
+            this.noteFolderKept?.(taskId);
+          } catch {
+            // The detached mission still keeps it from every later pass.
+          }
+        }
         // A finish that was already deleting it when this was chosen (it
         // deletes only a folder that holds nothing but what git left) leaves
         // nothing to name.
@@ -154,6 +174,7 @@ export class TaskCloseService {
       } catch (err) {
         return { ok: false, taskId, reason: 'error', error: (err as Error).message };
       } finally {
+        releaseTask();
         release();
       }
     }

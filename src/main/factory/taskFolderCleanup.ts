@@ -522,6 +522,16 @@ export async function gitWorktreeRegistered(repoRoot: string, folder: string): P
 const folderOps = new Map<string, Promise<unknown>>();
 /** taskId → resumes holding its folder: no cleanup removes it meanwhile. */
 const folderHolds = new Map<string, number>();
+/** Tasks closed with Close and keep folder (#2388): their folder is the
+ *  owner's. The mission says so too (detached), but a pass may still hold a
+ *  mission it read before that close; this is read when a cleanup starts. */
+const keptByOwner = new Set<string>();
+
+/** Close and keep folder closed `taskId`: no cleanup removes its folder.
+ *  Taken while holdTaskFolder holds it, so no cleanup is under way. */
+export function noteTaskFolderKept(taskId: string): void {
+  keptByOwner.add(taskId);
+}
 
 /**
  * A resume holds the task's folder while it relaunches the worker: a cleanup
@@ -590,7 +600,7 @@ async function cleanTaskFolderNow(
   const now = ports.now ?? Date.now;
   const log = ports.log ?? ((m: string) => console.warn(m));
   const exists = ports.exists ?? defaultExists;
-  if (!isEndedBotTask(entry) || !mission || mission.detached === true) return 'skipped';
+  if (!isEndedBotTask(entry) || !mission || mission.detached === true || keptByOwner.has(entry.id)) return 'skipped';
   const botId = entry.dispatch?.origin.botId ?? '';
   const kind = taskFolderKind(mission.folder, mission.branch, botId, ports.roots);
   if (!kind) return 'skipped';

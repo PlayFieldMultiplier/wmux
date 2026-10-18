@@ -93,9 +93,20 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
     return this.write();
   }
 
-  delete(worktreePath: string): Promise<void> {
-    if (!this.records.delete(pendingRemovalKey(worktreePath))) return Promise.resolve();
-    return this.write();
+  /** A record whose deletion cannot be written stays (the write throws):
+   *  the file still holds it, so a restart would find it again, and a later
+   *  delete must try the write again rather than find nothing to do. */
+  async delete(worktreePath: string): Promise<void> {
+    const key = pendingRemovalKey(worktreePath);
+    const rec = this.records.get(key);
+    if (!rec) return;
+    this.records.delete(key);
+    try {
+      await this.write();
+    } catch (err) {
+      if (!this.records.has(key)) this.records.set(key, rec);
+      throw err;
+    }
   }
 
   private async write(): Promise<void> {

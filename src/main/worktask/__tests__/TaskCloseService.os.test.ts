@@ -361,6 +361,25 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('keepFolder of a bot task holds its folder against the bots\' cleanup and marks it kept once closed', async () => {
+    const left = path.join(wtBase, 'left-k7');
+    fs.mkdirSync(left, { recursive: true });
+    const order: string[] = [];
+    const holdTaskFolder = vi.fn(async (id: string) => { order.push(`hold ${id}`); return () => { order.push('release'); }; });
+    const noteFolderKept = vi.fn((id: string) => { order.push(`kept ${id}`); });
+    const port: CloseDaemonPort = { rpc: vi.fn(async (_m, params) => { order.push('close'); return { ok: true, taskId: params['taskId'] }; }) };
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept });
+    expect(await svc.closeTask({ taskId: 'wtask-k7', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true })).toMatchObject({ ok: true, keptFolder: left });
+    expect(order).toEqual(['hold wtask-k7', 'close', 'kept wtask-k7', 'release']);
+
+    // A close the daemon refuses marks nothing kept.
+    order.length = 0;
+    const refusing: CloseDaemonPort = { rpc: vi.fn(async () => ({ ok: false, error: { message: 'no' } })) };
+    const svc2 = new TaskCloseService({ daemon: refusing, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept });
+    expect(await svc2.closeTask({ taskId: 'wtask-k8', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true })).toMatchObject({ ok: false });
+    expect(order).toEqual(['hold wtask-k8', 'release']);
+  });
+
   it('a close of a task waits for the one already running for it: a keep asked during a removal never races it', async () => {
     const order: string[] = [];
     let finishRemove: () => void = () => undefined;

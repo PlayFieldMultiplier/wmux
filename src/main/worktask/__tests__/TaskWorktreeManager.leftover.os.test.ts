@@ -521,6 +521,23 @@ describe('a removal that could not finish is recorded for a later close', () => 
     }
   });
 
+  it('a record whose deletion cannot be written stays, so a later delete writes again', async () => {
+    const dir = leftover();
+    const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');
+    const store = new PendingWorktreeRemovals(file);
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    // The file cannot be written: a file stands where its folder goes.
+    const folder = path.dirname(file);
+    fs.rmSync(folder, { recursive: true });
+    fs.writeFileSync(folder, 'not a folder');
+    await expect(store.delete(dir)).rejects.toThrow();
+    expect(store.get(dir)).not.toBeNull();
+    fs.rmSync(folder);
+    await store.delete(dir);
+    expect(store.get(dir)).toBeNull();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).removals).toEqual([]);
+  });
+
   it('a refused finish of a leftover names Close and keep folder', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));

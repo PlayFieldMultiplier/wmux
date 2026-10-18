@@ -22,6 +22,7 @@ import {
   gitWorktreeRegistered,
   installTaskFolderCleanup,
   noteKeptFolderStopped,
+  noteTaskFolderKept,
   removeTreeNoFollow,
   MountPointError,
   parseMountInfo,
@@ -268,6 +269,14 @@ describe('review safeguards', () => {
     } finally {
       held();
     }
+  });
+
+  it('leaves a folder Close and keep folder kept alone, even to a pass that read the mission before that close', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager());
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    noteTaskFolderKept('wtask-kept-12345678');
+    expect(await cleanTaskFolder(ports(), row('completed', { id: 'wtask-kept-12345678' }), mission, [])).toBe('skipped');
+    expect(fs.existsSync(wt)).toBe(true);
   });
 
   it('waits while a gate runs on the task; leaves a detached task\'s worktree to the owner', async () => {

@@ -29,6 +29,7 @@ import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
 import { PendingWorktreeRemovals, setActivePendingRemovals, sweepPendingRemovals } from '../../worktask/pendingWorktreeRemovals';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { holdTaskFolder, noteTaskFolderKept } from '../../factory/taskFolderCleanup';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
 import { TREE_DESTROY_TIMEOUT_MS, assertNothingRunsIn, destroyedTreeOf, forgetFolderStops, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
@@ -119,6 +120,8 @@ export function registerWorktaskHandlers(
     // A pane still running inside the worktree holds files that make the removal partial on Windows.
     stopPanesIn,
     forgetStops: (folder) => forgetFolderStops(folder),
+    holdTaskFolder,
+    noteFolderKept: noteTaskFolderKept,
     panesStopped: (taskId, sessionIds) => {
       const row = getTaskLedger().get(taskId);
       if (row) noteTaskPanesStopped(taskId, row.taskWorkspaceId, sessionIds);
