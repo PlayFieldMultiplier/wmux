@@ -16,8 +16,18 @@ export const GIT_BRANCH_HIT_TTL_MS = 15_000;
  * shell integration or GitContextWatcher sees one.
  */
 export const GIT_BRANCH_MISS_TTL_MS = 60_000;
+/**
+ * How long a FAILED lookup is held: the 3 s exec timeout, a lock held by
+ * antivirus, git missing from PATH. Not a verdict on the directory, so it
+ * must not hide a branch for a minute; held just long enough to not retry
+ * on the very next 5 s tick.
+ */
+export const GIT_BRANCH_ERROR_TTL_MS = 5_000;
 /** Bound on remembered directories. */
 export const GIT_BRANCH_CACHE_MAX = 256;
+
+/** `exec` result: a branch, `undefined` for "not a repo", `null` for a failed lookup. */
+export type GitBranchLookup = string | undefined | null;
 
 interface BranchEntry {
   branch: string | undefined;
@@ -33,12 +43,12 @@ interface BranchEntry {
 export class MetadataCollector {
   private readonly branches = new Map<string, BranchEntry>();
   private readonly now: () => number;
-  private readonly exec: (cwd: string) => Promise<string | undefined>;
+  private readonly exec: (cwd: string) => Promise<GitBranchLookup>;
 
   constructor(deps: {
     now?: () => number;
     /** Injected for tests; the default spawns `git rev-parse --abbrev-ref HEAD`. */
-    exec?: (cwd: string) => Promise<string | undefined>;
+    exec?: (cwd: string) => Promise<GitBranchLookup>;
   } = {}) {
     this.now = deps.now ?? (() => Date.now());
     this.exec = deps.exec ?? MetadataCollector.execGitBranch;
@@ -46,9 +56,10 @@ export class MetadataCollector {
 
   /**
    * The branch at `cwd`, or undefined when it is not inside a repo. Cached per
-   * directory: a hit for GIT_BRANCH_HIT_TTL_MS, a miss for
-   * GIT_BRANCH_MISS_TTL_MS. Concurrent callers for one directory share a
-   * single spawn.
+   * directory: a hit for GIT_BRANCH_HIT_TTL_MS, "not a repo" for
+   * GIT_BRANCH_MISS_TTL_MS, a failed lookup for GIT_BRANCH_ERROR_TTL_MS.
+   * Concurrent callers for one directory share a single spawn. A lookup
+   * never rejects: a rejecting `exec` counts as a failed lookup.
    */
   async getGitBranch(cwd: string): Promise<string | undefined> {
     const now = this.now();
@@ -57,22 +68,21 @@ export class MetadataCollector {
       if (cached.inflight) return cached.inflight;
       if (cached.expiresAt > now) return cached.branch;
     }
-    const inflight = this.exec(cwd).then((branch) => {
-      const settledAt = this.now();
-      this.remember(cwd, {
-        branch,
-        expiresAt: settledAt + (branch ? GIT_BRANCH_HIT_TTL_MS : GIT_BRANCH_MISS_TTL_MS),
+    const inflight: Promise<string | undefined> = Promise.resolve()
+      .then(() => this.exec(cwd))
+      .then((found) => found, () => null)
+      .then((found) => {
+        // Only the lookup that still owns the entry may write it, so an
+        // older spawn finishing last cannot overwrite a newer answer.
+        if (this.branches.get(cwd)?.inflight !== inflight) return found ?? undefined;
+        const settledAt = this.now();
+        const branch = found ?? undefined;
+        const ttl = found === null ? GIT_BRANCH_ERROR_TTL_MS : found ? GIT_BRANCH_HIT_TTL_MS : GIT_BRANCH_MISS_TTL_MS;
+        this.remember(cwd, { branch, expiresAt: settledAt + ttl });
+        return branch;
       });
-      return branch;
-    });
     this.remember(cwd, { branch: cached?.branch, expiresAt: 0, inflight });
     return inflight;
-  }
-
-  /** Drop what is remembered for a directory (or everything). */
-  forget(cwd?: string): void {
-    if (cwd === undefined) this.branches.clear();
-    else this.branches.delete(cwd);
   }
 
   private remember(cwd: string, entry: BranchEntry): void {
@@ -86,7 +96,12 @@ export class MetadataCollector {
     }
   }
 
-  private static async execGitBranch(cwd: string): Promise<string | undefined> {
+  /**
+   * `rev-parse` exits 128 with "not a git repository" outside a repo; that is
+   * the one failure that is an answer. Anything else — timeout, ENOENT for
+   * git itself, a transient lock — is a failed lookup (null).
+   */
+  private static async execGitBranch(cwd: string): Promise<GitBranchLookup> {
     try {
       const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
         cwd,
@@ -95,8 +110,9 @@ export class MetadataCollector {
       });
       const branch = stdout.trim();
       return branch || undefined;
-    } catch {
-      return undefined;
+    } catch (err) {
+      const stderr = (err as { stderr?: unknown })?.stderr;
+      return typeof stderr === 'string' && /not a git repository/i.test(stderr) ? undefined : null;
     }
   }
 }

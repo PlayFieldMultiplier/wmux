@@ -3,10 +3,12 @@ import {
   MetadataCollector,
   GIT_BRANCH_HIT_TTL_MS,
   GIT_BRANCH_MISS_TTL_MS,
+  GIT_BRANCH_ERROR_TTL_MS,
   GIT_BRANCH_CACHE_MAX,
+  type GitBranchLookup,
 } from '../MetadataCollector';
 
-function make(answers: Record<string, string | undefined>) {
+function make(answers: Record<string, GitBranchLookup>) {
   let clock = 0;
   const exec = vi.fn(async (cwd: string) => answers[cwd]);
   const c = new MetadataCollector({ now: () => clock, exec });
@@ -54,12 +56,48 @@ describe('MetadataCollector.getGitBranch — per-directory cache', () => {
     expect(f.exec).toHaveBeenCalledTimes(2);
   });
 
-  it('forget() drops a directory so the next call asks git again', async () => {
-    const f = make({ '/home/u': undefined });
-    await f.c.getGitBranch('/home/u');
-    f.c.forget('/home/u');
-    await f.c.getGitBranch('/home/u');
+  it('a failed lookup (null) is held only briefly, never for the not-a-repo minute', async () => {
+    const f = make({ '/repo': null });
+    expect(await f.c.getGitBranch('/repo')).toBeUndefined();
+    f.advance(GIT_BRANCH_ERROR_TTL_MS - 1);
+    await f.c.getGitBranch('/repo');
+    expect(f.exec).toHaveBeenCalledTimes(1);
+    f.advance(2);
+    await f.c.getGitBranch('/repo');
     expect(f.exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('a rejecting exec is a failed lookup: resolves undefined, does not poison the directory', async () => {
+    let clock = 0;
+    let calls = 0;
+    const c = new MetadataCollector({
+      now: () => clock,
+      exec: async () => { calls++; if (calls === 1) throw new Error('EBUSY'); return 'main'; },
+    });
+    await expect(c.getGitBranch('/repo')).resolves.toBeUndefined();
+    clock += GIT_BRANCH_ERROR_TTL_MS + 1;
+    await expect(c.getGitBranch('/repo')).resolves.toBe('main');
+    expect(calls).toBe(2);
+  });
+
+  it('an older lookup finishing last cannot overwrite a newer answer', async () => {
+    const gates: Array<(v: GitBranchLookup) => void> = [];
+    const c = new MetadataCollector({
+      now: () => 0,
+      exec: () => new Promise<GitBranchLookup>((r) => { gates.push(r); }),
+    });
+    const first = c.getGitBranch('/repo');
+    // The entry is evicted meanwhile (cache pressure), then asked again.
+    for (let i = 0; i < GIT_BRANCH_CACHE_MAX; i++) void c.getGitBranch(`/d${i}`);
+    const second = c.getGitBranch('/repo');
+    // exec is invoked on the microtask queue; let every lookup start.
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(gates).toHaveLength(GIT_BRANCH_CACHE_MAX + 2);
+    gates[gates.length - 1]?.('new');
+    gates[0]?.('old');
+    expect(await second).toBe('new');
+    expect(await first).toBe('old');
+    expect(await c.getGitBranch('/repo')).toBe('new');
   });
 
   it('the cache is bounded', async () => {
