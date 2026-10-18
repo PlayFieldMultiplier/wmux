@@ -2,7 +2,7 @@
 // close(F3). electron ipcMain을 캡처해 핸들러를 직접 호출한다(diff.handler.os.test.ts 패턴).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
 import { registerWorktaskHandlers } from '../worktask.handler';
 import { forgetBotWorkerSession, noteBotWorkerSession, reloadBotWorkerSessionsForTests, setWorkerMcpResolvers } from '../../../agents/botWorkerMergeGuard';
 import { IPC } from '../../../../shared/constants';
+import { pendingRemovalRefusal } from '../../../worktask/pendingWorktreeRemovals';
 import type { DaemonClient } from '../../../DaemonClient';
 
 async function call(channel: string, payload: unknown): Promise<unknown> {
@@ -220,5 +221,28 @@ describe('task:close disk-missing 라우팅(F3)', () => {
     const res = (await call(IPC.TASK_CLOSE, { taskId: 'wtask-2', verifiedWorkspaceId: 'parent-ws' })) as { ok: boolean };
     expect(res.ok).toBe(true);
     expect(daemon.rpcCalls.filter((c) => c.method === 'task.mission.close')).toHaveLength(1);
+  });
+});
+
+// #2388: Close and keep folder — the task closes, its folder stays as it is,
+// and the folder's pending removal (the lock against new panes) ends.
+describe('task:close keepFolder', () => {
+  it('closes the task, keeps the folder and its files, and unlocks it', async () => {
+    const wt = seedWorktree('task-keep', false);
+    writeFileSync(join(wt, 'held.txt'), 'x', 'utf8');
+    const file = join(base, '.wmux', 'worktask', 'pending-removals.json');
+    mkdirSync(join(base, '.wmux', 'worktask'), { recursive: true });
+    // Its repository is there: only keepFolder closes the task.
+    mkdirSync(join(base, 'repo'), { recursive: true });
+    writeFileSync(file, JSON.stringify({ version: 1, removals: [{ path: wt, repoRoot: join(base, 'repo'), repoHash: 'repohash', at: 1 }] }), 'utf8');
+    daemon = makeDaemon([{ id: 'wtask-k', title: 'K', status: 'open', owner: 'parent-ws', worktreePath: wt, branch: 'wtask/k' }]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    expect(pendingRemovalRefusal(wt)).not.toBeNull();
+    const res = (await call(IPC.TASK_CLOSE, { taskId: 'wtask-k', verifiedWorkspaceId: 'parent-ws', keepFolder: true })) as { ok: boolean; keptFolder?: string };
+    expect(res).toMatchObject({ ok: true, keptFolder: wt });
+    expect(readFileSync(join(wt, 'held.txt'), 'utf8')).toBe('x');
+    expect(daemon.rpcCalls.filter((c) => c.method === 'task.mission.close')).toHaveLength(1);
+    expect(daemon.rpcCalls.some((c) => c.method === 'daemon.destroySession')).toBe(false);
+    expect(pendingRemovalRefusal(wt)).toBeNull();
   });
 });

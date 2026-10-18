@@ -185,8 +185,13 @@ export interface RunGitOptions {
 
 type RunGit = (args: string[], cwd: string, opts?: RunGitOptions) => Promise<{ stdout: string; stderr: string }>;
 
+/** What a refused finish of a half-removed folder tells the person to do. */
+const KEEP_FOLDER_HINT = 'use Close and keep folder to close the task and keep its files';
+
 export type RemoveResult =
-  | { ok: true }
+  /** `keptFolder`: the task may close, but its folder stays on disk (the
+   *  repository it came from is gone, so nothing could check it). */
+  | { ok: true; keptFolder?: string }
   | {
       ok: false;
       error: string;
@@ -830,11 +835,17 @@ export class TaskWorktreeManager {
    * folder first. The leftover goes only under the second layer's checks
    * (removeDeregisteredLeftover). Null when no removal of `worktreePath` is
    * recorded; a folder already gone ends the record.
+   *
+   * A record whose repository is gone (moved or deleted) can never pass
+   * git's checks again. `keepWhenRepoGone` (a task close, which the person
+   * asked for) then ends the record and keeps the folder, named in
+   * `keptFolder`, so the task can close; without it (the sweep at start, for
+   * which a missing drive may come back) the record and the folder stay.
    */
   async finishPendingRemoval(
     worktreePath: string,
     beforeRemove?: (worktreePath: string) => Promise<void>,
-    opts: { beforeDelete?: (worktreePath: string) => Promise<void> } = {},
+    opts: { beforeDelete?: (worktreePath: string) => Promise<void>; keepWhenRepoGone?: boolean } = {},
   ): Promise<RemoveResult | null> {
     const rec = this.pendingRemovals?.get(worktreePath);
     if (!rec) return null;
@@ -842,6 +853,14 @@ export class TaskWorktreeManager {
       if (!fs.existsSync(rec.path)) {
         await this.forgetPending(rec.path);
         return { ok: true };
+      }
+      if (!fs.existsSync(rec.repoRoot)) {
+        if (!opts.keepWhenRepoGone) {
+          return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, so nothing can check the folder; it was kept; ${KEEP_FOLDER_HINT}`, preserved: true };
+        }
+        await this.forgetPending(rec.path);
+        console.warn(`[worktask] the repository of ${rec.path} (${rec.repoRoot}) is not there; the task closes and the folder is kept`);
+        return { ok: true, keptFolder: rec.path };
       }
       // Every check first, stopping nothing: a folder that is kept anyway
       // (work written into it since, git listing it again) never costs the
@@ -874,10 +893,16 @@ export class TaskWorktreeManager {
     if (leftover.registered) await this.forgetPending(rec.path);
     return {
       ok: false,
-      error: leftover.registered ? 'removeWorktree: the folder is a worktree of its repository again; it was kept' : `removeWorktree: ${leftover.error}`,
+      error: leftover.registered ? 'removeWorktree: the folder is a worktree of its repository again; it was kept' : `removeWorktree: ${leftover.error}; ${KEEP_FOLDER_HINT}`,
       preserved: true,
       ...(leftover.dirty ? { dirty: true } : {}),
     };
+  }
+
+  /** Close and keep folder: the removal of `worktreePath` is no longer
+   *  pending (the folder stays where it is). */
+  async forgetPendingRemoval(worktreePath: string): Promise<void> {
+    await this.forgetPending(validatePath(worktreePath, 'worktreePath'));
   }
 
   /** The removals the pending store holds (the sweep at start). */

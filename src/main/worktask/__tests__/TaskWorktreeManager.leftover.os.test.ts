@@ -421,6 +421,40 @@ describe('a removal that could not finish is recorded for a later close', () => 
     }
   });
 
+  it('a record whose repository is gone: the sweep keeps it and the folder (the drive may come back), and names the way out', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    const gone = path.join(tmp, 'moved-away');
+    await store.put({ path: dir, repoRoot: gone, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr, removeTree } = manager(fakeGit().git, { pendingRemovals: store });
+    const lines: string[] = [];
+    await sweepPendingRemovals({
+      paths: () => mgr.pendingRemovalPaths(),
+      sessions: async () => ({ sessions: [], recoveryDone: true }),
+      startedIn: async () => [],
+      finish: (folder) => mgr.finishPendingRemoval(folder),
+      log: (m) => lines.push(m),
+    });
+    expect(lines).toEqual([expect.stringMatching(/kept .*repository .*moved-away is not there.*Close and keep folder/)]);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(store.get(dir)).toMatchObject({ repoRoot: gone });
+    // A close (keepWhenRepoGone) ends it, keeping the folder.
+    expect(await mgr.finishPendingRemoval(dir, undefined, { keepWhenRepoGone: true })).toEqual({ ok: true, keptFolder: dir });
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(store.get(dir)).toBeNull();
+  });
+
+  it('a refused finish of a leftover names Close and keep folder', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr } = manager(fakeGit({ leftoverUntracked: 'notes.md\n' }).git, { pendingRemovals: store });
+    const res = await mgr.finishPendingRemoval(dir);
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/not what git left.*use Close and keep folder/);
+  });
+
   it('looks for panes once more right before deleting: one opened during the git checks keeps the folder', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
