@@ -501,6 +501,15 @@ describe('survivorsStillRunningWin32', () => {
     expect(survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api)).toEqual([]);
   });
 
+  it('keeps an exited survivor while a child under its pid runs that cannot be opened', () => {
+    const f = fakeWin([
+      { pid: 11, ppid: 1, createdAt: 110n, exited: true },
+      { pid: 21, ppid: 11, createdAt: 150n, unopenable: true },
+    ]);
+    const s11 = { pid: 11, reason: 'access denied', startTime: '110' };
+    expect(survivorsStillRunningWin32([s11], f.api)).toEqual([s11]);
+  });
+
   it('stays unverified when a child that vanished shows a child of its own in a later table', async () => {
     // 11 forks 12 after the first table and exits before it is opened.
     const f = fakeWin([

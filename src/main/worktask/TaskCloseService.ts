@@ -110,15 +110,21 @@ export class TaskCloseService {
     const { taskId } = input;
 
     // Close and keep folder: the task closes, the folder stays as it is.
+    // It closes detached: the folder is the owner's from now on, so nothing
+    // that cleans up after closed tasks (the bots' task folder cleanup, the
+    // cleanup list's orphan check) takes it.
     if (input.keepFolder) {
       const folder = input.worktreePath ?? input.leftoverPath;
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
       if (folder) {
         await this.worktrees.forgetPendingRemoval(folder).catch(() => undefined);
         this.forgetFolderStops(folder);
       }
-      return { ok: true, taskId, archivePending: closed.archivePending, ...(folder ? { keptFolder: folder } : {}) };
+      // A finish that was already deleting it when this was chosen (it
+      // deletes only a folder that holds nothing but what git left) leaves
+      // nothing to name.
+      return { ok: true, taskId, archivePending: closed.archivePending, ...(folder && fs.existsSync(folder) ? { keptFolder: folder } : {}) };
     }
 
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.
@@ -143,9 +149,10 @@ export class TaskCloseService {
       if (finished && !finished.ok) {
         return { ok: false, taskId, reason: finished.dirty ? 'dirty' : 'error', error: finished.error, preservedWorktree: input.leftoverPath };
       }
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
+      const kept = finished?.ok ? finished.keptFolder : undefined;
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, kept ? { detach: true } : {});
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-      if (finished?.ok && finished.keptFolder) this.forgetFolderStops(finished.keptFolder);
+      if (kept) this.forgetFolderStops(kept);
       if (stopped.ids) {
         try {
           this.panesStopped?.(taskId, stopped.ids);
@@ -158,7 +165,7 @@ export class TaskCloseService {
         taskId,
         archivePending: closed.archivePending,
         unmaterialized: true,
-        ...(finished?.ok && finished.keptFolder ? { keptFolder: finished.keptFolder } : {}),
+        ...(kept ? { keptFolder: kept } : {}),
       };
     }
 
@@ -259,11 +266,13 @@ export class TaskCloseService {
   private async missionClose(
     taskId: string,
     verifiedWorkspaceId: string,
+    opts: { detach?: boolean } = {},
   ): Promise<{ ok: true; archivePending: boolean } | { ok: false; error: string }> {
     try {
       const res = (await this.daemon.rpc('task.mission.close', {
         taskId,
         verifiedWorkspaceId,
+        ...(opts.detach ? { detach: true } : {}),
       })) as { ok?: boolean; archivePending?: boolean; error?: { message?: string } };
       if (res && res.ok === true) {
         // Lane F: the task ledger learns about the close now, not on the

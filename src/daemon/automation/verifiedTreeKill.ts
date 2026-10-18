@@ -227,7 +227,14 @@ export function survivorsStillRunningWin32(survivors: readonly TreeKillSurvivor[
           if (seen.has(pid)) continue;
           seen.add(pid);
           const child = api.open(pid);
-          // One that is gone or cannot be identified is not followed.
+          // One that is gone is not followed. One still running that cannot
+          // be opened (another user's, an elevated one) cannot be told apart
+          // from what the survivor started: the survivor stays in the record,
+          // so a later check looks again rather than clearing it.
+          if ('failure' in child) {
+            if (!out.includes(s)) out.push(s);
+            continue;
+          }
           if (!('handle' in child)) continue;
           try {
             const ours = child.createdAt >= item.created && (item.until === null || child.createdAt < item.until);

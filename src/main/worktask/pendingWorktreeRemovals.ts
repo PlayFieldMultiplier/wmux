@@ -112,17 +112,30 @@ export function setActivePendingRemovals(store: PendingRemovalStore | null): voi
   active = store;
 }
 
+/** The key of a folder as the file system names it: links, junctions and
+ *  8.3 short names resolved when it exists. */
+function canonicalKey(p: string): string {
+  let real = path.resolve(p);
+  try {
+    real = fs.realpathSync.native(real);
+  } catch {
+    // Not there: compared as spelled.
+  }
+  return pendingRemovalKey(real);
+}
+
 /**
  * Why a pane may not start in `cwd`, or null: a folder whose removal is
  * pending is half deleted, and what a pane wrote there would be checked
  * against it, or deleted with it. A WSL pane's Linux path is read as the
- * Windows folder it is.
+ * Windows folder it is. Both sides are compared canonical, so an alias of
+ * the folder (a link, a junction, an 8.3 name) is refused too.
  */
 export function pendingRemovalRefusal(cwd: string | null | undefined, platform: NodeJS.Platform = process.platform): string | null {
   if (!cwd || !active) return null;
-  const want = pendingRemovalKey(sessionHostDir(cwd, {}, platform));
+  const want = canonicalKey(sessionHostDir(cwd, {}, platform));
   for (const rec of active.all()) {
-    const held = pendingRemovalKey(rec.path);
+    const held = canonicalKey(rec.path);
     if (want === held || want.startsWith(held + path.sep)) {
       return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or use Close and keep folder on its task`;
     }

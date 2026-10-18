@@ -185,6 +185,13 @@ export interface RunGitOptions {
 
 type RunGit = (args: string[], cwd: string, opts?: RunGitOptions) => Promise<{ stdout: string; stderr: string }>;
 
+/** A folder's key in `keeping`: resolved, without case where the file
+ *  system has none (pendingRemovalKey's rule). */
+function keepKey(p: string): string {
+  const resolved = path.resolve(p);
+  return process.platform === 'win32' || process.platform === 'darwin' ? resolved.toLowerCase() : resolved;
+}
+
 /** What a refused finish of a half-removed folder tells the person to do. */
 const KEEP_FOLDER_HINT = 'use Close and keep folder to close the task and keep its files';
 
@@ -259,6 +266,8 @@ export class TaskWorktreeManager {
   /** Removals not finished yet (#2388), so a later close or the sweep at
    *  start can finish one. Absent: nothing is recorded. */
   private readonly pendingRemovals?: PendingRemovalStore;
+  /** Folders Close and keep folder is ending the pending removal of. */
+  private readonly keeping = new Set<string>();
 
   /** The folder every task worktree lives under; the second layer never
    *  deletes anything outside it. */
@@ -847,9 +856,13 @@ export class TaskWorktreeManager {
     beforeRemove?: (worktreePath: string) => Promise<void>,
     opts: { beforeDelete?: (worktreePath: string) => Promise<void>; keepWhenRepoGone?: boolean } = {},
   ): Promise<RemoveResult | null> {
-    const rec = this.pendingRemovals?.get(worktreePath);
-    if (!rec) return null;
-    return this.withRepoLock(rec.repoHash, async () => {
+    const queued = this.pendingRemovals?.get(worktreePath);
+    if (!queued) return null;
+    return this.withRepoLock(queued.repoHash, async () => {
+      // Read again under the lock: Close and keep folder may have ended the
+      // record while this waited.
+      const rec = this.pendingRemovals?.get(worktreePath);
+      if (!rec) return null;
       if (!fs.existsSync(rec.path)) {
         await this.forgetPending(rec.path);
         return { ok: true };
@@ -900,9 +913,20 @@ export class TaskWorktreeManager {
   }
 
   /** Close and keep folder: the removal of `worktreePath` is no longer
-   *  pending (the folder stays where it is). */
+   *  pending (the folder stays where it is). A finish of it under way
+   *  deletes nothing from now on (`keeping`); the record ends once that
+   *  finish is over (the repository lock), so a later one finds none. */
   async forgetPendingRemoval(worktreePath: string): Promise<void> {
-    await this.forgetPending(validatePath(worktreePath, 'worktreePath'));
+    const safePath = validatePath(worktreePath, 'worktreePath');
+    const key = keepKey(safePath);
+    this.keeping.add(key);
+    try {
+      const rec = this.pendingRemovals?.get(safePath);
+      if (rec) await this.withRepoLock(rec.repoHash, () => this.forgetPending(safePath));
+      else await this.forgetPending(safePath);
+    } finally {
+      this.keeping.delete(key);
+    }
   }
 
   /** The removals the pending store holds (the sweep at start). */
@@ -948,11 +972,13 @@ export class TaskWorktreeManager {
       return { ok: false, error: 'the leftover folder was kept: it is, or holds, or sits in the repository' };
     }
     const gitEntry = leftoverGitEntry(real);
+    const registered = await this.listsWorktree(rec.repoRoot, repoReal, real);
+    // A folder git still lists (a locked worktree git refused to remove) is a
+    // worktree, not a leftover, whatever its .git holds: its record ends.
+    if (registered === true) return { ok: false, registered: true, error: 'the folder is still a worktree' };
     if (gitEntry !== null) return { ok: false, error: `the leftover folder was kept: ${gitEntry}` };
 
-    const registered = await this.listsWorktree(rec.repoRoot, repoReal, real);
     if (registered === null) return { ok: false, error: 'the leftover folder was kept: git did not confirm it is no longer a worktree' };
-    if (registered) return { ok: false, registered: true, error: 'the folder is still a worktree' };
 
     if (!rec.head) return { ok: false, error: 'the leftover folder was kept: no clean commit was recorded to compare it with' };
     const changed = await this.leftoverChanges(rec.repoRoot, real, rec.head);
@@ -968,6 +994,9 @@ export class TaskWorktreeManager {
         return { ok: false, error: `the leftover folder was kept: ${(err as Error).message}` };
       }
     }
+    // Close and keep folder chosen while the checks ran: nothing is deleted.
+    // Read right before the deletion starts, with no wait in between.
+    if (this.keeping.has(keepKey(rec.path))) return { ok: false, error: 'the leftover folder was kept: Close and keep folder was chosen' };
 
     try {
       await this.removeTree(real, rootReal);

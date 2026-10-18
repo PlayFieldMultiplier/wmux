@@ -15,6 +15,7 @@ import os from 'node:os';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { TaskWorktreeManager, type RunGitOptions } from '../TaskWorktreeManager';
 import { PendingWorktreeRemovals, pendingRemovalRefusal, setActivePendingRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const HEAD = 'a'.repeat(40);
 const onWindows = process.platform === 'win32';
@@ -443,6 +444,81 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(await mgr.finishPendingRemoval(dir, undefined, { keepWhenRepoGone: true })).toEqual({ ok: true, keptFolder: dir });
     expect(fs.existsSync(dir)).toBe(true);
     expect(store.get(dir)).toBeNull();
+  });
+
+  // Close and keep folder while a finish of the same folder is under way
+  // (the sweep at start): nothing is deleted, and the record ends after it.
+  it('Close and keep folder chosen while a finish runs its checks: the folder is kept', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const g = fakeGit();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const git = vi.fn(async (args: string[], cwd: string, opts?: RunGitOptions) => {
+      if (args.includes('ls-files')) await gate;
+      return g.git(args, cwd, opts);
+    });
+    const { mgr, removeTree } = manager(git as unknown as ReturnType<typeof fakeGit>['git'], { pendingRemovals: store });
+    const finishing = mgr.finishPendingRemoval(dir);
+    await vi.waitFor(() => expect(git.mock.calls.some(([a]) => a.includes('ls-files'))).toBe(true), { timeout: 5_000 });
+    const keeping = mgr.forgetPendingRemoval(dir);
+    // It waits for the finish under way: until then a finish could still
+    // reach the deletion, so it must not have let go of the folder yet.
+    let kept = false;
+    void keeping.then(() => { kept = true; });
+    await deliberateSleep(200, 'a negative check: the keep is still waiting for the finish under way');
+    expect(kept).toBe(false);
+    release();
+    const res = await finishing;
+    await keeping;
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/Close and keep folder was chosen/);
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(store.get(dir)).toBeNull();
+  });
+
+  it('a finish queued behind Close and keep folder finds no record and deletes nothing', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr, removeTree } = manager(fakeGit().git, { pendingRemovals: store });
+    const keeping = mgr.forgetPendingRemoval(dir);
+    const finishing = mgr.finishPendingRemoval(dir);
+    await keeping;
+    expect(await finishing).toBeNull();
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(fs.existsSync(dir)).toBe(true);
+  });
+
+  it('a folder git still lists ends its record even when its .git names a live git dir (a locked worktree)', async () => {
+    const dir = leftover();
+    const gitDir = path.join(repo, '.git', 'worktrees', 'task-a');
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir}\n`);
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    const { mgr, removeTree } = manager(fakeGit({ removeFails: true, listed: [dir] }).git, { pendingRemovals: store });
+    const res = await mgr.removeWorktree(repo, 'hash1', dir, async () => undefined);
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(store.get(dir)).toBeNull();
+  });
+
+  it('the lock refuses an alias of the folder too (a junction or link to it)', async () => {
+    const dir = leftover();
+    const alias = path.join(tmp, 'alias');
+    fs.symlinkSync(dir, alias, 'junction');
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    setActivePendingRemovals(store);
+    try {
+      expect(pendingRemovalRefusal(alias)).not.toBeNull();
+      expect(pendingRemovalRefusal(path.join(alias, 'src'))).not.toBeNull();
+    } finally {
+      setActivePendingRemovals(null);
+    }
   });
 
   it('a refused finish of a leftover names Close and keep folder', async () => {

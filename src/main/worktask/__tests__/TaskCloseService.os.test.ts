@@ -269,6 +269,8 @@ describe('close-only with a leftover folder (#2388)', () => {
     expect(res).toMatchObject({ ok: true, unmaterialized: true });
     expect(finishPendingRemoval).toHaveBeenCalledWith('/wt/left', expect.any(Function), { keepWhenRepoGone: true });
     expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    // A folder that went is not kept: an ordinary close.
+    expect(calls[0].params).not.toHaveProperty('detach');
     expect(panesStopped).toHaveBeenCalledWith('wtask-8', ['p-1']);
   });
 
@@ -309,6 +311,9 @@ describe('a close that keeps the folder (#2388)', () => {
     const res = await svc.closeTask({ taskId: 'wtask-k1', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath, keepFolder: true });
     expect(res).toEqual({ ok: true, taskId: 'wtask-k1', archivePending: false, keptFolder: worktreePath });
     expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    // Closed detached: the folder is the owner's, so no cleanup of closed
+    // tasks (the bots' task folder cleanup) takes it.
+    expect(calls[0].params).toMatchObject({ taskId: 'wtask-k1', detach: true });
     expect(stopPanesIn).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(worktreePath, 'wip.txt'), 'utf8')).toBe('uncommitted\n');
     expect(git(['worktree', 'list', '--porcelain'], repoRoot)).toContain(worktreePath.replace(/\\/g, '/'));
@@ -357,6 +362,7 @@ describe('a close that keeps the folder (#2388)', () => {
     const res = await svc.closeTask({ taskId: 'wtask-k4', verifiedWorkspaceId: 'ws-owner', leftoverPath: left });
     expect(res).toMatchObject({ ok: true, unmaterialized: true, keptFolder: left });
     expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    expect(calls[0].params).toMatchObject({ detach: true });
     expect(stopPanesIn).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(left, 'held.txt'), 'utf8')).toBe('x\n');
     expect(store.all()).toEqual([]);
