@@ -47,6 +47,8 @@ interface FakeGitOpts {
   listed?: string[];
   /** Whether the list names the repository itself. */
   namesRepo?: boolean;
+  /** The repository the list names (default: the test's repo). */
+  repoPath?: string;
   /** Status lines of the worktree before / after the panes stopped. */
   statusBefore?: string;
   statusAfter?: string;
@@ -68,7 +70,7 @@ function fakeGit(o: FakeGitOpts = {}) {
     if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return out(`${path.join(repo, '.git')}\n`);
     if (args[0] === 'status') return out((stopped ? o.statusAfter : o.statusBefore) ?? '');
     if (args[0] === 'worktree' && args[1] === 'list') {
-      const entries = [...(o.namesRepo === false ? [] : [repo]), ...(o.listed ?? [])];
+      const entries = [...(o.namesRepo === false ? [] : [o.repoPath ?? repo]), ...(o.listed ?? [])];
       return out(entries.map((p) => `worktree ${p.replace(/\\/g, '/')}\nHEAD ${HEAD}\n`).join('\n'));
     }
     if (args[0] === 'worktree' && args[1] === 'remove') {
@@ -155,7 +157,7 @@ describe('second layer: a folder git left after dropping the worktree', () => {
   it('never the repository, nor a folder holding it, even inside the root', async () => {
     const inner = path.join(root, 'hash1', 'repo-inside');
     fs.mkdirSync(inner, { recursive: true });
-    const g = fakeGit({ removeFails: true });
+    const g = fakeGit({ removeFails: true, repoPath: inner });
     const { mgr, removeTree } = manager(g.git);
     expect(await mgr.removeWorktree(inner, 'hash1', inner, async () => undefined)).toMatchObject({ ok: false, preserved: true });
     expect(await mgr.removeWorktree(inner, 'hash1', path.join(root, 'hash1'), async () => undefined)).toMatchObject({ ok: false, preserved: true });
