@@ -425,6 +425,28 @@ describe('survivorsStillRunningWin32', () => {
     expect(r).toEqual([expect.objectContaining({ pid: 21, unverified: true })]);
   });
 
+  it('stays unverified when a child that vanished shows a child of its own in a later table', async () => {
+    // 11 forks 12 after the first table and exits before it is opened.
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, exited: true },
+      { pid: 12, ppid: 11, createdAt: 120n },
+    ], {
+      tables: [[{ pid: 10, ppid: 1 }, { pid: 11, ppid: 10 }]],
+    });
+    const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toEqual([expect.objectContaining({ pid: 11, unverified: true })]);
+  });
+
+  it('a child that vanished with nothing under it in any later table is no question', async () => {
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, goneOnOpen: true },
+    ]);
+    expect((await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 })).ok).toBe(true);
+  });
+
   it('a survivor still running is still running; one that exited is not', () => {
     const f = fakeWin([{ pid: 11, ppid: 1, createdAt: 110n }, { pid: 12, ppid: 1, createdAt: 120n, exited: true }]);
     const s11 = { pid: 11, reason: 'access denied', startTime: '110' };

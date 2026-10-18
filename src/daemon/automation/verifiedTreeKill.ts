@@ -299,6 +299,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
    *  not be identified, while it had children there: they cannot be told
    *  from strangers (nothing pins its pid), so the tree is not known whole. */
   const lostParents = new Set<number>();
+  /** A child of ours that exited before it could be opened, with no child in
+   *  that table: one it started just before it exited shows up in a later
+   *  table under its pid. Its parent's creation time bounds such a child. */
+  const vanished = new Map<number, bigint>();
   let released = false;
 
   /** One rescan: adds every new process of the tree. Returns how many were
@@ -315,6 +319,31 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
       if (list) list.push(pid);
       else children.set(ppid, [pid]);
     }
+    const untrackedChildren = (pid: number): number[] => (children.get(pid) ?? []).filter((c) => !tracked.has(c));
+    /** A child of `floor`'s process that is gone (or whose pid another
+     *  process took): its children now, or in a later table, are lost. */
+    const lostChild = (pid: number, floor: bigint): void => {
+      if (untrackedChildren(pid).length > 0) lostParents.add(pid);
+      else vanished.set(pid, floor);
+    };
+    // A child that vanished earlier: one that started under it shows up now.
+    // It is lost unless it is younger than a later owner of that pid.
+    for (const [pid, floor] of vanished) {
+      if (lostParents.has(pid)) continue;
+      const owner = api.open(pid);
+      const ownerCreated = 'handle' in owner ? owner.createdAt : null;
+      if ('handle' in owner) api.close(owner.handle);
+      for (const c of untrackedChildren(pid)) {
+        const child = api.open(c);
+        if ('gone' in child) continue;
+        if ('handle' in child) api.close(child.handle);
+        const created = 'handle' in child ? child.createdAt : null;
+        if (created === null || (created >= floor && (ownerCreated === null || created < ownerCreated))) {
+          lostParents.add(pid);
+          break;
+        }
+      }
+    }
     let added = 0;
     const queue = [...tracked.values()];
     for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
@@ -322,7 +351,7 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
         if (tracked.has(pid)) continue;
         const opened = api.open(pid);
         if ('gone' in opened) {
-          if ((children.get(pid) ?? []).some((c) => !tracked.has(c))) lostParents.add(pid);
+          lostChild(pid, parent.createdAt);
           continue;
         }
         if ('failure' in opened) {
@@ -342,7 +371,7 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           api.close(opened.handle);
           // Newer than the table: the child the table listed exited and its
           // pid went to this one, so its own children in the table are lost.
-          if (opened.createdAt > askedAt && (children.get(pid) ?? []).some((c) => !tracked.has(c))) lostParents.add(pid);
+          if (opened.createdAt > askedAt) lostChild(pid, parent.createdAt);
           continue;
         }
         unidentified.delete(pid);
