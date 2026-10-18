@@ -2191,7 +2191,7 @@ export class HookIngest {
   private isDuplicateTurnEnd(sessionId: string, signal: AgentSignal): boolean {
     if (signal.kind !== 'agent.stop' && signal.kind !== 'agent.stop_failure') return false;
     const cue = normalizeHookCue(signal);
-    if (signal.kind === 'agent.stop' && (cue.child || cue.leftoverWork !== 0)) return false;
+    if (signal.kind === 'agent.stop' && !(cue.class === 'stop' && !cue.child && cue.leftoverWork === 0)) return false;
     const ended = this.deps.latestEndedTurn?.(sessionId) ?? null;
     const last = this.endedTurn.get(sessionId);
     if (ended === null || last?.turn !== ended || last.signature !== turnEndSignature(signal)) return false;

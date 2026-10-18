@@ -45,6 +45,7 @@ describe('HookIngest — one turn, one end', () => {
           bridge.noteAgentStatus(data.status, true, undefined, data.signal.payload?.['provisional'] === true, data.signal.ts);
         }
       },
+      applyResumeBinding: () => undefined,
       log: () => undefined,
       latestEndedTurn: () => bridge.endedTurnId(),
     });
