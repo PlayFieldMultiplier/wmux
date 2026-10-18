@@ -102,10 +102,11 @@ describe('#1002 — pane-restructure terminal adoption (source-level)', () => {
     expect(src).toMatch(/reconnectPendingRef\.current = message !== null;/);
   });
 
-  it('a rate-limited give-up reattaches again on a slow timer, cleared on teardown', () => {
+  it('a rate-limited (or #2398 exhausted) give-up reattaches again on a slow timer, cleared on teardown', () => {
     // No daemon:connected follows a rate limit (the daemon never disconnected),
-    // so without this the pane would wait for a manual Retry.
-    expect(src).toMatch(/if \(info\?\.rateLimited && slowRetry === null\) \{\s*slowRetry = setTimeout\(\(\) => \{ slowRetry = null; void reattach\('rate-limit-retry'\); \}/);
+    // so without this the pane would wait for a manual Retry. Since #2398 an
+    // exhausted reattach keeps its id unconfirmed too, and retries the same way.
+    expect(src).toMatch(/if \(\(info\?\.rateLimited \|\| info\?\.unconfirmed\) && slowRetry === null\) \{\s*slowRetry = setTimeout\(\(\) => \{ slowRetry = null; void reattach\('rate-limit-retry'\); \}/);
     expect(src).toMatch(/if \(slowRetry !== null\) clearTimeout\(slowRetry\);\s*if \(off\) off\(\);/);
   });
 
