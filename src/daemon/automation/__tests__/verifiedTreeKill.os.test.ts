@@ -240,10 +240,10 @@ describe('captureTreeWin32', () => {
     expect(f.openHandles()).toBe(0);
   });
 
-  it('does not walk a root nothing confirms: unverified, the root named for a later check, nothing terminated', async () => {
+  it('does not walk a root nothing confirms: unverified, nothing terminated', async () => {
     const f = fakeWin([{ pid: 10, ppid: 1, createdAt: 100n }, { pid: 11, ppid: 10, createdAt: 110n }]);
     const r = await captureTreeWin32(10, f.api, { rootIsOurs: () => null })!.kill({ timeoutMs: 0 });
-    expect(r).toMatchObject({ ok: false, killed: [], captured: [{ pid: 10, startTime: '100' }] });
+    expect(r).toMatchObject({ ok: false, killed: [] });
     if (!r.ok) expect(r.survivors[0]).toMatchObject({ pid: 10, unverified: true });
     expect(f.terminated).toEqual([]);
     expect(f.openHandles()).toBe(0);
@@ -292,10 +292,10 @@ describe('captureTreePosix', () => {
     expect(f.signals.some(([p]) => p === 200)).toBe(false);
   });
 
-  it('does not walk a root nothing confirms: unverified, the root named for a later check, nothing signalled', async () => {
+  it('does not walk a root nothing confirms: unverified, nothing signalled', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait, rootIsOurs: () => null }))!.kill({ timeoutMs: 0 });
-    expect(r).toMatchObject({ ok: false, killed: [], captured: [{ pid: 100, startTime: 't100' }] });
+    expect(r).toMatchObject({ ok: false, killed: [] });
     if (!r.ok) expect(r.survivors[0]).toMatchObject({ pid: 100, unverified: true });
     expect(f.signals).toEqual([]);
   });
@@ -309,7 +309,7 @@ describe('captureTreePosix', () => {
   it('fails closed when a process survives the kill', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { stuck: [101] });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
-    expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }], captured: [{ pid: 100, startTime: 't100' }, { pid: 101, startTime: 't101' }] });
+    expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }] });
   });
 
   it('does not stop a pid that changed hands between the read and the stop', async () => {

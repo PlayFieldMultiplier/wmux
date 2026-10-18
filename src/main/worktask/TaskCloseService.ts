@@ -115,16 +115,26 @@ export class TaskCloseService {
     // cleanup list's orphan check) takes it.
     if (input.keepFolder) {
       const folder = input.worktreePath ?? input.leftoverPath;
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
-      if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-      if (folder) {
-        await this.worktrees.forgetPendingRemoval(folder).catch(() => undefined);
-        this.forgetFolderStops(folder);
+      // Held from the start: a finish of it under way (the sweep at start)
+      // must not delete it while the close is asked for.
+      let release: () => void = () => undefined;
+      try {
+        if (folder) release = this.worktrees.holdFolder(folder);
+        const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
+        if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+        if (folder) {
+          await this.worktrees.forgetPendingRemoval(folder).catch(() => undefined);
+          this.forgetFolderStops(folder);
+        }
+        // A finish that was already deleting it when this was chosen (it
+        // deletes only a folder that holds nothing but what git left) leaves
+        // nothing to name.
+        return { ok: true, taskId, archivePending: closed.archivePending, ...(folder && fs.existsSync(folder) ? { keptFolder: folder } : {}) };
+      } catch (err) {
+        return { ok: false, taskId, reason: 'error', error: (err as Error).message };
+      } finally {
+        release();
       }
-      // A finish that was already deleting it when this was chosen (it
-      // deletes only a folder that holds nothing but what git left) leaves
-      // nothing to name.
-      return { ok: true, taskId, archivePending: closed.archivePending, ...(folder && fs.existsSync(folder) ? { keptFolder: folder } : {}) };
     }
 
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.

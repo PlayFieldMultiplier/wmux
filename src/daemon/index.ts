@@ -2650,12 +2650,6 @@ function registerRpcHandlers(
       throw err;
     }
     const tree = p.killTree === true ? (captured ? await captured.kill() : { ok: true as const, killed: [] }) : undefined;
-    // A kill that could not be verified names the pane's shell too, when its
-    // recorded start time is in the form a later check compares.
-    if (tree && !tree.ok && live && !tree.captured.some((c) => c.pid === live.pid)) {
-      const recorded = recordedStartOf(live);
-      if (recorded && (process.platform !== 'win32' || /^\d+$/.test(recorded))) tree.captured.push({ pid: live.pid, startTime: recorded });
-    }
 
     // Clean up buffer dump file if exists
     const bufPath = stateWriter.getBufferDumpPath(p.id);

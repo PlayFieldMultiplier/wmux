@@ -348,6 +348,39 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(store.get(left)).not.toBeNull();
   });
 
+  it('keepFolder holds the folder from the start: a sweep that ends its checks while the close is asked deletes nothing', async () => {
+    const root = path.join(wtBase, 'root');
+    const left = path.join(root, 'task-held');
+    fs.mkdirSync(left, { recursive: true });
+    fs.writeFileSync(path.join(left, 'a.txt'), 'a\n');
+    const store = storeIn(wtBase);
+    const head = git(['rev-parse', 'HEAD'], repoRoot).trim();
+    await store.put({ path: left, repoRoot, repoHash: 'closehash', head, at: 1 });
+    // The sweep's git checks wait on a gate; the close RPC waits on another.
+    let openChecks: () => void = () => undefined;
+    const checks = new Promise<void>((r) => { openChecks = r; });
+    const runGit = vi.fn(async (args: string[], cwd: string) => {
+      if (args.includes('ls-files')) await checks;
+      return { stdout: execFileSync('git', args, { cwd }).toString(), stderr: '' };
+    });
+    const removeTree = vi.fn(async (d: string) => { fs.rmSync(d, { recursive: true, force: true }); });
+    const mgr = new TaskWorktreeManager({ runGit, worktreesRoot: root, removeTree, pendingRemovals: store });
+    let answer: (v: unknown) => void = () => undefined;
+    const port: CloseDaemonPort = { rpc: vi.fn(() => new Promise((r) => { answer = r; })) };
+    const svc = new TaskCloseService({ daemon: port, worktrees: mgr });
+
+    const sweeping = mgr.finishPendingRemoval(left);
+    await vi.waitFor(() => expect(runGit.mock.calls.some(([a]) => a.includes('ls-files'))).toBe(true), { timeout: 10_000 });
+    const closing = svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true });
+    openChecks();
+    expect(await sweeping).toMatchObject({ ok: false, preserved: true });
+    answer({ ok: true, taskId: 'wtask-k5' });
+    expect(await closing).toMatchObject({ ok: true, keptFolder: left });
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(left, 'a.txt'))).toBe(true);
+    expect(store.get(left)).toBeNull();
+  });
+
   it('a half-removed folder whose repository is gone: the close keeps the folder, names it, and closes', async () => {
     const root = path.join(wtBase, 'root');
     const left = path.join(root, 'task-gone');

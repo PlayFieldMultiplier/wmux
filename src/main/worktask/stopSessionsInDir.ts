@@ -35,29 +35,31 @@ export interface SessionsInDirPort {
   stillRunning?(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]>;
 }
 
-/** What an earlier stop of a folder left to check, its sessions gone. */
+/** What an earlier stop of a folder left, its sessions gone. */
 interface FolderRecord {
-  /** Processes to look at again, by pid and (when known) start time: the
-   *  identified survivors, and every process a kill that could not be
-   *  verified had taken. */
+  /** Identified survivors (pid and start time) to look at again. */
   check: TreeKillSurvivor[];
-  /** Why that kill could not be verified, when it could not. */
+  /** Why a kill could not be verified, when one could not. */
   unverified?: string;
 }
 
 /**
  * What earlier stops of a folder left, by folder. A stop destroys the panes'
  * sessions, so a later stop finds no session to capture from: it checks the
- * recorded processes instead (on Windows, also what each one started before
- * it exited) and keeps the folder until that check is positive, every one
- * gone. A record with nothing to check (a kill that took no process) is
- * never cleared by a check. Close and keep folder (keepFolder) ends a record. Held for
- * the life of the app.
+ * identified survivors instead (on Windows, also what each one started
+ * before it exited) and keeps the folder until every one is gone. A kill
+ * that could not be verified did not capture the whole tree (a process it
+ * could not identify, a parent gone before its children were seen, a table
+ * it could not read), and nothing seen later can show what it missed is
+ * gone: no check ends that record. Close and keep folder (keepFolder) ends
+ * any record. Held for the life of the app.
  */
 const lingering = new Map<string, FolderRecord>();
 
-/** How a refusal that only a later check or Close and keep folder can end says so. */
+/** How a refusal a later check or Close and keep folder can end says so. */
 export const STOP_ESCAPE_HINT = 'close it again once they have exited, or use Close and keep folder to close the task and keep its files';
+/** How a refusal only Close and keep folder can end says so. */
+const KEEP_FOLDER_ONLY_HINT = 'nothing can show the processes it missed have exited; use Close and keep folder to close the task and keep its files';
 
 /** Close and keep folder (keepFolder): forget what earlier stops of `dir` left. */
 export function forgetFolderStops(dir: string, port: Pick<SessionsInDirPort, 'realpath' | 'platform'> = {}): void {
@@ -89,29 +91,26 @@ function identified(survivors: readonly TreeKillSurvivor[]): TreeKillSurvivor[] 
 }
 
 /** Add what a pane's kill left to the folder's record. */
-function recordTree(key: string, tree: { survivors: TreeKillSurvivor[]; captured?: Array<{ pid: number; startTime: string }> }): void {
+function recordTree(key: string, tree: { survivors: TreeKillSurvivor[] }): void {
   const prior = lingering.get(key) ?? { check: [] };
   const check = [...prior.check];
-  const add = (x: TreeKillSurvivor): void => {
-    if (!check.some((c) => c.pid === x.pid && c.startTime === x.startTime)) check.push(x);
-  };
-  for (const s of identified(tree.survivors)) add(s);
-  const unverified = tree.survivors.filter((s) => s.unverified).map((s) => s.reason);
-  if (unverified.length > 0) {
-    for (const c of tree.captured ?? []) add({ pid: c.pid, startTime: c.startTime, reason: 'taken by a kill that could not be verified' });
+  for (const s of identified(tree.survivors)) {
+    if (!check.some((c) => c.pid === s.pid && c.startTime === s.startTime)) check.push(s);
   }
+  const unverified = tree.survivors.filter((s) => s.unverified).map((s) => s.reason);
   const reasons = [prior.unverified, ...unverified].filter((r): r is string => !!r);
   if (check.length === 0 && reasons.length === 0) return;
   lingering.set(key, { check, ...(reasons.length > 0 ? { unverified: reasons.join('; ') } : {}) });
 }
 
-/** Check what earlier stops of the folder left: the record ends once every
- *  recorded process is gone; otherwise this throws and keeps it. */
+/** Check what earlier stops of the folder left: a record of identified
+ *  survivors ends once every one is gone; one of a kill that could not be
+ *  verified does not end here. Otherwise this throws and keeps it. */
 async function checkEarlierStops(key: string, port: Pick<SessionsInDirPort, 'stillRunning'>): Promise<void> {
   const earlier = lingering.get(key);
   if (!earlier) return;
-  if (earlier.check.length === 0) {
-    throw new PanesStillRunningError([], [], [`an earlier stop could not verify its processes exited (${earlier.unverified ?? 'unknown'}) and took none to check again; use Close and keep folder to close the task and keep its files`]);
+  if (earlier.unverified) {
+    throw new PanesStillRunningError([], [], [`an earlier stop could not verify its processes exited (${earlier.unverified}); ${KEEP_FOLDER_ONLY_HINT}`]);
   }
   const still = await (port.stillRunning ?? survivorsStillRunning)(earlier.check);
   if (still.length === 0) {
@@ -119,8 +118,7 @@ async function checkEarlierStops(key: string, port: Pick<SessionsInDirPort, 'sti
     return;
   }
   lingering.set(key, { ...earlier, check: still });
-  const why = earlier.unverified ? ` (an earlier stop could not verify its processes exited: ${earlier.unverified})` : '';
-  throw new PanesStillRunningError(still.map((x) => x.pid), [`still running since an earlier stop${why}; ${STOP_ESCAPE_HINT}`]);
+  throw new PanesStillRunningError(still.map((x) => x.pid), [`still running since an earlier stop; ${STOP_ESCAPE_HINT}`]);
 }
 
 /** Test seam: forget every earlier stop's survivors. */

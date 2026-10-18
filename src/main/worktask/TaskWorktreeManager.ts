@@ -266,8 +266,9 @@ export class TaskWorktreeManager {
   /** Removals not finished yet (#2388), so a later close or the sweep at
    *  start can finish one. Absent: nothing is recorded. */
   private readonly pendingRemovals?: PendingRemovalStore;
-  /** Folders Close and keep folder is ending the pending removal of. */
-  private readonly keeping = new Set<string>();
+  /** Folders Close and keep folder holds (how many holds each): no finish
+   *  deletes one while it is held. */
+  private readonly keeping = new Map<string, number>();
 
   /** The folder every task worktree lives under; the second layer never
    *  deletes anything outside it. */
@@ -912,20 +913,35 @@ export class TaskWorktreeManager {
     };
   }
 
+  /** Close and keep folder: from now until the returned release, no finish
+   *  of `worktreePath` deletes it (one under way stops right before the
+   *  deletion). Taken before anything is awaited. */
+  holdFolder(worktreePath: string): () => void {
+    const key = keepKey(validatePath(worktreePath, 'worktreePath'));
+    this.keeping.set(key, (this.keeping.get(key) ?? 0) + 1);
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      const left = (this.keeping.get(key) ?? 1) - 1;
+      if (left > 0) this.keeping.set(key, left);
+      else this.keeping.delete(key);
+    };
+  }
+
   /** Close and keep folder: the removal of `worktreePath` is no longer
-   *  pending (the folder stays where it is). A finish of it under way
-   *  deletes nothing from now on (`keeping`); the record ends once that
-   *  finish is over (the repository lock), so a later one finds none. */
+   *  pending (the folder stays where it is). Held meanwhile (holdFolder);
+   *  the record ends once a finish under way is over (the repository
+   *  lock), so a later one finds none. */
   async forgetPendingRemoval(worktreePath: string): Promise<void> {
     const safePath = validatePath(worktreePath, 'worktreePath');
-    const key = keepKey(safePath);
-    this.keeping.add(key);
+    const release = this.holdFolder(safePath);
     try {
       const rec = this.pendingRemovals?.get(safePath);
       if (rec) await this.withRepoLock(rec.repoHash, () => this.forgetPending(safePath));
       else await this.forgetPending(safePath);
     } finally {
-      this.keeping.delete(key);
+      release();
     }
   }
 
@@ -996,7 +1012,7 @@ export class TaskWorktreeManager {
     }
     // Close and keep folder chosen while the checks ran: nothing is deleted.
     // Read right before the deletion starts, with no wait in between.
-    if (this.keeping.has(keepKey(rec.path))) return { ok: false, error: 'the leftover folder was kept: Close and keep folder was chosen' };
+    if ((this.keeping.get(keepKey(rec.path)) ?? 0) > 0) return { ok: false, error: 'the leftover folder was kept: Close and keep folder was chosen' };
 
     try {
       await this.removeTree(real, rootReal);
