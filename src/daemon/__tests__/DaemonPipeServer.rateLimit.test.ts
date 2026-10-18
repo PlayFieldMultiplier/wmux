@@ -90,18 +90,18 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     expect(replies.get('251')).toMatchObject({ ok: true, result: { attached: true } });
   });
 
-  it('dispatches the pty:create rollback destroy (a session this socket just created) after a background flood used up the global budget', async () => {
+  it('keeps destroySession background: a flood refuses it like any background call', async () => {
     const methods: Call[] = [
       { method: 'daemon.createSession', params: { id: 'daemon-new1' } },
       ...Array.from({ length: 250 }, () => 'task.mission.list'),
       { method: 'daemon.destroySession', params: { id: 'daemon-new1' } },
     ];
     const replies = await sendBatch(pipeName, methods);
-    expect(replies.get('250')).toMatchObject({ ok: false, error: 'rate limited (global)' });
-    expect(replies.get('251')).toMatchObject({ ok: true, result: { destroyed: true } });
+    expect(replies.get('0')).toMatchObject({ ok: true });
+    expect(replies.get('251')).toMatchObject({ ok: false, error: 'rate limited (global)' });
   });
 
-  it('keeps every other destroySession (a cleanup sweep) background: 150 of them do not block a create', async () => {
+  it('a cleanup sweep of 150 destroySession calls does not block a create', async () => {
     const methods: Call[] = [
       ...Array.from({ length: 150 }, (_, i) => ({ method: 'daemon.destroySession', params: { id: `daemon-old${i}` } })),
       ...Array.from({ length: 100 }, (_, i) => ({ method: 'daemon.createSession', params: { id: `daemon-c${i}` } })),

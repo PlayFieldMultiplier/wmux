@@ -112,17 +112,8 @@ export function createFanOutService(
           ptyId?: string;
           initialCommand?: string;
           error?: string;
-          noPty?: unknown;
         };
-        if (res && typeof res.error === 'string') {
-          // What the renderer knows of a pane (see FanOutRendererPort): carried
-          // over only in the shape it is meant to have, else left out.
-          return {
-            error: res.error,
-            ...(res.noPty === true ? { noPty: true as const } : {}),
-            ...(typeof res.ptyId === 'string' && res.ptyId ? { ptyId: res.ptyId } : {}),
-          };
-        }
+        if (res && typeof res.error === 'string') return { error: res.error };
         if (res && typeof res.workspaceId === 'string') {
           return {
             workspaceId: res.workspaceId,

@@ -208,16 +208,7 @@ export interface FanOutRendererPort {
          *  is that version a re-fire must replay. */
         initialCommand?: string;
       }
-    | {
-        error: string;
-        /** No PTY was ever created for this spawn (it failed before
-         *  pty.create, or pty.create itself was refused), so no agent can be
-         *  running in its folder. Absent = not known (an older renderer, or a
-         *  failure after the PTY existed). */
-        noPty?: true;
-        /** The PTY this spawn did create before it failed. */
-        ptyId?: string;
-      }
+    | { error: string }
   >;
 }
 
@@ -1347,10 +1338,9 @@ export class FanOutService {
         await this.botSkills(ctx.requester.botId, plan.worktreePath).catch(() => undefined);
       }
     }
-    // A failure after this point keeps the folder: the worktree is preserved
-    // for the J3 cleanup; an output folder is never removed by wmux at all.
-    // Except a launch refused before any pane could exist: that worktree is
-    // rolled back (rollbackTaskWorktree, #2349).
+    // A failure from here until the renderer is asked for the pane rolls the
+    // worktree back (rollbackTaskWorktree, #2349); one at or after that call
+    // keeps it for the J3 cleanup. An output folder is never removed by wmux.
     const preserved = plan ? { preservedWorktree: plan.worktreePath } : {};
 
     // 프롬프트 파일(비었으면 생략 — §7 "환경만 조성") + task.json 스탬프를 태스크 메타
@@ -1423,8 +1413,9 @@ export class FanOutService {
     } catch (err) {
       discardTempDir();
       const error = `prompt file write failed: ${(err as Error).message}`;
-      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
-      return { ...base, error, ...preserved };
+      const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
+      return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
     }
 
     // T2 — 태스크 환경 변수(포트). 훅과 에이전트 페인이 같은 값을 본다.
@@ -1450,15 +1441,17 @@ export class FanOutService {
         // 이 태스크만 보상한다 — 훅 타임아웃/실패는 fan-out 전체를 접지 않고,
         // 호출부 루프가 다음 태스크를 그대로 이어간다.
         discardTempDir();
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: `worktree setup hook failed: ${setupRun.error}` });
+        const error = `worktree setup hook failed: ${setupRun.error}`;
+        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
         // 페인이 뜨지 않았으니 포트는 이 태스크의 것이 아니다 — 결과에서 뺀다
         // (run()이 예약도 함께 반납한다).
         const { port: _unusedPort, ...withoutPort } = base;
         return {
           ...withoutPort,
           setupFailed: true,
-          error: `worktree setup hook failed: ${setupRun.error}`,
-          preservedWorktree: plan.worktreePath,
+          error,
+          ...(rolledBack.removed ? {} : { preservedWorktree: plan.worktreePath }),
         };
       }
     }
@@ -1595,22 +1588,16 @@ export class FanOutService {
         workerPermissionMode: ctx.workerMode,
       });
       if ('error' in spawned) {
-        // The renderer rolls its workspace back before it answers with an
-        // error, but that alone does not prove no agent runs in the folder: a
-        // PTY created before the failure can outlive its dispose. The folder
-        // goes back only on proof (paneAbsence), and forced only when no PTY
-        // ever existed; anything less keeps it, with the row, for the cleanup.
-        // The temp dir still goes to the sweep: main's own create rollback can
-        // fail to destroy a daemon session.
+        // Once the renderer was asked for the pane, a failure proves nothing
+        // about whether an agent runs in the folder (a PTY created before the
+        // failure can outlive its dispose), so the folder is kept, with its
+        // row, for the kept-folder cleanup, which checks what uses it. The
+        // temp dir goes to the sweep for the same reason.
         releaseSlot();
         handOverTempDir(`task:${taskId}`);
         const error = `renderer spawn failed: ${spawned.error}`;
-        const absence = await this.paneAbsence(spawned);
-        const rolledBack = absence
-          ? await this.rollbackTaskWorktree(plan, ctx, { force: absence === 'never-created' })
-          : { removed: false, ...(plan ? { outcome: `; worktree kept at ${plan.worktreePath} (a pane may still be using it)` } : {}) };
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
-        return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
+        return { ...base, error, ...preserved };
       }
       workspaceId = spawned.workspaceId;
       // ptyId는 옵셔널(핸드셰이크가 싣지 못하면 부재) — §3 onExhausted 토스트 매핑용.
@@ -2101,7 +2088,7 @@ export class FanOutService {
   /**
    * 태스크 단위 보상(§2): mission.close(J0 보상 경로 재사용 — 채널 archive 포함).
    * worktree는 **삭제하지 않고** 보존(실패 시점 디스크 상태 파괴가 더 위험 — §2).
-   * The few refusals that come before any pane could exist roll their worktree
+   * Failures before the renderer is asked for the pane roll their worktree
    * back first (rollbackTaskWorktree); `failure.outcome` then says so.
    *
    * #2349: the task's ledger row is written first and whether or not the close
@@ -2147,32 +2134,12 @@ export class FanOutService {
   }
 
   /**
-   * #2349 — proof that no pane of a failed spawn can still run in its folder:
-   * 'never-created' when no PTY ever existed, 'gone' when the daemon reports
-   * the PTY it did create absent or dead. null when that is not known: no
-   * signal (an older renderer), the session still lives, or the check failed.
-   */
-  private async paneAbsence(spawned: { noPty?: true; ptyId?: string }): Promise<'never-created' | 'gone' | null> {
-    if (spawned.noPty === true) return 'never-created';
-    if (!spawned.ptyId) return null;
-    try {
-      const sessions = await this.daemon.rpc('daemon.listSessions', { includeSuspended: true });
-      if (!Array.isArray(sessions)) return null;
-      const session = (sessions as Array<{ id?: unknown; state?: unknown } | null>).find((s) => s?.id === spawned.ptyId);
-      return !session || session.state === 'dead' ? 'gone' : null;
-    } catch (err) {
-      console.warn(`[fanout] could not check whether pane ${spawned.ptyId} is gone: ${(err as Error).message}`);
-      return null;
-    }
-  }
-
-  /**
-   * #2349 — take back the worktree of a spawn that was refused before any pane
-   * could exist (no launch slot, the launch check, a missing secret, or the
-   * renderer reporting that no PTY was ever created). Nothing but wmux's own
-   * setup ever wrote there, so the removal is forced. `force: false` is for a
-   * spawn whose PTY existed and is confirmed gone (paneAbsence): uncommitted
-   * changes then keep the folder. The branch
+   * #2349 — take back the worktree of a task that failed before main ever
+   * asked the renderer for its pane (a prompt-file write or setup hook that
+   * failed, no launch slot, the launch check, a missing secret). Decided by
+   * main's own call order alone: no pane can exist yet, and nothing but wmux's
+   * own setup ever wrote there, so the removal is forced. A failure at or
+   * after the spawn call keeps the folder (see its branch). The branch
    * goes only while it still points at the commit it was created from; a
    * detached checkout has none. Never throws. `removed: false` keeps the
    * folder, and `outcome` (the ledger summary's tail) says where and why.
@@ -2180,11 +2147,10 @@ export class FanOutService {
   private async rollbackTaskWorktree(
     plan: TaskWorktreePlan | undefined,
     ctx: { baseOid?: string; checkout?: { sha: string } },
-    opts: { force: boolean } = { force: true },
   ): Promise<{ removed: boolean; outcome?: string }> {
     if (!plan) return { removed: false };
     try {
-      const removed = await this.worktrees.removeWorktree(plan.repoRoot, plan.repoHash, plan.worktreePath, undefined, { force: opts.force });
+      const removed = await this.worktrees.removeWorktree(plan.repoRoot, plan.repoHash, plan.worktreePath, undefined, { force: true });
       if (!removed.ok) {
         console.warn(`[fanout] worktree of a spawn that did not launch kept at ${plan.worktreePath}: ${removed.error}`);
         return { removed: false, outcome: `; worktree kept at ${plan.worktreePath} (${removed.error})` };

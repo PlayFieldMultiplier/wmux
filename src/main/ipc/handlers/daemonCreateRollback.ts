@@ -8,9 +8,6 @@
  * The destroy is best-effort and never masks the original error. The daemon's
  * RPC limiter is a fixed 1s window, so a rate-limited destroy (likely when the
  * create itself failed on the limiter) is retried once after the window clears.
- * The daemon also counts this destroy against its reserved budget, not the
- * background one: it names a session this same connection just asked to
- * create (DaemonPipeServer.ROLLBACK_DESTROY_WINDOW_MS), so no tag is sent.
  */
 export const ROLLBACK_RATE_LIMIT_RETRY_MS = 1100;
 
