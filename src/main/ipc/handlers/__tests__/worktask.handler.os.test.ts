@@ -260,6 +260,21 @@ describe('task:close keepFolder of a research task', () => {
   });
 });
 
+describe('task:close of a research task whose keep did not finish', () => {
+  it('a plain close names its output folder, and so keeps it', async () => {
+    const out = join(base, 'research', 'batch-2', 't');
+    mkdirSync(out, { recursive: true });
+    const file = join(base, '.wmux', 'worktask', 'pending-removals.json');
+    mkdirSync(join(base, '.wmux', 'worktask'), { recursive: true });
+    writeFileSync(file, JSON.stringify({ version: 1, removals: [{ path: out, repoRoot: '', repoHash: '', keep: true, at: 1 }] }), 'utf8');
+    daemon = makeDaemon([{ id: 'wtask-r2', title: 'R', status: 'open' as const, owner: 'parent-ws', outputDir: out }]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    const res = (await call(IPC.TASK_CLOSE, { taskId: 'wtask-r2', verifiedWorkspaceId: 'parent-ws' })) as { ok: boolean; keptFolder?: string };
+    expect(res).toMatchObject({ ok: true, keptFolder: out });
+    expect(daemon.rpcCalls.find((c) => c.method === 'task.mission.close')?.params).toMatchObject({ detach: true });
+  });
+});
+
 describe('task:close of a detached task', () => {
   it('keeps its folder: it is the owner\'s', async () => {
     const wt = seedWorktree('task-detached', false);

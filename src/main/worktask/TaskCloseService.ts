@@ -174,16 +174,16 @@ export class TaskCloseService {
     let release: () => void = () => undefined;
     let releaseTask: () => void = () => undefined;
     try {
+      // Held before anything is awaited: a sweep under way must not reach
+      // the deletion meanwhile.
+      if (folder) release = this.worktrees.holdFolder(folder);
       // A bot's task: its folder cleanup (one under way is waited for)
       // leaves the folder alone from here on, whichever folder it is, and
       // its record of the folder ends on disk before the task closes (a
       // close that then fails keeps more, never less).
       if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
       await this.noteFolderKept?.(taskId);
-      if (folder) {
-        release = this.worktrees.holdFolder(folder);
-        await this.worktrees.markPendingRemovalKept(folder);
-      }
+      if (folder) await this.worktrees.markPendingRemovalKept(folder);
       const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
       // The daemon records a detach only on an open task: one closed before

@@ -379,6 +379,12 @@ describe('task.close', () => {
     expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS, keepFolder: true, leftoverPath: '/data/research/batch-1/t' });
   });
 
+  it('a plain close names a research task\'s output folder too, so a keep recorded for it holds', async () => {
+    const h = harness({ tasks: [{ id: TASK.id, title: TASK.title, status: 'open', outputDir: '/data/research/batch-1/t' }] });
+    await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1' });
+    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS, leftoverPath: '/data/research/batch-1/t' });
+  });
+
   it('only a literal true keeps the folder', async () => {
     const h = harness();
     await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1', keepFolder: 'true' });

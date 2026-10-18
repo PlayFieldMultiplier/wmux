@@ -203,7 +203,10 @@ export function registerWorktaskHandlers(
       // 건너뛰고 mission.close만. 이게 스캔의 disk-missing 정합화 버튼과
       // TaskCloseService 계약(remove 성공↔close 실패 크래시 재시도)을 살린다.
       if (!task.worktreePath || !fs.existsSync(task.worktreePath)) {
-        return closeService.closeTask({ taskId, verifiedWorkspaceId, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
+        // A research task's folder is its output folder: named, so a keep
+        // recorded for it is honoured (#2388).
+        const folder = task.worktreePath ?? task.outputDir;
+        return closeService.closeTask({ taskId, verifiedWorkspaceId, ...(folder ? { leftoverPath: folder } : {}) });
       }
       const repo = await resolveRepoInfo(task.worktreePath);
       if (!repo) {

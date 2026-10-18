@@ -449,6 +449,19 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(fs.existsSync(path.join(worktreePath, 'a.txt'))).toBe(true);
   });
 
+  it('keepFolder holds the folder before it waits on the bots\' cleanup', async () => {
+    const left = path.join(wtBase, 'left-k14');
+    fs.mkdirSync(left, { recursive: true });
+    const mgr = new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) });
+    const order: string[] = [];
+    const hold = vi.spyOn(mgr, 'holdFolder');
+    hold.mockImplementation(() => { order.push('hold folder'); return () => undefined; });
+    const holdTaskFolder = vi.fn(async () => { order.push('hold task'); return () => undefined; });
+    const { port } = makeDaemon();
+    await new TaskCloseService({ daemon: port, worktrees: mgr, holdTaskFolder }).closeTask({ taskId: 'wtask-k14', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true });
+    expect(order.slice(0, 2)).toEqual(['hold folder', 'hold task']);
+  });
+
   it('a close queued behind Close and keep folder removes nothing', async () => {
     const { worktreePath } = await makeWorktree('keep-q');
     const { port } = makeDaemon();

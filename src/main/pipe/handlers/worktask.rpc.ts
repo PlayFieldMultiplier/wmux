@@ -825,7 +825,10 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     if (!task.worktreePath || !fileExists(task.worktreePath)) {
       // Nothing on disk to remove — close-only, exactly as the IPC path
       // reconciles an unmaterialized or already-deleted task.
-      return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
+      // A research task's folder is its output folder: named, so a keep
+      // recorded for it is honoured (#2388).
+      const folder = task.worktreePath ?? task.outputDir;
+      return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId, ...(folder ? { leftoverPath: folder } : {}) });
     }
     const repo = await resolveRepoInfo(task.worktreePath);
     // #2388: a folder an earlier close left half removed is finished first.
