@@ -14,6 +14,10 @@ import { dormantTaskWorkspaceSet, endedTaskAgentRuns, isTaskOwnWorkerPane, type 
 
 const isEndedStatus = (status: LedgerEntry['status']): boolean => status === 'completed' || status === 'cancelled' || status === 'failed';
 
+/** After the daemon answered that it is still restoring its sessions, it is
+ *  not asked again this soon (a cap check reads on every look). */
+const RESTORING_RECHECK_MS = 2_000;
+
 /** One read of the daemon's sessions, and whether its startup recovery had
  *  finished when it answered. */
 export interface SessionRead {
@@ -87,6 +91,8 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
   let agentWorkspaces: ReadonlySet<string> = new Set();
   // When the last good read started.
   let readAt = -Infinity;
+  // Until when a daemon that said it is still restoring is not asked again.
+  let restoringUntil = -Infinity;
   const read = async (): Promise<ReadonlySet<string>> => {
     // A mirror the renderer has not pushed yet, or pushed empty, is not "no
     // workspaces open": a read now would hold every ended task restored next
@@ -96,12 +102,16 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     // When the observation started: a launch after this makes what it saw
     // of that task stale (AgentGoneFacts.note).
     const at = now();
+    if (at < restoringUntil) throw new Error('the daemon is still restoring its sessions');
     const reply = await ports.readSessions();
     // While the daemon restores its sessions, a pane still waiting for its
     // WSL distribution reads as suspended (no agent) and the list may be
     // short: that is no proof any agent is gone, so the read fails and
     // writes nothing. Once recovery is done, an empty list is the truth.
-    if (!reply.recoveryDone) throw new Error('the daemon is still restoring its sessions');
+    if (!reply.recoveryDone) {
+      restoringUntil = now() + RESTORING_RECHECK_MS;
+      throw new Error('the daemon is still restoring its sessions');
+    }
     const byId = new Map(reply.sessions.map((x) => [x.id, x]));
     for (const x of reply.sessions) if (x.agentProcessAlive === true) ports.facts?.sessionAgentSeen(x.id, at);
     // A session no open workspace holds is at work: the tree may have come

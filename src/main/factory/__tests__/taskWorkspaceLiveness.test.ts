@@ -247,13 +247,18 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-a', 'ws-b']);
     expect(w.facts.all()).toEqual([]);
     expect(w.liveness.goneTasks().size).toBe(0);
-    // Not cached as fresh: the next check reads again.
+    // Not cached as fresh, and not asked again for 2 s: a cap check looks
+    // often while the daemon is busiest.
+    await w.liveness.refresh();
+    expect(w.reads).toHaveBeenCalledTimes(1);
+    w.t.now += 2_000;
     await w.liveness.refresh();
     expect(w.reads).toHaveBeenCalledTimes(2);
 
     // Recovery done, nothing came back: the agents are gone.
     w.state.sessions = [];
     w.state.recoveryDone = true;
+    w.t.now += 2_000;
     await w.liveness.refresh();
     expect(w.guards.liveTaskWorkspaces()).toEqual([]);
     await w.facts.written();
