@@ -115,8 +115,11 @@ describe.skipIf(!onWindows)('verified tree kill (real Windows processes)', () =>
 
     const result = await killProcessTreeVerified(root.pid!);
 
-    expect(result.ok).toBe(true);
-    expect([...result.killed].sort()).toEqual(expect.arrayContaining([...before].sort()));
+    // The whole result on failure: which process survived, and why.
+    expect(result).toMatchObject({ ok: true });
+    // A process of the tree that ended by itself before the kill is not in
+    // `killed`; every one is gone either way.
+    expect(result.killed).toEqual(expect.arrayContaining([root.pid, holderPid]));
     for (const pid of before) expect(isAlive(pid)).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
     expect(fs.existsSync(dir)).toBe(false);
