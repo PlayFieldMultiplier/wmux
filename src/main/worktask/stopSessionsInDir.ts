@@ -153,10 +153,12 @@ export async function sessionsStartedIn(dirs: readonly string[], port: Pick<Sess
  */
 export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirPort, 'listSessions' | 'realpath' | 'platform' | 'stillRunning'>): Promise<void> {
   const platform = port.platform ?? process.platform;
+  const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
+  // A stop under way has taken its sessions off the list already: wait for
+  // it, then list, so a pane opened meanwhile is seen too.
+  await stopsAround(key);
   const started = await sessionsStartedIn([dir], port);
   if (started.length > 0) throw new Error(`${started.length} pane(s) were started in the folder`);
-  const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
-  await stopsAround(key);
   const earlier = lingering.get(key);
   if (!earlier) return;
   const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));

@@ -182,6 +182,22 @@ describe('stopSessionsInDir', () => {
     await expect(secondStop).rejects.toBeInstanceOf(PanesStillRunningError);
   });
 
+  it('the sweep\'s check lists the sessions only after a stop under way in the folder is done', async () => {
+    let answer: (tree: DaemonDestroySessionTree) => void = () => undefined;
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
+    first.p.destroySession = () => new Promise((resolve) => { answer = resolve; });
+    const firstStop = stopSessionsInDir('/w/t', first.p);
+    const listing = port([], 'linux');
+    const listSessions = vi.fn(async () => [{ id: 'opened-meanwhile', pid: 9, spawnCwd: '/w/t' }]);
+    listing.p.listSessions = listSessions;
+    const check = assertNothingRunsIn('/w/t', listing.p);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(listSessions).not.toHaveBeenCalled();
+    answer({ ok: true, killed: [7] });
+    await firstStop;
+    await expect(check).rejects.toThrow(/started in the folder/);
+  });
+
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {
     const isAlive = vi.fn(() => true);
     const { p } = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7, 70] } } });
