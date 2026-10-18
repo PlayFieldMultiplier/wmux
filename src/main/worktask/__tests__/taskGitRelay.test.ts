@@ -202,7 +202,7 @@ describe('task.fetch: a repository inside a WSL distro', () => {
         async () => ({ code: 1, stdout: '', stderr: 'host git' }),
         { platform: 'win32', wslExec: exec },
       );
-      expect(r).toMatchObject({ ok: true, defaultBranch: 'main', fetched: [{ ref: 'origin/main', sha }], missing: ['origin/wtask/one'] });
+      expect(r).toMatchObject({ ok: true, defaultBranch: 'main', fetchCommandShell: 'linux', fetched: [{ ref: 'origin/main', sha }], missing: ['origin/wtask/one'] });
       const { fetchCommand, fetchCommandWsl } = r as { fetchCommand: string; fetchCommandWsl?: string };
       expect(fetchCommand).toBe("git fetch --no-tags --no-write-fetch-head '/mnt/c/wmux/relay/wtask-1' '+refs/heads/main:refs/remotes/origin/main'");
       expect(fetchCommandWsl).toBe(fetchCommand);

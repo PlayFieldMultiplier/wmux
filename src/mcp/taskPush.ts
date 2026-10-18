@@ -61,6 +61,22 @@ export function registerTaskPushTool(server: McpServer, deps: TaskPushToolDeps):
 /** Mirrors main's fetch timeout (the push's, worktask/taskPush.ts) plus headroom. */
 const TASK_FETCH_RPC_TIMEOUT_MS = 150_000;
 
+/** The fetch line(s) of a task.fetch result, for the worker to run. One
+ *  unlabelled line only when every shell runs it (a repository inside a WSL
+ *  distro, or a non-Windows host); a Windows-host repository's line is always
+ *  labelled for the Windows shell. Pure. */
+export function taskFetchLines(result: { fetchCommand?: unknown; fetchCommandWsl?: unknown; fetchCommandShell?: unknown } | undefined): string {
+  const cmd = result && typeof result.fetchCommand === 'string' ? result.fetchCommand : null;
+  if (cmd === null) return '';
+  const wslCmd = typeof result?.fetchCommandWsl === 'string' ? result.fetchCommandWsl : null;
+  const head = 'Run this in your shell, then `git merge origin/<default>`:\n';
+  if (wslCmd !== null && wslCmd !== cmd) return `${head}Windows shell:\n${cmd}\nWSL shell:\n${wslCmd}\n\n`;
+  if (wslCmd === null && result?.fetchCommandShell === 'win32') {
+    return `${head}Windows shell:\n${cmd}\nno WSL line could be built; run it from a Windows shell\n\n`;
+  }
+  return `${head}${cmd}\n\n`;
+}
+
 export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps): void {
   const resolveSenderPtyId = deps.getSenderPtyId ?? (() => '');
   server.tool(
@@ -79,14 +95,9 @@ export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps)
       const pty = resolveSenderPtyId();
       if (pty) params['senderPtyId'] = pty;
       try {
-        const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean; fetchCommand?: unknown; fetchCommandWsl?: unknown } | undefined;
+        const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean; fetchCommand?: unknown; fetchCommandWsl?: unknown; fetchCommandShell?: unknown } | undefined;
         // The fetch line first, verbatim, so the worker runs exactly it.
-        // Two lines, labelled, when a WSL shell runs a different one.
-        const cmd = result && typeof result.fetchCommand === 'string' ? result.fetchCommand : null;
-        const wslCmd = result && typeof result.fetchCommandWsl === 'string' ? result.fetchCommandWsl : null;
-        const lines = cmd === null ? ''
-          : wslCmd !== null && wslCmd !== cmd ? `Windows shell:\n${cmd}\nWSL shell:\n${wslCmd}\n` : `${cmd}\n`;
-        const line = lines ? `Run this in your shell, then \`git merge origin/<default>\`:\n${lines}\n` : '';
+        const line = taskFetchLines(result);
         return {
           content: [{ type: 'text' as const, text: `${line}${JSON.stringify(result ?? {}, null, 2)}` }],
           ...(result && result.ok === false ? { isError: true as const } : {}),

@@ -53,6 +53,9 @@ export type TaskFetchResult =
      *  quoted for bash), since its relay borrows objects by a Windows path
      *  that Linux git cannot read. */
     fetchCommandWsl?: string;
+    /** The platform whose shell fetchCommand is quoted for ('win32' for a
+     *  Windows-host repository). */
+    fetchCommandShell: NodeJS.Platform;
     fetched: TaskFetchedRef[]; missing: string[];
   }
   | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'no-default-branch' | 'git-failed'; error: string };
@@ -206,7 +209,7 @@ export async function fetchTaskRefs(input: TaskFetchInput, git: TaskPushGit = de
     ? fetchCommand
     : repo.workerShellPlatform === 'win32' ? fetchCommandFor(repo.relayShellPath, refspecs, 'linux', 'git.exe') : null;
   return {
-    ok: true, remote: 'origin', defaultBranch, fetchCommand,
+    ok: true, remote: 'origin', defaultBranch, fetchCommand, fetchCommandShell: repo.workerShellPlatform,
     ...(fetchCommandWsl ? { fetchCommandWsl } : {}),
     fetched, missing: wanted.filter((b) => !there.has(b)).map((b) => `origin/${b}`),
   };

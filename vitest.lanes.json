@@ -285,6 +285,7 @@
     "src/mcp/__tests__/codexThreadIdentity.server.test.ts",
     "src/mcp/__tests__/codexThreadIdentity.test.ts",
     "src/mcp/__tests__/codexThreadIdentity.windows.test.ts",
+    "src/mcp/__tests__/taskFetchLines.test.ts",
     "src/mcp/__tests__/wmux-client.callerPtyId.test.ts",
     "src/mcp/__tests__/wmux-client.timeout.test.ts",
     "src/mcp/__tests__/wmux-client.transport.test.ts",
