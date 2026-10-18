@@ -14,7 +14,7 @@ import { ENV_KEYS } from '../../../shared/constants';
 import type { AgentSignal } from '../../../shared/hooks/signal-types';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
-type TerminalPromptInput = { sessionId: string; agent: string; workspaceId?: string; toolName?: string; summary?: string };
+type TerminalPromptInput = { sessionId: string; agent: string; workspaceId?: string; toolName?: string; summary?: string; source?: string };
 
 function makeSignal(overrides: Partial<AgentSignal> = {}): AgentSignal {
   return { kind: 'agent.awaiting_input', agent: 'claude', cwd: '/repo', payload: {}, ts: 1_000, ptyId: 'pty-a', ...overrides };
