@@ -25,7 +25,7 @@ import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
 import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
-import { noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
+import { noteSessionAgentLaunched, noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -1046,6 +1046,9 @@ export function registerPTYHandlers(
       if (!ptyManager.get(id)) throw new Error('PTY_WRITE_LAUNCH: no such session');
       ptyManager.write(id, line);
     }
+    // An agent starts again in this pane: an ended task it belongs to is not
+    // known gone any more (agentGoneFacts.ts).
+    if (submit === true) noteSessionAgentLaunched(id);
   }));
 
   // Per-session scheduled prompts. Unlike Command Deck schedules, these

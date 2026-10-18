@@ -33,7 +33,7 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
   };
   const reads = vi.fn();
   const rowOf = (ws: string, task: Task | undefined): LedgerEntry | null => (task ? ({ id: task.id, status: task.status, taskWorkspaceId: ws, updatedAt: t.now } as LedgerEntry) : null);
-  const facts = new AgentGoneFacts(nodePath.join(dir, 'factory', AGENT_GONE_FILENAME), () => undefined);
+  const facts = new AgentGoneFacts(nodePath.join(dir, 'factory', AGENT_GONE_FILENAME), () => undefined, () => t.now);
   facts.load();
   const ports: TaskWorkspaceLivenessPorts = {
     entries: () => (state.entries ? [...state.entries] : null),
@@ -321,6 +321,50 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     await w.liveness.refresh();
     expect(w.facts.get('t-closed')).toMatchObject({ taskWorkspaceId: 'ws-closed', sessions: [] });
     expect([...w.liveness.goneTasks()]).toEqual(['t-closed']);
+  });
+
+  it('a closed workspace is no proof while a session outside the tree is at work, or while the task\'s own pane runs', async () => {
+    const w = world({ 'ws-open': { id: 't-open', status: 'working', pty: 'p-open' } }, {
+      closed: { 'ws-closed': { id: 't-closed', status: 'completed', pty: 'p-closed' } },
+    });
+    w.open();
+    // The tree came back without the task's workspace; its pane still runs.
+    w.state.sessions = [running('p-open'), running('p-closed')];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-closed')).toBeNull();
+    expect(w.liveness.goneTasks().size).toBe(0);
+  });
+
+  it('a read that started before an agent launch in the pane adds no fact, and the launch clears the one held', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.state.sessions = [exited('p-x')];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).not.toBeNull();
+    // The owner resumes the agent in the same pane (pty:write-launch).
+    w.facts.sessionLaunched('p-x');
+    expect(w.facts.get('t-x')).toBeNull();
+    // A read that started before the launch answers after it.
+    w.t.now += REFRESH_MS + 1;
+    const before = w.t.now;
+    const reading = w.liveness.refresh();
+    w.facts.sessionLaunched('p-x', before);
+    await reading;
+    expect(w.facts.get('t-x')).toBeNull();
+    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+  });
+
+  it('a close that stopped the panes after the last read outweighs that read\'s sighting of the agent', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.state.sessions = [running('p-x')];
+    await w.liveness.refresh();
+    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    w.t.now += 1;
+    w.facts.note({ taskId: 't-x', taskWorkspaceId: 'ws-x', sessions: ['p-x'], at: w.t.now });
+    w.state.sessions = 'down';
+    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect([...w.liveness.goneTasks()]).toEqual(['t-x']);
   });
 });
 

@@ -10,7 +10,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { WorkspaceListEntry } from '../../shared/workspaceMirror';
 import { IdleSnapshot, paneRunsNoAgent, paneShowsWork } from './agentSlots';
 import type { AgentGoneFact, AgentGoneFacts } from './agentGoneFacts';
-import { dormantTaskWorkspaceSet, endedTaskAgentRuns, type ReclaimedWorker, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
+import { dormantTaskWorkspaceSet, endedTaskAgentRuns, isTaskOwnWorkerPane, type ReclaimedWorker, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
 
 const isEndedStatus = (status: LedgerEntry['status']): boolean => status === 'completed' || status === 'cancelled' || status === 'failed';
 
@@ -85,12 +85,17 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
   // silent pane not counted), as of the last good read: they hold their slot
   // even when a reclaim record says stopped or a fact says gone.
   let agentWorkspaces: ReadonlySet<string> = new Set();
+  // When the last good read started.
+  let readAt = -Infinity;
   const read = async (): Promise<ReadonlySet<string>> => {
     // A mirror the renderer has not pushed yet, or pushed empty, is not "no
     // workspaces open": a read now would hold every ended task restored next
     // as live until the following read, so it fails and is not kept.
     const entries = ports.entries();
     if (!entries || entries.length === 0) throw new Error('the workspace list is not available yet');
+    // When the observation started: a launch after this makes what it saw
+    // of that task stale (AgentGoneFacts.note).
+    const at = now();
     const reply = await ports.readSessions();
     // While the daemon restores its sessions, a pane still waiting for its
     // WSL distribution reads as suspended (no agent) and the list may be
@@ -98,7 +103,6 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     // writes nothing. Once recovery is done, an empty list is the truth.
     if (!reply.recoveryDone) throw new Error('the daemon is still restoring its sessions');
     const byId = new Map(reply.sessions.map((x) => [x.id, x]));
-    const at = now();
     const next = new Set<string>();
     const busy = new Set<string>();
     const endedNoAgent = new Set<string>();
@@ -115,18 +119,28 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
         withAgent.add(e.id);
         // Seen running again: the task holds its slot from now on, across a
         // restart too, until a read sees it exit.
-        if (row) ports.facts?.clear(row.id, 'an agent was seen running in its workspace');
+        if (row) ports.facts?.clear(row.id, 'an agent was seen running in its workspace', at);
       } else if (row && isEndedStatus(row.status) && !endedTaskAgentRuns(ptys, row.id, recorded, byId, ports.sessionRecordOf)) {
         endedNoAgent.add(e.id);
         if (!resumed(row.id)) ports.facts?.note({ taskId: row.id, taskWorkspaceId: e.id, sessions: [...ptys], at });
       }
     }
-    // An ended task whose workspace is closed: its panes are gone.
-    const open = new Set(entries.map((e) => e.id));
-    for (const row of ports.endedRows()) {
-      if (!isEndedStatus(row.status) || open.has(row.taskWorkspaceId) || resumed(row.id)) continue;
-      ports.facts?.note({ taskId: row.id, taskWorkspaceId: row.taskWorkspaceId, sessions: [], at });
+    // An ended task whose workspace is closed: its panes are gone. Not when
+    // a session no open workspace holds is at work (a tree that came back
+    // without its workspaces, the panes still running), nor while one of the
+    // task's own panes still runs its agent.
+    const inTree = new Set(entries.flatMap((e) => (Array.isArray(e.ptyIds) ? e.ptyIds : [])));
+    if (!reply.sessions.some((x) => !inTree.has(x.id) && paneShowsWork(x))) {
+      const open = new Set(entries.map((e) => e.id));
+      for (const row of ports.endedRows()) {
+        if (!isEndedStatus(row.status) || open.has(row.taskWorkspaceId) || resumed(row.id)) continue;
+        const recorded = ports.recordedSessions(row.id);
+        const own = reply.sessions.filter((x) => isTaskOwnWorkerPane(x, row.id, recorded, ports.sessionRecordOf)).map((x) => x.id);
+        if (endedTaskAgentRuns(own, row.id, recorded, byId, ports.sessionRecordOf)) continue;
+        ports.facts?.note({ taskId: row.id, taskWorkspaceId: row.taskWorkspaceId, sessions: [], at });
+      }
     }
+    readAt = at;
     busyWorkspaces = busy;
     endedNoAgentWorkspaces = endedNoAgent;
     agentWorkspaces = withAgent;
@@ -144,6 +158,13 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     const ptys = Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
     return ptys.every((id) => f.sessions.includes(id));
   };
+  /** The workspaces the last good read saw an agent in, less those a fact
+   *  written after that read says are gone (a close that stopped the panes):
+   *  an older sighting never outweighs a newer stop. */
+  const seenRunning = (): ReadonlySet<string> => {
+    const newer = new Set((ports.facts?.all() ?? []).filter((f) => f.at > readAt).map((f) => f.taskWorkspaceId));
+    return newer.size === 0 ? agentWorkspaces : new Set([...agentWorkspaces].filter((ws) => !newer.has(ws)));
+  };
   const factWorkspaces = (): string[] => {
     const entries = ports.entries();
     return (ports.facts?.all() ?? []).filter((f) => holds(f, entries)).map((f) => f.taskWorkspaceId);
@@ -160,17 +181,18 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
       row: ports.row,
       workspaceRow: ports.workspaceRow,
       endedNoAgent: ports.facts ? factWorkspaces() : endedNoAgentWorkspaces,
-      agentWorkspaces,
+      agentWorkspaces: seenRunning(),
     });
   };
 
   const goneTasks = (): ReadonlySet<string> => {
     idle.get();
     const entries = ports.entries();
+    const running = seenRunning();
     const out = new Set<string>();
     for (const f of ports.facts?.all() ?? []) {
       const row = ports.row(f.taskId);
-      if (!row || !isEndedStatus(row.status) || resumed(f.taskId) || agentWorkspaces.has(f.taskWorkspaceId) || !holds(f, entries)) continue;
+      if (!row || !isEndedStatus(row.status) || resumed(f.taskId) || running.has(f.taskWorkspaceId) || !holds(f, entries)) continue;
       out.add(f.taskId);
     }
     if (ports.facts) return out;

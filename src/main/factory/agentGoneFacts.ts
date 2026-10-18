@@ -53,8 +53,16 @@ export class AgentGoneFacts {
   /** False once the file could not be read: facts then live in memory only. */
   private writable = true;
   private lastWrite: Promise<void> = Promise.resolve();
+  /** When each task, and each session, was last seen to run again (in
+   *  memory): an observation made before that is stale and adds no fact. */
+  private readonly taskRanAt = new Map<string, number>();
+  private readonly sessionRanAt = new Map<string, number>();
 
-  constructor(private readonly file: string, private readonly warn: (line: string) => void = (l) => console.warn(l)) {
+  constructor(
+    private readonly file: string,
+    private readonly warn: (line: string) => void = (l) => console.warn(l),
+    private readonly now: () => number = Date.now,
+  ) {
     this.persister = createFilePersister(file, () => ({ version: AGENT_GONE_VERSION, facts: [...this.facts.values()] }));
   }
 
@@ -86,9 +94,13 @@ export class AgentGoneFacts {
     return [...this.facts.values()].map((f) => ({ ...f, sessions: [...f.sessions] }));
   }
 
-  /** Record that the task's agent was seen gone. A fact already held for the
-   *  same workspace and sessions is kept as it is (no write). */
+  /** Record that the task's agent was seen gone (`at`: when the observation
+   *  started). One that started no later than the task or one of its
+   *  sessions was last seen to run again is stale and dropped. A fact already
+   *  held for the same workspace and sessions is kept as it is (no write). */
   note(fact: AgentGoneFact): void {
+    if ((this.taskRanAt.get(fact.taskId) ?? -Infinity) >= fact.at) return;
+    if (fact.sessions.some((s) => (this.sessionRanAt.get(s) ?? -Infinity) >= fact.at)) return;
     const prior = this.facts.get(fact.taskId);
     const sessions = [...new Set(fact.sessions)].sort();
     if (prior && prior.taskWorkspaceId === fact.taskWorkspaceId && prior.sessions.length === sessions.length
@@ -103,11 +115,23 @@ export class AgentGoneFacts {
     this.persist();
   }
 
-  /** The task runs again (`why` is logged): its fact goes. */
-  clear(taskId: string, why: string): void {
+  /** The task runs again (`why` is logged): its fact goes, and a read that
+   *  started before now adds none. */
+  clear(taskId: string, why: string, at: number = this.now()): void {
+    remember(this.taskRanAt, taskId, at);
     if (!this.facts.delete(taskId)) return;
     console.log(`[factory] agent-gone fact cleared for ${taskId}: ${why}`);
     this.persist();
+  }
+
+  /** An agent launch line was submitted in a session (a resume typed into
+   *  the pane): a fact naming that session goes, and a read that started
+   *  before now adds none for it. */
+  sessionLaunched(sessionId: string, at: number = this.now()): void {
+    remember(this.sessionRanAt, sessionId, at);
+    for (const f of [...this.facts.values()]) {
+      if (f.sessions.includes(sessionId)) this.clear(f.taskId, `an agent was launched in ${sessionId}`, at);
+    }
   }
 
   /** Resolves once the writes scheduled so far are on disk (or failed). */
@@ -118,6 +142,17 @@ export class AgentGoneFacts {
   private persist(): void {
     if (!this.writable) return;
     this.lastWrite = this.persister.schedule().catch((err) => this.warn(`[factory] agent-gone facts not written: ${String(err)}`));
+  }
+}
+
+/** Bounded like the facts: the oldest entry goes first. */
+function remember(map: Map<string, number>, key: string, at: number): void {
+  map.delete(key);
+  map.set(key, at);
+  while (map.size > AGENT_GONE_MAX) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
   }
 }
 
@@ -143,6 +178,15 @@ export function noteTaskWorkerLaunched(taskId: string): void {
 export function noteTaskPanesStopped(taskId: string, taskWorkspaceId: string, sessionIds: readonly string[], at: number = Date.now()): void {
   try {
     hosted?.note({ taskId, taskWorkspaceId, sessions: [...sessionIds], at });
+  } catch {
+    /* best effort: the next good read decides */
+  }
+}
+
+/** An agent launch line was submitted in `sessionId` (pty:write-launch). Never throws. */
+export function noteSessionAgentLaunched(sessionId: string): void {
+  try {
+    hosted?.sessionLaunched(sessionId);
   } catch {
     /* best effort: the next good read decides */
   }
