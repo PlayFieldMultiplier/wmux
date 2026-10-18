@@ -144,14 +144,48 @@ function canonicalKey(p: string): string {
  */
 export function pendingRemovalRefusal(cwd: string | null | undefined, platform: NodeJS.Platform = process.platform): string | null {
   if (!cwd || !active) return null;
-  const want = canonicalKey(sessionHostDir(cwd, {}, platform));
-  for (const rec of active.all()) {
+  return refusalAmong(cwd, {}, active.all(), platform);
+}
+
+function refusalAmong(
+  cwd: string,
+  session: { wslTarget?: { distribution?: unknown } },
+  records: readonly PendingWorktreeRemoval[],
+  platform: NodeJS.Platform,
+): string | null {
+  const want = canonicalKey(sessionHostDir(cwd, session, platform));
+  for (const rec of records) {
     const held = canonicalKey(rec.path);
     if (want === held || want.startsWith(held + path.sep)) {
       return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or use Close and keep folder on its task`;
     }
   }
   return null;
+}
+
+/**
+ * pendingRemovalRefusal for the daemon, which starts panes the desktop never
+ * sees (a phone's, an automation's): read from the store's file under
+ * `wmuxDir`. A file that cannot be read refuses nothing here (logged); the
+ * desktop's own check and the sweep's last look before a deletion still
+ * hold.
+ */
+export function pendingRemovalRefusalAt(
+  wmuxDir: string,
+  cwd: string | null | undefined,
+  session: { wslTarget?: { distribution?: unknown } } = {},
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!cwd) return null;
+  let records: PendingWorktreeRemoval[];
+  try {
+    const raw = readVersionedFile(path.join(wmuxDir, 'worktask', PENDING_REMOVALS_FILENAME), PENDING_REMOVALS_VERSION);
+    records = raw && Array.isArray(raw.removals) ? raw.removals.filter(isRecord) : [];
+  } catch (err) {
+    console.warn(`[worktask] pending removals not read for a new pane: ${(err as Error).message}`);
+    return null;
+  }
+  return records.length > 0 ? refusalAmong(cwd, session, records, platform) : null;
 }
 
 /** What the sweep at start needs (TaskWorktreeManager and the daemon). */

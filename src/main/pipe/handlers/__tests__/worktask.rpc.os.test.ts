@@ -380,6 +380,12 @@ describe('task.close', () => {
     expect(h.closeTask).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: TASK.worktreePath }));
   });
 
+  it('a detached task\'s close keeps its folder: it is the owner\'s', async () => {
+    const h = harness({ tasks: [{ ...TASK, status: 'closed', detachedAt: 1 }] });
+    await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1' });
+    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS, keepFolder: true, leftoverPath: TASK.worktreePath });
+  });
+
   it('reports the unpushed-branch refusal from the close service', async () => {
     const h = harness();
     h.closeTask.mockResolvedValueOnce({ ok: false, taskId: TASK.id, reason: 'unpushed', error: '2 commits', aheadCount: 2 });

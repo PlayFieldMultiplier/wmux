@@ -246,3 +246,18 @@ describe('task:close keepFolder', () => {
     expect(pendingRemovalRefusal(wt)).toBeNull();
   });
 });
+
+describe('task:close of a detached task', () => {
+  it('keeps its folder: it is the owner\'s', async () => {
+    const wt = seedWorktree('task-detached', false);
+    writeFileSync(join(wt, 'held.txt'), 'x', 'utf8');
+    mkdirSync(join(base, 'repo'), { recursive: true });
+    const task = { id: 'wtask-d', title: 'D', status: 'closed' as const, owner: 'parent-ws', worktreePath: wt, branch: 'wtask/d', detachedAt: 1 };
+    daemon = makeDaemon([task]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    const res = (await call(IPC.TASK_CLOSE, { taskId: 'wtask-d', verifiedWorkspaceId: 'parent-ws' })) as { ok: boolean; keptFolder?: string };
+    expect(res).toMatchObject({ ok: true, keptFolder: wt });
+    expect(readFileSync(join(wt, 'held.txt'), 'utf8')).toBe('x');
+    expect(daemon.rpcCalls.some((c) => c.method === 'daemon.destroySession' || c.method === 'daemon.listSessions')).toBe(false);
+  });
+});

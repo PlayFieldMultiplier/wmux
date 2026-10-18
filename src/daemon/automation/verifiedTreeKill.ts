@@ -547,6 +547,13 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       }
     }
     const byPid = new Map(rows.map((r) => [r.pid, r]));
+    // The root confirmed above, or nothing: once its pid holds another
+    // process, what the pid leads to is not ours (the root may not be among
+    // the captured yet, when it changed hands before its stop).
+    if (byPid.get(rootPid)?.start !== rootRow.start) {
+      scanError = 'the root ended or was replaced before the tree was taken';
+      break;
+    }
     // Parent links lead to our processes only through the ones captured: a
     // frozen one someone else killed hands its children to init, and its pid
     // can go to another process whose children are not ours.

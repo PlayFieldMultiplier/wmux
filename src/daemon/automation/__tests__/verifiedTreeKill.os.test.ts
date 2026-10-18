@@ -312,6 +312,27 @@ describe('captureTreePosix', () => {
     expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }] });
   });
 
+  it('takes nothing a root that changed hands before its stop leads to', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1 confirms the root. By read 2 (right before the stop) it
+        // exited and its pid went to a stranger, which has a child of its own.
+        return reads === 1
+          ? [row(1, 0), row(100, 1), row(101, 100)]
+          : [row(1, 0), { pid: 100, ppid: 1, stat: 'S', start: 'stranger' }, row(102, 100)];
+      },
+      signal: (pid, sig) => { signals.push([pid, sig]); },
+    };
+    const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+    const r = await tree.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors.some((s) => s.unverified && /root ended or was replaced/.test(s.reason))).toBe(true);
+    expect(signals.filter(([p, s]) => (p === 100 || p === 102 || p === -100) && s !== 'SIGCONT')).toEqual([]);
+  });
+
   it('does not stop a pid that changed hands between the read and the stop', async () => {
     let reads = 0;
     const signals: Array<[number, NodeJS.Signals]> = [];

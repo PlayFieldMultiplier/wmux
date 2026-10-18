@@ -796,7 +796,8 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     const owned = await resolveOwnedTask(deps, params, ctx);
     if (!('task' in owned)) return deny(owned.code, owned.message);
     const { task, workspaceId } = owned;
-    const keepFolder = (params as { keepFolder?: unknown }).keepFolder === true;
+    // A detached task's folder is the owner's: its close never removes it.
+    const keepFolder = (params as { keepFolder?: unknown }).keepFolder === true || task.detachedAt !== undefined;
 
     // Asked BEFORE the ordering contract starts, so a denial leaves the task
     // exactly as it was — TaskCloseService's first step is the unpushed check,

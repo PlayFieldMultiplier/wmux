@@ -117,6 +117,9 @@ export class TaskCloseService {
 
   /** The close running for each task. */
   private readonly closing = new Map<string, Promise<CloseTaskResult>>();
+  /** Tasks this process closed keeping their folder: a later close of one
+   *  (queued behind the keep, from its stale view) removes nothing. */
+  private readonly kept = new Set<string>();
 
   /**
    * Close a task. Closes of one task run one at a time (#2388): a Close and
@@ -136,6 +139,13 @@ export class TaskCloseService {
 
   private async closeTaskNow(input: CloseTaskInput): Promise<CloseTaskResult> {
     const { taskId } = input;
+    const named = input.worktreePath ?? input.leftoverPath;
+
+    // Closed keeping its folder: the folder is the owner's, and a close asked
+    // since (queued behind that one) removes nothing.
+    if (this.kept.has(taskId) && !input.keepFolder) {
+      return { ok: true, taskId, archivePending: false, ...(named && fs.existsSync(named) ? { keptFolder: named } : {}) };
+    }
 
     // Close and keep folder: the task closes, the folder stays as it is.
     // It closes detached: the folder is the owner's from now on, so nothing
@@ -159,6 +169,7 @@ export class TaskCloseService {
         }
         const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
         if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+        this.kept.add(taskId);
         if (folder) {
           this.forgetFolderStops(folder);
           try {
@@ -204,7 +215,10 @@ export class TaskCloseService {
       const kept = finished?.ok ? finished.keptFolder : undefined;
       const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, kept ? { detach: true } : {});
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-      if (kept) this.forgetFolderStops(kept);
+      if (kept) {
+        this.kept.add(taskId);
+        this.forgetFolderStops(kept);
+      }
       if (stopped.ids) {
         try {
           this.panesStopped?.(taskId, stopped.ids);

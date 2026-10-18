@@ -30,6 +30,7 @@ import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
 import { killProcessTree } from './automation/treeKill';
 import { captureProcessTree, matchesRecordedStart, recordedStartOf, type CapturedTree } from './automation/verifiedTreeKill';
+import { pendingRemovalRefusalAt } from '../main/worktask/pendingWorktreeRemovals';
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
@@ -2513,6 +2514,10 @@ function registerRpcHandlers(
     if (p.args !== undefined && !isWslDistroSpawnArgs(p.cmd, p.args)) {
       throw new Error('Invalid session args: expected [\'-d\', wsl-distro] for a wsl.exe cmd');
     }
+    // #2388: a task folder whose removal did not finish takes no new pane,
+    // whoever asks (the desktop, a phone, an automation).
+    const pendingRefusal = pendingRemovalRefusalAt(getWmuxDir(), p.cwd, { ...(p.wslTarget ? { wslTarget: p.wslTarget } : {}) });
+    if (pendingRefusal) throw new Error(pendingRefusal);
     const session = await sessionManager.createSessionAsync({
       id: p.id,
       cmd: p.cmd,

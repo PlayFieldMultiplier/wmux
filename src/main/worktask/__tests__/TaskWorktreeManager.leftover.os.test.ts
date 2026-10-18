@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { TaskWorktreeManager, type RunGitOptions } from '../TaskWorktreeManager';
-import { PendingWorktreeRemovals, pendingRemovalRefusal, setActivePendingRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
+import { PendingWorktreeRemovals, pendingRemovalRefusal, pendingRemovalRefusalAt, setActivePendingRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const HEAD = 'a'.repeat(40);
@@ -536,6 +536,19 @@ describe('a removal that could not finish is recorded for a later close', () => 
     await store.delete(dir);
     expect(store.get(dir)).toBeNull();
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).removals).toEqual([]);
+  });
+
+  it('the daemon reads the lock from the store\'s file, so a pane it starts for a phone or an automation is refused too', async () => {
+    const dir = leftover();
+    const wmuxDir = path.join(tmp, 'wmux');
+    expect(pendingRemovalRefusalAt(wmuxDir, dir)).toBeNull();
+    const store = new PendingWorktreeRemovals(path.join(wmuxDir, 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    expect(pendingRemovalRefusalAt(wmuxDir, path.join(dir, 'src'))).toMatch(/removal did not finish.*Close and keep folder/);
+    expect(pendingRemovalRefusalAt(wmuxDir, `${dir}-sibling`)).toBeNull();
+    expect(pendingRemovalRefusalAt(wmuxDir, undefined)).toBeNull();
+    await store.delete(dir);
+    expect(pendingRemovalRefusalAt(wmuxDir, dir)).toBeNull();
   });
 
   it('a refused finish of a leftover names Close and keep folder', async () => {

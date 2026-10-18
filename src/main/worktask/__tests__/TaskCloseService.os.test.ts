@@ -361,6 +361,34 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('a close queued behind Close and keep folder removes nothing', async () => {
+    const { worktreePath } = await makeWorktree('keep-q');
+    const { port } = makeDaemon();
+    const mgr = new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) });
+    const remove = vi.spyOn(mgr, 'removeWorktree');
+    const svc = new TaskCloseService({ daemon: port, worktrees: mgr });
+    const keeping = svc.closeTask({ taskId: 'wtask-kq', verifiedWorkspaceId: 'ws-owner', leftoverPath: worktreePath, keepFolder: true });
+    const removing = svc.closeTask({ taskId: 'wtask-kq', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath });
+    expect(await keeping).toMatchObject({ ok: true, keptFolder: worktreePath });
+    expect(await removing).toMatchObject({ ok: true, keptFolder: worktreePath });
+    expect(remove).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(worktreePath, 'a.txt'))).toBe(true);
+  });
+
+  it('a close whose repository is gone fails, the task left open, when the record cannot be dropped on disk', async () => {
+    const root = path.join(wtBase, 'root');
+    const left = path.join(root, 'task-gone2');
+    fs.mkdirSync(left, { recursive: true });
+    const rec = { path: left, repoRoot: path.join(wtBase, 'moved-away'), repoHash: 'closehash', at: 1 };
+    const failing = { get: () => rec, all: () => [rec], put: async () => undefined, delete: async () => { throw new Error('EACCES: the store cannot be written'); } };
+    const { port, calls } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ worktreesRoot: root, pendingRemovals: failing }) });
+    const res = await svc.closeTask({ taskId: 'wtask-k9', verifiedWorkspaceId: 'ws-owner', leftoverPath: left });
+    expect(res).toMatchObject({ ok: false, preservedWorktree: left });
+    if (!res.ok) expect(res.error).toMatch(/could not be dropped: EACCES/);
+    expect(calls).toHaveLength(0);
+  });
+
   it('keepFolder of a bot task holds its folder against the bots\' cleanup and marks it kept once closed', async () => {
     const left = path.join(wtBase, 'left-k7');
     fs.mkdirSync(left, { recursive: true });

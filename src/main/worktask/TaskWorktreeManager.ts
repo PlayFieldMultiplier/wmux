@@ -872,7 +872,13 @@ export class TaskWorktreeManager {
         if (!opts.keepWhenRepoGone) {
           return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, so nothing can check the folder; it was kept; ${KEEP_FOLDER_HINT}`, preserved: true };
         }
-        await this.forgetPending(rec.path);
+        // Dropped on disk, or the task stays open: a record left in the file
+        // would be finished once the repository is back.
+        try {
+          await this.pendingRemovals?.delete(rec.path);
+        } catch (err) {
+          return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, and the folder's pending removal could not be dropped: ${(err as Error).message}`, preserved: true };
+        }
         console.warn(`[worktask] the repository of ${rec.path} (${rec.repoRoot}) is not there; the task closes and the folder is kept`);
         return { ok: true, keptFolder: rec.path };
       }

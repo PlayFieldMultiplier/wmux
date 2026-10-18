@@ -191,8 +191,9 @@ export function registerWorktaskHandlers(
       const task = await resolveTask(daemonPort, taskId, verifiedWorkspaceId);
       if (!task) return { ok: false, taskId, reason: 'error' as const, error: 'task:close: task not found (not in the task list).' };
 
-      // Close and keep folder (#2388): the task closes, its folder stays.
-      if ((raw as { keepFolder?: unknown } | null)?.keepFolder === true) {
+      // Close and keep folder (#2388): the task closes, its folder stays. A
+      // detached task's folder is the owner's: its close never removes it.
+      if ((raw as { keepFolder?: unknown } | null)?.keepFolder === true || task.detachedAt !== undefined) {
         return closeService.closeTask({ taskId, verifiedWorkspaceId, keepFolder: true, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
       }
 
