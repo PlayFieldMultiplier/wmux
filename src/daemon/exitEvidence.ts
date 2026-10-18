@@ -32,7 +32,7 @@ export interface ExitEvidenceProcess {
   on(event: 'exit', listener: (code: number) => void): unknown;
   on(event: 'uncaughtExceptionMonitor', listener: (err: unknown, origin: string) => void): unknown;
   listenerCount(event: string): number;
-  report?: { reportOnFatalError: boolean; directory: string } | undefined;
+  report?: { reportOnFatalError: boolean; directory: string; excludeEnv?: boolean } | undefined;
 }
 
 export interface ExitEvidenceOptions {
@@ -140,10 +140,18 @@ export function installExitEvidence(proc: ExitEvidenceProcess, opts: ExitEvidenc
   // leave. A native access violation leaves not even that.
   if (opts.reportDir && proc.report) {
     try {
+      // A report carries the environment by default, and the daemon's holds
+      // whatever credentials it inherited (API keys, tokens). Leave it out;
+      // a Node that cannot do that writes no reports at all.
+      proc.report.excludeEnv = true;
+      if (proc.report.excludeEnv !== true) {
+        opts.log('warn', '[exit] diagnostic reports off: this Node cannot leave the environment out of them');
+        return;
+      }
       fs.mkdirSync(opts.reportDir, { recursive: true });
       proc.report.directory = opts.reportDir;
       proc.report.reportOnFatalError = true;
-      opts.log('info', `[exit] a fatal error writes a diagnostic report to ${opts.reportDir}`);
+      opts.log('info', `[exit] a fatal error writes a diagnostic report (environment excluded) to ${opts.reportDir}`);
     } catch (err) {
       opts.log('warn', `[exit] diagnostic reports unavailable (${err instanceof Error ? err.message : String(err)})`);
     }

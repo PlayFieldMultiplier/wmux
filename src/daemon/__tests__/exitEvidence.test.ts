@@ -89,6 +89,20 @@ describe('uncaught exceptions', () => {
   });
 });
 
+describe('diagnostic reports', () => {
+  it('stay off on a Node that cannot leave the environment out (it holds credentials)', () => {
+    const proc = fakeProcess();
+    const report = { reportOnFatalError: false, directory: '' };
+    // An older Node: the excludeEnv setting does not exist and does not stick.
+    Object.defineProperty(report, 'excludeEnv', { get: () => undefined, set: () => { /* unsupported */ } });
+    proc.report = report;
+    const lines: Array<{ level: string; msg: string }> = [];
+    installExitEvidence(proc, { log: (level, msg) => { lines.push({ level, msg }); }, reportDir: '/never/created' });
+    expect(report.reportOnFatalError).toBe(false);
+    expect(lines).toEqual([{ level: 'warn', msg: '[exit] diagnostic reports off: this Node cannot leave the environment out of them' }]);
+  });
+});
+
 describe('oneLineFrames', () => {
   it('drops Node-internal frames and the listener’s own', () => {
     const stack = [
