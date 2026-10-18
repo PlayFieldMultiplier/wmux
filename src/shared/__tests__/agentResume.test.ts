@@ -490,6 +490,14 @@ describe('toResumeCommand (X6)', () => {
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'process', at: 3_000 }, resumeBinding })).toBe('codex');
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'hook', at: 3_000 }, resumeBinding })).toBe('codex');
     });
+    it('a proven later run of an agent wmux cannot resume offers nothing', () => {
+      const resumeBinding = { agent: 'claude', sessionId: 'abc', cwd: '/w', ts: 2_000 };
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'aider', lastDetectedAgentEvidence: { source: 'process', at: 3_000 }, resumeBinding })).toBeUndefined();
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', lastDetectedAgentEvidence: { source: 'hook', at: 3_000 }, resumeBinding })).toBeUndefined();
+      // Proven before the binding, or only seen on screen: the binding stands.
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', lastDetectedAgentEvidence: { source: 'process', at: 1_000 }, resumeBinding })).toBe('claude');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', lastDetectedAgentEvidence: { source: 'screen', at: 3_000 }, resumeBinding })).toBe('claude');
+    });
     it('a name that agrees with the binding is offered as is', () => {
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'claude', resumeBinding: { agent: 'claude', sessionId: 'abc', cwd: '/w', ts: 1 } })).toBe('claude');
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex' })).toBe('codex');

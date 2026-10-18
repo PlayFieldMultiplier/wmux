@@ -632,11 +632,16 @@ export function resumeOfferForRecovered(session: {
   resumeBinding?: unknown;
 }): string | undefined {
   if (session.exec || session.supervision) return undefined;
-  const detected = session.lastDetectedAgent && RESUME_BY_LAUNCHER.has(session.lastDetectedAgent)
-    ? session.lastDetectedAgent
-    : undefined;
+  const named = session.lastDetectedAgent;
+  const detected = named && RESUME_BY_LAUNCHER.has(named) ? named : undefined;
   const binding = isUsableResumeBinding(session.resumeBinding) ? session.resumeBinding : undefined;
   const bound = binding && RESUME_BY_LAUNCHER.has(binding.agent) ? binding.agent : undefined;
+  // An agent wmux cannot resume (Gemini, Aider) that a hook or a live process
+  // proved ran after the saved conversation was the pane's last agent: there
+  // is nothing to offer, and the older conversation must not be reopened.
+  if (bound && named && named !== bound && !detected && provenAfter(session.lastDetectedAgentEvidence, binding?.ts)) {
+    return undefined;
+  }
   if (!bound || !detected || bound === detected) return detected ?? bound;
   // The name and the saved conversation disagree. The binding is the agent's
   // own word (its hook, its command line), the name may be the screen
