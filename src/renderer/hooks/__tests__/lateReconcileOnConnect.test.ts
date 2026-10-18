@@ -151,4 +151,27 @@ describe('createLateReconcileOnConnect', () => {
 
     expect(signals[0].aborted).toBe(true);
   });
+
+  // #2398 — a failed startup reconcile keeps the bindings unconfirmed and asks
+  // for another pass; no daemon:connected follows it.
+  it('rerun runs the same guarded reconcile once the gate is ready', () => {
+    const { late, reconcile, log } = make();
+    late.rerun('startup reconcile failed');
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith('log', '[lifecycle] startup reconcile failed — re-reconciling PTYs');
+  });
+
+  it('rerun does nothing while the gate is still pending', () => {
+    const { late, reconcile } = make({ getPaneGate: () => 'pending' });
+    late.rerun('startup reconcile failed');
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('a rerun that fails preserves (swallowed, never thrown)', async () => {
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>(async () => { throw new Error('rpc timeout'); });
+    const { late, log } = make({ reconcile });
+    late.rerun('startup reconcile failed');
+    await vi.runAllTimersAsync();
+    expect(log).toHaveBeenCalledWith('warn', '[lifecycle] late reconcile failed — preserving ptyIds (no clear):', expect.any(Error));
+  });
 });

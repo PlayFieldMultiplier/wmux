@@ -97,3 +97,34 @@ describe('PTY_RECONNECT registers session:data before attachSession (source-leve
     expect(matches.length).toBe(1);
   });
 });
+
+/**
+ * #2398 — a cap-skipped native session lives only in the daemon's persisted
+ * state. pty:reconnect listed sessions without includeSuspended, so such a
+ * pane read as absent → `session-dead` → the renderer cleared its id and
+ * self-created a blank shell over it (its scrollback and binding lost). Listed
+ * with includeSuspended it takes the promote branch instead. Source lock: the
+ * handler is a closure inside registerPTYHandlers.
+ */
+describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it dead (#2398)', () => {
+  it('lists suspended sessions too', () => {
+    expect(RECONNECT).toMatch(/const sessions = await daemonClient\.rpc\('daemon\.listSessions', \{ includeSuspended: true \}\)/);
+  });
+
+  it('a suspended entry goes down the promote branch, before any attach', () => {
+    const suspendedAt = RECONNECT.indexOf("if (session.state === 'suspended')");
+    const promoteAt = RECONNECT.indexOf("daemonClient.rpc('daemon.promoteSession', { id }", suspendedAt);
+    const attachAt = RECONNECT.indexOf("daemon.attachSession', { id }");
+    expect(suspendedAt).toBeGreaterThan(-1);
+    expect(promoteAt).toBeGreaterThan(suspendedAt);
+    expect(attachAt).toBeGreaterThan(promoteAt);
+  });
+
+  it('the daemon’s suspended entries carry `cmd`, which the reconnect records and returns', () => {
+    const daemon = readFileSync(path.resolve(process.cwd(), 'src/daemon/index.ts'), 'utf8');
+    const at = daemon.indexOf('if (includeSuspended) {');
+    const mapper = daemon.slice(at, daemon.indexOf('return reply(', at));
+    expect(mapper).toMatch(/\.map\(\(s\) => \(\{[\s\S]*?cmd: s\.cmd,[\s\S]*?state: 'suspended' as const,/);
+    expect(RECONNECT).toMatch(/recordPtyShell\(session\.id, session\.cmd\)/);
+  });
+});

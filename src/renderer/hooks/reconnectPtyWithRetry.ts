@@ -18,9 +18,10 @@ import type { DeadPaneRecovery } from '../../shared/ptyRecovery';
  *     main-side handler-swap window → clearing here DESTROYS a live session.
  *     This is the reported "daemon reset, session replaced" bug.
  *
- * We retry transient failures with short backoff and only clear as a last
- * resort after retries are exhausted. `isCurrent()` lets the caller bail the
- * moment the terminal unmounts so we never mutate state for a torn-down view.
+ * We retry transient failures with short backoff. Only a permanent answer
+ * clears; exhausted retries keep the id unconfirmed (#2398). `isCurrent()`
+ * lets the caller bail the moment the terminal unmounts so we never mutate
+ * state for a torn-down view.
  */
 
 export interface ReconnectResult {
@@ -43,9 +44,14 @@ export interface ReconnectResult {
 export interface ReconnectDeps {
   /** Invoke the pty.reconnect RPC. */
   reconnect: (id: string) => Promise<ReconnectResult>;
+  onRecoveryError?: (message: string | null, info?: { cwdMissing?: boolean; rateLimited?: boolean; unconfirmed?: boolean }) => void;
   /** Clear the surface's ptyId so the next mount self-creates. */
-  onRecoveryError?: (message: string | null, info?: { cwdMissing?: boolean; rateLimited?: boolean }) => void;
   clearPtyId: (id: string, recovery?: DeadPaneRecovery) => void;
+  /**
+   * #2398 — record whether the binding is confirmed: true when the attempts
+   * ran out without an answer (the id is kept), false once it attached.
+   */
+  setUnconfirmed?: (id: string, unconfirmed: boolean) => void;
   /** Sleep between retries. Injectable so tests don't wait real time. */
   sleep?: (ms: number) => Promise<void>;
   /** Optional structured logger. Defaults to console. */
@@ -101,6 +107,7 @@ export async function reconnectPtyWithRetry(
       // A reconnect that settles after its terminal was replaced reports
       // nothing: its geometry must not resize the terminal current now.
       if (!isCurrent()) return null;
+      deps.setUnconfirmed?.(ptyId, false);
       deps.onRecoveryError?.(null);
       return result.cols && result.rows ? { cols: result.cols, rows: result.rows } : null;
     }
@@ -135,12 +142,20 @@ export async function reconnectPtyWithRetry(
     // behind the Retry banner, and the next daemon:connected reattaches) rather
     // than self-creating a fresh session over a live one.
     log('error', `[useTerminal] pty.reconnect ${ptyId} still rate limited after ${schedule.length} retries (${lastErr}) — keeping ptyId`);
-    if (isCurrent()) deps.onRecoveryError?.('wmux is busy and could not reattach this terminal yet.', { rateLimited: true });
+    if (isCurrent()) {
+      deps.setUnconfirmed?.(ptyId, true);
+      deps.onRecoveryError?.('wmux is busy and could not reattach this terminal yet.', { rateLimited: true });
+    }
     return null;
   }
-  // Exhausted all retries on transient failures. Clear as a last resort so the
-  // surface doesn't keep a stale ptyId that silently never forwards input.
-  log('error', `[useTerminal] pty.reconnect ${ptyId} still failing after ${RECONNECT_BACKOFFS_MS.length} retries (${lastErr}) — clearing ptyId`);
-  if (isCurrent()) deps.clearPtyId(ptyId);
+  // #2398 — exhausted all retries on transient failures. None of them said the
+  // session is gone, so keep the id, binding and scrollback (unconfirmed,
+  // behind the Retry banner) exactly as the rate-limited branch does. Clearing
+  // here self-created a fresh shell beside a session that was still alive.
+  log('error', `[useTerminal] pty.reconnect ${ptyId} still failing after ${RECONNECT_BACKOFFS_MS.length} retries (${lastErr}) — keeping ptyId unconfirmed`);
+  if (isCurrent()) {
+    deps.setUnconfirmed?.(ptyId, true);
+    deps.onRecoveryError?.('wmux could not reattach this terminal yet.', { unconfirmed: true });
+  }
   return null;
 }

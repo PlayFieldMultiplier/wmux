@@ -1467,7 +1467,11 @@ export function registerPTYHandlers(
 
     ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string) => {
       try {
-        const sessions = await daemonClient.rpc('daemon.listSessions', {}) as Array<{
+        // #2398 — includeSuspended: a cap-skipped native session lives only in
+        // the daemon's persisted state, and a list without it reported such a
+        // pane `session-dead`, so the renderer cleared its id and self-created
+        // a blank shell over it. Listed, it takes the promote branch below.
+        const sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as Array<{
           id: string;
           cmd: string;
           state: string;

@@ -92,6 +92,8 @@ import { clearPersistedColdFrames, restoreColdFrames } from '../../terminal/cold
 import { resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
 import { runWithProgressTimeout } from '../../hooks/reconcileProgressTimeout';
 import { createLateReconcileOnConnect } from '../../hooks/lateReconcileOnConnect';
+import { applyStartupReconcileFallback } from '../../hooks/startupReconcileFallback';
+import { ptyLifecycle } from '../../hooks/ptyLifecycle';
 import ProjectConfigDialog from '../Project/ProjectConfigDialog';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
 import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } from '../../utils/projectConfigProbe';
@@ -182,7 +184,9 @@ function seedSurfaceAgentsFromProcess(
  *     │                                      │
  *     ├── timeout/throw ──► abortCtl.abort() │
  *     │                     if (gen === startupGenRef.current)
- *     │                       clearAllPtyState()
+ *     │                       daemon: keep ids, mark unconfirmed,
+ *     │                         late reconcile after the gate (#2398)
+ *     │                       no daemon: clearAllPtyState()
  *     │                     ────────────────┤
  *     │                                      │
  *     └── (always) finally: setPaneGate('ready') ───┘
@@ -196,7 +200,7 @@ function seedSurfaceAgentsFromProcess(
  * watchdog, re-armed after each reconcile IPC stage. A fixed total timeout is
  * unsafe now that one pass can serially list, promote, and re-list sessions:
  * two individually valid slow RPCs could otherwise exceed 15s and make the
- * startup catch wipe every live session via clearAllPtyState().
+ * startup catch give up on a reconcile that was making progress.
  */
 
 /** Collect all terminal surfaces from a pane tree */
@@ -1065,7 +1069,7 @@ export default function AppLayout() {
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [sessionLoadFailed, setSessionLoadFailed] = useState(false);
   // Fix 0: monotonic startup generation counter. Each mount-effect run
-  // bumps it; the startup catch only fires clearAllPtyState if its own
+  // bumps it; the startup catch only applies its fallback if its own
   // gen still matches the current ref. Prevents a stale startup from
   // wiping state that a fresher startup already reconciled correctly.
   // Also used by the in-flight reconcile share (below) so late mutations
@@ -1079,6 +1083,9 @@ export default function AppLayout() {
   // the shared promise of whatever run is in flight. Late re-reconciles
   // after the first run completes still trigger a fresh pass.
   const reconcileInFlightRef = useRef<Promise<void> | null>(null);
+  // #2398 — the late-reconcile controller, so a failed startup reconcile can
+  // ask for another pass: no daemon:connected follows a timeout.
+  const lateReconcileRef = useRef<ReturnType<typeof createLateReconcileOnConnect> | null>(null);
   // #582: monotonic reconcile cycle counter for clearer console logs —
   // distinguishes "1 cycle walking 4 workspaces" from "4 cycles" (#582).
   const reconcileCycleRef = useRef(0);
@@ -1217,6 +1224,9 @@ export default function AppLayout() {
           listedPtys.filter((p) => p.state === 'dead').map((p) => [p.id, p]),
         );
         const activeIds = new Set(activePtys.map((p: { id: string }) => p.id));
+        // #2398 — a binding kept unconfirmed (failed startup reconcile,
+        // exhausted reattach) is confirmed by the daemon listing it live.
+        useStore.getState().setPtysUnconfirmed(activeIds, false);
         // #582: include workspace count so "Reconciling workspace: X" logs that
         // follow are unambiguously a single cycle walking N workspaces, not N
         // separate cycles. The monotonic cycle number helps correlate across
@@ -1445,6 +1455,10 @@ export default function AppLayout() {
   useEffect(() => {
     const gen = ++startupGenRef.current;
     let abortCtl: AbortController | null = null;
+    // Whether this startup attached to a daemon, whose sessions outlive a
+    // failed reconcile (and a disconnect), unlike local ptys.
+    let daemonModeAtStartup = false;
+    let rerunReconcile = false;
     // Codex P2 — wrap the entire startup in an async IIFE so a session.load()
     // rejection (preload gap, IPC handler swap mid-call, renderer reload race)
     // still reaches the outer try/finally. The previous structure put try inside
@@ -1513,6 +1527,7 @@ export default function AppLayout() {
         // as if reconcile never happened. Setting it inside this serialized
         // startup path guarantees daemonMode is correct before Terminal mount.
         setDaemonModeActive(daemonReady.connected);
+        daemonModeAtStartup = daemonReady.connected;
 
         // User-facing scrollback restore toggle. OFF: skip reconcile entirely
         // and clear every pty-keyed surface field so each Terminal mounts
@@ -1527,6 +1542,7 @@ export default function AppLayout() {
         else clearPersistedColdFrames();
         if (!restoreEnabled) {
           console.log('[AppLayout] scrollbackRestoreEnabled=false — clearing pty state for fresh start');
+          ptyLifecycle.invalidateAll();
           clearAllPtyState();
           return;
         }
@@ -1558,19 +1574,36 @@ export default function AppLayout() {
       } catch (err) {
         // Fix 0 explicit fallback. Reconcile aborted, timed out, session.load
         // rejected, daemon.whenReady rejected, or any other startup throw.
-        // Clear all pty-keyed state so Terminal.tsx self-create receives a
-        // consistent blank slate. Generation check prevents a stale startup
-        // from wiping state a fresher startup already reconciled correctly.
+        // #2398: with a daemon the saved ptyIds are kept, unconfirmed, and a
+        // late reconcile is scheduled — a failure is no proof any session
+        // died, and clearing them self-created duplicate shells. Without one
+        // they are cleared for Terminal.tsx self-create, as before.
+        // Generation check prevents a stale startup from touching state a
+        // fresher startup already reconciled correctly.
         console.warn('[AppLayout] startup reconcile failed:', err);
         if (!sessionLoadedRef.current) setSessionLoadFailed(true);
         abortCtl?.abort();
         if (gen === startupGenRef.current) {
-          clearAllPtyState();
+          rerunReconcile = applyStartupReconcileFallback({
+            daemonMode: daemonModeAtStartup,
+            workspaces: useStore.getState().workspaces,
+            markUnconfirmed: (ids) => useStore.getState().setPtysUnconfirmed(ids, true),
+            clearAll: clearAllPtyState,
+          }) === 'kept';
         }
       } finally {
         // Always flip the gate, even on error — never leave the user
         // staring at a permanent "Restoring panes…" placeholder.
         setPaneGate('ready');
+        if (rerunReconcile) {
+          // The aborted pass may still own reconcileInFlightRef until its
+          // pending RPC settles, and a rerun now would only join it. The late
+          // controller re-checks the gate, has its own abort budget, and on
+          // failure preserves (never clears).
+          void Promise.resolve(reconcileInFlightRef.current)
+            .catch(() => undefined)
+            .then(() => lateReconcileRef.current?.rerun('startup reconcile failed'));
+        }
         // The load is over, whatever it found: from here the pane tree is
         // the real one (a first run, an empty or a broken session included).
         if (gen === startupGenRef.current) useStore.getState().markSessionLoadSettled();
@@ -1713,8 +1746,10 @@ export default function AppLayout() {
       reconcile: (signal) => reconcilePtys(signal),
       timeoutMs: RECONCILE_TIMEOUT_MS,
     });
+    lateReconcileRef.current = late;
     const remove = window.electronAPI.daemon.onConnected(late.onConnected);
     return () => {
+      if (lateReconcileRef.current === late) lateReconcileRef.current = null;
       late.dispose();
       remove();
     };

@@ -307,10 +307,12 @@ export interface WorkspaceSlice {
    * Fix 0 fallback action. Clears every ptyId-keyed piece of renderer state
    * in one atomic immer set: terminal surface ptyId across all workspaces +
    * nested split panes, floatingPanePtyId, terminalBookmarks,
-   * and company member.ptyId. Called from AppLayout startup catch when
-   * reconcile aborts/times out, so Terminal.tsx self-create receives a
-   * consistent blank slate and external RPC handlers don't have stale
-   * pty-keyed maps lying around.
+   * and company member.ptyId. Called from AppLayout startup when scrollback
+   * restore is off, and from its catch only when no daemon holds sessions
+   * (local mode), so Terminal.tsx self-create receives a consistent blank
+   * slate and external RPC handlers don't have stale pty-keyed maps lying
+   * around. A daemon-mode reconcile failure keeps the bindings unconfirmed
+   * instead (#2398): clearing them self-created shells beside live sessions.
    */
   clearAllPtyState: () => void;
   /**
@@ -1111,11 +1113,16 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       //   entirely by Terminal.tsx — the well-tested path stays
       //   well-tested.
       //
-      //   On any reconcile failure (abort, timeout, RPC reject),
-      //   AppLayout's catch calls store.clearAllPtyState(), which
-      //   reproduces the historical wipe — but as an explicit,
-      //   logged, generation-guarded fallback, not an unconditional
-      //   startup behavior. The wipe lives there, not here.
+      //   On a reconcile failure (abort, timeout, RPC reject) with a
+      //   daemon, AppLayout's catch KEEPS every saved ptyId and marks
+      //   it unconfirmed (#2398): a timeout says nothing about whether
+      //   a session is alive, and wiping them self-created duplicate
+      //   shells beside sessions the daemon still ran. A late
+      //   reconcile and each Terminal's own reattach then confirm or
+      //   clear them on an authoritative answer. Only with no daemon
+      //   (local mode, where no pty outlives the app) does the catch
+      //   call store.clearAllPtyState(), the explicit, logged,
+      //   generation-guarded form of the historical wipe.
       //
       //   Side state (floatingPanePtyId, terminalBookmarks,
       //   company member.ptyId) is also cleared by
@@ -1798,6 +1805,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
                 delete state.resumeHintByPtyId[ptyId];
                 delete state.resumeBindingByPtyId[ptyId];
               }
+              if (state.ptyUnconfirmedById) delete state.ptyUnconfirmedById[ptyId];
               s.ptyId = '';
               // #977 — a stashed pane's liveness is DERIVED from its surfaces'
               // ptyIds, so this clear IS the alive→exited transition. Log it:
@@ -1848,6 +1856,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         if (ws.metadata?.listeningPorts !== undefined) delete ws.metadata.listeningPorts;
       }
       if (state.deadPaneRecoveryOfferByPtyId) state.deadPaneRecoveryOfferByPtyId = {};
+      if (state.ptyUnconfirmedById) state.ptyUnconfirmedById = {};
 
       // 3. companySlice — member.ptyId across all departments.
       if (state.company) {

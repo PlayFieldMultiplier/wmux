@@ -86,13 +86,34 @@ describe('reconnectPtyWithRetry (RCA A1 non-destructive contract)', () => {
     expect(clearPtyId).not.toHaveBeenCalled();
   });
 
-  it('transient failures exhaust all retries → clears as last resort', async () => {
+  it('transient failures exhaust all retries → keeps the id unconfirmed, never clears (#2398)', async () => {
     const clearPtyId = vi.fn();
+    const setUnconfirmed = vi.fn();
+    const onRecoveryError = vi.fn();
     const reconnect = vi.fn(async () => ({ success: false, transient: true, error: 'still not writable' }));
-    await reconnectPtyWithRetry('pty-stuck', alwaysCurrent, { reconnect, clearPtyId, sleep: noSleep, log: noLog });
+    await reconnectPtyWithRetry('pty-stuck', alwaysCurrent, { reconnect, clearPtyId, setUnconfirmed, onRecoveryError, sleep: noSleep, log: noLog });
     // initial attempt + one per backoff slot
     expect(reconnect).toHaveBeenCalledTimes(RECONNECT_BACKOFFS_MS.length + 1);
-    expect(clearPtyId).toHaveBeenCalledWith('pty-stuck');
+    // No attempt said the session is gone: clearing here self-created a fresh
+    // shell beside a session that was still alive.
+    expect(clearPtyId).not.toHaveBeenCalled();
+    expect(setUnconfirmed).toHaveBeenCalledWith('pty-stuck', true);
+    // Retry banner, and the flag useTerminal arms its slow reattach on.
+    expect(onRecoveryError).toHaveBeenLastCalledWith(expect.stringMatching(/reattach/), { unconfirmed: true });
+  });
+
+  it('marks the binding confirmed again once a reattach succeeds (#2398)', async () => {
+    const setUnconfirmed = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true }));
+    await reconnectPtyWithRetry('pty-1', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), setUnconfirmed, sleep: noSleep, log: noLog });
+    expect(setUnconfirmed).toHaveBeenCalledWith('pty-1', false);
+  });
+
+  it('a rate-limited give-up keeps the binding unconfirmed too (#2398)', async () => {
+    const setUnconfirmed = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: false, transient: true, error: 'rate limited (global)' }));
+    await reconnectPtyWithRetry('pty-busy', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), setUnconfirmed, sleep: noSleep, log: noLog });
+    expect(setUnconfirmed).toHaveBeenCalledWith('pty-busy', true);
   });
 
   it('a rate-limited daemon never costs the live PTY: longer retries, then pending instead of clearing', async () => {

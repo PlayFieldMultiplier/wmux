@@ -650,11 +650,12 @@ let webglTokenSeq = 0;
 
 // RCA A1 — reconnect-with-retry policy lives in its own module so it can be
 // unit-tested without xterm/zustand/electron. Bound to the live deps here.
-function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: { cwdMissing?: boolean; rateLimited?: boolean }) => void): Promise<{ cols: number; rows: number } | null> {
+function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: { cwdMissing?: boolean; rateLimited?: boolean; unconfirmed?: boolean }) => void): Promise<{ cols: number; rows: number } | null> {
   return reconnectPtyWithRetryImpl(ptyId, isCurrent, {
     reconnect: (id) => window.electronAPI.pty.reconnect(id),
     onRecoveryError,
     clearPtyId: (id, recovery) => useStore.getState().clearSurfacePtyIdByPty(id, recovery),
+    setUnconfirmed: (id, unconfirmed) => useStore.getState().setPtysUnconfirmed([id], unconfirmed),
   });
 }
 
@@ -3685,9 +3686,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     let inFlight = false;
     reconnectInFlightRef.current = false;
     reconnectPendingRef.current = false;
-    // A rate-limited give-up keeps the live session but no daemon:connected is
-    // coming (the daemon never disconnected), so try again on a slow timer
-    // until it attaches or this effect is torn down.
+    // A rate-limited (or, #2398, an exhausted) give-up keeps the session but no
+    // daemon:connected is coming (the daemon never disconnected), so try again
+    // on a slow timer until it attaches or this effect is torn down.
     let slowRetry: ReturnType<typeof setTimeout> | null = null;
     const reattach = (reason: string) => {
       if (inFlight) return;
@@ -3700,7 +3701,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // A non-null message means the attempt settled WITHOUT a session pipe
         // (rate limited, WSL recovery pending); null means it attached.
         reconnectPendingRef.current = message !== null;
-        if (info?.rateLimited && slowRetry === null) {
+        if ((info?.rateLimited || info?.unconfirmed) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
         onRecoveryErrorRef.current?.(message, info);

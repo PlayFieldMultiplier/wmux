@@ -3268,6 +3268,9 @@ function registerRpcHandlers(
         .filter((s) => s.state === 'suspended' && !activeIdSet.has(s.id))
         .map((s) => ({
           id: s.id,
+          // `cmd` as every live entry has it (pty:reconnect records and returns
+          // it after a promote, #2398); `shell` kept for older readers.
+          cmd: s.cmd,
           shell: s.cmd,
           state: 'suspended' as const,
           cwd: s.cwd,

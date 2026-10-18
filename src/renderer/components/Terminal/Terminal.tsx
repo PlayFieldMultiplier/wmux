@@ -118,6 +118,9 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
   // Silent stale display failed the app-weight review's DX gate — the pane
   // must identify itself whenever its content is not current.
   const [syncState, setSyncState] = useState<PaneSyncUiState>(null);
+  // #2398 — a binding kept although it could not be checked (failed startup
+  // reconcile, exhausted reattach): the pane says so until it attaches.
+  const unconfirmed = useStore((s) => (ptyId ? Boolean(s.ptyUnconfirmedById?.[ptyId]) : false));
   useEffect(() => {
     if (!ptyId) { setSyncState(null); return; }
     setSyncState(getPaneSyncUi(ptyId));
@@ -581,10 +584,13 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
 
       {/* P0-5 freshness chip — non-blocking corner badge while the pane is
           catching up from the daemon, or after a degraded resync left it
-          potentially stale. Muted per the color grammar (status, not action). */}
-      {syncState && (
+          potentially stale. Muted per the color grammar (status, not action).
+          #2398: the same chip says "reattaching…" while the binding is
+          unconfirmed; once the reattach gives up, the banner above (with
+          Retry) says it instead. */}
+      {(syncState || (unconfirmed && !recoveryError)) && (
         <div className="absolute top-1 right-2 z-10 pointer-events-none px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--bg-secondary)] text-[var(--text-muted)] border border-[var(--border)] opacity-90">
-          {syncState === 'syncing' ? t('terminal.catchingUp') : t('terminal.staleScreen')}
+          {syncState === 'syncing' ? t('terminal.catchingUp') : syncState ? t('terminal.staleScreen') : t('terminal.reattaching')}
         </div>
       )}
 
