@@ -65,6 +65,7 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     server.onRpc('daemon.createSession', async () => ({ created: true }));
     server.onRpc('daemon.attachSession', async () => ({ attached: true }));
     server.onRpc('daemon.destroySession', async () => ({ destroyed: true }));
+    server.onRpc('task.mission.start', async () => ({ ok: true, taskId: 't1' }));
     await server.start();
   });
 
@@ -89,6 +90,13 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     const replies = await sendBatch(pipeName, methods);
     expect(replies.get('249')).toMatchObject({ ok: false, error: 'rate limited (global)' });
     expect(replies.get('250')).toMatchObject({ ok: true, result: { destroyed: true } });
+  });
+
+  it('dispatches task.mission.start (the first write of a fan-out task) after a background flood used up the global budget', async () => {
+    const methods = [...Array.from({ length: 250 }, () => 'task.mission.list'), 'task.mission.start'];
+    const replies = await sendBatch(pipeName, methods);
+    expect(replies.get('249')).toMatchObject({ ok: false, error: 'rate limited (global)' });
+    expect(replies.get('250')).toMatchObject({ ok: true, result: { ok: true, taskId: 't1' } });
   });
 
   it('bounds interactive calls across all sockets by the aggregate cap, apart from background traffic', async () => {

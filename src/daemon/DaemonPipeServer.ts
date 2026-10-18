@@ -144,13 +144,21 @@ export class DaemonPipeServer {
   // destroySession: pty:create's rollback (withDaemonCreateRollback) destroys a
   // session whose attach or pipe connect failed, and a destroy refused in the
   // same storm (its one retry included) leaks that attached session for the
-  // daemon's lifetime. The per-socket cap bounds each client (100/s is 4x the
-  // attach peak seen restoring ~94 panes); the aggregate cap bounds the class
-  // across all sockets, so it can never add more than that to the total.
+  // daemon's lifetime. So are a fan-out task's own lifecycle writes, each sent
+  // once per task and never polled: task.mission.start (before the worktree,
+  // with an idempotency key), task.mission.update (after the spawn) and
+  // task.mission.close (its compensation). A fan-out started during a restore
+  // storm had every task.mission.start refused before any pane was asked for.
+  // The per-socket cap bounds each client (100/s is 4x the attach peak seen
+  // restoring ~94 panes); the aggregate cap bounds the class across all
+  // sockets, so it can never add more than that to the total.
   private static readonly INTERACTIVE_METHODS: ReadonlySet<string> = new Set([
     'daemon.createSession',
     'daemon.attachSession',
     'daemon.destroySession',
+    'task.mission.start',
+    'task.mission.update',
+    'task.mission.close',
   ]);
   private static readonly INTERACTIVE_PER_SOCKET_RATE_LIMIT = 100;
   private static readonly INTERACTIVE_GLOBAL_RATE_LIMIT = 200;
