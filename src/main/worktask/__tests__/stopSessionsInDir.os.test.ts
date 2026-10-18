@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { PanesStillRunningError, assertNothingRunsIn, destroyedTreeOf, resetLingeringSurvivors, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
+import { PanesStillRunningError, assertNothingRunsIn, destroyedTreeOf, forgetFolderStops, resetLingeringSurvivors, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
 import type { DaemonDestroySessionTree } from '../../../shared/rpc';
+import type { TreeKillSurvivor } from '../../../daemon/automation/verifiedTreeKill';
 
 type Session = { id: string; pid?: number; cwd?: string; spawnCwd?: string; wslTarget?: { distribution: string } };
 
@@ -128,17 +129,49 @@ describe('stopSessionsInDir', () => {
     await expect(stopSessionsInDir('/w/t', later.p)).rejects.toBeInstanceOf(PanesStillRunningError);
   });
 
-  // Each stop stands on its own: one that could not verify its tree keeps the
-  // folder and says why, and the next one decides from scratch.
-  it('an inconclusive stop keeps the folder and says why; a conclusive clean one after it proceeds', async () => {
-    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', {
-      trees: { s: { ok: false, killed: [7], survivors: [{ pid: 7, reason: 'the process table could not be read', unverified: true }] } },
-    });
-    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('could not verify all processes exited: the process table could not be read');
+  // A kill that could not be verified leaves the processes it had taken to
+  // check: a later close goes ahead only once that check is positive, and a
+  // force close (keepFolder) ends the record.
+  it('an unverified close keeps the folder; a later close waits for a positive check; force close ends it', async () => {
+    const unverified = {
+      ok: false as const,
+      killed: [7],
+      survivors: [{ pid: 7, reason: 'the process table could not be read', unverified: true as const }],
+      captured: [{ pid: 7, startTime: 't7' }, { pid: 70, startTime: 't70' }],
+    };
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: unverified } });
+    const err = await stopSessionsInDir('/w/t', first.p).catch((e: unknown) => e as Error);
+    expect(err.message).toContain('could not verify all processes exited: the process table could not be read');
+    expect(err.message).toContain('Close and keep folder');
 
-    const second = port([{ id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux', { trees: { u: { ok: true, killed: [8, 80] } } });
-    expect(await stopSessionsInDir('/w/t', second.p)).toEqual(['u']);
-    expect(await stopSessionsInDir('/w/t', port([], 'linux').p)).toEqual([]);
+    // Close 2: the session is gone; 70 still runs.
+    const second = port([], 'linux');
+    const stillRunning = vi.fn(async (list: readonly TreeKillSurvivor[]) => list.filter((x) => x.pid === 70));
+    second.p.stillRunning = stillRunning;
+    await expect(stopSessionsInDir('/w/t', second.p)).rejects.toThrow(/still running since an earlier stop.*Close and keep folder/);
+    expect(stillRunning).toHaveBeenCalledWith([expect.objectContaining({ pid: 7, startTime: 't7' }), expect.objectContaining({ pid: 70, startTime: 't70' })]);
+
+    // The check is positive: the close goes ahead.
+    second.p.stillRunning = async () => [];
+    expect(await stopSessionsInDir('/w/t', second.p)).toEqual([]);
+
+    // Unverified again; this time a force close ends the record.
+    await expect(stopSessionsInDir('/w/t', port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: unverified } }).p)).rejects.toThrow();
+    const third = port([], 'linux');
+    third.p.stillRunning = async (list) => [...list];
+    await expect(stopSessionsInDir('/w/t', third.p)).rejects.toThrow();
+    forgetFolderStops('/w/t', third.p);
+    expect(await stopSessionsInDir('/w/t', third.p)).toEqual([]);
+  });
+
+  it('an unverified kill that took no process to check is refused until a force close', async () => {
+    const bare = { ok: false as const, killed: [], survivors: [{ pid: 7, reason: 'native process access is unavailable', unverified: true as const }], captured: [] };
+    await expect(stopSessionsInDir('/w/t', port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: bare } }).p)).rejects.toThrow();
+    const later = port([], 'linux');
+    later.p.stillRunning = async () => [];
+    await expect(stopSessionsInDir('/w/t', later.p)).rejects.toThrow(/took none to check again; use Close and keep folder/);
+    forgetFolderStops('/w/t', later.p);
+    expect(await stopSessionsInDir('/w/t', later.p)).toEqual([]);
   });
 
   it('a stop whose destroy did not answer fails, and leaves nothing behind for the next one', async () => {

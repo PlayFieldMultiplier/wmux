@@ -35,16 +35,34 @@ export interface SessionsInDirPort {
   stillRunning?(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]>;
 }
 
+/** What an earlier stop of a folder left to check, its sessions gone. */
+interface FolderRecord {
+  /** Processes to look at again, by pid and (when known) start time: the
+   *  identified survivors, and every process a kill that could not be
+   *  verified had taken. */
+  check: TreeKillSurvivor[];
+  /** Why that kill could not be verified, when it could not. */
+  unverified?: string;
+}
+
 /**
- * Identified processes of a folder's panes that outlived an earlier stop
- * (each with its start time), by folder. The stop destroyed their sessions,
- * so a later stop finds no session to capture them from: it checks these
- * processes instead, and keeps the folder only while one of them still
- * runs. An entry ends when its process exits. Nothing else is kept: an
- * attempt that could not verify a tree fails on its own, and the next
- * attempt starts from scratch.
+ * What earlier stops of a folder left, by folder. A stop destroys the panes'
+ * sessions, so a later stop finds no session to capture from: it checks the
+ * recorded processes instead (on Windows, also what each one started before
+ * it exited) and keeps the folder until that check is positive, every one
+ * gone. A record with nothing to check (a kill that took no process) is
+ * never cleared by a check. Close and keep folder (keepFolder) ends a record. Held for
+ * the life of the app.
  */
-const lingering = new Map<string, TreeKillSurvivor[]>();
+const lingering = new Map<string, FolderRecord>();
+
+/** How a refusal that only a later check or Close and keep folder can end says so. */
+export const STOP_ESCAPE_HINT = 'close it again once they have exited, or use Close and keep folder to close the task and keep its files';
+
+/** Close and keep folder (keepFolder): forget what earlier stops of `dir` left. */
+export function forgetFolderStops(dir: string, port: Pick<SessionsInDirPort, 'realpath' | 'platform'> = {}): void {
+  lingering.delete(normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), port.platform ?? process.platform));
+}
 
 /**
  * Stops under way, by folder. A stop destroys its sessions before it knows
@@ -68,6 +86,41 @@ function stopsAround(key: string): Promise<void> {
 /** The survivors worth checking again later: identified processes only. */
 function identified(survivors: readonly TreeKillSurvivor[]): TreeKillSurvivor[] {
   return survivors.filter((x) => !x.unverified && x.startTime !== undefined);
+}
+
+/** Add what a pane's kill left to the folder's record. */
+function recordTree(key: string, tree: { survivors: TreeKillSurvivor[]; captured?: Array<{ pid: number; startTime: string }> }): void {
+  const prior = lingering.get(key) ?? { check: [] };
+  const check = [...prior.check];
+  const add = (x: TreeKillSurvivor): void => {
+    if (!check.some((c) => c.pid === x.pid && c.startTime === x.startTime)) check.push(x);
+  };
+  for (const s of identified(tree.survivors)) add(s);
+  const unverified = tree.survivors.filter((s) => s.unverified).map((s) => s.reason);
+  if (unverified.length > 0) {
+    for (const c of tree.captured ?? []) add({ pid: c.pid, startTime: c.startTime, reason: 'taken by a kill that could not be verified' });
+  }
+  const reasons = [prior.unverified, ...unverified].filter((r): r is string => !!r);
+  if (check.length === 0 && reasons.length === 0) return;
+  lingering.set(key, { check, ...(reasons.length > 0 ? { unverified: reasons.join('; ') } : {}) });
+}
+
+/** Check what earlier stops of the folder left: the record ends once every
+ *  recorded process is gone; otherwise this throws and keeps it. */
+async function checkEarlierStops(key: string, port: Pick<SessionsInDirPort, 'stillRunning'>): Promise<void> {
+  const earlier = lingering.get(key);
+  if (!earlier) return;
+  if (earlier.check.length === 0) {
+    throw new PanesStillRunningError([], [], [`an earlier stop could not verify its processes exited (${earlier.unverified ?? 'unknown'}) and took none to check again; use Close and keep folder to close the task and keep its files`]);
+  }
+  const still = await (port.stillRunning ?? survivorsStillRunning)(earlier.check);
+  if (still.length === 0) {
+    lingering.delete(key);
+    return;
+  }
+  lingering.set(key, { ...earlier, check: still });
+  const why = earlier.unverified ? ` (an earlier stop could not verify its processes exited: ${earlier.unverified})` : '';
+  throw new PanesStillRunningError(still.map((x) => x.pid), [`still running since an earlier stop${why}; ${STOP_ESCAPE_HINT}`]);
 }
 
 /** Test seam: forget every earlier stop's survivors. */
@@ -97,7 +150,9 @@ export class PanesStillRunningError extends Error {
  *  that could not be checked whole. */
 function survivorsError(survivors: readonly TreeKillSurvivor[]): PanesStillRunningError {
   const running = survivors.filter((x) => !x.unverified);
-  return new PanesStillRunningError(running.map((x) => x.pid), running.map((x) => `${x.pid}: ${x.reason}`), survivors.filter((x) => x.unverified).map((x) => x.reason));
+  const unverified = survivors.filter((x) => x.unverified).map((x) => x.reason);
+  if (unverified.length > 0) unverified[unverified.length - 1] += `; ${STOP_ESCAPE_HINT}`;
+  return new PanesStillRunningError(running.map((x) => x.pid), running.map((x) => `${x.pid}: ${x.reason}`), unverified);
 }
 
 /** The tree in a `daemon.destroySession` reply, when the daemon sent one. */
@@ -168,12 +223,7 @@ export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirP
     if (stopsStarted === seen) break;
     if (attempt >= 4) throw new Error('stops of the folder keep starting');
   }
-  const earlier = lingering.get(key);
-  if (!earlier) return;
-  const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));
-  if (still.length === 0) lingering.delete(key);
-  else lingering.set(key, still);
-  if (still.length > 0) throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: still running since an earlier stop`));
+  await checkEarlierStops(key, port);
 }
 
 /**
@@ -200,15 +250,7 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
 
 async function stopNow(dir: string, key: string, platform: NodeJS.Platform, port: SessionsInDirPort): Promise<string[]> {
   const sessions = await port.listSessions();
-  const earlier = lingering.get(key);
-  if (earlier) {
-    const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));
-    if (still.length > 0) {
-      lingering.set(key, still);
-      throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: still running since an earlier stop`));
-    }
-    lingering.delete(key);
-  }
+  await checkEarlierStops(key, port);
   const inside = sessions.filter((s) => typeof s.spawnCwd === 'string' && s.spawnCwd.length > 0
     && isInside(sessionHostDir(s.spawnCwd, s, platform), dir, port, platform));
   const unknown = sessions.filter((s) => !s.spawnCwd).length;
@@ -222,9 +264,8 @@ async function stopNow(dir: string, key: string, platform: NodeJS.Platform, port
       if (!tree.ok) {
         treeSurvivors.push(...tree.survivors);
         // Kept before the next destroy: if that one throws, this pane is
-        // already gone and only this record still names its survivors.
-        const known = identified(treeSurvivors);
-        if (known.length > 0) lingering.set(key, known);
+        // already gone and only this record still names what it left.
+        recordTree(key, tree);
       }
     } else if (typeof s.pid === 'number' && s.pid > 0) {
       unreported.push(s.pid);

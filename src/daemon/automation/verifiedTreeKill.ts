@@ -56,9 +56,23 @@ export interface TreeKillSurvivor {
   unverified?: true;
 }
 
+/** A process the capture took, by pid and start time. */
+export interface CapturedProcess {
+  pid: number;
+  startTime: string;
+}
+
 export type VerifiedTreeKillResult =
   | { ok: true; killed: number[] }
-  | { ok: false; killed: number[]; survivors: TreeKillSurvivor[] };
+  | {
+      ok: false;
+      killed: number[];
+      survivors: TreeKillSurvivor[];
+      /** Every process the capture took (even a partial capture), by
+       *  identity: what a later check can still look at once the pane is
+       *  gone, when this kill could not be verified. */
+      captured: CapturedProcess[];
+    };
 
 /** A process tree captured while its root was alive. */
 export interface CapturedTree {
@@ -83,8 +97,11 @@ export const CAPTURE_ROUNDS = 8;
 export interface CaptureOptions {
   /** Whether the root found at the pid is the process the caller means:
    *  given the root's creation time (Windows: FILETIME; POSIX: `ps -o
-   *  lstart=`), false when it is another one (the pid was reused). Null or
-   *  absent: not known, taken as the caller's. */
+   *  lstart=`), false when it is another one (the pid was reused). Absent:
+   *  taken as the caller's. Null (nothing recorded to compare with): the tree
+   *  is not walked, since nothing confirms the pid leads to the caller's
+   *  process; the kill reports it unverified and leaves the root to its
+   *  owner (the PTY destroy ends a pane's shell). */
   rootIsOurs?: (startTime: string) => boolean | null;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -258,14 +275,21 @@ export async function killProcessTreeVerified(
 
 /** A capture that could not see the tree: its kill reports the root as a
  *  survivor, so the caller keeps whatever it guards. */
-function failedCapture(rootPid: number, reason: string): CapturedTree {
+function failedCapture(rootPid: number, reason: string, rootStart?: string): CapturedTree {
   return {
     rootPid,
     pids: () => [rootPid],
-    kill: async () => ({ ok: false, killed: [], survivors: [{ pid: rootPid, reason, unverified: true }] }),
+    kill: async () => ({
+      ok: false,
+      killed: [],
+      survivors: [{ pid: rootPid, reason, unverified: true }],
+      captured: rootStart !== undefined ? [{ pid: rootPid, startTime: rootStart }] : [],
+    }),
     release: () => undefined,
   };
 }
+
+const UNCONFIRMED_ROOT = "the pane's shell has no recorded start time to confirm its pid, so its tree was not taken";
 
 // ─── Windows ────────────────────────────────────────────────────────────────
 
@@ -282,10 +306,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
   const root = api.open(rootPid);
   if ('gone' in root) return null;
   if ('failure' in root) return failedCapture(rootPid, `the root could not be opened: ${root.failure}`);
-  if (opts.rootIsOurs?.(root.createdAt.toString()) === false) {
-    api.close(root.handle);
-    return null;
-  }
+  const ours = opts.rootIsOurs?.(root.createdAt.toString());
+  if (ours === false || ours === null) api.close(root.handle);
+  if (ours === false) return null;
+  if (ours === null) return failedCapture(rootPid, UNCONFIRMED_ROOT, root.createdAt.toString());
   const tracked = new Map<number, WinTracked>([[rootPid, { pid: rootPid, ...root }]]);
   /** Processes whose ppid names one of ours but that could not be identified. */
   const unidentified = new Map<number, string>();
@@ -402,7 +426,7 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
     pids: () => [...tracked.keys()],
     release,
     kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
-      if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }] };
+      if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }], captured: [] };
       const deadline = Date.now() + timeoutMs;
       const refused = new Map<number, string>();
       try {
@@ -449,7 +473,8 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
         if (!settled && survivors.length === 0) survivors.push({ pid: rootPid, reason: 'the tree kept starting processes until the deadline', unverified: true });
         const killed = [...tracked.values()].filter(exited).map((t) => t.pid);
         if (scanError !== null) survivors.push({ pid: rootPid, reason: `the process table could not be read: ${scanError}`, unverified: true });
-        return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors };
+        const captured = [...tracked.values()].map((t) => ({ pid: t.pid, startTime: t.createdAt.toString() }));
+        return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors, captured };
       } finally {
         release();
       }
@@ -517,7 +542,9 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   }
   const rootRow = rows.find((r) => r.pid === rootPid);
   if (!rootRow || rootRow.stat.startsWith('Z')) return null;
-  if (opts.rootIsOurs?.(rootRow.start) === false) return null;
+  const ours = opts.rootIsOurs?.(rootRow.start);
+  if (ours === false) return null;
+  if (ours === null) return failedCapture(rootPid, UNCONFIRMED_ROOT, rootRow.start);
   /** pid → start time, in discovery order (parents before children). */
   const targets = new Map<number, string>();
   let scanError: string | null = null;
@@ -600,7 +627,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       for (const pid of targets.keys()) send(pid, 'SIGCONT');
     },
     kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
-      if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }] };
+      if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }], captured: [] };
       released = true;
       const ours = await stillCaptured();
       // A pid that changed hands between the read and the stop: the stop may
@@ -632,7 +659,8 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       const survivors = [...alive];
       if (scanError !== null) survivors.push({ pid: rootPid, reason: `the tree could not be taken whole: ${scanError}`, unverified: true });
       const killed = [...targets.keys()].filter((pid) => !alive.some((s) => s.pid === pid));
-      return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors };
+      const captured = [...targets].map(([pid, startTime]) => ({ pid, startTime }));
+      return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors, captured };
     },
   };
 }
