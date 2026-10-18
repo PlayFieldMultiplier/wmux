@@ -2743,6 +2743,9 @@ export const ko = {
   'integrationSetup.hooks.title': '훅 브리지',
   'integrationSetup.hooks.promptSuppressed': '설치 안내 창이 꺼져 있습니다.',
   'integrationSetup.hooks.promptReenable': '다시 묻기',
+  'integrationSetup.hooks.accountTitle': '훅 브리지 · {name}',
+  'integrationSetup.hooks.accountDescription':
+    '이 Claude 계정은 계정을 추가할 때 만든 Claude Code 설정 사본을 따로 써서, 그 뒤에 wmux가 추가한 훅을 받지 못했습니다.',
   'integrationSetup.hooks.updateNote':
     '이 설치는 현재 wmux가 쓰는 훅 구성보다 오래됐습니다: {hooks}. 업데이트는 이 훅만 쓰고 다른 훅은 그대로 둡니다.',
   'integrationSetup.hooks.description':

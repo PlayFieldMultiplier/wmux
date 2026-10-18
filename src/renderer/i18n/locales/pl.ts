@@ -3340,6 +3340,9 @@ export const pl = {
   'integrationSetup.hooks.title': 'Mostek hooków',
   'integrationSetup.hooks.promptSuppressed': 'Monit instalacyjny jest wyłączony.',
   'integrationSetup.hooks.promptReenable': 'Zapytaj ponownie',
+  'integrationSetup.hooks.accountTitle': 'Mostek hooków · {name}',
+  'integrationSetup.hooks.accountDescription':
+    'To konto Claude ma własną kopię ustawień Claude Code, utworzoną przy dodaniu konta, więc nie dostało hooków dodanych później przez wmux.',
   'integrationSetup.hooks.updateNote':
     'Ta instalacja jest starsza niż zestaw hooków, którego oczekuje bieżący wmux: {hooks}. Aktualizacja zapisze tylko je, a pozostałe hooki zostawi bez zmian.',
   'integrationSetup.hooks.description':

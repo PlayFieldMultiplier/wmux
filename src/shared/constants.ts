@@ -217,6 +217,8 @@ export const IPC = {
   //   build expects to an existing install and rewrites only outdated wmux
   //   entries. User-clicked, like INSTALL.
   HOOKS_BRIDGE_UPDATE: 'hooks:bridge:update',
+  // An account folder's own copy of Claude settings: the same Update, by id.
+  HOOKS_BRIDGE_UPDATE_ACCOUNT: 'hooks:bridge:update-account',
   //   ALLOW_WORKER_TOOLS — the Settings button that adds the minimal fan-out
   //   worker tool list to permissions.allow. User-clicked, like INSTALL.
   HOOKS_BRIDGE_ALLOW_WORKER_TOOLS: 'hooks:bridge:allow-worker-tools',

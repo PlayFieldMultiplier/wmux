@@ -906,6 +906,11 @@ const electronAPI = {
         ipcRenderer.invoke(IPC.HOOKS_BRIDGE_UPDATE) as Promise<
           import('../cli/commands/setupHooks').UpdateOutcome
         >,
+      // The same Update for one Claude account folder, named by account id.
+      updateAccount: (accountId: string) =>
+        ipcRenderer.invoke(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT, accountId) as Promise<
+          import('../cli/commands/setupHooks').UpdateOutcome
+        >,
       allowWorkerTools: () =>
         ipcRenderer.invoke(IPC.HOOKS_BRIDGE_ALLOW_WORKER_TOOLS) as Promise<
           import('../cli/commands/setupHooks').AllowWorkerToolsOutcome

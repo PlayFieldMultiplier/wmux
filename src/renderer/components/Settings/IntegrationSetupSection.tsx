@@ -43,11 +43,17 @@ export interface IntegrationSetupApi {
       /** #2404 — installed, but older than the hook set this build expects. */
       updateAvailable?: boolean;
       outcome?: { pluginAlsoInstalled?: boolean; hooks?: Array<{ label: string; state: string }> };
+      /** Claude account folders whose own settings copy drifted (see
+       *  hooksBridge.handler accountHookDrift). */
+      accounts?: Array<{ accountId: string; name: string; stale: string[] }>;
     }>;
     install: () => Promise<{ ok: boolean; error: string | null }>;
     /** #2404 — adds only the hooks a newer build expects. Optional: without
      *  it an older preload never shows the Update state. */
     update?: () => Promise<{ ok: boolean; error: string | null }>;
+    /** The same Update for one account folder, by account id. Optional: without
+     *  it no account row is shown. */
+    updateAccount?: (accountId: string) => Promise<{ ok: boolean; error: string | null }>;
     /** The install prompt's durable "Don't ask again". Optional: an older
      *  preload simply never shows the re-enable line. */
     getPromptPreference?: () => Promise<{ suppressed: boolean }>;
@@ -187,6 +193,13 @@ interface RowModel {
 }
 
 const INITIAL: RowModel = { state: 'unknown', error: null };
+
+/** A Claude account folder whose own settings copy drifted. */
+interface AccountHookRow {
+  accountId: string;
+  name: string;
+  model: RowModel;
+}
 const UNAVAILABLE: RowModel = { state: 'unavailable', error: null };
 
 /** Probe → row state. Kept separate so the mapping is testable without a DOM. */
@@ -227,6 +240,9 @@ export function IntegrationSetupSection({
 }): React.ReactElement {
   const t = useT();
   const [hooks, setHooks] = useState<RowModel>(INITIAL);
+  // One row per Claude account folder whose settings copy drifted, replaced
+  // whole by each probe: an account brought up to date drops out.
+  const [accountHooks, setAccountHooks] = useState<AccountHookRow[]>([]);
   const [mcp, setMcp] = useState<RowModel>(INITIAL);
   const [statusline, setStatusline] = useState<RowModel>(INITIAL);
   // The install prompt's durable refusal. `null` means "no answer to show" —
@@ -279,6 +295,14 @@ export function IntegrationSetupSection({
     if (!api.hooks) commit(setHooks, UNAVAILABLE, gen);
     else api.hooks
       .status()
+      .then((s) => {
+        if (mountedRef.current && gen === genRef.current) {
+          setAccountHooks(api.hooks?.updateAccount
+            ? (s.accounts ?? []).map((a) => ({ accountId: a.accountId, name: a.name, model: { state: 'outdated', error: null, stale: a.stale } }))
+            : []);
+        }
+        return s;
+      })
       .then((s) =>
         commit(setHooks, s.updateAvailable === true && api.hooks?.update
           ? {
@@ -436,6 +460,12 @@ export function IntegrationSetupSection({
       .catch(() => { /* leave the line up: the refusal is still in force */ });
   }, [api]);
 
+  // runInstall drives one row through a setter; this is an account row's.
+  const accountSetter = (accountId: string): React.Dispatch<React.SetStateAction<RowModel>> => (next) =>
+    setAccountHooks((rows) => rows.map((r) => (r.accountId === accountId
+      ? { ...r, model: typeof next === 'function' ? next(r.model) : next }
+      : r)));
+
   // DESIGN.md "One primary per surface": the first row that needs the user
   // carries the warm primary; every other action on the card is secondary.
   // A row mid-install keeps the slot (drawn secondary while it runs), so the
@@ -491,6 +521,24 @@ export function IntegrationSetupSection({
             </button>
           </div>
         )}
+        {accountHooks.map((row) => (
+          <SetupRow
+            key={row.accountId}
+            id={`hooks-account-${row.accountId}`}
+            required
+            title={t('integrationSetup.hooks.accountTitle', { name: row.name })}
+            description={t('integrationSetup.hooks.accountDescription')}
+            model={row.model}
+            actionLabel={t('integrationSetup.updateButton')}
+            onAction={() => {
+              const update = api.hooks?.updateAccount;
+              if (update) void runInstall(accountSetter(row.accountId), () => update(row.accountId));
+            }}
+            note={(row.model.stale?.length ?? 0) > 0
+              ? t('integrationSetup.hooks.updateNote', { hooks: (row.model.stale ?? []).join(', ') })
+              : null}
+          />
+        ))}
         <SetupRow
           id="mcp"
           required

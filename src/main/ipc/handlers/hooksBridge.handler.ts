@@ -15,6 +15,7 @@
 // Reuses src/cli/commands/setupHooks.ts verbatim: same idempotent settings
 // merge, same stable bridge copy under ~/.wmux/hooks/, same atomic writes.
 
+import path from 'node:path';
 import { ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
@@ -28,7 +29,9 @@ import {
   type StatusOutcome,
   type InstallOutcome,
   type UpdateOutcome,
+  type SetupHooksPaths,
 } from '../../../cli/commands/setupHooks';
+import { getAccountStore, type Account } from '../../account/accountStore';
 import {
   loadHooksPromptPreference,
   setHooksPromptSuppressed,
@@ -44,6 +47,45 @@ export interface HooksBridgeStatus {
    *  `installed` alone, so a drifted install is never nagged about at launch. */
   updateAvailable: boolean;
   outcome: StatusOutcome;
+  /** Claude account folders whose own copy of settings.json (made once, when
+   *  the account was added) is older than the hook set this build expects.
+   *  Each gets the same Update, by id; nothing writes without that click. */
+  accounts: AccountHookDrift[];
+}
+
+export interface AccountHookDrift {
+  accountId: string;
+  name: string;
+  /** The hooks an Update would write there, by label. */
+  stale: string[];
+}
+
+/** The hook paths for an account folder: its own settings.json, the shared bridge. */
+export function accountHookPaths(base: SetupHooksPaths, account: Pick<Account, 'configDir'>): SetupHooksPaths {
+  return { ...base, settingsPath: path.join(account.configDir, 'settings.json') };
+}
+
+/**
+ * The Claude accounts whose settings copy is a wmux install that drifted,
+ * by the same rule as the default config's Update (installed, and some
+ * expected hook missing or outdated). The default config itself is skipped:
+ * the card's own row covers it. One unreadable folder never hides the rest.
+ */
+export function accountHookDrift(accounts: readonly Account[], base: SetupHooksPaths): AccountHookDrift[] {
+  const out: AccountHookDrift[] = [];
+  for (const account of accounts) {
+    if (account.vendor !== 'claude') continue;
+    const paths = accountHookPaths(base, account);
+    if (path.resolve(paths.settingsPath) === path.resolve(base.settingsPath)) continue;
+    try {
+      const status = statusHooks(paths);
+      if (!computeInstalled(status) || !status.updateAvailable) continue;
+      out.push({ accountId: account.id, name: account.name, stale: status.hooks.filter((h) => h.state !== 'ok').map((h) => h.label) });
+    } catch {
+      // Unreadable: no row, rather than an Update for a file we could not read.
+    }
+  }
+  return out;
 }
 
 export function computeInstalled(s: StatusOutcome): boolean {
@@ -59,9 +101,12 @@ export function registerHooksBridgeHandlers(): void {
   ipcMain.handle(
     IPC.HOOKS_BRIDGE_STATUS,
     wrapHandler(IPC.HOOKS_BRIDGE_STATUS, async (): Promise<HooksBridgeStatus> => {
-      const outcome = statusHooks(defaultPaths());
+      const paths = defaultPaths();
+      const outcome = statusHooks(paths);
       const installed = computeInstalled(outcome);
-      return { installed, updateAvailable: installed && outcome.updateAvailable, outcome };
+      let accounts: AccountHookDrift[] = [];
+      try { accounts = accountHookDrift(getAccountStore().listAccounts(), paths); } catch { /* no account rows */ }
+      return { installed, updateAvailable: installed && outcome.updateAvailable, outcome, accounts };
     }),
   );
 
@@ -78,6 +123,20 @@ export function registerHooksBridgeHandlers(): void {
     IPC.HOOKS_BRIDGE_UPDATE,
     wrapHandler(IPC.HOOKS_BRIDGE_UPDATE, async (): Promise<UpdateOutcome> => {
       return updateHooks(defaultPaths());
+    }),
+  );
+
+  // The same Update for one account folder. The renderer names the account by
+  // id only; the folder comes from the account store, never from the caller.
+  ipcMain.removeHandler(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT);
+  ipcMain.handle(
+    IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT,
+    wrapHandler(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT, async (_event, accountId: unknown): Promise<UpdateOutcome> => {
+      const account = typeof accountId === 'string'
+        ? getAccountStore().listAccounts().find((a) => a.id === accountId && a.vendor === 'claude')
+        : undefined;
+      if (!account) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no such Claude account');
+      return updateHooks(accountHookPaths(defaultPaths(), account));
     }),
   );
 

@@ -3365,6 +3365,9 @@ export const en = {
   'integrationSetup.hooks.title': 'Hook bridge',
   'integrationSetup.hooks.promptSuppressed': 'The install prompt is turned off.',
   'integrationSetup.hooks.promptReenable': 'Ask again',
+  'integrationSetup.hooks.accountTitle': 'Hook bridge · {name}',
+  'integrationSetup.hooks.accountDescription':
+    'This Claude account keeps its own copy of Claude Code settings, made when the account was added, so it did not get hooks wmux added later.',
   'integrationSetup.hooks.updateNote':
     'This install is older than the hook set the current wmux expects: {hooks}. Update writes only these and leaves your other hooks as they are.',
   'integrationSetup.hooks.description':

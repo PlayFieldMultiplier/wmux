@@ -2957,6 +2957,9 @@ export const zh = {
   'integrationSetup.hooks.title': '钩子桥接',
   'integrationSetup.hooks.promptSuppressed': '安装提示已关闭。',
   'integrationSetup.hooks.promptReenable': '重新询问',
+  'integrationSetup.hooks.accountTitle': '钩子桥接 · {name}',
+  'integrationSetup.hooks.accountDescription':
+    '此 Claude 账户使用添加账户时复制的独立 Claude Code 设置，因此没有获得 wmux 之后新增的钩子。',
   'integrationSetup.hooks.updateNote':
     '此安装的钩子比当前 wmux 需要的旧：{hooks}。更新只写入这些钩子，其他钩子保持不变。',
   'integrationSetup.hooks.description': '开启完成、审批提示和子智能体活动上报。没有它，这些只能靠读取屏幕来获取。',

@@ -646,3 +646,54 @@ describe('IntegrationSetupSection — hook prompt refusal', () => {
     expect(line(broken.container)).toBeNull();
   });
 });
+
+// ─── Account folders: each one's own copy of Claude settings ─────────────────
+
+describe('IntegrationSetupSection — account folder hook update', () => {
+  function accountsApi(withUpdateAccount = true) {
+    const calls: string[] = [];
+    const current = new Set<string>();
+    const api = fakeApi({ hooksInstalled: true });
+    api.hooks!.status = async () => ({
+      installed: true,
+      updateAvailable: false,
+      outcome: { pluginAlsoInstalled: false, hooks: [{ label: 'Stop', state: 'ok' }] },
+      accounts: [
+        { accountId: 'a', name: 'Work', stale: ['StopFailure'] },
+        { accountId: 'b', name: 'Home', stale: ['StopFailure', 'Notification:permission_prompt'] },
+      ].filter((x) => !current.has(x.accountId)),
+    });
+    if (withUpdateAccount) {
+      api.hooks!.updateAccount = async (id) => { calls.push(id); current.add(id); return { ok: true, error: null }; };
+    }
+    return { api, calls };
+  }
+
+  it('lists each drifted account folder with its missing hooks and writes only on its own click', async () => {
+    const { api, calls } = accountsApi();
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+
+    expect(state(container, 'hooks')).toBe('installed');
+    expect(state(container, 'hooks-account-a')).toBe('outdated');
+    expect(row(container, 'hooks-account-a').textContent).toContain('Work');
+    expect(row(container, 'hooks-account-a').querySelector('[data-setup-row-note]')!.textContent).toContain('StopFailure');
+    expect(calls).toEqual([]);
+
+    await act(async () => { action(container, 'hooks-account-b')!.click(); await Promise.resolve(); });
+    await flush();
+    expect(calls).toEqual(['b']);
+    // Brought up to date: its row goes; the other stays as it was.
+    expect(container.querySelector('[data-setup-row="hooks-account-b"]')).toBeNull();
+    expect(state(container, 'hooks-account-a')).toBe('outdated');
+  });
+
+  it('shows no account rows on a preload without the account Update', async () => {
+    const { api } = accountsApi(false);
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    expect(container.querySelector('[data-setup-row^="hooks-account-"]')).toBeNull();
+  });
+});
