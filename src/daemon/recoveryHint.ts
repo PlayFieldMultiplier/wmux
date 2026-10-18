@@ -1,3 +1,7 @@
+import { agentDisplayToSlug } from '../shared/agentIdentity';
+import { screenShowsActiveDialog, screenShowsRunningTurn } from './transcript/chatScreenGate';
+import { claudeComposerVisible, codexComposerVisible } from './transcript/deliverChatPrompt';
+
 /**
  * The recovery hint for a pane, or undefined once process truth shows the
  * pane's agent alive again.
@@ -34,4 +38,30 @@ export function liveRecoveryHint<S, B>(
 export function namedAgentAlive(identity: { slug?: string; alive: boolean } | undefined): boolean | undefined {
   if (identity?.slug === undefined) return undefined;
   return identity.alive;
+}
+
+/**
+ * The agent a recovered pane's screen tier has sighted since recovery, when
+ * its live chrome can be read off the screen (Claude Code, Codex). The
+ * pane's detector is new with the respawned shell and is fed only live
+ * output, so a name here was drawn after the restart, never by the dead
+ * session.
+ *
+ * A sighting only hides the recovery pill. It never consumes the offer: that
+ * takes a hook or a live process (see the `session:agent` handler).
+ */
+export function sightedRecoveredAgent(screenAgent: string | null | undefined): 'claude' | 'codex' | undefined {
+  const slug = agentDisplayToSlug(screenAgent ?? '');
+  return slug === 'claude' || slug === 'codex' ? slug : undefined;
+}
+
+/**
+ * Is the sighted agent still on the visible screen? Its composer, its running
+ * turn row, or a dialog it owns. Once the agent exits, its composer is gone
+ * from the grid (captured on Claude Code's classic and fullscreen renderers),
+ * so the sighting goes stale and the pill shows again.
+ */
+export function screenShowsLiveAgent(rows: readonly string[], slug: 'claude' | 'codex'): boolean {
+  const composer = slug === 'claude' ? claudeComposerVisible(rows) : codexComposerVisible(rows);
+  return composer || screenShowsRunningTurn(rows, slug) || screenShowsActiveDialog(rows);
 }

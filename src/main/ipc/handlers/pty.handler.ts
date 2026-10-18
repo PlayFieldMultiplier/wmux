@@ -1284,6 +1284,9 @@ export function registerPTYHandlers(
         lastDetectedAgent?: string;
         // X6 ② — present only for an interactive agent pane recovered this boot.
         resumeAgent?: string;
+        // #2408 — with resumeAgent: the screen shows a live agent sighted since
+        // the restart. Hides the pill only; the offer stays.
+        resumeAgentOnScreen?: boolean;
         // X6 ③ — the captured resume binding (origin id + cwd + permission mode),
         // surfaced alongside resumeAgent (recovery-only, cwd-matched) for the pill.
         args?: string[];
@@ -1349,6 +1352,7 @@ export function registerPTYHandlers(
             : {}),
           // X6 ② — carry the resume hint (agent slug) for the renderer pill.
           ...(s.resumeAgent ? { resumeAgent: s.resumeAgent } : {}),
+          ...(s.resumeAgent && s.resumeAgentOnScreen === true ? { resumeAgentOnScreen: true } : {}),
           // X6 ③ — carry the binding so the pill can build `--resume <id>`.
           ...(s.resumeBinding ? { resumeBinding: s.resumeBinding } : {}),
           ...(s.args ? { args: s.args } : {}),

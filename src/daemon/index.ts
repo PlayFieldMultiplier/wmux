@@ -124,7 +124,7 @@ import { WorkTaskService } from './worktask/WorkTaskService';
 import { isTaskState, type AgentStatus, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
-import { liveRecoveryHint, namedAgentAlive } from './recoveryHint';
+import { liveRecoveryHint, namedAgentAlive, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
 import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher } from './wslAgentProcess';
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
@@ -3024,6 +3024,31 @@ function registerRpcHandlers(
     return { ok: true, mode: 'rows', rows: capped.rows, bufferType: outcome.bufferType, rowsBelowCursor: outcome.rowsBelowCursor, truncated: capped.truncated };
   });
 
+  // #2408: per recovered pane, the ring position its screen was last read at
+  // and what it showed, so a quiet pane is not rendered again on every list.
+  const recoveredSightingAt = new Map<string, { at: number; onScreen: boolean }>();
+  /**
+   * #2408: a recovered pane whose screen tier sighted a live agent since the
+   * restart, still on screen: an alternate screen (a fullscreen agent has not
+   * exited), or its composer, running row or dialog on the visible grid. Only
+   * hides the pill; the offer stays until a hook or a live process consumes
+   * it. Panes with no sighting are never rendered.
+   */
+  const recoveredAgentOnScreen = async (id: string): Promise<boolean> => {
+    const managed = sessionManager.getSession(id);
+    const slug = managed ? sightedRecoveredAgent(managed.bridge.getLastAgent()) : undefined;
+    if (!managed || !slug) return false;
+    if (managed.bridge.outputModes?.altScreen === true) return true;
+    const at = managed.ringBuffer.totalBytesWritten;
+    const cached = recoveredSightingAt.get(id);
+    if (cached && cached.at === at) return cached.onScreen;
+    const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
+    const onScreen = !!frame && screenShowsLiveAgent(frame.rows, slug);
+    // An unreadable frame says nothing: read it again on the next list.
+    if (frame) recoveredSightingAt.set(id, { at, onScreen });
+    return onScreen;
+  };
+
   // daemon.listSessions
   pipeServer.onRpc('daemon.listSessions', async (rawParams) => {
     const params = (rawParams ?? {}) as Record<string, unknown>;
@@ -3040,7 +3065,15 @@ function registerRpcHandlers(
     // `wmux list --json` and the sidebar badge.
     // X6 ②: attach resumeAgent ONLY for sessions recovered-this-boot that were
     // interactive agents (recoveredAgentShellIds) — drives the resume pill.
-    const activeSessions = sessionManager.listSessions().map((s) => {
+    const listed = sessionManager.listSessions();
+    for (const id of recoveredSightingAt.keys()) {
+      if (!recoveredAgentShellIds.has(id)) recoveredSightingAt.delete(id);
+    }
+    const onScreen = new Set<string>();
+    await Promise.all(listed.filter((s) => recoveredAgentShellIds.has(s.id)).map(async (s) => {
+      if (await recoveredAgentOnScreen(s.id)) onScreen.add(s.id);
+    }));
+    const activeSessions = listed.map((s) => {
       // The slug is held in the map (captured from the persisted session at
       // recovery) — NOT read off the live meta, which is a fresh shell here.
       const resumeAgent = liveRecoveryHint(s.id, (id) => namedAgentAlive(agentProcessTracker.identityFor(id)), recoveredAgentShellIds, recoveredResumeBindings);
@@ -3068,7 +3101,11 @@ function registerRpcHandlers(
       const withRuntime = base.supervision
         ? { ...base, supervisionRuntime: paneSupervisor.getRuntime(s.id) }
         : base;
-      const withAgent = resumeAgent ? { ...withRuntime, resumeAgent } : withRuntime;
+      // #2408: additive; an older daemon sends no `resumeAgentOnScreen` and the
+      // renderer then gates the pill as before.
+      const withAgent = resumeAgent
+        ? { ...withRuntime, resumeAgent, ...(onScreen.has(s.id) ? { resumeAgentOnScreen: true as const } : {}) }
+        : withRuntime;
       // Binding to SURFACE: the recovery-transient one (recovered-this-boot,
       // cwd+transcript guarded) OR the durable meta binding re-probed for
       // transcript existence (D5). The cwd guard (F7) is deliberately NOT applied
@@ -7011,7 +7048,9 @@ function wireEvents(
     // exact binding, and the pill would be gone after the next reconnect.
     // A real relaunch reaches process truth on the tracker's launch edge,
     // where liveRecoveryHint drops the pair on its next read; until then the
-    // renderer hides the pill on its own live-agent and running-command state.
+    // renderer hides the pill on its own live-agent and running-command state,
+    // and on the screen sighting listSessions reports (#2408), which hides
+    // without consuming.
     if (slug && canonical && canonical.source !== 'screen') {
       recoveredAgentShellIds.delete(payload.sessionId);
       recoveredResumeBindings.delete(payload.sessionId);
