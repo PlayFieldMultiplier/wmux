@@ -45,8 +45,10 @@ function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] }, an
     calls.push({ args, options });
     if (args[0] === 'run' && args[1] === 'list') return JSON.stringify(greenRuns.map((databaseId) => ({ databaseId })));
     if (args[0] === 'api') {
-      const id = /check-runs\/(\d+)\/annotations$/.exec(args[1])?.[1];
-      return JSON.stringify((annotations[id] ?? []).map((message) => ({ annotation_level: 'failure', message })));
+      expect(args.slice(0, 2)).toEqual(['api', '--paginate']);
+      expect(args.slice(3)).toEqual(['--jq', '.[].message']);
+      const id = /check-runs\/(\d+)\/annotations$/.exec(args[2])?.[1];
+      return (annotations[id] ?? []).join('\n');
     }
     if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify(issues);
     if (args[0] === 'issue' && args[1] === 'view') return JSON.stringify(issue);

@@ -161,9 +161,10 @@ const TIMED_OUT = /exceeded the maximum execution time/i;
 export function markTimeouts(gh, { repo }, jobsJson) {
   const jobs = (jobsJson?.jobs ?? []).map((job) => {
     if (job.status !== 'completed' || job.conclusion !== 'cancelled' || !job.databaseId) return job;
-    const out = gh(['api', `repos/${repo}/check-runs/${job.databaseId}/annotations`]);
-    const annotations = parseJson(out || '[]', 'check-run annotations');
-    return annotations.some((a) => TIMED_OUT.test(a?.message ?? '')) ? { ...job, conclusion: 'timed_out' } : job;
+    // Every page, one message per line: a job with many warnings can push the
+    // timeout annotation past the first page.
+    const messages = gh(['api', '--paginate', `repos/${repo}/check-runs/${job.databaseId}/annotations`, '--jq', '.[].message']);
+    return TIMED_OUT.test(messages || '') ? { ...job, conclusion: 'timed_out' } : job;
   });
   return { ...jobsJson, jobs };
 }
