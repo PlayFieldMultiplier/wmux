@@ -59,10 +59,22 @@ export function resolveRepo(startDir: string): ResolvedRepo | null {
 /**
  * resolveRepo, also telling whether a null answer is conclusive: the walk
  * reached the filesystem root and every `.git` probe on the way said "no
- * such file". A walk that hit MAX_WALK_UP, an unreadable `.git`, or a `.git`
- * file without a `gitdir:` line is inconclusive — git may still find a repo.
+ * such file", along the cwd as given and along its physical path. A walk
+ * that hit MAX_WALK_UP, an unreadable `.git`, a `.git` file without a
+ * `gitdir:` line, or a cwd whose real path cannot be read is inconclusive —
+ * git may still find a repo.
  */
 export function resolveRepoState(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
+  const lexical = walkUp(startDir);
+  if (lexical.repo || !lexical.conclusive) return lexical;
+  // The shell reports its logical $PWD; git walks the physical one. Through
+  // a symlink (`~/link` → `/repo/src`) only the latter passes `/repo/.git`.
+  let real: string;
+  try { real = fs.realpathSync.native(startDir); } catch { return { repo: null, conclusive: false }; }
+  return real === startDir ? lexical : walkUp(real);
+}
+
+function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
   let dir = startDir;
   let conclusive = true;
   for (let i = 0; i < MAX_WALK_UP; i++) {

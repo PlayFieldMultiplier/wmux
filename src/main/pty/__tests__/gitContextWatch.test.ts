@@ -354,6 +354,28 @@ describe('GitContextWatcher', () => {
     expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
   });
 
+  it('a cwd reached through a symlink into a repo is not absent', () => {
+    const repo = tmp();
+    initFakeRepo(repo, 'main');
+    const src = path.join(repo, 'src');
+    fs.mkdirSync(src);
+    const alias = path.join(tmp(), 'alias');
+    try {
+      fs.symlinkSync(src, alias, 'junction');
+    } catch {
+      return; // no symlink permission (Windows without developer mode)
+    }
+    const state = resolveRepoState(alias);
+    expect(state.repo?.gitDir).toBe(path.join(fs.realpathSync.native(repo), '.git'));
+    makeWatcher().update('s1', alias);
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+  });
+
+  it('a non-repo cwd that cannot be resolved to a real path is unknown', () => {
+    const gone = path.join(tmp(), 'gone');
+    expect(resolveRepoState(gone)).toEqual({ repo: null, conclusive: false });
+  });
+
   it('a .git file without a gitdir line is unknown, not absent', () => {
     const root = tmp();
     fs.writeFileSync(path.join(root, '.git'), 'garbage\n');
