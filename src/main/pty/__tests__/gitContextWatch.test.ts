@@ -885,6 +885,45 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'fixed', isWorktree: true });
   });
 
+  it('walks again after a passing error made the walk inconclusive', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'recovered');
+    const cwd = path.join(root, 'a', 'b');
+    fs.mkdirSync(cwd, { recursive: true });
+    let failed = false;
+    const flaky: ProbeIo = (probe) => {
+      // The distro answers the ancestor's `.git` with an error once.
+      if (!failed && probe.op === 'stat' && probe.path === path.join(root, '.git')) { failed = true; return Promise.resolve('error'); }
+      return localIo(probe);
+    };
+    makeRemoteWatcher(flaky).update('s1', cwd);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'recovered', isWorktree: false });
+  });
+
+  it('backs off walking a cwd that stays inconclusive', async () => {
+    const parent = tmp();
+    const cwd = path.join(parent, 'bare');
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(path.join(cwd, 'HEAD'), 'not a repo\n'); // inconclusive for good
+    let walks = 0;
+    const counting: ProbeIo = (probe) => {
+      if (probe.path === path.join(parent, '.git')) walks++; // only a walk looks above the cwd
+      return localIo(probe);
+    };
+    makeRemoteWatcher(counting).update('s1', cwd);
+    await settle();
+    expect(walks).toBe(1);
+    for (let round = 0; round < 15; round++) {
+      await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+      await settle();
+    }
+    expect(walks).toBe(1 + 4); // rounds 1, 3, 7 and 15
+  });
+
   it('a superseded walk sends no further probes', async () => {
     const io = holdableIo();
     const watcher = makeRemoteWatcher(io.io);

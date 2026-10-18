@@ -61,6 +61,8 @@ const REREAD_DEBOUNCE_MS = 50;
 const WSL_SHARE = /^[\\/]{2}(wsl\.localhost|wsl\$)[\\/]/i;
 /** How often a WSL-share watch re-reads HEAD, or looks for a `.git` appearing. */
 export const REMOTE_POLL_MS = 2_500;
+/** An inconclusive WSL-share walk is retried after 1, 2, 4… rounds, up to this (a minute). */
+const REMOTE_REWALK_MAX_ROUNDS = 24;
 /**
  * How long a WSL-share resolve may take before the session reads as unknown.
  * Sized for a cold start, where every recovered pane resolves at once, one
@@ -522,7 +524,8 @@ export class GitContextWatcher extends EventEmitter {
    * The watch for a WSL share: one async probe round every REMOTE_POLL_MS.
    * Inside a repo, re-read HEAD; outside, look at the cwd's `.git` (and the
    * text of a `.git` file) and `HEAD`, and re-resolve when any of it changes
-   * (a `git init`, a clone, a gitdir line written in place). Each tick is
+   * (a `git init`, a clone, a gitdir line written in place); an inconclusive
+   * walk is also retried, backing off to once a minute. Each tick is
    * scheduled only once the last one's probes settled, so a wedged distro
    * queues at most one round per session. No git process is spawned.
    */
@@ -532,6 +535,8 @@ export class GitContextWatcher extends EventEmitter {
     // A conclusive walk saw neither entry in the cwd; otherwise the first
     // round only records what is there.
     let entries: string | null = watch.conclusive ? 'missing missing ' : null;
+    let walkEvery = 1;
+    let roundsSinceWalk = 0;
     const tick = async () => {
       timer = null;
       if (watch.repo) {
@@ -545,11 +550,16 @@ export class GitContextWatcher extends EventEmitter {
         const gitText = gitEntry === 'file' ? await this.io({ op: 'read', path: path.join(watch.cwd, '.git') }) : '';
         if (closed) return;
         const seen = `${gitEntry} ${headEntry} ${gitText}`;
-        // Without a baseline, a `.git` already there (created before this
-        // first round) is reason enough to look again.
-        const changed = entries === null ? gitEntry !== 'missing' : seen !== entries;
+        let again = entries !== null && seen !== entries;
         entries = seen;
-        if (changed) this.update(sessionId, watch.cwd, watch.mapGitDir);
+        // An inconclusive walk may have met a passing error (a distro still
+        // booting) anywhere up the tree: walk again, backing off.
+        if (!watch.conclusive && ++roundsSinceWalk >= walkEvery) {
+          roundsSinceWalk = 0;
+          walkEvery = Math.min(walkEvery * 2, REMOTE_REWALK_MAX_ROUNDS);
+          again = true;
+        }
+        if (again) this.update(sessionId, watch.cwd, watch.mapGitDir);
       }
       if (!closed) schedule();
     };
