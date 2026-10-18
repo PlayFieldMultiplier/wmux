@@ -175,6 +175,43 @@ describe('pane identity persistence (event to lastDetectedAgent)', () => {
   });
 });
 
+describe('the evidence stamp against a saved conversation of another agent', () => {
+  it('a live same-name agent refreshes a stamp older than the binding, once', () => {
+    // Codex was proven at 1000; a Claude binding was captured at 2000 (the
+    // spool can deliver one late). A Codex process seen now is newer than
+    // both, so the stamp must say so or the pill would offer Claude.
+    const p = pane({
+      lastDetectedAgent: 'codex',
+      lastDetectedAgentEvidence: { source: 'process', at: 1 },
+      resumeBinding: { agent: 'claude', ts: 1_500 },
+    });
+    p.processEdge({ slug: 'codex', alive: true });
+    expect(p.meta.lastDetectedAgentEvidence?.source).toBe('process');
+    expect(p.meta.lastDetectedAgentEvidence?.at ?? 0).toBeGreaterThan(1_500);
+    expect(p.writes).toBe(1);
+    p.hook('codex');
+    p.processEdge({ slug: 'codex', alive: true });
+    expect(p.writes).toBe(1);
+  });
+
+  it('a binding of the same agent, or an older one, needs no refresh', () => {
+    const same = pane({
+      lastDetectedAgent: 'claude',
+      lastDetectedAgentEvidence: { source: 'process', at: 1 },
+      resumeBinding: { agent: 'claude', ts: 5_000 },
+    });
+    same.processEdge({ slug: 'claude', alive: true });
+    expect(same.writes).toBe(0);
+    const older = pane({
+      lastDetectedAgent: 'codex',
+      lastDetectedAgentEvidence: { source: 'process', at: 900 },
+      resumeBinding: { agent: 'claude', ts: 800 },
+    });
+    older.processEdge({ slug: 'codex', alive: true });
+    expect(older.writes).toBe(0);
+  });
+});
+
 describe('daemon wiring: every identity site goes through recordPaneIdentity', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf-8');
 
