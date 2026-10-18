@@ -541,21 +541,34 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       scanError = `process(es) ${replaced.join(', ')} of the tree ended or were replaced while frozen`;
       break;
     }
+    const found = collectDescendants(rows.map((r) => [r.pid, r.ppid] as const), rootPid)
+      .filter((pid) => !targets.has(pid) && byPid.has(pid));
+    if (found.length === 0) {
+      complete = true;
+      break;
+    }
+    // Read again right before the stop: one that exited since and whose pid
+    // went to another process is not stopped (the next scan sees whether the
+    // tree still leads to anything new).
+    let fresh: Map<number, PosixProcRow>;
+    try {
+      fresh = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
+    } catch (err) {
+      scanError = err instanceof Error ? err.message : String(err);
+      break;
+    }
     let added = 0;
-    for (const pid of collectDescendants(rows.map((r) => [r.pid, r.ppid] as const), rootPid)) {
-      if (targets.has(pid)) continue;
-      const row = byPid.get(pid);
-      if (!row) continue;
-      targets.set(pid, row.start);
+    for (const pid of found) {
+      const start = (byPid.get(pid) as PosixProcRow).start;
+      if (fresh.get(pid)?.start !== start) continue;
+      targets.set(pid, start);
       // One that cannot be frozen (another user's, a setuid program) can
       // still fork and exit, leaving a child the tree no longer leads to.
       if (!send(pid, 'SIGSTOP')) unfrozen.push(pid);
       added++;
     }
-    if (added === 0) {
-      complete = true;
-      break;
-    }
+    // Every one found had ended or changed hands: scan again.
+    void added;
   }
   // Still finding new processes in the last round: one of them may have
   // forked before it was frozen, into a process group the kill misses.
@@ -565,7 +578,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   /** The captured pids still held by the processes captured (their start
    *  time unchanged), in capture order. A frozen process cannot exit, but
    *  another process can kill it and its pid go to an unrelated one; that
-   *  one is never signalled. When the table cannot be read, all of them:
+   *  one is never killed. When the table cannot be read, all of them:
    *  frozen, they keep their pids. */
   const stillCaptured = async (): Promise<number[]> => {
     try {
@@ -581,14 +594,18 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
     release: () => {
       if (released) return;
       released = true;
-      void stillCaptured().then((pids) => {
-        for (const pid of pids) send(pid, 'SIGCONT');
-      });
+      // Every pid this capture stopped runs again: ours, and a stranger the
+      // stop reached because the pid changed hands between the read and the
+      // signal.
+      for (const pid of targets.keys()) send(pid, 'SIGCONT');
     },
     kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
       if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }] };
       released = true;
       const ours = await stillCaptured();
+      // A pid that changed hands between the read and the stop: the stop may
+      // have reached the new owner, which must run on.
+      for (const pid of targets.keys()) if (!ours.includes(pid)) send(pid, 'SIGCONT');
       // Leaves first (discovery order is parent-before-child), then the PTY's
       // process group (the root is a session leader) and the root, while the
       // root is still the one captured (its group is then still its own).

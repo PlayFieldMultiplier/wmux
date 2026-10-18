@@ -295,6 +295,47 @@ describe('captureTreePosix', () => {
     expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }] });
   });
 
+  it('does not stop a pid that changed hands between the read and the stop', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1 lists 101 under 100; by read 2 (right before the stop) 101
+        // exited and its pid went to a stranger.
+        return reads === 1
+          ? [row(1, 0), row(100, 1), row(101, 100)]
+          : [row(1, 0), row(100, 1), { pid: 101, ppid: 1, stat: 'S', start: 'stranger' }];
+      },
+      signal: (pid, sig) => { signals.push([pid, sig]); },
+    };
+    const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+    expect(signals.filter(([p]) => p === 101)).toEqual([]);
+    await tree.kill({ timeoutMs: 0 });
+    expect(signals.filter(([p, s]) => p === 101 && s !== 'SIGCONT')).toEqual([]);
+  });
+
+  it('runs on a stranger the stop reached: the kill and the release send it SIGCONT, never SIGKILL', async () => {
+    for (const end of ['kill', 'release'] as const) {
+      const rows = [row(1, 0), row(100, 1), row(101, 100)];
+      const signals: Array<[number, NodeJS.Signals]> = [];
+      const deps: PosixTreeDeps = {
+        listProcesses: async () => rows.map((r) => ({ ...r })),
+        signal: (pid, sig) => {
+          signals.push([pid, sig]);
+          // The pid changed hands right before the stop landed: it stopped a stranger.
+          if (pid === 101 && sig === 'SIGSTOP') rows[2] = { pid: 101, ppid: 1, stat: 'T', start: 'stranger' };
+        },
+      };
+      const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+      if (end === 'kill') await tree.kill({ timeoutMs: 0 });
+      else tree.release();
+      const to101 = signals.filter(([p]) => p === 101).map(([, s]) => s);
+      expect(to101).toContain('SIGCONT');
+      expect(to101).not.toContain('SIGKILL');
+    }
+  });
+
   it('fails closed when a process of the tree cannot be frozen', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
     const signal = f.deps.signal;
@@ -313,10 +354,11 @@ describe('captureTreePosix', () => {
     const deps: PosixTreeDeps = {
       listProcesses: async () => {
         reads++;
-        // Read 1: 100 -> 101. Read 2: 101 was killed by someone else and
+        // Reads 1-2 (the scan and the read before the stop): 100 -> 101.
+        // Then 101 was killed by someone else and
         // another process got its pid, with a child of its own (102), and
         // 100 also started 103 before it was frozen.
-        if (reads === 1) return [row(1, 0), row(100, 1), row(101, 100)];
+        if (reads <= 2) return [row(1, 0), row(100, 1), row(101, 100)];
         return [row(1, 0), row(100, 1), { pid: 101, ppid: 100, stat: 'S', start: 'other' }, row(102, 101), row(103, 100)];
       },
       signal: (pid, sig) => { signals.push([pid, sig]); },
