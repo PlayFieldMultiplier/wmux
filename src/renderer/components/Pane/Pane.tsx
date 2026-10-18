@@ -360,6 +360,25 @@ export function claimAutoResume(ptyId: string): boolean {
   return true;
 }
 
+/**
+ * Whether the recovery pill must stay hidden because the pane's agent is live:
+ * process truth or OSC 133 says so (strong evidence), or the daemon's screen
+ * tier sighted it there since the restart and it is still on screen (#2408).
+ *
+ * Hiding destroys nothing, so the weak screen evidence may hide; it never
+ * consumes the offer (only a hook or a live process does, daemon-side), and
+ * the pill is back once the sighting goes stale. A process observed dead or a
+ * shell back at its prompt outranks the screen read.
+ */
+export function recoveryAgentLive(args: {
+  agentAlive?: boolean;
+  commandRunning?: boolean;
+  agentOnScreen?: boolean;
+}): boolean {
+  if (args.agentAlive === true || args.commandRunning === true) return true;
+  return args.agentOnScreen === true && args.agentAlive !== false && args.commandRunning !== false;
+}
+
 /** Agents whose recovered panes are resumed automatically on start. */
 const AUTO_RESUME_AGENTS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
@@ -387,6 +406,9 @@ export function planAutoResume(args: {
   commandRunning?: boolean;
   /** Process truth: the pane's agent process is alive. */
   agentAlive?: boolean;
+  /** #2408: the screen tier sighted an agent in the pane since the restart,
+   *  whether or not it is on screen now (the read may still be pending). */
+  agentSighted?: boolean;
 }): string | null {
   const agent = args.agent;
   if (!args.enabled || !agent || !AUTO_RESUME_AGENTS.has(agent)) return null;
@@ -394,6 +416,9 @@ export function planAutoResume(args: {
   // resume hint across app restarts while the resumed agent runs in it. Typing
   // then would land in the agent's own input box. Unknown signals do not block.
   if (args.commandRunning === true || args.agentAlive === true) return null;
+  // An agent was started in the pane by hand since the restart (#2408): the
+  // pill may still offer the resume, but nothing is typed on its own.
+  if (args.agentSighted === true) return null;
   const { binding } = args;
   // Validate the session id before typing it: only a well-formed session id (a
   // UUID, for Claude and Codex alike) is ever put on the line; anything else
@@ -843,12 +868,16 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
   const resumeHint = useStore((s) =>
     activeSurfacePtyId ? s.resumeHintByPtyId[activeSurfacePtyId] : undefined,
   );
-  // The pane's agent is running right now (process truth or OSC 133). A hint
-  // can outlive the resume it asked for when the daemon outlives an app quit;
-  // the pill must not offer a resume into that running agent.
+  // The pane's agent is running right now (process truth, OSC 133, or a live
+  // agent on its screen, #2408). A hint can outlive the resume it asked for
+  // when the daemon outlives an app quit; the pill must not offer a resume
+  // into that running agent.
   const resumeAgentLive = useStore((s) =>
-    !!activeSurfacePtyId &&
-    (s.agentAliveByPtyId[activeSurfacePtyId] === true || s.commandRunningByPtyId[activeSurfacePtyId] === true),
+    !!activeSurfacePtyId && recoveryAgentLive({
+      agentAlive: s.agentAliveByPtyId[activeSurfacePtyId],
+      commandRunning: s.commandRunningByPtyId[activeSurfacePtyId],
+      agentOnScreen: s.resumeAgentOnScreenByPtyId[activeSurfacePtyId] === true,
+    }),
   );
   const resumeBinding = useStore((s) =>
     activeSurfacePtyId ? s.resumeBindingByPtyId[activeSurfacePtyId] : undefined,
@@ -883,29 +912,51 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       roleBinding: paneRoleBinding,
       commandRunning: useStore.getState().commandRunningByPtyId[ptyId],
       agentAlive: useStore.getState().agentAliveByPtyId[ptyId],
+      agentSighted: useStore.getState().resumeAgentOnScreenByPtyId[ptyId] !== undefined,
     });
     if (!line) return;
     // A beat after the first output, so the prompt is up and reading input.
+    let cancelled = false;
     const timer = setTimeout(() => {
       if (!useStore.getState().claudeResumeOnStart) return; // turned off meanwhile
       if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return; // typed into / dismissed meanwhile
       // Re-checked here, not only when planning: the liveness snapshot lands
       // with the session list, which can arrive after the pane is ready.
-      const { commandRunningByPtyId, agentAliveByPtyId } = useStore.getState();
+      const { commandRunningByPtyId, agentAliveByPtyId, resumeAgentOnScreenByPtyId } = useStore.getState();
       if (commandRunningByPtyId[ptyId] === true || agentAliveByPtyId[ptyId] === true) {
         // The agent is already running in this pane: the hint is stale.
         useStore.getState().clearResumeHint(ptyId);
         return;
       }
-      if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
-      // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
-      // A refused line keeps the pill, so the pane can still be resumed by hand.
-      window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
-        () => useStore.getState().clearResumeHint(ptyId),
-        (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
-      );
+      // Seen only by the screen tier: skip, but keep the offer (#2408).
+      if (resumeAgentOnScreenByPtyId[ptyId] !== undefined) return;
+      // The store's sighting is as old as the last list, and an agent banner
+      // or hook can land after it: ask the daemon once more right before
+      // typing, and type only while it still offers this resume. A list that
+      // fails types nothing; the pill stays.
+      void window.electronAPI.pty.list().then((sessions) => {
+        if (cancelled) return; // the pane changed hands meanwhile (chat-v2, supervision, another pty)
+        const now = sessions.find((s) => s.id === ptyId);
+        // A dead pane's offer lives in the renderer (deadPaneRecoveryOfferByPtyId);
+        // the daemon holds every other one.
+        const ownOffer = !!useStore.getState().deadPaneRecoveryOfferByPtyId[ptyId];
+        if (!now || (!ownOffer && now.resumeAgent !== resumeHint)) return;
+        if (now.resumeAgentOnScreen !== undefined || now.commandRunning === true || now.agentProcessAlive === true) return;
+        if (!useStore.getState().claudeResumeOnStart) return;
+        if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return;
+        if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
+        // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
+        // A refused line keeps the pill, so the pane can still be resumed by hand.
+        window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
+          () => useStore.getState().clearResumeHint(ptyId),
+          (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
+        );
+      }, () => undefined);
     }, 400);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSurfacePtyId, resumePtyReady, resumeHint, resumeBinding, supervision, chatV2OwnsPane]);
   // The persistent resume chip's "is this pane's agent busy?" gate — and the

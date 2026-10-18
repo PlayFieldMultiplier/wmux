@@ -226,9 +226,13 @@ describe('FanOutService — detached checkout + dispatch record', () => {
     expect(res.tasks[0]).toMatchObject({ ok: true, workspaceId: 'ws-task-1' });
     expect(res.tasks[1]).toMatchObject({ ok: false, error: 'not launched: the agent factory is off' });
     expect(res.tasks[1].workspaceId).toBeUndefined();
-    // Its mission is closed; its worktree is kept and reported, like any task that did not launch.
+    // Its mission is closed and, since no pane was ever started in it, its
+    // worktree is rolled back (#2349) and no longer reported as preserved.
     expect(r.calls.filter((c) => c.method === 'task.mission.close')).toHaveLength(1);
-    expect(res.tasks[1].preservedWorktree).toEqual(expect.any(String));
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledWith('/repo', 'h', expect.any(String), undefined, { force: true });
+    expect(res.tasks[1].preservedWorktree).toBeUndefined();
+    expect(ledger.get(res.tasks[1].taskId!)).toMatchObject({ status: 'cancelled' });
   });
 
   it('awaitLaunchSlot holds each task before its spawn: the slot is released once the row registers, and a refused slot launches nothing', async () => {
@@ -251,6 +255,30 @@ describe('FanOutService — detached checkout + dispatch record', () => {
     expect(r.spawn).toHaveBeenCalledTimes(1);
     expect(res.tasks[1]).toMatchObject({ ok: false, error: 'not launched: no agent slot freed within 30 minutes' });
     expect(r.calls.filter((c) => c.method === 'task.mission.close')).toHaveLength(1);
+    // No pane was ever started in it: its worktree is rolled back (#2349)
+    // and the task still gets its cancelled row.
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledWith('/repo', 'h', expect.any(String), undefined, { force: true });
+    expect(res.tasks[1].preservedWorktree).toBeUndefined();
+    const row = ledger.get(res.tasks[1].taskId!);
+    expect(row).toMatchObject({ status: 'cancelled' });
+    expect(row!.summary).toContain('not launched: no agent slot freed within 30 minutes');
+    expect(row!.summary).toContain('its worktree was removed');
+  });
+
+  it('a launch refused for a secret it cannot grant rolls its worktree back and writes the row', async () => {
+    const r = rig();
+    const res = await r.svc.start({
+      ...base,
+      checkout: { sha: SHA, detached: true },
+      // Not a name a grant can carry: no grant, so no launch.
+      secretNames: ['not a valid name!'],
+    });
+    expect(res.tasks[0]).toMatchObject({ ok: false, error: 'not launched: a secret it names is not stored any more' });
+    expect(r.spawn).not.toHaveBeenCalled();
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledWith('/repo', 'h', expect.any(String), undefined, { force: true });
+    expect(res.tasks[0].preservedWorktree).toBeUndefined();
+    expect(ledger.get(res.tasks[0].taskId!)).toMatchObject({ status: 'cancelled' });
   });
 
   it('a slot granted to a task whose launch is then refused is given back', async () => {

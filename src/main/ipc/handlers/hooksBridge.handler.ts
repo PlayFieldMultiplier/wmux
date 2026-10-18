@@ -22,10 +22,12 @@ import {
   defaultPaths,
   statusHooks,
   installHooks,
+  updateHooks,
   allowFanoutWorkerTools,
   type AllowWorkerToolsOutcome,
   type StatusOutcome,
   type InstallOutcome,
+  type UpdateOutcome,
 } from '../../../cli/commands/setupHooks';
 import {
   loadHooksPromptPreference,
@@ -37,6 +39,10 @@ import {
 export interface HooksBridgeStatus {
   /** True when every wmux hook event is present and the bridge copy exists. */
   installed: boolean;
+  /** #2404 — installed, but older than the hook set this build expects. The
+   *  Settings card offers Update for it; the launch prompt keeps reading
+   *  `installed` alone, so a drifted install is never nagged about at launch. */
+  updateAvailable: boolean;
   outcome: StatusOutcome;
 }
 
@@ -54,7 +60,8 @@ export function registerHooksBridgeHandlers(): void {
     IPC.HOOKS_BRIDGE_STATUS,
     wrapHandler(IPC.HOOKS_BRIDGE_STATUS, async (): Promise<HooksBridgeStatus> => {
       const outcome = statusHooks(defaultPaths());
-      return { installed: computeInstalled(outcome), outcome };
+      const installed = computeInstalled(outcome);
+      return { installed, updateAvailable: installed && outcome.updateAvailable, outcome };
     }),
   );
 
@@ -63,6 +70,14 @@ export function registerHooksBridgeHandlers(): void {
     IPC.HOOKS_BRIDGE_INSTALL,
     wrapHandler(IPC.HOOKS_BRIDGE_INSTALL, async (): Promise<InstallOutcome> => {
       return installHooks(defaultPaths());
+    }),
+  );
+
+  ipcMain.removeHandler(IPC.HOOKS_BRIDGE_UPDATE);
+  ipcMain.handle(
+    IPC.HOOKS_BRIDGE_UPDATE,
+    wrapHandler(IPC.HOOKS_BRIDGE_UPDATE, async (): Promise<UpdateOutcome> => {
+      return updateHooks(defaultPaths());
     }),
   );
 

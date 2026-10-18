@@ -1,4 +1,5 @@
 import { configDefaults, defineConfig } from 'vitest/config';
+import { DurationSequencer } from './scripts/lib/duration-sequencer.mjs';
 import lanes from './vitest.lanes.json';
 
 const include = [
@@ -61,21 +62,28 @@ export default defineConfig({
         },
       },
     ],
+    // `--shard` splits by the durations in vitest.durations.json, not by file
+    // count: vitest's own split gave the integration shards 447 s and 235 s.
+    // Root-only in vitest; it balances each project on its own
+    // (scripts/lib/duration-sequencer.mjs).
+    sequence: { sequencer: DurationSequencer },
     // CI only: retry a failed test once, so one flake no longer costs a full
     // rerun. Vitest's github-actions reporter (on by default in Actions) lists
     // every test that passed only on retry in the job summary.
     retry: process.env.CI ? 1 : 0,
-    // CI only: also write every retried test to test-results/retries-unit.json
-    // (scripts/vitest-retry-reporter.mjs), which the workflow lists with
-    // scripts/flaky-report.mjs and uploads, so a flake that passed on retry is
-    // recorded rather than lost in a green job. Naming any reporter replaces
+    // CI only: also write every retried test to test-results/retries-<project>.json,
+    // one file per project that ran (scripts/vitest-retry-reporter.mjs), which
+    // the workflow lists with scripts/flaky-report.mjs and uploads, so a flake
+    // that passed on retry is recorded rather than lost in a green job.
+    // Reporters are root-only, so the reporter takes the name from each test's
+    // project rather than from an option here. Naming any reporter replaces
     // vitest's defaults, so `default` and `github-actions` are listed again.
     ...(process.env.CI
       ? {
           reporters: [
             'default',
             ...(process.env.GITHUB_ACTIONS === 'true' ? ['github-actions'] : []),
-            ['./scripts/vitest-retry-reporter.mjs', { suite: 'unit' }],
+            './scripts/vitest-retry-reporter.mjs',
           ],
         }
       : {}),

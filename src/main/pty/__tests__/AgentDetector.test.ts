@@ -465,6 +465,112 @@ describe('AgentDetector', () => {
     });
   });
 
+  describe('Gemini CLI gate is line-level chrome, not a substring', () => {
+    it('opens the gate on the empty composer placeholder (every session, every footer config)', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('\u2502 >   Type your message or @path/to/file                        \u2502\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+      const agents = cb.mock.calls.map((c) => (c[0] as { agent: string }).agent);
+      expect(agents).toContain('Gemini CLI');
+    });
+
+    it('opens the gate on the voice-mode placeholder and the YOLO prompt glyph', () => {
+      for (const row of [
+        '>   Type your message or hold space to talk (Esc to exit)\n',
+        '*   Type your message or @path/to/file\n',
+      ]) {
+        const det = new AgentDetector();
+        det.feed(row);
+        expect(det.getLastAgent(), row).toBe('Gemini CLI');
+      }
+    });
+
+    it('opens the gate on the footer model column, in its current and older shapes', () => {
+      for (const row of [
+        '~/repo  main*  no sandbox  gemini-2.5-pro  12% used\n',
+        '~/repo \u00b7 no sandbox \u00b7 gemini-2.5-pro \u00b7 12%\n',
+        '~/repo   no sandbox (see /docs)   gemini-2.5-pro (88% context left)\n',
+      ]) {
+        const det = new AgentDetector();
+        det.feed(row);
+        expect(det.getLastAgent(), row).toBe('Gemini CLI');
+      }
+    });
+
+    it('opens the gate on the update notice', () => {
+      const det = new AgentDetector();
+      det.feed('Gemini CLI update available! 0.1.9 \u2192 0.2.0\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+    });
+
+    it('does NOT open the gate on a Claude table row or prose that starts with "Gemini CLI"', () => {
+      const det = new AgentDetector();
+      det.feed('\u2502 Gemini CLI \u2502 Google \u2502 Apache-2.0 \u2502\n');
+      det.feed("  Gemini CLI is Google's open-source agent and it\n");
+      det.feed('\u23fa Claude ran with gemini-2.5-pro as the judge model.\n');
+      expect(det.getLastAgent()).toBeNull();
+    });
+
+    it('does NOT open the gate on a model name followed by a percentage inside other output', () => {
+      for (const row of [
+        '\u23fa Claude ran with gemini-2.5-pro 95% of the time.\n',
+        '~/code/gemini-cli 45% | Opus\n',
+        '\u2502 gemini-2.5-pro \u2502 63% \u2502 fast \u2502\n',
+        'added @google/gemini-cli 100% done\n',
+        // Comparison tables: the column rules must not be read as footer gaps.
+        '\u2502 gemini-2.5-pro \u2502 63% \u2502\n',
+        '\u2502 Gemini \u2502 gemini-2.5-pro \u2502 63% \u2502\n',
+        '| gemini-2.5-pro | 63% |\n',
+        '| gemini-2.5-pro | 63%\n',
+        // An aligned two-column table has no column before the model.
+        'gemini-2.5-pro      63%\n',
+      ]) {
+        const det = new AgentDetector();
+        det.feed(row);
+        expect(det.getLastAgent(), row).toBeNull();
+      }
+    });
+
+    it('opens the gate on a footer row whose column gaps are cursor moves', () => {
+      const det = new AgentDetector();
+      det.feed('~/repo\u001b[3Cno sandbox\u001b[3Cgemini-2.5-pro\u001b[3C12% used\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+    });
+
+    it('opens the gate on a composer row drawn with cursor moves (no literal spaces)', () => {
+      const det = new AgentDetector();
+      det.feed('>\u001b[3CType\u001b[1Cyour\u001b[1Cmessage\u001b[1Cor\u001b[1C@path/to/file\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+    });
+
+    it('does NOT open the gate on a Claude reply, a shell command or a package name that names Gemini', () => {
+      // Reddit report: a Claude-only pane came back after a reboot offering
+      // "Resume Gemini" — the substring gate had taken the pane over on text
+      // like these while Claude's compound gate was still unconfirmed.
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('⏺ I compared it with the gemini model and Claude was faster.\n');
+      det.feed('$ cd ~/projects/gemini \n');
+      det.feed('GEMINI_API_KEY=xxx gemini pro\n');
+      det.feed('⏺ Install Gemini CLI with npm i -g @google/gemini-cli\n');
+      expect(det.getLastAgent()).toBeNull();
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it('does NOT open the gate after Claude exited and the shell echoes "gemini"', () => {
+      const det = new AgentDetector();
+      det.feed('\u001b]0;✳ Claude Code\u0007');
+      det.feed('? for shortcuts                       bypass permissions on (shift+tab to cycle)\n');
+      expect(det.getLastAgent()).toBe('Claude Code');
+      det.feed('\u001b]133;A\u0007');
+      det.feed('$ ls gemini \n');
+      expect(det.getLastAgent()).toBe('Claude Code');
+    });
+  });
+
   describe('Grok CLI (live capture 2026-08-16)', () => {
     it('opens the gate on the version banner and reports waiting on the footer', () => {
       const det = new AgentDetector();

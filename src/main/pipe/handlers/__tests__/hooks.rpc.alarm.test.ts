@@ -306,6 +306,16 @@ describe('hooks.signal — local verdict gate (CompletionAlarm)', () => {
     );
   });
 
+  it('a permission_prompt Notification raises nothing here: the PermissionRequest already alerted', async () => {
+    const r = rig();
+    await primeWorking(r);
+
+    await r.dispatch({ kind: 'agent.awaiting_input', payload: { hook_event_name: 'Notification', notification_type: 'permission_prompt' } });
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
+
   // A turn that dies on an API error fires StopFailure and no Stop at all, so
   // without this branch the pane kept the amber dot its turn START lit until
   // the agent process died.

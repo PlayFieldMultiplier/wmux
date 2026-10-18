@@ -188,6 +188,7 @@ jobs:
       # artifact so flakes add up across runs (scripts/flaky-report.mjs reads a
       # directory of downloaded ones). Neither step can fail the job.
       - name: Flaky test report
+        id: flaky
         if: ${{ !cancelled() }}
         run: node scripts/flaky-report.mjs test-results
 
@@ -197,6 +198,17 @@ jobs:
         with:
           name: test-report-validate-${{ matrix.shard }}
           path: test-results/
+          if-no-files-found: ignore
+
+      # The retry reports on their own, only when one lists a retried test,
+      # for the weekly rollup (scripts/flaky-weekly.mjs): it downloads these
+      # and nothing else, so a run without a retry costs it no API call.
+      - name: Upload retry report
+        if: ${{ !cancelled() && steps.flaky.outputs.retried == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-report-retries-validate-${{ matrix.shard }}
+          path: test-results/retries-*.json
           if-no-files-found: ignore
 
   # The native Windows computer-use helper (native/computer-use-windows): the
@@ -317,6 +329,7 @@ jobs:
       # Same as validate's two steps: list tests that passed only on retry
       # and keep the report for scripts/flaky-report.mjs.
       - name: Flaky test report
+        id: flaky
         if: ${{ !cancelled() }}
         run: node scripts/flaky-report.mjs test-results
 
@@ -326,4 +339,15 @@ jobs:
         with:
           name: test-report-integration-${{ matrix.shard }}
           path: test-results/
+          if-no-files-found: ignore
+
+      # The retry reports on their own, only when one lists a retried test,
+      # for the weekly rollup (scripts/flaky-weekly.mjs): it downloads these
+      # and nothing else, so a run without a retry costs it no API call.
+      - name: Upload retry report
+        if: ${{ !cancelled() && steps.flaky.outputs.retried == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-report-retries-integration-${{ matrix.shard }}
+          path: test-results/retries-*.json
           if-no-files-found: ignore
