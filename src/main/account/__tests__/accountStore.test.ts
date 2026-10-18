@@ -249,12 +249,32 @@ describe('AccountStore groups (account-groups.json)', () => {
     expect(new AccountStore(dir).getAccount(a.id)?.group).toBe('Work');
   });
 
-  it('prunes a removed account from the groups file on the next group write', async () => {
+  it('drops a removed account from the groups file in the same removal', async () => {
+    const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
+    const b = await store.addAccount({ name: 'b', vendor: 'claude', configDir: mkConfigDir('b') });
+    const c = await store.addAccount({ name: 'c', vendor: 'claude', configDir: mkConfigDir('c') });
+    await store.setAccountGroup(a.id, 'Work');
+    await store.setAccountGroup(b.id, 'Work');
+    await store.setAccountGroup(c.id, 'Solo');
+    await store.removeAccount(a.id);
+    const readFile = () => JSON.parse(fs.readFileSync(path.join(dir, 'account-groups.json'), 'utf8'));
+    expect(readFile()).toEqual({ version: 1, groups: { [b.id]: 'Work', [c.id]: 'Solo' } });
+    // The last member gone, the group is gone: a group is only a shared name.
+    await store.removeAccount(c.id);
+    expect(readFile()).toEqual({ version: 1, groups: { [b.id]: 'Work' } });
+    expect(new AccountStore(dir).listAccounts().map((x) => [x.id, x.group])).toEqual([[b.id, 'Work']]);
+  });
+
+  it("prunes an orphan an older build's removal left, on the next account write", async () => {
     const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
     const b = await store.addAccount({ name: 'b', vendor: 'claude', configDir: mkConfigDir('b') });
     await store.setAccountGroup(a.id, 'Work');
-    await store.removeAccount(a.id);
     await store.setAccountGroup(b.id, 'Work');
+    // An older build removes `a` from accounts.json only; it never touches the groups file.
+    const raw = JSON.parse(fs.readFileSync(getAccountsPath(dir), 'utf8')) as { accounts: { id: string }[] };
+    raw.accounts = raw.accounts.filter((x) => x.id !== a.id);
+    fs.writeFileSync(getAccountsPath(dir), JSON.stringify(raw));
+    await new AccountStore(dir).renameAccount(b.id, 'b 2');
     const groups = JSON.parse(fs.readFileSync(path.join(dir, 'account-groups.json'), 'utf8'));
     expect(groups).toEqual({ version: 1, groups: { [b.id]: 'Work' } });
   });
