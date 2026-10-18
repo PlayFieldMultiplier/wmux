@@ -10,11 +10,12 @@
 //     launch, respawn and resume), when that launch began, who started it,
 //     and its state;
 //   - the task and generation of every task pane, bot worker or owner
-//     fan-out, keyed by the pane's session: a pane moved to another
-//     workspace keeps its record, so its task is read, never inferred.
-//
-// The workspace side of the link is the lineage stamp (fanoutGuards.ts),
-// which carries the same task and generation.
+//     fan-out, keyed by the pane's session, written at the pane's create
+//     before the session exists: a pane moved to another workspace keeps
+//     its record, so its task is read, never inferred;
+//   - the same for every task workspace. The lineage stamp
+//     (fanoutGuards.ts) carries it too, but an older build rewrites that
+//     file without it; this one it never touches.
 //
 // An entry is written synchronously before the launch; a write that fails
 // refuses the launch. A launch's later callback names its generation, and
@@ -23,7 +24,8 @@
 // `<wmuxDir>/factory/worker-slots.json`, version 1. An older build ignores
 // it. A file a newer version wrote is never written over: entries then live
 // in memory only and launches go on. A file no version can read is moved
-// aside. With no file, the entries are rebuilt from the ledger rows once.
+// aside, and while it cannot be, every launch is refused. With no file, the
+// entries are rebuilt from the ledger rows once.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -95,13 +97,22 @@ export interface LaunchRequest {
   cwd?: string;
 }
 
+/** The task and generation a workspace was created (or relaunched) for. */
+export interface TaskRef {
+  taskId: string;
+  gen: number;
+}
+
 export class WorkerSlots {
   private readonly tasks = new Map<string, TaskLaunch>();
   private readonly panes = new Map<string, TaskPane>();
+  private readonly workspaces = new Map<string, TaskRef>();
   /** Launches under way: owner and folder → task and generation. */
-  private readonly inflight = new Map<string, { taskId: string; gen: number }>();
-  /** False when a newer version's file is on disk: entries in memory only. */
-  private writable = true;
+  private readonly inflight = new Map<string, TaskRef>();
+  /** `memory`: a newer version's file is on disk, entries live in memory and
+   *  launches go on; `broken`: the file could not be read nor moved aside,
+   *  so nothing can be recorded and every launch is refused. */
+  private mode: 'disk' | 'memory' | 'broken' = 'disk';
 
   constructor(
     private readonly file: string,
@@ -120,23 +131,25 @@ export class WorkerSlots {
   load(): void {
     this.tasks.clear();
     this.panes.clear();
+    this.workspaces.clear();
     let raw: Record<string, unknown> | null = null;
     try {
       raw = readVersionedFile(this.file, WORKER_SLOTS_VERSION);
-      this.writable = true;
+      this.mode = 'disk';
     } catch (err) {
       if (this.newerVersionOnDisk()) {
-        this.writable = false;
+        this.mode = 'memory';
         this.warn(`[factory] worker slots not read, kept in memory only: ${String(err)}`);
         return;
       }
       try {
         fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
-        this.writable = true;
+        this.mode = 'disk';
         this.warn(`[factory] worker slots unreadable, moved aside and rebuilt from the task ledger: ${String(err)}`);
       } catch (moveErr) {
-        this.writable = false;
-        this.warn(`[factory] worker slots not read, kept in memory only: ${String(err)}; ${String(moveErr)}`);
+        this.mode = 'broken';
+        this.warn(`[factory] worker slots unreadable and not moved aside; no worker is launched until it is fixed: ${String(err)}; ${String(moveErr)}`);
+        return;
       }
       raw = null;
     }
@@ -144,6 +157,8 @@ export class WorkerSlots {
       for (const t of Array.isArray(raw.tasks) ? raw.tasks : []) if (isLaunch(t)) this.tasks.set(t.taskId, { ...t });
       const panes = raw.panes && typeof raw.panes === 'object' && !Array.isArray(raw.panes) ? raw.panes as Record<string, unknown> : {};
       for (const [id, p] of Object.entries(panes)) if (id && isPane(p)) this.panes.set(id, { taskId: p.taskId, gen: p.gen, workspaceId: p.workspaceId });
+      const spaces = raw.workspaces && typeof raw.workspaces === 'object' && !Array.isArray(raw.workspaces) ? raw.workspaces as Record<string, unknown> : {};
+      for (const [id, w] of Object.entries(spaces)) if (id && isRef(w)) this.workspaces.set(id, { taskId: w.taskId, gen: w.gen });
       return;
     }
     this.rebuild();
@@ -200,6 +215,12 @@ export class WorkerSlots {
     return p ? { ...p } : null;
   }
 
+  /** The task and generation a workspace was created (or relaunched) for. */
+  workspaceOf(workspaceId: string): TaskRef | null {
+    const w = this.workspaces.get(workspaceId);
+    return w ? { ...w } : null;
+  }
+
   /** The launch under way for an owner's pane in `cwd`, or null. */
   inflightFor(ownerWorkspaceId: string, cwd: string): { taskId: string; gen: number } | null {
     const hit = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
@@ -211,15 +232,21 @@ export class WorkerSlots {
    *  the caller does not launch. */
   beginLaunch(req: LaunchRequest): { gen: number; launchedAt: number } {
     const prior = this.tasks.get(req.taskId);
+    // Above every generation a pane or workspace of the task still names,
+    // so a generation never goes back (an entry dropped by the bound).
+    let top = prior?.gen ?? 0;
+    for (const p of this.panes.values()) if (p.taskId === req.taskId && p.gen > top) top = p.gen;
+    for (const w of this.workspaces.values()) if (w.taskId === req.taskId && w.gen > top) top = w.gen;
     const next: TaskLaunch = {
       taskId: req.taskId,
-      gen: (prior?.gen ?? 0) + 1,
+      gen: top + 1,
       launchedAt: this.now(),
       origin: req.origin,
       ...(req.botId ? { botId: req.botId } : {}),
       ownerWorkspaceId: req.ownerWorkspaceId,
       state: 'launching',
     };
+    if (this.mode === 'broken') throw new Error(`the task's launch could not be recorded: ${this.file} is unreadable and could not be moved aside`);
     this.tasks.delete(req.taskId);
     this.tasks.set(req.taskId, next);
     this.bound();
@@ -241,9 +268,33 @@ export class WorkerSlots {
     if (cwd) this.dropInflight(t?.ownerWorkspaceId, cwd, taskId, gen);
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'launched' });
-    if (sessionId) this.notePane(sessionId, { taskId, gen, workspaceId });
-    else this.persist();
+    if (sessionId) this.setPane(sessionId, { taskId, gen, workspaceId });
+    this.setWorkspace(workspaceId, { taskId, gen });
+    this.persist();
     return true;
+  }
+
+  /** A task pane's create (pty:create): the pane and its workspace are the
+   *  launch under way's for that owner and folder, recorded before the
+   *  session exists. THROWS when it cannot be written (the create fails).
+   *  Returns the task, or null when no launch is under way there. */
+  recordCreate(ownerWorkspaceId: string, cwd: string, workspaceId: string, sessionId: string): TaskRef | null {
+    const ref = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
+    if (!ref || this.tasks.get(ref.taskId)?.gen !== ref.gen) return null;
+    const prevPane = this.panes.get(sessionId);
+    const prevSpace = this.workspaces.get(workspaceId);
+    this.setPane(sessionId, { taskId: ref.taskId, gen: ref.gen, workspaceId });
+    this.setWorkspace(workspaceId, ref);
+    try {
+      this.write();
+    } catch (err) {
+      if (prevPane) this.panes.set(sessionId, prevPane);
+      else this.panes.delete(sessionId);
+      if (prevSpace) this.workspaces.set(workspaceId, prevSpace);
+      else this.workspaces.delete(workspaceId);
+      throw new Error(`PTY_CREATE: the task pane could not be recorded: ${String(err)}`);
+    }
+    return { ...ref };
   }
 
   /** The launch of `gen` did not happen. Ignored (false) when a newer launch
@@ -257,16 +308,16 @@ export class WorkerSlots {
     return true;
   }
 
-  /** A pane now runs the task's generation `gen` (a resume typed into it). */
-  notePane(sessionId: string, pane: TaskPane): void {
+  private setPane(sessionId: string, pane: TaskPane): void {
     this.panes.delete(sessionId);
     this.panes.set(sessionId, { ...pane });
-    while (this.panes.size > WORKER_PANES_MAX) {
-      const oldest = this.panes.keys().next();
-      if (oldest.done) break;
-      this.panes.delete(oldest.value);
-    }
-    this.persist();
+    trim(this.panes, WORKER_PANES_MAX);
+  }
+
+  private setWorkspace(workspaceId: string, ref: TaskRef): void {
+    this.workspaces.delete(workspaceId);
+    this.workspaces.set(workspaceId, { taskId: ref.taskId, gen: ref.gen });
+    trim(this.workspaces, WORKER_PANES_MAX);
   }
 
   private dropInflight(owner: string | undefined, cwd: string, taskId: string, gen: number): void {
@@ -276,23 +327,28 @@ export class WorkerSlots {
     if (hit && hit.taskId === taskId && hit.gen === gen) this.inflight.delete(key);
   }
 
+  /** Past the bound, released entries go first, then the oldest; a task
+   *  whose pane or workspace is still recorded keeps its generation through
+   *  them (beginLaunch). */
   private bound(): void {
     if (this.tasks.size <= WORKER_SLOTS_MAX) return;
     for (const [id, t] of this.tasks) {
       if (this.tasks.size <= WORKER_SLOTS_MAX) return;
       if (t.state === 'released') this.tasks.delete(id);
     }
-    while (this.tasks.size > WORKER_SLOTS_MAX) {
-      const oldest = this.tasks.keys().next();
-      if (oldest.done) break;
-      this.tasks.delete(oldest.value);
-    }
+    trim(this.tasks, WORKER_SLOTS_MAX);
   }
 
   private write(): void {
-    if (!this.writable) return;
+    if (this.mode === 'memory') return;
+    if (this.mode === 'broken') throw new Error(`${this.file} is unreadable and could not be moved aside`);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    atomicWriteJSONSync(this.file, { version: WORKER_SLOTS_VERSION, tasks: [...this.tasks.values()], panes: Object.fromEntries(this.panes) });
+    atomicWriteJSONSync(this.file, {
+      version: WORKER_SLOTS_VERSION,
+      tasks: [...this.tasks.values()],
+      panes: Object.fromEntries(this.panes),
+      workspaces: Object.fromEntries(this.workspaces),
+    });
   }
 
   /** A write after the launch: a failure is logged, the entry stays in memory. */
@@ -306,6 +362,21 @@ export class WorkerSlots {
 }
 
 const inflightKey = (owner: string, cwd: string): string => `${owner}\u0000${path.resolve(cwd)}`;
+
+/** Drop the oldest entries past `max`. */
+function trim<K, V>(map: Map<K, V>, max: number): void {
+  while (map.size > max) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
+  }
+}
+
+function isRef(v: unknown): v is TaskRef {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.taskId === 'string' && r.taskId.length > 0 && typeof r.gen === 'number' && Number.isInteger(r.gen) && r.gen >= 1;
+}
 
 let hosted: WorkerSlots | null = null;
 

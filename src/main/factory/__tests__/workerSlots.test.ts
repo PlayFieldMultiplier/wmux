@@ -7,7 +7,7 @@ import type { LedgerEntry } from '../../../shared/ledger';
 import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
-import { FanOutGuards, stampFanoutTaskPane } from '../../worktask/fanoutGuards';
+import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 
 const BOT = 'bot-0000000a';
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-worker-slots-'));
@@ -23,7 +23,10 @@ const row = (id: string, over: Partial<LedgerEntry> = {}): LedgerEntry => ({
   updatedAt: 1_000, updatedBy: { kind: 'worker', workspaceId: `ws-${id}` }, dispatch: { origin: { kind: 'bot', botId: BOT } }, ...over,
 });
 
-afterEach(() => setWorkerSlotsForTests(null));
+afterEach(() => {
+  setWorkerSlotsForTests(null);
+  setFanOutGuardsForTests(null);
+});
 
 describe('WorkerSlots', () => {
   it('a restart keeps each task\'s generation and each pane\'s task', () => {
@@ -120,6 +123,77 @@ describe('WorkerSlots', () => {
     expect(fs.readdirSync(path.dirname(file)).some((n) => n.startsWith(`${WORKER_SLOTS_FILENAME}.unreadable-`))).toBe(true);
     expect(s.launchOf('r')?.gen).toBe(1);
     expect(store(dir).launchOf('r')?.gen).toBe(1);
+  });
+});
+
+describe('round 1 review (#2393 identity)', () => {
+  it('a file that can neither be read nor moved aside refuses every launch', () => {
+    const dir = tmp();
+    const file = path.join(dir, 'factory', WORKER_SLOTS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{ torn');
+    const rename = fs.renameSync;
+    (fs as { renameSync: typeof fs.renameSync }).renameSync = () => { throw new Error('EACCES'); };
+    let s: WorkerSlots;
+    try {
+      s = store(dir);
+    } finally {
+      (fs as { renameSync: typeof fs.renameSync }).renameSync = rename;
+    }
+    expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
+  });
+
+  it('a pane\'s create records the pane and its workspace before any renderer reply; a write that fails fails the create', () => {
+    const dir = tmp();
+    const s = store(dir);
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
+    recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, 'pty-t', () => s);
+    // A crash here: the records are on disk.
+    const after = store(dir);
+    expect(after.paneOf('pty-t')).toEqual({ taskId: 't', gen, workspaceId: 'ws-t' });
+    expect(after.workspaceOf('ws-t')).toEqual({ taskId: 't', gen });
+    // A pane no launch is under way for is not recorded.
+    recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-x', cwd: '/w/other' }, 'pty-x', () => s);
+    expect(s.paneOf('pty-x')).toBeNull();
+    const failing = { recordCreate: () => { throw new Error('PTY_CREATE: the task pane could not be recorded: disk full'); } };
+    expect(() => recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, 'pty-2', () => failing)).toThrow(/could not be recorded/);
+  });
+
+  it('a resume in the pane moves its workspace to the new generation too', () => {
+    const s = store(tmp());
+    const first = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' }).gen;
+    s.launched('t', first, 'ws-t', 'pty-t');
+    const second = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' }).gen;
+    s.launched('t', second, 'ws-t', 'pty-t');
+    expect(s.workspaceOf('ws-t')).toEqual({ taskId: 't', gen: second });
+    expect(s.paneOf('pty-t')?.gen).toBe(second);
+  });
+
+  it('an older build rewriting the lineage store does not lose a workspace\'s task', () => {
+    const dir = tmp();
+    const s = store(dir);
+    setWorkerSlotsForTests(s);
+    const guards = new FanOutGuards({ dir, ledgerTaskOwner: () => null });
+    setFanOutGuardsForTests(guards);
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
+    stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, guards, () => s);
+    s.launched('t', gen, 'ws-t', 'pty-t', '/w/t');
+    // An older build rewrites the stamps without the task fields.
+    fs.writeFileSync(path.join(dir, 'fanout-lineage.json'), JSON.stringify({ version: 1, tasks: { 'ws-t': { owner: 'ws-owner', at: 1 } } }));
+    setFanOutGuardsForTests(new FanOutGuards({ dir, ledgerTaskOwner: () => null }));
+    setWorkerSlotsForTests(store(dir));
+    expect(taskOfWorkspace('ws-t')).toEqual({ taskId: 't', gen });
+  });
+
+  it('a generation never goes back, even after its entry was dropped', () => {
+    const s = store(tmp());
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
+    s.launched('t', gen, 'ws-t', 'pty-t');
+    const second = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' }).gen;
+    s.launched('t', second, 'ws-t', 'pty-t');
+    // Its entry dropped by the bound (simulated): its pane still names gen 2.
+    (s as unknown as { tasks: Map<string, unknown> }).tasks.delete('t');
+    expect(s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' }).gen).toBe(second + 1);
   });
 });
 

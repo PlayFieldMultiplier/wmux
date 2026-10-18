@@ -72,7 +72,7 @@ import { agentDisplayToSlug } from '../../../shared/agentIdentity';
 import { wslDistroArgs, isWslDistroSpawnArgs } from '../../../shared/wslDistro';
 import { getDefaultWslDistro } from '../../pty/defaultWslDistro';
 import { SessionPromptScheduler } from '../../pty/SessionPromptScheduler';
-import { stampFanoutTaskPane } from '../../worktask/fanoutGuards';
+import { recordFanoutTaskPane, stampFanoutTaskPane } from '../../worktask/fanoutGuards';
 import type { FanoutOrigin } from '../../../shared/fanoutOrigin';
 import {
   removeSessionPromptSchedulesForPty,
@@ -573,6 +573,8 @@ export function registerPTYHandlers(
         // A new worker session for the task (a respawn or a resume): its agent runs again.
         if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
       }
+      // A fan-out task pane's task and launch generation, bot or owner.
+      recordFanoutTaskPane(options, sessionId);
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -900,6 +902,12 @@ export function registerPTYHandlers(
           throw err;
         }
         if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
+      }
+      try {
+        recordFanoutTaskPane(options, instance.id);
+      } catch (err) {
+        ptyManager.dispose(instance.id);
+        throw err;
       }
       ptyBridge.setupDataForwarding(instance.id);
       const actualCwd = instance.cwd || effectiveCwd || homedir();

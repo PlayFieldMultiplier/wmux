@@ -1655,14 +1655,14 @@ export class FanOutService {
     handOverTempDir(workspaceId);
     // Its pane names the task and generation from here on (a late answer of
     // an older generation's spawn changes nothing).
-    launches.launched(taskId, gen, workspaceId, base.ptyId, cwd);
+    const current = launches.launched(taskId, gen, workspaceId, base.ptyId, cwd);
     // The renderer already stamped the lineage before the agent launched; this
     // second write is idempotent and covers a renderer that did not. It carries
-    // the same origin and task the spawn did and never replaces an origin
-    // already recorded.
+    // the same origin and task the spawn did (not a generation a newer launch
+    // replaced) and never replaces an origin already recorded.
     try {
       const lineage = this.lineage ?? getFanOutGuards();
-      lineage.markTask(workspaceId, ctx.verifiedWorkspaceId, ctx.requester, { taskId, gen });
+      lineage.markTask(workspaceId, ctx.verifiedWorkspaceId, ctx.requester, current ? { taskId, gen } : undefined);
     } catch (err) {
       console.warn(`[fanout] could not confirm the lineage stamp for ${workspaceId}: ${String(err)}`);
     }
@@ -2095,10 +2095,10 @@ export class FanOutService {
       launches.released(input.taskId, gen, input.cwd);
       return { error: 'the renderer returned no pane' };
     }
-    launches.launched(input.taskId, gen, spawned.workspaceId, spawned.ptyId, input.cwd);
+    const current = launches.launched(input.taskId, gen, spawned.workspaceId, spawned.ptyId, input.cwd);
     // The same idempotent second stamp the fan-out writes after its spawn.
     try {
-      (this.lineage ?? getFanOutGuards()).markTask(spawned.workspaceId, input.ownerWorkspaceId, origin, { taskId: input.taskId, gen });
+      (this.lineage ?? getFanOutGuards()).markTask(spawned.workspaceId, input.ownerWorkspaceId, origin, current ? { taskId: input.taskId, gen } : undefined);
     } catch (err) {
       console.warn(`[fanout] could not confirm the lineage stamp for ${spawned.workspaceId}: ${String(err)}`);
     }

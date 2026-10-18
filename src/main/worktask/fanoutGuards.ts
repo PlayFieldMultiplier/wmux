@@ -810,6 +810,33 @@ export function stampFanoutTaskPane(
   else guards.markTask(ws, owner);
 }
 
+/** A task pane's create, once its session id is known and before the
+ *  session exists: the pane and its workspace are recorded as the task's
+ *  whose launch is under way for that owner and folder
+ *  (factory/workerSlots.ts). Throws (failing the create) when that record
+ *  cannot be written. A pane no launch is under way for is not recorded. */
+export function recordFanoutTaskPane(
+  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; cwd?: unknown } | undefined,
+  sessionId: string,
+  launches: () => Pick<WorkerSlots, 'recordCreate'> = getWorkerSlots,
+): void {
+  const owner = typeof options?.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
+  const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
+  const cwd = typeof options?.cwd === 'string' ? options.cwd : '';
+  if (!owner || !ws || !cwd || !sessionId) return;
+  launches().recordCreate(owner, cwd, ws, sessionId);
+}
+
+/** The task and generation a workspace was created (or relaunched) for:
+ *  its record (factory/workerSlots.ts), else its lineage stamp. Never throws. */
+export function taskOfWorkspace(workspaceId: string): StampTask | null {
+  try {
+    return getWorkerSlots().workspaceOf(workspaceId) ?? getFanOutGuards().taskOfWorkspace(workspaceId);
+  } catch {
+    return null;
+  }
+}
+
 /** Task workspaces kept open after their task ended and their agent was
  *  stopped (factory worker reclaim), or whose task ended (the owner's stop
  *  among them) and runs no agent any more: they hold no live slot. A
