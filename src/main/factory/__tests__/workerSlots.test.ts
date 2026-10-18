@@ -9,6 +9,7 @@ import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
+import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 
@@ -284,6 +285,8 @@ describe('round 3 review (#2393 identity)', () => {
     expect(startsAgent('"C:\\tools\\claude.cmd" --continue')).toBe(true);
     expect(startsAgent('Please review the diff below')).toBe(false);
     expect(startsAgent(' --dangerously-skip-permissions')).toBe(false);
+    // A launch that pins its model starts with main's env marker.
+    expect(startsAgent(`${MODEL_ENV_MARKER}claude "$(cat '/x/prompt.md')"`)).toBe(true);
   });
 });
 
@@ -345,6 +348,14 @@ describe('GLM review (#2411)', () => {
     expect(s.launchOf('open')).not.toBeNull();
     expect(s.launchOf(`e${WORKER_SLOTS_MAX + 4}`)).not.toBeNull();
     expect(s.launchOf('e0')).toBeNull();
+  });
+
+  it('the seed inserts oldest first, so the bound drops the oldest open row, never the newest', () => {
+    const rows = Array.from({ length: WORKER_SLOTS_MAX + 1 }, (_, i) => row(`o${i}`, { updatedAt: 10 + i }));
+    const s = store(tmp(), { rows });
+    expect(s.launchOf(`o${WORKER_SLOTS_MAX}`)).not.toBeNull();
+    expect(s.workspaceOf(`ws-o${WORKER_SLOTS_MAX}`)).not.toBeNull();
+    expect(s.launchOf('o0')).toBeNull();
   });
 });
 

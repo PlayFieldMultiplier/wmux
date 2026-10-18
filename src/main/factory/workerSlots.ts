@@ -38,6 +38,7 @@ import { botWorkerSessionRecord } from '../agents/botWorkerMergeGuard';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { AGENT_ROWS, agentLauncherStem } from '../../shared/agentIdentity';
 import { launcherStem, tokenize } from '../../shared/agentResume';
+import { splitModelEnvMarker } from '../../shared/workerLaunch';
 
 export const WORKER_SLOTS_FILENAME = 'worker-slots.json';
 export const WORKER_SLOTS_VERSION = 1 as const;
@@ -206,11 +207,20 @@ export class WorkerSlots {
       this.warn(`[factory] worker slots not rebuilt from the task ledger: ${String(err)}`);
     }
     const isOpen = (r: LedgerEntry): boolean => r.status === 'working' || r.status === 'input_required' || r.status === 'review_requested';
+    // The rows kept: every open one, then the newest ended ones while the
+    // bound has room. Inserted oldest first, as the bound drops the first.
     const order = [...rows].sort((a, b) => Number(isOpen(b)) - Number(isOpen(a)) || b.updatedAt - a.updatedAt);
-    let added = false;
+    const kept: LedgerEntry[] = [];
+    let room = WORKER_SLOTS_MAX - this.tasks.size;
     for (const r of order) {
       if (this.tasks.has(r.id)) continue;
-      if (!isOpen(r) && this.tasks.size >= WORKER_SLOTS_MAX) break;
+      if (!isOpen(r) && room <= 0) break;
+      kept.push(r);
+      room--;
+    }
+    kept.sort((a, b) => a.updatedAt - b.updatedAt);
+    let added = false;
+    for (const r of kept) {
       added = true;
       if (r.taskWorkspaceId && !this.workspaces.has(r.taskWorkspaceId)) this.workspaces.set(r.taskWorkspaceId, { taskId: r.id, gen: 1 });
       const origin = r.dispatch?.origin;
@@ -510,7 +520,8 @@ const AGENT_STEMS: ReadonlySet<string> = new Set(AGENT_ROWS.map(agentLauncherSte
  *  `env` words): text pasted into a running agent, or the arguments a
  *  second stage appends, is no launch. Pure. */
 export function startsAgent(line: string): boolean {
-  for (const t of tokenize(line.trim())) {
+  // A launch that pins its model starts with main's env marker.
+  for (const t of tokenize(splitModelEnvMarker(line.trim()).command.trim())) {
     if (t.value === 'env' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t.value)) continue;
     return AGENT_STEMS.has(launcherStem(t.value));
   }
