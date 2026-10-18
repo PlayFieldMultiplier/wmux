@@ -115,7 +115,9 @@ export class Watchdog {
   recheckBlock(): boolean {
     if (!this.sessionsBlocked || !this.healthCheck) return this.sessionsBlocked;
     const now = Date.now();
-    if (now - this.lastRecheckAt < Watchdog.RECHECK_MIN_INTERVAL_MS) return this.sessionsBlocked;
+    // A clock that went back (now < lastRecheckAt) samples again rather than
+    // holding the last answer until the clock catches up.
+    if (now >= this.lastRecheckAt && now - this.lastRecheckAt < Watchdog.RECHECK_MIN_INTERVAL_MS) return this.sessionsBlocked;
     this.lastRecheckAt = now;
     try {
       const health = this.healthCheck();

@@ -240,6 +240,18 @@ describe('Watchdog', () => {
       expect(healthCheck.mock.calls.length).toBe(samplesBefore + 2);
     });
 
+    it('samples again when the clock went back since the last recheck', () => {
+      wd.start(healthCheck);
+      vi.advanceTimersByTime(30_000);
+      expect(wd.recheckBlock()).toBe(true);
+      const samplesBefore = healthCheck.mock.calls.length;
+
+      memoryBytes = 700 * MB;
+      vi.setSystemTime(Date.now() - 60_000);
+      expect(wd.recheckBlock()).toBe(false);
+      expect(healthCheck.mock.calls.length).toBe(samplesBefore + 1);
+    });
+
     it('does not sample when not blocked', () => {
       memoryBytes = 100 * MB;
       wd.start(healthCheck);
