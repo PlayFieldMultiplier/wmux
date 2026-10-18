@@ -82,6 +82,22 @@ jobs:
       - name: Test (both lanes, shard ${{ matrix.shard }}/2)
         run: npm run test:parallel -- --shard=${{ matrix.shard }}/2
 
+      # Same as validate's two steps in ci.yml: list tests that passed only on
+      # retry (one report per lane, retries-unit.json and
+      # retries-integration.json) and keep them, so a unit test that is flaky
+      # only on Windows shows up here rather than nowhere.
+      - name: Flaky test report
+        if: ${{ !cancelled() }}
+        run: node scripts/flaky-report.mjs test-results
+
+      - name: Upload test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-report-windows-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+
       # Last: a red run on main opens (or comments on) one `Nightly red:
       # <workflow>` issue, so the triage bot sees it; a green one closes it.
       # Off main this is a branch run someone dispatched and is watching.

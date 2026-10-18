@@ -69,6 +69,16 @@ describe('fake gh', () => {
     expect(state().repos['github.com/acme/app'].prs[0]).toMatchObject({ state: 'MERGED', mergedAt: expect.any(String) });
   });
 
+  it('marks an open draft ready; an unknown number fails', () => {
+    const s = state();
+    s.repos['github.com/acme/app'].prs[0].isDraft = true;
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(s));
+    expect(gh('pr', 'view', '1', '--repo', 'github.com/acme/app', '--json', 'isDraft').json).toMatchObject({ isDraft: true });
+    expect(gh('pr', 'ready', '1', '--repo', 'github.com/acme/app').code).toBe(0);
+    expect(state().repos['github.com/acme/app'].prs[0].isDraft).toBe(false);
+    expect(gh('pr', 'ready', '9', '--repo', 'github.com/acme/app').code).toBe(1);
+  });
+
   it('an unknown command fails without a rate-limit message and is logged as unhandled', () => {
     const r = gh('release', 'list');
     expect(r.code).toBe(1);

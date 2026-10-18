@@ -5,19 +5,27 @@
 // retries (v5), so this reads them from the reporter API the same way vitest's
 // github-actions reporter does: TestCase.diagnostic().retryCount.
 //
-// The file is written on every finished run, empty `tests` included, so a
+// Reporters are root-only in vitest 5, so one instance sees every project of a
+// run. It writes one report per project that ran,
+// test-results/retries-<name>.json with `suite: <name>`, so the integration
+// lane is not filed under unit. A config without `projects` has a blank project
+// name and uses the `suite` option instead (vitest.runtime.config.ts: runtime).
+//
+// A report is written on every finished run, empty `tests` included, so a
 // missing file means the run did not finish, never "no flakes". The format and
 // the reader are in scripts/lib/test-retries.mjs; scripts/flaky-report.mjs
 // prints it.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildReport, collectRetriedTests } from './lib/test-retries.mjs';
+import { buildReport, collectRetriedTests, sortTests } from './lib/test-retries.mjs';
 
 export default class RetryReporter {
   constructor(options = {}) {
     this.suite = options.suite ?? 'tests';
-    this.outputFile = options.outputFile ?? `test-results/retries-${this.suite}.json`;
+    // An explicit file gets one report labelled `suite`, every project's tests
+    // in it: a second project must not overwrite the first one's file.
+    this.outputFile = options.outputFile;
   }
 
   onInit(ctx) {
@@ -27,20 +35,33 @@ export default class RetryReporter {
   onTestRunEnd(testModules) {
     const config = this.ctx.config;
     const retry = typeof config.retry === 'number' ? config.retry : (config.retry?.count ?? 0);
-    const report = buildReport({
-      suite: this.suite,
-      shard: config.shard,
-      platform: process.platform,
-      retry,
-      tests: collectRetriedTests(testModules),
-    });
-    const file = path.resolve(config.root, this.outputFile);
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
-    } catch (error) {
-      // A report that cannot be written must never fail the test run.
-      this.ctx.logger.warn(`retry reporter: could not write ${file}: ${error.message}`);
+    const write = (suite, tests, outputFile) => {
+      const report = buildReport({ suite, shard: config.shard, platform: process.platform, retry, tests });
+      const file = path.resolve(config.root, outputFile);
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
+      } catch (error) {
+        // A report that cannot be written must never fail the test run.
+        this.ctx.logger.warn(`retry reporter: could not write ${file}: ${error.message}`);
+      }
+    };
+
+    const byProject = collectRetriedTests(testModules);
+    if (this.outputFile) {
+      write(this.suite, sortTests([...byProject.values()].flat()), this.outputFile);
+      return;
+    }
+    // No module at all still finished the run: one empty report says so.
+    if (byProject.size === 0) byProject.set('', []);
+    for (const [project, tests] of byProject) {
+      const suite = project || this.suite;
+      write(suite, tests, `test-results/retries-${fileSafe(suite)}.json`);
     }
   }
+}
+
+// A project name is free text; keep it to one plain path segment.
+function fileSafe(name) {
+  return name.replace(/[^\w.-]+/g, '-');
 }
