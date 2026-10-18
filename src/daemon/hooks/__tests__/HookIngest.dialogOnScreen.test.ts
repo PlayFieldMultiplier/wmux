@@ -202,10 +202,12 @@ describe('HookIngest — the permission_prompt Notification is the firm signal',
     expect(f.awaiting()).toHaveLength(1);
   });
 
-  it('a Notification raises no AskUserQuestion card (it names no tool)', () => {
+  it('a Notification raises no AskUserQuestion card (it names no tool), but asks for a screen-read phone record', () => {
     const f = makeIngest();
     f.ingest.handle(notification());
     expect(f.cards).toEqual([]);
+    // The registry refuses it while the request's own record is pending.
+    expect(f.terminalPrompts).toEqual(['pty-a']);
   });
 
   it('subagent work behind the dialog does not rebut it', async () => {

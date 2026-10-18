@@ -1548,6 +1548,12 @@ export class HookIngest {
       // Stands down a second-layer screen read already in flight.
       this.bumpDialogEpoch(sessionId);
       resume = this.unlessSettled(sessionId, fanOut);
+      // The phone record, read off the screen, for a prompt no request came
+      // before (a sandboxed network request) or whose record was retired
+      // meanwhile. The registry refuses it while one is pending, and a
+      // detector report that replaces this window inherits its firmness and
+      // so skips its own note.
+      this.noteDetectorTerminalPrompt(sessionId, signal.agent);
     }
     const outcome = this.alarm.observe(sessionId, signal.agent, cue, resume);
     if (outcome === 'hold') {
