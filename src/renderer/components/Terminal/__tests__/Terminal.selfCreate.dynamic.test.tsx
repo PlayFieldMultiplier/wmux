@@ -208,4 +208,27 @@ describe('Terminal self-create through the per-surface lifecycle (#2398)', () =>
     expect(order).toEqual(['bind:pty-retried']);
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
+
+  it('a bound pane whose binding is cleared, and whose replacement is refused, still shows Retry', async () => {
+    mount({ ptyId: 'pty-old' });
+    expect(seenPtyIds.at(-1)).toBe('pty-old');
+    create.mockImplementationOnce(() => Promise.reject(new Error('[RESOURCE_EXHAUSTED] session cap reached')));
+    // The reconnect said session-dead: the store binding is cleared.
+    mount({ ptyId: undefined });
+    await act(async () => { await Promise.resolve(); });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('This terminal could not start.');
+  });
+
+  it('a refusal ends once the surface is bound: a later clear creates again', async () => {
+    create.mockImplementationOnce(() => Promise.reject(new Error('[RESOURCE_EXHAUSTED] session cap reached')));
+    mount();
+    await act(async () => { await Promise.resolve(); });
+    expect(useStore.getState().ptyCreateByKey[surfaceId]?.state).toBe('createFailed');
+    // Another path binds it, then that session dies and the binding is cleared.
+    mount({ ptyId: 'pty-other' });
+    expect(useStore.getState().ptyCreateByKey[surfaceId]).toBeUndefined();
+    mount({ ptyId: undefined });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
 });

@@ -148,8 +148,10 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       setPtyId(externalPtyId);
       selfCreateRef.current = null;
       // Another path bound this surface while its own create was in flight:
-      // that create is replaced and must never bind (a no-op otherwise).
+      // that create is replaced and must never bind (a no-op otherwise). A
+      // refusal from before is over too: once bound, a later clear creates.
       ptyLifecycle.cancel(lifecycleKey, ownerSurfaceId);
+      ptyLifecycle.clearRefusal(lifecycleKey);
       return;
     }
 
@@ -559,7 +561,10 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       {/* #2398 — a refused create: the reason and the one way to try again.
           Same alert shape as the recovery banner above; a refused create
           never fires again by itself. */}
-      {!ptyId && createAttempt?.state === 'createFailed' && (
+      {/* Gated on the surface binding, not the local ptyId: a pane whose
+          binding was cleared still holds its old id locally until a
+          replacement binds. */}
+      {!externalPtyId && createAttempt?.state === 'createFailed' && (
         <div role="alert" className="absolute inset-x-2 top-2 z-20 rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
           <p className="break-words">{t('terminal.createFailed')}</p>
           <p className="mt-1 break-words text-[var(--text-muted)]">{createAttempt.error}</p>
