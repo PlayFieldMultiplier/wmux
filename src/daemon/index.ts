@@ -7363,6 +7363,10 @@ function wireContextWatchers(
   };
   const onCwd = (payload: { sessionId: string; cwd: string }) => {
     const meta = sessionManager.getSession(payload.sessionId)?.meta;
+    // Only a live session is watched. A WSL pane's share is polled, and its own
+    // wsl.exe is what keeps the distro running; a cwd adopted for a pane that
+    // has exited (adoptAgentCwd) must not start a poll that would wake it.
+    if (meta?.state !== 'attached' && meta?.state !== 'detached') return;
     const session = { cwd: payload.cwd, cmd: meta?.cmd, wslTarget: meta?.wslTarget };
     gitWatcher.update(payload.sessionId, gitWatchCwdFor(session), gitDirMapperFor(session));
   };
@@ -7372,6 +7376,9 @@ function wireContextWatchers(
   sessionManager.on('session:created', onCreated);
   sessionManager.on('session:cwd', onCwd);
   sessionManager.on('session:died', onGone);
+  // An involuntary exit leaves the session suspended, not died: its watch
+  // (and any share poll) goes too.
+  sessionManager.on('session:interrupted', onGone);
   sessionManager.on('session:destroyed', onGone);
 
   portWatcher.start();
@@ -7387,6 +7394,7 @@ function wireContextWatchers(
     sessionManager.off('session:created', onCreated);
     sessionManager.off('session:cwd', onCwd);
     sessionManager.off('session:died', onGone);
+    sessionManager.off('session:interrupted', onGone);
     sessionManager.off('session:destroyed', onGone);
     portWatcher.stop();
     gitWatcher.dispose();

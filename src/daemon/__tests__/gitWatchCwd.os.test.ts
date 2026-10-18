@@ -79,6 +79,23 @@ describe('daemon git watcher wiring (#2407)', () => {
     expect(mapped).toHaveLength(all.length);
   });
 
+  // A WSL pane's share is polled, and the pane's own wsl.exe is what keeps its
+  // distro running. These pin the argument that no poll ever runs against a
+  // stopped distro: a watch starts only for a live session and goes with it.
+  it('watches only live sessions, and drops a session on every way it stops', () => {
+    const start = src.indexOf('function wireContextWatchers(');
+    const body = src.slice(start, src.indexOf('\n}', start));
+    for (const event of ['session:died', 'session:interrupted', 'session:destroyed']) {
+      expect(body).toContain(`sessionManager.on('${event}', onGone);`);
+      expect(body).toContain(`sessionManager.off('${event}', onGone);`);
+    }
+    expect(body).toContain('for (const s of sessionManager.listLiveSessions()) {');
+    const onCwd = body.slice(body.indexOf('const onCwd ='), body.indexOf('const onGone ='));
+    expect(onCwd).toMatch(/if \(meta\?\.state !== 'attached' && meta\?\.state !== 'detached'\) return;\s+const session/);
+    // No other path starts a watch.
+    expect(body.match(/gitWatcher\.update\(/g)).toHaveLength(3);
+  });
+
   it('reads the session\'s WSL target for a cwd change', () => {
     const start = src.indexOf('const onCwd = (payload: { sessionId: string; cwd: string }) => {');
     expect(start).toBeGreaterThan(-1);

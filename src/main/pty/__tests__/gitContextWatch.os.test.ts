@@ -11,6 +11,8 @@ import {
   serialProbeIo,
   REMOTE_POLL_MS,
   REMOTE_RESOLVE_TIMEOUT_MS,
+  REMOTE_POLL_DEADLINE_MS,
+  REMOTE_POLL_MAX_MS,
   type ProbeIo,
   type GitWatchFactory,
   type GitWatchListener,
@@ -943,19 +945,121 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(walks).toBe(1 + 4); // rounds 1, 3, 7 and 15
   });
 
-  it('a superseded walk sends no further probes', async () => {
+  it('a poll round the distro does not answer reads as unknown at its deadline, and queues nothing more', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
     const io = holdableIo();
     const watcher = makeRemoteWatcher(io.io);
-    const dirs = Array.from({ length: 5 }, () => path.join(tmp(), 'a', 'b'));
+    watcher.update('s1', root);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+
     io.hold();
-    for (const dir of dirs) watcher.update('s1', dir);
-    watcher.remove('s1');
-    const queued = io.probes; // the first probe of each walk
-    expect(queued).toBe(dirs.length);
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS); // the round starts and sticks
+    const stuck = io.probes;
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_DEADLINE_MS - 1);
+    expect(events).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+
+    // Backed off, and nothing stacked behind the stuck round.
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MAX_MS * 2);
+    expect(io.probes).toBe(stuck);
+    expect(watcher.probesOutstanding).toBe(1);
+
+    // The late answer is dropped; the next round reads afresh and recovers.
+    fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/after\n');
     io.release();
     await settle();
-    expect(io.probes).toBe(queued);
+    expect(events.at(-1)?.branch).toBeNull();
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MAX_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'after', isWorktree: false });
+  });
+
+  it('backs off a stuck poll, then returns to the normal interval once it answers', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const io = holdableIo();
+    makeRemoteWatcher(io.io).update('s1', root);
+    await settle();
+    io.hold();
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS + REMOTE_POLL_DEADLINE_MS);
+    io.release();
+    await settle();
+    const before = io.probes;
+    // The next round comes at twice the interval, not at the normal one.
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS * 2 - 1);
+    await settle();
+    expect(io.probes).toBe(before);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(io.probes).toBe(before + 1);
+    // Answered: the interval is back to normal.
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(io.probes).toBe(before + 2);
+  });
+
+  it.runIf(process.platform === 'win32')('a wedged distro does not hold up another distro\'s panes', async () => {
+    // Two distros' shares, answered from memory: A never answers, B does.
+    let headB = 'ref: refs/heads/b-main\n';
+    const answer: ProbeIo = ({ op, path: p }) => {
+      if (/^\\\\wsl\$\\A\\/i.test(p)) return new Promise(() => undefined);
+      if (op === 'stat') return Promise.resolve(p === '\\\\wsl$\\B\\repo\\.git' ? 'dir' : 'missing');
+      if (op === 'read') return Promise.resolve(p === '\\\\wsl$\\B\\repo\\.git\\HEAD' ? headB : null);
+      return Promise.resolve(p);
+    };
+    const w = new GitContextWatcher(fake.factory, { io: answer });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('a', '\\\\wsl$\\A\\repo');
+    w.update('b', '\\\\wsl$\\B\\repo');
+    await settle();
+    expect(events).toEqual([{ sessionId: 'b', branch: 'b-main', isWorktree: false }]);
+    headB = 'ref: refs/heads/b-next\n';
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 'b', branch: 'b-next', isWorktree: false });
+    await vi.advanceTimersByTimeAsync(REMOTE_RESOLVE_TIMEOUT_MS);
+    expect(events.filter((e) => e.sessionId === 'a')).toEqual([{ sessionId: 'a', branch: null, isWorktree: false }]);
+  });
+
+  it('1,000 cds behind a stuck probe, then remove(): one probe in flight, none after', async () => {
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    const root = tmp();
+    io.hold();
+    watcher.update('s1', path.join(root, 'first'));
+    await settle();
+    expect(io.probes).toBe(1); // the first walk's first probe, now stuck
+    for (let i = 0; i < 1_000; i++) watcher.update('s1', path.join(root, `d${i}`));
+    await settle();
+    expect(watcher.probesOutstanding).toBe(1); // coalesced: nothing queued behind it
+    watcher.remove('s1');
+    io.release();
+    await settle();
+    expect(io.probes).toBe(1);
     expect(events).toEqual([]);
+  });
+
+  it('1,000 cds behind a stuck probe walk only the last one', async () => {
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    const root = tmp();
+    const last = path.join(root, 'd999');
+    fs.mkdirSync(last);
+    initFakeRepo(last, 'latest');
+    io.hold();
+    watcher.update('s1', path.join(root, 'first'));
+    await settle();
+    for (let i = 0; i < 1_000; i++) watcher.update('s1', path.join(root, `d${i}`));
+    io.release();
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'latest', isWorktree: false }]);
+    // The stuck probe, then the last cwd's own walk and HEAD read: `.git` is a
+    // directory there, so two probes.
+    expect(io.probes).toBe(1 + 2);
   });
 
   it('serialProbeIo runs one probe at a time', async () => {
