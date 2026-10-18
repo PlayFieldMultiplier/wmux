@@ -8567,6 +8567,14 @@ async function main(): Promise<void> {
     const managed = sessionManager.getSession(sessionId);
     if (!managed) return;
     if (state.alive) sessionManager.confirmAgent(sessionId);
+    // A slugless pick (a `tail -f`, an unknown child) that dies while the
+    // screen names an agent: arm() skipped probing while that pick read
+    // alive, so an agent launched in the meantime was never attributed.
+    // Probe again, or the launch edge that consumes the recovery offer and
+    // names the pane never comes.
+    if (!state.alive && state.slug === undefined && managed.bridge.getLastAgent()) {
+      agentProcessTracker.arm(sessionId, managed.meta.pid);
+    }
     // A death edge, or a launch edge for a different agent than the last one
     // seen here, ends the previous agent's running episode.
     const previousSlug = managed.meta.lastDetectedAgent;

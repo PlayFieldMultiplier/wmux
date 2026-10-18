@@ -141,6 +141,15 @@ describe('X6 ② reboot-survival durability', () => {
     expect(body.slice(guard, guard + 160)).toMatch(/recoveredAgentShellIds\.delete\(sessionId\);\s*recoveredResumeBindings\.delete\(sessionId\);/);
   });
 
+  it('a slugless pick dying while the screen names an agent probes again', () => {
+    // arm() is a no-op while any pick reads alive, so an agent launched
+    // while a `tail -f` was still tracked would never reach a launch edge.
+    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const idx = src.indexOf('agentProcessTracker.setStateChangeListener(');
+    const body = src.slice(idx, idx + 8000);
+    expect(body).toMatch(/if \(!state\.alive && state\.slug === undefined && managed\.bridge\.getLastAgent\(\)\) \{\s*agentProcessTracker\.arm\(sessionId, managed\.meta\.pid\);/);
+  });
+
   it('a hook that resolves to a live agent consumes the recovery offer', () => {
     const src = fs.readFileSync(daemonIndexPath, 'utf-8');
     const idx = src.indexOf('onAuthorityTouched: (sessionId, signal) =>');
