@@ -14,7 +14,9 @@ name: Runtime suite
 # - on demand: `gh workflow run runtime.yml --ref <branch>` (or "Run workflow"
 #   in the Actions tab) for a pull request that touches what this suite covers.
 #
-# Nothing requires this workflow to pass. A red run is the notification.
+# Nothing requires this workflow to pass. A red run on main opens a
+# `Nightly red: <workflow>` issue (scripts/ci-failure-issue.mjs), which the
+# triage bot picks up; the next green run closes it.
 on:
   schedule:
     # 18:23 UTC = 03:23 KST. Off the hour: scheduled runs on :00 queue longest.
@@ -35,6 +37,12 @@ concurrency:
 
 jobs:
   validate-runtime:
+    # The report steps below file and close an issue (issues) and read the
+    # run's job list (actions). The workflow default stays read-only.
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     runs-on: windows-latest
     # The runtime suite takes ~4-5 min plus setup; the cap only stops a hang.
     timeout-minutes: 25
@@ -66,3 +74,19 @@ jobs:
           # Tells those suites the bundle was promised, so removing the step
           # above fails a test instead of silently retiring both files.
           WMUX_REQUIRE_DAEMON_BUNDLE: '1'
+
+      # Last: a red run on main opens (or comments on) one `Nightly red:
+      # <workflow>` issue, so the triage bot sees it; a green one closes it.
+      # Off main this is a branch run someone dispatched and is watching.
+      # scripts/lib/ci-failure-issue.mjs has the rules.
+      - name: Report a red run as an issue
+        if: failure() && github.ref == 'refs/heads/main'
+        run: node scripts/ci-failure-issue.mjs --state failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Close the issue on a green run
+        if: success() && github.ref == 'refs/heads/main'
+        run: node scripts/ci-failure-issue.mjs --state success
+        env:
+          GH_TOKEN: ${{ github.token }}
