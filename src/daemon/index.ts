@@ -4012,6 +4012,7 @@ function registerRpcHandlers(
         pipeServer.broadcast(event);
       },
       onClaudeLine: (sessionId, path, line) => turnEnds.noteLine(sessionId, path, line),
+      onClaudeGap: (sessionId) => turnEnds.noteGap(sessionId),
       afterTick: () => turnEnds.settle(),
     });
     transcriptActivity.start();

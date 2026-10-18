@@ -131,6 +131,9 @@ export interface TranscriptActivityDeps {
    * entry of a turn that failed before the watch existed is not lost.
    */
   onClaudeLine?: (sessionId: string, path: string, line: string) => void;
+  /** Lines of this session's Claude transcript were skipped unread (more was
+   *  appended in one tick than READ_CAP_BYTES): what they said is unknown. */
+  onClaudeGap?: (sessionId: string) => void;
   /** Runs at the end of every tick. */
   afterTick?: () => void;
   now?: () => number;
@@ -392,6 +395,7 @@ export class TranscriptActivityWatcher {
       watch.replay = watch.lines;
       this.replayLines(id, watch);
     } else if (stat.size - watch.offset > READ_CAP_BYTES) {
+      if (watch.lines) this.deps.onClaudeGap?.(id);
       const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: watch.parse });
       if (!page) { this.watches.delete(id); return; }
       events = page.events;

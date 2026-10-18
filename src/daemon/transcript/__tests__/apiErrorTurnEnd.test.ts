@@ -220,6 +220,33 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     expect(lines).toEqual([turnDuration, error]);
   });
 
+  it('drops a pending error when the watcher skips lines after it', () => {
+    const file = path.join(dir, 's.jsonl');
+    fs.writeFileSync(file, `${turnDuration}\n`);
+    const binding: ResumeBinding = { agent: 'claude', sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+    let watcher: TranscriptActivityWatcher | null = null;
+    const g = gate({ isReader: (id, p) => watcher?.readsLines(id, p) === true });
+    watcher = new TranscriptActivityWatcher({
+      listSessionIds: () => ['pty-1'],
+      getBinding: () => binding,
+      isAgentAlive: () => true,
+      emit: () => undefined,
+      onClaudeLine: (id, p, line) => g.turnEnds.noteLine(id, p, line),
+      onClaudeGap: (id) => g.turnEnds.noteGap(id),
+      afterTick: () => g.turnEnds.settle(),
+      minGapMs: 0,
+    });
+    watcher.tick();
+    fs.appendFileSync(file, `${apiError('server_error', 'overloaded')}\n`);
+    watcher.tick();
+    // The turn goes on: a reply, then more than one tick can read.
+    const blob = JSON.stringify({ type: 'system', subtype: 'blob', data: 'x'.repeat(300 * 1024) });
+    fs.appendFileSync(file, `${reply}\n${blob}\n`);
+    g.advance(GRACE_MS);
+    watcher.tick();
+    expect(g.sent).toEqual([]);
+  });
+
   it('replays a transcript two panes share once, for the pane that keeps it', () => {
     const file = path.join(dir, 's.jsonl');
     fs.writeFileSync(file, `${apiError('oauth_org_not_allowed', NOTICE)}\n${turnDuration}\n`);

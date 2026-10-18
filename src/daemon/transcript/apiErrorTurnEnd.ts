@@ -132,6 +132,13 @@ export class ApiErrorTurnEnds {
     else if (this.pending.has(sessionId) && isTurnProgress(line)) this.pending.delete(sessionId);
   }
 
+  /** The watcher skipped lines of the pane's transcript. A pending error may
+   *  have been followed by the turn going on, so it no longer stands for the
+   *  turn end; an error in what was read after the gap arrives as a line. */
+  noteGap(sessionId: string): void {
+    this.pending.delete(sessionId);
+  }
+
   /** Every resolved hook signal for the session; `ts` is when the hook fired. */
   noteHookSignal(sessionId: string, kind: string, ts?: number): void {
     // Compared with the entry's own time, so the hook's firing time, not its
