@@ -1497,6 +1497,10 @@ export function clonePaneTreeFresh(pane: Pane): Pane {
       // go too (#1129): a clone that kept `remoteOwned` would offer to
       // destroy a session it does not point at.
       delete next.remoteOwned;
+      // #2398 — a staged dead-pane recovery names the SOURCE pane's dead
+      // session (its directory, WSL target and resume binding); the clone is
+      // a fresh pane under the copied profile, not that session's replacement.
+      delete next.pendingRecovery;
       return next;
     });
     // Preserve which surface was active by POSITION, since ids changed.
