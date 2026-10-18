@@ -114,6 +114,13 @@ interface AgentPattern {
   // An optional "gate" regex: patterns are only checked if the gate has
   // previously matched in this session, confirming the agent is active.
   gate?: RegExp;
+  /**
+   * Line-level chrome check the gate must ALSO pass, for an agent whose name
+   * is an ordinary word in other agents' output. The gate stays a cheap
+   * substring hint; this decides. Declared on the row so the open rule is
+   * not a per-slug branch in checkGates.
+   */
+  chrome?: (line: string) => boolean;
   patterns: { regex: RegExp; status: AgentEvent['status']; message: string }[];
 }
 
@@ -387,7 +394,16 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Gemini CLI',
     slug: 'gemini',
-    gate: /gemini |Gemini CLI/,
+    // Cheap hint only — checkGates opens this gate through isGeminiChrome, a
+    // line-level check. The old substring gate (`gemini ` / `Gemini CLI`)
+    // opened on any row that merely named Gemini — a Claude reply comparing
+    // models, `cd ~/projects/gemini`, `npm i -g @google/gemini-cli` — and on
+    // a pane whose Claude gate was not yet confirmed (or whose Claude had
+    // exited) that made Gemini the pane's lastAgent. The daemon persists that
+    // slug as lastDetectedAgent, so after a restart a Claude-only pane
+    // offered "Resume Gemini" and the exact-session resume never matched.
+    gate: /[Gg]emini/,
+    chrome: (line) => isGeminiChrome(line),
     patterns: [
       { regex: /^gemini>\s*$/,                   status: 'waiting',   message: 'Waiting for input' },
     ],
@@ -741,6 +757,22 @@ function isCodexChrome(line: string): boolean {
   const v = visibleChrome(stripped);
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
     || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v);
+}
+
+/**
+ * The Gemini CLI's own chrome, as opposed to a row that merely names Gemini:
+ * the status footer (`~/repo  no sandbox (see /docs)  gemini-2.5-pro (98%
+ * context left)`), which the TUI redraws under the composer for the whole
+ * session, or a row whose visible text STARTS with `Gemini CLI` (the update
+ * notice, `Gemini CLI update available`). Prose, a shell command or a
+ * package name that contains the word does not count.
+ */
+function isGeminiChrome(line: string): boolean {
+  const stripped = stripAnsi(line);
+  if (SOURCE_LINE_RE.test(stripped)) return false;
+  const v = visibleChrome(stripped);
+  return /\bgemini-[\w.-]+\s*\(\d+%\s*context\s*left\)/i.test(v)
+    || /^Gemini CLI\b/.test(v);
 }
 
 /**
@@ -1202,7 +1234,9 @@ export class AgentDetector {
             ? candidateLines(clean).some(isGrokChrome)
             : ap.slug === 'codex'
               ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(isCodexChrome)
-              : !blockedTakeover && ap.gate.test(clean);
+              : ap.chrome
+                ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(ap.chrome)
+                : !blockedTakeover && ap.gate.test(clean);
       if (!gateMatched) continue;
 
       this.activeAgents.add(ap.agent);

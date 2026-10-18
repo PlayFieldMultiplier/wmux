@@ -463,6 +463,18 @@ describe('toResumeCommand (X6)', () => {
     it('EXCLUDES supervised units', () => {
       expect(resumeOfferForRecovered({ supervision: { restart: 'always' }, lastDetectedAgent: 'claude' })).toBeUndefined();
     });
+    it('prefers the saved binding\'s agent over a contradicting screen guess', () => {
+      // A Claude-only pane whose detector got taken over by a row naming
+      // another agent: the binding is the hook's own word, the guess is not.
+      const resumeBinding = { agent: 'claude', sessionId: 'abc', cwd: '/w' };
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', resumeBinding })).toBe('claude');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding })).toBe('claude');
+      expect(resumeOfferForRecovered({ resumeBinding })).toBe('claude');
+    });
+    it('falls back to lastDetectedAgent when the binding is unusable or unresumable', () => {
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding: { agent: 'claude', sessionId: '', cwd: '/w' } })).toBe('codex');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding: { agent: 'gemini', sessionId: 'x', cwd: '/w' } })).toBe('codex');
+    });
   });
 });
 

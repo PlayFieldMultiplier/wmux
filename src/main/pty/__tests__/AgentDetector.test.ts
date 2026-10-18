@@ -465,6 +465,49 @@ describe('AgentDetector', () => {
     });
   });
 
+  describe('Gemini CLI gate is line-level chrome, not a substring', () => {
+    it('opens the gate on the status footer (model + context-left)', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('~/repo   no sandbox (see /docs)   gemini-2.5-pro (98% context left)\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+      const agents = cb.mock.calls.map((c) => (c[0] as { agent: string }).agent);
+      expect(agents).toContain('Gemini CLI');
+    });
+
+    it('opens the gate on a row that starts with "Gemini CLI"', () => {
+      const det = new AgentDetector();
+      det.feed('Gemini CLI update available! 0.1.9 → 0.2.0\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+    });
+
+    it('does NOT open the gate on a Claude reply, a shell command or a package name that names Gemini', () => {
+      // Reddit report: a Claude-only pane came back after a reboot offering
+      // "Resume Gemini" — the substring gate had taken the pane over on text
+      // like these while Claude's compound gate was still unconfirmed.
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('⏺ I compared it with the gemini model and Claude was faster.\n');
+      det.feed('$ cd ~/projects/gemini \n');
+      det.feed('GEMINI_API_KEY=xxx gemini pro\n');
+      det.feed('⏺ Install Gemini CLI with npm i -g @google/gemini-cli\n');
+      expect(det.getLastAgent()).toBeNull();
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it('does NOT open the gate after Claude exited and the shell echoes "gemini"', () => {
+      const det = new AgentDetector();
+      det.feed('\u001b]0;✳ Claude Code\u0007');
+      det.feed('? for shortcuts                       bypass permissions on (shift+tab to cycle)\n');
+      expect(det.getLastAgent()).toBe('Claude Code');
+      det.feed('\u001b]133;A\u0007');
+      det.feed('$ ls gemini \n');
+      expect(det.getLastAgent()).toBe('Claude Code');
+    });
+  });
+
   describe('Grok CLI (live capture 2026-08-16)', () => {
     it('opens the gate on the version banner and reports waiting on the footer', () => {
       const det = new AgentDetector();
