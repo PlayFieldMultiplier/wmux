@@ -45,9 +45,18 @@ export interface DaemonSession {
   lastActivity: string;     // ISO 8601
   pid: number;              // child process PID
   /**
-   * OS-reported creation time of `pid`, as the platform prints it (Windows
-   * CIM `CreationDate` in wmic's DMTF format, posix `ps -o lstart=`). Opaque — only ever compared
-   * for equality against a fresh reading of the same pid.
+   * Windows: the creation time of `pid` as a FILETIME (100 ns units since
+   * 1601), in decimal — a bigint cannot go into JSON and a number would lose
+   * precision. Read natively and stamped synchronously right after the spawn
+   * (#2398). Compared exactly against a fresh reading of the same pid. Absent
+   * on posix, and on records written before it existed.
+   */
+  pidCreatedAtFt?: string;
+  /**
+   * OS-reported creation time of `pid`, as the platform prints it. Posix
+   * still writes it (`ps -o lstart=`, compared for equality). Windows only
+   * reads it: records from before `pidCreatedAtFt` hold wmic's DMTF format
+   * (`20260915084549.500977+540`), compared in UTC microseconds.
    *
    * A pid alone is not an identity: Windows recycles pids aggressively and a
    * tombstone can outlive its shell by `deadTtlHours`, so a later "pid is
@@ -55,7 +64,7 @@ export interface DaemonSession {
    * (pid, pidStartTime) is unique, and #646's reaping paths kill a process
    * tree — they must not fire on a recycled pid.
    *
-   * Optional: filled in asynchronously just after spawn (so it is absent for
+   * Optional: on posix it is filled in asynchronously just after spawn (so it is absent for
    * the first moments of a session's life), and absent entirely from records
    * written before this field existed. Consumers must degrade, not guess.
    */

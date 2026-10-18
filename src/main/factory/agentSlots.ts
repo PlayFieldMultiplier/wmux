@@ -20,6 +20,7 @@
 // takes a free slot like a bot's resume does, or is refused (tryAcquire). A task row whose workspace is gone, or whose panes run no agent
 // any more, holds no slot either (an open row can outlive its worker).
 
+import { holderInputsChanged } from './holderInputs';
 import type { LedgerEntry } from '../../shared/ledger';
 
 export const SLOT_WAIT_MAX_MS = 30 * 60_000;
@@ -146,6 +147,10 @@ export interface AgentSlotPorts {
   runningBots: () => number;
   /** Live workers: open fan-out tasks and resumed workers. */
   liveWorkers: () => number;
+  /** The live workers already count the granted and held slots (the holder
+   *  set, workerHolders.ts, reads them through pendingSlots): inUse adds
+   *  neither again. */
+  liveWorkersIncludeGrants?: boolean;
   /** Whether a spawned worker whose ledger row was not written still holds
    *  its slot: its workspace lives and still no row counts it. Absent: a held
    *  slot is released at once. */
@@ -174,6 +179,8 @@ interface Waiter {
 interface Grant {
   botId?: string;
   taskId?: string;
+  /** The owner's Resume took it (not a bot's). */
+  byOwner?: boolean;
   at: number;
 }
 
@@ -185,16 +192,47 @@ export class AgentSlots {
   private readonly queue: Waiter[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
-
   constructor(private readonly ports: AgentSlotPorts) {}
 
   /** Agents counted against the cap now. Never throws. */
   inUse(): number {
+    this.prune();
+    const own = this.grants.size + this.held.size;
+    let n = this.ports.liveWorkersIncludeGrants ? 0 : own;
+    try {
+      n += Math.max(0, this.ports.runningBots());
+    } catch {
+      /* counted as what could be read */
+    }
+    try {
+      n += Math.max(0, this.ports.liveWorkers());
+    } catch {
+      // Fail closed: the slots granted and held here still count when the
+      // workers that include them cannot be read.
+      if (this.ports.liveWorkersIncludeGrants) n += own;
+    }
+    return n;
+  }
+
+  /** The slots granted and not released yet, and the spawned workspaces
+   *  held with no ledger row: what the holder set counts of this budget. */
+  pendingSlots(): { grants: Array<{ taskId?: string; botId?: string; byOwner?: boolean }>; held: string[] } {
+    this.prune();
+    return {
+      grants: [...this.grants].map((g) => ({ ...(g.taskId ? { taskId: g.taskId } : {}), ...(g.botId ? { botId: g.botId } : {}), ...(g.byOwner ? { byOwner: true } : {}) })),
+      held: [...this.held],
+    };
+  }
+
+  /** Drops grants past SLOT_GRANT_MAX_MS and held workspaces stillHeld no
+   *  longer keeps. */
+  private prune(): void {
     const at = (this.ports.now ?? Date.now)();
     for (const g of [...this.grants]) {
       if (at - g.at < SLOT_GRANT_MAX_MS) continue;
       (this.ports.log ?? ((m: string) => console.warn(m)))(`[factory] the agent slot granted for ${g.taskId ?? 'a launch'} was never released; it no longer counts`);
       this.grants.delete(g);
+      holderInputsChanged();
     }
     for (const ws of [...this.held]) {
       let keep = false;
@@ -203,15 +241,11 @@ export class AgentSlots {
       } catch {
         keep = true; // cannot tell: keep counting it
       }
-      if (!keep) this.held.delete(ws);
+      if (!keep) {
+        this.held.delete(ws);
+        holderInputsChanged();
+      }
     }
-    let n = this.grants.size + this.held.size;
-    try {
-      n += Math.max(0, this.ports.runningBots()) + Math.max(0, this.ports.liveWorkers());
-    } catch {
-      /* counted as what could be read */
-    }
-    return n;
   }
 
   waiting(): WaitingWorker[] {
@@ -247,10 +281,11 @@ export class AgentSlots {
   }
 
   /** A slot now, or null when none is free (or others wait first): for a
-   *  start that does not wait (a bot's resume answers its tool call). */
-  tryAcquire(): SlotGrant | null {
+   *  start that does not wait (a bot's resume answers its tool call). `w`:
+   *  the task it is for, so the slot and that task count as one. */
+  tryAcquire(w?: { botId?: string; taskId?: string; byOwner?: boolean }): SlotGrant | null {
     if (this.disposed || this.queue.length > 0 || this.inUse() >= this.cap()) return null;
-    return this.grant();
+    return this.grant(w);
   }
 
   /** The cap in force (at least 1). */
@@ -304,22 +339,27 @@ export class AgentSlots {
     }
   }
 
-  private grant(w?: Pick<WaitingWorker, 'botId' | 'taskId'>): SlotGrant {
+  private grant(w?: { botId?: string; taskId?: string; byOwner?: boolean }): SlotGrant {
     let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
       this.grants.delete(g);
+      holderInputsChanged();
       this.kick();
     };
-    const g: Grant = { ...(w ? { botId: w.botId, taskId: w.taskId } : {}), at: (this.ports.now ?? Date.now)() };
+    const g: Grant = { ...(w?.botId ? { botId: w.botId } : {}), ...(w?.taskId ? { taskId: w.taskId } : {}), ...(w?.byOwner ? { byOwner: true } : {}), at: (this.ports.now ?? Date.now)() };
     this.grants.add(g);
+    holderInputsChanged();
     return {
       ok: true,
       release,
       hold: (workspaceId) => {
         if (released) return;
-        if (workspaceId && this.ports.stillHeld) this.held.add(workspaceId);
+        if (workspaceId && this.ports.stillHeld) {
+          this.held.add(workspaceId);
+          holderInputsChanged();
+        }
         release();
       },
     };

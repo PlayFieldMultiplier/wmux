@@ -480,7 +480,7 @@ export interface FanOutServiceOptions {
   firstRunRecheckMs?: number;
   /** Depth-1 lineage + live-cap store. Injected in tests; defaults to the
    *  hosted one. */
-  lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'>;
+  lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'> & Partial<Pick<FanOutGuards, 'bindTask'>>;
   /** Each task's launch generation on disk (factory/workerSlots.ts).
    *  Injected in tests; defaults to the hosted one. */
   launches?: Pick<WorkerSlots, 'beginLaunch' | 'launched' | 'released'>;
@@ -574,7 +574,7 @@ export class FanOutService {
   /** F15 — deferred re-checks still in flight (tests await them). */
   private pendingRechecks: Promise<void>[] = [];
   /** Depth-1 lineage + live-cap store (absent = the hosted one). */
-  private readonly lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'>;
+  private readonly lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'> & Partial<Pick<FanOutGuards, 'bindTask'>>;
   private readonly launches?: Pick<WorkerSlots, 'beginLaunch' | 'launched' | 'released'>;
   private readonly workerPermissionMode: () => FanoutWorkerPermissionMode;
   private readonly outputsRoot: string;
@@ -817,6 +817,7 @@ export class FanOutService {
       verifiedWorkspaceId,
       memberId,
       missionIdemKey: `${req.idempotencyKey}-${k}`,
+      reservationKey: req.idempotencyKey,
       ...(entries[k].role ? { role: entries[k].role } : {}),
       ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
       ...(req.branches?.[k] ? { branch: req.branches[k] } : {}),
@@ -850,7 +851,7 @@ export class FanOutService {
       tasks.push(r);
       // This task is through its spawn: from here its stamped workspace (if
       // it got one) is what the live cap counts, not the in-flight booking.
-      (this.lineage ?? getFanOutGuards()).taskSettled(req.idempotencyKey);
+      (this.lineage ?? getFanOutGuards()).taskSettled(req.idempotencyKey, r.taskId);
     }
 
     // 배정됐지만 태스크가 뜨지 못한 포트는 창에 돌려준다(예약 TTL을 기다리지 않게).
@@ -953,7 +954,7 @@ export class FanOutService {
       if (!result.tasks[k]?.pending) return;
       result.tasks[k] = r;
       result.ok = result.tasks.every((t) => t.ok || t.pending);
-      guards.taskSettled(key);
+      guards.taskSettled(key, r.taskId);
       const left = remaining();
       try {
         req.onDeferredLaunch?.(r, { remaining: left, ...(result.outputBatchDir ? { outputBatchDir: result.outputBatchDir } : {}) });
@@ -1109,6 +1110,7 @@ export class FanOutService {
         verifiedWorkspaceId,
         memberId,
         missionIdemKey: `${req.idempotencyKey}-${k}`,
+        reservationKey: req.idempotencyKey,
         output: { batchDir },
         ...(entries[k].role ? { role: entries[k].role } : {}),
         ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
@@ -1130,8 +1132,9 @@ export class FanOutService {
         tasks.push({ index: k, title: entries[k].title, ok: false, pending: { waitingOn: graph.dependsOn[k] } });
         continue;
       }
-      tasks.push(await spawnAt(k, tasks));
-      (this.lineage ?? getFanOutGuards()).taskSettled(req.idempotencyKey);
+      const r = await spawnAt(k, tasks);
+      tasks.push(r);
+      (this.lineage ?? getFanOutGuards()).taskSettled(req.idempotencyKey, r.taskId);
     }
     const result: FanOutResult = { ok: tasks.every((t) => t.ok || t.pending), tasks, outputBatchDir: batchDir };
     const warnings: string[] = [];
@@ -1216,6 +1219,8 @@ export class FanOutService {
     verifiedWorkspaceId: string;
     memberId: string;
     missionIdemKey: string;
+    /** The fan-out's key in the caps' bookings (FanOutGuards.bindTask). */
+    reservationKey?: string;
     /** T2 — WMUX_TASK_PORT for this task (absent = no range / window empty). */
     port?: number;
     /** T2 — trust-gated worktree setup hook (absent = nothing to run). */
@@ -1465,6 +1470,11 @@ export class FanOutService {
         };
       }
     }
+
+    // The task's booking under the caps is this task's from now on, so its
+    // agent slot, its workspace and its ledger row count as one holder with
+    // it (factory/workerHolders.ts).
+    if (ctx.reservationKey) (this.lineage ?? getFanOutGuards()).bindTask?.(ctx.reservationKey, taskId);
 
     // A slot under the factory's agent budget: the task waits here (its
     // worktree ready, nothing launched) until one is free.

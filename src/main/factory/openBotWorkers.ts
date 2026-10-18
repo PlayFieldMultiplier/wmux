@@ -2,14 +2,18 @@
 //
 // The fan-out's budget check (fanout.rpc.ts) and the bot's status (the
 // profile's Today block, BotRuntime.status) count a bot's running workers
-// the same way: open bot tasks whose worker still holds an agent slot, minus
-// verify tasks whose verdict is recorded, plus resumed workers.
+// the same way: its bot holders (workerHolders.ts), which every other cap
+// filters too. Until the worker lifecycle host installs the holder set: open
+// bot tasks whose worker still holds an agent slot, minus verify tasks whose
+// verdict is recorded, plus resumed workers.
 
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getFactLog, type FactLog } from './factLog';
 import { getVerdictedTasks } from './verdictedTasks';
 import { getSlotLiveness, rowHoldsAgentSlot } from './agentSlots';
 import { resumedWorkersLive } from './workerReclaim';
+import { holderCounts, liveHolders } from './workerHolders';
+import { getFanOutGuards } from '../worktask/fanoutGuards';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { Fact } from '../../shared/facts';
 
@@ -59,8 +63,14 @@ export function countOpenBotWorkers(
   return { bot, factory };
 }
 
-/** Open workers of `botId`, and of every bot, as the fan-out's cap counts them. */
-export function openBotWorkers(botId: string): { bot: number; factory: number } {
+/** Open workers of `botId`, and of every bot, as the fan-out's cap counts
+ *  them: fan-outs still being started included (`botStarting`: the bot's). */
+export function openBotWorkers(botId: string): { bot: number; factory: number; botStarting?: number } {
+  const holders = liveHolders();
+  if (holders) {
+    const c = holderCounts(holders.holders, botId);
+    return { bot: c.bot, factory: c.workers, botStarting: c.botStarting };
+  }
   const live = getSlotLiveness();
   const rows = getTaskLedger().list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r, live));
   const open = countOpenBotWorkers(rows, botId, (ids) => {
@@ -69,5 +79,8 @@ export function openBotWorkers(botId: string): { bot: number; factory: number } 
     for (const id of ids) if (kept?.has(id)) found.add(id);
     return found;
   });
-  return { bot: open.bot + resumedWorkersLive(botId), factory: open.factory + resumedWorkersLive() };
+  // The bot fan-outs booked and not through their start (FanOutGuards).
+  const booked = getFanOutGuards().reservedTasks().filter((u) => u.botId);
+  const bookedBot = booked.filter((u) => u.botId === botId).length;
+  return { bot: open.bot + resumedWorkersLive(botId) + bookedBot, factory: open.factory + resumedWorkersLive() + booked.length, botStarting: bookedBot };
 }

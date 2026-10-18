@@ -154,6 +154,7 @@ interface NativeBindings {
   GetLastError: () => number;
   OpenProcess: (access: number, inherit: number, pid: number) => Handle;
   GetProcessTimes: (handle: Handle, creation: Buffer, exit: Buffer, kernel: Buffer, user: Buffer) => number;
+  QueryFullProcessImageNameW: (handle: Handle, flags: number, name: Buffer, size: Buffer) => number;
 }
 
 /** undefined = load not attempted yet; null = attempted and unavailable. */
@@ -212,6 +213,9 @@ function loadBindings(): NativeBindings | null {
       GetProcessTimes: kernel32.func('GetProcessTimes', 'int', [
         'int64', 'void *', 'void *', 'void *', 'void *',
       ]) as NativeBindings['GetProcessTimes'],
+      QueryFullProcessImageNameW: kernel32.func('QueryFullProcessImageNameW', 'int', [
+        'int64', 'uint32', 'void *', 'void *',
+      ]) as NativeBindings['QueryFullProcessImageNameW'],
     };
   } catch (err) {
     warn(`koffi load failed — native snapshot disabled: ${err instanceof Error ? err.message : String(err)}`);
@@ -422,6 +426,67 @@ export function tryProcessCreatedAt(pid: number): bigint | null {
     }
   } catch {
     return null;
+  }
+}
+
+/** OpenProcess on a pid that no longer exists. */
+const ERROR_INVALID_PARAMETER = 87;
+/** QueryFullProcessImageNameW takes and returns a length in WCHARs; 32767 is the longest Win32 path. */
+const MAX_IMAGE_PATH_CHARS = 32767;
+
+/** Creation time (FILETIME, 100 ns units) and executable path of one live process. */
+export interface ProcessIdentityRow {
+  createdAt: bigint;
+  /** Null when Windows withholds the path while still reporting the times. */
+  imagePath: string | null;
+}
+
+/** Why {@link tryProcessIdentity} read nothing. `gone` is true only for a pid that no longer exists. */
+export interface ProcessIdentityFailure {
+  failure: string;
+  gone: boolean;
+}
+
+/**
+ * Creation time and executable path of one process through a single handle
+ * (#2398). This replaces a Windows PowerShell CIM query per read: during a
+ * cold-start burst those started dozens of PowerShell processes and timed
+ * out, which left the daemon unable to confirm any pid it wanted to reap.
+ *
+ * Never throws. A failure says why, so the caller can tell a pid that is gone
+ * (nothing to log) from a read that failed on a live one.
+ */
+export function tryProcessIdentity(pid: number): ProcessIdentityRow | ProcessIdentityFailure {
+  if (!Number.isInteger(pid) || pid <= 0) return { failure: `invalid pid ${pid}`, gone: true };
+  const b = loadFailed ? null : loadBindings();
+  if (!b) {
+    loadFailed = true;
+    return { failure: 'native process reads are unavailable', gone: false };
+  }
+  try {
+    const raw = b.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    const handle = typeof raw === 'bigint' ? raw : BigInt(raw);
+    if (handle === 0n) {
+      const code = b.GetLastError();
+      return { failure: `OpenProcess failed (error ${code})`, gone: code === ERROR_INVALID_PARAMETER };
+    }
+    try {
+      const creation = Buffer.alloc(8);
+      if (!b.GetProcessTimes(raw, creation, Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8))) {
+        return { failure: `GetProcessTimes failed (error ${b.GetLastError()})`, gone: false };
+      }
+      const name = Buffer.alloc(MAX_IMAGE_PATH_CHARS * 2);
+      const size = Buffer.alloc(4);
+      size.writeUInt32LE(MAX_IMAGE_PATH_CHARS, 0);
+      const imagePath = b.QueryFullProcessImageNameW(raw, 0, name, size)
+        ? name.toString('utf16le', 0, size.readUInt32LE(0) * 2) || null
+        : null;
+      return { createdAt: creation.readBigUInt64LE(0), imagePath };
+    } finally {
+      b.CloseHandle(raw);
+    }
+  } catch (err) {
+    return { failure: err instanceof Error ? err.message : String(err), gone: false };
   }
 }
 

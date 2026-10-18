@@ -35,6 +35,7 @@ import { getWakeQueue } from './wakeQueue';
 import {
   RECLAIM_CATCHUP_MS,
   REPORTED_IDLE_MS,
+  isReclaimableEnd,
   RESUMED_IDLE_MS,
   ReclaimedWorkers,
   createDaemonTurnSeed,
@@ -55,7 +56,6 @@ import {
   type WorkerRespawnInput,
   type WorkerResumePorts,
   type WorkerSessionInfo,
-  unreclaimedEndedWorkers,
   viewProtects,
   workerPanesIdle,
 } from './workerReclaim';
@@ -67,10 +67,14 @@ import { TaskWorktreeManager } from '../worktask/TaskWorktreeManager';
 import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { STOPPED_BY_OWNER } from './factoryStop';
-import { getFanOutGuards, setDormantRefresh, setDormantTaskWorkspaces } from '../worktask/fanoutGuards';
+import { getFanOutGuards, setDormantRefresh, setDormantTaskWorkspaces, taskOfWorkspace } from '../worktask/fanoutGuards';
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
-import { getWorkerSlots } from './workerSlots';
+import { getWorkerSlots, taskOfPane } from './workerSlots';
+import { holderInputsRevision } from './holderInputs';
+import { holderCounts, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
+import { getVerdictedTasks } from './verdictedTasks';
+import { verdictedTaskIds } from './openBotWorkers';
 import type { FanOutService } from '../worktask/FanOutService';
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
@@ -163,13 +167,22 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     readSessions: async () => parseSessionRead(await rpc('daemon.listSessions', { withRecovery: true })),
     workspaceRow: (ws) => ledger.findByTaskWorkspace(ws),
     row: (taskId) => ledger.get(taskId),
+    // The window runs from the task's last recorded launch (#2411), as the
+    // holder set's does (workerHolders.ts): a row edit never reopens it.
     endedRows: () => {
       const since = Date.now() - RECLAIM_CATCHUP_MS;
-      return ledger.list({}).filter((e) => e.updatedAt >= since && (e.status === 'completed' || e.status === 'cancelled' || e.status === 'failed'));
+      return ledger.list({}).filter((e) => (launches.launchOf(e.id)?.launchedAt ?? -Infinity) >= since && (e.status === 'completed' || e.status === 'cancelled' || e.status === 'failed'));
     },
     records: () => (reclaimOn ? reclaimed.all() : []),
     recordedSessions: (taskId) => reclaimedStore?.get(taskId)?.sessions.map((x) => x.sessionId) ?? [],
     sessionRecordOf: botWorkerSessionRecord,
+    paneTask: (sessionId) => {
+      const p = launches.paneOf(sessionId);
+      if (!p) return null;
+      const botId = launches.launchOf(p.taskId)?.botId;
+      return { taskId: p.taskId, ...(botId ? { botId } : {}) };
+    },
+    workspaceTask: (workspaceId) => launches.workspaceOf(workspaceId)?.taskId ?? null,
     facts: goneFacts,
     refreshMs: LIVENESS_REFRESH_MS,
   });
@@ -541,12 +554,19 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         return !!row && row.status === 'cancelled' && row.summary === STOPPED_BY_OWNER && row.updatedBy.kind === 'system';
       },
       // A bot's resume starts a worker: its own worker budget applies.
-      botWorkerRefusal: (botId, starting) => {
+      botWorkerRefusal: (botId, starting, taskId) => {
         const store = getBotStore();
         const profile = store?.get(botId);
         if (!store || !profile) return 'the bot was removed';
-        const open = slotRows().filter((r) => r.dispatch?.origin.botId === botId).length;
-        const c = checkWorkers(profile.budget, store.usageOf(botId), open + resumedLive(botId) + starting, 1, Date.now());
+        // The bot's holders (workerHolders.ts), as the fan-out's budget check
+        // counts them, less the resumes under way: each holds a granted slot
+        // before its check, so those that passed theirs are `starting`, and
+        // this one is the one added below.
+        const live = liveHolders();
+        const open = live
+          ? holderCounts(live.holders.filter((h) => h.taskId !== taskId && h.why !== 'resuming'), botId).bot + starting
+          : slotRows().filter((r) => r.dispatch?.origin.botId === botId).length + resumedLive(botId) + starting;
+        const c = checkWorkers(profile.budget, store.usageOf(botId), open, 1, Date.now());
         return c.ok ? null : `this bot's worker budget refuses another worker now (${c.reason})`;
       },
       note,
@@ -655,15 +675,65 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const rt = getBotRuntime();
     return rt ? (getBotStore()?.list({}) ?? []).filter((b) => rt.currentTurn(b.id) !== null).map((b) => b.name) : [];
   };
+  // The holder set every live-worker cap filters (workerHolders.ts), read
+  // from the records above on every look. The verdict scan reads only the
+  // verify tasks waiting for review (none: no scan) and stops at the first
+  // verdict of each.
+  const holderSnapshot = (): HolderSnapshot => {
+    const now = Date.now();
+    const rows = ledger.list({});
+    const entries = getWorkspaceMirror().getEntries();
+    const openIds = entries ? entries.map((e) => e.id) : [];
+    const ptys = new Map<string, readonly string[]>();
+    for (const e of entries ?? []) ptys.set(e.id, Array.isArray(e.ptyIds) ? e.ptyIds : []);
+    const stamps = new Map<string, { owner: string; origin?: { kind: string; botId?: string } }>();
+    for (const [ws, l] of Object.entries(getFanOutGuards().lineageFor(openIds))) {
+      stamps.set(ws, { owner: l.owner, ...(l.origin ? { origin: { kind: l.origin.kind, ...(l.origin.botId ? { botId: l.origin.botId } : {}) } } : {}) });
+    }
+    const verifyIds = rows.filter((r) => r.status === 'review_requested' && r.dispatch?.preset === 'verify').map((r) => r.id);
+    const kept = getVerdictedTasks();
+    const verdicted = verdictedTaskIds(verifyIds.filter((id) => !kept?.has(id)));
+    for (const id of verifyIds) if (kept?.has(id)) verdicted.add(id);
+    const pending = slots.pendingSlots();
+    return {
+      now,
+      rows,
+      reclaimable: new Set(rows.filter((r) => isReclaimableEnd(r, r.status)).map((r) => r.id)),
+      catchupMs: RECLAIM_CATCHUP_MS,
+      workspaces: entries ? new Set(openIds) : null,
+      ptys,
+      stamps,
+      read: taskLiveness.readState(),
+      readAt: taskLiveness.lastReadAt(),
+      idle: idle.get(),
+      busy: taskLiveness.busyWorkspaces(),
+      agentSeen: taskLiveness.agentSeen(),
+      agentTasks: taskLiveness.agentSeenTasks(),
+      gone: taskLiveness.goneTasks(),
+      goneAt: (taskId) => goneFacts.get(taskId)?.at,
+      records: reclaimOn ? reclaimed.all() : [],
+      verdicted,
+      taskOfWorkspace: (ws) => taskOfWorkspace(ws)?.taskId ?? null,
+      taskOfPane: (ptyId) => taskOfPane(ptyId)?.taskId ?? null,
+      launchAt: (taskId) => launches.liveLaunchAt(taskId),
+      launchOf: (taskId) => launches.launchOf(taskId),
+      reservations: getFanOutGuards().reservedTasks(),
+      grants: pending.grants,
+      heldWorkspaces: pending.held,
+    };
+  };
+  /** The bot holders that hold an agent: the agent budget's workers. */
+  const agentHolders = (): WorkerHolder[] => (liveHolders()?.holders ?? [])
+    .filter((h) => h.state !== 'free' && h.origin === 'bot' && !h.reserved);
   const slots = new AgentSlots({
     cap: () => getFactorySettings().maxConcurrentAgents,
     runningBots: () => runningBotNames().length,
-    // Open bot tasks whose worker still runs, ended bot tasks whose worker
-    // is not reclaimed yet and not known gone (taskWorkspaceLiveness.ts),
-    // resumed workers. The owner's own fan-outs and a row whose worker is
-    // gone do not count (rowHoldsAgentSlot).
-    liveWorkers: () => slotRows().length
-      + (reclaimOn ? unreclaimedEndedWorkers(ledger.list({}), reclaimed, Date.now(), taskLiveness.goneTasks()) + resumedLive() : 0),
+    // The bot holders past their reservation (workerHolders.ts): open bot
+    // tasks whose worker still runs, ended ones whose worker is not reclaimed
+    // or known gone, resumed workers, and the slots granted or held here. The
+    // owner's own fan-outs do not count.
+    liveWorkers: () => holderCounts(liveHolders()?.holders ?? []).agents,
+    liveWorkersIncludeGrants: true,
     // A spawned worker whose row was not written: while its workspace lives
     // and still no row names it.
     stillHeld: (workspaceId) => !ledger.findByTaskWorkspace(workspaceId)
@@ -671,7 +741,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     onWaiting: (w, inUse, cap) => {
       // What holds the slots: bots in a turn, then workers by title — in
       // English, and as values the reader's language words.
-      const held = slotHolderArgs(runningBotNames(), slotRows().map((r) => r.title), inUse);
+      const held = slotHolderArgs(runningBotNames(), agentHolders().filter((h) => h.title).map((h) => h.title as string), inUse);
       note(
         w.ownerWorkspaceId,
         (w.threadId ?? `task:${w.taskId}`) as ThreadId,
@@ -683,6 +753,21 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     changed,
   });
   setAgentSlots(slots);
+  // What moves between looks: a look is reused only within one turn and
+  // while none moved, so a decision right after a booking, a grant, a
+  // launch, a reclaim record, a verdict, a fact, a transition or a read
+  // sees it.
+  let transitions = 0;
+  let mirrorPushes = 0;
+  offs.push(ledger.onTransition(() => {
+    transitions++;
+  }));
+  offs.push(getWorkspaceMirror().onSnapshot(() => {
+    mirrorPushes++;
+  }));
+  const holderKey = (): readonly unknown[] => [getFanOutGuards(), holderInputsRevision(), transitions, mirrorPushes, taskLiveness.lastReadAt()];
+  setHolderSource(holderSnapshot, holderKey);
+  offs.push(() => setHolderSource(null));
   offs.push(ledger.onTransition(() => slots.kick()));
   offs.push(() => {
     slots.dispose();

@@ -142,9 +142,11 @@ import {
   getWin32BootId,
   getWin32BootIdSync,
   isPidAlive,
-  isWin32ShellProcess,
   isSameBootProven,
   mayReap,
+  readPosixStartTime,
+  readWin32ReapIdentity,
+  setNativeProcessReadWarn,
   shouldReconcileTombstone,
 } from './phantomExit';
 import { createSnapshotRunner } from './snapshotRunner';
@@ -157,6 +159,7 @@ import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonState } from './types';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
+import { gitWatchCwdFor } from './gitWatchCwd';
 import { randomUUID } from 'node:crypto';
 import { monitorEventLoopDelay, performance as nodePerformance } from 'node:perf_hooks';
 import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, isBrainPty } from '../shared/constants';
@@ -1639,25 +1642,44 @@ async function reapProcessTree(pid: number, reason: string): Promise<void> {
 async function reapIfIdentityConfirmed(opts: {
   pid: number;
   cmd: string;
+  storedCreatedAtFt?: string;
   storedStartTime?: string;
   reason: string;
 }): Promise<boolean> {
-  const [currentStartTime, looksLikeOurShell] = await Promise.all([
-    getProcessStartTime(opts.pid),
-    // Only consulted when no creation time was recorded, but probing both in
-    // parallel keeps the slow path off the critical path of the common case.
-    isOurShellProcess(opts.pid, opts.cmd),
-  ]);
+  // Windows reads the FILETIME and the executable natively, in one read
+  // (#2398); posix keeps `ps -o lstart=` and `ps -o comm=`.
+  const win32 = process.platform === 'win32';
+  let now: { currentCreatedAtFt: bigint | null; currentStartTime: string | null; currentGone: boolean; looksLikeOurShell: boolean };
+  if (win32) {
+    now = { ...readWin32ReapIdentity(opts.pid, opts.cmd), currentStartTime: null };
+  } else {
+    const [startRead, looksLikeOurShell] = await Promise.all([
+      readPosixStartTime(opts.pid),
+      // Only consulted when no creation time was recorded, but probing both in
+      // parallel keeps the slow path off the critical path of the common case.
+      isOurShellProcess(opts.pid, opts.cmd),
+    ]);
+    now = { currentCreatedAtFt: null, currentStartTime: startRead.value, currentGone: startRead.gone, looksLikeOurShell };
+  }
+  const { currentCreatedAtFt, currentStartTime, looksLikeOurShell } = now;
   const identity = classifyReapIdentity({
+    storedCreatedAtFt: opts.storedCreatedAtFt,
     storedStartTime: opts.storedStartTime,
-    currentStartTime,
-    looksLikeOurShell,
+    ...now,
   });
+  if (identity === 'gone') {
+    // Nothing to kill, and not a refusal: counting these as unconfirmed
+    // identities is what made the refusal counts unreadable.
+    log('info', `[reap] pid ${opts.pid} already exited (${opts.reason})`);
+    return false;
+  }
   if (!mayReap(identity)) {
+    const current = win32 ? currentCreatedAtFt?.toString() : currentStartTime;
     log(
       'warn',
       `[reap] refusing to kill pid ${opts.pid} (${opts.reason}): identity unconfirmed ` +
-        `(storedStartTime=${opts.storedStartTime ?? 'none'} currentStartTime=${currentStartTime ?? 'unknown'} ` +
+        `(storedCreatedAtFt=${opts.storedCreatedAtFt ?? 'none'} storedStartTime=${opts.storedStartTime ?? 'none'} ` +
+        `currentStartTime=${current ?? 'unknown'} ` +
         `looksLikeOurShell=${looksLikeOurShell} cmd=${opts.cmd}) — the pid may belong to another process now`,
     );
     return false;
@@ -1670,24 +1692,21 @@ async function reapIfIdentityConfirmed(opts: {
   return true;
 }
 
-/** Check if a PID belongs to the shell process we originally spawned.
+/** Check if a PID belongs to the shell process we originally spawned (posix;
+ *  Windows reads it with the creation time in readWin32ReapIdentity).
  *  Prevents killing unrelated processes after PID recycling (e.g. reboot). */
 async function isOurShellProcess(pid: number, expectedCmd: string): Promise<boolean> {
   try {
     const { execFile } = require('child_process');
     const { promisify } = require('util');
     const execFileAsync = promisify(execFile);
-    if (process.platform === 'win32') {
-      return await isWin32ShellProcess(pid, expectedCmd);
-    } else {
-      // Unix: check /proc/<pid>/exe or use ps
-      const { stdout } = await execFileAsync('ps', ['-o', 'comm=', '-p', String(pid)], {
-        encoding: 'utf-8', timeout: 3000,
-      });
-      const actualCmd = (stdout as string).trim();
-      const expectedBase = path.basename(expectedCmd);
-      return actualCmd === expectedBase || actualCmd.includes(expectedBase);
-    }
+    // Unix: check /proc/<pid>/exe or use ps
+    const { stdout } = await execFileAsync('ps', ['-o', 'comm=', '-p', String(pid)], {
+      encoding: 'utf-8', timeout: 3000,
+    });
+    const actualCmd = (stdout as string).trim();
+    const expectedBase = path.basename(expectedCmd);
+    return actualCmd === expectedBase || actualCmd.includes(expectedBase);
   } catch {
     // If we can't determine, err on the side of caution — don't kill
     return false;
@@ -1912,6 +1931,7 @@ async function recoverSessions(
         reap: (s) => reapIfIdentityConfirmed({
           pid: s.pid,
           cmd: s.cmd,
+          storedCreatedAtFt: s.pidCreatedAtFt,
           storedStartTime: s.pidStartTime,
           reason: `recovery of ${s.id}`,
         }),
@@ -1932,6 +1952,7 @@ async function recoverSessions(
         const reaped = await reapIfIdentityConfirmed({
           pid,
           cmd: session.cmd,
+          storedCreatedAtFt: session.pidCreatedAtFt,
           storedStartTime: session.pidStartTime,
           reason: `tombstone reconciliation of session ${session.id}`,
         });
@@ -1952,6 +1973,7 @@ async function recoverSessions(
         await reapIfIdentityConfirmed({
           pid: session.pid,
           cmd: session.cmd,
+          storedCreatedAtFt: session.pidCreatedAtFt,
           storedStartTime: session.pidStartTime,
           reason: `scheduled-run session ${session.id} left by a previous daemon`,
         });
@@ -1971,7 +1993,8 @@ async function recoverSessions(
     if (isWslShell(session.cmd)) {
       if (!rebooted && session.state !== 'suspended' && recoverableIds.has(session.id)) {
         await reapIfIdentityConfirmed({ pid: session.pid, cmd: session.cmd,
-          storedStartTime: session.pidStartTime, reason: `WSL recovery of ${session.id}` });
+          storedCreatedAtFt: session.pidCreatedAtFt, storedStartTime: session.pidStartTime,
+          reason: `WSL recovery of ${session.id}` });
       }
       session.state = 'suspended';
       session.bufferDumpPath ??= stateWriter.getBufferDumpPath(session.id);
@@ -2472,7 +2495,9 @@ function registerRpcHandlers(
     if (shuttingDown) {
       throw new Error('SHUTTING_DOWN: daemon is shutting down — retry after reconnect');
     }
-    if (watchdog.isBlocked) {
+    // #2375: re-sample before refusing, so a block set by one transient RSS
+    // spike lifts as soon as memory is back under the limit.
+    if (watchdog.recheckBlock()) {
       throw new Error('Cannot create session: memory pressure too high. Try again later.');
     }
     const p = params as unknown as DaemonCreateSessionParams;
@@ -6847,7 +6872,7 @@ function wireEvents(
   // and would leave the still-live shell behind — exactly the orphan this fix
   // exists to prevent. Reattaching to the live ConPTY instead of killing it is
   // a separate piece of work (likely an upstream node-pty fix).
-  sessionManager.on('session:phantomExit', (payload: { id: string; pid?: number; pidStartTime?: string; exitCode: number | null; signal?: number; cmd?: string; lastActivityMsAgo?: number; raw?: string }) => {
+  sessionManager.on('session:phantomExit', (payload: { id: string; pid?: number; pidCreatedAtFt?: string; pidStartTime?: string; exitCode: number | null; signal?: number; cmd?: string; lastActivityMsAgo?: number; raw?: string }) => {
     // `raw` is the verbatim node-pty payload — printed as-is because the
     // native-layer investigation needs the exact shape node-pty produced, not
     // our reading of it.
@@ -6880,6 +6905,7 @@ function wireEvents(
     void reapIfIdentityConfirmed({
       pid: payload.pid,
       cmd: payload.cmd ?? '',
+      storedCreatedAtFt: payload.pidCreatedAtFt,
       storedStartTime: payload.pidStartTime,
       reason: `phantom exit of session ${payload.id}`,
     });
@@ -7352,11 +7378,14 @@ function wireContextWatchers(
     }
   });
 
-  const onCreated = (payload: { session: { id: string; cwd: string } }) => {
-    gitWatcher.update(payload.session.id, payload.session.cwd);
+  // #2407: a WSL pane reports a Linux cwd; the watcher reads with Windows fs,
+  // so it is handed the Windows name of that directory (gitWatchCwdFor).
+  const onCreated = (payload: { session: { id: string; cwd: string; cmd?: string; wslTarget?: { distribution?: unknown } } }) => {
+    gitWatcher.update(payload.session.id, gitWatchCwdFor(payload.session));
   };
   const onCwd = (payload: { sessionId: string; cwd: string }) => {
-    gitWatcher.update(payload.sessionId, payload.cwd);
+    const meta = sessionManager.getSession(payload.sessionId)?.meta;
+    gitWatcher.update(payload.sessionId, gitWatchCwdFor({ cwd: payload.cwd, cmd: meta?.cmd, wslTarget: meta?.wslTarget }));
   };
   const onGone = (payload: { id: string }) => {
     gitWatcher.remove(payload.id);
@@ -7370,7 +7399,7 @@ function wireContextWatchers(
 
   // Seed git context for sessions recovered before this wiring ran.
   for (const s of sessionManager.listLiveSessions()) {
-    gitWatcher.update(s.id, s.cwd);
+    gitWatcher.update(s.id, gitWatchCwdFor(s));
   }
 
   resyncContextWatchers = () => { portWatcher.resync(); gitWatcher.resync(); };
@@ -7722,6 +7751,7 @@ async function main(): Promise<void> {
   const startTime = Date.now();
   markDaemonBoot('main-start');
   log('info', `wmux-daemon starting (PID ${process.pid})`);
+  setNativeProcessReadWarn((message) => log('warn', message));
 
   // 1. Single-instance check
   if (!(await acquireLock())) {

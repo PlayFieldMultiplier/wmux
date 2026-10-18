@@ -41,7 +41,7 @@ function makeFakePty(): { pty: IPty; feed: (data: string) => void } {
       dataHandler = cb;
       return { dispose: () => { dataHandler = null; } };
     },
-    onExit: () => ({ dispose: () => {} }),
+    onExit: () => ({ dispose: () => { /* no-op */ } }),
   } as unknown as IPty;
   return { pty, feed: (data: string) => dataHandler?.(data) };
 }
@@ -408,7 +408,7 @@ describe('DaemonPTYBridge turn priority', () => {
 
     it('without forceSubmitted a bare digit on a pane that is not blocked stays inert', () => {
       // On a pane blocked on a dialog the same digit IS the answer — see
-      // DaemonPTYBridge.answerRelease.test.ts.
+      // DaemonPTYBridge.answerRelease.os.test.ts.
       bridge.noteAgentStatus('waiting');
       bridge.noteInput('2');
       feed('.');

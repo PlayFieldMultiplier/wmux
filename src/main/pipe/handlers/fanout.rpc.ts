@@ -719,8 +719,9 @@ export interface FanOutBotPort {
   /** Whether that running wake carried outside text (factory/wakeTaint.ts);
    *  true when it cannot be told. Its tasks' dispatch carries the mark. */
   currentWakeTainted(botId: string): boolean;
-  /** Open fan-out tasks started by this bot, and by any bot. */
-  openWorkers(botId: string): { bot: number; factory: number };
+  /** Open fan-out tasks started by this bot, and by any bot, the bot
+   *  fan-outs still being started included (`botStarting`: this bot's). */
+  openWorkers(botId: string): { bot: number; factory: number; botStarting?: number };
   /** Brings what openWorkers counts up to date (which workers' panes still
    *  run an agent). Awaited before the caps are checked. Never rejects. */
   refreshLiveness?(): Promise<void>;
@@ -939,8 +940,6 @@ export function registerFanOutRpc(
   // of them costs almost nothing.
   const pending = new Map<string, GateState>();
   const terminal = new Map<string, Tombstone>();
-  /** Bot fan-outs accepted and not yet through their start (see the caps). */
-  const botBooked = new Map<string, { botId: string; n: number }>();
 
   /** Insertion-ordered LRU over the AWAITING keys only. */
   const claim = (key: string): void => {
@@ -1477,36 +1476,30 @@ export function registerFanOutRpc(
     // A bot's own worker budget, and the factory-wide worker cap, counted
     // over open bot tasks plus bot fan-outs still being started (booked in
     // this same tick, so two concurrent starts cannot both pass).
+    // The bot holders (factory/workerHolders.ts) count the fan-outs still
+    // being started: each is booked under the live cap below in this tick.
     if (bot && botPort && botProfile) {
       const open = botPort.openWorkers(bot.botId);
-      let bookedBot = 0;
-      let bookedAll = 0;
-      for (const b of botBooked.values()) {
-        bookedAll += b.n;
-        if (b.botId === bot.botId) bookedBot += b.n;
-      }
+      const bookedBot = open.botStarting ?? 0;
       const n = parsed.titles.length;
-      if (open.factory + bookedAll + n > WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS) {
+      if (open.factory + n > WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS) {
         botPort.budgetExhausted(bot, 'factory_workers');
         return deny('RESOURCE_EXHAUSTED', `the factory runs at most ${WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS} bot workers at once`);
       }
-      const budget = checkWorkers(botProfile.budget, botPort.usage(bot.botId), open.bot + bookedBot, n, Date.now());
+      const budget = checkWorkers(botProfile.budget, botPort.usage(bot.botId), open.bot, n, Date.now());
       if (!budget.ok) {
         botPort.budgetExhausted(bot, budget.reason);
         const held = budget.reason === 'concurrent_workers'
-          ? workersHeldNote(open.bot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
+          ? workersHeldNote(open.bot - bookedBot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
           : '';
         return deny('RESOURCE_EXHAUSTED', `this bot's worker budget refuses the fan-out (${budget.reason})${held}`);
       }
     }
 
     const guards = guardsOf();
-    const reservation = guards.reserve(key, parsed.titles.length);
+    const reservation = guards.reserve(key, parsed.titles.length, { ownerWorkspaceId: callerWorkspaceId, ...(bot ? { botId: bot.botId } : {}) });
     if (!reservation.ok) return deny('RESOURCE_EXHAUSTED', reservation.message);
-    if (bot) {
-      botBooked.set(key, { botId: bot.botId, n: parsed.titles.length });
-      botPort?.recordFanoutKey(key);
-    }
+    if (bot) botPort?.recordFanoutKey(key);
 
     // ── Claim the key ────────────────────────────────────────────────────
     // Last synchronous statement of the tick that read the gate above: from
@@ -1561,7 +1554,6 @@ export function registerFanOutRpc(
       // otherwise a transient renderer miss would brick it until eviction.
       pending.delete(key);
       guards.release(key);
-      botBooked.delete(key);
       return deny(preflight.code, preflight.message);
     }
     const callerRepoRoot = preflight.root;
@@ -1574,7 +1566,6 @@ export function registerFanOutRpc(
       if (refusal) {
         pending.delete(key);
         guards.release(key);
-        botBooked.delete(key);
         return deny('FAILED_PRECONDITION', refusal);
       }
     }
@@ -1911,11 +1902,10 @@ export function registerFanOutRpc(
         // its cap reservation held until the app restarts.
         if (!terminal.has(key)) settle(key, { phase: 'denied', reason: 'unavailable' });
         guards.release(key);
+        // ...nor booked as spawning, past commitStart.
+        guards.settleStarted(key);
         console.error(`[fanout.rpc] fan-out ${key} aborted:`, err);
         tellBot(noneStarted(plainStartFailure(String(err)), String(err)));
-      } finally {
-        // Started tasks now count through their open ledger rows.
-        botBooked.delete(key);
       }
     })();
 

@@ -195,47 +195,46 @@ describe('vitest.durations.json', () => {
     expect(merged).toEqual({ unit: { 'a.test.ts': 300, 'b.test.ts': 900 } });
   });
 
-  it('seeds from the vitest results cache, filing unnamed keys by vitest.lanes.json', () => {
+  it('seeds from the vitest results cache, filing unnamed keys by the lane their name gives', () => {
     const cache = {
       version: '5.0.0',
       results: [
-        [':src/a/__tests__/spawn.test.ts', { duration: 12_000, failed: false }],
+        [':src/a/__tests__/spawn.os.test.ts', { duration: 12_000, failed: false }],
         [':src\\b\\__tests__\\pure.test.ts', { duration: 40, failed: false }],
         ['unit:src/c/__tests__/named.test.ts', { duration: 700, failed: true }],
         [':src/deleted/__tests__/old.test.ts', { duration: 1, failed: false }],
       ],
     };
     const testFiles = new Set([
-      'src/a/__tests__/spawn.test.ts',
+      'src/a/__tests__/spawn.os.test.ts',
       'src/b/__tests__/pure.test.ts',
       'src/c/__tests__/named.test.ts',
     ]);
     const expected = {
-      integration: { 'src/a/__tests__/spawn.test.ts': 12_000 },
+      integration: { 'src/a/__tests__/spawn.os.test.ts': 12_000 },
       unit: { 'src/b/__tests__/pure.test.ts': 40, 'src/c/__tests__/named.test.ts': 700 },
     };
-    const integration = ['src/a/__tests__/spawn.test.ts'];
-    expect(durationsFromVitestCache(cache, { integration, testFiles })).toEqual(expected);
+    expect(durationsFromVitestCache(cache, { testFiles })).toEqual(expected);
     // The object form of `results` reads the same.
     const asObject = { version: '5.0.0', results: Object.fromEntries(cache.results) };
-    expect(durationsFromVitestCache(asObject, { integration, testFiles })).toEqual(expected);
+    expect(durationsFromVitestCache(asObject, { testFiles })).toEqual(expected);
   });
 
   it('leaves a lane the input has no file for as it was', () => {
     const current = {
-      integration: { 'src/a/__tests__/spawn.test.ts': 30_000 },
+      integration: { 'src/a/__tests__/spawn.os.test.ts': 30_000 },
       unit: { 'src/b/__tests__/pure.test.ts': 900 },
     };
-    const testFiles = new Set(['src/a/__tests__/spawn.test.ts', 'src/b/__tests__/pure.test.ts']);
+    const testFiles = new Set(['src/a/__tests__/spawn.os.test.ts', 'src/b/__tests__/pure.test.ts']);
     // A cache that ran the unit lane only.
     const unitOnly = durationsFromVitestCache(
       { version: '5.0.0', results: [['unit:src/b/__tests__/pure.test.ts', { duration: 400, failed: false }]] },
-      { integration: ['src/a/__tests__/spawn.test.ts'], testFiles },
+      { testFiles },
     );
     expect(Object.keys(unitOnly)).toEqual(['unit']);
     expect(updateDurations(current, unitOnly, ['unit', 'integration'])).toEqual({
       unit: { 'src/b/__tests__/pure.test.ts': 400 },
-      integration: { 'src/a/__tests__/spawn.test.ts': 30_000 },
+      integration: { 'src/a/__tests__/spawn.os.test.ts': 30_000 },
     });
     // CI reports whose integration files were all deleted since: same.
     const report = (project, files) => ({ version: 1, project, shard: null, platform: 'linux', files });

@@ -6,6 +6,8 @@ import type { LedgerEntry } from '../../../shared/ledger';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
 import { AGENT_GONE_FILENAME, AGENT_GONE_MAX, AgentGoneFacts, LAUNCH_SETTLE_MS, noteSessionAgentLaunched, noteSessionInput, noteTaskPanesStopped, noteTaskWorkerLaunched, setAgentGoneFacts } from '../agentGoneFacts';
 import { createTaskWorkspaceLiveness, parseSessionRead, type TaskWorkspaceLivenessPorts } from '../taskWorkspaceLiveness';
+import { computeHolders, holderCounts } from '../workerHolders';
+import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
 import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setDormantTaskWorkspaces } from '../../worktask/fanoutGuards';
 
@@ -29,7 +31,11 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
     records: ReclaimedWorker[];
     /** The task a session's worker record names. */
     ownerOf: Record<string, string>;
-  } = { entries: null, sessions: [], recoveryDone: true, records: [], ownerOf: {} };
+    /** The task a pane's launch record names (factory/workerSlots.ts). */
+    paneTasks: Record<string, string>;
+    /** The task a workspace's launch record names. */
+    workspaceTasks: Record<string, string>;
+  } = { entries: null, sessions: [], recoveryDone: true, records: [], ownerOf: {}, paneTasks: {}, workspaceTasks: {} };
   const open = (): void => {
     state.entries = Object.entries(tasks).map(([ws, task]) => ({ id: ws, name: ws, ptyIds: [task.pty] }) as WorkspaceListEntry);
   };
@@ -57,6 +63,8 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
     records: () => state.records,
     recordedSessions: () => [],
     sessionRecordOf: (id) => (state.ownerOf[id] ? { taskId: state.ownerOf[id] } : null),
+    paneTask: (id) => (state.paneTasks[id] ? { taskId: state.paneTasks[id], botId: 'bot-0000000a' } : null),
+    workspaceTask: (ws) => state.workspaceTasks[ws] ?? null,
     facts,
     refreshMs: REFRESH_MS,
     now: () => t.now,
@@ -598,5 +606,115 @@ describe('parseSessionRead', () => {
     expect(parseSessionRead({ sessions: [] })).toEqual({ sessions: [], recoveryDone: true });
     expect(() => parseSessionRead(null)).toThrow();
     expect(() => parseSessionRead({ ok: false })).toThrow();
+  });
+});
+
+describe('sightings by task (#2393 holder set)', () => {
+  // Holder-set review rounds R8 (an adopted worker counted against two tasks)
+  // and R9 (its pane still marked the other task busy and not gone).
+  it('R8/R9: a worker pane adopted into another task\'s workspace is its own task\'s sighting, not that workspace\'s', async () => {
+    const w = world({ 'ws-a': { id: 't-a', status: 'working', pty: 'p-other' }, 'ws-b': { id: 't-b', status: 'completed', pty: 'p-a' } });
+    w.open();
+    // Which task the pane is comes from its launch record.
+    w.state.paneTasks = { 'p-a': 't-a' };
+    w.state.sessions = [running('p-a'), exited('p-other')];
+    await w.liveness.refresh();
+    expect([...w.liveness.agentSeenTasks().keys()]).toEqual(['t-a']);
+    expect(w.liveness.agentSeen().has('ws-b')).toBe(false);
+    expect(w.liveness.agentSeen().has('ws-a')).toBe(true);
+    // Nor is it work of the ended task's: its workspace runs no agent of its
+    // own, so the task is seen gone.
+    expect(w.liveness.busyWorkspaces().has('ws-b')).toBe(false);
+    expect(w.liveness.idle.get().has('ws-b')).toBe(true);
+    expect(w.liveness.goneTasks().has('t-b')).toBe(true);
+    // One running worker, one holder on every cap.
+    const rows = [
+      { id: 't-a', status: 'working', taskWorkspaceId: 'ws-a', ownerWorkspaceId: 'ws-owner', title: 'a', rev: 3, updatedAt: 0, dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' } } },
+      { id: 't-b', status: 'completed', taskWorkspaceId: 'ws-b', ownerWorkspaceId: 'ws-owner', title: 'b', rev: 3, updatedAt: 0, dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' } } },
+    ] as LedgerEntry[];
+    const holders = computeHolders({
+      now: w.t.now, rows, reclaimable: new Set(['t-b']), catchupMs: 86_400_000,
+      workspaces: new Set(['ws-a', 'ws-b']), ptys: new Map([['ws-a', ['p-other']], ['ws-b', ['p-a']]]), stamps: new Map(),
+      read: w.liveness.readState(), readAt: w.liveness.lastReadAt(), idle: w.liveness.idle.get(), busy: w.liveness.busyWorkspaces(),
+      agentSeen: w.liveness.agentSeen(), agentTasks: w.liveness.agentSeenTasks(), gone: w.liveness.goneTasks(),
+      records: [], verdicted: new Set(), reservations: [], grants: [], heldWorkspaces: [],
+      taskOfWorkspace: () => null, taskOfPane: (id) => w.state.paneTasks[id] ?? null, launchAt: () => undefined, launchOf: () => null,
+    });
+    expect(holderCounts(holders, 'bot-0000000a')).toMatchObject({ live: 1, workers: 1, agents: 1, bot: 1 });
+  });
+
+  it('C1.2: a worker pane adopted into a workspace no row names is not that workspace\'s agent when its launch record names another task', async () => {
+    const w = world({ 'ws-a': { id: 't-a', status: 'working', pty: 'p-a-own' } });
+    // ws-x: task x's workspace (its register failed, no row), now holding b's pane.
+    w.state.entries = [{ id: 'ws-x', name: 'ws-x', ptyIds: ['p-b'] } as WorkspaceListEntry];
+    w.state.paneTasks = { 'p-b': 't-b' };
+    w.state.workspaceTasks = { 'ws-x': 'x' };
+    w.state.sessions = [running('p-b')];
+    await w.liveness.refresh();
+    expect([...w.liveness.agentSeenTasks().keys()]).toEqual(['t-b']);
+    expect(w.liveness.agentSeen().has('ws-x')).toBe(false);
+    expect(w.liveness.busyWorkspaces().has('ws-x')).toBe(false);
+  });
+
+  it('C2.2: an owner worker\'s WSL pane no process attributes, moved out of its workspace, is its task\'s sighting by its launch record', async () => {
+    const w = world({ 'ws-t': { id: 't', status: 'working', pty: 'p-shell' } });
+    w.state.entries = [
+      { id: 'ws-t', name: 'ws-t', ptyIds: ['p-shell'] } as WorkspaceListEntry,
+      { id: 'ws-owner', name: 'ws-owner', ptyIds: ['p-wsl'] } as WorkspaceListEntry,
+    ];
+    // No reclaim or bot session record names it (an owner fan-out).
+    w.state.paneTasks = { 'p-wsl': 't' };
+    w.state.sessions = [{ id: 'p-wsl', commandRunning: true }, exited('p-shell')];
+    await w.liveness.refresh();
+    expect([...w.liveness.agentSeenTasks().keys()]).toEqual(['t']);
+    expect(w.liveness.agentSeen().has('ws-t')).toBe(true);
+  });
+
+  it('C3.1: an ended task whose silent pane its launch record names runs outside its workspace is not seen gone', async () => {
+    const w = world({ 'ws-owner': { id: 'other', status: 'working', pty: 'p-wsl' } }, { closed: { 'ws-t': { id: 't', status: 'completed', pty: 'p-old' } } });
+    w.open();
+    w.state.paneTasks = { 'p-wsl': 't' };
+    // Neither attributed nor reported as running a command.
+    w.state.sessions = [{ id: 'p-wsl' }];
+    await w.liveness.refresh();
+    expect(w.liveness.goneTasks().has('t')).toBe(false);
+  });
+
+  it('C5.1/C5.2: an adopted pane resumed in another task\'s workspace: that workspace stays its task\'s, the sighting is the pane\'s task\'s', async () => {
+    const slots = new WorkerSlots(nodePath.join(tmpDir(), 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slots.load();
+    for (const [task, ws, pane] of [['t-a', 'ws-w', 'p-a'], ['t-b', 'ws-b', 'p-b']]) {
+      const { gen } = slots.beginLaunch({ taskId: task, origin: 'bot', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-owner' });
+      slots.launched(task, gen, ws, pane);
+    }
+    const { gen } = slots.beginLaunch({ taskId: 't-b', origin: 'bot', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-owner', pane: { sessionId: 'p-b', workspaceId: 'ws-w' } });
+    slots.launched('t-b', gen, 'ws-w', 'p-b');
+    const w = world({ 'ws-w': { id: 't-a', status: 'completed', pty: 'p-b' }, 'ws-b': { id: 't-b', status: 'working', pty: 'p-gone' } });
+    w.open();
+    for (const id of ['p-a', 'p-b']) w.state.paneTasks[id] = slots.paneOf(id)?.taskId ?? '';
+    for (const ws of ['ws-w', 'ws-b']) w.state.workspaceTasks[ws] = slots.workspaceOf(ws)?.taskId ?? '';
+    expect(w.state.workspaceTasks['ws-w']).toBe('t-a');
+    w.state.sessions = [running('p-b'), exited('p-gone')];
+    await w.liveness.refresh();
+    expect([...w.liveness.agentSeenTasks().keys()]).toEqual(['t-b']);
+    expect(w.liveness.agentSeen().has('ws-b')).toBe(true);
+    expect(w.liveness.agentSeen().has('ws-w')).toBe(false);
+    // a's workspace runs no agent of a's: a is seen gone.
+    expect(w.liveness.goneTasks().has('t-a')).toBe(true);
+  });
+
+  it('GLM C2: a fact older than the task\'s last launch is replaced by the same observation made after it', () => {
+    const clock = { now: 1_000, launchedAt: undefined as number | undefined };
+    const facts = new AgentGoneFacts(nodePath.join(tmpDir(), 'factory', AGENT_GONE_FILENAME), () => undefined, () => clock.now, () => clock.launchedAt);
+    facts.load();
+    facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p-t'], at: 1_000 });
+    // Relaunched (recorded at 2000), then seen gone again with the same panes.
+    clock.launchedAt = 2_000;
+    clock.now = 10_000;
+    facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p-t'], at: 10_000 });
+    expect(facts.get('t')?.at).toBe(10_000);
+    // The same observation again, after that, keeps the fact as it is.
+    facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p-t'], at: 12_000 });
+    expect(facts.get('t')?.at).toBe(10_000);
   });
 });

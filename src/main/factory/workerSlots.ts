@@ -27,6 +27,7 @@
 // aside, and while it cannot be, every launch is refused. With no file, the
 // entries are rebuilt from the ledger rows once.
 
+import { holderInputsChanged } from './holderInputs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
@@ -126,6 +127,11 @@ export class WorkerSlots {
   private mode: 'disk' | 'memory' | 'broken' = 'disk';
   /** Launches begun in this run and not settled yet: task → generation. */
   private readonly underway = new Map<string, number>();
+  /** Relaunches in an existing pane begun in this run: task → generation.
+   *  Such a launch claims no workspace (see setWorkspace). */
+  private readonly relaunches = new Map<string, number>();
+  /** Workspaces a refused reassign was logged for (once each). */
+  private readonly refusedWarned = new Set<string>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -331,7 +337,7 @@ export class WorkerSlots {
     this.tasks.set(req.taskId, next);
     if (req.pane) {
       this.setPane(req.pane.sessionId, { taskId: req.taskId, gen: next.gen, workspaceId: req.pane.workspaceId });
-      if (req.pane.workspaceId) this.setWorkspace(req.pane.workspaceId, { taskId: req.taskId, gen: next.gen });
+      if (req.pane.workspaceId) this.setWorkspace(req.pane.workspaceId, { taskId: req.taskId, gen: next.gen }, false);
     }
     this.bound();
     try {
@@ -341,6 +347,8 @@ export class WorkerSlots {
       throw new Error(`the task's launch could not be recorded: ${String(err)}`);
     }
     this.underway.set(req.taskId, next.gen);
+    if (req.pane) this.relaunches.set(req.taskId, next.gen);
+    else this.relaunches.delete(req.taskId);
     return { gen: next.gen, launchedAt: next.launchedAt };
   }
 
@@ -349,10 +357,12 @@ export class WorkerSlots {
   launched(taskId: string, gen: number, workspaceId: string, sessionId?: string): boolean {
     const t = this.tasks.get(taskId);
     if (this.underway.get(taskId) === gen) this.underway.delete(taskId);
+    const relaunch = this.relaunches.get(taskId) === gen;
+    if (relaunch) this.relaunches.delete(taskId);
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'launched' });
     if (sessionId) this.setPane(sessionId, { taskId, gen, workspaceId });
-    this.setWorkspace(workspaceId, { taskId, gen });
+    this.setWorkspace(workspaceId, { taskId, gen }, !relaunch);
     this.persist();
     return true;
   }
@@ -380,6 +390,7 @@ export class WorkerSlots {
   released(taskId: string, gen: number): boolean {
     const t = this.tasks.get(taskId);
     if (this.underway.get(taskId) === gen) this.underway.delete(taskId);
+    if (this.relaunches.get(taskId) === gen) this.relaunches.delete(taskId);
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'released' });
     this.persist();
@@ -393,6 +404,7 @@ export class WorkerSlots {
   }
 
   private restore(s: ReturnType<WorkerSlots['snapshot']>): void {
+    holderInputsChanged();
     for (const [from, to] of [[s.tasks, this.tasks], [s.panes, this.panes], [s.workspaces, this.workspaces]] as Array<[Map<string, unknown>, Map<string, unknown>]>) {
       to.clear();
       for (const [k, v] of from) to.set(k, v);
@@ -405,7 +417,22 @@ export class WorkerSlots {
     trim(this.panes, WORKER_PANES_MAX);
   }
 
-  private setWorkspace(workspaceId: string, ref: TaskRef): void {
+  /** Records a workspace as the task's. A workspace recorded for another
+   *  task is never reassigned (an adopted pane resumed where it now is, in
+   *  another task's workspace): the pane record alone names the task, so a
+   *  workspace's record and its row never name two tasks. `claim` false (a
+   *  relaunch in an existing pane): only a workspace already this task's is
+   *  refreshed; one recorded for none (the owner's) is never claimed. */
+  private setWorkspace(workspaceId: string, ref: TaskRef, claim = true): void {
+    const cur = this.workspaces.get(workspaceId);
+    if (cur && cur.taskId !== ref.taskId) {
+      if (!this.refusedWarned.has(workspaceId)) {
+        this.refusedWarned.add(workspaceId);
+        this.warn(`[factory] worker slots: workspace ${workspaceId} stays task ${cur.taskId}'s; task ${ref.taskId} is recorded by its pane only`);
+      }
+      return;
+    }
+    if (!cur && !claim) return;
     this.workspaces.delete(workspaceId);
     this.workspaces.set(workspaceId, { taskId: ref.taskId, gen: ref.gen });
     trim(this.workspaces, WORKER_PANES_MAX);
@@ -425,6 +452,7 @@ export class WorkerSlots {
   }
 
   private write(): void {
+    holderInputsChanged();
     if (this.mode === 'memory') return;
     if (this.mode === 'broken') throw new Error(`${this.file} is unreadable and could not be moved aside`);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
@@ -445,6 +473,7 @@ export class WorkerSlots {
   /** A write after the launch, coalesced (PERSIST_DELAY_MS): a failure is
    *  logged, the entries stay in memory. */
   private persist(): void {
+    holderInputsChanged();
     if (this.persistTimer) return;
     const t = setTimeout(() => {
       this.persistTimer = null;

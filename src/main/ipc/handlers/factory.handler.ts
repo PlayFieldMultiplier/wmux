@@ -139,7 +139,8 @@ export function factoryWorkerResumeHandler(
     if (!p) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
     if (p.store.get(raw)?.state === 'resumed') return resumeWorker(p, raw, { kind: 'owner' });
     const s = slots();
-    const slot = s ? s.tryAcquire() : null;
+    const botId = p.store.get(raw)?.botId;
+    const slot = s ? s.tryAcquire({ taskId: raw, ...(botId ? { botId } : {}), byOwner: true }) : null;
     if (s && !slot) {
       const cap = s.limit();
       return { ok: false, code: 'no_slot', cap, message: `No free agent slot (the limit is ${cap}). Stop an idle worker, or raise the limit in Settings › Bots.` };
