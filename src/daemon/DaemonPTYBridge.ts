@@ -1039,6 +1039,19 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /**
+   * The id of the episode `ts` falls in, when that episode is over for good: a
+   * later one has opened, or it was closed by a settle that is not soft (a
+   * soft close resumes under the same id). Null while it can still go on, or
+   * when `ts` maps to no episode with an id.
+   */
+  endedTurnAt(ts: number): string | null {
+    const turn = this.turnAt(ts);
+    if (!turn?.turnId) return null;
+    if (!turn.current) return turn.turnId;
+    return !this.turnOpen && !this.turnSoftClosed ? turn.turnId : null;
+  }
+
+  /**
    * Record a failed turn. A failure already held for the same turn (or, with
    * no turn id, any failure held since the last episode opened) is kept as
    * is, so every surface serves one `turnId`/`at`; `fresh` is false then.
