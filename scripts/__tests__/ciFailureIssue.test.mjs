@@ -38,16 +38,20 @@ const REPORT = job('Report to issue', 'in_progress', '', ['success']);
 const RED = job('validate-runtime', 'completed', 'failure');
 const GREEN = job('validate-runtime', 'completed', 'success');
 
-function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] } } = {}) {
+function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {} } = {}) {
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
+    if (args[0] === 'api') {
+      const id = /check-runs\/(\d+)\/annotations$/.exec(args[1])?.[1];
+      return JSON.stringify((annotations[id] ?? []).map((message) => ({ annotation_level: 'failure', message })));
+    }
     if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify(issues);
     if (args[0] === 'issue' && args[1] === 'view') return JSON.stringify(issue);
     if (args[0] === 'run' && args[1] === 'view') return JSON.stringify({ jobs });
     return '';
   };
-  return { gh, calls, writes: () => calls.filter((c) => !['list', 'view'].includes(c.args[1])) };
+  return { gh, calls, writes: () => calls.filter((c) => c.args[0] !== 'api' && !['list', 'view'].includes(c.args[1])) };
 }
 
 describe('issueTitle', () => {
@@ -216,6 +220,32 @@ describe('report --state auto (the report job)', () => {
   it('closes on a green run', () => {
     const fake = fakeGh({ issues: [{ number: 12, title: 'Nightly red: Runtime suite' }], jobs: [GREEN, REPORT] });
     expect(report({ env: ENV, gh: fake.gh })).toBe('closed');
+  });
+
+  it('reports a job that hit its timeout (the API says cancelled; the annotation says why)', () => {
+    // As seen on a real run: conclusion `cancelled`, annotations
+    // "The job has exceeded the maximum execution time of 1m0s" and
+    // "The operation was canceled."
+    const timedOut = { ...job('validate-runtime', 'completed', 'cancelled'), databaseId: 117596085033 };
+    const fake = fakeGh({
+      issues: [],
+      jobs: [timedOut, REPORT],
+      annotations: { 117596085033: ['The job has exceeded the maximum execution time of 1m0s', 'The operation was canceled.'] },
+    });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('created');
+    const create = fake.writes().find((c) => c.args[0] === 'issue' && c.args[1] === 'create').args;
+    expect(create[create.indexOf('--body') + 1]).toContain('- `validate-runtime`');
+  });
+
+  it('does nothing for a run a newer push superseded (cancelled, no timeout annotation)', () => {
+    const superseded = { ...job('validate-runtime', 'completed', 'cancelled'), databaseId: 7 };
+    const fake = fakeGh({
+      issues: [{ number: 12, title: 'Nightly red: Runtime suite' }],
+      jobs: [superseded, REPORT],
+      annotations: { 7: ['Canceling since a higher priority waiting request for runtime-push-refs/heads/main exists'] },
+    });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('none');
+    expect(fake.writes()).toEqual([]);
   });
 
   it('does nothing for a cancelled run', () => {

@@ -18,7 +18,9 @@
 // Why a job of its own and not a last step in each test job: a step cannot
 // report a job that timed out (the job is gone before `if: failure()` runs),
 // and windows.yml's two shards would each report, racing to open the issue
-// and to close it. One job after all of them sees every result once.
+// and to close it. One job after all of them sees every result once. A
+// timed-out job reads as `cancelled` in the jobs API; markTimeouts tells it
+// from a superseded run by its check-run annotation.
 //
 // Runs of one workflow still overlap: a push run and the nightly sit in
 // separate concurrency groups. A green run closes the issue only when it is
@@ -135,6 +137,24 @@ function readJobs(gh, { repo, runId }) {
   return parseJson(gh(['run', 'view', String(runId), '-R', repo, '--json', 'jobs']) || '{}', 'gh run view');
 }
 
+const TIMED_OUT = /exceeded the maximum execution time/i;
+
+/**
+ * The jobs API reports a job that hit its timeout-minutes as `cancelled`, the
+ * same as one a newer push superseded. Its check run's annotations tell them
+ * apart: "The job has exceeded the maximum execution time of …". A cancelled
+ * job whose annotations say so is rewritten to `timed_out`, a failure.
+ */
+export function markTimeouts(gh, { repo }, jobsJson) {
+  const jobs = (jobsJson?.jobs ?? []).map((job) => {
+    if (job.status !== 'completed' || job.conclusion !== 'cancelled' || !job.databaseId) return job;
+    const out = gh(['api', `repos/${repo}/check-runs/${job.databaseId}/annotations`]);
+    const annotations = parseJson(out || '[]', 'check-run annotations');
+    return annotations.some((a) => TIMED_OUT.test(a?.message ?? '')) ? { ...job, conclusion: 'timed_out' } : job;
+  });
+  return { ...jobsJson, jobs };
+}
+
 /**
  * One report. `state` is 'failure', 'success', or 'auto' (the default): the
  * run's finished jobs decide (runOutcome). `gh(args, { allowFailure })` runs
@@ -146,7 +166,7 @@ export function report({ state = 'auto', env, gh, log = () => undefined }) {
   const repo = env.GITHUB_REPOSITORY;
   const title = issueTitle(env.GITHUB_WORKFLOW);
   const url = runUrl(env);
-  const jobsJson = readJobs(gh, { repo, runId: env.GITHUB_RUN_ID });
+  const jobsJson = markTimeouts(gh, { repo }, readJobs(gh, { repo, runId: env.GITHUB_RUN_ID }));
   if (state === 'auto') state = runOutcome(jobsJson);
   if (state === 'cancelled') {
     log('the run was cancelled; nothing to report');
