@@ -164,7 +164,7 @@ describe.skipIf(process.platform !== 'win32')('tryProcessCreatedAt (Windows, liv
 // replaced. Keeping any spawnable artifact of it in the port-watch path —
 // the interpreter path or the enumeration cmdlets — would re-ship the
 // signature, so the sources themselves are scanned. (Style precedent:
-// installedFonts.test.ts's absolute-path guard and security.test.ts's
+// installedFonts.os.test.ts's absolute-path guard and security.os.test.ts's
 // no-spawn guard.)
 describe('issue #1051 regression guard', () => {
   const banned = [

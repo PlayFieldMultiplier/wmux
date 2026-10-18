@@ -14,7 +14,7 @@ import path from 'node:path';
 //
 // Asserted at the source level rather than by spawning a real daemon: importing
 // src/daemon/index.ts runs main() at module load and would lock the test
-// process (same rationale as syncExitGuard.test.ts).
+// process (same rationale as syncExitGuard.os.test.ts).
 describe('daemon durable logging + recovery instrumentation', () => {
   const daemonIndexPath = path.join(__dirname, '..', 'index.ts');
   const src = fs.readFileSync(daemonIndexPath, 'utf-8');

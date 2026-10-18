@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Behavioral verification of the WorkspaceMirror push cadence (Finding 2). Like
-// useNotificationListener.activity.dynamic.test.tsx, we mount the REAL hook
+// useNotificationListener.activity.dynamic.os.test.tsx, we mount the REAL hook
 // against the REAL module-singleton store and capture pushes through a mocked
 // `window.electronAPI.workspaceMirror.push`.
 //

@@ -2,7 +2,7 @@
 //
 // Dynamic verification for #171 terminal font zoom.
 //
-// Unlike the source-invariant checks in useKeyboard.test.ts (which string-match
+// Unlike the source-invariant checks in useKeyboard.os.test.ts (which string-match
 // the handler), this suite mounts the REAL useKeyboard hook against the REAL
 // zustand store and dispatches REAL KeyboardEvents, then asserts the live
 // terminalFontSize moved. It is the automated stand-in for clicking around the

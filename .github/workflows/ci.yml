@@ -119,7 +119,7 @@ jobs:
       # free of errors and warnings. Lint does not depend on the OS, so it
       # runs here once instead of on every Baseline leg.
       - name: ESLint (cross-platform files, strict)
-        run: npx eslint --max-warnings=0 src/shared/platform.ts src/shared/__tests__/platform.test.ts src/shared/ShellDetector.ts src/shared/__tests__/ShellDetector.test.ts src/shared/shellResolution.ts src/shared/__tests__/shellResolution.test.ts src/main/notification/__tests__/ToastManager.test.ts
+        run: npx eslint --max-warnings=0 src/shared/platform.ts src/shared/__tests__/platform.os.test.ts src/shared/ShellDetector.ts src/shared/__tests__/ShellDetector.os.test.ts src/shared/shellResolution.ts src/shared/__tests__/shellResolution.os.test.ts src/main/notification/__tests__/ToastManager.test.ts
 
   validate:
     name: validate (${{ matrix.shard }}/2)

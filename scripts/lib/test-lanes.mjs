@@ -22,7 +22,7 @@
  * checked in as vitest.lanes.json (integration files only; every other
  * included file is unit), which vitest.config.ts reads: classifying costs
  * ~0.5 s of CPU, too much to pay on every `vitest run`. A guard test
- * (scripts/__tests__/testLanes.test.mjs) recomputes it and fails when the
+ * (scripts/__tests__/testLanes.os.test.mjs) recomputes it and fails when the
  * file is stale, naming the file, the reason and the fix.
  *
  * THE RULE. A test file is `integration` when any of these holds, else `unit`:
@@ -80,7 +80,7 @@ export const LANES_FILE = path.join(ROOT, 'vitest.lanes.json');
 export const OS_MODULES = ['child_process', 'net', 'http', 'https', 'http2', 'dgram', 'tls'];
 
 // The suites vitest.config.ts includes, as one regex over a repo-relative,
-// forward-slash path. scripts/__tests__/testLanes.test.mjs pins it to the
+// forward-slash path. scripts/__tests__/testLanes.os.test.mjs pins it to the
 // config's `include` globs, so the two cannot drift apart.
 //   src/**/__tests__/**/*.test.{ts,tsx}
 //   scripts/__tests__/**/*.test.mjs

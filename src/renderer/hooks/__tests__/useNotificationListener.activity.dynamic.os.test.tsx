@@ -5,7 +5,7 @@
 //
 // The metadata `onUpdate` handler is wired INSIDE useNotificationListener's
 // useEffect (it reads the module-singleton useStore directly), so — like
-// useKeyboard.zoom.dynamic.test.tsx — we mount the REAL hook against the REAL
+// useKeyboard.zoom.dynamic.os.test.tsx — we mount the REAL hook against the REAL
 // store, mock `window.electronAPI` to CAPTURE the onUpdate callback, then push
 // a METADATA_UPDATE payload through it and assert the live store moved.
 //

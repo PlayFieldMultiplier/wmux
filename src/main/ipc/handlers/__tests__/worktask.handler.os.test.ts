@@ -1,5 +1,5 @@
 // J3 worktask 핸들러 — refire(§3·F2·F7) + owner 스코프 close(F1 E2E) + disk-missing
-// close(F3). electron ipcMain을 캡처해 핸들러를 직접 호출한다(diff.handler.test.ts 패턴).
+// close(F3). electron ipcMain을 캡처해 핸들러를 직접 호출한다(diff.handler.os.test.ts 패턴).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';

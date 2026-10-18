@@ -12,7 +12,7 @@
 // includes is `unit`. The list is checked in rather than computed when vitest
 // starts because classifying ~2,000 files costs ~0.5 s of CPU, and vitest
 // loads its config on every run, `vitest run one.test.ts` included.
-// scripts/__tests__/testLanes.test.mjs runs --check's comparison, so a stale
+// scripts/__tests__/testLanes.os.test.mjs runs --check's comparison, so a stale
 // list fails the suite with the command that fixes it.
 //
 // Exit codes: 0 ok, 1 stale (--check) or unknown file (--why), 2 bad usage.
