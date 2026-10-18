@@ -1,6 +1,8 @@
 // @wmux-lane unit — every case injects the platform and a fake handle or
 // child-exit source; nothing opens a real process or calls into Windows.
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   createDaemonExitWatch,
   describeExitCode,
@@ -155,5 +157,16 @@ describe('createDaemonExitWatch (spawned child)', () => {
     expect(lines[0].msg).toBe(
       'daemon pid 55 socket close, exit code unavailable: this process did not spawn the daemon, so it gets no exit event',
     );
+  });
+});
+
+describe('launcher wiring', () => {
+  it('a directly spawned daemon is registered, and its child exit settles the record', () => {
+    // spawnDirect is not reachable from a unit test (it spawns the real
+    // daemon); this pins the two lines the runtime test stands in for.
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'shared', 'daemon', 'daemonLauncherCore.ts'), 'utf-8');
+    const at = src.indexOf('const spawnDirect = () => {');
+    const body = src.slice(at, src.indexOf('watch({', at));
+    expect(body).toMatch(/trackSpawnedDaemon\(spawnedPid\);\s*child\.on\('exit', \(code, signal\) => settleSpawnedDaemon\(spawnedPid, code, signal\)\);/);
   });
 });
