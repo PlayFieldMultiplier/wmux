@@ -57,7 +57,7 @@ function conversation(): Session {
   return session;
 }
 
-/** The managed object as today's bridge serves it (chatBridgeRoutes.test.ts fixture). */
+/** The managed object as today's bridge serves it (chatBridgeRoutes.os.test.ts fixture). */
 const managedResolution: ChatResolution = {
   source: 'managed',
   status: {

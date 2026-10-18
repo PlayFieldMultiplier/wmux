@@ -323,7 +323,7 @@ describe('the line the renderer really sends for a bot\'s codex worker', () => {
     for (const pick of [{ agent: 'codex' }, { agent: 'codex', model: 'gpt-6.1-sol', effort: 'low' }]) {
       // Main's rows for a bot preset with the owner's pick applied.
       const [choice] = withBotWorkerAgent([{ agent: 'claude' }], pick);
-      // The renderer's chain (useRpcBridge, as in botWorkerMergeGuard.test.ts).
+      // The renderer's chain (useRpcBridge, as in botWorkerMergeGuard.os.test.ts).
       const main = workerLaunchCommand('claude', '/w/.wtask/prompt.md', { platform: 'darwin' }).command;
       const binding = fanoutChoiceBinding(choice);
       const { marker, command: bare } = splitModelEnvMarker(main);

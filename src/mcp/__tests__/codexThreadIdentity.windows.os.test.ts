@@ -9,7 +9,7 @@ import {
 } from '../codexThreadIdentity';
 
 // Windows shapes of the thread-owner lookup. The writer/reader round-trip
-// lives in integrations/codex/__tests__/codexThreadOwnerWindows.test.ts: this
+// lives in integrations/codex/__tests__/codexThreadOwnerWindows.os.test.ts: this
 // directory is compiled into the MCP bundle, which must not take in the .mjs.
 
 describe('Windows shapes', () => {
