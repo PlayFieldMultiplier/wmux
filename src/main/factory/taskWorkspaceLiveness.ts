@@ -57,16 +57,24 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
   // silent pane not counted), as of the same read: they hold their slot even
   // when a reclaim record says stopped.
   let agentWorkspaces: ReadonlySet<string> = new Set();
-  // Whether a read ever completed. Until one does, nothing above is known.
-  let hasGoodRead = false;
+  // Whether the latest read completed. Until one does, and after one fails,
+  // the sets above are not current: the ledger decides (dormant below), and
+  // agentWorkspaces keeps what the last good read saw.
+  let readOk = false;
   let loggedFallback: { n: number; at: number } | null = null;
-  const idle = new IdleSnapshot(async () => {
-    // A mirror the renderer has not pushed yet is not "no workspaces open": a
-    // read now would hold every ended task as live until the next one, so it
-    // fails and is not kept.
+  const read = async (): Promise<ReadonlySet<string>> => {
+    // A mirror the renderer has not pushed yet, or pushed empty, is not "no
+    // workspaces open": a read now would hold every ended task restored next
+    // as live until the following read, so it fails and is not kept.
     const entries = ports.entries();
-    if (!entries) throw new Error('the workspace list is not available yet');
-    const byId = new Map((await ports.listSessions()).map((x) => [x.id, x]));
+    if (!entries || entries.length === 0) throw new Error('the workspace list is not available yet');
+    const sessions = await ports.listSessions();
+    // Panes listed with no session at all is a daemon still restoring, not
+    // every agent gone: kept, it would drop the last good read's agents.
+    if (sessions.length === 0 && entries.some((e) => Array.isArray(e.ptyIds) && e.ptyIds.length > 0)) {
+      throw new Error('the daemon lists no sessions yet');
+    }
+    const byId = new Map(sessions.map((x) => [x.id, x]));
     const next = new Set<string>();
     const busy = new Set<string>();
     const endedNoAgent = new Set<string>();
@@ -85,20 +93,31 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     busyWorkspaces = busy;
     endedNoAgentWorkspaces = endedNoAgent;
     agentWorkspaces = withAgent;
-    hasGoodRead = true;
     return next;
+  };
+  const idle = new IdleSnapshot(async () => {
+    try {
+      const next = await read();
+      readOk = true;
+      return next;
+    } catch (err) {
+      readOk = false;
+      throw err;
+    }
   }, ports.refreshMs, now);
 
   const dormant = (): ReadonlySet<string> => {
     idle.get();
     const base = { records: ports.records(), row: ports.row, workspaceRow: ports.workspaceRow, agentWorkspaces };
-    if (hasGoodRead) return dormantTaskWorkspaceSet({ ...base, endedNoAgent: endedNoAgentWorkspaces });
-    // No read of the panes yet (the daemon or the workspace list is not up):
-    // the ledger decides. An ended task's workspace holds no slot unless an
-    // agent was seen in it; counting it live would refuse fan-outs on tasks
-    // that ended long ago.
-    const out = dormantTaskWorkspaceSet({ ...base, endedNoAgent: (ports.entries() ?? []).map((e) => e.id) });
-    const n = out.size - dormantTaskWorkspaceSet({ ...base, endedNoAgent: [] }).size;
+    if (readOk) return dormantTaskWorkspaceSet({ ...base, endedNoAgent: endedNoAgentWorkspaces });
+    // No current read of the panes (the daemon or the workspace list is not
+    // up, or the latest read failed): the ledger decides. An ended task's
+    // workspace holds no slot unless the last good read saw an agent in it;
+    // counting it live would refuse fan-outs on tasks that ended long ago.
+    const lastGood = dormantTaskWorkspaceSet({ ...base, endedNoAgent: endedNoAgentWorkspaces });
+    const out = dormantTaskWorkspaceSet({ ...base, endedNoAgent: [...endedNoAgentWorkspaces, ...(ports.entries() ?? []).map((e) => e.id)] });
+    // Only the ones the last good read did not already hold dormant are news.
+    const n = out.size - lastGood.size;
     if (n > 0 && (!loggedFallback || loggedFallback.n !== n || now() - loggedFallback.at >= FALLBACK_LOG_MS)) {
       loggedFallback = { n, at: now() };
       warn(`[fanout] liveness unknown: counting ${n} ended task workspace(s) as dormant from the ledger`);

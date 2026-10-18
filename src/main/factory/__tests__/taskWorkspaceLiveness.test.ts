@@ -147,6 +147,46 @@ describe('task workspace liveness (#2387)', () => {
     expect(w.warn).not.toHaveBeenCalled();
   });
 
+  it('an empty workspace list or an empty session list is not kept: the last good read still holds its agents', async () => {
+    const w = world({
+      'ws-agent': { id: 't-agent', status: 'completed', pty: 'p-agent' },
+      'ws-gone': { id: 't-gone', status: 'completed', pty: 'p-gone' },
+    });
+    // Pushed empty first, then the restored tree at the same instant: a read is made.
+    w.state.entries = [];
+    w.state.sessions = [running('p-agent'), exited('p-gone')];
+    await w.liveness.refresh();
+    expect(w.reads).not.toHaveBeenCalled();
+    w.open();
+    await w.liveness.refresh();
+    expect(w.reads).toHaveBeenCalledTimes(1);
+    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-agent']);
+    // The daemon answers with no sessions while panes are listed (still restoring).
+    w.state.sessions = [];
+    w.t.now += REFRESH_MS + 1;
+    await refreshDormantTaskWorkspaces();
+    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-agent']);
+    expect(w.warn).not.toHaveBeenCalled();
+  });
+
+  it('a task that ends after the last good read is dormant from the ledger once reads fail, and it says so', async () => {
+    const tasks: Record<string, Task> = { 'ws-x': { id: 't-x', status: 'working', pty: 'p-x' } };
+    const w = world(tasks);
+    w.open();
+    // The last good read: the task is still working, its agent has exited.
+    w.state.sessions = [exited('p-x')];
+    await w.liveness.refresh();
+    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    // The task completes, then the daemon cannot be read.
+    tasks['ws-x'].status = 'completed';
+    w.state.sessions = 'down';
+    w.t.now += REFRESH_MS + 1;
+    await refreshDormantTaskWorkspaces();
+    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect(w.warn).toHaveBeenCalledTimes(1);
+    expect(w.warn.mock.calls[0][0]).toBe('[fanout] liveness unknown: counting 1 ended task workspace(s) as dormant from the ledger');
+  });
+
   it('a fresh read that never answers holds the check for 2 s at most, then the ledger decides', async () => {
     vi.useFakeTimers();
     const w = world({
