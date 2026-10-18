@@ -354,9 +354,6 @@ export const createSurfaceSlice: StateCreator<StoreState, [['zustand/immer', nev
     // whether the tab that is closing was an agent — the same test closePane
     // applies per leaf, asked here about the one surface being destroyed.
     const closedAgent = closedPtyId ? state.surfaceAgent?.[closedPtyId] : undefined;
-    if (state.pendingDeadPaneRecoveryBySurfaceId) {
-      delete state.pendingDeadPaneRecoveryBySurfaceId[surfaceId];
-    }
     if (closedPtyId && state.deadPaneRecoveryOfferByPtyId?.[closedPtyId]) {
       delete state.deadPaneRecoveryOfferByPtyId[closedPtyId];
       delete state.resumeHintByPtyId[closedPtyId];

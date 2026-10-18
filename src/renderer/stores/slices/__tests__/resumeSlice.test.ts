@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../../index';
+import { createWorkspace } from '../../../../shared/types';
 
 // X6 Feature ② — resume-hint slice. Mirrors supervisionSlice.test structure.
 describe('resumeSlice', () => {
   beforeEach(() => {
     useStore.setState((state) => {
-      state.pendingDeadPaneRecoveryBySurfaceId = {};
       state.deadPaneRecoveryOfferByPtyId = {};
       state.resumeConsumedByPtyId = {};
     });
@@ -120,6 +120,27 @@ describe('resumeSlice', () => {
   });
 
   describe('dead-pane replacement hand-off (#650)', () => {
+    // The hand-off is staged on the surface itself (#2398), so the surface
+    // has to exist.
+    beforeEach(() => {
+      const ws = createWorkspace('recovery');
+      if (ws.rootPane.type !== 'leaf') throw new Error('fixture expects a leaf root');
+      ws.rootPane.surfaces = [{ id: 'surface-a', ptyId: '', title: 'Terminal', shell: 'pwsh', cwd: '' }];
+      ws.rootPane.activeSurfaceId = 'surface-a';
+      useStore.setState({ workspaces: [ws], activeWorkspaceId: ws.id });
+    });
+    const staged = () => {
+      const root = useStore.getState().workspaces[0].rootPane;
+      return root.type === 'leaf' ? root.surfaces[0].pendingRecovery : undefined;
+    };
+
+    it('stages on the surface, and staging for a surface that is gone is a no-op', () => {
+      useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:\\wmux' });
+      expect(staged()).toEqual({ spawnCwd: 'D:\\wmux' });
+      useStore.getState().stageDeadPaneRecovery('surface-gone', { spawnCwd: 'D:\\x' });
+      expect(staged()).toEqual({ spawnCwd: 'D:\\wmux' });
+    });
+
     it('moves a staged binding to the replacement pty', () => {
       const resumeBinding = binding('dead-conversation');
       useStore.getState().stageDeadPaneRecovery('surface-a', {
@@ -130,7 +151,7 @@ describe('resumeSlice', () => {
 
       useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
 
-      expect(useStore.getState().pendingDeadPaneRecoveryBySurfaceId['surface-a']).toBeUndefined();
+      expect(staged()).toBeUndefined();
       expect(useStore.getState().resumeHintByPtyId['pty-new']).toBe('claude');
       expect(useStore.getState().resumeBindingByPtyId['pty-new']).toEqual(resumeBinding);
     });
@@ -156,7 +177,7 @@ describe('resumeSlice', () => {
     it('consumes cwd-only recovery without inventing a resume offer', () => {
       useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:\\wmux' });
       useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
-      expect(useStore.getState().pendingDeadPaneRecoveryBySurfaceId['surface-a']).toBeUndefined();
+      expect(staged()).toBeUndefined();
       expect(useStore.getState().deadPaneRecoveryOfferByPtyId['pty-new']).toBeUndefined();
       expect(useStore.getState().resumeHintByPtyId['pty-new']).toBeUndefined();
     });

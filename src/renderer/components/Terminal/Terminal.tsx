@@ -12,6 +12,7 @@ import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { isFileDrag } from '../../../shared/dragDrop';
 import type { FixedGeometry } from '../../terminal/fixedGeometryFit';
 import { findLeafBySurfaceId } from '../../../shared/paneUtils';
+import type { DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import ViCopyMode from './ViCopyMode';
 import SearchBar from './SearchBar';
 import BookmarkIndicator from './BookmarkIndicator';
@@ -54,12 +55,16 @@ interface TerminalProps {
   workspaceId?: string;
   /** ID of the surface this terminal occupies. Sent as WMUX_SURFACE_ID. */
   surfaceId?: string;
+  /** The surface's staged dead-session recovery (`surface.pendingRecovery`):
+   *  present when this blank surface replaces a session the daemon confirmed
+   *  dead, so the create asks for that session's cwd/target instead. */
+  pendingRecovery?: DeadPaneRecovery;
   /** Grid owned elsewhere — see useTerminal's `fixedGeometry`. Only the
    *  browser build (wmux web) sets it; the desktop never does. */
   fixedGeometry?: FixedGeometry | null;
 }
 
-export default function TerminalComponent({ chatView = false, ptyId: externalPtyId, shell, cwd, onPtyCreated, isActive = true, visible, isWorkspaceVisible = true, scrollbackFile, workspaceId: ownerWorkspaceId, surfaceId: ownerSurfaceId, fixedGeometry }: TerminalProps) {
+export default function TerminalComponent({ chatView = false, ptyId: externalPtyId, shell, cwd, onPtyCreated, isActive = true, visible, isWorkspaceVisible = true, scrollbackFile, workspaceId: ownerWorkspaceId, surfaceId: ownerSurfaceId, pendingRecovery: deadPaneRecovery, fixedGeometry }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [ptyId, setPtyId] = useState<string | null>(externalPtyId || null);
   const creatingRef = useRef(false);
@@ -69,9 +74,6 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
   const setViCopyModeActive = useStore((s) => s.setViCopyModeActive);
   const searchBarVisible = useStore((s) => s.searchBarVisible);
   const setSearchBarVisible = useStore((s) => s.setSearchBarVisible);
-  const deadPaneRecovery = useStore((s) =>
-    ownerSurfaceId ? s.pendingDeadPaneRecoveryBySurfaceId[ownerSurfaceId] : undefined,
-  );
   const bookmarks = useStore((s) => (ptyId ? s.terminalBookmarks[ptyId] : undefined)) ?? EMPTY_BOOKMARKS;
   const { invoke: ipcInvoke } = useIpc();
   // Keep the invoker stable across re-renders without re-triggering the PTY

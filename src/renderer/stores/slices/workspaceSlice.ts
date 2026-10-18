@@ -18,7 +18,7 @@ import { MULTIVIEW_ARRANGEMENTS } from '../../utils/multiviewGrid';
 import { publishWorkspaceMetadataChanged, publishA2aTask } from '../../events/publisher';
 import { retentionMigrationDone, markRetentionMigrationDone } from '../retentionMigration';
 import { decUnread } from './notificationSlice';
-import { mergeDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
+import { mergeDeadPaneRecovery, normalizeDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import { stashedPaneLiveness } from '../../../shared/paneStash';
 import { resolveAttentionBlink, resolveAttentionBlinkFinished, resolveAttentionRemindMs } from '../../components/Sidebar/attentionBlink';
 import { resolveWindowGlass } from '../../utils/windowGlass';
@@ -692,19 +692,16 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         const removedWs = state.workspaces[idx];
         for (const pid of getWorkspacePtyIds(removedWs)) delete state.taskPtyRegistry[pid];
       }
-      // #650 recovery metadata is transient but hydration-sticky. A removed
-      // workspace must evict both surface-keyed pending hand-offs and offers
-      // rebound to its ptys, otherwise the normal list poll intentionally keeps
-      // them alive forever.
+      // #650 recovery offers rebound to a replacement pty are transient but
+      // hydration-sticky. A removed workspace must evict the ones rebound to
+      // its ptys, otherwise the normal list poll intentionally keeps them alive
+      // forever. (A pending hand-off lives on its surface and goes with it.)
       {
         const removedWs = state.workspaces[idx];
         const allSurfaces = getWorkspaceLeafPanes(removedWs).flatMap((leaf) =>
           leaf.surfaces.map((s) => ({ id: s.id, ptyId: s.ptyId })),
         );
         for (const surface of allSurfaces) {
-          if (state.pendingDeadPaneRecoveryBySurfaceId) {
-            delete state.pendingDeadPaneRecoveryBySurfaceId[surface.id];
-          }
           if (surface.ptyId && state.deadPaneRecoveryOfferByPtyId?.[surface.ptyId]) {
             delete state.deadPaneRecoveryOfferByPtyId[surface.ptyId];
             delete state.resumeHintByPtyId[surface.ptyId];
@@ -1156,6 +1153,13 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
               if (BLOCKED_URL_SCHEMES.some((scheme) => normalized.startsWith(scheme))) {
                 s.browserUrl = 'about:blank';
               }
+            }
+            // #2398 — a staged dead-pane recovery is replayed into pty.create,
+            // so it gets the same validation as a fresh daemon tombstone.
+            if (s.pendingRecovery !== undefined) {
+              const recovery = normalizeDeadPaneRecovery(s.pendingRecovery);
+              if (recovery) s.pendingRecovery = recovery;
+              else delete s.pendingRecovery;
             }
           }
         } else {
@@ -1786,11 +1790,8 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
             // 유틸 surface(git·review)는 pty 없음 — 명시적으로 제외해 방어.
             if (s.ptyId === ptyId && s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
               const previousOffer = state.deadPaneRecoveryOfferByPtyId?.[ptyId];
-              if ((recovery || previousOffer) && state.pendingDeadPaneRecoveryBySurfaceId) {
-                state.pendingDeadPaneRecoveryBySurfaceId[s.id] = mergeDeadPaneRecovery(
-                  state.pendingDeadPaneRecoveryBySurfaceId[s.id] ?? previousOffer,
-                  recovery ?? {},
-                );
+              if (recovery || previousOffer) {
+                s.pendingRecovery = mergeDeadPaneRecovery(s.pendingRecovery ?? previousOffer, recovery ?? {});
               }
               if (previousOffer) {
                 delete state.deadPaneRecoveryOfferByPtyId[ptyId];
@@ -1826,6 +1827,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
           if (s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
             s.ptyId = '';
           }
+          if (s.pendingRecovery) delete s.pendingRecovery;
         }
       };
       // Workspace-wide (#977): this is the "we could not reconcile anything"
@@ -1845,7 +1847,6 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       for (const ws of state.workspaces) {
         if (ws.metadata?.listeningPorts !== undefined) delete ws.metadata.listeningPorts;
       }
-      if (state.pendingDeadPaneRecoveryBySurfaceId) state.pendingDeadPaneRecoveryBySurfaceId = {};
       if (state.deadPaneRecoveryOfferByPtyId) state.deadPaneRecoveryOfferByPtyId = {};
 
       // 3. companySlice — member.ptyId across all departments.

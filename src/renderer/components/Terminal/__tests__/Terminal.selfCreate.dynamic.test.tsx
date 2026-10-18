@@ -141,6 +141,20 @@ describe('Terminal self-create for a visible blank surface', () => {
     expect(order).toEqual(['bind:pty-home']);
   });
 
+  it('a surface replacing a dead session asks for that session’s directories and target', () => {
+    mount({ pendingRecovery: { sourceSessionId: 'daemon-1', spawnCwd: '/home/me/a', cwd: '/home/me/b', wslTarget: { distribution: 'Ubuntu', user: 'me' } } });
+    expect(create).toHaveBeenCalledTimes(1);
+    const options = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(options.cwd).toBeUndefined();
+    expect(options.recoveryCwds).toEqual({
+      spawnCwd: '/home/me/a',
+      cwd: '/home/me/b',
+      wslTarget: { distribution: 'Ubuntu', user: 'me' },
+      args: undefined,
+      sourceSessionId: 'daemon-1',
+    });
+  });
+
   it('a surface that already has a pty creates nothing', () => {
     mount({ ptyId: 'pty-live' });
     expect(create).not.toHaveBeenCalled();

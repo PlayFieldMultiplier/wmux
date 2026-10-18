@@ -1568,6 +1568,7 @@ function TerminalSurface({ surface, paneId, chatViewEnabled, isActive, visible, 
           scrollbackFile={surface.scrollbackFile}
           workspaceId={workspaceId}
           surfaceId={surface.id}
+          pendingRecovery={surface.pendingRecovery}
         />
       </div>
       {chatV2 && shown && isWorkspaceVisible && surface.ptyId && <ChatV2Overlay ptyId={surface.ptyId} surfaceId={surface.id} cwd={surface.cwd} />}

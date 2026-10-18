@@ -18,11 +18,10 @@ import {
   mergeDeadPaneRecovery,
   type DeadPaneRecovery,
 } from '../../../shared/ptyRecovery';
+import type { Surface } from '../../../shared/types';
+import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 
 export interface ResumeSlice {
-  /** One-shot recovery metadata keyed by the stable renderer surface id. */
-  pendingDeadPaneRecoveryBySurfaceId: Record<string, DeadPaneRecovery>;
-
   /**
    * Recovery offers rebound to a replacement pty. Kept separately so the
    * daemon's normal 15-second hydration (which does not list dead tombstones)
@@ -30,7 +29,11 @@ export interface ResumeSlice {
    */
   deadPaneRecoveryOfferByPtyId: Record<string, DeadPaneRecovery>;
 
-  /** Stage a known-dead session before clearing its surface ptyId. */
+  /**
+   * Stage a known-dead session before clearing its surface ptyId. Staged on
+   * the surface itself (`surface.pendingRecovery`, #2398), so it is saved with
+   * the session until the replacement is created.
+   */
   stageDeadPaneRecovery: (surfaceId: string, recovery: DeadPaneRecovery, previousPtyId?: string) => void;
 
   /** Move staged metadata onto the freshly-created replacement pty. */
@@ -120,6 +123,17 @@ export interface ResumeSlice {
   hydrateResumeAgentOnScreen: (snapshot: Record<string, boolean>) => void;
 }
 
+/** The surface with this id anywhere a workspace owns it, stashed panes included. */
+function findSurfaceDraft(draft: StoreState, surfaceId: string): Surface | undefined {
+  for (const ws of draft.workspaces) {
+    for (const leaf of getWorkspaceLeafPanes(ws)) {
+      const surface = leaf.surfaces.find((s) => s.id === surfaceId);
+      if (surface) return surface;
+    }
+  }
+  return undefined;
+}
+
 export const createResumeSlice: StateCreator<
   StoreState,
   [['zustand/immer', never]],
@@ -133,14 +147,15 @@ export const createResumeSlice: StateCreator<
   agentAliveByPtyId: {},
   resumeAgentOnScreenByPtyId: {},
   ptyReadyByPtyId: {},
-  pendingDeadPaneRecoveryBySurfaceId: {},
   deadPaneRecoveryOfferByPtyId: {},
 
   stageDeadPaneRecovery: (surfaceId, recovery, previousPtyId) => set((draft: StoreState) => {
     if (!surfaceId) return;
-    const previous = draft.pendingDeadPaneRecoveryBySurfaceId[surfaceId]
+    const surface = findSurfaceDraft(draft, surfaceId);
+    if (!surface) return;
+    const previous = surface.pendingRecovery
       ?? (previousPtyId ? draft.deadPaneRecoveryOfferByPtyId[previousPtyId] : undefined);
-    draft.pendingDeadPaneRecoveryBySurfaceId[surfaceId] = mergeDeadPaneRecovery(previous, recovery);
+    surface.pendingRecovery = mergeDeadPaneRecovery(previous, recovery);
     if (previousPtyId && draft.deadPaneRecoveryOfferByPtyId[previousPtyId]) {
       delete draft.deadPaneRecoveryOfferByPtyId[previousPtyId];
       delete draft.resumeHintByPtyId[previousPtyId];
@@ -150,9 +165,10 @@ export const createResumeSlice: StateCreator<
 
   completeDeadPaneRecovery: (surfaceId, ptyId) => set((draft: StoreState) => {
     if (!surfaceId || !ptyId) return;
-    const recovery = draft.pendingDeadPaneRecoveryBySurfaceId[surfaceId];
-    if (!recovery) return;
-    delete draft.pendingDeadPaneRecoveryBySurfaceId[surfaceId];
+    const surface = findSurfaceDraft(draft, surfaceId);
+    const recovery = surface?.pendingRecovery;
+    if (!surface || !recovery) return;
+    delete surface.pendingRecovery;
 
     const agent = recovery.resumeAgent ?? asRecoveryAgentSlug(recovery.resumeBinding?.agent);
     if (!agent) return;
