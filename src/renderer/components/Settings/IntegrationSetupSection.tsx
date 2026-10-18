@@ -297,9 +297,12 @@ export function IntegrationSetupSection({
       .status()
       .then((s) => {
         if (mountedRef.current && gen === genRef.current) {
-          setAccountHooks(api.hooks?.updateAccount
-            ? (s.accounts ?? []).map((a) => ({ accountId: a.accountId, name: a.name, model: { state: 'outdated', error: null, stale: a.stale } }))
-            : []);
+          // A row whose Update is still running keeps its state until that
+          // Update settles.
+          setAccountHooks((prev) => (api.hooks?.updateAccount ? s.accounts ?? [] : []).map((a) => {
+            const running = prev.find((r) => r.accountId === a.accountId && r.model.state === 'working');
+            return running ?? { accountId: a.accountId, name: a.name, model: { state: 'outdated', error: null, stale: a.stale } };
+          }));
         }
         return s;
       })
@@ -318,7 +321,14 @@ export function IntegrationSetupSection({
               error: null,
             }, gen),
       )
-      .catch(() => commit(setHooks, INITIAL, gen));
+      .catch(() => {
+        commit(setHooks, INITIAL, gen);
+        // The probe that follows an Update failed: let its rows be clicked again
+        // (the Update writes only what is missing, so a repeat is harmless).
+        if (mountedRef.current && gen === genRef.current) {
+          setAccountHooks((rows) => rows.map((r) => (r.model.state === 'working' ? { ...r, model: { ...r.model, state: 'outdated' } } : r)));
+        }
+      });
     // Probed with the rows but kept OUT of RowModel: it is not an install
     // state, and folding it into the hooks row would make a suppressed prompt
     // read as a broken install.
@@ -460,11 +470,25 @@ export function IntegrationSetupSection({
       .catch(() => { /* leave the line up: the refusal is still in force */ });
   }, [api]);
 
-  // runInstall drives one row through a setter; this is an account row's.
-  const accountSetter = (accountId: string): React.Dispatch<React.SetStateAction<RowModel>> => (next) =>
-    setAccountHooks((rows) => rows.map((r) => (r.accountId === accountId
-      ? { ...r, model: typeof next === 'function' ? next(r.model) : next }
-      : r)));
+  // One account folder's Update. Not runInstall: its single generation would
+  // let a second account's Update swallow the first one's result. Each row
+  // settles on its own; a success re-probes, which replaces the rows.
+  const runAccountUpdate = useCallback(async (accountId: string) => {
+    const update = api.hooks?.updateAccount;
+    if (!update) return;
+    const setRow = (model: (prev: RowModel) => RowModel) => {
+      if (!mountedRef.current) return;
+      setAccountHooks((rows) => rows.map((r) => (r.accountId === accountId ? { ...r, model: model(r.model) } : r)));
+    };
+    setRow((prev) => ({ ...prev, state: 'working', error: null }));
+    try {
+      const outcome = await update(accountId);
+      if (outcome.ok) { probeAll(); return; }
+      setRow((prev) => ({ ...prev, state: 'error', error: outcome.error }));
+    } catch (err) {
+      setRow((prev) => ({ ...prev, state: 'error', error: err instanceof Error ? err.message : null }));
+    }
+  }, [api, probeAll]);
 
   // DESIGN.md "One primary per surface": the first row that needs the user
   // carries the warm primary; every other action on the card is secondary.
@@ -472,7 +496,10 @@ export function IntegrationSetupSection({
   // emphasis does not jump to the next row until that install settles.
   const needsAction = (m: RowModel) =>
     m.state === 'missing' || m.state === 'outdated' || m.state === 'error' || m.state === 'working';
-  const primaryRow = needsAction(hooks) ? 'hooks' : needsAction(mcp) ? 'mcp' : needsAction(statusline) ? 'statusline' : null;
+  const accountNeedingAction = accountHooks.find((r) => needsAction(r.model));
+  const primaryRow = needsAction(hooks) ? 'hooks'
+    : accountNeedingAction ? `hooks-account-${accountNeedingAction.accountId}`
+    : needsAction(mcp) ? 'mcp' : needsAction(statusline) ? 'statusline' : null;
 
   return (
     <section
@@ -530,10 +557,8 @@ export function IntegrationSetupSection({
             description={t('integrationSetup.hooks.accountDescription')}
             model={row.model}
             actionLabel={t('integrationSetup.updateButton')}
-            onAction={() => {
-              const update = api.hooks?.updateAccount;
-              if (update) void runInstall(accountSetter(row.accountId), () => update(row.accountId));
-            }}
+            primary={primaryRow === `hooks-account-${row.accountId}`}
+            onAction={() => void runAccountUpdate(row.accountId)}
             note={(row.model.stale?.length ?? 0) > 0
               ? t('integrationSetup.hooks.updateNote', { hooks: (row.model.stale ?? []).join(', ') })
               : null}

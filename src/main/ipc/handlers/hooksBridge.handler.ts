@@ -15,6 +15,7 @@
 // Reuses src/cli/commands/setupHooks.ts verbatim: same idempotent settings
 // merge, same stable bridge copy under ~/.wmux/hooks/, same atomic writes.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
@@ -65,18 +66,43 @@ export function accountHookPaths(base: SetupHooksPaths, account: Pick<Account, '
   return { ...base, settingsPath: path.join(account.configDir, 'settings.json') };
 }
 
+/** The file a path names once symlinks are followed (the path itself when it
+ *  does not exist yet): two names for one settings file are one file. */
+function physicalPath(file: string): string {
+  try { return fs.realpathSync.native(file); } catch { return path.resolve(file); }
+}
+
+/** A UNC folder (`\\wsl.localhost\…`, a network share): the hook commands
+ *  Update writes name this machine's node and bridge path, which a Claude
+ *  running behind that path cannot run. Such accounts get no row. */
+function isUncPath(dir: string): boolean {
+  return /^[\\/]{2}/.test(dir);
+}
+
+/** The account's settings file when wmux may offer to update it: a Claude
+ *  account on a local folder whose settings file is its own (not the default
+ *  config's, which the card's own row covers). */
+function ownAccountSettings(account: Account, base: SetupHooksPaths): SetupHooksPaths | null {
+  if (account.vendor !== 'claude' || isUncPath(account.configDir)) return null;
+  const paths = accountHookPaths(base, account);
+  return physicalPath(paths.settingsPath) === physicalPath(base.settingsPath) ? null : paths;
+}
+
 /**
  * The Claude accounts whose settings copy is a wmux install that drifted,
  * by the same rule as the default config's Update (installed, and some
- * expected hook missing or outdated). The default config itself is skipped:
- * the card's own row covers it. One unreadable folder never hides the rest.
+ * expected hook missing or outdated). A settings file two accounts share is
+ * listed once. One unreadable folder never hides the rest.
  */
 export function accountHookDrift(accounts: readonly Account[], base: SetupHooksPaths): AccountHookDrift[] {
   const out: AccountHookDrift[] = [];
+  const seen = new Set<string>();
   for (const account of accounts) {
-    if (account.vendor !== 'claude') continue;
-    const paths = accountHookPaths(base, account);
-    if (path.resolve(paths.settingsPath) === path.resolve(base.settingsPath)) continue;
+    const paths = ownAccountSettings(account, base);
+    if (!paths) continue;
+    const file = physicalPath(paths.settingsPath);
+    if (seen.has(file)) continue;
+    seen.add(file);
     try {
       const status = statusHooks(paths);
       if (!computeInstalled(status) || !status.updateAvailable) continue;
@@ -133,10 +159,11 @@ export function registerHooksBridgeHandlers(): void {
     IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT,
     wrapHandler(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT, async (_event, accountId: unknown): Promise<UpdateOutcome> => {
       const account = typeof accountId === 'string'
-        ? getAccountStore().listAccounts().find((a) => a.id === accountId && a.vendor === 'claude')
+        ? getAccountStore().listAccounts().find((a) => a.id === accountId)
         : undefined;
-      if (!account) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no such Claude account');
-      return updateHooks(accountHookPaths(defaultPaths(), account));
+      const paths = account ? ownAccountSettings(account, defaultPaths()) : null;
+      if (!paths) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no Claude account with its own local settings');
+      return updateHooks(paths);
     }),
   );
 

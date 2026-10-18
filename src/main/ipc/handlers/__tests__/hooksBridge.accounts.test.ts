@@ -81,6 +81,18 @@ describe('account folders in the hook-set check', () => {
     expect(accountHookDrift(list, base)).toEqual([{ accountId: 'a', name: 'acct a', stale: ['StopFailure'] }]);
   });
 
+  it('skips a settings file that is the default one or another account\'s by another name, and UNC folders', () => {
+    const real = path.join(tmp, 'acct-a');
+    staleCopy(real, 'StopFailure');
+    const alias = path.join(tmp, 'acct-alias');
+    fs.symlinkSync(real, alias);
+    const linkedToDefault = path.join(tmp, 'acct-l');
+    fs.mkdirSync(linkedToDefault);
+    fs.symlinkSync(base.settingsPath, path.join(linkedToDefault, 'settings.json'));
+    const list = [account('a', real), account('alias', alias), account('l', linkedToDefault), account('w', '\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude')];
+    expect(accountHookDrift(list, base).map((d) => d.accountId)).toEqual(['a']);
+  });
+
   it('reports drift through status, and Update writes only the account named by id', async () => {
     const dir = path.join(tmp, 'acct-a');
     staleCopy(dir, 'StopFailure');

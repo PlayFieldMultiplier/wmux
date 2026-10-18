@@ -689,6 +689,40 @@ describe('IntegrationSetupSection — account folder hook update', () => {
     expect(state(container, 'hooks-account-a')).toBe('outdated');
   });
 
+  it('settles two overlapping account Updates on their own, and gives the first the primary', async () => {
+    const { api } = accountsApi();
+    const pending: Array<(v: { ok: boolean; error: string | null }) => void> = [];
+    api.hooks!.updateAccount = () => new Promise((resolve) => { pending.push(resolve); });
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    expect(action(container, 'hooks-account-a')!.className).toContain('ui-btn-primary');
+    expect(action(container, 'hooks-account-b')!.className).not.toContain('ui-btn-primary');
+
+    await act(async () => { action(container, 'hooks-account-a')!.click(); await Promise.resolve(); });
+    await act(async () => { action(container, 'hooks-account-b')!.click(); await Promise.resolve(); });
+    await act(async () => { pending[0]({ ok: false, error: 'EACCES' }); pending[1]({ ok: false, error: 'EPERM' }); await Promise.resolve(); });
+    await flush();
+    expect(state(container, 'hooks-account-a')).toBe('error');
+    expect(state(container, 'hooks-account-b')).toBe('error');
+    expect(action(container, 'hooks-account-a')!.textContent).toBe('Update');
+  });
+
+  it('lets a row be clicked again when the probe after its Update fails', async () => {
+    const { api } = accountsApi();
+    const status = api.hooks!.status;
+    let failProbe = false;
+    api.hooks!.status = async () => { if (failProbe) throw new Error('ipc'); return status(); };
+    api.hooks!.updateAccount = async () => { failProbe = true; return { ok: true, error: null }; };
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    await act(async () => { action(container, 'hooks-account-a')!.click(); await Promise.resolve(); });
+    await flush();
+    expect(state(container, 'hooks-account-a')).toBe('outdated');
+    expect((action(container, 'hooks-account-a') as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('shows no account rows on a preload without the account Update', async () => {
     const { api } = accountsApi(false);
     const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
