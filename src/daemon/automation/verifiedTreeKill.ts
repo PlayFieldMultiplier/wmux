@@ -537,6 +537,9 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   let scanError: string | null = null;
   let complete = false;
   const unfrozen: number[] = [];
+  /** Found in the tree, but gone or another process's by the stop: what it
+   *  started meanwhile went to init, where no scan leads. */
+  const lost: number[] = [];
   for (let round = 0; round < CAPTURE_ROUNDS; round++) {
     if (round > 0) {
       try {
@@ -568,9 +571,9 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       complete = true;
       break;
     }
-    // Read again right before the stop: one that exited since and whose pid
-    // went to another process is not stopped (the next scan sees whether the
-    // tree still leads to anything new).
+    // Read again right before the stop: one that exited since, or whose pid
+    // went to another process, is not stopped, and the tree is not known
+    // whole (a child it forked before it went is under no captured pid).
     let fresh: Map<number, PosixProcRow>;
     try {
       fresh = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
@@ -581,7 +584,10 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
     let added = 0;
     for (const pid of found) {
       const start = (byPid.get(pid) as PosixProcRow).start;
-      if (fresh.get(pid)?.start !== start) continue;
+      if (fresh.get(pid)?.start !== start) {
+        lost.push(pid);
+        continue;
+      }
       targets.set(pid, start);
       // One that cannot be frozen (another user's, a setuid program) can
       // still fork and exit, leaving a child the tree no longer leads to.
@@ -595,18 +601,20 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   // forked before it was frozen, into a process group the kill misses.
   if (!complete && scanError === null) scanError = `the tree was still growing after ${CAPTURE_ROUNDS} scans`;
   if (unfrozen.length > 0 && scanError === null) scanError = `process(es) ${unfrozen.join(', ')} could not be frozen`;
+  if (lost.length > 0 && scanError === null) scanError = `process(es) ${lost.join(', ')} of the tree ended or changed hands before they could be frozen`;
   let released = false;
   /** The captured pids still held by the processes captured (their start
    *  time unchanged), in capture order. A frozen process cannot exit, but
    *  another process can kill it and its pid go to an unrelated one; that
-   *  one is never killed. When the table cannot be read, all of them:
-   *  frozen, they keep their pids. */
+   *  one is never killed. When the table cannot be read, the frozen ones:
+   *  they keep their pids. One that could not be frozen may have exited and
+   *  its pid gone to another process, so it is left out. */
   const stillCaptured = async (): Promise<number[]> => {
     try {
       const byPid = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
       return [...targets].filter(([pid, start]) => byPid.get(pid)?.start === start).map(([pid]) => pid);
     } catch {
-      return [...targets.keys()];
+      return [...targets.keys()].filter((pid) => !unfrozen.includes(pid));
     }
   };
   return {

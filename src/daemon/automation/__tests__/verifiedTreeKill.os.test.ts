@@ -333,6 +333,45 @@ describe('captureTreePosix', () => {
     expect(signals.filter(([p, s]) => (p === 100 || p === 102 || p === -100) && s !== 'SIGCONT')).toEqual([]);
   });
 
+  it('a process of the tree gone before its stop leaves the tree unverified: what it forked went to init', async () => {
+    let reads = 0;
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1 lists 101 under 100. By read 2 it forked 102 into a group
+        // of its own and exited: 102 is init's now, under no captured pid.
+        return reads === 1
+          ? [row(1, 0), row(100, 1), row(101, 100)]
+          : [row(1, 0), row(100, 1), row(102, 1)];
+      },
+      signal: () => undefined,
+    };
+    const r = await (await captureTreePosix(100, deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toContainEqual(expect.objectContaining({ unverified: true, reason: expect.stringMatching(/101 of the tree ended or changed hands before they could be frozen/) }));
+  });
+
+  it('never kills a process it could not freeze when the table cannot be read again', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // The capture's reads work; the kill's read fails.
+        if (reads > 3) throw new Error('ps failed');
+        return [row(1, 0), row(100, 1), row(101, 100)];
+      },
+      // 101 cannot be stopped (another user's): it may exit, and its pid go.
+      signal: (pid, sig) => {
+        signals.push([pid, sig]);
+        if (pid === 101 && sig === 'SIGSTOP') throw new Error('EPERM');
+      },
+    };
+    const r = await (await captureTreePosix(100, deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    expect(signals.filter(([p, s]) => p === 101 && s === 'SIGKILL')).toEqual([]);
+  });
+
   it('does not stop a pid that changed hands between the read and the stop', async () => {
     let reads = 0;
     const signals: Array<[number, NodeJS.Signals]> = [];
