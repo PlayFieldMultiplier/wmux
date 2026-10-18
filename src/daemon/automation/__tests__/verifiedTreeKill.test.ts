@@ -20,7 +20,7 @@ interface FakeProc {
 }
 
 /** A Windows process table behind the ProcessHandleApi surface. */
-function fakeWin(procs: FakeProc[], opts: { now?: bigint | (() => bigint); tableFails?: boolean; tables?: Array<Array<{ pid: number; ppid: number }>> } = {}) {
+function fakeWin(procs: FakeProc[], opts: { now?: bigint | ((tableReads: number) => bigint); tableFails?: boolean; tables?: Array<Array<{ pid: number; ppid: number }>> } = {}) {
   let tableReads = 0;
   const table = new Map(procs.map((p) => [p.pid, p]));
   const handles = new Map<ProcessHandle, FakeProc>();
@@ -54,7 +54,7 @@ function fakeWin(procs: FakeProc[], opts: { now?: bigint | (() => bigint); table
     },
     hasExited: (h) => handles.get(h)!.exited === true,
     close: () => { open--; },
-    now: () => (typeof opts.now === 'function' ? opts.now() : opts.now ?? 1_000n),
+    now: () => (typeof opts.now === 'function' ? opts.now(tableReads) : opts.now ?? 1_000n),
   };
   return { api, opened, terminated, openHandles: () => open };
 }
@@ -102,12 +102,12 @@ describe('captureTreeWin32', () => {
   it('never takes a process that took a listed child\'s pid while the table was read', async () => {
     // The table lists 11 under 10 (its first owner, gone since); the process
     // now on 11 was created after the table was asked for, under another parent.
-    let clock = 1_000n;
     const f = fakeWin([
       { pid: 10, ppid: 1, createdAt: 100n },
       { pid: 11, ppid: 99, createdAt: 1_500n },
     ], {
-      now: () => (clock += 1_000n) - 1_000n,
+      // The clock reads 1000 before the first table, 2000 after it.
+      now: (tableReads) => (tableReads === 0 ? 1_000n : 2_000n),
       tables: [[{ pid: 10, ppid: 1 }, { pid: 11, ppid: 10 }]],
     });
     const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 });
