@@ -144,6 +144,10 @@ describe('reclaimWorker', () => {
     expect(body).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree and the conversation are kept; Resume continues the same conversation.');
     expect(body).not.toContain('free memory');
     expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'cancelled', title: 'perf-A' } });
+    // With no conversation recorded, the same cause.
+    const bare = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'bare')), [session({ resumeBinding: undefined })]);
+    await reclaimWorker(bare.ports, row('cancelled'), 'cancelled');
+    expect(bare.note.mock.calls[0][3]).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree is kept; no conversation was recorded to resume.');
   });
 
   it('records nothing (and the worker keeps running) without a worktree or when every stop is refused; no pane left is recorded as nothing to stop', async () => {
