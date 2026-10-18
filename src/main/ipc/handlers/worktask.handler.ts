@@ -29,7 +29,7 @@ import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
-import { beginPaneRelaunch } from '../../factory/workerSlots';
+import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
 import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
@@ -288,7 +288,7 @@ export function registerWorktaskHandlers(
       // typed (factory/workerSlots.ts); not recorded, not typed.
       let settleRelaunch: ((typed: boolean) => void) | null;
       try {
-        settleRelaunch = beginPaneRelaunch(ptyId);
+        settleRelaunch = startsAgent(line) ? beginPaneRelaunch(ptyId) : null;
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
       }

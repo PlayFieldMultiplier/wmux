@@ -4,10 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
+import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
+import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 
 const BOT = 'bot-0000000a';
@@ -37,6 +39,7 @@ describe('WorkerSlots', () => {
     const { gen } = s.beginLaunch({ taskId: 't1', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
     expect(gen).toBe(1);
     expect(s.launched('t1', gen, 'ws-t1', 'pty-1')).toBe(true);
+    s.flushForTests();
     const again = store(dir);
     expect(again.launchOf('t1')).toMatchObject({ taskId: 't1', gen: 1, origin: 'owner', state: 'launched' });
     expect(again.paneOf('pty-1')).toEqual({ taskId: 't1', gen: 1, workspaceId: 'ws-t1' });
@@ -129,20 +132,31 @@ describe('WorkerSlots', () => {
 });
 
 describe('round 1 review (#2393 identity)', () => {
-  it('a file that can neither be read nor moved aside refuses every launch', () => {
+  it('a file that can neither be read nor moved aside refuses launches only while it cannot be moved', () => {
     const dir = tmp();
     const file = path.join(dir, 'factory', WORKER_SLOTS_FILENAME);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{ torn');
     const rename = fs.renameSync;
-    (fs as { renameSync: typeof fs.renameSync }).renameSync = () => { throw new Error('EACCES'); };
+    let tries = 0;
+    (fs as { renameSync: typeof fs.renameSync }).renameSync = () => {
+      tries++;
+      throw new Error('EBUSY');
+    };
     let s: WorkerSlots;
     try {
-      s = store(dir);
+      s = store(dir, { rows: [row('r')] });
+      // A few tries at load, then one at each launch.
+      expect(tries).toBe(3);
+      expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
+      expect(tries).toBe(4);
     } finally {
       (fs as { renameSync: typeof fs.renameSync }).renameSync = rename;
     }
-    expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
+    // The lock is gone: the next launch moves it aside, rebuilds and is recorded.
+    expect(s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen).toBe(1);
+    expect(s.launchOf('r')?.gen).toBe(1);
+    expect(store(dir).launchOf('t')?.gen).toBe(1);
   });
 
   it('a pane\'s create records the pane and its workspace before any renderer reply; a write that fails fails the create', () => {
@@ -180,6 +194,7 @@ describe('round 1 review (#2393 identity)', () => {
     const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
     stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', fanoutLaunch: { taskId: 't', gen } }, guards, () => s);
     s.launched('t', gen, 'ws-t', 'pty-t');
+    s.flushForTests();
     // An older build rewrites the stamps without the task fields.
     fs.writeFileSync(path.join(dir, 'fanout-lineage.json'), JSON.stringify({ version: 1, tasks: { 'ws-t': { owner: 'ws-owner', at: 1 } } }));
     setFanOutGuardsForTests(new FanOutGuards({ dir, ledgerTaskOwner: () => null }));
@@ -227,15 +242,33 @@ describe('round 2 review (#2393 identity)', () => {
     expect(s.paneOf('pty-late')).toBeNull();
   });
 
-  it('a pane from before panes were recorded is its workspace\'s task\'s: a launch typed into it is recorded', () => {
-    const s = store(tmp(), { rows: [row('old')] });
+  it('a pane from before panes were recorded is its workspace\'s task\'s, only where the record and the ledger agree', async () => {
+    const dir = tmp();
+    const ledger = new TaskLedger({ dir });
+    setTaskLedgerForTests(ledger);
+    await ledger.register({ id: 'old', taskWorkspaceId: 'ws-old', ownerWorkspaceId: 'ws-owner', title: 'old' });
+    const s = store(dir, { rows: ledger.list({}) });
     setWorkerSlotsForTests(s);
-    getWorkspaceMirror().setSnapshot({ ts: 0, entries: [{ id: 'ws-old', name: 'ws-old', ptyIds: ['pty-old'] }], fleets: [] });
+    getWorkspaceMirror().setSnapshot({
+      ts: 0,
+      entries: [
+        { id: 'ws-old', name: 'ws-old', ptyIds: ['pty-old'] },
+        { id: 'ws-owner', name: 'owner', ptyIds: ['pty-owner'] },
+        { id: 'ws-other', name: 'other', ptyIds: ['pty-moved'] },
+      ],
+      fleets: [],
+    });
     const settle = beginPaneRelaunch('pty-old');
     expect(settle).not.toBeNull();
     settle?.(true);
     expect(s.launchOf('old')).toMatchObject({ gen: 2, state: 'launched' });
     expect(s.paneOf('pty-old')).toEqual({ taskId: 'old', gen: 2, workspaceId: 'ws-old' });
+    // The owner's workspace is no task's; one whose record the ledger does
+    // not confirm is not known either.
+    expect(beginPaneRelaunch('pty-owner')).toBeNull();
+    s.launched('other', s.beginLaunch({ taskId: 'other', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen, 'ws-other');
+    expect(beginPaneRelaunch('pty-moved')).toBeNull();
+    setTaskLedgerForTests(null);
   });
 
   it('the rebuild from the ledger names each task\'s workspace', () => {
@@ -275,6 +308,43 @@ describe('round 4 review (#2393 identity)', () => {
     expect(launchStillCurrent({ taskId: 't', gen: second })).toBe(true);
     // A pane that named no launch.
     expect(launchStillCurrent(undefined)).toBe(true);
+  });
+});
+
+describe('GLM review (#2411)', () => {
+  it('only a launched entry, or a launch under way in this run, starts the grace', () => {
+    const dir = tmp();
+    const s = store(dir);
+    const { gen, launchedAt } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+    expect(s.liveLaunchAt('t')).toBe(launchedAt);
+    // A crash leaves it launching: after the restart it starts nothing.
+    expect(store(dir).liveLaunchAt('t')).toBeUndefined();
+    s.released('t', gen);
+    expect(s.liveLaunchAt('t')).toBeUndefined();
+    const next = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+    s.launched('t', next.gen, 'ws-t');
+    expect(s.liveLaunchAt('t')).toBe(next.launchedAt);
+  });
+
+  it('the writes after a launch are coalesced into one; a launch writes at once', () => {
+    const dir = tmp();
+    const s = store(dir);
+    const file = path.join(dir, 'factory', WORKER_SLOTS_FILENAME);
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+    const written = fs.statSync(file).mtimeMs;
+    s.launched('t', gen, 'ws-t', 'pty-t');
+    expect(store(dir).launchOf('t')?.state).toBe('launching');
+    s.flushForTests();
+    expect(store(dir).launchOf('t')?.state).toBe('launched');
+    expect(fs.statSync(file).mtimeMs).toBeGreaterThanOrEqual(written);
+  });
+
+  it('the ledger seed keeps every open row and the newest ended ones within the bound', () => {
+    const rows = [row('open', { updatedAt: 1 }), ...Array.from({ length: WORKER_SLOTS_MAX + 5 }, (_, i) => row(`e${i}`, { status: 'completed', updatedAt: 10 + i }))];
+    const s = store(tmp(), { rows });
+    expect(s.launchOf('open')).not.toBeNull();
+    expect(s.launchOf(`e${WORKER_SLOTS_MAX + 4}`)).not.toBeNull();
+    expect(s.launchOf('e0')).toBeNull();
   });
 });
 

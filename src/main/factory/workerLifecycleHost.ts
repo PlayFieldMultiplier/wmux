@@ -198,7 +198,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       idleWorkspaces,
       stoppedTasks: stoppedTasks(),
       busyWorkspaces: taskLiveness.busyWorkspaces(),
-      launchedAt: (taskId) => launches.launchOf(taskId)?.launchedAt,
+      launchedAt: (taskId) => launches.liveLaunchAt(taskId),
       now: Date.now(),
     };
   };

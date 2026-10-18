@@ -45,8 +45,9 @@ export interface SlotLiveness {
    *  runs a foreground command: a stopped task's worker relaunched there
    *  holds its slot again. */
   busyWorkspaces?: ReadonlySet<string>;
-  /** When a task's worker was last launched (factory/workerSlots.ts), or
-   *  undefined when not recorded. */
+  /** When a task's worker came up or is coming up now (factory/
+   *  workerSlots.ts liveLaunchAt), or undefined: none recorded, or one that
+   *  did not happen. */
   launchedAt?: (taskId: string) => number | undefined;
   now: number;
 }

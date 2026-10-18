@@ -42,9 +42,18 @@ import { launcherStem, tokenize } from '../../shared/agentResume';
 export const WORKER_SLOTS_FILENAME = 'worker-slots.json';
 export const WORKER_SLOTS_VERSION = 1 as const;
 /** Entries kept (released ones dropped first, then the oldest). */
-export const WORKER_SLOTS_MAX = 5000;
+export const WORKER_SLOTS_MAX = 1000;
 /** Pane records kept (the oldest dropped first). */
-export const WORKER_PANES_MAX = 5000;
+export const WORKER_PANES_MAX = 1000;
+/** An unreadable file is moved aside with this many tries at load (a lock
+ *  an antivirus or backup tool holds is often brief), then once more at each
+ *  launch while it still cannot be. */
+const MOVE_ASIDE_TRIES = 3;
+const MOVE_ASIDE_PAUSE_MS = 50;
+/** Writes after a launch (its pane came up, it did not happen) are coalesced
+ *  into one, this long after the first; a write that gates a launch is made
+ *  at once and takes them with it. */
+const PERSIST_DELAY_MS = 200;
 
 export type TaskLaunchState = 'launching' | 'launched' | 'released';
 
@@ -114,6 +123,9 @@ export class WorkerSlots {
    *  launches go on; `broken`: the file could not be read nor moved aside,
    *  so nothing can be recorded and every launch is refused. */
   private mode: 'disk' | 'memory' | 'broken' = 'disk';
+  /** Launches begun in this run and not settled yet: task → generation. */
+  private readonly underway = new Map<string, number>();
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly file: string,
@@ -143,15 +155,14 @@ export class WorkerSlots {
         this.mode = 'memory';
         this.warn(`[factory] worker slots not read, kept in memory only: ${String(err)}`);
       } else {
-        try {
-          fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
-          this.mode = 'disk';
-          this.warn(`[factory] worker slots unreadable, moved aside and rebuilt from the task ledger: ${String(err)}`);
-        } catch (moveErr) {
+        const moveErr = this.moveAside(MOVE_ASIDE_TRIES);
+        if (moveErr) {
           this.mode = 'broken';
-          this.warn(`[factory] worker slots unreadable and not moved aside; no worker is launched until it is fixed: ${String(err)}; ${String(moveErr)}`);
+          this.warn(`[factory] worker slots unreadable and not moved aside; each launch tries again, and none starts until it can: ${String(err)}; ${String(moveErr)}`);
           return;
         }
+        this.mode = 'disk';
+        this.warn(`[factory] worker slots unreadable, moved aside and rebuilt from the task ledger: ${String(err)}`);
       }
       raw = null;
     }
@@ -167,8 +178,25 @@ export class WorkerSlots {
     this.seed();
   }
 
+  /** Move the unreadable file aside, trying `tries` times; the last error, or
+   *  null once it is moved (or gone). */
+  private moveAside(tries: number): unknown {
+    let last: unknown = null;
+    for (let i = 0; i < tries; i++) {
+      if (i > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, MOVE_ASIDE_PAUSE_MS);
+      try {
+        if (fs.existsSync(this.file)) fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
+        return null;
+      } catch (err) {
+        last = err;
+      }
+    }
+    return last;
+  }
+
   /** One entry per ledger row the record does not hold yet, generation 1,
-   *  timed by the row's last write, with its workspace. Written when any was
+   *  timed by the row's last write, with its workspace: every open row, and
+   *  the newest ended ones while the bound has room. Written when any was
    *  added. */
   private seed(): void {
     let rows: readonly LedgerEntry[] = [];
@@ -177,14 +205,17 @@ export class WorkerSlots {
     } catch (err) {
       this.warn(`[factory] worker slots not rebuilt from the task ledger: ${String(err)}`);
     }
+    const isOpen = (r: LedgerEntry): boolean => r.status === 'working' || r.status === 'input_required' || r.status === 'review_requested';
+    const order = [...rows].sort((a, b) => Number(isOpen(b)) - Number(isOpen(a)) || b.updatedAt - a.updatedAt);
     let added = false;
-    for (const r of rows) {
+    for (const r of order) {
       if (this.tasks.has(r.id)) continue;
+      if (!isOpen(r) && this.tasks.size >= WORKER_SLOTS_MAX) break;
       added = true;
       if (r.taskWorkspaceId && !this.workspaces.has(r.taskWorkspaceId)) this.workspaces.set(r.taskWorkspaceId, { taskId: r.id, gen: 1 });
       const origin = r.dispatch?.origin;
       const bot = origin?.kind === 'bot' && typeof origin.botId === 'string' && origin.botId.length > 0;
-      const open = r.status === 'working' || r.status === 'input_required' || r.status === 'review_requested';
+      const open = isOpen(r);
       this.tasks.set(r.id, {
         taskId: r.id,
         gen: 1,
@@ -218,6 +249,17 @@ export class WorkerSlots {
   launchOf(taskId: string): TaskLaunch | null {
     const t = this.tasks.get(taskId);
     return t ? { ...t } : null;
+  }
+
+  /** When the task's worker came up or is coming up now: a launched entry's
+   *  launch time, or a launching one's while that launch is under way in
+   *  this run. A released entry, or one left launching by a crash, starts
+   *  nothing. */
+  liveLaunchAt(taskId: string): number | undefined {
+    const t = this.tasks.get(taskId);
+    if (!t) return undefined;
+    if (t.state === 'launched') return t.launchedAt;
+    return t.state === 'launching' && this.underway.get(taskId) === t.gen ? t.launchedAt : undefined;
   }
 
   /** The task and generation a pane was created (or relaunched) for. */
@@ -262,7 +304,18 @@ export class WorkerSlots {
       ownerWorkspaceId: req.ownerWorkspaceId,
       state: 'launching',
     };
-    if (this.mode === 'broken') throw new Error(`the task's launch could not be recorded: ${this.file} is unreadable and could not be moved aside`);
+    if (this.mode === 'broken') {
+      // The file may be free again (a lock that held it at load is gone).
+      const moveErr = this.moveAside(1);
+      if (moveErr) throw new Error(`the task's launch could not be recorded: ${this.file} is unreadable and could not be moved aside: ${String(moveErr)}`);
+      this.mode = 'disk';
+      this.warn(`[factory] worker slots unreadable file moved aside; rebuilt from the task ledger`);
+      this.tasks.clear();
+      this.panes.clear();
+      this.workspaces.clear();
+      this.seed();
+      return this.beginLaunch(req);
+    }
     const prevPane = req.pane ? this.panes.get(req.pane.sessionId) : undefined;
     const prevSpace = req.pane ? this.workspaces.get(req.pane.workspaceId) : undefined;
     this.tasks.delete(req.taskId);
@@ -285,6 +338,7 @@ export class WorkerSlots {
       }
       throw new Error(`the task's launch could not be recorded: ${String(err)}`);
     }
+    this.underway.set(req.taskId, next.gen);
     return { gen: next.gen, launchedAt: next.launchedAt };
   }
 
@@ -292,6 +346,7 @@ export class WorkerSlots {
    *  when a newer launch of the task began since. */
   launched(taskId: string, gen: number, workspaceId: string, sessionId?: string): boolean {
     const t = this.tasks.get(taskId);
+    if (this.underway.get(taskId) === gen) this.underway.delete(taskId);
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'launched' });
     if (sessionId) this.setPane(sessionId, { taskId, gen, workspaceId });
@@ -326,6 +381,7 @@ export class WorkerSlots {
    *  began since. */
   released(taskId: string, gen: number): boolean {
     const t = this.tasks.get(taskId);
+    if (this.underway.get(taskId) === gen) this.underway.delete(taskId);
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'released' });
     this.persist();
@@ -358,6 +414,11 @@ export class WorkerSlots {
   }
 
   private write(): void {
+    // This write takes any coalesced one with it.
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
     if (this.mode === 'memory') return;
     if (this.mode === 'broken') throw new Error(`${this.file} is unreadable and could not be moved aside`);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
@@ -369,13 +430,25 @@ export class WorkerSlots {
     });
   }
 
-  /** A write after the launch: a failure is logged, the entry stays in memory. */
+  /** A write after the launch, coalesced (PERSIST_DELAY_MS): a failure is
+   *  logged, the entries stay in memory. */
   private persist(): void {
-    try {
-      this.write();
-    } catch (err) {
-      this.warn(`[factory] worker slots not written: ${String(err)}`);
-    }
+    if (this.persistTimer) return;
+    const t = setTimeout(() => {
+      this.persistTimer = null;
+      try {
+        this.write();
+      } catch (err) {
+        this.warn(`[factory] worker slots not written: ${String(err)}`);
+      }
+    }, PERSIST_DELAY_MS);
+    t.unref?.();
+    this.persistTimer = t;
+  }
+
+  /** Tests: make a coalesced write now. */
+  flushForTests(): void {
+    if (this.persistTimer) this.write();
   }
 }
 
@@ -454,9 +527,13 @@ export function beginPaneRelaunch(sessionId: string): ((typed: boolean) => void)
   const pane = slots.paneOf(sessionId);
   const bot = pane ? null : botWorkerSessionRecord(sessionId);
   // A pane created before panes were recorded: the task of the workspace
-  // that holds it (its record, written at the upgrade from the ledger).
+  // that holds it, only when that workspace is a task's and its record and
+  // its ledger row agree on which (a pane moved into another task's or the
+  // owner's workspace is not known, never taken as the wrong task's).
   const holder = pane || bot?.taskId ? null : getWorkspaceMirror().getEntries()?.find((e) => Array.isArray(e.ptyIds) && e.ptyIds.includes(sessionId))?.id;
-  const taskId = pane?.taskId ?? bot?.taskId ?? (holder ? slots.workspaceOf(holder)?.taskId : undefined);
+  const held = holder ? slots.workspaceOf(holder) : null;
+  const heldTask = held && getTaskLedger().findByTaskWorkspace(holder as string)?.id === held.taskId ? held.taskId : undefined;
+  const taskId = pane?.taskId ?? bot?.taskId ?? heldTask;
   if (!taskId) return null;
   const prior = slots.launchOf(taskId);
   const workspaceId = pane?.workspaceId ?? bot?.workspaceId ?? holder ?? '';
