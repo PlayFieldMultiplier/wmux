@@ -131,6 +131,14 @@ export interface DaemonSession {
    */
   lastDetectedAgent?: AgentSlug;
   /**
+   * What last decided `lastDetectedAgent`, and when (ms): the canonical tier
+   * (`hook`, `process` or `screen`) whose identity was written. Absent on a
+   * name that predates it, or that the resume binding or spool filled in.
+   * Lets the recovery pill tell a proven later launch from a screen guess
+   * when the name and the saved conversation disagree.
+   */
+  lastDetectedAgentEvidence?: { source: 'hook' | 'process' | 'screen'; at: number };
+  /**
    * X6 ③ resume-by-id: the captured handle on this pane's agent conversation
    * (origin session id + cwd + last permission mode), set live from the claude
    * hook via daemon.setResumeBinding and persisted IMMEDIATELY (saveImmediate —
