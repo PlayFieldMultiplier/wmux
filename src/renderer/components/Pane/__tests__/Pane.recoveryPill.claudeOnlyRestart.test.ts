@@ -110,6 +110,16 @@ describe('Claude-only pane: Codex and Gemini in the output, exit, daemon restart
     expect(pillLineAfterRestart({ ...persisted, resumeBinding })).toEqual({ offer: 'claude', line: `claude --resume ${SID}` });
   });
 
+  it('a real Codex run after Claude still offers Codex, not the older Claude conversation', () => {
+    const { persisted } = runClaudeOnlyPane();
+    const meta = { ...persisted, resumeBinding };
+    // The user starts Codex in the same pane; the tracker attributes it after
+    // Claude's binding was captured. Codex wrote no binding of its own.
+    recordPaneIdentity(meta, resolveCanonicalAgentIdentity({ proc: { slug: 'codex', alive: true } }), 10_000);
+    expect(meta.lastDetectedAgent).toBe('codex');
+    expect(pillLineAfterRestart(meta)).toEqual({ offer: 'codex', line: 'codex resume' });
+  });
+
   it('a name an older build persisted from the screen is repaired by the saved conversation', () => {
     const screenGuess = runClaudeOnlyPane().named.pop();
     const persistedNames = [
