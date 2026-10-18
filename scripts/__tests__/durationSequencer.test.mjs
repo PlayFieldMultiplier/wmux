@@ -8,12 +8,12 @@
 import { describe, expect, it } from 'vitest';
 import { DurationSequencer } from '../lib/duration-sequencer.mjs';
 import {
-  FILE_COST_MS,
   balanceShards,
   durationsFromVitestCache,
   median,
   mergeDurationReports,
   renderDurationsFile,
+  updateDurations,
 } from '../lib/test-durations.mjs';
 
 const ROOT = '/repo';
@@ -41,7 +41,7 @@ function shuffled(list, seed) {
 
 function totals(shards, durations) {
   return shards.map((shard) =>
-    shard.reduce((sum, it) => sum + (durations[it.project]?.[it.path] ?? 0) + FILE_COST_MS, 0),
+    shard.reduce((sum, it) => sum + (durations[it.project]?.[it.path] ?? 0), 0),
   );
 }
 
@@ -110,10 +110,19 @@ describe('balanceShards', () => {
     ]);
   });
 
-  it('falls back to equal weights when nothing is recorded', () => {
-    const items = ['a', 'b', 'c', 'd', 'e'].map((f) => item(`${f}.test.ts`, 'unit'));
-    const shards = balanceShards(items, {}, 2);
-    expect(shards.map((s) => s.length)).toEqual([3, 2]);
+  it('splits by file count when nothing is recorded', () => {
+    const items = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((f) => item(`${f}.test.ts`, 'unit'));
+    expect(balanceShards(items, {}, 2).map((s) => s.length)).toEqual([4, 3]);
+    expect(balanceShards(items, {}, 3).map((s) => s.length)).toEqual([3, 2, 2]);
+  });
+
+  it('breaks a tie on the total by file count, so zero-cost files do not pile onto shard 1', () => {
+    const durations = { unit: { 'z1.test.ts': 0, 'z2.test.ts': 0, 'z3.test.ts': 0, 'z4.test.ts': 0 } };
+    const items = Object.keys(durations.unit).map((f) => item(f, 'unit'));
+    expect(paths(balanceShards(items, durations, 2))).toEqual([
+      ['z1.test.ts', 'z3.test.ts'],
+      ['z2.test.ts', 'z4.test.ts'],
+    ]);
   });
 
   it('balances each project on its own and gives every shard a share of both', () => {
@@ -135,8 +144,8 @@ describe('balanceShards', () => {
         shards.map((s) => s.filter((it) => it.project === project)),
         durations,
       );
-    expect(perProject('integration')).toEqual([60_000 + FILE_COST_MS, 60_000 + 2 * FILE_COST_MS]);
-    expect(perProject('unit')).toEqual([5_000 + 2 * FILE_COST_MS, 5_000 + 2 * FILE_COST_MS]);
+    expect(perProject('integration')).toEqual([60_000, 60_000]);
+    expect(perProject('unit')).toEqual([5_000, 5_000]);
     // Pooled together instead, the 60 s file would take a shard to itself and
     // leave every unit file to the other one.
   });
@@ -206,5 +215,30 @@ describe('vitest.durations.json', () => {
     // The object form of `results` reads the same.
     const asObject = { version: '5.0.0', results: Object.fromEntries(cache.results) };
     expect(durationsFromVitestCache(asObject, { integration, testFiles })).toEqual(expected);
+  });
+
+  it('leaves a lane the input has no file for as it was', () => {
+    const current = {
+      integration: { 'src/a/__tests__/spawn.test.ts': 30_000 },
+      unit: { 'src/b/__tests__/pure.test.ts': 900 },
+    };
+    const testFiles = new Set(['src/a/__tests__/spawn.test.ts', 'src/b/__tests__/pure.test.ts']);
+    // A cache that ran the unit lane only.
+    const unitOnly = durationsFromVitestCache(
+      { version: '5.0.0', results: [['unit:src/b/__tests__/pure.test.ts', { duration: 400, failed: false }]] },
+      { integration: ['src/a/__tests__/spawn.test.ts'], testFiles },
+    );
+    expect(Object.keys(unitOnly)).toEqual(['unit']);
+    expect(updateDurations(current, unitOnly, ['unit', 'integration'])).toEqual({
+      unit: { 'src/b/__tests__/pure.test.ts': 400 },
+      integration: { 'src/a/__tests__/spawn.test.ts': 30_000 },
+    });
+    // CI reports whose integration files were all deleted since: same.
+    const report = (project, files) => ({ version: 1, project, shard: null, platform: 'linux', files });
+    const merged = mergeDurationReports(
+      [report('unit', { 'src/b/__tests__/pure.test.ts': 700 }), report('integration', { 'src/gone.test.ts': 5 })],
+      { projects: ['unit', 'integration'], testFiles },
+    );
+    expect(updateDurations(current, merged, ['unit', 'integration']).integration).toEqual(current.integration);
   });
 });

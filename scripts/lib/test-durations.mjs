@@ -12,10 +12,12 @@
 // writes test-results/durations-<project>.json for every project that ran, and
 // those files are uploaded with the test-report-* artifacts. Download a few
 // runs and `node scripts/test-durations.mjs --write <dir>` takes the median of
-// each file across them. A duration is TestModule.diagnostic().duration: the
-// time of the file's tests and hooks, the same number vitest keeps in its own
-// results cache. It leaves out the import and environment time, so the
-// balancer adds a fixed FILE_COST_MS to every file.
+// each file across them. A file's duration is what it costs a worker: the sum
+// of TestModule.diagnostic()'s environmentSetupDuration, prepareDuration,
+// collectDuration (importing the file), setupDuration (setupFiles) and
+// duration (tests and hooks). `duration` alone, the number vitest keeps in its
+// results cache, is under 50 ms for half the unit files, whose real cost is
+// the import.
 //
 // Report format (version 1), one per project that ran:
 //   {
@@ -36,21 +38,28 @@ export const DURATIONS_VERSION = 1;
 export const DURATIONS_PREFIX = 'durations-';
 export const DURATIONS_FILE_NAME = 'vitest.durations.json';
 
-/**
- * Added to every file's weight when balancing. `duration` counts only tests
- * and hooks; importing the file and setting up its environment cost something
- * too, and half the unit files record under 50 ms, so without this the
- * balancer would treat hundreds of files as free and pile them on one shard.
- */
-export const FILE_COST_MS = 500;
+/** The ModuleDiagnostic fields (vitest 5) that add up to a file's cost. */
+export const COST_FIELDS = ['environmentSetupDuration', 'prepareDuration', 'collectDuration', 'setupDuration', 'duration'];
+
+/** A module's full cost in ms from its diagnostic(), or undefined when unusable. */
+export function moduleCost(diagnostic) {
+  if (!diagnostic) return undefined;
+  let total = 0;
+  for (const field of COST_FIELDS) {
+    const ms = diagnostic[field] ?? 0;
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
+    total += ms;
+  }
+  return total;
+}
 
 /**
- * Every finished module's duration, grouped by the vitest project that ran it:
- * a Map from project name to { "<posix path>": ms }. Every project that ran a
- * module has an entry, an empty one included. A module that did not finish
- * (skipped, never started) has no real duration and is left out.
- * Duck-typed on the reporter API: TestModule.project.name / relativeModuleId /
- * state() / diagnostic().duration.
+ * Every finished module's cost (moduleCost), grouped by the vitest project
+ * that ran it: a Map from project name to { "<posix path>": ms }. Every
+ * project that ran a module has an entry, an empty one included. A module
+ * that did not finish (skipped, never started) has no real cost and is left
+ * out. Duck-typed on the reporter API: TestModule.project.name /
+ * relativeModuleId / state() / diagnostic().
  */
 export function collectDurations(testModules) {
   const byProject = new Map();
@@ -59,9 +68,9 @@ export function collectDurations(testModules) {
     if (!byProject.has(project)) byProject.set(project, {});
     const state = module.state?.();
     if (state && state !== 'passed' && state !== 'failed') continue;
-    const duration = module.diagnostic?.()?.duration;
-    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) continue;
-    byProject.get(project)[toPosix(module.relativeModuleId)] = duration;
+    const cost = moduleCost(module.diagnostic?.());
+    if (cost === undefined) continue;
+    byProject.get(project)[toPosix(module.relativeModuleId)] = cost;
   }
   return byProject;
 }
@@ -108,7 +117,8 @@ export function median(values) {
 /**
  * The median duration of every file across reports, per project:
  * { project: { path: ms } }. Only the projects in `projects` are kept, and with
- * `testFiles` only the paths in it (a file deleted since is dropped).
+ * `testFiles` only the paths in it (a file deleted since is dropped). Only
+ * projects with at least one file appear.
  */
 export function mergeDurationReports(reports, { projects, testFiles } = {}) {
   const samples = new Map();
@@ -125,6 +135,8 @@ export function mergeDurationReports(reports, { projects, testFiles } = {}) {
   }
   const out = {};
   for (const [project, byFile] of samples) {
+    // A lane with no usable file is left out, like a lane with no report.
+    if (byFile.size === 0) continue;
     out[project] = {};
     for (const [file, values] of byFile) out[project][file] = median(values);
   }
@@ -137,12 +149,18 @@ export function mergeDurationReports(reports, { projects, testFiles } = {}) {
  * { version, results: [["<project>:<path>", { duration, failed }], ...] }
  * (an object of the same keys is read too). A key with no project name comes
  * from a run without `projects`; its lane is `integration` when the path is in
- * `integration` (vitest.lanes.json), else `unit`. Only `testFiles` are kept.
+ * `integration` (vitest.lanes.json), else `unit`. Only `testFiles` are kept,
+ * and only lanes the cache has a file for appear in the result, so a lane it
+ * says nothing about keeps what vitest.durations.json has.
+ *
+ * The cache holds `duration` only (tests and hooks), not a file's full cost,
+ * so these numbers run low, most of all for small files. A stopgap for when
+ * no CI report is at hand; CI's durations-*.json are the real source.
  */
 export function durationsFromVitestCache(cache, { integration, testFiles }) {
   const integrationSet = new Set(integration);
   const entries = Array.isArray(cache?.results) ? cache.results : Object.entries(cache?.results ?? {});
-  const out = { integration: {}, unit: {} };
+  const lanes = { integration: {}, unit: {} };
   for (const [key, value] of entries) {
     const colon = key.indexOf(':');
     if (colon < 0) continue;
@@ -152,9 +170,21 @@ export function durationsFromVitestCache(cache, { integration, testFiles }) {
     if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) continue;
     const named = key.slice(0, colon);
     const lane = named || (integrationSet.has(file) ? 'integration' : 'unit');
-    if (!out[lane]) continue;
-    out[lane][file] = duration;
+    if (!Object.hasOwn(lanes, lane)) continue;
+    lanes[lane][file] = duration;
   }
+  const out = {};
+  for (const [lane, files] of Object.entries(lanes)) if (Object.keys(files).length > 0) out[lane] = files;
+  return out;
+}
+
+/**
+ * The durations to write: each of `lanes` from `fresh` when it has that lane,
+ * else from `current` (the checked-in file), else empty.
+ */
+export function updateDurations(current, fresh, lanes) {
+  const out = {};
+  for (const lane of lanes) out[lane] = fresh[lane] ?? current[lane] ?? {};
   return out;
 }
 
@@ -187,9 +217,11 @@ export function readDurationsFile(file) {
  * runs both lanes) runs one project after the other with its own worker
  * count: shard i gets bucket i of every project. Within a project it is
  * greedy longest-processing-time: heaviest file first (ties by path), each to
- * the shard with the smallest total so far (ties to the lower shard). A file
- * with no recorded duration weighs the median of the project's recorded ones.
- * The result depends only on the set of items, never on their order.
+ * the shard with the smallest total so far (ties to the one with fewer files,
+ * then the lower shard). A file with no recorded duration weighs the median of
+ * the project's recorded ones; with nothing recorded every file weighs 0 and
+ * the tie-break spreads them by count. The result depends only on the set of
+ * items, never on their order.
  *
  * Returns an array of `count` arrays of the given items.
  */
@@ -208,15 +240,19 @@ export function balanceShards(items, durations, count) {
       .get(project)
       .map((item) => ({
         item,
-        weight: (typeof known[item.path] === 'number' ? known[item.path] : fallback) + FILE_COST_MS,
+        weight: typeof known[item.path] === 'number' ? known[item.path] : fallback,
       }))
       .sort((a, b) => compareText(a.item.path, b.item.path) || compareText(a.item.pool ?? '', b.item.pool ?? ''))
       .sort((a, b) => b.weight - a.weight);
     const totals = new Array(count).fill(0);
+    const files = new Array(count).fill(0);
     for (const { item, weight } of weighted) {
       let target = 0;
-      for (let i = 1; i < count; i++) if (totals[i] < totals[target]) target = i;
+      for (let i = 1; i < count; i++) {
+        if (totals[i] < totals[target] || (totals[i] === totals[target] && files[i] < files[target])) target = i;
+      }
       totals[target] += weight;
+      files[target] += 1;
       shards[target].push(item);
     }
   }

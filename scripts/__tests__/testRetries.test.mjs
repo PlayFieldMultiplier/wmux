@@ -26,12 +26,20 @@ const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fl
 
 // The slice of vitest's reporter API (TestModule / TestCase) the collectors
 // read. `project` is the TestProject.name: '' for a config without projects.
-function fakeModule(relativeModuleId, tests, project = 'unit', { duration = 0, state = 'passed' } = {}) {
+function fakeModule(relativeModuleId, tests, project = 'unit', { duration = 0, state = 'passed', diagnostic = {} } = {}) {
   return {
     relativeModuleId,
     project: { name: project },
     state: () => state,
-    diagnostic: () => ({ duration }),
+    diagnostic: () => ({
+      environmentSetupDuration: 0,
+      prepareDuration: 0,
+      collectDuration: 0,
+      setupDuration: 0,
+      duration,
+      heap: undefined,
+      ...diagnostic,
+    }),
     children: {
       allTests: () =>
         tests.map((t) => ({
@@ -258,6 +266,19 @@ describe('vitest-retry-reporter.mjs', () => {
 });
 
 describe('collectDurations', () => {
+  it('records a file\'s full cost: environment, prepare, import, setup files, tests', () => {
+    const byProject = collectDurations([
+      fakeModule('src/a.test.ts', [], 'unit', {
+        duration: 30,
+        diagnostic: { environmentSetupDuration: 400, prepareDuration: 20, collectDuration: 1_500, setupDuration: 50 },
+      }),
+      // A field vitest left out counts as 0; a broken one drops the file.
+      fakeModule('src/b.test.ts', [], 'unit', { duration: 10, diagnostic: { prepareDuration: undefined } }),
+      fakeModule('src/c.test.ts', [], 'unit', { duration: 10, diagnostic: { collectDuration: Number.NaN } }),
+    ]);
+    expect(byProject.get('unit')).toEqual({ 'src/a.test.ts': 2_000, 'src/b.test.ts': 10 });
+  });
+
   it('records finished modules only, every project that ran included', () => {
     const byProject = collectDurations([
       fakeModule('src/a.test.ts', [], 'unit', { duration: 10 }),
