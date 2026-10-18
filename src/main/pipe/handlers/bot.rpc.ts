@@ -490,9 +490,10 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       // Issue wakes queued for a triage bot under its old default triggers
       // never run: those triggers did not check the author.
       for (const botId of store.migratedTriageBots()) queue.dropUnfilteredIssueWakes(botId);
-      // PR-event wakes queued for a verifier under its old default triggers
-      // never run: it now verifies only the heads it is asked to.
-      for (const botId of store.migratedVerifierBots()) queue.dropPrEventWakes(botId);
+      // PR-event wakes queued under triggers a bot no longer has never run
+      // (a reviewer moved to on-request verification). Checked on every
+      // start, so a start that failed after the move still gets it done.
+      for (const bot of store.list()) queue.dropPrEventWakes(bot.id, new Set(bot.triggers.map((t) => t.kind)));
       runtime = new BotRuntime({
         store,
         queue,

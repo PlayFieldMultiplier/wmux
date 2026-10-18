@@ -467,7 +467,6 @@ describe('BotStore', () => {
     expect(s.get('bot-0b0b0b01')?.triggers).toEqual([]);
     expect(s.get('bot-0b0b0b02')?.triggers).toEqual([{ kind: 'pr.opened', filter: { authorTrusted: true } }]);
     expect(s.get('bot-0b0b0b03')?.triggers).toEqual(LEGACY_VERIFIER_TRIGGERS);
-    expect(s.migratedVerifierBots()).toEqual(['bot-0b0b0b01']);
     expect(s.migratedTriageBots()).toEqual([]);
     // PR-event wakes queued under the old triggers never run; a request does.
     const q = new WakeQueue(wakeQueuePath(dir), { now });
@@ -479,7 +478,9 @@ describe('BotStore', () => {
     // Parked by a provider limit: it would run once the park lifts.
     expect(q.park(failed?.id ?? '')?.state).toBe('parked');
     const human = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'human', text: 'verify #1', source: 'desktop' }, priority: 0 });
-    expect(q.dropPrEventWakes('bot-0b0b0b01')).toBe(3);
+    // A bot that still has a PR-event trigger keeps those wakes.
+    expect(q.dropPrEventWakes('bot-0b0b0b01', new Set(['pr.opened', 'pr.head_moved', 'ci.failed']))).toBe(0);
+    expect(q.dropPrEventWakes('bot-0b0b0b01', new Set((s.get('bot-0b0b0b01')?.triggers ?? []).map((t) => t.kind)))).toBe(3);
     expect(q.get(failed?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
     expect(q.get(opened?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
     expect(q.get(moved?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
@@ -490,7 +491,6 @@ describe('BotStore', () => {
     const t = newStore();
     t.load();
     expect(t.get('bot-0b0b0b01')?.triggers).toEqual([]);
-    expect(t.migratedVerifierBots()).toEqual([]);
   });
 
   it('a cap the owner saved after templates survives a reload, even at an old default; an unknown template is Custom', async () => {
