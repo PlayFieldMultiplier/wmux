@@ -7,7 +7,7 @@
  * prompt. The bridge sends nothing for them; a real subagent's hooks and the
  * main thread's go out as before.
  *
- * Same harness as bridgeMoaDelegateWorker.test.ts: the real bridge as a
+ * Same harness as bridgeMoaDelegateWorker.os.test.ts: the real bridge as a
  * subprocess against a fake daemon socket.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

@@ -72,7 +72,7 @@ describe('wmux-client callerPtyId', () => {
 });
 
 // The wire: a local fake daemon captures the raw envelopes. POSIX only (Unix
-// domain socket fixture), like wmux-client.transport.test.ts.
+// domain socket fixture), like wmux-client.transport.os.test.ts.
 describe.skipIf(process.platform === 'win32')('callerPtyId on the envelope', () => {
   let tmpHome: string;
   const saved: Record<string, string | undefined> = {};

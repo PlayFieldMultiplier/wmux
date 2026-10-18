@@ -1,6 +1,6 @@
 // Tests for the task-lifecycle MCP tools.
 //
-// The trust boundary is main-side (worktask.rpc.test.ts). What is pinned HERE
+// The trust boundary is main-side (worktask.rpc.os.test.ts). What is pinned HERE
 // is the tool SHAPE: a schema that cannot express a call main rejects, the
 // verified ptyId attached on every call, and the wire envelope handed back
 // whole — collapsing it would hide the `reason` an unattended caller branches

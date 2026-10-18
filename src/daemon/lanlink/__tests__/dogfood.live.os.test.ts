@@ -4,7 +4,7 @@
 // PIN-EKE pairing, the AEAD channel, the allow-list router, durable inbox append,
 // and execute-impossibility over an actual TCP socket (not the in-memory fake).
 //
-//   LANLINK_DOGFOOD_IP=192.168.x.y npx vitest run src/daemon/lanlink/__tests__/dogfood.live.test.ts
+//   LANLINK_DOGFOOD_IP=192.168.x.y npx vitest run src/daemon/lanlink/__tests__/dogfood.live.os.test.ts
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import net from 'node:net';
 import os from 'node:os';

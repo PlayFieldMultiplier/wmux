@@ -2,7 +2,7 @@
 //
 // The frontend has no bundler: `keyboardProtocol.js` is inlined into
 // terminal.html by scripts/build-daemon-web.mjs. Evaluate the shipped file
-// verbatim, exactly like copyPasteKeys.test.ts / touchScroll.test.ts, so this
+// verbatim, exactly like copyPasteKeys.os.test.ts / touchScroll.test.ts, so this
 // covers the bytes the browser actually runs.
 
 import { describe, it, expect, beforeAll } from 'vitest';

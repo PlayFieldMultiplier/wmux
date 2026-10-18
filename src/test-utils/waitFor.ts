@@ -7,7 +7,7 @@
  * ── Why this exists as one shared thing ────────────────────────────────────
  * Four test files had defined their own byte-identical copy, and a fifth had
  * open-coded the same idea as `setTimeout(50)`. That last one is the reason
- * this file exists: `DaemonPipeServer.test.ts` slept 50ms as a stand-in for
+ * this file exists: `DaemonPipeServer.os.test.ts` slept 50ms as a stand-in for
  * "the server has registered this socket", and on a loaded windows-latest
  * runner the sleep finished first. The socket was not yet in the server's set,
  * `rotateToken()` did not drop it, and the test hung until vitest killed it at
