@@ -169,6 +169,16 @@ export class TaskCloseService {
         }
         const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
         if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+        // The daemon records a detach only on an open task: one closed before
+        // has nothing that keeps its folder from the cleanups after a restart.
+        if (!closed.detached) {
+          return {
+            ok: false,
+            taskId,
+            reason: 'error',
+            error: 'close: the task was already closed, so its folder cannot be marked kept; it stays where it is, but the cleanup of closed tasks may still take it',
+          };
+        }
         this.kept.add(taskId);
         if (folder) {
           this.forgetFolderStops(folder);
@@ -212,9 +222,11 @@ export class TaskCloseService {
       if (finished && !finished.ok) {
         return { ok: false, taskId, reason: finished.dirty ? 'dirty' : 'error', error: finished.error, preservedWorktree: input.leftoverPath };
       }
-      const kept = finished?.ok ? finished.keptFolder : undefined;
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, kept ? { detach: true } : {});
+      const leftKept = finished?.ok ? finished.keptFolder : undefined;
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, leftKept ? { detach: true } : {});
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+      // Named kept only once the daemon recorded the task detached.
+      const kept = leftKept && closed.detached ? leftKept : undefined;
       if (kept) {
         this.kept.add(taskId);
         this.forgetFolderStops(kept);
@@ -333,13 +345,13 @@ export class TaskCloseService {
     taskId: string,
     verifiedWorkspaceId: string,
     opts: { detach?: boolean } = {},
-  ): Promise<{ ok: true; archivePending: boolean } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; archivePending: boolean; detached: boolean } | { ok: false; error: string }> {
     try {
       const res = (await this.daemon.rpc('task.mission.close', {
         taskId,
         verifiedWorkspaceId,
         ...(opts.detach ? { detach: true } : {}),
-      })) as { ok?: boolean; archivePending?: boolean; error?: { message?: string } };
+      })) as { ok?: boolean; archivePending?: boolean; detached?: boolean; error?: { message?: string } };
       if (res && res.ok === true) {
         // Lane F: the task ledger learns about the close now, not on the
         // next reconcile pass (an open row would hold the brain's Stop gate).
@@ -352,7 +364,7 @@ export class TaskCloseService {
         } catch {
           // Best-effort: a leftover relay is swept at the next start.
         }
-        return { ok: true, archivePending: res.archivePending === true };
+        return { ok: true, archivePending: res.archivePending === true, detached: res.detached === true };
       }
       return { ok: false, error: res?.error?.message ?? 'task.mission.close failed' };
     } catch (err) {

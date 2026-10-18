@@ -47,6 +47,9 @@ export function pendingRemovalKey(p: string): string {
 }
 
 export interface PendingRemovalStore {
+  /** Why the file could not be read, when it could not: nothing it holds is
+   *  known, so nothing can be dropped from it either. */
+  unreadable?(): string | null;
   get(worktreePath: string): PendingWorktreeRemoval | null;
   all(): PendingWorktreeRemoval[];
   put(rec: PendingWorktreeRemoval): Promise<void>;
@@ -56,6 +59,8 @@ export interface PendingRemovalStore {
 export class PendingWorktreeRemovals implements PendingRemovalStore {
   private readonly records = new Map<string, PendingWorktreeRemoval>();
   private readonly persister: FilePersister;
+  /** Set when load() failed: the file is left as it is (never overwritten). */
+  private loadError: string | null = null;
 
   constructor(private readonly file: string) {
     this.persister = createFilePersister(file, () => ({ version: PENDING_REMOVALS_VERSION, removals: [...this.records.values()] }));
@@ -65,12 +70,24 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
     return new PendingWorktreeRemovals(path.join(wmuxDir, 'worktask', PENDING_REMOVALS_FILENAME));
   }
 
-  /** Read the file (missing → empty). A file of another version throws. */
+  /** Read the file (missing → empty). A file of another version, or one
+   *  that cannot be read, throws, and the store stays unreadable: it holds
+   *  nothing, and writes nothing over the file. */
   load(): void {
     this.records.clear();
-    const raw = readVersionedFile(this.file, PENDING_REMOVALS_VERSION);
-    const list = raw && Array.isArray(raw.removals) ? raw.removals : [];
-    for (const r of list) if (isRecord(r)) this.records.set(pendingRemovalKey(r.path), r);
+    try {
+      const raw = readVersionedFile(this.file, PENDING_REMOVALS_VERSION);
+      const list = raw && Array.isArray(raw.removals) ? raw.removals : [];
+      for (const r of list) if (isRecord(r)) this.records.set(pendingRemovalKey(r.path), r);
+      this.loadError = null;
+    } catch (err) {
+      this.loadError = (err as Error).message;
+      throw err;
+    }
+  }
+
+  unreadable(): string | null {
+    return this.loadError;
   }
 
   get(worktreePath: string): PendingWorktreeRemoval | null {
@@ -83,6 +100,7 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
   }
 
   put(rec: PendingWorktreeRemoval): Promise<void> {
+    if (this.loadError !== null) return Promise.reject(new Error(`${this.file} could not be read (${this.loadError}), so nothing is recorded in it`));
     const key = pendingRemovalKey(rec.path);
     this.records.delete(key);
     this.records.set(key, { ...rec });
@@ -110,6 +128,7 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
   }
 
   private async write(): Promise<void> {
+    if (this.loadError !== null) throw new Error(`${this.file} could not be read (${this.loadError}), so it is not written`);
     await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
     await this.persister.schedule();
   }

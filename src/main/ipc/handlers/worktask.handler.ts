@@ -91,7 +91,7 @@ export function registerWorktaskHandlers(
   // 크로스 인스턴스 worktree add/remove 경합은 git 자체의 index.lock이 backstop.
   const pendingRemovals = loadPendingRemovals();
   // A folder whose removal is pending is locked against new panes.
-  setActivePendingRemovals(pendingRemovals ?? null);
+  setActivePendingRemovals(pendingRemovals);
   const worktrees = new TaskWorktreeManager({ onCreated: ensureSecretHook, pendingRemovals });
   const stopPanesIn = async (worktreePath: string): Promise<string[]> => {
     const dc = getDaemonClient();
@@ -434,15 +434,17 @@ const PENDING_SWEEP_ATTEMPTS = 10;
 
 /** The pending worktree removals (#2388), or none when the file cannot be
  *  read (another version: never overwritten). */
-function loadPendingRemovals(): PendingWorktreeRemovals | undefined {
+/** The store, unreadable when its file could not be read: it then holds
+ *  nothing and writes nothing, and Close and keep folder refuses rather than
+ *  promise a keep a removal recorded in that file could undo. */
+function loadPendingRemovals(): PendingWorktreeRemovals {
   const store = PendingWorktreeRemovals.at(getWmuxDir());
   try {
     store.load();
-    return store;
   } catch (err) {
     console.warn(`[worktask] pending worktree removals not read: ${String(err)}`);
-    return undefined;
   }
+  return store;
 }
 
 /** F7 — worktreePath 정규화 후 전용 루트({wmux home}/worktrees) 하위 여부.

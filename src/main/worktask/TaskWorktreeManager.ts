@@ -945,6 +945,8 @@ export class TaskWorktreeManager {
     const release = this.holdFolder(safePath);
     try {
       const store = this.pendingRemovals;
+      const unreadable = store?.unreadable?.() ?? null;
+      if (unreadable !== null) throw new Error(`the pending removals could not be read (${unreadable}), so one of this folder may still be recorded`);
       const rec = store?.get(safePath);
       if (store && rec) await this.withRepoLock(rec.repoHash, () => store.delete(safePath));
     } finally {

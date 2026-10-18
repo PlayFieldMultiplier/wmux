@@ -42,7 +42,8 @@ function makeDaemon(
         const vws = params.verifiedWorkspaceId;
         return { ok: true, tasks: tasks.filter((t) => t.owner === vws) };
       }
-      if (method === 'task.mission.close') return { ok: true, taskId: params.taskId, archivePending: false };
+      // As the daemon answers: a detach is recorded on an open or a detached task.
+      if (method === 'task.mission.close') return { ok: true, taskId: params.taskId, archivePending: false, ...(params.detach === true ? { detached: true } : {}) };
       if (method === 'daemon.listSessions') return sessions;
       return { ok: true };
     },
