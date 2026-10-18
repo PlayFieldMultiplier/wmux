@@ -916,6 +916,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     });
     if (!line) return;
     // A beat after the first output, so the prompt is up and reading input.
+    let cancelled = false;
     const timer = setTimeout(() => {
       if (!useStore.getState().claudeResumeOnStart) return; // turned off meanwhile
       if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return; // typed into / dismissed meanwhile
@@ -930,11 +931,17 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       // Seen only by the screen tier: skip, but keep the offer (#2408).
       if (resumeAgentOnScreenByPtyId[ptyId] !== undefined) return;
       // The store's sighting is as old as the last list, and an agent banner
-      // can land after it: ask the daemon once more right before typing. A
-      // list that fails types nothing; the pill stays.
+      // or hook can land after it: ask the daemon once more right before
+      // typing, and type only while it still offers this resume. A list that
+      // fails types nothing; the pill stays.
       void window.electronAPI.pty.list().then((sessions) => {
+        if (cancelled) return; // the pane changed hands meanwhile (chat-v2, supervision, another pty)
         const now = sessions.find((s) => s.id === ptyId);
-        if (!now || now.resumeAgentOnScreen !== undefined || now.commandRunning === true || now.agentProcessAlive === true) return;
+        // A dead pane's offer lives in the renderer (deadPaneRecoveryOfferByPtyId);
+        // the daemon holds every other one.
+        const ownOffer = !!useStore.getState().deadPaneRecoveryOfferByPtyId[ptyId];
+        if (!now || (!ownOffer && now.resumeAgent !== resumeHint)) return;
+        if (now.resumeAgentOnScreen !== undefined || now.commandRunning === true || now.agentProcessAlive === true) return;
         if (!useStore.getState().claudeResumeOnStart) return;
         if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return;
         if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
@@ -946,7 +953,10 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         );
       }, () => undefined);
     }, 400);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSurfacePtyId, resumePtyReady, resumeHint, resumeBinding, supervision, chatV2OwnsPane]);
   // The persistent resume chip's "is this pane's agent busy?" gate — and the
