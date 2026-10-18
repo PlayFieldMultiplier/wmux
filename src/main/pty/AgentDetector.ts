@@ -114,6 +114,13 @@ interface AgentPattern {
   // An optional "gate" regex: patterns are only checked if the gate has
   // previously matched in this session, confirming the agent is active.
   gate?: RegExp;
+  /**
+   * Line-level chrome check the gate must ALSO pass, for an agent whose name
+   * is an ordinary word in other agents' output. The gate stays a cheap
+   * substring hint; this decides. Declared on the row so the open rule is
+   * not a per-slug branch in checkGates.
+   */
+  chrome?: (line: string) => boolean;
   patterns: { regex: RegExp; status: AgentEvent['status']; message: string }[];
 }
 
@@ -387,7 +394,20 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Gemini CLI',
     slug: 'gemini',
-    gate: /gemini |Gemini CLI/,
+    // Cheap hint only — checkGates opens this gate through isGeminiChrome, a
+    // line-level check. The old substring gate (`gemini ` / `Gemini CLI`)
+    // opened on any row that merely named Gemini — a Claude reply comparing
+    // models, `cd ~/projects/gemini`, `npm i -g @google/gemini-cli` — and on
+    // a pane whose Claude gate was not yet confirmed (or whose Claude had
+    // exited) that made Gemini the pane's lastAgent. The daemon persists that
+    // slug as lastDetectedAgent, so after a restart a Claude-only pane lost
+    // its resume pill (Gemini has no resume grammar) or offered another
+    // agent's picker. The hint names the composer and a model name
+    // (`gemini-2.5…`), not the word: a cwd like `~/gemini-cli` sits in
+    // Claude's statusline on every repaint and must not pay for
+    // candidateLines on each chunk.
+    gate: /Type\s*your\s*message\s*or|gemini-\d|Gemini CLI update/,
+    chrome: (line) => isGeminiChrome(line),
     patterns: [
       { regex: /^gemini>\s*$/,                   status: 'waiting',   message: 'Waiting for input' },
     ],
@@ -741,6 +761,60 @@ function isCodexChrome(line: string): boolean {
   const v = visibleChrome(stripped);
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
     || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v);
+}
+
+/**
+ * The Gemini CLI's own chrome, as opposed to a row that merely names Gemini.
+ * From the upstream TUI (packages/cli/src/ui/components, read 2026-10-18):
+ *   - the empty composer's placeholder, `>   Type your message or
+ *     @path/to/file` (voice mode: `… or hold space to talk (Esc to exit)`),
+ *     redrawn whenever the composer is empty — the one row every session
+ *     shows, in every footer configuration;
+ *   - the footer's model column with the context display beside it:
+ *     `gemini-2.5-pro 12% used`, `gemini-2.5-pro 12%`, or the older
+ *     `gemini-2.5-pro (88% context left)`. The percentage is hidden by
+ *     default and the model may read `auto`, so this is a second chance,
+ *     not the main one;
+ *   - the update notice, `Gemini CLI update available …`.
+ * A row that STARTS with `Gemini CLI` is not enough: a Claude reply's table
+ * (`│ Gemini CLI │ Google │`) or wrapped prose begins the same way once the
+ * frame is stripped, and those rows are the bug this check exists to stop.
+ */
+function isGeminiChrome(line: string): boolean {
+  const stripped = stripAnsi(line);
+  if (SOURCE_LINE_RE.test(stripped)) return false;
+  const v = visibleChrome(stripped);
+  // `\s*` between the words: a cursor-drawn row loses its spaces after the
+  // strip (the same reason CLAUDE_PROMPT_RE and the Kiro check allow it).
+  return /^[>!*]?\s*Type\s*your\s*message\s*or\s*(?:@path\/to\/file|(?:hold\s*)?space\s*to\s*talk)/.test(v)
+    || isGeminiFooterRow(line)
+    || /^Gemini CLI update available/.test(v);
+}
+
+/**
+ * The Gemini footer row, read as the whole row rather than through
+ * `visibleChrome()`, which turns a table's column rules into spaces: a
+ * Claude reply's `│ gemini-2.5-pro │ 63% │` then reads exactly like the
+ * footer. Upstream (Footer.tsx, read 2026-10-18) draws one unframed row of
+ * columns separated by padding or ` · ` — workspace, branch, sandbox, then
+ * the model column with the context display beside it — and never a
+ * vertical rule. So the row must:
+ *   - hold no vertical rule anywhere (`│ ┃ ║ |`): a table row is not a footer;
+ *   - have a column before the model, set off by a column gap (two or more
+ *     spaces, or ` · `), not a word of prose (`ran with gemini-2.5-pro 95%`);
+ *   - end with the context display right after the model:
+ *     `gemini-2.5-pro   12% used`, `gemini-2.5-pro · 12%`, or the older
+ *     `gemini-2.5-pro (88% context left)`.
+ * A cursor-forward move counts as the spaces it skips, so a row drawn with
+ * cursor moves keeps its gaps.
+ */
+function isGeminiFooterRow(line: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  const row = stripAnsi(line.replace(/\u001b\[(\d*)C/g, (_m, n: string) => ' '.repeat(Math.min(Number(n || '1'), 8))))
+    .replace(/[\r\n]/g, '')
+    .trimEnd();
+  if (/[│┃║|]/.test(row)) return false;
+  return /\S(?: {2,}| · )gemini-\d[\w.-]*(?: +·)? +(?:\d+%(?: +used)?|\(\d+% *context *left\))$/i.test(row);
 }
 
 /**
@@ -1202,7 +1276,9 @@ export class AgentDetector {
             ? candidateLines(clean).some(isGrokChrome)
             : ap.slug === 'codex'
               ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(isCodexChrome)
-              : !blockedTakeover && ap.gate.test(clean);
+              : ap.chrome
+                ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(ap.chrome)
+                : !blockedTakeover && ap.gate.test(clean);
       if (!gateMatched) continue;
 
       this.activeAgents.add(ap.agent);

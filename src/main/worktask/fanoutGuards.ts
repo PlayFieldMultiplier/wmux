@@ -35,6 +35,7 @@ import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { sanitizeFanoutOrigin, type FanoutLineageEntry, type FanoutOrigin } from '../../shared/fanoutOrigin';
 import { BOT_ID_RE } from '../../shared/bot';
+import { getWorkerSlots, parseLaunchToken, type WorkerSlots } from '../factory/workerSlots';
 
 export const FANOUT_LIVE_TASK_CAP = 8;
 export const FANOUT_HOURLY_TASK_CAP = 24;
@@ -61,7 +62,21 @@ interface LineageStamp {
   /** Who asked for the task (additive: older stamps lack it, and an older
    *  reader ignores it). Display only — the depth-1 check reads `owner`. */
   origin?: FanoutOrigin;
+  /** The task the workspace was created for, and its launch generation
+   *  (factory/workerSlots.ts). Additive, like `origin`. */
+  taskId?: string;
+  gen?: number;
 }
+
+/** The task a workspace was created for, as its stamp names it. */
+export interface StampTask {
+  taskId: string;
+  gen: number;
+}
+
+const isStampTask = (t: unknown): t is StampTask => !!t && typeof t === 'object'
+  && typeof (t as StampTask).taskId === 'string' && (t as StampTask).taskId.length > 0
+  && typeof (t as StampTask).gen === 'number' && Number.isInteger((t as StampTask).gen) && (t as StampTask).gen >= 1;
 
 interface HourlyStamp {
   /** The fan-out's scoped idempotency key (informational; not unique). */
@@ -308,7 +323,8 @@ export class FanOutGuards {
           if (s && typeof s.owner === 'string' && s.owner.length > 0) {
             // A malformed origin drops the origin, never the stamp.
             const origin = sanitizeFanoutOrigin(s.origin);
-            map.set(ws, { owner: s.owner, at: typeof s.at === 'number' ? s.at : 0, ...(origin ? { origin } : {}) });
+            const task = isStampTask(s) ? { taskId: s.taskId, gen: s.gen } : {};
+            map.set(ws, { owner: s.owner, at: typeof s.at === 'number' ? s.at : 0, ...(origin ? { origin } : {}), ...task });
           }
         }
       } catch {
@@ -343,23 +359,27 @@ export class FanOutGuards {
   /** Stamp `workspaceId` as a task of `ownerWorkspaceId`. Synchronous and
    *  durable before it returns; throws when the write fails. A re-mark by the
    *  same owner never erases a recorded origin: it only adds one the stamp
-   *  does not have yet. */
-  markTask(workspaceId: string, ownerWorkspaceId: string, origin?: FanoutOrigin): void {
+   *  does not have yet. `task`: the task and launch generation it was created
+   *  for; a re-mark records a newer generation, never an older one. */
+  markTask(workspaceId: string, ownerWorkspaceId: string, origin?: FanoutOrigin, task?: StampTask): void {
     if (!workspaceId || !ownerWorkspaceId) throw new Error('markTask: workspace ids are required');
     const map = this.loadLineage();
     const clean = sanitizeFanoutOrigin(origin);
+    const named = isStampTask(task) ? { taskId: task.taskId, gen: task.gen } : null;
     const existing = map.get(workspaceId);
     if (existing?.owner === ownerWorkspaceId) {
-      if (existing.origin || !clean) return;
+      const addOrigin = !existing.origin && !!clean;
+      const addTask = !!named && (existing.taskId !== named.taskId || (existing.gen ?? 0) < named.gen);
+      if (!addOrigin && !addTask) return;
       const next = new Map(map);
-      next.set(workspaceId, { ...existing, origin: clean });
+      next.set(workspaceId, { ...existing, ...(addOrigin && clean ? { origin: clean } : {}), ...(addTask && named ? named : {}) });
       atomicWriteJSONSync(this.lineagePath(), { version: 1, tasks: Object.fromEntries(next) });
       this.lineage = next;
       return;
     }
     const next = new Map(map);
     next.delete(workspaceId);
-    next.set(workspaceId, { owner: ownerWorkspaceId, at: this.now(), ...(clean ? { origin: clean } : {}) });
+    next.set(workspaceId, { owner: ownerWorkspaceId, at: this.now(), ...(clean ? { origin: clean } : {}), ...(named ?? {}) });
     while (next.size > LINEAGE_MAX_ENTRIES) {
       const oldest = next.keys().next();
       if (oldest.done) break;
@@ -367,6 +387,19 @@ export class FanOutGuards {
     }
     atomicWriteJSONSync(this.lineagePath(), { version: 1, tasks: Object.fromEntries(next) });
     this.lineage = next;
+  }
+
+  /** The task and launch generation `workspaceId`'s stamp names, or null
+   *  (no stamp, one written before stamps named tasks, or the store cannot
+   *  be read). Never throws. */
+  taskOfWorkspace(workspaceId: string): StampTask | null {
+    let stamp: LineageStamp | undefined;
+    try {
+      stamp = this.loadLineage().get(workspaceId);
+    } catch {
+      return null;
+    }
+    return stamp?.taskId && stamp.gen ? { taskId: stamp.taskId, gen: stamp.gen } : null;
   }
 
   /**
@@ -753,16 +786,50 @@ export class FanOutGuards {
  * stamped with the owner. It is sanitized here; a malformed one is dropped.
  */
 export function stampFanoutTaskPane(
-  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; fanoutOrigin?: unknown } | undefined,
+  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; fanoutOrigin?: unknown; fanoutLaunch?: unknown } | undefined,
   guards: Pick<FanOutGuards, 'markTask'> = getFanOutGuards(),
+  launches: () => Pick<WorkerSlots, 'claimLaunch'> = getWorkerSlots,
 ): void {
   const owner = typeof options?.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
   if (!owner) return;
   const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
   if (!ws) throw new Error('PTY_CREATE: a fan-out task pane needs its workspaceId for the lineage stamp');
   const origin = sanitizeFanoutOrigin(options?.fanoutOrigin);
-  if (origin) guards.markTask(ws, owner, origin);
+  // The launch its spawn carried (main recorded it before the spawn,
+  // factory/workerSlots.ts): the stamp names it from the start, and one that
+  // was abandoned or replaced fails the create (claimLaunch throws).
+  const token = parseLaunchToken(options?.fanoutLaunch);
+  const task: StampTask | null = token ? launches().claimLaunch(token) : null;
+  if (task) guards.markTask(ws, owner, origin ?? undefined, task);
+  else if (origin) guards.markTask(ws, owner, origin);
   else guards.markTask(ws, owner);
+}
+
+/** A task pane's create, once its session id is known and before the
+ *  session exists: the pane and its workspace are recorded as the launch's
+ *  its spawn carried (factory/workerSlots.ts). Throws (failing the create)
+ *  when that launch was abandoned or the record cannot be written. A pane
+ *  whose spawn carried no launch is not recorded. */
+export function recordFanoutTaskPane(
+  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; fanoutLaunch?: unknown } | undefined,
+  sessionId: string,
+  launches: () => Pick<WorkerSlots, 'recordCreate'> = getWorkerSlots,
+): void {
+  const owner = typeof options?.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
+  const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
+  const token = parseLaunchToken(options?.fanoutLaunch);
+  if (!owner || !ws || !token || !sessionId) return;
+  launches().recordCreate(token, ws, sessionId);
+}
+
+/** The task and generation a workspace was created (or relaunched) for:
+ *  its record (factory/workerSlots.ts), else its lineage stamp. Never throws. */
+export function taskOfWorkspace(workspaceId: string): StampTask | null {
+  try {
+    return getWorkerSlots().workspaceOf(workspaceId) ?? getFanOutGuards().taskOfWorkspace(workspaceId);
+  } catch {
+    return null;
+  }
 }
 
 /** Task workspaces kept open after their task ended and their agent was
@@ -782,6 +849,38 @@ function dormantTaskWorkspaces(): ReadonlySet<string> {
 /** Install (or clear, with null) the dormant task-workspace source. */
 export function setDormantTaskWorkspaces(source: (() => ReadonlySet<string>) | null): void {
   dormantSource = source ?? (() => new Set());
+}
+
+/** How long a live-cap check waits for a fresh dormant read (#2387). A
+ *  second layer: the root fix is the durable "agent seen gone" fact
+ *  (factory/agentGoneFacts.ts, #2393), which answers without any read; this
+ *  wait only lets a task that ended since the last read count on a fresh one. */
+export const DORMANT_REFRESH_WAIT_MS = 2_000;
+
+let dormantRefresh: (() => Promise<void>) | null = null;
+
+/** Install (or clear, with null) how to bring the dormant source up to date. */
+export function setDormantRefresh(refresh: (() => Promise<void>) | null): void {
+  dormantRefresh = refresh;
+}
+
+/** Brings the dormant set up to date before a live-cap check: resolves once
+ *  the fresh read settles or after `timeoutMs`, whichever is first (the
+ *  check then decides on what is known). Never rejects. */
+export async function refreshDormantTaskWorkspaces(timeoutMs = DORMANT_REFRESH_WAIT_MS): Promise<void> {
+  let work: Promise<void> | undefined;
+  try {
+    work = dormantRefresh?.();
+  } catch {
+    return;
+  }
+  if (!work) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([work.catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 let hosted: FanOutGuards | null = null;

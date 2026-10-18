@@ -182,6 +182,10 @@ export interface LedgerDispatch {
   handoffId?: string;
   /** A bot's task: the connections its worker was started with (names). */
   connectors?: string[];
+  /** Written by the WorkTask reconciler for a task it mirrored with no row,
+   *  from the task's lineage stamp: only `origin` is known. The fan-out's own
+   *  register, when it lands later, replaces it with the full record. */
+  reconciled?: true;
 }
 
 /** The bot fan-out preset of a research task: no repository, no worktree,

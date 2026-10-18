@@ -450,10 +450,12 @@ describe('pty:create applies the guard (source-level lock)', () => {
     }
     // The session is recorded (before the daemon creates it), and forgotten with the pane.
     // It names the task when it is that task's own fan-out (or resume) launch.
-    const noted = src.indexOf('if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });');
+    // (#2393: the launch task is read once, so the agent-gone fact can be cleared too.)
+    expect(src.split('const launchTask = botWorkerLaunchTask(botWorker);').length - 1).toBe(2);
+    const noted = src.indexOf('noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });');
     expect(noted).toBeGreaterThan(-1);
     expect(noted).toBeLessThan(src.indexOf("daemonClient.rpc('daemon.createSession'"));
-    expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });');
+    expect(src).toContain('noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });');
     // The record carries a guarded codex launch's folder as well as a claude launch's files,
     // and the conversation the launch line pinned.
     expect(src).toContain('launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded), ...(conversation ? { conversation } : {}) }');

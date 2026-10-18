@@ -58,8 +58,20 @@ describe('claude bridge PermissionRequest', () => {
 
   type Captured = { id: unknown; method: string; params: { kind: string; payload: Record<string, unknown> } };
 
-  /** Run the real bridge for one PermissionRequest against a fake daemon socket. */
-  async function runBridge(entrypoint: string | undefined): Promise<{ code: number | null; stdout: string; requests: Captured[] }> {
+  const PERMISSION_REQUEST_PAYLOAD = {
+    session_id: 's-1',
+    hook_event_name: 'PermissionRequest',
+    tool_name: 'Bash',
+    tool_input: { command: 'od -c /etc/hosts | head -1' },
+    permission_mode: 'default',
+  };
+
+  /** Run the real bridge for one hook (PermissionRequest by default) against a fake daemon socket. */
+  async function runBridge(
+    entrypoint: string | undefined,
+    hook = 'PermissionRequest',
+    payload: Record<string, unknown> = PERMISSION_REQUEST_PAYLOAD,
+  ): Promise<{ code: number | null; stdout: string; requests: Captured[] }> {
     const home = mkdtempSync(path.join(tmp, 'home-'));
     mkdirSync(path.join(home, '.wmux'), { recursive: true });
     writeFileSync(path.join(home, '.wmux', 'daemon-auth-token'), 'test-token\n', 'utf8');
@@ -79,15 +91,8 @@ describe('claude bridge PermissionRequest', () => {
     });
     await new Promise<void>((resolve) => server.listen(sock, resolve));
 
-    const payload = {
-      session_id: 's-1',
-      hook_event_name: 'PermissionRequest',
-      tool_name: 'Bash',
-      tool_input: { command: 'od -c /etc/hosts | head -1' },
-      permission_mode: 'default',
-    };
     const result = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, [BRIDGE, 'PermissionRequest'], {
+      const child = spawn(process.execPath, [BRIDGE, hook], {
         env: {
           PATH: process.env.PATH,
           HOME: home,
@@ -127,6 +132,53 @@ describe('claude bridge PermissionRequest', () => {
       const { code, stdout, requests } = await runBridge(entrypoint);
       expect(code).toBe(0);
       expect(stdout).toBe('');
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  // Notification of type `permission_prompt`: the prompt has waited ~6 s. The
+  // daemon's firm "needs you"; every other type is dropped here.
+  const notification = (type?: string) => ({
+    session_id: 's-1',
+    hook_event_name: 'Notification',
+    message: 'Claude needs your permission to use Bash',
+    ...(type ? { notification_type: type } : {}),
+  });
+
+  it('maps Notification to agent.awaiting_input and registers it at matcher "permission_prompt" only', () => {
+    expect(hookToKind['Notification']).toBe('agent.awaiting_input');
+    const manifest = JSON.parse(
+      readFileSync(path.resolve(process.cwd(), 'integrations/claude/hooks/hooks.json'), 'utf8'),
+    ) as { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
+    const groups = manifest.hooks['Notification'];
+    expect(groups).toHaveLength(1);
+    expect(groups[0].matcher).toBe('permission_prompt');
+    expect(groups[0].hooks.every((h) => h.command.endsWith('Notification'))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('forwards a permission_prompt Notification, writes nothing to stdout', async () => {
+    const { code, stdout, requests } = await runBridge('cli', 'Notification', notification('permission_prompt'));
+    expect(code).toBe(0);
+    expect(stdout).toBe('');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].params.kind).toBe('agent.awaiting_input');
+    expect(requests[0].params.payload).toMatchObject({ hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+  });
+
+  it.skipIf(process.platform === 'win32').each(['idle_prompt', 'auth_success', 'elicitation_dialog', undefined])(
+    'drops a Notification of type %s',
+    async (type) => {
+      const { code, stdout, requests } = await runBridge('cli', 'Notification', notification(type));
+      expect(code).toBe(0);
+      expect(stdout).toBe('');
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32').each(['sdk-cli', undefined])(
+    'sends no Notification for a headless session (entrypoint %s)',
+    async (entrypoint) => {
+      const { requests } = await runBridge(entrypoint, 'Notification', notification('permission_prompt'));
       expect(requests).toHaveLength(0);
     },
   );

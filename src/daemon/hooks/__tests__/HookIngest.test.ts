@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   HookIngest,
+  PERMISSION_NOTIFY_GRACE_MS,
   gateInputIsCritical,
   resolveSessionIdForSignal,
   type DetectorHeldEventData,
@@ -1360,7 +1361,7 @@ describe('HookIngest', () => {
       return { ingestWithCards, awaitingInput, emitted: base.emitted };
     }
 
-    it('broadcasts awaiting_input but raises no approval card', () => {
+    it('broadcasts awaiting_input (after its Notification grace) but raises no approval card', () => {
       const { ingestWithCards, awaitingInput, emitted } = ingestTracking();
 
       ingestWithCards.handle(makeSignal({
@@ -1368,7 +1369,7 @@ describe('HookIngest', () => {
         ptyId: 'pty-a',
         payload: { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf build' } },
       }));
-      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+      vi.advanceTimersByTime(PERMISSION_NOTIFY_GRACE_MS + DEFAULT_ALARM_WINDOW_MS);
 
       expect(awaitingInput).toEqual([]);
       expect(emitted.at(-1)?.data).toMatchObject({ status: 'awaiting_input', source: 'hook' });
@@ -1390,23 +1391,23 @@ describe('HookIngest', () => {
     const awaitingEmits = (base: { emitted: Array<{ data: HookAgentEventData }> }) =>
       base.emitted.filter((e) => e.data.status === 'awaiting_input');
 
-    it('an answer inside the window cancels the held awaiting (no late re-lock)', () => {
+    it('an answer before it is raised cancels the held awaiting (no late re-lock)', () => {
       const base = makeDeps([session({ id: 'pty-a' })]);
       const ing = new HookIngest(base.deps);
       ing.handle(makeSignal({ kind: 'agent.awaiting_input', ptyId: 'pty-a', payload: PERMISSION_REQUEST }));
       vi.advanceTimersByTime(300);
       ing.noteAnswered('pty-a', 'claude');
-      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS * 2);
+      vi.advanceTimersByTime(PERMISSION_NOTIFY_GRACE_MS + DEFAULT_ALARM_WINDOW_MS * 2);
       expect(awaitingEmits(base)).toEqual([]);
     });
 
-    it('subagent tool activity during the window does not cancel it', () => {
+    it('subagent tool activity before it is raised does not cancel it', () => {
       const base = makeDeps([session({ id: 'pty-a' })]);
       const ing = new HookIngest(base.deps);
       ing.handle(makeSignal({ kind: 'agent.awaiting_input', ptyId: 'pty-a', payload: PERMISSION_REQUEST }));
       ing.handle(makeSignal({ kind: 'agent.activity', ptyId: 'pty-a', payload: { tool_name: 'Grep' } }));
       ing.notePaneWorking('pty-a', 'claude');
-      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+      vi.advanceTimersByTime(PERMISSION_NOTIFY_GRACE_MS + DEFAULT_ALARM_WINDOW_MS);
       expect(awaitingEmits(base)).toHaveLength(1);
     });
 
@@ -1417,9 +1418,11 @@ describe('HookIngest', () => {
       vi.advanceTimersByTime(100);
       const arb = ing.arbitrateDetector('pty-a', { agent: 'Claude Code', status: 'awaiting_input', message: 'Approval requested' });
       expect(arb.decision).toBe('pending');
-      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS * 2);
-      const detectorAwaiting = base.detectorEmitted.filter((e) => e.data.status === 'awaiting_input');
-      expect(awaitingEmits(base).length + detectorAwaiting.length).toBe(1);
+      vi.advanceTimersByTime(PERMISSION_NOTIFY_GRACE_MS + DEFAULT_ALARM_WINDOW_MS * 2);
+      // Both may broadcast (the hook's later one is a dedup); one toast.
+      const detectorToasts = base.detectorEmitted.filter((e) => e.data.status === 'awaiting_input' && e.data.decision === 'emit');
+      const hookToasts = awaitingEmits(base).filter((e) => e.data.decision === 'emit');
+      expect(hookToasts.length + detectorToasts.length).toBe(1);
     });
 
     it('leaves the Codex PermissionRequest card path as it was', () => {
