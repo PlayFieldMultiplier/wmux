@@ -23,6 +23,7 @@
 // and admission never fails for that reason. A file no version can read is
 // moved aside, and facts are kept on disk again from then on.
 
+import { holderInputsChanged } from './holderInputs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicReadJSONSync } from '../../daemon/util/atomicWrite';
@@ -143,7 +144,11 @@ export class AgentGoneFacts {
     if (fact.at <= (this.taskLaunchedAt.get(fact.taskId) ?? -Infinity) + LAUNCH_SETTLE_MS) return;
     const prior = this.facts.get(fact.taskId);
     const sessions = [...new Set(fact.sessions)].sort();
-    if (prior && prior.taskWorkspaceId === fact.taskWorkspaceId && prior.sessions.length === sessions.length
+    // The same fact again is kept as it is, unless the kept one predates the
+    // task's last recorded launch (it says nothing of that worker): then the
+    // newer observation replaces it.
+    const priorStale = !!prior && (this.recordedLaunchAt(fact.taskId) ?? -Infinity) >= prior.at;
+    if (prior && !priorStale && prior.taskWorkspaceId === fact.taskWorkspaceId && prior.sessions.length === sessions.length
       && prior.sessions.every((s, i) => s === sessions[i])) return;
     this.facts.delete(fact.taskId);
     this.facts.set(fact.taskId, { taskId: fact.taskId, taskWorkspaceId: fact.taskWorkspaceId, sessions, at: fact.at });
@@ -212,6 +217,7 @@ export class AgentGoneFacts {
   }
 
   private persist(): void {
+    holderInputsChanged();
     if (!this.writable) return;
     this.lastWrite = this.persister.schedule().catch((err) => this.warn(`[factory] agent-gone facts not written: ${String(err)}`));
   }

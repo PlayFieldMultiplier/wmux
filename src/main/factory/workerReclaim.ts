@@ -54,6 +54,7 @@
 // turn ended, nothing typed into it) for RESUMED_IDLE_MS: then its agent is
 // stopped again the same way (createResumedIdleSweep), resumable once more.
 
+import { holderInputsChanged } from './holderInputs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isResearchDispatch, type LedgerEntry } from '../../shared/ledger';
@@ -269,6 +270,12 @@ export class ReclaimedWorkers {
   private readonly records = new Map<string, ReclaimedWorker>();
   private readonly persister: FilePersister;
 
+  /** Every change is saved through here, and tells the holder set. */
+  private save(): Promise<void> {
+    holderInputsChanged();
+    return this.persister.schedule();
+  }
+
   constructor(private readonly file: string) {
     this.persister = createFilePersister(file, () => ({ version: RECLAIMED_WORKERS_VERSION, workers: [...this.records.values()] }));
   }
@@ -304,12 +311,12 @@ export class ReclaimedWorkers {
       if (this.records.size <= RECLAIMED_WORKERS_MAX) break;
       if (r.state === 'stopped') this.records.delete(id);
     }
-    return this.persister.schedule();
+    return this.save();
   }
 
   remove(taskId: string): Promise<void> {
     if (!this.records.delete(taskId)) return Promise.resolve();
-    return this.persister.schedule();
+    return this.save();
   }
 
   /** Told of every state change made through setState (the agent budget
@@ -331,7 +338,7 @@ export class ReclaimedWorkers {
     const r = this.records.get(taskId);
     if (!r || r.endRev !== from || to === from) return;
     r.endRev = to;
-    void this.persister.schedule().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
+    void this.save().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
   }
 
   setState(taskId: string, state: ReclaimedWorker['state'], at: number): boolean {
@@ -341,7 +348,7 @@ export class ReclaimedWorkers {
     r.state = state;
     r.at = at;
     this.notifyState(r, from, state, at);
-    void this.persister.schedule().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
+    void this.save().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
     return true;
   }
 
@@ -350,7 +357,7 @@ export class ReclaimedWorkers {
     const r = this.records.get(taskId);
     if (!r || r.seenAt !== undefined) return false;
     r.seenAt = at;
-    void this.persister.schedule().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
+    void this.save().catch((err) => console.warn(`[factory] reclaimed workers not written: ${String(err)}`));
     return true;
   }
 
@@ -360,7 +367,7 @@ export class ReclaimedWorkers {
     if (!r) return Promise.resolve();
     r.paneWorkspaceId = workspaceId;
     r.sessions = [{ ...session }];
-    return this.persister.schedule();
+    return this.save();
   }
 
   /** The task whose recorded pane `sessionId` is, or null. */

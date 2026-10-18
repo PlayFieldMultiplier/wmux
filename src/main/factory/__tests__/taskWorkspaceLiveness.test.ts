@@ -702,4 +702,19 @@ describe('sightings by task (#2393 holder set)', () => {
     // a's workspace runs no agent of a's: a is seen gone.
     expect(w.liveness.goneTasks().has('t-a')).toBe(true);
   });
+
+  it('GLM C2: a fact older than the task\'s last launch is replaced by the same observation made after it', () => {
+    const clock = { now: 1_000, launchedAt: undefined as number | undefined };
+    const facts = new AgentGoneFacts(nodePath.join(tmpDir(), 'factory', AGENT_GONE_FILENAME), () => undefined, () => clock.now, () => clock.launchedAt);
+    facts.load();
+    facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p-t'], at: 1_000 });
+    // Relaunched (recorded at 2000), then seen gone again with the same panes.
+    clock.launchedAt = 2_000;
+    clock.now = 10_000;
+    facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p-t'], at: 10_000 });
+    expect(facts.get('t')?.at).toBe(10_000);
+    // The same observation again, after that, keeps the fact as it is.
+    facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p-t'], at: 12_000 });
+    expect(facts.get('t')?.at).toBe(10_000);
+  });
 });

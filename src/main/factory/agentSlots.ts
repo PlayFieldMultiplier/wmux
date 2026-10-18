@@ -20,6 +20,7 @@
 // takes a free slot like a bot's resume does, or is refused (tryAcquire). A task row whose workspace is gone, or whose panes run no agent
 // any more, holds no slot either (an open row can outlive its worker).
 
+import { holderInputsChanged } from './holderInputs';
 import type { LedgerEntry } from '../../shared/ledger';
 
 export const SLOT_WAIT_MAX_MS = 30 * 60_000;
@@ -191,17 +192,24 @@ export class AgentSlots {
   private readonly queue: Waiter[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
-
   constructor(private readonly ports: AgentSlotPorts) {}
 
   /** Agents counted against the cap now. Never throws. */
   inUse(): number {
     this.prune();
-    let n = this.ports.liveWorkersIncludeGrants ? 0 : this.grants.size + this.held.size;
+    const own = this.grants.size + this.held.size;
+    let n = this.ports.liveWorkersIncludeGrants ? 0 : own;
     try {
-      n += Math.max(0, this.ports.runningBots()) + Math.max(0, this.ports.liveWorkers());
+      n += Math.max(0, this.ports.runningBots());
     } catch {
       /* counted as what could be read */
+    }
+    try {
+      n += Math.max(0, this.ports.liveWorkers());
+    } catch {
+      // Fail closed: the slots granted and held here still count when the
+      // workers that include them cannot be read.
+      if (this.ports.liveWorkersIncludeGrants) n += own;
     }
     return n;
   }
@@ -224,6 +232,7 @@ export class AgentSlots {
       if (at - g.at < SLOT_GRANT_MAX_MS) continue;
       (this.ports.log ?? ((m: string) => console.warn(m)))(`[factory] the agent slot granted for ${g.taskId ?? 'a launch'} was never released; it no longer counts`);
       this.grants.delete(g);
+      holderInputsChanged();
     }
     for (const ws of [...this.held]) {
       let keep = false;
@@ -232,7 +241,10 @@ export class AgentSlots {
       } catch {
         keep = true; // cannot tell: keep counting it
       }
-      if (!keep) this.held.delete(ws);
+      if (!keep) {
+        this.held.delete(ws);
+        holderInputsChanged();
+      }
     }
   }
 
@@ -333,16 +345,21 @@ export class AgentSlots {
       if (released) return;
       released = true;
       this.grants.delete(g);
+      holderInputsChanged();
       this.kick();
     };
     const g: Grant = { ...(w?.botId ? { botId: w.botId } : {}), ...(w?.taskId ? { taskId: w.taskId } : {}), ...(w?.byOwner ? { byOwner: true } : {}), at: (this.ports.now ?? Date.now)() };
     this.grants.add(g);
+    holderInputsChanged();
     return {
       ok: true,
       release,
       hold: (workspaceId) => {
         if (released) return;
-        if (workspaceId && this.ports.stillHeld) this.held.add(workspaceId);
+        if (workspaceId && this.ports.stillHeld) {
+          this.held.add(workspaceId);
+          holderInputsChanged();
+        }
         release();
       },
     };

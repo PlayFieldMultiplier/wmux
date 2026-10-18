@@ -125,6 +125,8 @@ export interface HolderSnapshot {
   agentTasks?: ReadonlyMap<string, string | undefined>;
   /** Ended tasks whose agent is known gone (agentGoneFacts.ts). */
   gone: ReadonlySet<string>;
+  /** When that was seen (its fact's time), when known. */
+  goneAt?: (taskId: string) => number | undefined;
   records: readonly HolderRecord[];
   /** Verify tasks whose verdict is recorded. */
   verdicted: ReadonlySet<string>;
@@ -386,7 +388,9 @@ function decide(
   // Ended. An agent seen running holds, whatever a record or a fact says.
   if (seen(s.agentSeen)) return { state: 'held', why: 'running' };
   if (stopped) return { state: 'free', why: 'stopped' };
-  if (s.gone.has(taskId)) return { state: 'free', why: 'gone' };
+  // A fact older than the worker's last launch says nothing of it.
+  const goneAt = s.gone.has(taskId) ? s.goneAt?.(taskId) : undefined;
+  if (s.gone.has(taskId) && !(launch !== undefined && goneAt !== undefined && launch > goneAt)) return { state: 'free', why: 'gone' };
   if (open.length === 0 || !s.workspaces) {
     // Its workspace is closed (or not known yet): a bot worker the reclaim
     // has not covered still holds within the window; any other is free.
@@ -434,16 +438,41 @@ export interface LiveHolders {
 }
 
 let source: (() => HolderSnapshot) | null = null;
+let sourceKey: (() => readonly unknown[]) | null = null;
+let memo: { key: readonly unknown[]; value: LiveHolders } | null = null;
 
-/** Set by the worker lifecycle host: how to read a snapshot now. */
-export function setHolderSource(next: (() => HolderSnapshot) | null): void {
+/** Set by the worker lifecycle host: how to read a snapshot now, and the
+ *  key of what it reads (holderInputs.ts's counter, ledger transitions,
+ *  workspace-tree pushes, the last daemon read). One look answers every cap
+ *  that asks in the same turn of the event loop (a fan-out tick asks several
+ *  times) while its key is unchanged; the next turn looks again. Without a
+ *  key, every look is fresh. */
+export function setHolderSource(next: (() => HolderSnapshot) | null, key?: () => readonly unknown[]): void {
   source = next;
+  sourceKey = next ? key ?? null : null;
+  memo = null;
 }
+
+const sameKey = (a: readonly unknown[], b: readonly unknown[]): boolean => a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
 
 /** The holder set now, or null while no source is installed (the old
  *  per-cap counts answer then). Throws when the snapshot cannot be read. */
 export function liveHolders(): LiveHolders | null {
   if (!source) return null;
+  const key = sourceKey ? sourceKey() : null;
+  if (key && memo && sameKey(key, memo.key)) {
+    return { holders: memo.value.holders.slice(), workspacesKnown: memo.value.workspacesKnown };
+  }
   const snap = source();
-  return { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null };
+  const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null };
+  if (key) {
+    const entry = { key, value };
+    memo = entry;
+    // Only for the rest of this turn: time-bound rules (a launch's grace,
+    // the catch-up window) and records no key covers are read again next turn.
+    queueMicrotask(() => {
+      if (memo === entry) memo = null;
+    });
+  }
+  return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown };
 }

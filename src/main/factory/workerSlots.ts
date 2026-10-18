@@ -27,6 +27,7 @@
 // aside, and while it cannot be, every launch is refused. With no file, the
 // entries are rebuilt from the ledger rows once.
 
+import { holderInputsChanged } from './holderInputs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
@@ -403,6 +404,7 @@ export class WorkerSlots {
   }
 
   private restore(s: ReturnType<WorkerSlots['snapshot']>): void {
+    holderInputsChanged();
     for (const [from, to] of [[s.tasks, this.tasks], [s.panes, this.panes], [s.workspaces, this.workspaces]] as Array<[Map<string, unknown>, Map<string, unknown>]>) {
       to.clear();
       for (const [k, v] of from) to.set(k, v);
@@ -450,6 +452,7 @@ export class WorkerSlots {
   }
 
   private write(): void {
+    holderInputsChanged();
     if (this.mode === 'memory') return;
     if (this.mode === 'broken') throw new Error(`${this.file} is unreadable and could not be moved aside`);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
@@ -470,6 +473,7 @@ export class WorkerSlots {
   /** A write after the launch, coalesced (PERSIST_DELAY_MS): a failure is
    *  logged, the entries stay in memory. */
   private persist(): void {
+    holderInputsChanged();
     if (this.persistTimer) return;
     const t = setTimeout(() => {
       this.persistTimer = null;

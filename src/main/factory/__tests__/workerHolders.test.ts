@@ -8,8 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { holderInputsRevision } from '../holderInputs';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { computeHolders, holderCounts, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
+import { computeHolders, holderCounts, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
 import { AgentSlots, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
@@ -196,6 +197,8 @@ interface Rig {
   launch: (taskId: string, workspaceId: string, sessionId: string, ago: number) => number;
   /** An app restart: the launch record read back from its file. */
   restart: () => void;
+  /** The snapshot the host would assemble now. */
+  build: () => HolderSnapshot;
 }
 
 function rig(over: Partial<HolderSnapshot> = {}): Rig {
@@ -242,6 +245,7 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
       r.launches.flushForTests();
       r.launches = open();
     },
+    build: () => build(),
   };
   r.launches = open();
   // What the lifecycle host assembles: the test's records, the guards'
@@ -636,6 +640,65 @@ describe('Codex rounds on the durable-identity holder set (#2393)', () => {
     // A read after the stop that still sees it running holds it (#2339).
     r.snap = { ...r.snap, read: 'ok', readAt: NOW - 5_000 };
     expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
+  });
+
+  it('GLM: a gone fact older than the worker\'s last launch frees nothing', () => {
+    const r = rig();
+    r.launch('g', 'ws-g', 'p-g', 30 * 60_000);
+    r.snap = { rows: [row('g', { status: 'completed' })], gone: new Set(['g']), goneAt: () => NOW - 60 * 60_000 };
+    expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
+    // A fact written after that launch frees it.
+    r.snap = { ...r.snap, goneAt: () => NOW - 10 * 60_000 };
+    expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
+  });
+
+  it('GLM: one look answers every cap in the same turn while its key holds; the next turn looks again', async () => {
+    let reads = 0;
+    let key = 1;
+    let snap = snapshot({ rows: [row('a')], busy: new Set(['ws-a']) });
+    setHolderSource(() => {
+      reads++;
+      return snap;
+    }, () => [key]);
+    expect(liveHolders()?.holders).toHaveLength(1);
+    expect(liveHolders()?.holders).toHaveLength(1);
+    expect(reads).toBe(1);
+    // A change moves the key: the next look is fresh, in the same turn too.
+    snap = snapshot({ rows: [row('a'), row('b')], busy: new Set(['ws-a', 'ws-b']) });
+    key = 2;
+    expect(liveHolders()?.holders).toHaveLength(2);
+    expect(reads).toBe(2);
+    // The next turn looks again with the key unchanged (time-bound rules).
+    await Promise.resolve();
+    liveHolders();
+    expect(reads).toBe(3);
+    // A source with no key is never remembered.
+    setHolderSource(() => {
+      reads++;
+      return snap;
+    });
+    liveHolders();
+    liveHolders();
+    expect(reads).toBe(5);
+  });
+
+  it('GLM: with looks remembered, a decision right after a booking, a grant or a stamp sees it', async () => {
+    const r = rig({ workspaces: new Set() });
+    // The host's key: the shared change counter (holderInputs.ts).
+    const build = r.build;
+    setHolderSource(build, () => [r.guards, holderInputsRevision()]);
+    expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
+    expect(r.guards.reserve('k', 1, { ownerWorkspaceId: OWNER, botId: BOT })).toEqual({ ok: true });
+    expect(r.four()).toEqual({ agents: 0, factory: 1, bot: 1, live: 1 });
+    r.guards.commitStart('k');
+    r.guards.bindTask('k', 't');
+    const g = r.slots.tryAcquire({ taskId: 't', botId: BOT });
+    expect(g?.ok).toBe(true);
+    expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
+    if (g?.ok) g.release();
+    r.guards.taskSettled('k', 't');
+    r.guards.settleStarted('k');
+    expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
   });
 });
 

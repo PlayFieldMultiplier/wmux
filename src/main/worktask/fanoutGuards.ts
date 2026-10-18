@@ -37,6 +37,7 @@ import { sanitizeFanoutOrigin, type FanoutLineageEntry, type FanoutOrigin } from
 import { BOT_ID_RE } from '../../shared/bot';
 import { getWorkerSlots, parseLaunchToken, type WorkerSlots } from '../factory/workerSlots';
 import { holderCounts, liveHolders, type LiveHolders, type ReservedTask } from '../factory/workerHolders';
+import { holderInputsChanged } from '../factory/holderInputs';
 
 export const FANOUT_LIVE_TASK_CAP = 8;
 export const FANOUT_HOURLY_TASK_CAP = 24;
@@ -370,6 +371,7 @@ export class FanOutGuards {
    *  for; a re-mark records a newer generation, never an older one. */
   markTask(workspaceId: string, ownerWorkspaceId: string, origin?: FanoutOrigin, task?: StampTask): void {
     if (!workspaceId || !ownerWorkspaceId) throw new Error('markTask: workspace ids are required');
+    holderInputsChanged();
     const map = this.loadLineage();
     const clean = sanitizeFanoutOrigin(origin);
     const named = isStampTask(task) ? { taskId: task.taskId, gen: task.gen } : null;
@@ -584,6 +586,7 @@ export class FanOutGuards {
     }
 
     this.pending.set(key, count);
+    holderInputsChanged();
     this.reserved = this.reserved.filter((u) => !(u.key === key && u.phase === 'pending'));
     for (let i = 0; i < count; i++) {
       this.reserved.push({ key, ownerWorkspaceId: who?.ownerWorkspaceId ?? '', ...(who?.botId ? { botId: who.botId } : {}), phase: 'pending' });
@@ -595,6 +598,7 @@ export class FanOutGuards {
    *  throw): its reservation stops counting against either cap. */
   release(key: string): void {
     this.pending.delete(key);
+    holderInputsChanged();
     this.reserved = this.reserved.filter((u) => !(u.key === key && u.phase === 'pending'));
   }
 
@@ -609,6 +613,7 @@ export class FanOutGuards {
     const unit = this.reserved.find((u) => u.taskId === taskId)
       ?? this.reserved.find((u) => u.key === key && u.phase === 'spawning' && !u.taskId);
     if (unit) unit.taskId = taskId;
+    holderInputsChanged();
   }
 
   /**
@@ -623,6 +628,7 @@ export class FanOutGuards {
     if (count === undefined) return;
     this.pending.delete(key);
     this.spawning.set(key, (this.spawning.get(key) ?? 0) + count);
+    holderInputsChanged();
     for (const u of this.reserved) if (u.key === key) u.phase = 'spawning';
     // Tasks that wait on dependencies are booked live now but stamped on the
     // hour only when they actually start (stampDeferredStart): stamped now,
@@ -701,6 +707,7 @@ export class FanOutGuards {
    *  task, when it was minted. */
   taskSettled(key: string, taskId?: string): void {
     const left = (this.spawning.get(key) ?? 0) - 1;
+    holderInputsChanged();
     if (left > 0) this.spawning.set(key, left);
     else this.spawning.delete(key);
     const of = this.reserved.filter((u) => u.key === key && u.phase === 'spawning');
@@ -710,6 +717,7 @@ export class FanOutGuards {
 
   /** The fan-out's run returned: whatever is still booked for it is dropped. */
   settleStarted(key: string): void {
+    holderInputsChanged();
     this.spawning.delete(key);
     this.reserved = this.reserved.filter((u) => !(u.key === key && u.phase === 'spawning'));
   }

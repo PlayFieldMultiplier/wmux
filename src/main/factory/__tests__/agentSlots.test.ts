@@ -22,6 +22,16 @@ function slots(over: Partial<AgentSlotPorts> & { bots?: () => number; workers?: 
 const w = (taskId: string) => ({ taskId, title: taskId, botId: 'bot-0000000a', ownerWorkspaceId: 'ws-1' });
 
 describe('AgentSlots', () => {
+  it('when the holder set cannot be read, the slots granted and held here still count (fail closed)', async () => {
+    const { s } = slots({ liveWorkersIncludeGrants: true, stillHeld: () => true, workers: () => { throw new Error('snapshot unreadable'); } });
+    const a = await s.acquire(w('a'));
+    const b = await s.acquire(w('b'));
+    if (b.ok) b.hold('ws-b');
+    expect(a.ok).toBe(true);
+    // 1 bot + a's grant + b's held workspace.
+    expect(s.inUse()).toBe(3);
+  });
+
   it('grants under the cap and counts granted launches until they register', async () => {
     let workers = 0;
     const { s, onWaiting } = slots({ workers: () => workers });

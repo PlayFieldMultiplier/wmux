@@ -71,6 +71,7 @@ import { getFanOutGuards, setDormantRefresh, setDormantTaskWorkspaces, taskOfWor
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
 import { getWorkerSlots, taskOfPane } from './workerSlots';
+import { holderInputsRevision } from './holderInputs';
 import { holderCounts, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
 import { getVerdictedTasks } from './verdictedTasks';
 import { verdictedTaskIds } from './openBotWorkers';
@@ -709,6 +710,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       agentSeen: taskLiveness.agentSeen(),
       agentTasks: taskLiveness.agentSeenTasks(),
       gone: taskLiveness.goneTasks(),
+      goneAt: (taskId) => goneFacts.get(taskId)?.at,
       records: reclaimOn ? reclaimed.all() : [],
       verdicted,
       taskOfWorkspace: (ws) => taskOfWorkspace(ws)?.taskId ?? null,
@@ -751,7 +753,20 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     changed,
   });
   setAgentSlots(slots);
-  setHolderSource(holderSnapshot);
+  // What moves between looks: a look is reused only within one turn and
+  // while none moved, so a decision right after a booking, a grant, a
+  // launch, a reclaim record, a verdict, a fact, a transition or a read
+  // sees it.
+  let transitions = 0;
+  let mirrorPushes = 0;
+  offs.push(ledger.onTransition(() => {
+    transitions++;
+  }));
+  offs.push(getWorkspaceMirror().onSnapshot(() => {
+    mirrorPushes++;
+  }));
+  const holderKey = (): readonly unknown[] => [getFanOutGuards(), holderInputsRevision(), transitions, mirrorPushes, taskLiveness.lastReadAt()];
+  setHolderSource(holderSnapshot, holderKey);
   offs.push(() => setHolderSource(null));
   offs.push(ledger.onTransition(() => slots.kick()));
   offs.push(() => {
