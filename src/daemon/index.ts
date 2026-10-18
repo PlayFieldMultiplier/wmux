@@ -156,6 +156,7 @@ import { RingBuffer } from './RingBuffer';
 import { GitContextWatcher } from '../main/pty/gitContextWatch';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
+import { installExitEvidence, noteExitReason, STATUS_CONTROL_C_EXIT } from './exitEvidence';
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonState } from './types';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
@@ -1247,6 +1248,14 @@ function log(level: string, msg: string, ...args: unknown[]): void {
     // Logging must never crash the daemon.
   }
 }
+
+// Every exit JS can see leaves one line saying why; registered before the
+// exit listeners that save state, so the line lands even if one of them hangs.
+installExitEvidence(process, {
+  log,
+  ignoreError: (err) => !stdioErrorsConsumed() && isBrokenPipeError(err),
+  reportDir: path.join(wmuxDir, 'crash-reports'),
+});
 
 // === X6 resume on replay ===
 // Compute the NON-persisted launch command for a supervised exec session being
@@ -7599,6 +7608,7 @@ async function shutdown(
 ): Promise<{ stateSaved: boolean }> {
   if (shuttingDown) return { stateSaved: false };
   shuttingDown = true;
+  noteExitReason(`shutdown (${signal})`);
   gateFlag?.stop();
   stopPushRecovery?.();
   sessionManager.cancelPendingCreates();
@@ -7657,6 +7667,7 @@ async function shutdown(
   // Hard timeout guard — force exit if shutdown hangs
   const shutdownTimeout = setTimeout(() => {
     log('error', 'Shutdown timed out after 10s — forcing exit');
+    noteExitReason('shutdown timed out after 10s');
     releaseLock();
     process.exit(1);
   }, 10_000);
@@ -7836,6 +7847,7 @@ async function main(): Promise<void> {
 
   // 1. Single-instance check
   if (!(await acquireLock())) {
+    noteExitReason(lockHeldByLiveDaemon ? 'a live daemon holds the lock' : 'lock acquisition failed');
     // Under a service manager, a live daemon already running is not a crash:
     // DAEMON_EXIT_ALREADY_RUNNING is the code the unit's restart policy skips.
     // The desktop launcher's path keeps exit 1 here.
@@ -9452,8 +9464,24 @@ async function main(): Promise<void> {
 
   // 9. Signal handlers — doShutdown was hoisted above setCallbacks so
   // the idle-shutdown callback can reuse it.
-  process.on('SIGTERM', () => doShutdown('SIGTERM'));
-  process.on('SIGINT', () => doShutdown('SIGINT'));
+  // Each one says so first, synchronously: the graceful path can still die
+  // before it writes anything (the hard timeout, or a native fault mid-dump).
+  const onExitSignal = (sig: string): void => {
+    noteExitReason(`signal ${sig}`);
+    log('warn', `[exit] received ${sig} — shutting down`);
+  };
+  process.on('SIGTERM', () => { onExitSignal('SIGTERM'); void doShutdown('SIGTERM'); });
+  process.on('SIGINT', () => { onExitSignal('SIGINT'); void doShutdown('SIGINT'); });
+  if (process.platform === 'win32') {
+    // Ctrl+Break. With no listener Windows ends the process with
+    // STATUS_CONTROL_C_EXIT; a listener suppresses that, so this one logs and
+    // then exits with the same code. Only a daemon run in a console (a
+    // foreground `wmux daemon`) can receive it — the launcher's is detached.
+    process.on('SIGBREAK', () => {
+      onExitSignal('SIGBREAK');
+      process.exit(STATUS_CONTROL_C_EXIT);
+    });
+  }
 
   // Last-resort synchronous save on process exit — registered on ALL platforms.
   //
@@ -9524,6 +9552,7 @@ async function main(): Promise<void> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code && FATAL_CODES.has(code)) {
       log('error', `Fatal error code ${code} — shutting down immediately`);
+      noteExitReason(`uncaught ${code}`);
       doShutdown('uncaughtException');
       return;
     }
@@ -9549,6 +9578,7 @@ async function main(): Promise<void> {
 
     if (timestamps.length >= UNCAUGHT_THRESHOLD) {
       log('error', `Same uncaught exception repeated ${timestamps.length} times in ${UNCAUGHT_WINDOW_MS / 1000}s — shutting down`);
+      noteExitReason(`uncaught exception repeated: ${errKey.slice(0, 80)}`);
       doShutdown('uncaughtException');
     }
   });
@@ -9582,10 +9612,12 @@ main().catch((err) => {
     // acquireLock() wrote for us; the launcher reconnects via the canonical
     // pipe name, not the pid file.
     log('warn', 'another live daemon owns the control pipe — exiting cleanly (EDAEMON_ALREADY_RUNNING)');
+    noteExitReason('another live daemon owns the control pipe');
     releaseLock();
     process.exit(DAEMON_EXIT_ALREADY_RUNNING);
   }
   log('error', 'Fatal error during startup:', err);
+  noteExitReason('startup failed');
   releaseLock();
   process.exit(1);
 });
