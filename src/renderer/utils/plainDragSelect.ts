@@ -31,6 +31,7 @@
  */
 
 import type { AgentSlug } from '../../shared/agentIdentity';
+import { isAltScreen } from '../terminal/altScreenWheel';
 
 /**
  * Agents that select and copy on a drag themselves. Claude Code's fullscreen
@@ -241,5 +242,64 @@ export function installPlainDragSelect(
     container.removeEventListener('mousedown', onDown, true);
     container.removeEventListener('mousemove', onHoverMove, true);
     stop();
+  };
+}
+
+export interface WheelSelectionTerminal {
+  buffer?: { active?: { type?: string } };
+  modes?: { mouseTrackingMode?: string };
+  hasSelection?(): boolean;
+}
+
+export interface WheelClearsSelectionHintDeps {
+  /** Surface the hint. Called at most once per install (one pane). */
+  show: () => void;
+  /** True for an agent that keeps its own selection while it scrolls
+   *  (Claude Code, agentSelectsOnDrag): no xterm selection to lose there. */
+  isExempt: () => boolean;
+  /** Runs `fn` once xterm has handled the wheel. Default: a 0 ms timeout. */
+  defer?: (fn: () => void) => void;
+}
+
+/**
+ * #2293: say why a selection vanished when the wheel scrolled a mouse-tracking
+ * alternate-screen app (Codex's fullscreen view).
+ *
+ * The alternate screen has no scrollback: the app keeps its transcript and
+ * redraws other text into the same cells when it scrolls. With mouse tracking
+ * on, xterm sends the wheel to the app as a mouse report, which is user input,
+ * so the SelectionService clears the selection. That is kept on purpose (a
+ * selection kept across the scroll would copy text that is no longer there);
+ * this only tells the user once per pane that the app scrolls its own
+ * transcript and that Shift+drag (Option+drag on macOS) selects what is on
+ * screen.
+ *
+ * Nothing is swallowed: the listener only reads state before the wheel and
+ * looks again once xterm has handled it.
+ */
+export function installWheelClearsSelectionHint(
+  container: HTMLElement,
+  term: WheelSelectionTerminal,
+  deps: WheelClearsSelectionHintDeps,
+): () => void {
+  const defer = deps.defer ?? ((fn: () => void) => { setTimeout(fn, 0); });
+  let shown = false;
+  let disposed = false;
+  const onWheel = (): void => {
+    if (shown) return;
+    if ((term.modes?.mouseTrackingMode ?? 'none') === 'none' || !isAltScreen(term)) return;
+    if (!term.hasSelection?.() || deps.isExempt()) return;
+    defer(() => {
+      if (shown || disposed || term.hasSelection?.()) return;
+      shown = true;
+      deps.show();
+    });
+  };
+  // Capture: xterm's own wheel handler cancels the event under tracking, so a
+  // bubbling listener here would never run.
+  container.addEventListener('wheel', onWheel, { capture: true, passive: true });
+  return () => {
+    disposed = true;
+    container.removeEventListener('wheel', onWheel, true);
   };
 }

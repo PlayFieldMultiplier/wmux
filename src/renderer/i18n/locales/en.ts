@@ -973,6 +973,8 @@ export const en = {
   'terminal.copyFailed': 'Copy failed — selection kept',
   'terminal.mouseOwnedSelectHint': 'This app is using the mouse — hold Shift to select text',
   'terminal.mouseOwnedSelectHintMac': 'This app is using the mouse — hold Option to select text',
+  'terminal.altWheelSelectionHint': 'This app scrolls its own transcript, so scrolling cleared the selection — Shift+drag selects what is on screen',
+  'terminal.altWheelSelectionHintMac': 'This app scrolls its own transcript, so scrolling cleared the selection — Option+drag selects what is on screen',
   'terminal.openPathBlocked': 'Executable blocked — opened parent folder',
   'terminal.openPathFailed': "Couldn't open — showing folder",
   'terminal.bookmarkAdded': 'Bookmark added',

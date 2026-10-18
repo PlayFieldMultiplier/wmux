@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentSelectsOnDrag,
   installPlainDragSelect,
+  installWheelClearsSelectionHint,
   isDrag,
   mouseOwnedHintApplies,
   shouldHoldHoverMove,
@@ -281,5 +282,75 @@ describe('installPlainDragSelect', () => {
     selection = true;
     fire(screen, 'mousemove', { buttons: 0, clientX: 5, clientY: 1 });
     expect(seen.filter((s) => s.type === 'mousemove')).toHaveLength(1);
+  });
+});
+
+describe('installWheelClearsSelectionHint (#2293)', () => {
+  // A fake xterm: the wheel handler below stands in for xterm's, which sends
+  // the wheel to a tracking app as user input and so clears the selection.
+  function setup(opts: { tracking?: string; buffer?: string; exempt?: boolean } = {}) {
+    const container = document.createElement('div');
+    const screen = document.createElement('div');
+    container.appendChild(screen);
+    document.body.appendChild(container);
+    const term = {
+      modes: { mouseTrackingMode: opts.tracking ?? 'any' },
+      buffer: { active: { type: opts.buffer ?? 'alternate' } },
+      selection: true,
+      hasSelection(): boolean { return this.selection; },
+    };
+    screen.addEventListener('wheel', (e) => {
+      if (term.modes.mouseTrackingMode !== 'none') term.selection = false;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    const deferred: Array<() => void> = [];
+    const show = vi.fn();
+    const detach = installWheelClearsSelectionHint(container, term, {
+      show,
+      isExempt: () => opts.exempt === true,
+      defer: (fn) => { deferred.push(fn); },
+    });
+    const wheel = (): void => {
+      screen.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100 }));
+      deferred.splice(0).forEach((fn) => fn());
+    };
+    return { term, show, wheel, detach, container };
+  }
+
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('says why once, when a wheel in a tracking alternate-screen app clears the selection', () => {
+    const { term, show, wheel } = setup();
+    wheel();
+    expect(show).toHaveBeenCalledTimes(1);
+    // Once per pane: a later selection cleared the same way stays quiet.
+    term.selection = true;
+    wheel();
+    expect(show).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays quiet without a selection, off the alternate screen, without tracking, or for Claude Code', () => {
+    const none = setup();
+    none.term.selection = false;
+    none.wheel();
+    expect(none.show).not.toHaveBeenCalled();
+    for (const opts of [{ buffer: 'normal' }, { tracking: 'none' }, { exempt: true }]) {
+      const s = setup(opts);
+      s.wheel();
+      expect(s.show).not.toHaveBeenCalled();
+    }
+  });
+
+  it('stays quiet when the selection survived the wheel, and after teardown', () => {
+    const kept = setup();
+    kept.term.selection = true;
+    kept.container.firstChild?.addEventListener('wheel', () => { kept.term.selection = true; });
+    kept.wheel();
+    expect(kept.show).not.toHaveBeenCalled();
+    const gone = setup();
+    gone.detach();
+    gone.wheel();
+    expect(gone.show).not.toHaveBeenCalled();
   });
 });

@@ -26,7 +26,7 @@ import { claimFit } from '../utils/fitGuard';
 import { createFitScheduler } from '../utils/layoutTransitionGate';
 import { installAltClickTrackingGuard } from '../utils/altClickUnderMouseTracking';
 import { createMouseOwnedHint } from '../utils/mouseOwnedHint';
-import { agentSelectsOnDrag, installPlainDragSelect, mouseOwnedHintApplies } from '../utils/plainDragSelect';
+import { agentSelectsOnDrag, installPlainDragSelect, installWheelClearsSelectionHint, mouseOwnedHintApplies } from '../utils/plainDragSelect';
 import { resizeOrderFor, runOrderedFit, type CancelOrderedFit } from '../utils/resizeOrder';
 import { createAutoSelectionCopy } from '../utils/autoSelectionCopy';
 import { createOsc52Handler } from '../utils/osc52Clipboard';
@@ -745,7 +745,10 @@ function showCopyErrorToast() {
 // nothing. Longer-lived than the copy toasts because this one is
 // instructional, not an acknowledgement.
 let mouseOwnedToastTimer: ReturnType<typeof setTimeout> | null = null;
-function showMouseOwnedHintToast() {
+const MOUSE_OWNED_HINT_KEYS = { mac: 'terminal.mouseOwnedSelectHintMac', other: 'terminal.mouseOwnedSelectHint' } as const;
+/** #2293: the same toast, for a wheel scroll that cleared the selection. */
+const ALT_WHEEL_SELECTION_HINT_KEYS = { mac: 'terminal.altWheelSelectionHintMac', other: 'terminal.altWheelSelectionHint' } as const;
+function showMouseOwnedHintToast(keys: { mac: string; other: string } = MOUSE_OWNED_HINT_KEYS, visibleMs = 3200) {
   let el = document.getElementById('wmux-mouse-owned-toast');
   if (!el) {
     el = document.createElement('div');
@@ -754,14 +757,10 @@ function showMouseOwnedHintToast() {
     document.body.appendChild(el);
   }
   const node = el;
-  node.textContent = t(
-    window.electronAPI?.platform === 'darwin'
-      ? 'terminal.mouseOwnedSelectHintMac'
-      : 'terminal.mouseOwnedSelectHint',
-  );
+  node.textContent = t(window.electronAPI?.platform === 'darwin' ? keys.mac : keys.other);
   node.style.opacity = '1';
   if (mouseOwnedToastTimer) clearTimeout(mouseOwnedToastTimer);
-  mouseOwnedToastTimer = setTimeout(() => { node.style.opacity = '0'; }, 3200);
+  mouseOwnedToastTimer = setTimeout(() => { node.style.opacity = '0'; }, visibleMs);
 }
 
 /**
@@ -1563,6 +1562,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     const detachPlainDragSelect = installPlainDragSelect(container, terminal, {
       isEnabled: () => useStore.getState().plainDragSelectEnabled && !paneAgentSelectsOnDrag(),
       isMac,
+    });
+    // #2293: the wheel keeps going to a mouse-tracking fullscreen app (Codex),
+    // which clears the selection; say why once per pane. Claude Code keeps its
+    // own selection while it scrolls, so it is left out.
+    const detachWheelSelectionHint = installWheelClearsSelectionHint(container, terminal, {
+      isExempt: paneAgentSelectsOnDrag,
+      show: () => showMouseOwnedHintToast(ALT_WHEEL_SELECTION_HINT_KEYS, 6000),
     });
 
     // Issue #167: keep the hidden IME textarea empty while idle. xterm only
@@ -3509,6 +3515,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       if (isMac) { container.removeEventListener('paste', blockNativePaste, true); }
       detachAltClickGuard();
       detachPlainDragSelect();
+      detachWheelSelectionHint();
       detachAltScreenWheel();
       terminal.textarea?.removeEventListener('focus', onTextareaFocus);
       terminal.textarea?.removeEventListener('keydown', onWatchdogKeyDown);

@@ -961,6 +961,8 @@ export const pl = {
   'terminal.copyFailed': 'Kopiowanie nie powiodło się — zaznaczenie zachowane',
   'terminal.mouseOwnedSelectHint': 'Ta aplikacja używa myszy — przytrzymaj Shift, aby zaznaczyć tekst',
   'terminal.mouseOwnedSelectHintMac': 'Ta aplikacja używa myszy — przytrzymaj Option, aby zaznaczyć tekst',
+  'terminal.altWheelSelectionHint': 'Ta aplikacja sama przewija swoją historię, więc przewinięcie usunęło zaznaczenie — Shift+przeciągnięcie zaznacza to, co jest na ekranie',
+  'terminal.altWheelSelectionHintMac': 'Ta aplikacja sama przewija swoją historię, więc przewinięcie usunęło zaznaczenie — Option+przeciągnięcie zaznacza to, co jest na ekranie',
   'terminal.openPathBlocked': 'Plik wykonywalny zablokowany — otwarto folder nadrzędny',
   'terminal.openPathFailed': 'Nie udało się otworzyć — pokazuję folder',
   'terminal.bookmarkAdded': 'Dodano zakładkę',
