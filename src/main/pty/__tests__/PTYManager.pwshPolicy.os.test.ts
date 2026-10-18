@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { spawn } = vi.hoisted(() => ({ spawn: vi.fn(() => ({ pid: 0, kill: vi.fn() })) }));
+const { spawn } = vi.hoisted(() => ({ spawn: vi.fn(() => ({ pid: 4242, kill: vi.fn() })) }));
 vi.mock('node-pty', () => ({ spawn, default: { spawn } }));
 
 import { PTYManager } from '../PTYManager';

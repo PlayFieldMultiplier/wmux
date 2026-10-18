@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Local-mode WSL create: the cwd probe is async, so a pane can be disposed
 // while it is still pending. dispose(id) in that window must cancel the spawn.
 const { spawn, resolveWslCwd, buildWslInjection } = vi.hoisted(() => ({
-  spawn: vi.fn(() => ({ pid: 0, kill() {} })),
+  spawn: vi.fn(() => ({ pid: 4242, kill() {} })),
   resolveWslCwd: vi.fn(),
   buildWslInjection: vi.fn(() => ({ args: [], env: {} })),
 }));

@@ -88,7 +88,7 @@ describe.skipIf(!onWindows)('recovery replay — real ConPTY (win32 only; elsewh
   async function recoverWithHeldHead(id: string): Promise<{ mgr: DaemonSessionManager; managed: ManagedSession; client: Client }> {
     const mgr = new DaemonSessionManager();
     manager = mgr;
-    mgr.createSession({
+    await mgr.createSessionAsync({
       id,
       cmd: CMD_EXE,
       cwd: path.resolve(process.cwd()),

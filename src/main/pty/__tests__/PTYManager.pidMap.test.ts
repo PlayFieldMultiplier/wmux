@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 // Local PTY mode writes the same pid-map anchors as daemon mode, through the
 // shared helpers, so a pane keeps one PID and dispose clears it by content.
@@ -80,6 +81,57 @@ describe('PTYManager pid-map anchors', () => {
       manager.dispose(instance.id);
 
       expect(read(4321)).toBe('daemon-other');
+    } finally { manager.disposeAll(); }
+  });
+  // #2398 — node-pty 1.2.0-beta on Windows: pid 0 until the output pipe
+  // connects, and a CreateProcess failure is an exit while it is still 0.
+  const deferredPty = () => {
+    const exits = new EventEmitter();
+    const p = {
+      pid: 0,
+      _socket: new EventEmitter(),
+      kill: vi.fn(),
+      onData: vi.fn(),
+      onExit: (listener: (e: { exitCode: number }) => void) => {
+        exits.on('exit', listener);
+        return { dispose: () => { exits.off('exit', listener); } };
+      },
+      write: vi.fn(),
+      resize: vi.fn(),
+      fail: (exitCode: number) => exits.emit('exit', { exitCode }),
+    };
+    return p;
+  };
+
+  it('writes the anchor for the pid the deferred ConPTY reports, never for 0', async () => {
+    const late = deferredPty();
+    spawn.mockImplementationOnce(() => late as never);
+    const manager = new PTYManager();
+    try {
+      const pending = manager.createAsync({});
+      await new Promise<void>((r) => setImmediate(r));
+      expect(read(0)).toBeNull();
+      expect(manager.get('pty-1')).toBeUndefined();
+      late.pid = 6543;
+      late._socket.emit('ready_datapipe');
+      const instance = await pending;
+      expect(read(6543)).toBe(instance.id);
+      expect(read(0)).toBeNull();
+    } finally { manager.disposeAll(); }
+  });
+
+  it('registers nothing when the spawn fails before a pid exists', async () => {
+    const failed = deferredPty();
+    spawn.mockImplementationOnce(() => failed as never);
+    const manager = new PTYManager();
+    try {
+      const pending = manager.createAsync({});
+      await new Promise<void>((r) => setImmediate(r));
+      failed.fail(267);
+      await expect(pending).rejects.toThrow(/Cannot create process, error code: 267$/);
+      expect(manager.get('pty-1')).toBeUndefined();
+      expect(read(0)).toBeNull();
+      expect(fs.existsSync(mapDir) ? fs.readdirSync(mapDir) : []).toEqual([]);
     } finally { manager.disposeAll(); }
   });
 });
