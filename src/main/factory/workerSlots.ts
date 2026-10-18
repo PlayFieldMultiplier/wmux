@@ -424,11 +424,6 @@ export class WorkerSlots {
   }
 
   private write(): void {
-    // This write takes any coalesced one with it.
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
     if (this.mode === 'memory') return;
     if (this.mode === 'broken') throw new Error(`${this.file} is unreadable and could not be moved aside`);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
@@ -438,6 +433,12 @@ export class WorkerSlots {
       panes: Object.fromEntries(this.panes),
       workspaces: Object.fromEntries(this.workspaces),
     });
+    // Written: it took any coalesced write with it (one that failed leaves
+    // that one pending).
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
   }
 
   /** A write after the launch, coalesced (PERSIST_DELAY_MS): a failure is
