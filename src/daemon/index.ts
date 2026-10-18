@@ -3317,14 +3317,20 @@ function registerRpcHandlers(
   // in-flight promotion. Exec units also resume when no GUI is attached.
   setImmediate(() => {
     if (shuttingDown) return;
-    const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
-    const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
     const promotions: Array<Promise<unknown>> = [];
-    for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
-      promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
+    try {
+      const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
+      const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
+      for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
+        promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
+      }
+    } catch (err) {
+      log('error', 'WSL background recovery could not start:', err);
+    } finally {
+      // Recovery is done for daemon.listSessions once these settle. Always
+      // tracked: a pass that threw must not leave it "not done" for good.
+      startupRecovery.track(promotions);
     }
-    // Recovery is done for daemon.listSessions once these settle.
-    startupRecovery.track(promotions);
   });
 
 
