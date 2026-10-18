@@ -85,8 +85,17 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
     expect(reconcile).toMatch(/examinedPtyIds\.push\(surface\.ptyId\);\s*if \(activeIds\.has\(surface\.ptyId\)\)/);
     // …and unmarked once the pass completes (not when it was aborted).
     const completeAt = reconcile.indexOf('Reconcile cycle #${reconcileCycleRef.current} complete');
-    const unmarkAt = reconcile.indexOf('if (!signal?.aborted) useStore.getState().setPtysUnconfirmed(examinedPtyIds, false);');
+    const unmarkAt = reconcile.search(/if \(!signal\?\.aborted\) \{\s*useStore\.getState\(\)\.setPtysUnconfirmed\(examinedPtyIds/);
     expect(unmarkAt).toBeGreaterThan(reconcile.indexOf('resolveReconcileRebind('));
     expect(unmarkAt).toBeLessThan(completeAt);
+  });
+
+  it('a failed re-query leaves the absent bindings unconfirmed (Codex P1)', () => {
+    const start = source.indexOf('const reconcilePtys = useCallback');
+    const reconcile = source.slice(start, source.indexOf('// 앱 시작 시 세션 복원', start));
+    const resolveAt = reconcile.indexOf('const toClear = await resolvePtyIdsToClear(firstAbsent');
+    const keepAt = reconcile.indexOf('if (secondSnapshot === null) for (const id of firstAbsent) unsettledPtyIds.add(id);');
+    expect(keepAt).toBeGreaterThan(resolveAt);
+    expect(reconcile).toMatch(/setPtysUnconfirmed\(examinedPtyIds\.filter\(\(id\) => !unsettledPtyIds\.has\(id\)\), false\)/);
   });
 });

@@ -1791,6 +1791,11 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
     // mount and creates fresh PTYs — the well-tested new-pane path.
     clearSurfacePtyIdByPty: (ptyId: string, recovery?: DeadPaneRecovery) => set((state: StoreState) => {
       if (!ptyId) return;
+      // The floating pane is the one pty binding outside a surface. A session
+      // confirmed dead must free it too, or FloatingPane (which creates only
+      // while the field is empty) is stuck on it (#2398: the failed-startup
+      // fallback no longer wipes it with everything else).
+      if (state.floatingPanePtyId === ptyId) state.floatingPanePtyId = null;
       const walk = (pane: PaneLeaf, stashed: boolean) => {
         {
           for (const s of pane.surfaces) {

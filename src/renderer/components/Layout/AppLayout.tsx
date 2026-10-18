@@ -1276,8 +1276,10 @@ export default function AppLayout() {
         // mid-rehydrate), so clearing on the first cycle could destroy a live
         // session. We defer the destructive decision to a 2-strike re-query.
         const absentCandidates: { paneId: string; surfaceId: string; ptyId: string; stashed: boolean }[] = [];
-        // Every binding this pass looks at (#2398, see the end of the pass).
+        // Every binding this pass looks at, and those it could not settle
+        // (#2398, see the end of the pass).
         const examinedPtyIds: string[] = [];
+        const unsettledPtyIds = new Set<string>();
         const collect = (pane: PaneLeaf, stashed: boolean) => {
           if (signal?.aborted) return;
           for (const surface of pane.surfaces) {
@@ -1390,6 +1392,9 @@ export default function AppLayout() {
             isCurrent: () => !signal?.aborted,
             log: (level, message) => (level === 'warn' ? console.warn(message) : console.log(message)),
           });
+          // Without a second snapshot (the re-query failed) nothing absent was
+          // settled: those bindings stay unconfirmed for the next pass.
+          if (secondSnapshot === null) for (const id of firstAbsent) unsettledPtyIds.add(id);
           // v2 RCA fix (axis B-lite): decide clear-vs-rebind per candidate (pure,
           // unit-tested in resolveReconcileRebind.test.ts). Acts ONLY on ptyIds
           // already judged dead (in toClear), so it never swaps a live-attached
@@ -1454,7 +1459,9 @@ export default function AppLayout() {
         // instead of asking for yet another pass. Without this, a daemon that
         // lists nothing (the empty-list guard above preserves every id) would
         // leave such a pane waiting on reconciles forever.
-        if (!signal?.aborted) useStore.getState().setPtysUnconfirmed(examinedPtyIds, false);
+        if (!signal?.aborted) {
+          useStore.getState().setPtysUnconfirmed(examinedPtyIds.filter((id) => !unsettledPtyIds.has(id)), false);
+        }
         console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
       } finally {
         reconcileInFlightRef.current = null;

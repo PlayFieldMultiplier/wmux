@@ -78,4 +78,19 @@ describe('applyStartupReconcileFallback', () => {
     useStore.getState().clearSurfacePtyIdByPty('pty-live-2');
     expect(useStore.getState().ptyUnconfirmedById).toEqual({});
   });
+
+  it('the floating pane, kept with the rest, is freed once its session is confirmed dead (Codex P2)', () => {
+    useStore.setState({ floatingPanePtyId: 'pty-float' });
+    applyStartupReconcileFallback({
+      daemonMode: true,
+      workspaces: useStore.getState().workspaces,
+      markUnconfirmed: (ids) => useStore.getState().setPtysUnconfirmed(ids, true),
+      clearAll: useStore.getState().clearAllPtyState,
+      log: () => undefined,
+    });
+    expect(useStore.getState().floatingPanePtyId).toBe('pty-float');
+    // Its reattach answered session-dead.
+    useStore.getState().clearSurfacePtyIdByPty('pty-float');
+    expect(useStore.getState().floatingPanePtyId).toBeNull();
+  });
 });
