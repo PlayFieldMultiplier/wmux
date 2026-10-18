@@ -12,9 +12,11 @@
 // refuses it, so the pipe's bot.update never sets one. A picture that fails
 // the check on read is dropped and the bot kept; so is a job that fails
 // normalizeBotJob, a worker agent (`workerAgent`, optional, owner-set
-// through `update`) that fails validateBotWorkerAgent, and an engine model
-// that fails fan-out's model rule (shared/fanoutPreset.ts
-// validateFanoutModel), which is refused on create/update.
+// through `update`) that fails validateBotWorkerAgent. An engine model is
+// checked on create/update only (shared/fanoutPreset.ts validateBotBrainModel
+// for claude-sdk, validateFanoutModel otherwise); a stored one is kept as
+// written, and one that fails the rule is ignored when the bot runs
+// (botEngines.ts), never dropped from the file.
 //
 // A bot's own model and effort are its engine's (`engine.model`/`effort`,
 // claude-sdk); its workers' are `workerAgent`. Both are optional, so a
@@ -64,12 +66,14 @@ import {
 import { CLAUDE_EFFORT_LEVELS } from '../../shared/claudeModels';
 import { isFactKind, type FactFilter } from '../../shared/facts';
 import { normalizeRepoKey } from '../../shared/repoKey';
+import { isOriginPin } from '../../shared/originPin';
 import { emptyUsage, pruneUsage, sanitizeUsage, type BotUsage } from './budget';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { LEGACY_TRIAGE_TRIGGERS, defaultTriggers } from './roleDefaults';
 import { parseBotAvatar } from './botAvatar';
 import { validateBotWorkerAgent } from '../../shared/botWorkerAgent';
-import { validateBotBrainModel, validateFanoutModel } from '../../shared/fanoutPreset';
+import { BOT_BRAIN_MODEL_MAX, validateBotBrainModel, validateFanoutModel } from '../../shared/fanoutPreset';
+import { ROLE_BINDING_MODEL_MAX } from '../../shared/orchestratorRole';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -88,6 +92,8 @@ const LABEL_MAX = 100;
 const BATCH_WINDOW_MAX_MS = 24 * 3_600_000;
 const BATCH_MAX = 100;
 const EFFORTS: ReadonlySet<string> = new Set(CLAUDE_EFFORT_LEVELS);
+/** The refusal for an engine sanitizeBotEngine rejects, with both model rules. */
+const ENGINE_MALFORMED = `engine is malformed (a claude-sdk model must be one model id of up to ${BOT_BRAIN_MODEL_MAX} characters: a letter or digit first, then letters, digits and . _ : / @ -, optionally ending in a [variant], so a Bedrock or Vertex id or a model ARN passes; a claude-pty model: a letter or digit first, then letters, digits and . _ : -, up to ${ROLE_BINDING_MODEL_MAX})`;
 
 /** What a store answers to the trigger engine (§14). */
 export interface BotDirectoryApi {
@@ -103,27 +109,30 @@ function boundedString(v: unknown, max: number): string | undefined {
   return t.length > 0 && t.length <= max ? t : undefined;
 }
 
-/** A well-formed engine (a fresh object), or null. A model must pass
- *  fan-out's model rule (validateFanoutModel); on a read (`read: true`) a
- *  stored model that does not is dropped and the engine kept, so the bot
- *  runs on the default model rather than disappearing. */
+/** A well-formed engine (a fresh object), or null. On create/update a model
+ *  must pass the brain model rule (claude-sdk, validateBotBrainModel) or
+ *  fan-out's (validateFanoutModel). On a read (`read: true`) a stored model
+ *  string is kept exactly as written, valid or not, so a later write never
+ *  drops it from bots.json; the engine factory ignores one that fails the
+ *  rule (the bot runs on claude's default) and the profile warns of it. */
 export function sanitizeBotEngine(raw: unknown, opts: { read?: boolean } = {}): BotEngine | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
-  const checked = r.model === undefined ? undefined : r.kind === 'claude-sdk' ? validateBotBrainModel(r.model) : validateFanoutModel(r.model);
-  if (checked && !checked.ok && opts.read !== true) return null;
-  const model = checked?.ok ? checked.model : undefined;
+  const read = opts.read === true;
+  const checked = r.model === undefined || read ? undefined : r.kind === 'claude-sdk' ? validateBotBrainModel(r.model) : validateFanoutModel(r.model);
+  if (checked && !checked.ok) return null;
+  const model = read ? (typeof r.model === 'string' ? r.model : undefined) : checked?.ok ? checked.model : undefined;
   switch (r.kind) {
     case 'claude-sdk': {
       if (r.effort !== undefined && (typeof r.effort !== 'string' || !EFFORTS.has(r.effort))) return null;
       return {
         kind: 'claude-sdk',
-        ...(model ? { model } : {}),
+        ...(model !== undefined ? { model } : {}),
         ...(typeof r.effort === 'string' ? { effort: r.effort } : {}),
       };
     }
     case 'claude-pty':
-      return { kind: 'claude-pty', ...(model ? { model } : {}) };
+      return { kind: 'claude-pty', ...(model !== undefined ? { model } : {}) };
     case 'acp': {
       const command = boundedString(r.command, ACP_COMMAND_MAX);
       if (!command || !Array.isArray(r.args) || r.args.length > ACP_ARGS_MAX) return null;
@@ -228,7 +237,7 @@ function sanitizeRepo(raw: unknown): BotProfile['repo'] | null {
   const repoKey = normalizeRepoKey(r.repoKey);
   if (!repoKey) return null;
   if (typeof r.repoPath !== 'string' || r.repoPath.length > 4096 || !path.isAbsolute(r.repoPath)) return null;
-  return { repoKey, repoPath: path.normalize(r.repoPath) };
+  return { repoKey, repoPath: path.normalize(r.repoPath), ...(isOriginPin(r.originPin) ? { originPin: r.originPin } : {}) };
 }
 
 function sanitizeParked(raw: unknown): BotProfile['parked'] | null {
@@ -549,7 +558,7 @@ export class BotStore implements BotDirectoryApi {
     const name = input.name === undefined ? fallbackName : normalizeBotName(input.name);
     if (!name) return refuse('invalid_argument', `name must be 1-${NAME_MAX} characters, no control characters or slashes`);
     const engine = input.engine === undefined ? withTemplateBrain(sanitizeBotEngine(this.defaultEngine()), template) : sanitizeBotEngine(input.engine);
-    if (!engine) return refuse('invalid_argument', 'engine is malformed (a model must be one model id: letters/digits first, then . _ : -, optionally ending in a [variant])');
+    if (!engine) return refuse('invalid_argument', ENGINE_MALFORMED);
     let workerAgent = TEMPLATE_MODEL_DEFAULTS[template]?.worker;
     if (input.workerAgent !== undefined) {
       const v = validateBotWorkerAgent(input.workerAgent, this.platform);
@@ -630,7 +639,12 @@ export class BotStore implements BotDirectoryApi {
     }
     if (patch.engine !== undefined) {
       const engine = sanitizeBotEngine(patch.engine);
-      if (!engine) return refuse('invalid_argument', 'engine is malformed (a model must be one model id: letters/digits first, then . _ : -, optionally ending in a [variant])');
+      if (!engine) return refuse('invalid_argument', ENGINE_MALFORMED);
+      // A stored model that fails the rule cannot be sent back, so a patch
+      // without a model keeps it: only picking another model replaces it.
+      if (engine.kind === 'claude-sdk' && engine.model === undefined && cur.engine.kind === 'claude-sdk' && cur.engine.model !== undefined && !validateBotBrainModel(cur.engine.model).ok) {
+        engine.model = cur.engine.model;
+      }
       next.engine = engine;
     }
     if (patch.workerAgent !== undefined) {

@@ -10,6 +10,7 @@ import {
   CodexCwdBinder, codexLiveFor, describeCodexPane, findCodexRolloutByCwd, LAUNCH_WINDOW_MS, MAX_HEAD_READS, parseEtime,
   type CodexCwdQuery, type CodexPaneFacts,
 } from '../codexRolloutByCwd';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const A = '01a0e700-0000-7000-8000-00000000000a';
 const B = '01a0e700-0000-7000-8000-00000000000b';
@@ -174,12 +175,12 @@ describe('CodexCwdBinder', () => {
     });
     binder.arm('pty-1');
     rollout(A, {}, Date.now());
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'negative: no bind before the launch marker');
     expect(bound).toEqual([]); // no launch marker yet
     marker.launchAt = Date.now() - 5_000;
     await until(() => bound.length > 0);
     binder.arm('pty-1'); // a later banner after the bind is a no-op
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'negative: a later banner after the bind is a no-op');
     expect(bound).toEqual([A]);
     binder.dispose();
   });
@@ -196,7 +197,7 @@ describe('CodexCwdBinder', () => {
     });
     binder.arm('pty-1');
     await until(() => logs.length > 0);
-    await new Promise((r) => setTimeout(r, 30));
+    await deliberateSleep(30, 'negative: a shared cwd binds nothing and logs once');
     expect(bound).toEqual([]);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain('shares its cwd');

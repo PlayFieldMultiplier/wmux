@@ -23,7 +23,13 @@ import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
 import type { RpcMethod } from '../../../shared/rpc';
 import { TaskWorktreeManager, metaDirForWorktree } from '../../worktask/TaskWorktreeManager';
+import { removeTaskRelay } from '../../worktask/taskPush';
+import { getWmuxDir } from '../../../daemon/config';
+import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
+import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
+import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
 import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
@@ -85,6 +91,11 @@ export function registerWorktaskHandlers(
   const closeService = new TaskCloseService({
     daemon: daemonPort,
     worktrees,
+    removeRelay: (taskId) => removeTaskRelay(path.join(getWmuxDir(), 'factory', 'git-relay'), taskId),
+    pushedHead: (taskId) => {
+      const v = taskPushRecordOf(getWmuxDir()).get(taskId);
+      return typeof v === 'string' && v !== 'unknown' ? v : null;
+    },
     // A pane still running inside the worktree holds files that make the removal partial on Windows.
     stopPanesIn: async (worktreePath) => {
       const dc = getDaemonClient();
@@ -100,6 +111,11 @@ export function registerWorktaskHandlers(
         log: (message) => console.warn(message),
       });
       if (stopped.length > 0) console.log(`[worktask] stopped ${stopped.length} pane(s) inside ${worktreePath} before removing it`);
+      return stopped;
+    },
+    panesStopped: (taskId, sessionIds) => {
+      const row = getTaskLedger().get(taskId);
+      if (row) noteTaskPanesStopped(taskId, row.taskWorkspaceId, sessionIds);
     },
   });
   const prService = new TaskPrService({ daemon: daemonPort, cache: prStatusCache });
@@ -268,8 +284,17 @@ export function registerWorktaskHandlers(
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
       }
+      // A task's pane: a new launch of the task, on disk before the line is
+      // typed (factory/workerSlots.ts); not recorded, not typed.
+      let settleRelaunch: ((typed: boolean) => void) | null;
+      try {
+        settleRelaunch = startsAgent(line) ? beginPaneRelaunch(ptyId) : null;
+      } catch (err) {
+        return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+      }
       // 정상 경로(scheduleInitialCommand.write)와 동일: sanitize + CR.
-      dc.writeToSession(ptyId, sanitizePtyText(line) + '\r');
+      const typed = dc.writeToSession(ptyId, sanitizePtyText(line) + '\r') !== false;
+      settleRelaunch?.(typed);
       return { ok: true as const };
     }),
   );

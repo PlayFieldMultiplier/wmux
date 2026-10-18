@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DaemonClient, getDaemonPipeName, readDaemonAuthToken } from '../DaemonClient';
 import { createSessionPipeMarkers } from '../../daemon/SessionPipe';
-import { waitFor } from '../../test-utils/waitFor';
+import { waitFor, deliberateSleep } from '../../test-utils/waitFor';
 
 // Helper: unique pipe name per test
 function testPipeName(suffix: string): string {
@@ -593,13 +593,12 @@ describe('DaemonClient', () => {
       await client.connectSessionPipe(sessionId);
 
       // Small delay for pipe connection to settle
-      await new Promise(r => setTimeout(r, 100));
+      await deliberateSleep(100, 'not yet converted (#2363): lets the session pipe settle; nothing polled');
 
       // Send data from mock PTY to client
       mockSession.writeToClient(Buffer.from('Hello from PTY'));
 
-      // Wait for data to arrive
-      await new Promise(r => setTimeout(r, 200));
+      await vi.waitFor(() => expect(Buffer.concat(received).toString()).toContain('Hello from PTY'), { timeout: 10_000 });
 
       expect(received.length).toBeGreaterThan(0);
       const combined = Buffer.concat(received).toString();
@@ -681,13 +680,12 @@ describe('DaemonClient', () => {
       await client.connectSessionPipe(sessionId);
 
       // Wait for connection
-      await new Promise(r => setTimeout(r, 100));
+      await deliberateSleep(100, 'not yet converted (#2363): lets the session pipe settle; nothing polled');
 
       // Write from client to session
       client.writeToSession(sessionId, 'user input here');
 
-      // Wait for data
-      await new Promise(r => setTimeout(r, 200));
+      await vi.waitFor(() => expect(Buffer.concat(inputReceived).toString()).toBe('user input here'), { timeout: 10_000 });
 
       const allInput = Buffer.concat(inputReceived).toString();
       expect(allInput).toBe('user input here');
@@ -757,8 +755,7 @@ describe('DaemonClient', () => {
         diedEvents.push(payload);
       });
 
-      // Wait for socket to be tracked in server
-      await new Promise(r => setTimeout(r, 100));
+      await vi.waitFor(() => expect(sockets.size).toBeGreaterThan(0), { timeout: 10_000 });
 
       // Simulate daemon broadcasting a session.died event
       const event = JSON.stringify({
@@ -772,9 +769,7 @@ describe('DaemonClient', () => {
         socket.write(event);
       }
 
-      await new Promise(r => setTimeout(r, 200));
-
-      expect(diedEvents).toHaveLength(1);
+      await vi.waitFor(() => expect(diedEvents).toHaveLength(1), { timeout: 10_000 });
       expect(diedEvents[0]).toEqual({ sessionId: 'test-sess-1', exitCode: 1 });
 
       await client.disconnect();
@@ -813,8 +808,7 @@ describe('DaemonClient', () => {
         diedEvents.push(payload);
       });
 
-      // Wait for socket to be tracked in server
-      await new Promise(r => setTimeout(r, 100));
+      await vi.waitFor(() => expect(sockets.size).toBeGreaterThan(0), { timeout: 10_000 });
 
       // Simulate daemon broadcasting a session.died event
       const event = JSON.stringify({
@@ -828,9 +822,7 @@ describe('DaemonClient', () => {
         socket.write(event);
       }
 
-      await new Promise(r => setTimeout(r, 200));
-
-      expect(diedEvents).toHaveLength(1);
+      await vi.waitFor(() => expect(diedEvents).toHaveLength(1), { timeout: 10_000 });
       expect(diedEvents[0]).toEqual({ sessionId: 'test-sess-1', exitCode: 0, signal: 9 });
 
       await client.disconnect();
@@ -862,7 +854,7 @@ describe('DaemonClient', () => {
         cwdEvents.push(payload);
       });
 
-      await new Promise(r => setTimeout(r, 100));
+      await vi.waitFor(() => expect(sockets.size).toBeGreaterThan(0), { timeout: 10_000 });
 
       // The daemon broadcasts the resolved cwd as the event's `data` string.
       const event = JSON.stringify({
@@ -876,9 +868,7 @@ describe('DaemonClient', () => {
         socket.write(event);
       }
 
-      await new Promise(r => setTimeout(r, 200));
-
-      expect(cwdEvents).toHaveLength(1);
+      await vi.waitFor(() => expect(cwdEvents).toHaveLength(1), { timeout: 10_000 });
       expect(cwdEvents[0]).toEqual({ sessionId: 'sess-cwd-1', cwd: 'D:\\proj\\api' });
 
       await client.disconnect();
@@ -903,10 +893,9 @@ describe('DaemonClient', () => {
       await client.connect();
       const seen: Array<{ sessionId: string }> = [];
       client.on('session:input', (payload: { sessionId: string }) => seen.push(payload));
-      await new Promise(r => setTimeout(r, 100));
+      await vi.waitFor(() => expect(sockets.size).toBeGreaterThan(0), { timeout: 10_000 });
       for (const socket of sockets) socket.write(JSON.stringify({ type: 'input.typed', sessionId: 'sess-typed', data: null }) + '\n');
-      await new Promise(r => setTimeout(r, 200));
-      expect(seen).toEqual([{ sessionId: 'sess-typed' }]);
+      await vi.waitFor(() => expect(seen).toEqual([{ sessionId: 'sess-typed' }]), { timeout: 10_000 });
       await client.disconnect();
       sockets.forEach(s => s.destroy());
       await new Promise<void>(resolve => server.close(() => resolve()));
@@ -990,8 +979,7 @@ describe('DaemonClient', () => {
       // unwritable.
       await sessionPipe.stop();
       // Allow the close event to propagate.
-      await new Promise((r) => setTimeout(r, 50));
-      expect(client.isSessionPipeWritable(SESSION_ID)).toBe(false);
+      await vi.waitFor(() => expect(client.isSessionPipeWritable(SESSION_ID)).toBe(false), { timeout: 10_000 });
 
       // Bring the daemon side back up at the same pipe name.
       sessionPipe = createMockSessionPipe(SESSION_ID, AUTH_TOKEN);
@@ -1053,7 +1041,7 @@ describe('DaemonClient', () => {
       expect(client.writeToSession(SESSION_ID, 'live')).toBe(true);
 
       await sessionPipe.stop();
-      await new Promise((r) => setTimeout(r, 50));
+      await vi.waitFor(() => expect(client.isSessionPipeWritable(SESSION_ID)).toBe(false), { timeout: 10_000 });
 
       expect(client.writeToSession(SESSION_ID, 'after-close')).toBe(false);
       expect(client.isSessionPipeWritable(SESSION_ID)).toBe(false);
@@ -1215,11 +1203,9 @@ describe('DaemonClient — event subscription (#659, #858)', () => {
     await client.connect();
 
     // Push an id-less frame the way the daemon's broadcast does.
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(mockServer.sockets.size).toBeGreaterThan(0), { timeout: 10_000 });
     mockServer.sockets.forEach((s) => s.write(JSON.stringify({ type: 'title.changed', sessionId: 's1' }) + '\n'));
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(seen).toContainEqual(expect.objectContaining({ type: 'title.changed' }));
+    await vi.waitFor(() => expect(seen).toContainEqual(expect.objectContaining({ type: 'title.changed' })), { timeout: 10_000 });
   });
 
   it('retries a subscribe the daemon rejected, instead of going event-blind', async () => {
@@ -1302,7 +1288,7 @@ describe('DaemonClient — event subscription (#659, #858)', () => {
     rejectHandshake = false;
     expect(await client.connect()).toBe(true);
     await waitFor(() => methods.length >= 4);
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    await deliberateSleep(350, 'negative: no further subscribe calls after the four expected');
 
     expect(methods).toEqual([
       'daemon.events.subscribe',
@@ -1325,7 +1311,7 @@ describe('DaemonClient — event subscription (#659, #858)', () => {
 
     client = new DaemonClient(pipeName, AUTH_TOKEN);
     await client.connect();
-    await new Promise((r) => setTimeout(r, 600));
+    await deliberateSleep(600, 'negative: no retry storm follows a rejected identify');
 
     // Nothing threw, connect still succeeded, and no retry storm followed.
     expect(await client.rpc('daemon.ping')).toEqual({ status: 'ok' });

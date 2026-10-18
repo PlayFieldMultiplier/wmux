@@ -213,6 +213,10 @@ export const IPC = {
   //   2026-07-17). Renderer-only trust boundary.
   HOOKS_BRIDGE_STATUS: 'hooks:bridge:status',
   HOOKS_BRIDGE_INSTALL: 'hooks:bridge:install',
+  //   UPDATE — #2404, the Settings card's Update button: adds the hooks a newer
+  //   build expects to an existing install and rewrites only outdated wmux
+  //   entries. User-clicked, like INSTALL.
+  HOOKS_BRIDGE_UPDATE: 'hooks:bridge:update',
   //   ALLOW_WORKER_TOOLS — the Settings button that adds the minimal fan-out
   //   worker tool list to permissions.allow. User-clicked, like INSTALL.
   HOOKS_BRIDGE_ALLOW_WORKER_TOOLS: 'hooks:bridge:allow-worker-tools',
@@ -247,6 +251,7 @@ export const IPC = {
   ACCOUNT_ONBOARD_PREPARE: 'account:onboard:prepare',
   ACCOUNT_ADD: 'account:add',
   ACCOUNT_RENAME: 'account:rename',
+  ACCOUNT_SET_GROUP: 'account:set-group',
   ACCOUNT_REMOVE: 'account:remove',
   ACCOUNT_SET_BINDING: 'account:set-binding',
   ACCOUNT_CREDENTIAL_STATUS: 'account:credential-status',
@@ -475,6 +480,11 @@ export const IPC = {
   FACTORY_TASK_FOLDERS_USAGE: 'factory:taskFolders:usage',
   FACTORY_TASK_FOLDERS_CLEAN: 'factory:taskFolders:clean',
   TRACK_RECORD_CHANGED: 'trackRecord:changed',
+  // The Fleet approvals tab's Plan card (shared/planApproval.ts): Claude's
+  // ExitPlanMode dialogs, answered from the main window only.
+  PLAN_APPROVALS_LIST: 'planApprovals:list',
+  PLAN_APPROVALS_ANSWER: 'planApprovals:answer',
+  PLAN_APPROVALS_CHANGED: 'planApprovals:changed',
   // Git page ship button: the branch's status, commit / push / create PR
   GIT_SHIP_STATUS: 'gitShip:status',
   GIT_SHIP_COMMIT: 'gitShip:commit',
@@ -499,6 +509,10 @@ export const IPC = {
   ROOM_RESOLVE: 'room:resolve',
   ROOM_DECISION: 'room:decision',
   ROOM_ACTORS: 'room:actors',
+  // A photo on an owner card (the room's stored copy, as a data URL), and the
+  // composer's file picker for photos.
+  ROOM_ATTACHMENT: 'room:attachment',
+  ROOM_PICK_ATTACHMENTS: 'room:pick-attachments',
   DIALOG_PICK_FOLDER: 'dialog:pick-folder',
   // File system
   FS_READ_DIR: 'fs:read-dir',

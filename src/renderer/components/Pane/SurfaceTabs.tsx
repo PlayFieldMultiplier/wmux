@@ -26,6 +26,7 @@ import PaneActionsMenu, { PANE_ACTIONS_MENU_WIDTH, type PaneActionItem } from '.
 import { PANE_BROWSER_PROFILE_KEY, usePaneChromeProfileMenu } from './usePaneChromeProfileMenu';
 import { usePaneBrowserPolicyMenu } from './usePaneBrowserPolicyMenu';
 import { PANE_CONTINUE_ACCOUNT_KEY, usePaneContinueOnAccount } from './usePaneContinueOnAccount';
+import { usePaneClaudeRewind } from './usePaneClaudeRewind';
 import BrowserPolicyDialog from './BrowserPolicyDialog';
 import {
   bindingEnforcesModel, bindingEnforcesSkipPermissions, bindingSkipPermissionsFlag, type RoleBinding,
@@ -734,9 +735,12 @@ export default function SurfaceTabs({
   const continueAccount = usePaneContinueOnAccount({
     ptyId: activeSurfacePtyId,
     allowed: !readOnly,
+    workspaceId: workspace.id,
     openSubmenu: openContinueAccountMenu,
   });
   const reloadContinueAccount = continueAccount.reload;
+  // Open Claude's own Rewind picker (the hook gates itself to a terminal Claude).
+  const claudeRewindItems = usePaneClaudeRewind({ ptyId: activeSurfacePtyId, allowed: !readOnly });
   useEffect(() => {
     if (menu !== 'main') return;
     reloadChromeProfiles();
@@ -808,6 +812,7 @@ export default function SurfaceTabs({
       onSelect: startPaneRename,
     },
     ...continueAccount.mainItems,
+    ...claudeRewindItems,
     ...(canLinkRemote ? [{
       key: 'link-remote-pane',
       label: t('a2aLink.menu'),
@@ -857,7 +862,7 @@ export default function SurfaceTabs({
   ].filter((item) => !shadow || !(HIDDEN_ON_SHADOW.has(item.key) || item.key.startsWith('snap-'))), [
     t, onSplitHorizontal, onSplitVertical, onAddBrowser, newBrowserLabel, onAddPrivateBrowser, chromeProfile.mainItems, browserPolicy.mainItems, onAddRemote,
     onSplitHorizontalRemote, onSplitVerticalRemote, startPaneRename,
-    menuTabSurface, startRename, canLinkRemote, paneMuted, togglePaneMuted, continueAccount.mainItems,
+    menuTabSurface, startRename, canLinkRemote, paneMuted, togglePaneMuted, continueAccount.mainItems, claudeRewindItems,
     stashChord, stashDisabled, stashTooltip, stashThisPane, isZoomed, toggleZoom,
     layoutTemplates, shadow,
   ]);
@@ -1227,6 +1232,7 @@ export default function SurfaceTabs({
         ptyId={surfaces.find((sf) => sf.id === activeSurfaceId)?.ptyId}
         compact={usageLimitCompact}
         readOnly={readOnly}
+        workspaceId={workspace.id}
       />
       {supervision && (
         <span

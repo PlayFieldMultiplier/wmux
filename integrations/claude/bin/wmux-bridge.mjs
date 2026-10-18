@@ -47,7 +47,8 @@ const HOOK_TIMEOUT_MS = 2000; // hard cap so we never slow Claude
 //   0.3.0 — suffix-isolated lifecycle routing and bridge state.
 //   0.5.0 — `--context` mode (HQ brain UserPromptSubmit additionalContext).
 //   0.6.0 — `--context` mode honors a `block` (exit 2 discards the prompt).
-const BRIDGE_VERSION = '0.6.0';
+//   0.7.0 — `Notification` (permission_prompt only) → agent.awaiting_input.
+const BRIDGE_VERSION = '0.7.0';
 
 // A2 (2026-05-29 user dogfood: 8 connect-errors during a brief main-process
 // restart / handler-swap window): retry a TRANSIENT connect failure a few
@@ -103,7 +104,15 @@ const HOOK_TO_KIND = {
   // so the pane reads "needs you" even when the screen detector misses the
   // row. Exit 0 with empty stdout is "no decision": the dialog stays up and the
   // human answers it. Nothing on this path may ever write stdout.
+  // The daemon holds it as TENTATIVE: Claude fires it for dialogs nobody ever
+  // sees too (decided by another hook, auto-denied, answered at once).
   PermissionRequest: 'agent.awaiting_input',
+  // Claude Code's notification. Only `notification_type: 'permission_prompt'`
+  // is forwarded (main() drops every other type): a permission prompt that has
+  // waited, unanswered, for about six seconds. That is the daemon's firm "needs
+  // you" for a permission dialog. Registered at matcher `permission_prompt`, so
+  // no other type spawns this bridge in the first place.
+  Notification: 'agent.awaiting_input',
 };
 
 // Determine the signal kind for a PostToolUse hook. AskUserQuestion completing
@@ -1102,10 +1111,12 @@ async function main() {
   // waited on. A headless run nested in a pane inherits WMUX_PTY_ID, so it
   // would mark the HOST pane "needs you". Only an interactive session can be
   // blocked on a human.
-  if (hookName === 'PermissionRequest') {
+  // The permission Notification follows the same rule: only an interactive
+  // session has a prompt on a screen.
+  if (hookName === 'PermissionRequest' || hookName === 'Notification') {
     const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
     if (!entrypoint || !INTERACTIVE_ENTRYPOINTS.has(entrypoint)) {
-      logEvent('permission-request-skipped', { reason: 'headless', entrypoint: entrypoint ?? null });
+      logEvent(hookName === 'Notification' ? 'notification-skipped' : 'permission-request-skipped', { reason: 'headless', entrypoint: entrypoint ?? null });
       return;
     }
   }
@@ -1142,6 +1153,13 @@ async function main() {
   // Empty stdin is allowed for SessionStart per Claude Code spec.
   if (payload === null && hookName !== 'SessionStart') {
     logEvent('empty-stdin', { hook: hookName });
+    return;
+  }
+  // A notification other than a waiting permission prompt (idle, auth,
+  // elicitation…) says nothing about a permission dialog. Keyed on the type
+  // alone, never on the message text.
+  if (hookName === 'Notification' && !(payload && payload.notification_type === 'permission_prompt')) {
+    logEvent('skip-notification', { type: payload && typeof payload.notification_type === 'string' ? payload.notification_type : null });
     return;
   }
   if (entrypointClass === 'unknown' && payload) {

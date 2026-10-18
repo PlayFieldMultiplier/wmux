@@ -27,7 +27,9 @@
 // approved skills by name and description and `skill_read` returns an
 // approved body; a worker it starts in a worktree gets copies of the approved
 // skills in its `.claude/skills/bot-<name>/`, excluded from git (a research
-// worker's scratch folder gets none).
+// worker's scratch folder gets none), each front matter written again from its
+// parsed fields (main/factory/skillFrontmatter.ts), never copied as the bot
+// wrote it.
 //
 // A bot writes and reads only its own skills; main takes the bot from the
 // token's binding and builds every path itself — a call never names a path.
@@ -69,11 +71,14 @@ export const SKILL_LIMITS = {
   DIFF_MAX: 7000,
 } as const;
 
-/** A skill's name: a lowercase slug — no separator, no dot, so never `..`. */
-export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** A skill's name: a lowercase slug — no separator, no dot, so never `..`
+ *  — and never a Windows device name (con, prn, aux, nul, com0-9, lpt0-9),
+ *  which no folder on Windows can be called. */
+export const SKILL_NAME_RE = /^(?!(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$)[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** A reference file's name: a slug with a .md or .txt extension. */
-export const SKILL_REFERENCE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\.(md|txt)$/;
+/** A reference file's name: a slug with a .md or .txt extension, whose
+ *  stem is never a Windows device name (`con.md` is reserved too). */
+export const SKILL_REFERENCE_NAME_RE = /^(?!(?:con|prn|aux|nul|com[0-9]|lpt[0-9])\.)[a-z0-9][a-z0-9_-]{0,63}\.(md|txt)$/;
 
 /** `MAJOR.MINOR.PATCH`. */
 export const SKILL_VERSION_RE = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/;
@@ -148,42 +153,6 @@ export interface SkillFrontmatter {
   name: string;
   description: string;
   version: string;
-}
-
-/** The front matter of a SKILL.md: `---`, one `key: value` line per key
- *  (exactly SKILL_FRONTMATTER_KEYS, each once; a value may be quoted), `---`.
- *  Returns the fields and the body after it, or why not. Pure. */
-export function parseSkillFrontmatter(content: string): { ok: true; frontmatter: SkillFrontmatter; body: string } | { ok: false; error: string } {
-  const text = content.replace(/^\uFEFF/, '');
-  const lines = text.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') return { ok: false, error: 'SKILL.md starts with a --- front matter line' };
-  const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
-  if (end < 0) return { ok: false, error: 'the front matter has no closing --- line' };
-  const fields: Record<string, string> = {};
-  for (const line of lines.slice(1, end)) {
-    if (!line.trim()) continue;
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line);
-    if (!m) return { ok: false, error: `front matter line is not "key: value": ${line.slice(0, 60)}` };
-    const key = m[1];
-    if (!(SKILL_FRONTMATTER_KEYS as readonly string[]).includes(key)) {
-      return { ok: false, error: `front matter key ${key} is not one of ${SKILL_FRONTMATTER_KEYS.join(', ')}` };
-    }
-    if (key in fields) return { ok: false, error: `front matter key ${key} is given twice` };
-    let value = m[2].trim();
-    if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith('\'') && value.endsWith('\'')))) value = value.slice(1, -1);
-    fields[key] = value;
-  }
-  for (const key of SKILL_FRONTMATTER_KEYS) {
-    if (!fields[key]) return { ok: false, error: `front matter needs ${key}` };
-  }
-  if (!SKILL_NAME_RE.test(fields.name)) return { ok: false, error: 'front matter name is a lowercase slug (a-z, 0-9, -)' };
-  if (fields.description.length > SKILL_LIMITS.DESCRIPTION_MAX) return { ok: false, error: `description is at most ${SKILL_LIMITS.DESCRIPTION_MAX} characters` };
-  if (!SKILL_VERSION_RE.test(fields.version)) return { ok: false, error: 'version is MAJOR.MINOR.PATCH (1.0.0)' };
-  return {
-    ok: true,
-    frontmatter: { name: fields.name, description: fields.description, version: fields.version },
-    body: lines.slice(end + 1).join('\n'),
-  };
 }
 
 /** a > b for two SKILL_VERSION_RE versions. Pure. */

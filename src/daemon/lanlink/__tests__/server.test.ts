@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,6 +11,7 @@ import { FrameReader, encodeFrame, type FrameType } from '../wire';
 import { ReconnectInitiator } from '../pairing';
 import { AeadSealer, AeadOpener } from '../aead';
 import type { InboxRecord } from '../../../shared/lanlink';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // ── in-memory cross-wired socket pair ─────────────────────────────────────────
 class FakeSocket extends EventEmitter {
@@ -137,7 +138,7 @@ async function makeServer(onPeerPersist?: () => void): Promise<Harness> {
       },
     },
   });
-  await delay(30); // let the reconcile chain create the server + capture onConn
+  await vi.waitFor(() => expect(onConn).not.toBeNull(), { timeout: 5_000 }); // the reconcile chain creates the server + captures onConn
   return { server, onConn: (s) => onConn!(s), serverPeers, appended, nudges };
 }
 
@@ -258,7 +259,7 @@ describe('LanLinkServer — inbound responder state machine', () => {
     // order cost an extra whole-store write on every connection close — which is
     // every single message on the sendToPeer path.
     ch.clientSock.destroy();
-    await delay(20);
+    await deliberateSleep(20, 'negative: closing the connection costs no extra store write');
     expect(writes - before).toBe(N);
     h.server.dispose();
     expect(writes - before).toBe(N);
@@ -271,7 +272,7 @@ describe('LanLinkServer — inbound responder state machine', () => {
     const result = await doPair(h, clientPeers, '123456');
     const ch = await openAeadChannel(h, result.peerUuid, clientPeers.secretOf(result.peerUuid)!);
     ch.sendRaw({ kind: 'a2a.task.send', peerName: 'B', text: 'rm -rf', senderSeq: 1, execute: true });
-    await delay(40);
+    await deliberateSleep(40, 'negative: an execute kind never reaches the inbox');
     expect(h.appended.length).toBe(0); // never reaches the inbox
     h.server.dispose();
   });
@@ -283,7 +284,7 @@ describe('LanLinkServer — inbound responder state machine', () => {
     const result = await doPair(h, clientPeers, '123456');
     const ch = await openAeadChannel(h, result.peerUuid, clientPeers.secretOf(result.peerUuid)!);
     ch.sendRaw({ kind: 'msg.text', peerName: 'B', text: 'x', senderSeq: 1, file: { bytes: 'AAAA' } });
-    await delay(40);
+    await deliberateSleep(40, 'negative: a file payload never reaches the inbox');
     expect(h.appended.length).toBe(0);
     h.server.dispose();
   });
@@ -296,12 +297,11 @@ describe('LanLinkServer — inbound responder state machine', () => {
     const secret = clientPeers.secretOf(result.peerUuid)!;
     const ch1 = await openAeadChannel(h, result.peerUuid, secret);
     ch1.sendRaw({ kind: 'msg.text', peerName: 'B', text: 'first', senderSeq: 1 });
-    await delay(40);
-    expect(h.appended.length).toBe(1);
+    await vi.waitFor(() => expect(h.appended.length).toBe(1), { timeout: 5_000 });
     // fresh connection, SAME senderSeq → dropped
     const ch2 = await openAeadChannel(h, result.peerUuid, secret);
     ch2.sendRaw({ kind: 'msg.text', peerName: 'B', text: 'replay', senderSeq: 1 });
-    await delay(40);
+    await deliberateSleep(40, 'negative: a replayed senderSeq is dropped');
     expect(h.appended.length).toBe(1); // still 1
     h.server.dispose();
   });
@@ -311,9 +311,8 @@ describe('LanLinkServer — inbound responder state machine', () => {
     const [clientSock, serverSock] = pair();
     h.onConn(serverSock);
     clientSock.write(encodeFrame(0x10, Buffer.alloc(40)));
-    await delay(40);
+    await vi.waitFor(() => expect(serverSock.destroyed).toBe(true), { timeout: 5_000 });
     expect(h.appended.length).toBe(0);
-    expect(serverSock.destroyed).toBe(true);
     h.server.dispose();
   });
 
@@ -329,8 +328,7 @@ describe('LanLinkServer — inbound responder state machine', () => {
     h.onConn(serverSock);
     const recon = new ReconnectInitiator(result.peerUuid, secret);
     clientSock.write(encodeFrame(0x04, recon.hello()));
-    await delay(40);
-    expect(serverSock.destroyed).toBe(true);
+    await vi.waitFor(() => expect(serverSock.destroyed).toBe(true), { timeout: 5_000 });
     h.server.dispose();
   });
 

@@ -95,7 +95,6 @@ describe.skipIf(process.platform === 'win32')('agent probe under a Finder-launch
     const { resolveLoginShellPath } = await import('../../../shared/execEnv');
     expect(await resolveLoginShellPath()).toBeNull();
     const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(() => process.kill(pid, 0)).toThrow();
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 10_000 });
   }, 10_000);
 });

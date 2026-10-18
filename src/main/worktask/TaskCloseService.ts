@@ -61,19 +61,35 @@ export type CloseTaskResult =
 export interface TaskCloseServiceOptions {
   daemon: CloseDaemonPort;
   worktrees: TaskWorktreeManager;
-  /** Stops the panes running inside the worktree; called only after the unpushed and dirty checks pass. */
-  stopPanesIn?: (worktreePath: string) => Promise<void>;
+  /** Stops the panes running inside the worktree; called only after the unpushed and dirty checks pass.
+   *  Answers the sessions it stopped, when it knows them. */
+  stopPanesIn?: (worktreePath: string) => Promise<void | string[]>;
+  /** The task closed after its worktree's panes were stopped (`sessionIds`):
+   *  its agent is gone (agentGoneFacts.ts). Not called for a close-only
+   *  task, whose panes nothing stopped. */
+  panesStopped?: (taskId: string, sessionIds: string[]) => void;
+  /** Removes the task's relay repository (task_push/task_fetch); called on every close. */
+  removeRelay?: (taskId: string) => void | Promise<void>;
+  /** The commit task_push last published for the task (main's record), or
+   *  null: a worktree whose HEAD is that commit counts as pushed. */
+  pushedHead?: (taskId: string) => string | null;
 }
 
 export class TaskCloseService {
   private readonly daemon: CloseDaemonPort;
   private readonly worktrees: TaskWorktreeManager;
-  private readonly stopPanesIn?: (worktreePath: string) => Promise<void>;
+  private readonly stopPanesIn?: (worktreePath: string) => Promise<void | string[]>;
+  private readonly panesStopped?: (taskId: string, sessionIds: string[]) => void;
+  private readonly removeRelay?: (taskId: string) => void | Promise<void>;
+  private readonly pushedHead?: (taskId: string) => string | null;
 
   constructor(opts: TaskCloseServiceOptions) {
     this.daemon = opts.daemon;
     this.worktrees = opts.worktrees;
     this.stopPanesIn = opts.stopPanesIn;
+    this.panesStopped = opts.panesStopped;
+    this.removeRelay = opts.removeRelay;
+    this.pushedHead = opts.pushedHead;
   }
 
   async closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
@@ -87,7 +103,8 @@ export class TaskCloseService {
     }
 
     // ⓪ upstream/ahead 검사(CX3): 커밋됐지만 push 안 된 산출물이 있으면 진행 중단.
-    const ahead = await this.aheadOfUpstream(input.worktreePath);
+    // task_push sets no upstream: a HEAD that is the commit it last published counts as pushed.
+    const ahead = (await this.headIsPushed(taskId, input.worktreePath)) ? { kind: 'clean' as const } : await this.aheadOfUpstream(input.worktreePath);
     if (ahead.kind === 'ahead') {
       return {
         ok: false,
@@ -112,11 +129,18 @@ export class TaskCloseService {
     if (!input.repoRoot || !input.repoHash) {
       return { ok: false, taskId, reason: 'error', error: 'close: the task is missing repoRoot/repoHash (incomplete worktree record).' };
     }
+    const stopped: { ids: string[] | null } = { ids: null };
+    const stopPanesIn = this.stopPanesIn;
     const removed = await this.worktrees.removeWorktree(
       input.repoRoot,
       input.repoHash,
       input.worktreePath,
-      this.stopPanesIn,
+      stopPanesIn
+        ? async (worktreePath) => {
+          const ids = await stopPanesIn(worktreePath);
+          stopped.ids = Array.isArray(ids) ? ids : null;
+        }
+        : undefined,
     );
     if (!removed.ok) {
       if (removed.preserved) {
@@ -141,6 +165,13 @@ export class TaskCloseService {
       // remove는 이미 성립(clean이었으므로 산출물 유실 없음) — close 실패는
       // open+worktree 없음 상태로 남고 재시도 가능. 명시 에러.
       return { ok: false, taskId, reason: 'error', error: closed.error };
+    }
+    if (stopped.ids) {
+      try {
+        this.panesStopped?.(taskId, stopped.ids);
+      } catch {
+        // Best effort: the next liveness read records it.
+      }
     }
 
     // ③ meta dir(prompt.md) 삭제 — 실패는 비치명(정리 스캔 몫), 결과에 무영향.
@@ -169,6 +200,14 @@ export class TaskCloseService {
         // Lane F: the task ledger learns about the close now, not on the
         // next reconcile pass (an open row would hold the brain's Stop gate).
         await noteWorkTaskClosed(taskId);
+        // Queued, not awaited: the removal waits behind any relay call in
+        // flight (up to TASK_PUSH_TIMEOUT_MS per git call), longer than the
+        // caller's RPC timeout.
+        try {
+          void Promise.resolve(this.removeRelay?.(taskId)).catch(() => undefined);
+        } catch {
+          // Best-effort: a leftover relay is swept at the next start.
+        }
         return { ok: true, archivePending: res.archivePending === true };
       }
       return { ok: false, error: res?.error?.message ?? 'task.mission.close failed' };
@@ -186,6 +225,18 @@ export class TaskCloseService {
    *   - 검사 실패: 보수적으로 통과(clean 판정은 remove의 porcelain이 정본 —
    *     여기는 경고 게이트라 fail-open이 UX 손실뿐 데이터 손실 없음).
    */
+  /** Whether the worktree's HEAD is the commit task_push last published. */
+  private async headIsPushed(taskId: string, worktreePath: string): Promise<boolean> {
+    const pushed = this.pushedHead?.(taskId);
+    if (!pushed) return false;
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: worktreePath, timeout: 15000, env: getExecEnv() });
+      return stdout.trim().toLowerCase() === pushed.toLowerCase();
+    } catch {
+      return false;
+    }
+  }
+
   private async aheadOfUpstream(
     worktreePath: string,
   ): Promise<{ kind: 'clean' } | { kind: 'ahead' | 'no-upstream-with-commits'; count: number }> {

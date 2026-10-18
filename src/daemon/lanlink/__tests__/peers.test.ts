@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PeerStore, isPeerFile, PEER_BURN_THRESHOLD, PEER_CAP, type PeerStoreOptions } from '../peers';
 import type { PairResult } from '../pairing';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // Test seam: skip the win32 owner-DACL rewrite.
 const seam: PeerStoreOptions = {
@@ -416,8 +417,7 @@ describe('peers — per-peer store', () => {
         const afterFail = writes;
         hardenOk = true;
         // No further noteSeen and no dispose: the retry timer alone has to settle it.
-        await new Promise((r) => setTimeout(r, 80));
-        expect(writes).toBeGreaterThan(afterFail);
+        await vi.waitFor(() => expect(writes).toBeGreaterThan(afterFail), { timeout: 10_000 });
         expect(new PeerStore(dir, seam).get('u1')!.lastSeenAt).toBe(s.get('u1')!.lastSeenAt);
         s.dispose();
       } finally {
@@ -451,7 +451,7 @@ describe('peers — per-peer store', () => {
       const afterPair = writes();
       s.noteSeen('u1');
       s.noteSeen('u1'); // a second refresh must not arm a second timer
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'negative: a second refresh does not arm a second write');
       expect(writes()).toBe(afterPair + 1);
       s.dispose();
     });

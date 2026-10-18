@@ -340,8 +340,7 @@ describe.skipIf(process.platform === 'win32')('SshTunnel', () => {
     advance(1_001);
     // After it, a fresh tunnel is started.
     const next = f('wmux-ssh://h1/api/config').catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(children).toHaveLength(2);
+    await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 5_000 });
     children[1].die('Permission denied (publickey).\n');
     await next;
   });
