@@ -11,6 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { EmptyLeafFunnel } from '../EmptyLeafFunnel';
 import { useStore } from '../../../stores';
 import { createWorkspace } from '../../../../shared/types';
+import { ptyLifecycle } from '../../../hooks/ptyLifecycle';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -83,5 +84,20 @@ describe('EmptyLeafFunnel — binding the created pty', () => {
     await act(async () => { settle[0]({ id: 'pty-late' }); });
     expect(dispose).toHaveBeenCalledWith('pty-late');
     expect(leaf()?.surfaces.map((s) => s.ptyId)).toEqual(['pty-other']);
+  });
+
+  it('a refused create is not fired again by a re-run, only after Retry (#2398)', async () => {
+    create.mockImplementationOnce(() => Promise.reject(new Error('[RESOURCE_EXHAUSTED] session cap reached')));
+    act(() => root.render(createElement(EmptyLeafFunnel)));
+    await act(async () => { await Promise.resolve(); });
+    expect(useStore.getState().ptyCreateByKey[paneId]?.state).toBe('createFailed');
+    act(() => useStore.setState({ paneGate: 'pending' }));
+    act(() => useStore.setState({ paneGate: 'ready' }));
+    expect(create).toHaveBeenCalledTimes(1);
+    // The pane's Retry.
+    act(() => ptyLifecycle.clearRefusal(paneId));
+    expect(create).toHaveBeenCalledTimes(2);
+    await act(async () => { settle[0]({ id: 'pty-retried' }); });
+    expect(leaf()?.surfaces.map((s) => s.ptyId)).toEqual(['pty-retried']);
   });
 });

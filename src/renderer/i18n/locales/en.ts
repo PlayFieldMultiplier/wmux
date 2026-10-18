@@ -978,6 +978,9 @@ export const en = {
   'terminal.exitedBracket': '[Process exited with code {code}]',
   'terminal.catchingUp': 'catching up…',
   'terminal.staleScreen': 'screen may be stale — will retry',
+  'terminal.reattaching': 'reattaching…',
+  'terminal.createFailed': 'This terminal could not start.',
+  'terminal.retryCreate': 'Try again',
   'retention.migratedNotice': 'This update pauses rendering for hidden panes (everything keeps running; panes catch up when shown). You can turn it off in Settings → Terminal.',
   'retention.migratedNoticeTurnOff': 'Turn off',
   // X8 — in-pane supervised-restart marker. The trailing hint is the Ctrl+C

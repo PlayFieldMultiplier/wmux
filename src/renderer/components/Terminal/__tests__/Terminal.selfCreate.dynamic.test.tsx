@@ -161,3 +161,51 @@ describe('Terminal self-create for a visible blank surface', () => {
     expect(seenPtyIds.at(-1)).toBe('pty-live');
   });
 });
+
+describe('Terminal self-create through the per-surface lifecycle (#2398)', () => {
+  const closeSurface = () => act(() => {
+    const leaf = useStore.getState().workspaces[0].rootPane;
+    if (leaf.type !== 'leaf') throw new Error('fixture expects a leaf root');
+    useStore.setState({ workspaces: [{ ...useStore.getState().workspaces[0], rootPane: { ...leaf, surfaces: [] } }] });
+  });
+
+  it('a remount mid-create joins the create instead of starting a second one', async () => {
+    mount();
+    act(() => root.render(<></>));
+    mount();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(cancelCreate).not.toHaveBeenCalled();
+    await act(async () => { resolveCreate({ id: 'pty-joined', cwd: 'D:\\proj' }); });
+    expect(order).toEqual(['bind:pty-joined', 'heal:pty-joined:D:\\proj']);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('closing the surface mid-create cancels it and disposes the late pty', async () => {
+    mount();
+    closeSurface();
+    act(() => root.render(<></>));
+    expect(cancelCreate).toHaveBeenCalledWith(surfaceId);
+    await act(async () => { resolveCreate({ id: 'pty-late' }); });
+    expect(order).toEqual([]);
+    expect(dispose).toHaveBeenCalledWith('pty-late');
+  });
+
+  it('a refused create shows its reason and Retry, and never fires again by itself', async () => {
+    create.mockImplementationOnce(() => Promise.reject(new Error('[RESOURCE_EXHAUSTED] session cap reached')));
+    mount();
+    await act(async () => { await Promise.resolve(); });
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('This terminal could not start.');
+    // A remount (or any re-run of the effect) does not fire it again.
+    act(() => root.render(<></>));
+    mount();
+    expect(create).toHaveBeenCalledTimes(1);
+    const retry = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Try again');
+    expect(retry).toBeDefined();
+    act(() => { retry?.click(); });
+    expect(create).toHaveBeenCalledTimes(2);
+    await act(async () => { resolveCreate({ id: 'pty-retried' }); });
+    expect(order).toEqual(['bind:pty-retried']);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+});

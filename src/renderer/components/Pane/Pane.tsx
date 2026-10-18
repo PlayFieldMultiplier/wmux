@@ -8,6 +8,7 @@ import { destroyRemoteSessions, destroySurfaceRemoteSession } from '../../utils/
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { MAX_PANES_PER_WORKSPACE } from '../../stores/slices/paneSlice';
 import { useIpc } from '../../hooks/useIpc';
+import { ptyLifecycle } from '../../hooks/ptyLifecycle';
 import { driveFocusToTerminal } from '../../hooks/useActivePaneFocus';
 import { onTerminalRegistered, terminalRegistry } from '../../hooks/useTerminal';
 import { useStore } from '../../stores';
@@ -1617,8 +1618,25 @@ function SplitSurfaceView({
 }) {
   const chatViewEnabled = useStore((s) => s.chatViewEnabled);
   const updateRemoteSurfaceTitle = useStore((s) => s.updateRemoteSurfaceTitle);
+  const t = useT();
+  // #2398 — the empty-leaf funnel's create for this leaf, keyed by leaf id.
+  const leafCreate = useStore((s) => s.ptyCreateByKey?.[pane.id]);
 
   if (pane.surfaces.length === 0) {
+    if (leafCreate?.state === 'createFailed') {
+      // A refused create never fires again by itself: the reason, and Retry,
+      // which clears the refusal so the funnel creates once more.
+      return (
+        <div role="alert" className="flex-1 min-h-0 min-w-0 relative overflow-clip flex flex-col items-center justify-center gap-2 p-4 text-sm text-[var(--text-primary)]">
+          <p className="text-center break-words">{t('terminal.createFailed')}</p>
+          <p className="text-center break-words text-[var(--text-muted)]">{leafCreate.error}</p>
+          <button type="button" onClick={() => ptyLifecycle.clearRefusal(pane.id)}
+            className="rounded border border-[var(--border)] px-3 py-1">
+            {t('terminal.retryCreate')}
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="flex-1 min-h-0 min-w-0 relative overflow-clip flex items-center justify-center text-[var(--text-muted)] text-sm" {...tokenAttrs('textMuted', 'text')}>
         {emptyMessage}

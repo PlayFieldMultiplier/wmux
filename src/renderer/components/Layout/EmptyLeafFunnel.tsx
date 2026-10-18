@@ -14,7 +14,7 @@
 // activeWorkspaceId dep, paneGate 'ready' gate, version-skew guard, in-flight
 // ref, orphan guard, and project/split/browser seed branches all move verbatim.
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useStore } from '../../stores';
 import { useIpc } from '../../hooks/useIpc';
 import { maybeDelegateExternalBrowser } from '../../utils/browserPaneActions';
@@ -33,8 +33,13 @@ import {
 import type { Pane, PaneLeaf } from '../../../shared/types';
 import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import { isLeafReserved, useReservedLeavesVersion } from '../../utils/reservedLeaves';
+import { ptyLifecycle } from '../../hooks/ptyLifecycle';
 
 type LeafPane = PaneLeaf;
+
+/** The keys whose create was refused, as one comparable string. */
+const selectRefusedCreateKeys = (s: { ptyCreateByKey?: Record<string, { state: string }> }): string =>
+  Object.keys(s.ptyCreateByKey ?? {}).filter((k) => s.ptyCreateByKey?.[k].state === 'createFailed').sort().join('|');
 
 const collectEmptyLeaves = (pane: Pane): LeafPane[] => {
   if (pane.type === 'leaf') {
@@ -57,15 +62,9 @@ export function EmptyLeafFunnel() {
   const addSurface = useStore((s) => s.addSurface);
   // A released reservation re-runs the effect (reservedLeaves.ts).
   const reservedVersion = useReservedLeavesVersion();
-
-  // Panes with a pty.create in flight. Guards double-creation when the effect
-  // re-runs while an earlier run's create hasn't resolved yet — which happens
-  // EVERY multi-pane project-layout apply: the browser-leaf branch below
-  // mutates the store synchronously, re-rendering and re-running the effect
-  // mid-loop. (The old `cancelled` cleanup flag disposed the in-flight PTYs on
-  // any re-run, and since their one-shot seeds were already consumed, the
-  // re-run recreated them WITHOUT their startup commands — X5 dogfood S4c.)
-  const ptyCreateInFlightRef = useRef<Set<string>>(new Set());
+  // #2398 — the leaves whose create was refused. A refusal never re-fires by
+  // itself; the pane's Retry clears it, and that change re-runs the effect.
+  const refusedKey = useStore(selectRefusedCreateKeys);
 
   useEffect(() => {
     // Read the FULL active workspace fresh (getState) — this component
@@ -105,9 +104,19 @@ export function EmptyLeafFunnel() {
 
     for (const leaf of emptyLeaves) {
       const paneId = leaf.id;
-      if (ptyCreateInFlightRef.current.has(paneId)) continue;
+      // A pty.create in flight for this leaf (ptyLifecycle, keyed by leaf id).
+      // Guards double-creation when the effect re-runs while an earlier run's
+      // create hasn't resolved yet — which happens EVERY multi-pane
+      // project-layout apply: the browser-leaf branch below mutates the store
+      // synchronously, re-rendering and re-running the effect mid-loop. (The
+      // old `cancelled` cleanup flag disposed the in-flight PTYs on any re-run,
+      // and since their one-shot seeds were already consumed, the re-run
+      // recreated them WITHOUT their startup commands — X5 dogfood S4c.)
+      if (ptyLifecycle.isInFlight(paneId)) continue;
       // A fan-out spawn is filling this leaf with its worker (reservedLeaves.ts).
       if (isLeafReserved(paneId)) continue;
+      // Refused before: waits for the pane's Retry (#2398).
+      if (ptyLifecycle.isRefused(paneId)) continue;
       // Issues #173/#174/#175: split-inherited cwd > profile.startupCwd >
       // global startupDirectory > homedir (main-side fallback). The seed is
       // consumed immediately so a later effect re-run (e.g. PTY create failed
@@ -124,7 +133,7 @@ export function EmptyLeafFunnel() {
         if (maybeDelegateExternalBrowser(projectSeed.url)) continue;
         // Browser leaf (X3 surface) — no PTY at all. NOTE: this synchronous
         // store write re-renders and re-runs this effect before the loop's
-        // other iterations' creates resolve — see ptyCreateInFlightRef above.
+        // other iterations' creates resolve — see the in-flight check above.
         useStore.getState().addBrowserSurface(paneId, projectSeed.url, undefined, wsId);
         continue;
       }
@@ -135,7 +144,6 @@ export function EmptyLeafFunnel() {
         startupDirectory: storeState.startupDirectory,
       });
       if (storeState.splitCwdSeed[paneId]) storeState.clearSplitCwdSeed(paneId);
-      ptyCreateInFlightRef.current.add(paneId);
       // X8: a supervised seed (restart set, terminal leaf only) becomes an
       // exec-style supervised create — the command runs as the pane's ROOT
       // process under the daemon's PaneSupervisor, NOT typed in as an
@@ -184,58 +192,58 @@ export function EmptyLeafFunnel() {
         // in renderer tests that stub only the APIs they exercise.
         void window.electronAPI?.metadata?.setRole?.(paneId, wsId, projectSeed.role);
       }
-      void ipcInvoke<{ id: string; shell?: string; cwd?: string }>(() =>
-        window.electronAPI.pty.create(
-          withRoleBinding(
-            withWorkspaceProfile(
-              withDefaultShell(
-                // 순수 빈 리프(사용자가 split으로 연 셸)만 user-shell로 스탬프해 env
-                // 투과. project seed(seedCommand 존재 — initialCommand/exec 브랜치)는
-                // 자동화라 미스탬프 → main이 fail-closed로 gated 처리.
-                {
-                  workspaceId: wsId,
-                  cwd: startupCwd,
-                  ...bootstrapOptions,
-                  ...(seedCommand === undefined ? { spawnKind: 'user-shell' as const } : {}),
-                },
-                useStore.getState().defaultShell,
+      // A refused create (toast surfaced by useIpc) leaves the leaf refused.
+      void ptyLifecycle.ensure<{ id: string; shell?: string; cwd?: string }>(paneId, {
+        create: () => ipcInvoke<{ id: string; shell?: string; cwd?: string }>(() =>
+          window.electronAPI.pty.create(
+            withRoleBinding(
+              withWorkspaceProfile(
+                withDefaultShell(
+                  // 순수 빈 리프(사용자가 split으로 연 셸)만 user-shell로 스탬프해 env
+                  // 투과. project seed(seedCommand 존재 — initialCommand/exec 브랜치)는
+                  // 자동화라 미스탬프 → main이 fail-closed로 gated 처리.
+                  {
+                    workspaceId: wsId,
+                    cwd: startupCwd,
+                    ...bootstrapOptions,
+                    ...(seedCommand === undefined ? { spawnKind: 'user-shell' as const } : {}),
+                  },
+                  useStore.getState().defaultShell,
+                ),
+                activeWorkspace.profile,
               ),
-              activeWorkspace.profile,
-            ),
-            seedRoleBinding,
-            seedRoleName,
+              seedRoleBinding,
+              seedRoleName,
+            )
           )
-        )
-      ).then((result) => {
-        ptyCreateInFlightRef.current.delete(paneId);
-        if (!result.ok) return; // toast surfaced by useIpc
-        const created = result.data;
-        // Orphan guard, replacing the old effect-cleanup `cancelled` flag:
-        // adopt the PTY only if the target pane still exists in this
-        // workspace AND is still empty. A live-tree check survives benign
-        // effect re-runs (which the cancelled flag did not) while keeping
-        // the protection against leaking a PTY into a closed/replaced pane.
-        const liveWs = useStore.getState().workspaces.find((w) => w.id === wsId);
-        const livePane = liveWs ? findLiveLeaf(liveWs.rootPane, paneId) : null;
-        if (!livePane || livePane.surfaces.length > 0) {
-          window.electronAPI.pty.dispose(created.id);
-          return;
-        }
-        const shellName = created.shell ? shellDisplayName(created.shell) : 'Terminal';
-        // v2 RCA fix (axis A): the immediate persist now lives INSIDE addSurface
-        // (surfaceSlice centralization) so every binding call site gets it.
-        addSurface(paneId, created.id, shellName, created.cwd || '');
-        // Set initial CWD in workspace metadata from first pane
-        if (created.cwd) {
-          const currentMeta = useStore.getState().workspaces.find((w) => w.id === wsId)?.metadata;
-          if (!currentMeta?.cwd) {
-            useStore.getState().updateWorkspaceMetadata(wsId, { cwd: created.cwd });
+        ),
+        bind: (created) => {
+          // Orphan guard, replacing the old effect-cleanup `cancelled` flag:
+          // adopt the PTY only if the target pane still exists in this
+          // workspace AND is still empty. A live-tree check survives benign
+          // effect re-runs (which the cancelled flag did not) while keeping
+          // the protection against leaking a PTY into a closed/replaced pane.
+          // Returning false has ptyLifecycle dispose it.
+          const liveWs = useStore.getState().workspaces.find((w) => w.id === wsId);
+          const livePane = liveWs ? findLiveLeaf(liveWs.rootPane, paneId) : null;
+          if (!livePane || livePane.surfaces.length > 0) return false;
+          const shellName = created.shell ? shellDisplayName(created.shell) : 'Terminal';
+          // v2 RCA fix (axis A): the immediate persist now lives INSIDE addSurface
+          // (surfaceSlice centralization) so every binding call site gets it.
+          addSurface(paneId, created.id, shellName, created.cwd || '');
+          // Set initial CWD in workspace metadata from first pane
+          if (created.cwd) {
+            const currentMeta = useStore.getState().workspaces.find((w) => w.id === wsId)?.metadata;
+            if (!currentMeta?.cwd) {
+              useStore.getState().updateWorkspaceMetadata(wsId, { cwd: created.cwd });
+            }
           }
-        }
+          return true;
+        },
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- addSurface & ipcInvoke are stable; activeWorkspaceId + emptyLeafIdsKey + paneGate are the meaningful triggers
-  }, [activeWorkspaceId, emptyLeafIdsKey, paneGate, reservedVersion]);
+  }, [activeWorkspaceId, emptyLeafIdsKey, paneGate, reservedVersion, refusedKey]);
 
   return null;
 }
