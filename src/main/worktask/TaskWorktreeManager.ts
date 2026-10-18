@@ -193,6 +193,23 @@ export type RemoveResult =
     };
 
 /**
+ * Waits between the attempts of a removal refused by a lock (#2388): about
+ * 4 s in all, which is the exit wait given to the stopped panes' shells.
+ */
+export const REMOVE_RETRY_DELAYS_MS: readonly number[] = [250, 500, 750, 1000, 1500];
+
+/**
+ * A `git worktree remove` failure that a process still leaving the folder
+ * explains: Windows refuses to delete a directory that is some process's
+ * current directory, or a file that is still open, and git reports it as
+ * "Permission denied" (`EACCES`) or "Device or resource busy" (`EBUSY`).
+ * Anything else (a dirty tree, an unknown worktree, a missing path) is final.
+ */
+export function isTransientRemoveFailure(message: string): boolean {
+  return /permission denied|resource busy|being used by another process|EBUSY|EACCES|EPERM/i.test(message);
+}
+
+/**
  * repo 단위 직렬 큐를 갖춘 worktree 매니저. 인스턴스는 프로세스 수명 동안 재사용
  * (repoHash → 뮤텍스 체인을 유지해야 하므로).
  */
@@ -207,8 +224,12 @@ export class TaskWorktreeManager {
    *  (the app installs its pre-commit secret check there). */
   private onCreated?: (repoRoot: string) => void;
 
-  constructor(opts?: { runGit?: RunGit; onCreated?: (repoRoot: string) => void }) {
+  /** Injectable wait between removal retries (tests). */
+  private readonly sleep: (ms: number) => Promise<void>;
+
+  constructor(opts?: { runGit?: RunGit; onCreated?: (repoRoot: string) => void; sleep?: (ms: number) => Promise<void> }) {
     this.onCreated = opts?.onCreated;
+    this.sleep = opts?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.runGit =
       opts?.runGit ??
       (async (args, cwd, runOpts) => {
@@ -695,11 +716,26 @@ export class TaskWorktreeManager {
         }
       }
 
-      try {
-        await this.runGit(['worktree', 'remove', ...(force ? ['--force'] : []), safePath], repoRoot);
-      } catch (err) {
-        // A process that outlived its pane can still hold files: keep the record so nothing is lost silently.
-        return { ok: false, error: `removeWorktree: git worktree remove failed: ${(err as Error).message}`, preserved: true };
+      // #2388: stopping the panes waits for their shells, not for everything
+      // the shells started. On Windows an agent process still winding down
+      // inside the folder (or one whose handles the OS has not released yet)
+      // makes the delete fail with "Permission denied" for a moment, so a
+      // removal refused that way is tried again a few times before the
+      // worktree is kept.
+      const removeArgs = ['worktree', 'remove', ...(force ? ['--force'] : []), safePath];
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.runGit(removeArgs, repoRoot);
+          break;
+        } catch (err) {
+          const message = (err as Error).message;
+          if (attempt < REMOVE_RETRY_DELAYS_MS.length && isTransientRemoveFailure(message)) {
+            await this.sleep(REMOVE_RETRY_DELAYS_MS[attempt]);
+            continue;
+          }
+          // A process that outlived its pane can still hold files: keep the record so nothing is lost silently.
+          return { ok: false, error: `removeWorktree: git worktree remove failed: ${message}`, preserved: true };
+        }
       }
       if (fs.existsSync(safePath)) {
         return { ok: false, error: 'removeWorktree: files were left behind in the worktree folder', preserved: true };

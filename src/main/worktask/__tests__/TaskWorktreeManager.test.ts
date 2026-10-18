@@ -355,15 +355,60 @@ describe('removeWorktree — beforeRemove runs only once removal is decided', ()
 });
 
 describe('removeWorktree — a failed removal keeps the worktree', () => {
-  it('reports preserved when git worktree remove fails after the panes were stopped', async () => {
-    const { TaskWorktreeManager } = await loadModule();
+  const noWait = async () => undefined;
+
+  it('reports preserved when git worktree remove keeps failing after the panes were stopped', async () => {
+    const { TaskWorktreeManager, REMOVE_RETRY_DELAYS_MS } = await loadModule();
+    let removes = 0;
     const git = makeGitFake((args) => {
-      if (args[0] === 'worktree' && args[1] === 'remove') throw new Error('Permission denied');
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        removes++;
+        throw new Error("error: failed to delete 'C:/wt/some': Permission denied");
+      }
       return { stdout: '' };
     });
-    const mgr = new TaskWorktreeManager({ runGit: git });
+    const mgr = new TaskWorktreeManager({ runGit: git, sleep: noWait });
     const res = await mgr.removeWorktree('/repo', 'hash1', '/wt/some', async () => undefined);
     expect(res).toMatchObject({ ok: false, preserved: true });
+    if (!res.ok) expect(res.error).toMatch(/Permission denied/);
+    expect(removes).toBe(REMOVE_RETRY_DELAYS_MS.length + 1);
+  });
+
+  // #2388: the stopped pane's process may still hold the folder for a moment.
+  it('a removal refused with Permission denied is tried again and succeeds once the folder is free', async () => {
+    const { TaskWorktreeManager } = await loadModule();
+    const waits: number[] = [];
+    let removes = 0;
+    const git = makeGitFake((args) => {
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        removes++;
+        if (removes < 3) throw new Error("error: failed to delete 'C:/wt/some': Permission denied");
+      }
+      return { stdout: '' };
+    });
+    const mgr = new TaskWorktreeManager({ runGit: git, sleep: async (ms) => { waits.push(ms); } });
+    const res = await mgr.removeWorktree('/repo', 'hash1', '/wt/some', async () => undefined);
+    expect(res).toEqual({ ok: true });
+    expect(removes).toBe(3);
+    expect(waits).toEqual([250, 500]);
+  });
+
+  it('any other removal failure is final: no retry', async () => {
+    const { TaskWorktreeManager } = await loadModule();
+    let removes = 0;
+    const git = makeGitFake((args) => {
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        removes++;
+        throw new Error("fatal: '/wt/some' is not a working tree");
+      }
+      return { stdout: '' };
+    });
+    const sleep = vi.fn(noWait);
+    const mgr = new TaskWorktreeManager({ runGit: git, sleep });
+    const res = await mgr.removeWorktree('/repo', 'hash1', '/wt/some', async () => undefined);
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    expect(removes).toBe(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 });
 
