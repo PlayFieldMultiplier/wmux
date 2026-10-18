@@ -218,9 +218,9 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
   const tracked = new Map<number, WinTracked>([[rootPid, { pid: rootPid, ...root }]]);
   /** Processes whose ppid names one of ours but that could not be identified. */
   const unidentified = new Map<number, string>();
-  /** A process of the table that exited before it could be opened while it
-   *  still had children there: they cannot be told from strangers any more
-   *  (nothing pins its pid), so the tree is not known whole. */
+  /** A process of the table that exited before it could be opened, or could
+   *  not be identified, while it had children there: they cannot be told
+   *  from strangers (nothing pins its pid), so the tree is not known whole. */
   const lostParents = new Set<number>();
   let released = false;
 
@@ -251,7 +251,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
         if ('failure' in opened) {
           // Its ppid names one of ours, pinned, so it is ours or an orphan
           // older than the process now holding that pid: unknown either way.
+          // Its children are not walked, so with any in the table the tree
+          // is not known whole even once it exits.
           unidentified.set(pid, `could not be identified: ${opened.failure}`);
+          if ((children.get(pid) ?? []).some((c) => !tracked.has(c))) lostParents.add(pid);
           continue;
         }
         // Older than its "parent": an orphan whose dead parent's pid went to
@@ -330,6 +333,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           if (exited(t)) continue;
           survivors.push({ pid: t.pid, reason: refused.get(t.pid) ?? 'still running', startTime: t.createdAt.toString() });
         }
+        for (const pid of lostParents) {
+          unidentified.delete(pid);
+          survivors.push({ pid, reason: 'it exited before its children could be identified; they may still run', unverified: true });
+        }
         // Still there and still not identified (one that exited meanwhile is
         // no longer a question).
         for (const [pid, reason] of unidentified) {
@@ -337,9 +344,6 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           if ('gone' in now) continue;
           if ('handle' in now) api.close(now.handle);
           survivors.push({ pid, reason });
-        }
-        for (const pid of lostParents) {
-          survivors.push({ pid, reason: 'it exited before its children could be identified; they may still run', unverified: true });
         }
         // The tree was still growing at the deadline: a child started last may
         // not have been seen.
@@ -397,11 +401,13 @@ const defaultPosixDeps: PosixTreeDeps = {
 /** Exported for tests, with fake {@link PosixTreeDeps}. */
 export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opts: CaptureOptions = {}): Promise<CapturedTree | null> {
   const sleep = opts.sleep ?? defaultSleep;
-  const send = (pid: number, sig: NodeJS.Signals): void => {
+  const send = (pid: number, sig: NodeJS.Signals): boolean => {
     try {
       deps.signal(pid, sig);
+      return true;
     } catch {
-      /* already gone */
+      /* already gone, or not ours to signal */
+      return false;
     }
   };
   let rows: PosixProcRow[];
@@ -417,6 +423,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   const targets = new Map<number, string>();
   let scanError: string | null = null;
   let complete = false;
+  const unfrozen: number[] = [];
   for (let round = 0; round < CAPTURE_ROUNDS; round++) {
     if (round > 0) {
       try {
@@ -433,7 +440,9 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       const row = byPid.get(pid);
       if (!row) continue;
       targets.set(pid, row.start);
-      send(pid, 'SIGSTOP');
+      // One that cannot be frozen (another user's, a setuid program) can
+      // still fork and exit, leaving a child the tree no longer leads to.
+      if (!send(pid, 'SIGSTOP')) unfrozen.push(pid);
       added++;
     }
     if (added === 0) {
@@ -444,6 +453,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   // Still finding new processes in the last round: one of them may have
   // forked before it was frozen, into a process group the kill misses.
   if (!complete && scanError === null) scanError = `the tree was still growing after ${CAPTURE_ROUNDS} scans`;
+  if (unfrozen.length > 0 && scanError === null) scanError = `process(es) ${unfrozen.join(', ')} could not be frozen`;
   let released = false;
   /** The captured pids still held by the processes captured (their start
    *  time unchanged), in capture order. A frozen process cannot exit, but

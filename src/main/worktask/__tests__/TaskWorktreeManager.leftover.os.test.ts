@@ -107,6 +107,31 @@ describe('the status is read again once the panes are stopped', () => {
     expect(fs.existsSync(dir)).toBe(true);
   });
 
+  it('compares a leftover with the commit the stopped panes made, not the one before', async () => {
+    const dir = leftover();
+    const later = 'b'.repeat(40);
+    const g = fakeGit({ removeFails: true });
+    const git = vi.fn(async (args: string[], cwd: string, opts?: RunGitOptions) => {
+      if (args[0] === 'rev-parse' && args.includes('HEAD') && stopped) return { stdout: `${later}\n`, stderr: '' };
+      return g.git(args, cwd, opts);
+    });
+    let stopped = false;
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    let locked = true;
+    const { mgr } = manager(git as unknown as ReturnType<typeof fakeGit>['git'], {
+      pendingRemovals: store,
+      removeTree: async (d) => {
+        if (locked) throw new Error('EBUSY');
+        fs.rmSync(d, { recursive: true, force: true });
+      },
+    });
+    expect(await mgr.removeWorktree(repo, 'hash1', dir, async () => { stopped = true; })).toMatchObject({ ok: false });
+    expect(store.get(dir)?.head).toBe(later);
+    locked = false;
+    expect(await mgr.finishPendingRemoval(dir)).toEqual({ ok: true });
+    expect(git.mock.calls.some(([a]) => a.includes('read-tree') && a.includes(later))).toBe(true);
+  });
+
   it('a worktree still clean after the stop is removed', async () => {
     const dir = leftover();
     const g = fakeGit();

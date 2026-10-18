@@ -789,6 +789,14 @@ export class TaskWorktreeManager {
           await this.forgetPending(safePath);
           return { ok: false, error: `removeWorktree: status check failed: ${(err as Error).message}`, preserved: true };
         }
+        // A commit the stopped panes made meanwhile is what the folder is
+        // clean against now.
+        const headNow = await this.headOf(safePath);
+        if (pending && headNow !== pending.head) {
+          if (headNow) pending.head = headNow;
+          else delete pending.head;
+          await this.rememberPending(pending);
+        }
       }
 
       let failure: string | null = null;

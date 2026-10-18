@@ -176,6 +176,18 @@ describe('captureTreeWin32', () => {
     if (!r.ok) expect(r.survivors.map((s) => s.pid)).toEqual([11]);
   });
 
+  it('reports the tree unverified when a child it could not identify has children of its own', async () => {
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, unopenable: true },
+      { pid: 12, ppid: 11, createdAt: 120n },
+    ]);
+    const tree = captureTreeWin32(10, f.api, { sleep: noWait })!;
+    const r = await tree.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toEqual([expect.objectContaining({ pid: 11, unverified: true })]);
+  });
+
   it('fails closed on a child it cannot identify', async () => {
     const f = fakeWin([
       { pid: 10, ppid: 1, createdAt: 100n },
@@ -253,6 +265,18 @@ describe('captureTreePosix', () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { stuck: [101] });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
     expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }] });
+  });
+
+  it('fails closed when a process of the tree cannot be frozen', async () => {
+    const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
+    const signal = f.deps.signal;
+    f.deps.signal = (pid, sig) => {
+      if (pid === 101 && sig === 'SIGSTOP') throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      signal(pid, sig);
+    };
+    const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 100 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors.map((x) => x.reason).join()).toMatch(/could not be frozen/);
   });
 
   it('fails closed when the tree is still growing after every capture round', async () => {
