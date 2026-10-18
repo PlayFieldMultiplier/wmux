@@ -19,14 +19,14 @@
  *      reconcile stage resets it (a valid multi-RPC pass may exceed 15s).
  */
 import { describe, it, expect } from 'vitest';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import ts from 'typescript';
 import { selectPcRailPersisted } from '../../../stores/selectors/pcRail';
+import { readSourceText } from '../../../../test-utils/sourceText';
 
 describe('AppLayout — axis A session-save invariants', () => {
   const appLayoutPath = path.join(__dirname, '..', 'AppLayout.tsx');
-  const source = fs.readFileSync(appLayoutPath, 'utf-8');
+  const source = readSourceText(appLayoutPath);
 
   function startupRegion(): string {
     const start = source.indexOf('// 앱 시작 시 세션 복원');

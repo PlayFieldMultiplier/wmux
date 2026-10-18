@@ -5,6 +5,7 @@ import os from 'node:os';
 
 import { StateWriter } from '../StateWriter';
 import type { DaemonState } from '../types';
+import { readSourceText } from '../../test-utils/sourceText';
 
 // X6 ② reboot-survival durability regression lock.
 //
@@ -104,7 +105,7 @@ describe('X6 ② reboot-survival durability', () => {
   const daemonIndexPath = path.join(__dirname, '..', 'index.ts');
 
   it('session:agent handler persists via saveImmediate, not saveDebounced', () => {
-    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const src = readSourceText(daemonIndexPath);
     const body = extractEventHandlerBody(src, 'session:agent');
     expect(body).toMatch(/stateWriter\.saveImmediate\(/);
     // The bug: this used to be saveDebounced. Lock it out.
@@ -116,7 +117,7 @@ describe('X6 ② reboot-survival durability', () => {
     // A screen-tier read is a row that looks like an agent's chrome. Output
     // quoting a banner on a recovered shell used to delete the recovery offer
     // and its exact binding, so the pill was gone after the next reconnect.
-    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const src = readSourceText(daemonIndexPath);
     const body = extractEventHandlerBody(src, 'session:agent');
     const guard = body.indexOf("if (slug && canonical && canonical.source !== 'screen') {");
     expect(guard).toBeGreaterThan(body.indexOf('const canonical = canonicalIdentityFor('));
@@ -132,7 +133,7 @@ describe('X6 ② reboot-survival durability', () => {
     // liveRecoveryHint drops the pair only when a session list is read while
     // the agent is alive; an agent launched and exited between two reads
     // would otherwise leave the old offer for the next reconnect.
-    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const src = readSourceText(daemonIndexPath);
     const idx = src.indexOf('agentProcessTracker.setStateChangeListener(');
     expect(idx).toBeGreaterThan(-1);
     const body = src.slice(idx, idx + 6000);

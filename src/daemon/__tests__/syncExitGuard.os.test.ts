@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
+import { readSourceText } from '../../test-utils/sourceText';
 
 // A4 — precise sync exit guard.
 //
@@ -15,7 +15,7 @@ import path from 'node:path';
 // main() at module load, which would lock the test process).
 describe('A4 — sync exit handler guard (source-level invariants)', () => {
   const daemonIndexPath = path.join(__dirname, '..', 'index.ts');
-  const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+  const src = readSourceText(daemonIndexPath);
 
   it('declares the dumpsCompleted module flag', () => {
     expect(src).toMatch(/let dumpsCompleted = false;/);

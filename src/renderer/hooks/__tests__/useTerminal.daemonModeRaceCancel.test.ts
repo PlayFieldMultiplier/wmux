@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
+import { readSourceText } from '../../../test-utils/sourceText';
 
 // Phase A — A6. The async scrollback.load() in useTerminal can resolve
 // AFTER daemon mode becomes active. Writing the stale .txt content into
@@ -15,7 +15,7 @@ import path from 'node:path';
 // checklist in docs/upgrade-v2.9.1.md.
 describe('A6 — useTerminal async restore race cancel (source-level)', () => {
   const hookPath = path.join(__dirname, '..', 'useTerminal.ts');
-  const src = fs.readFileSync(hookPath, 'utf-8');
+  const src = readSourceText(hookPath);
 
   it('imports isDaemonModeActive from the renderer daemon module', () => {
     expect(src).toMatch(

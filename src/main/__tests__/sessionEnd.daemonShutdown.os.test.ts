@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
+import { readSourceText } from '../../test-utils/sourceText';
 
 // Phase A — A5 source-level invariants for the Windows session-end
 // (WM_ENDSESSION) handler in src/main/index.ts.
@@ -13,7 +13,7 @@ import path from 'node:path';
 // an OS shutdown signal, neither of which a vitest process can reproduce.
 describe('A5 — session-end (WM_ENDSESSION) handler invariants', () => {
   const mainIndexPath = path.join(__dirname, '..', 'index.ts');
-  const src = fs.readFileSync(mainIndexPath, 'utf-8');
+  const src = readSourceText(mainIndexPath);
 
   function extractHandler(): string {
     const marker = 'async function onWindowsSessionEnd(';
