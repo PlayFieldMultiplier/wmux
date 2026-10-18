@@ -194,29 +194,37 @@ describe('the evidence stamp against a saved conversation of another agent', () 
     expect(p.writes).toBe(1);
   });
 
-  it('a binding stamped ahead of the clock settles in one write', () => {
+  it('a binding stamped ahead of the clock is left to win, with no write per hook', () => {
     // A hook's own timestamp, or a clock step back, can put the binding
-    // after `now`. Hook signals fire per tool use: the stamp must not be
-    // rewritten on each of them while the clock catches up.
+    // after `now`. Nothing seen yet is newer than it, and hook signals fire
+    // per tool use: no stamp may be invented past it, and none rewritten.
     const p = pane({
       lastDetectedAgent: 'codex',
       lastDetectedAgentEvidence: { source: 'process', at: 1 },
       resumeBinding: { agent: 'claude', ts: 62_000 },
     });
     p.hook('codex');
-    expect(p.writes).toBe(1);
-    expect(p.meta.lastDetectedAgentEvidence?.at ?? 0).toBeGreaterThan(62_000);
-    p.hook('codex');
     p.hook('codex');
     p.processEdge({ slug: 'codex', alive: true });
-    expect(p.writes).toBe(1);
+    expect(p.writes).toBe(0);
+    expect(p.meta.lastDetectedAgentEvidence?.at).toBe(1);
   });
 
-  it('a rename by a live agent is stamped after a conflicting binding', () => {
-    const p = pane({ lastDetectedAgent: 'claude', resumeBinding: { agent: 'claude', ts: 62_000 } });
-    p.processEdge({ slug: 'codex', alive: true });
-    expect(p.meta.lastDetectedAgent).toBe('codex');
-    expect(p.meta.lastDetectedAgentEvidence?.at ?? 0).toBeGreaterThan(62_000);
+  it('a cached hook authority older than the binding cannot outrank it', () => {
+    // Codex's hook was last seen 90 s ago (inside IDENTITY_TTL); a Claude
+    // binding was captured since. The stamp is when Codex was observed.
+    const p = pane({
+      lastDetectedAgent: 'codex',
+      lastDetectedAgentEvidence: { source: 'hook', at: 1 },
+      resumeBinding: { agent: 'claude', ts: 1_500 },
+    });
+    p.hook('codex', { ageMs: 90_000 });
+    expect(p.writes).toBe(0);
+    const renamed = pane({ lastDetectedAgent: 'claude', resumeBinding: { agent: 'claude', ts: 1_500 } });
+    renamed.hook('codex', { ageMs: 1_000 });
+    expect(renamed.meta.lastDetectedAgent).toBe('codex');
+    // Observed at 2000 - 1000 = 1000, before the binding.
+    expect(renamed.meta.lastDetectedAgentEvidence).toEqual({ source: 'hook', at: 1_000 });
   });
 
   it('a binding of the same agent, or an older one, needs no refresh', () => {

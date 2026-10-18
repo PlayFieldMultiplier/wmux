@@ -51,6 +51,13 @@ export interface CanonicalHookAuthority {
 export interface CanonicalAgentIdentity {
   slug: AgentSlug;
   source: 'hook' | 'process' | 'screen';
+  /**
+   * How long ago the deciding signal was seen, when it was not seen just now:
+   * set only for an uncorroborated hook, which may be an authority entry up
+   * to IDENTITY_TTL old. A live process (alone or corroborating a hook) and
+   * the screen are observed now.
+   */
+  observedAgoMs?: number;
 }
 
 /**
@@ -93,7 +100,7 @@ export function resolveCanonicalAgentIdentity(inputs: {
   const contradictedByLiveProcess =
     proc?.slug !== undefined && proc.slug !== auth?.slug && proc.alive;
   if (auth?.exact && auth.ageMs <= ttl && !contradictedByLiveProcess) {
-    return { slug: auth.slug, source: 'hook' };
+    return { slug: auth.slug, source: 'hook', observedAgoMs: auth.ageMs };
   }
   if (proc?.slug && proc.alive) return { slug: proc.slug, source: 'process' };
   if (screenSlug) return { slug: screenSlug, source: 'screen' };
@@ -163,9 +170,12 @@ export function mayPersistIdentity(
  * name the screen tier (or a legacy write) set, so a later launch can be told
  * from a guess without a write per event. It is also refreshed when the
  * pane's saved conversation belongs to another agent and was captured after
- * the stamp: the recovery pill trusts the name over that binding only when
- * the stamp is the newer of the two, and a live same-name agent seen now is
- * newer. That costs at most one write per binding capture.
+ * the stamp, but before the signal now seen: the recovery pill trusts the
+ * name over that binding only when the stamp is the newer of the two. The
+ * stamp is the time the signal was observed, not the time it was recorded,
+ * so a hook authority cached before the binding cannot outrank it, and a
+ * binding stamped ahead of the clock is left to win rather than rewritten
+ * on every hook signal. That costs at most one write per binding capture.
  */
 export function recordPaneIdentity(
   meta: {
@@ -177,26 +187,20 @@ export function recordPaneIdentity(
   now: number,
 ): boolean {
   if (!canonical) return false;
-  // A conflicting binding already on the meta was captured before this
-  // event, so a live agent seen now is later than it whatever the clocks
-  // say: a hook's own timestamp or a clock step can put the binding ahead of
-  // `now`. The stamp is placed after it, so one write settles the order and
-  // the next event finds nothing to refresh.
-  const binding = meta.resumeBinding;
-  const bindingTs = binding !== undefined && binding.agent !== canonical.slug
-    && typeof binding.ts === 'number' && Number.isFinite(binding.ts) ? binding.ts : undefined;
+  const observedAt = now - (canonical.observedAgoMs ?? 0);
   if (meta.lastDetectedAgent === canonical.slug) {
     if (canonical.source === 'screen') return false;
     const stamp = meta.lastDetectedAgentEvidence;
     const proven = stamp?.source === 'hook' || stamp?.source === 'process';
-    const outdatedByBinding = proven && bindingTs !== undefined && bindingTs >= (stamp?.at ?? Infinity);
+    const binding = meta.resumeBinding;
+    const outdatedByBinding = proven && binding !== undefined && binding.agent !== canonical.slug
+      && typeof binding.ts === 'number' && binding.ts >= (stamp?.at ?? Infinity) && observedAt > binding.ts;
     if (proven && !outdatedByBinding) return false;
   } else if (!mayPersistIdentity(meta.lastDetectedAgent, canonical)) {
     return false;
   }
-  const at = canonical.source !== 'screen' && bindingTs !== undefined ? Math.max(now, bindingTs + 1) : now;
   meta.lastDetectedAgent = canonical.slug;
-  meta.lastDetectedAgentEvidence = { source: canonical.source, at };
+  meta.lastDetectedAgentEvidence = { source: canonical.source, at: observedAt };
   return true;
 }
 
