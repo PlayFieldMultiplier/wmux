@@ -428,6 +428,47 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     expect(f.awaiting()).toHaveLength(2);
   });
 
+  it('a request during the in-flight screen read does not raise the same dialog twice', async () => {
+    let resolve: (up: boolean | null) => void = () => undefined;
+    let reads = 0;
+    const f = makeIngest(() => { reads++; return reads === 1 ? new Promise<boolean | null>((r) => { resolve = r; }) : Promise.resolve(true); });
+    f.ingest.handle(makeSignal());
+    f.advance(PERMISSION_NOTIFY_GRACE_MS);
+    await settle();
+    f.ingest.handle(makeSignal({ ts: 9_100 }));
+    resolve(true);
+    await settle();
+    await runSecondLayer(f);
+    expect(f.toasts()).toBe(1);
+  });
+
+  it('a new dialog right after the first closed is checked on its own grace (the close moves the epoch meanwhile)', async () => {
+    const f = makeIngest(async () => true);
+    f.ingest.handle(makeSignal());
+    await runSecondLayer(f);
+    // Answered by mouse: nothing settles at once. A new request comes...
+    f.ingest.handle(makeSignal({ ts: 20_000 }));
+    f.advance(2_000);
+    // ...and the verifier's screen-cleared release lands before its grace.
+    f.ingest.noteAnswered('pty-a', 'claude');
+    await runSecondLayer(f);
+    expect(f.toasts()).toBe(2);
+  });
+
+  it('a request queued behind a raised dialog, then a turn end, on an unreadable grid → no alarm', async () => {
+    let grid: boolean | null = true;
+    const f = makeIngest(async () => grid);
+    f.ingest.handle(makeSignal());
+    await runSecondLayer(f);
+    expect(f.toasts()).toBe(1);
+    f.ingest.handle(makeSignal({ ts: 20_000 }));
+    f.advance(1_000);
+    f.ingest.handle(makeSignal({ kind: 'agent.stop', payload: {}, ts: 21_000 }));
+    grid = null;
+    await runSecondLayer(f);
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
   it('a detector report that replaced the raised window still stands down on a new prompt', async () => {
     for (const raiseBy of ['notification', 'screen'] as const) {
       const f = makeIngest(async () => true);

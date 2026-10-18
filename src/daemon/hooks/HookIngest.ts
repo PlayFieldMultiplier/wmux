@@ -1921,15 +1921,6 @@ export class HookIngest {
       return;
     }
     const epoch = this.dialogEpochOf(sessionId);
-    const raised = this.secondLayerRaised.get(sessionId);
-    if (raised !== undefined && raised.epoch === epoch) {
-      // The dialog this layer already raised is still unsettled; another
-      // request (a background agent's) is not a second dialog to raise. Its
-      // close moves the epoch: the answer keystroke, or the awaiting
-      // verifier's screen-cleared release, both reach noteAnswered.
-      this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId}: the screen check already raised the open dialog`);
-      return;
-    }
     const open = this.tentativeDialogs.get(sessionId);
     if (open && open.epoch === epoch) {
       open.fanOut = fanOut;
@@ -1937,11 +1928,29 @@ export class HookIngest {
     }
     this.clearTentativeDialog(sessionId);
     const entry: { epoch: number; cancel: () => void; fanOut: () => unknown } = { epoch, cancel: () => undefined, fanOut };
+    // Asked while a dialog this layer raised is still open: this request waits
+    // behind it, and the next epoch move may be that dialog's close, not this
+    // one's. The screen decides then, instead of the epoch.
+    const raised = this.secondLayerRaised.get(sessionId);
+    const behindRaised = raised !== undefined && raised.epoch === epoch;
     const timer = setTimeout(() => {
       if (this.tentativeDialogs.get(sessionId) !== entry) return;
       this.tentativeDialogs.delete(sessionId);
-      if (this.dialogEpoch.get(sessionId) !== epoch) return;
+      const moved = this.dialogEpoch.get(sessionId) !== epoch;
+      if (moved && !behindRaised) return;
       const raise = (): void => {
+        // Judged when the dialog would be raised, not when the request came:
+        // a dialog this layer already raised that is still unsettled is the
+        // one on screen (Claude shows one at a time), and another request (a
+        // background agent's) must not raise it again. Its close moves the
+        // epoch within seconds — the answer keystroke, or the awaiting
+        // verifier's screen-cleared release, both reach noteAnswered — so a
+        // genuine next dialog is checked on its own grace.
+        const raised = this.secondLayerRaised.get(sessionId);
+        if (raised !== undefined && raised.epoch === this.dialogEpoch.get(sessionId)) {
+          this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId}: the screen check already raised the open dialog`);
+          return;
+        }
         this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
         this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => entry.fanOut()));
       };
@@ -1950,7 +1959,10 @@ export class HookIngest {
         raise();
         return;
       }
-      this.confirmAgainstScreen(sessionId, verifyOnScreen, raise);
+      // Behind a dialog that has since been settled, only a dialog actually
+      // seen on screen counts: the settle may have been this one's too (a
+      // turn end clears both), so an unreadable grid is not trusted here.
+      this.confirmAgainstScreen(sessionId, verifyOnScreen, raise, moved);
     }, PERMISSION_NOTIFY_GRACE_MS);
     timer.unref?.();
     entry.cancel = () => clearTimeout(timer);
@@ -1991,17 +2003,22 @@ export class HookIngest {
    *     leave the grid dialog-free. A miss is re-read once after
    *     DIALOG_RECHECK_MS; only a second miss drops the alarm.
    *   - `null` (unreadable or narrow grid, #1901) and a thrown check trust
-   *     the hook.
+   *     the hook, unless `seenOnly` asks for a dialog actually seen.
    */
   private confirmAgainstScreen(
     sessionId: string,
     verifyOnScreen: NonNullable<HookIngestDeps['dialogOnScreen']>,
     raise: () => void,
+    seenOnly = false,
   ): void {
     const epoch = this.dialogEpochOf(sessionId);
     // A pane dropped meanwhile has no entry: stale, never a broadcast.
     const stale = (): boolean => this.dialogEpoch.get(sessionId) !== epoch;
-    const send = (): void => {
+    const send = (seen: boolean): void => {
+      if (seenOnly && !seen) {
+        this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: queued behind a settled dialog and none seen on screen`);
+        return;
+      }
       if (stale()) {
         this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} stood down: answered or superseded during the screen read`);
         return;
@@ -2019,11 +2036,11 @@ export class HookIngest {
         result = verifyOnScreen(sessionId);
       } catch (err) {
         this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
-        send();
+        send(false);
         return;
       }
       result.then((up) => {
-        if (up !== false) { send(); return; }
+        if (up !== false) { send(up === true); return; }
         if (stale()) return;
         if (attempt === 1) {
           const t = setTimeout(() => read(2), DIALOG_RECHECK_MS);
@@ -2033,7 +2050,7 @@ export class HookIngest {
         this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no permission_prompt Notification and no dialog on screen`);
       }, (err: unknown) => {
         this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
-        send();
+        send(false);
       });
     };
     read(1);

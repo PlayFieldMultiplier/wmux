@@ -668,6 +668,11 @@ export function registerHooksRpc(
     // unaffected. See HOOK_AUTHORITY_TTL_MS for staleness.
     hookRouter.touchAuthority(ptyId, signal.agent, Date.now(), true, signal.kind);
 
+    // This fallback keeps the old rule: a Claude PermissionRequest raises the
+    // alert. The permission_prompt Notification the daemon raises on instead
+    // (#2390) would be a second alert for the same dialog here.
+    if (signal.kind === 'agent.awaiting_input' && signal.payload?.['hook_event_name'] === 'Notification') return { ok: true };
+
     // X6 ③: persist the resume binding for session-LIFECYCLE kinds. This runs
     // BEFORE the isEmitKind gate below, which drops SessionStart for the
     // notification path — but SessionStart is a key live-capture point (the
