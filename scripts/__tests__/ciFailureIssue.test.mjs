@@ -279,6 +279,23 @@ describe('report --state auto (the report job)', () => {
     expect(report({ env: ENV, gh: fake.gh })).toBe('created');
   });
 
+  it('a red run reopens the issue an older green run closed while it commented', () => {
+    const closedByOlderGreen = { state: 'CLOSED', body: '', comments: [{ body: 'green again at https://github.com/acme/app/actions/runs/40' }] };
+    const fake = fakeGh({ issues: [{ number: 12, title: 'Nightly red: Runtime suite' }], jobs: [RED, REPORT], issue: closedByOlderGreen });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('commented');
+    expect(fake.writes().map((c) => c.args.slice(0, 3))).toEqual([
+      ['issue', 'comment', '12'],
+      ['issue', 'reopen', '12'],
+    ]);
+  });
+
+  it('a red run leaves the issue closed when a newer green run closed it', () => {
+    const closedByNewerGreen = { state: 'CLOSED', body: '', comments: [{ body: 'green again at https://github.com/acme/app/actions/runs/57' }] };
+    const fake = fakeGh({ issues: [{ number: 12, title: 'Nightly red: Runtime suite' }], jobs: [RED, REPORT], issue: closedByNewerGreen });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('commented');
+    expect(fake.writes().map((c) => c.args[1])).toEqual(['comment']);
+  });
+
   it('reopens the issue when a newer red run reported while it was closing', () => {
     const fake = fakeGh({
       issues: [{ number: 12, title: 'Nightly red: Runtime suite' }],

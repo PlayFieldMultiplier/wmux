@@ -27,6 +27,11 @@
 // not older than the newest red run the issue reports (run ids grow with
 // creation time; a rerun keeps its id), so an older green run finishing late
 // never hides a newer red one, and a green rerun still closes.
+//
+// GitHub has no lock for read-then-write on an issue, so every write is
+// followed by a read that converges on the newest run: a duplicate issue
+// hands its report to the oldest and closes; a close that raced a newer red
+// comment reopens; a red comment that raced an older green close reopens.
 
 export const LABEL = 'ci-nightly';
 export const LABEL_COLOR = 'B60205';
@@ -98,6 +103,15 @@ export function renderGreenComment(url) {
   return `green again at ${url}`;
 }
 
+/** The newest green run that closed the issue ("green again at <url>"), or 0. */
+export function newestClosingRun(issueJson) {
+  let newest = 0;
+  for (const c of issueJson.comments ?? []) {
+    for (const m of (c.body ?? '').matchAll(/^green again at \S*\/actions\/runs\/(\d+)\s*$/gm)) newest = Math.max(newest, Number(m[1]));
+  }
+  return newest;
+}
+
 function parseJson(text, what) {
   try {
     return JSON.parse(text);
@@ -130,7 +144,7 @@ export function newestReportedRun(issueJson) {
 }
 
 function readIssue(gh, { repo, number }) {
-  return parseJson(gh(['issue', 'view', String(number), '-R', repo, '--json', 'body,comments']) || '{}', 'gh issue view');
+  return parseJson(gh(['issue', 'view', String(number), '-R', repo, '--json', 'state,body,comments']) || '{}', 'gh issue view');
 }
 
 function readJobs(gh, { repo, runId }) {
@@ -225,6 +239,13 @@ export function report({ state = 'auto', env, gh, log = () => undefined }) {
   if (existing !== null) {
     gh(['issue', 'comment', String(existing), '-R', repo, '--body', body]);
     log(`commented on #${existing}`);
+    // An older green run may have closed the issue between the list above
+    // and this comment. This red is newer than that green, so it stands.
+    const after = readIssue(gh, { repo, number: existing });
+    if (after.state === 'CLOSED' && newestClosingRun(after) < Number(env.GITHUB_RUN_ID)) {
+      gh(['issue', 'reopen', String(existing), '-R', repo]);
+      log(`an older green run closed #${existing} meanwhile; reopened it`);
+    }
     return 'commented';
   }
   // Exists after the first time; the failure is ignored like `|| true`.
