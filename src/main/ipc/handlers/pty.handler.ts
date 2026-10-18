@@ -26,7 +26,7 @@ import { getMcpTarget } from '../../../shared/mcpTargets';
 import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { noteSessionAgentLaunched, noteSessionInput, noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
-import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
+import { beginPaneRelaunch, launchStillCurrent, startsAgent } from '../../factory/workerSlots';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -744,7 +744,16 @@ export function registerPTYHandlers(
       // is a no-op (its onFirstData stays a harmless call below).
       // A bot worker's line clears the screen first (clearedLaunchLine).
       const typedLine = execCommand !== undefined ? undefined : options?.initialCommand;
-      const writeLaunchLine = (cmd: string) => daemonClient.writeToSession(sessionId, sanitizePtyText(cmd) + '\r');
+      const writeLaunchLine = (cmd: string): boolean => {
+        // The task launch it is for was abandoned (its spawn timed out) or
+        // replaced since the create: nothing is typed, and the pane goes.
+        if (!launchStillCurrent(options?.fanoutLaunch)) {
+          console.warn(`[pty:create] ${sessionId}: its task launch was abandoned; the launch line is not typed`);
+          void daemonClient.rpc('daemon.destroySession', { id: sessionId }).catch(() => undefined);
+          return true;
+        }
+        return daemonClient.writeToSession(sessionId, sanitizePtyText(cmd) + '\r');
+      };
       // F26 — a fan-out task pane's line is checked once written, and written
       // once more if the shell never read it (verifyLaunchLine.ts).
       const verifyTaskLine = !!botWorker || !!options?.fanoutTaskOf;
@@ -920,7 +929,14 @@ export function registerPTYHandlers(
       // writes are always delivered locally, so the writer returns void.
       if (initialCommand && initialCommand.trim().length > 0) {
         const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(initialCommand, shell) : initialCommand, {
-          write: (cmd) => { ptyManager.write(instance.id, sanitizePtyText(cmd) + '\r'); },
+          write: (cmd) => {
+            // As the daemon path: an abandoned task launch types nothing.
+            if (!launchStillCurrent(options?.fanoutLaunch)) {
+              ptyManager.dispose(instance.id);
+              return;
+            }
+            ptyManager.write(instance.id, sanitizePtyText(cmd) + '\r');
+          },
         });
         const disposable = instance.process.onData(() => {
           disposable.dispose();

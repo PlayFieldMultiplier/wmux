@@ -160,21 +160,27 @@ export class WorkerSlots {
       for (const [id, p] of Object.entries(panes)) if (id && isPane(p)) this.panes.set(id, { taskId: p.taskId, gen: p.gen, workspaceId: p.workspaceId });
       const spaces = raw.workspaces && typeof raw.workspaces === 'object' && !Array.isArray(raw.workspaces) ? raw.workspaces as Record<string, unknown> : {};
       for (const [id, w] of Object.entries(spaces)) if (id && isRef(w)) this.workspaces.set(id, { taskId: w.taskId, gen: w.gen });
-      return;
     }
-    this.rebuild();
+    // Rows this file does not name yet (none at the first start; tasks an
+    // older build started after a downgrade): seeded from the ledger.
+    this.seed();
   }
 
-  /** One entry per ledger row, generation 1, timed by the row's last write. */
-  private rebuild(): void {
+  /** One entry per ledger row the record does not hold yet, generation 1,
+   *  timed by the row's last write, with its workspace. Written when any was
+   *  added. */
+  private seed(): void {
     let rows: readonly LedgerEntry[] = [];
     try {
       rows = this.rows();
     } catch (err) {
       this.warn(`[factory] worker slots not rebuilt from the task ledger: ${String(err)}`);
     }
+    let added = false;
     for (const r of rows) {
-      if (r.taskWorkspaceId) this.workspaces.set(r.taskWorkspaceId, { taskId: r.id, gen: 1 });
+      if (this.tasks.has(r.id)) continue;
+      added = true;
+      if (r.taskWorkspaceId && !this.workspaces.has(r.taskWorkspaceId)) this.workspaces.set(r.taskWorkspaceId, { taskId: r.id, gen: 1 });
       const origin = r.dispatch?.origin;
       const bot = origin?.kind === 'bot' && typeof origin.botId === 'string' && origin.botId.length > 0;
       const open = r.status === 'working' || r.status === 'input_required' || r.status === 'review_requested';
@@ -188,12 +194,13 @@ export class WorkerSlots {
         state: open ? 'launched' : 'released',
       });
     }
+    if (!added) return;
     this.bound();
     trim(this.workspaces, WORKER_PANES_MAX);
     try {
       this.write();
     } catch (err) {
-      this.warn(`[factory] worker slots rebuilt but not written: ${String(err)}`);
+      this.warn(`[factory] worker slots seeded from the task ledger but not written: ${String(err)}`);
     }
   }
 
@@ -377,6 +384,21 @@ function trim<K, V>(map: Map<K, V>, max: number): void {
     const oldest = map.keys().next();
     if (oldest.done) break;
     map.delete(oldest.value);
+  }
+}
+
+/** Whether the launch a task pane's create named (its `fanoutLaunch`) is
+ *  still the task's current one, right before its agent line is typed: a
+ *  spawn that timed out meanwhile, or a newer launch, makes it stale and
+ *  nothing is typed. True for a pane that named no launch. Never throws. */
+export function launchStillCurrent(fanoutLaunch: unknown): boolean {
+  const token = parseLaunchToken(fanoutLaunch);
+  if (!token) return true;
+  try {
+    const t = getWorkerSlots().launchOf(token.taskId);
+    return !!t && t.gen === token.gen && t.state !== 'released';
+  } catch {
+    return false;
   }
 }
 

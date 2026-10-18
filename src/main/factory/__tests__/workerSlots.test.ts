@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
@@ -248,6 +248,30 @@ describe('round 3 review (#2393 identity)', () => {
     expect(startsAgent('"C:\\tools\\claude.cmd" --continue')).toBe(true);
     expect(startsAgent('Please review the diff below')).toBe(false);
     expect(startsAgent(' --dangerously-skip-permissions')).toBe(false);
+  });
+});
+
+describe('round 4 review (#2393 identity)', () => {
+  it('a task an older build started after a downgrade is seeded from the ledger at the next start', () => {
+    const dir = tmp();
+    store(dir, { rows: [row('a')] });
+    const again = store(dir, { rows: [row('a'), row('b')] });
+    expect(again.launchOf('b')).toMatchObject({ gen: 1 });
+    expect(again.workspaceOf('ws-b')).toEqual({ taskId: 'b', gen: 1 });
+  });
+
+  it('a pane\'s launch line is typed only while its launch is the task\'s current one', () => {
+    const s = store(tmp());
+    setWorkerSlotsForTests(s);
+    const first = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen;
+    expect(launchStillCurrent({ taskId: 't', gen: first })).toBe(true);
+    s.released('t', first);
+    expect(launchStillCurrent({ taskId: 't', gen: first })).toBe(false);
+    const second = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen;
+    expect(launchStillCurrent({ taskId: 't', gen: first })).toBe(false);
+    expect(launchStillCurrent({ taskId: 't', gen: second })).toBe(true);
+    // A pane that named no launch.
+    expect(launchStillCurrent(undefined)).toBe(true);
   });
 });
 
