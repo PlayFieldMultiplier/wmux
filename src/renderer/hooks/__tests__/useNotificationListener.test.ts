@@ -5,7 +5,7 @@
  * wrapper itself (`useNotificationListener`) is a thin useEffect that
  * wires the factory to `window.electronAPI` and `useStore`; we exercise
  * the factory directly so vitest's `node` environment is sufficient (no
- * jsdom, no React testing harness — see useKeyboard.test.ts for the same
+ * jsdom, no React testing harness — see useKeyboard.os.test.ts for the same
  * pattern).
  *
  * Regression coverage promise (R1-R11): every behaviour that previously

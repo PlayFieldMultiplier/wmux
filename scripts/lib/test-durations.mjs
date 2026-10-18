@@ -34,6 +34,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { laneOfName } from './test-lanes.mjs';
 
 export const DURATIONS_VERSION = 1;
 export const DURATIONS_PREFIX = 'durations-';
@@ -149,17 +150,16 @@ export function mergeDurationReports(reports, { projects, testFiles } = {}) {
  * (node_modules/.vite/vitest/<hash>/results.json):
  * { version, results: [["<project>:<path>", { duration, failed }], ...] }
  * (an object of the same keys is read too). A key with no project name comes
- * from a run without `projects`; its lane is `integration` when the path is in
- * `integration` (vitest.lanes.json), else `unit`. Only `testFiles` are kept,
- * and only lanes the cache has a file for appear in the result, so a lane it
- * says nothing about keeps what vitest.durations.json has.
+ * from a run without `projects`; its lane is the one the path's name gives
+ * (`*.os.test.*` is `integration`, scripts/lib/test-lanes.mjs). Only
+ * `testFiles` are kept, and only lanes the cache has a file for appear in the
+ * result, so a lane it says nothing about keeps what vitest.durations.json has.
  *
  * The cache holds `duration` only (tests and hooks), not a file's full cost,
  * so these numbers run low, most of all for small files. A stopgap for when
  * no CI report is at hand; CI's durations-*.json are the real source.
  */
-export function durationsFromVitestCache(cache, { integration, testFiles }) {
-  const integrationSet = new Set(integration);
+export function durationsFromVitestCache(cache, { testFiles }) {
   const entries = Array.isArray(cache?.results) ? cache.results : Object.entries(cache?.results ?? {});
   const lanes = { integration: {}, unit: {} };
   for (const [key, value] of entries) {
@@ -170,7 +170,7 @@ export function durationsFromVitestCache(cache, { integration, testFiles }) {
     const duration = value?.duration;
     if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) continue;
     const named = key.slice(0, colon);
-    const lane = named || (integrationSet.has(file) ? 'integration' : 'unit');
+    const lane = named || laneOfName(file);
     if (!Object.hasOwn(lanes, lane)) continue;
     lanes[lane][file] = duration;
   }

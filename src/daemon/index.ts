@@ -43,7 +43,7 @@ import { coercePhoneDecisions } from './approvals/decisionConfig';
 import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
 import { SCROLLBACK_ROWS } from './web/hostSearch';
-import { recoveryCwd, isWslShell, isWslCwdMissingError, type WslTarget } from '../shared/wsl';
+import { recoveryCwd, isWslShell, isWslCwdMissingError } from '../shared/wsl';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -124,7 +124,7 @@ import { WorkTaskService } from './worktask/WorkTaskService';
 import { isTaskState, type AgentStatus, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
-import { liveRecoveryHint, namedAgentAlive } from './recoveryHint';
+import { liveRecoveryHint, namedAgentAlive, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
 import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher } from './wslAgentProcess';
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
@@ -151,13 +151,13 @@ import { createSnapshotRunner } from './snapshotRunner';
 import { createBufferHibernation } from './BufferHibernation';
 import { RingBuffer } from './RingBuffer';
 import { GitContextWatcher } from '../main/pty/gitContextWatch';
-import { gitWatchArgs } from './gitWatchPath';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonState } from './types';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
+import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
 import { randomUUID } from 'node:crypto';
 import { monitorEventLoopDelay, performance as nodePerformance } from 'node:perf_hooks';
 import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, isBrainPty } from '../shared/constants';
@@ -2473,7 +2473,9 @@ function registerRpcHandlers(
     if (shuttingDown) {
       throw new Error('SHUTTING_DOWN: daemon is shutting down — retry after reconnect');
     }
-    if (watchdog.isBlocked) {
+    // #2375: re-sample before refusing, so a block set by one transient RSS
+    // spike lifts as soon as memory is back under the limit.
+    if (watchdog.recheckBlock()) {
       throw new Error('Cannot create session: memory pressure too high. Try again later.');
     }
     const p = params as unknown as DaemonCreateSessionParams;
@@ -3025,6 +3027,45 @@ function registerRpcHandlers(
     return { ok: true, mode: 'rows', rows: capped.rows, bufferType: outcome.bufferType, rowsBelowCursor: outcome.rowsBelowCursor, truncated: capped.truncated };
   });
 
+  // #2408: how long a session list waits for a recovered pane's screen read.
+  const RECOVERED_SIGHTING_LIST_WAIT_MS = 300;
+  // #2408: per recovered pane, the ring position its screen was last read at
+  // and whether that screen showed a live agent the screen tier sighted.
+  const recoveredSighting = new Map<string, { at: number; onScreen: boolean }>();
+  const sightingReads = new Map<string, Promise<void>>();
+  /**
+   * #2408: read a recovered pane's screen again when its fresh detector
+   * sighted Claude or Codex since the restart and output has arrived since the
+   * last read. The verdict (the agent's composer at the bottom of the grid, or
+   * its dialog) only hides the pill; the offer stays until a hook or a live
+   * process consumes it. Panes with no sighting are never rendered, and an
+   * unreadable frame leaves the last verdict standing. Returns the read in
+   * flight, if any.
+   */
+  const readRecoveredSighting = (id: string): Promise<void> | undefined => {
+    const managed = sessionManager.getSession(id);
+    const slug = managed && recoveredAgentShellIds.has(id) ? sightedRecoveredAgent(managed.bridge.getLastAgent()) : undefined;
+    if (!managed || !slug) {
+      recoveredSighting.delete(id);
+      return undefined;
+    }
+    const inFlight = sightingReads.get(id);
+    if (inFlight || recoveredSighting.get(id)?.at === managed.ringBuffer.totalBytesWritten) return inFlight;
+    const read = renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot)
+      .then((frame) => {
+        if (frame && sessionManager.getSession(id) === managed && recoveredAgentShellIds.has(id)) {
+          recoveredSighting.set(id, { at: frame.mark, onScreen: screenShowsLiveAgent(frame.rows, slug) });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => sightingReads.delete(id));
+    sightingReads.set(id, read);
+    return read;
+  };
+  // A burst of output has settled, so the screen is drawn: read it then, and
+  // a list finds the verdict ready instead of waiting on a render.
+  sessionManager.on('session:idle', (payload: { sessionId: string }) => readRecoveredSighting(payload.sessionId));
+
   // daemon.listSessions
   pipeServer.onRpc('daemon.listSessions', async (rawParams) => {
     const params = (rawParams ?? {}) as Record<string, unknown>;
@@ -3035,7 +3076,23 @@ function registerRpcHandlers(
     // client that gets a bare list back (an older daemon) takes it as
     // recovered, as every read was taken before.
     const withRecovery = params['withRecovery'] === true;
-    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone: startupRecovery.done() } : sessions);
+    // Taken before the sighting wait below, so `recoveryDone` never describes
+    // a later state than the sessions listed after it.
+    const doneBeforeList = startupRecovery.done();
+    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone: doneBeforeList } : sessions);
+    // #2408: a sighted recovered pane whose screen changed since its last
+    // read is read now, waited on only briefly: the snapshot queue is shared,
+    // and a read that takes longer lands on a later list.
+    for (const id of recoveredSighting.keys()) {
+      if (!recoveredAgentShellIds.has(id)) recoveredSighting.delete(id);
+    }
+    const sightingReadsNow = [...recoveredAgentShellIds.keys()].flatMap((id) => readRecoveredSighting(id) ?? []);
+    if (sightingReadsNow.length > 0) {
+      await Promise.race([
+        Promise.all(sightingReadsNow),
+        new Promise<void>((resolve) => { setTimeout(resolve, RECOVERED_SIGHTING_LIST_WAIT_MS).unref?.(); }),
+      ]);
+    }
     // X8: join the supervisor's volatile runtime (restart counts, pending
     // backoff) onto supervised sessions — additive field consumed by
     // `wmux list --json` and the sidebar badge.
@@ -3069,7 +3126,14 @@ function registerRpcHandlers(
       const withRuntime = base.supervision
         ? { ...base, supervisionRuntime: paneSupervisor.getRuntime(s.id) }
         : base;
-      const withAgent = resumeAgent ? { ...withRuntime, resumeAgent } : withRuntime;
+      // #2408: additive, and present only for a pane whose screen tier sighted
+      // Claude or Codex since the restart: true while the last read shows it
+      // on screen, false while it is gone or not read yet. An older daemon
+      // sends none and the renderer gates the pill as before.
+      const sighted = !!resumeAgent && !!sightedRecoveredAgent(sessionManager.getSession(s.id)?.bridge.getLastAgent());
+      const withAgent = resumeAgent
+        ? { ...withRuntime, resumeAgent, ...(sighted ? { resumeAgentOnScreen: recoveredSighting.get(s.id)?.onScreen === true } : {}) }
+        : withRuntime;
       // Binding to SURFACE: the recovery-transient one (recovered-this-boot,
       // cwd+transcript guarded) OR the durable meta binding re-probed for
       // transcript existence (D5). The cwd guard (F7) is deliberately NOT applied
@@ -7012,7 +7076,9 @@ function wireEvents(
     // exact binding, and the pill would be gone after the next reconnect.
     // A real relaunch reaches process truth on the tracker's launch edge,
     // where liveRecoveryHint drops the pair on its next read; until then the
-    // renderer hides the pill on its own live-agent and running-command state.
+    // renderer hides the pill on its own live-agent and running-command state,
+    // and on the screen sighting listSessions reports (#2408), which hides
+    // without consuming.
     if (slug && canonical && canonical.source !== 'screen') {
       recoveredAgentShellIds.delete(payload.sessionId);
       recoveredResumeBindings.delete(payload.sessionId);
@@ -7289,14 +7355,16 @@ function wireContextWatchers(
     }
   });
 
-  // #2407 — a WSL session's Linux cwd is mapped to a path this process can
-  // read (gitWatchArgs); every other session's cwd goes in unchanged.
-  const onCreated = (payload: { session: { id: string; cwd: string; wslTarget?: WslTarget } }) => {
-    gitWatcher.update(...gitWatchArgs(payload.session.id, payload.session));
+  // #2407: a WSL pane reports a Linux cwd; the watcher reads with Windows fs,
+  // so it is handed the Windows name of that directory (gitWatchCwdFor), and
+  // a way to read a worktree's Linux gitdir the same way (gitDirMapperFor).
+  const onCreated = (payload: { session: { id: string; cwd: string; cmd?: string; wslTarget?: { distribution?: unknown } } }) => {
+    gitWatcher.update(payload.session.id, gitWatchCwdFor(payload.session), gitDirMapperFor(payload.session));
   };
   const onCwd = (payload: { sessionId: string; cwd: string }) => {
-    const wslTarget = sessionManager.getSession(payload.sessionId)?.meta.wslTarget;
-    gitWatcher.update(...gitWatchArgs(payload.sessionId, { cwd: payload.cwd, wslTarget }));
+    const meta = sessionManager.getSession(payload.sessionId)?.meta;
+    const session = { cwd: payload.cwd, cmd: meta?.cmd, wslTarget: meta?.wslTarget };
+    gitWatcher.update(payload.sessionId, gitWatchCwdFor(session), gitDirMapperFor(session));
   };
   const onGone = (payload: { id: string }) => {
     gitWatcher.remove(payload.id);
@@ -7310,7 +7378,7 @@ function wireContextWatchers(
 
   // Seed git context for sessions recovered before this wiring ran.
   for (const s of sessionManager.listLiveSessions()) {
-    gitWatcher.update(...gitWatchArgs(s.id, s));
+    gitWatcher.update(s.id, gitWatchCwdFor(s), gitDirMapperFor(s));
   }
 
   resyncContextWatchers = () => { portWatcher.resync(); gitWatcher.resync(); };

@@ -1,7 +1,7 @@
 /**
  * v2 RCA fix (reboot-reattach, axis A) — AppLayout session-save invariants.
  *
- * Structural test (house pattern: sessionEnd.daemonShutdown.test.ts,
+ * Structural test (house pattern: sessionEnd.daemonShutdown.os.test.ts,
  * pty.handler.resize-retry.test.ts): AppLayout has no jsdom fixture, and these
  * invariants encode review-confirmed data-loss/correctness decisions that a
  * refactor could silently undo with every unit test staying green:

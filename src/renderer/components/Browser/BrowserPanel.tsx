@@ -14,6 +14,7 @@ import { isPrivateSessionReady, privateSessionReady } from '../../utils/privateS
 import { formatElementHandoff, parseElementRect, parseInspectedElement, ELEMENT_STYLE_KEYS, HANDOFF_NOTE_MAX, type InspectedElement } from '../../../shared/browserElementHandoff';
 import { findWorkspaceSurfaceById } from '../../utils/paneTraversal';
 import { findLeaf } from '../../../shared/paneUtils';
+import { BROWSER_ZOOM_EVENT, stepPageZoom, type BrowserZoomDetail } from '../../../shared/browserZoom';
 import { injectText } from '../AgentToolbar/inject';
 import { IconX } from '../icons';
 
@@ -386,6 +387,19 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
     return () => document.removeEventListener(BROWSER_NAVIGATE_EVENT, onNavigateEvent);
   }, [surfaceId, handleNavigate]);
 
+  // Cmd/Ctrl + = / - / 0 while this pane's chrome has focus (useKeyboard);
+  // inside the page main handles the same keys.
+  useEffect(() => {
+    const onZoomEvent = (e: Event) => {
+      const detail = (e as CustomEvent<BrowserZoomDetail>).detail;
+      const wv = webviewRef.current;
+      if (!detail || detail.surfaceId !== surfaceId || !wv || !isReady) return;
+      wv.setZoomFactor(stepPageZoom(wv.getZoomFactor(), detail.step));
+    };
+    document.addEventListener(BROWSER_ZOOM_EVENT, onZoomEvent);
+    return () => document.removeEventListener(BROWSER_ZOOM_EVENT, onZoomEvent);
+  }, [surfaceId, isReady]);
+
   const handleBack = useCallback(() => {
     webviewRef.current?.goBack();
   }, []);
@@ -399,9 +413,11 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
   }, []);
 
   // Inspector: inject/remove highlight overlay into webview
-  const injectInspector = useCallback(() => {
+  // `domReady`: called from a dom-ready listener, which can hold a closure from
+  // before isReady turned true (a discarded page waking up while picking).
+  const injectInspector = useCallback((domReady = false) => {
     const wv = webviewRef.current;
-    if (!wv || !isReady) return;
+    if (!wv || (!isReady && !domReady)) return;
     const nonce = crypto.randomUUID();
     inspectNonceRef.current = nonce;
     // 이 오버레이/라벨은 게스트 웹뷰(임의의 외부 페이지) 내부에 주입된다.
@@ -529,6 +545,16 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
     setInspecting(!inspecting);
   }, [inspecting, injectInspector, removeInspector]);
 
+  // A full navigation replaces the document and the overlay with it, while
+  // `inspecting` stays on: re-inject so the picker keeps working on the new page.
+  useEffect(() => {
+    const wv = webviewRef.current;
+    if (!wv || !inspecting) return;
+    const onDomReady = () => injectInspector(true);
+    wv.addEventListener('dom-ready', onDomReady);
+    return () => { wv.removeEventListener('dom-ready', onDomReady); };
+  }, [inspecting, injectInspector, discarded, sessionReady]);
+
   // Listen for inspector click results from webview console
   useEffect(() => {
     const wv = webviewRef.current;
@@ -619,6 +645,8 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
   return (
     <div
       className="flex flex-col h-full w-full overflow-hidden"
+      // Lets the zoom shortcut find the pane whose chrome has focus (useKeyboard).
+      data-browser-panel={surfaceId}
       // Clicking the toolbar / title strip / page chrome (anywhere in the
       // pane) pulls keyboard focus onto the webview. Clicking *inside* page
       // content already focuses the guest natively, but pane-switch clicks and
