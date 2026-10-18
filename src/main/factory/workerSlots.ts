@@ -1,0 +1,338 @@
+// ─── Each task's launch generation and its panes, on disk (#2393) ──────────
+//
+// The live-worker caps need to know, across a restart, which task a pane or a
+// workspace belongs to and when the task's worker was last launched. Until
+// now that was pieced together from ledger rows (whose edit time and revision
+// move on any write), reclaim records and in-memory maps that a restart
+// empties. This file records it where the launch happens:
+//
+//   - one entry per task: its launch generation (`gen`, bumped on every
+//     launch, respawn and resume), when that launch began, who started it,
+//     and its state;
+//   - the task and generation of every task pane, bot worker or owner
+//     fan-out, keyed by the pane's session: a pane moved to another
+//     workspace keeps its record, so its task is read, never inferred.
+//
+// The workspace side of the link is the lineage stamp (fanoutGuards.ts),
+// which carries the same task and generation.
+//
+// An entry is written synchronously before the launch; a write that fails
+// refuses the launch. A launch's later callback names its generation, and
+// one from an older generation (a respawn ran since) is ignored.
+//
+// `<wmuxDir>/factory/worker-slots.json`, version 1. An older build ignores
+// it. A file a newer version wrote is never written over: entries then live
+// in memory only and launches go on. A file no version can read is moved
+// aside. With no file, the entries are rebuilt from the ledger rows once.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
+import { readVersionedFile } from './versionedFile';
+import { getWmuxDir } from '../../daemon/config';
+import type { LedgerEntry } from '../../shared/ledger';
+import { getTaskLedger } from '../deck/taskLedgerHost';
+import { botWorkerSessionRecord } from '../agents/botWorkerMergeGuard';
+
+export const WORKER_SLOTS_FILENAME = 'worker-slots.json';
+export const WORKER_SLOTS_VERSION = 1 as const;
+/** Entries kept (released ones dropped first, then the oldest). */
+export const WORKER_SLOTS_MAX = 5000;
+/** Pane records kept (the oldest dropped first). */
+export const WORKER_PANES_MAX = 5000;
+
+export type TaskLaunchState = 'launching' | 'launched' | 'released';
+
+export interface TaskLaunch {
+  taskId: string;
+  /** 1 for the first launch, +1 on each respawn and resume. */
+  gen: number;
+  /** When this generation's launch began (epoch ms). */
+  launchedAt: number;
+  origin: 'bot' | 'owner';
+  botId?: string;
+  ownerWorkspaceId: string;
+  /** launching: written, the spawn under way; launched: its pane came up;
+   *  released: the launch did not happen (refused or failed). */
+  state: TaskLaunchState;
+}
+
+export interface TaskPane {
+  taskId: string;
+  gen: number;
+  /** The workspace it was created in. */
+  workspaceId: string;
+}
+
+const isState = (v: unknown): v is TaskLaunchState => v === 'launching' || v === 'launched' || v === 'released';
+
+function isLaunch(v: unknown): v is TaskLaunch {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.taskId === 'string' && r.taskId.length > 0
+    && typeof r.gen === 'number' && Number.isInteger(r.gen) && r.gen >= 1
+    && typeof r.launchedAt === 'number' && Number.isFinite(r.launchedAt)
+    && (r.origin === 'bot' || r.origin === 'owner')
+    && (r.botId === undefined || typeof r.botId === 'string')
+    && typeof r.ownerWorkspaceId === 'string' && isState(r.state);
+}
+
+function isPane(v: unknown): v is TaskPane {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.taskId === 'string' && r.taskId.length > 0
+    && typeof r.gen === 'number' && Number.isInteger(r.gen) && r.gen >= 1
+    && typeof r.workspaceId === 'string';
+}
+
+export interface LaunchRequest {
+  taskId: string;
+  origin: 'bot' | 'owner';
+  botId?: string;
+  ownerWorkspaceId: string;
+  /** The folder its pane is created in: the pane's create reads the task
+   *  and generation back from it (inflight). */
+  cwd?: string;
+}
+
+export class WorkerSlots {
+  private readonly tasks = new Map<string, TaskLaunch>();
+  private readonly panes = new Map<string, TaskPane>();
+  /** Launches under way: owner and folder → task and generation. */
+  private readonly inflight = new Map<string, { taskId: string; gen: number }>();
+  /** False when a newer version's file is on disk: entries in memory only. */
+  private writable = true;
+
+  constructor(
+    private readonly file: string,
+    private readonly rows: () => readonly LedgerEntry[] = () => [],
+    private readonly warn: (line: string) => void = (l) => console.warn(l),
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  static at(wmuxDir: string, rows?: () => readonly LedgerEntry[]): WorkerSlots {
+    return new WorkerSlots(path.join(wmuxDir, 'factory', WORKER_SLOTS_FILENAME), rows);
+  }
+
+  /** Read the file. Missing: rebuilt from the ledger rows and written. A
+   *  newer version's: kept in memory only, never written over. Unreadable:
+   *  moved aside, then rebuilt. Never throws. */
+  load(): void {
+    this.tasks.clear();
+    this.panes.clear();
+    let raw: Record<string, unknown> | null = null;
+    try {
+      raw = readVersionedFile(this.file, WORKER_SLOTS_VERSION);
+      this.writable = true;
+    } catch (err) {
+      if (this.newerVersionOnDisk()) {
+        this.writable = false;
+        this.warn(`[factory] worker slots not read, kept in memory only: ${String(err)}`);
+        return;
+      }
+      try {
+        fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
+        this.writable = true;
+        this.warn(`[factory] worker slots unreadable, moved aside and rebuilt from the task ledger: ${String(err)}`);
+      } catch (moveErr) {
+        this.writable = false;
+        this.warn(`[factory] worker slots not read, kept in memory only: ${String(err)}; ${String(moveErr)}`);
+      }
+      raw = null;
+    }
+    if (raw) {
+      for (const t of Array.isArray(raw.tasks) ? raw.tasks : []) if (isLaunch(t)) this.tasks.set(t.taskId, { ...t });
+      const panes = raw.panes && typeof raw.panes === 'object' && !Array.isArray(raw.panes) ? raw.panes as Record<string, unknown> : {};
+      for (const [id, p] of Object.entries(panes)) if (id && isPane(p)) this.panes.set(id, { taskId: p.taskId, gen: p.gen, workspaceId: p.workspaceId });
+      return;
+    }
+    this.rebuild();
+  }
+
+  /** One entry per ledger row, generation 1, timed by the row's last write. */
+  private rebuild(): void {
+    let rows: readonly LedgerEntry[] = [];
+    try {
+      rows = this.rows();
+    } catch (err) {
+      this.warn(`[factory] worker slots not rebuilt from the task ledger: ${String(err)}`);
+    }
+    for (const r of rows) {
+      const origin = r.dispatch?.origin;
+      const bot = origin?.kind === 'bot' && typeof origin.botId === 'string' && origin.botId.length > 0;
+      const open = r.status === 'working' || r.status === 'input_required' || r.status === 'review_requested';
+      this.tasks.set(r.id, {
+        taskId: r.id,
+        gen: 1,
+        launchedAt: r.updatedAt,
+        origin: bot ? 'bot' : 'owner',
+        ...(bot ? { botId: origin.botId } : {}),
+        ownerWorkspaceId: r.ownerWorkspaceId,
+        state: open ? 'launched' : 'released',
+      });
+    }
+    this.bound();
+    try {
+      this.write();
+    } catch (err) {
+      this.warn(`[factory] worker slots rebuilt but not written: ${String(err)}`);
+    }
+  }
+
+  private newerVersionOnDisk(): boolean {
+    try {
+      const v = atomicReadJSONSync<{ version?: unknown }>(this.file)?.version;
+      return typeof v === 'number' && v > WORKER_SLOTS_VERSION;
+    } catch {
+      return false;
+    }
+  }
+
+  /** A task's launch now, or null. */
+  launchOf(taskId: string): TaskLaunch | null {
+    const t = this.tasks.get(taskId);
+    return t ? { ...t } : null;
+  }
+
+  /** The task and generation a pane was created (or relaunched) for. */
+  paneOf(sessionId: string): TaskPane | null {
+    const p = this.panes.get(sessionId);
+    return p ? { ...p } : null;
+  }
+
+  /** The launch under way for an owner's pane in `cwd`, or null. */
+  inflightFor(ownerWorkspaceId: string, cwd: string): { taskId: string; gen: number } | null {
+    const hit = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
+    return hit ? { ...hit } : null;
+  }
+
+  /** A launch (a first spawn, a respawn or a resume) is about to start: its
+   *  generation is bumped and written now. THROWS when it cannot be written:
+   *  the caller does not launch. */
+  beginLaunch(req: LaunchRequest): { gen: number; launchedAt: number } {
+    const prior = this.tasks.get(req.taskId);
+    const next: TaskLaunch = {
+      taskId: req.taskId,
+      gen: (prior?.gen ?? 0) + 1,
+      launchedAt: this.now(),
+      origin: req.origin,
+      ...(req.botId ? { botId: req.botId } : {}),
+      ownerWorkspaceId: req.ownerWorkspaceId,
+      state: 'launching',
+    };
+    this.tasks.delete(req.taskId);
+    this.tasks.set(req.taskId, next);
+    this.bound();
+    try {
+      this.write();
+    } catch (err) {
+      if (prior) this.tasks.set(req.taskId, prior);
+      else this.tasks.delete(req.taskId);
+      throw new Error(`the task's launch could not be recorded: ${String(err)}`);
+    }
+    if (req.cwd) this.inflight.set(inflightKey(req.ownerWorkspaceId, req.cwd), { taskId: req.taskId, gen: next.gen });
+    return { gen: next.gen, launchedAt: next.launchedAt };
+  }
+
+  /** The launch of `gen` brought its pane up in `workspaceId`. Ignored (false)
+   *  when a newer launch of the task began since. */
+  launched(taskId: string, gen: number, workspaceId: string, sessionId?: string, cwd?: string): boolean {
+    const t = this.tasks.get(taskId);
+    if (cwd) this.dropInflight(t?.ownerWorkspaceId, cwd, taskId, gen);
+    if (!t || t.gen !== gen) return false;
+    this.tasks.set(taskId, { ...t, state: 'launched' });
+    if (sessionId) this.notePane(sessionId, { taskId, gen, workspaceId });
+    else this.persist();
+    return true;
+  }
+
+  /** The launch of `gen` did not happen. Ignored (false) when a newer launch
+   *  began since. */
+  released(taskId: string, gen: number, cwd?: string): boolean {
+    const t = this.tasks.get(taskId);
+    if (cwd) this.dropInflight(t?.ownerWorkspaceId, cwd, taskId, gen);
+    if (!t || t.gen !== gen) return false;
+    this.tasks.set(taskId, { ...t, state: 'released' });
+    this.persist();
+    return true;
+  }
+
+  /** A pane now runs the task's generation `gen` (a resume typed into it). */
+  notePane(sessionId: string, pane: TaskPane): void {
+    this.panes.delete(sessionId);
+    this.panes.set(sessionId, { ...pane });
+    while (this.panes.size > WORKER_PANES_MAX) {
+      const oldest = this.panes.keys().next();
+      if (oldest.done) break;
+      this.panes.delete(oldest.value);
+    }
+    this.persist();
+  }
+
+  private dropInflight(owner: string | undefined, cwd: string, taskId: string, gen: number): void {
+    if (!owner) return;
+    const key = inflightKey(owner, cwd);
+    const hit = this.inflight.get(key);
+    if (hit && hit.taskId === taskId && hit.gen === gen) this.inflight.delete(key);
+  }
+
+  private bound(): void {
+    if (this.tasks.size <= WORKER_SLOTS_MAX) return;
+    for (const [id, t] of this.tasks) {
+      if (this.tasks.size <= WORKER_SLOTS_MAX) return;
+      if (t.state === 'released') this.tasks.delete(id);
+    }
+    while (this.tasks.size > WORKER_SLOTS_MAX) {
+      const oldest = this.tasks.keys().next();
+      if (oldest.done) break;
+      this.tasks.delete(oldest.value);
+    }
+  }
+
+  private write(): void {
+    if (!this.writable) return;
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    atomicWriteJSONSync(this.file, { version: WORKER_SLOTS_VERSION, tasks: [...this.tasks.values()], panes: Object.fromEntries(this.panes) });
+  }
+
+  /** A write after the launch: a failure is logged, the entry stays in memory. */
+  private persist(): void {
+    try {
+      this.write();
+    } catch (err) {
+      this.warn(`[factory] worker slots not written: ${String(err)}`);
+    }
+  }
+}
+
+const inflightKey = (owner: string, cwd: string): string => `${owner}\u0000${path.resolve(cwd)}`;
+
+let hosted: WorkerSlots | null = null;
+
+/** The hosted store, loaded on first use (rebuilt from the hosted ledger
+ *  when its file is missing). */
+export function getWorkerSlots(): WorkerSlots {
+  if (!hosted) {
+    hosted = WorkerSlots.at(getWmuxDir(), () => getTaskLedger().list({}));
+    hosted.load();
+  }
+  return hosted;
+}
+
+/** Tests only: swap the hosted store (null = re-create lazily). */
+export function setWorkerSlotsForTests(next: WorkerSlots | null): void {
+  hosted = next;
+}
+
+/** The task and generation a pane belongs to: its own record, else the bot
+ *  worker session record its create wrote (generation unknown). */
+export function taskOfPane(sessionId: string): { taskId: string; gen?: number } | null {
+  try {
+    const p = getWorkerSlots().paneOf(sessionId);
+    if (p) return { taskId: p.taskId, gen: p.gen };
+    const t = botWorkerSessionRecord(sessionId)?.taskId;
+    return t ? { taskId: t } : null;
+  } catch {
+    return null;
+  }
+}

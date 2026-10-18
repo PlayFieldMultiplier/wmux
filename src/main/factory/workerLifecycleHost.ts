@@ -70,6 +70,7 @@ import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantRefresh, setDormantTaskWorkspaces } from '../worktask/fanoutGuards';
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
+import { getWorkerSlots } from './workerSlots';
 import type { FanOutService } from '../worktask/FanOutService';
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
@@ -144,7 +145,10 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   };
   // Ended tasks whose agent was seen gone, kept across restarts
   // (agentGoneFacts.ts). A file this version cannot read leaves none.
-  const goneFacts = AgentGoneFacts.at(deps.wmuxDir());
+  // Each task's launch generation (workerSlots.ts): loaded, or rebuilt from
+  // the ledger rows on the first start with it.
+  const launches = getWorkerSlots();
+  const goneFacts = AgentGoneFacts.at(deps.wmuxDir(), (taskId) => launches.launchOf(taskId)?.launchedAt);
   goneFacts.load();
   setAgentGoneFacts(goneFacts);
   offs.push(() => setAgentGoneFacts(null));
@@ -189,7 +193,14 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const liveness = (): SlotLiveness => {
     const idleWorkspaces = idle.get();
     const entries = getWorkspaceMirror().getEntries();
-    return { workspaces: entries ? new Set(entries.map((e) => e.id)) : null, idleWorkspaces, stoppedTasks: stoppedTasks(), busyWorkspaces: taskLiveness.busyWorkspaces(), now: Date.now() };
+    return {
+      workspaces: entries ? new Set(entries.map((e) => e.id)) : null,
+      idleWorkspaces,
+      stoppedTasks: stoppedTasks(),
+      busyWorkspaces: taskLiveness.busyWorkspaces(),
+      launchedAt: (taskId) => launches.launchOf(taskId)?.launchedAt,
+      now: Date.now(),
+    };
   };
   /** Open bot task rows whose worker holds an agent slot. */
   const slotRows = (): ReturnType<typeof ledger.list> => {
@@ -453,6 +464,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     }
     const resumePorts: WorkerResumePorts = {
       store: reclaimed,
+      launches,
       listSessions,
       sessionRecordOf: botWorkerSessionRecord,
       workspacePanes: (workspaceId) => {

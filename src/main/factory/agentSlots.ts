@@ -45,6 +45,9 @@ export interface SlotLiveness {
    *  runs a foreground command: a stopped task's worker relaunched there
    *  holds its slot again. */
   busyWorkspaces?: ReadonlySet<string>;
+  /** When a task's worker was last launched (factory/workerSlots.ts), or
+   *  undefined when not recorded. */
+  launchedAt?: (taskId: string) => number | undefined;
   now: number;
 }
 
@@ -119,7 +122,9 @@ export function rowHoldsAgentSlot(
   // Its worker was stopped after the row last changed: no agent, even when
   // the row is recent or its pane is not known dead.
   if (row.id && live?.stoppedTasks?.has(row.id) && !live.busyWorkspaces?.has(row.taskWorkspaceId)) return false;
-  if (!live || live.now - row.updatedAt < SLOT_ROW_GRACE_MS) return true;
+  // Its worker's launch, as recorded; else the row's last write.
+  const since = (row.id ? live?.launchedAt?.(row.id) : undefined) ?? row.updatedAt;
+  if (!live || live.now - since < SLOT_ROW_GRACE_MS) return true;
   if (live.workspaces && !live.workspaces.has(row.taskWorkspaceId)) return false;
   return !live.idleWorkspaces.has(row.taskWorkspaceId);
 }

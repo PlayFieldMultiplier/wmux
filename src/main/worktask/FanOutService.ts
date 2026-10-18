@@ -61,6 +61,7 @@ import {
 import { workerTempEnv } from './fanoutTempDir';
 import { inheritTaskAutonomy } from './taskAutonomy';
 import { getFanOutGuards, type FanOutGuards } from './fanoutGuards';
+import { getWorkerSlots, type WorkerSlots } from '../factory/workerSlots';
 import { loadFanoutWorkerPermissionMode } from './fanoutWorkerPolicy';
 import { commandChoosesModel, promptFlagForLauncher } from '../../shared/orchestratorRole';
 import {
@@ -476,6 +477,9 @@ export interface FanOutServiceOptions {
   /** Depth-1 lineage + live-cap store. Injected in tests; defaults to the
    *  hosted one. */
   lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'>;
+  /** Each task's launch generation on disk (factory/workerSlots.ts).
+   *  Injected in tests; defaults to the hosted one. */
+  launches?: Pick<WorkerSlots, 'beginLaunch' | 'launched' | 'released'>;
   /** Worker permission mode reader. Injected in tests; defaults to the
    *  main-side Settings store. */
   workerPermissionMode?: () => FanoutWorkerPermissionMode;
@@ -567,6 +571,7 @@ export class FanOutService {
   private pendingRechecks: Promise<void>[] = [];
   /** Depth-1 lineage + live-cap store (absent = the hosted one). */
   private readonly lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'>;
+  private readonly launches?: Pick<WorkerSlots, 'beginLaunch' | 'launched' | 'released'>;
   private readonly workerPermissionMode: () => FanoutWorkerPermissionMode;
   private readonly outputsRoot: string;
   private readonly ledger?: Pick<TaskLedger, 'get' | 'onTransition'>;
@@ -599,6 +604,7 @@ export class FanOutService {
     this.firstRunOptions = opts.firstRunOptions;
     this.firstRunRecheckMs = opts.firstRunRecheckMs ?? FIRST_RUN_MODEL_RECHECK_MS;
     this.lineage = opts.lineage;
+    this.launches = opts.launches;
     this.workerPermissionMode = opts.workerPermissionMode ?? (() => loadFanoutWorkerPermissionMode());
     this.outputsRoot = opts.outputsRoot ?? defaultOutputsRoot();
     this.workerTempDirs = opts.workerTempDirs;
@@ -1509,6 +1515,28 @@ export class FanOutService {
       return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
     }
 
+    // The launch's generation, on disk before anything is spawned: the pane's
+    // create and every later reader name the task by it. Not recorded, not
+    // launched.
+    const launches = this.launches ?? getWorkerSlots();
+    let gen: number;
+    try {
+      gen = launches.beginLaunch({
+        taskId,
+        origin: ctx.requester?.kind === 'bot' ? 'bot' : 'owner',
+        ...(ctx.requester?.kind === 'bot' && ctx.requester.botId ? { botId: ctx.requester.botId } : {}),
+        ownerWorkspaceId: ctx.verifiedWorkspaceId,
+        cwd,
+      }).gen;
+    } catch (err) {
+      releaseSlot();
+      discardTempDir();
+      const error = `not launched: ${(err as Error).message}`;
+      const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+      await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
+      return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
+    }
+
     // A bot's named secrets: one single-use grant for this spawn, which only
     // pty:create can resolve (factory/secretGrants.ts). No grant, no launch.
     let secretGrant: string | null = null;
@@ -1534,6 +1562,7 @@ export class FanOutService {
         ? mintSecretGrant({ botId, taskId, ownerWorkspaceId: ctx.verifiedWorkspaceId, cwd, names: ctx.secretNames ?? [], connectionNames: connectorKeys })
         : null;
       if (!secretGrant) {
+        launches.released(taskId, gen, cwd);
         releaseSlot();
         discardTempDir();
         const error = 'not launched: a secret it names is not stored any more';
@@ -1593,6 +1622,7 @@ export class FanOutService {
         // failure can outlive its dispose), so the folder is kept, with its
         // row, for the kept-folder cleanup, which checks what uses it. The
         // temp dir goes to the sweep for the same reason.
+        launches.released(taskId, gen, cwd);
         releaseSlot();
         handOverTempDir(`task:${taskId}`);
         const error = `renderer spawn failed: ${spawned.error}`;
@@ -1609,6 +1639,7 @@ export class FanOutService {
       // A timeout does not prove the pane never spawned either: a late pane
       // is closed when it lands (spawnTaskWorkspace), but the worktree stays,
       // recorded on the task's ledger row.
+      launches.released(taskId, gen, cwd);
       releaseSlot();
       handOverTempDir(`task:${taskId}`);
       const error = `renderer spawn threw: ${(err as Error).message}`;
@@ -1622,13 +1653,16 @@ export class FanOutService {
     }
     base.workspaceId = workspaceId;
     handOverTempDir(workspaceId);
+    // Its pane names the task and generation from here on (a late answer of
+    // an older generation's spawn changes nothing).
+    launches.launched(taskId, gen, workspaceId, base.ptyId, cwd);
     // The renderer already stamped the lineage before the agent launched; this
     // second write is idempotent and covers a renderer that did not. It carries
-    // the same origin the spawn did and never replaces one already recorded.
+    // the same origin and task the spawn did and never replaces an origin
+    // already recorded.
     try {
       const lineage = this.lineage ?? getFanOutGuards();
-      if (ctx.requester) lineage.markTask(workspaceId, ctx.verifiedWorkspaceId, ctx.requester);
-      else lineage.markTask(workspaceId, ctx.verifiedWorkspaceId);
+      lineage.markTask(workspaceId, ctx.verifiedWorkspaceId, ctx.requester, { taskId, gen });
     } catch (err) {
       console.warn(`[fanout] could not confirm the lineage stamp for ${workspaceId}: ${String(err)}`);
     }
@@ -2020,6 +2054,16 @@ export class FanOutService {
       ? mintSecretGrant({ botId: input.botId, taskId: input.taskId, ownerWorkspaceId: input.ownerWorkspaceId, cwd: input.cwd, names: [], connectionNames: keys })
       : null;
     if (keys.length > 0 && !secretGrant) return { error: 'a connection\'s key is not stored any more' };
+    // A respawn is a new launch of the task: its generation goes up, on disk
+    // before the spawn (factory/workerSlots.ts).
+    const launches = this.launches ?? getWorkerSlots();
+    let gen: number;
+    try {
+      gen = launches.beginLaunch({ taskId: input.taskId, origin: 'bot', botId: input.botId, ownerWorkspaceId: input.ownerWorkspaceId, cwd: input.cwd }).gen;
+    } catch (err) {
+      revokeSecretGrant(secretGrant);
+      return { error: (err as Error).message };
+    }
     const releaseBotSpawn = beginBotWorkerSpawn(input.ownerWorkspaceId, input.cwd, { botId: input.botId, taskId: input.taskId, ...(connectors.length > 0 ? { connectors } : {}) });
     let spawned: Awaited<ReturnType<FanOutRendererPort['spawnWorkspace']>>;
     try {
@@ -2037,16 +2081,24 @@ export class FanOutService {
         workerPermissionMode: input.workerPermissionMode,
       });
     } catch (err) {
+      launches.released(input.taskId, gen, input.cwd);
       return { error: `renderer spawn threw: ${(err as Error).message}` };
     } finally {
       releaseBotSpawn();
       revokeSecretGrant(secretGrant);
     }
-    if ('error' in spawned) return { error: spawned.error };
-    if (!spawned.ptyId) return { error: 'the renderer returned no pane' };
+    if ('error' in spawned) {
+      launches.released(input.taskId, gen, input.cwd);
+      return { error: spawned.error };
+    }
+    if (!spawned.ptyId) {
+      launches.released(input.taskId, gen, input.cwd);
+      return { error: 'the renderer returned no pane' };
+    }
+    launches.launched(input.taskId, gen, spawned.workspaceId, spawned.ptyId, input.cwd);
     // The same idempotent second stamp the fan-out writes after its spawn.
     try {
-      (this.lineage ?? getFanOutGuards()).markTask(spawned.workspaceId, input.ownerWorkspaceId, origin);
+      (this.lineage ?? getFanOutGuards()).markTask(spawned.workspaceId, input.ownerWorkspaceId, origin, { taskId: input.taskId, gen });
     } catch (err) {
       console.warn(`[fanout] could not confirm the lineage stamp for ${spawned.workspaceId}: ${String(err)}`);
     }
