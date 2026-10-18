@@ -1,31 +1,30 @@
 #!/usr/bin/env node
 // Open, update or close the `Nightly red: <workflow>` issue for this run.
 //
-//   node scripts/ci-failure-issue.mjs --state failure|success [--dry-run]
+//   node scripts/ci-failure-issue.mjs [--state failure|success|auto] [--dry-run]
 //
-// Runs as the last step of a job on main (runtime.yml, windows.yml), with
-// GH_TOKEN set and the GITHUB_* variables Actions provides:
+// Runs in the `report` job of runtime.yml and windows.yml, on main, after the
+// test jobs, with GH_TOKEN set and the GITHUB_* variables Actions provides.
+// By default (auto) the run's finished jobs decide:
 //
-//   --state failure   comment on the open `ci-nightly` issue for this workflow,
-//                     or open one (labels bug, ci-nightly) when there is none;
-//   --state success   close that issue with "green again at <run url>", once
-//                     every other job in the run is green too;
-//   --dry-run         print the gh commands that would change something,
-//                     instead of running them. Reads print too and answer
-//                     "nothing found", so a dry run shows the create path.
+//   a job failed or timed out   comment on the open `ci-nightly` issue for this
+//                               workflow, or open one (labels bug, ci-nightly);
+//   all green                   close that issue with "green again at <run url>";
+//   a job was cancelled         nothing (a newer push superseded the run).
 //
-// The rules and the races are in scripts/lib/ci-failure-issue.mjs.
+//   --state failure|success     skip the job check (a manual or dry run);
+//   --dry-run                   print the gh commands that would change
+//                               something instead of running them. Reads print
+//                               too and answer "nothing found".
 //
-// Exit code: on the failure path an error exits 1; the job is red anyway, and
-// a red reporting step says the issue was not filed. On the success path an
-// error is a warning and the exit is 0: a gh hiccup must not turn a green job
-// red.
+// The rules are in scripts/lib/ci-failure-issue.mjs. An error exits 1: the
+// report job turns red, which says the issue was not filed or closed.
 
 import { spawnSync } from 'node:child_process';
 import { report } from './lib/ci-failure-issue.mjs';
 
 function parseArgs(argv) {
-  const args = { state: null, dryRun: false };
+  const args = { state: 'auto', dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
@@ -75,10 +74,6 @@ function main() {
       log: (line) => console.log(`ci-failure-issue: ${line}`),
     });
   } catch (error) {
-    if (args.state === 'success') {
-      console.log(`::warning::ci-failure-issue: ${error.message}`);
-      return;
-    }
     console.error(`ci-failure-issue: ${error.message}`);
     process.exit(1);
   }

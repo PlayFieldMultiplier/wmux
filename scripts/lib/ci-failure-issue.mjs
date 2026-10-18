@@ -1,12 +1,12 @@
 // Nightly red runs as GitHub issues: the pure parts of scripts/ci-failure-issue.mjs.
 //
 // runtime.yml and windows.yml run on main (nightly, on push, on demand) and
-// gate nothing. A red run used to notify by email only. Now the last step of
-// each job opens one issue per workflow, titled `Nightly red: <workflow>` and
-// labelled `ci-nightly`, or comments on it while it is open; the next green
-// run closes it. repoWatch turns a new issue into an `issue.opened` fact and
-// the triage bot wakes on it (src/main/factory/roleDefaults.ts), so a red
-// night becomes a bot task.
+// gate nothing. A red run used to notify by email only. Now a `report` job
+// runs after the test jobs, whatever happened to them, and opens one issue per
+// workflow, titled `Nightly red: <workflow>` and labelled `ci-nightly`, or
+// comments on it while it is open; the next green run closes it. repoWatch
+// turns a new issue into an `issue.opened` fact and the triage bot wakes on it
+// (src/main/factory/roleDefaults.ts), so a red night becomes a bot task.
 //
 // Everything here takes an injected `gh(args) => stdout` runner, so the tests
 // drive it with a fake and the command line is the only file that spawns.
@@ -15,20 +15,16 @@
 // the commit and the failed job names. Never log text: a log can carry
 // anything a test printed, and the issue is read by a bot.
 //
-// Races, accepted and written down here:
-// - windows.yml runs two shards, each with its own step. Two shards failing
-//   within the same second can both find no open issue and both create one.
-//   The window is one `gh issue list` round trip; the cost is a duplicate
-//   issue to close by hand.
-// - A green shard closes the issue only when every other job in the run has
-//   already finished green. If the other shard is still running, the green
-//   one leaves the issue alone and the last shard to finish decides; if both
-//   finish the same second, neither may close it, and the next green run does.
-// - Runs of one workflow overlap: a push run and the nightly sit in separate
-//   concurrency groups. A green run closes the issue only when it is not
-//   older than the newest red run the issue records (run ids grow with
-//   creation time; a rerun keeps its id), so an older green run finishing
-//   late never hides a newer red one, and a green rerun still closes.
+// Why a job of its own and not a last step in each test job: a step cannot
+// report a job that timed out (the job is gone before `if: failure()` runs),
+// and windows.yml's two shards would each report, racing to open the issue
+// and to close it. One job after all of them sees every result once.
+//
+// Runs of one workflow still overlap: a push run and the nightly sit in
+// separate concurrency groups. A green run closes the issue only when it is
+// not older than the newest red run the issue reports (run ids grow with
+// creation time; a rerun keeps its id), so an older green run finishing late
+// never hides a newer red one, and a green rerun still closes.
 
 export const LABEL = 'ci-nightly';
 export const LABEL_COLOR = 'B60205';
@@ -52,39 +48,29 @@ export function runUrl(env) {
 
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure']);
 
-function stepFailed(job) {
-  return (job.steps ?? []).some((step) => FAILED.has(step.conclusion));
-}
-
 /**
- * Names of the run's failed jobs, from `gh run view --json jobs`. A finished
- * job counts by its conclusion. A job still in progress counts only when one
- * of its steps already failed: that is the job running this very step on the
- * failure path (its own conclusion is not in yet), or the other shard on its
- * way to red. A job in progress with nothing failed is left out.
+ * Names of the run's failed jobs, from `gh run view --json jobs`. The report
+ * job runs after every other job has finished, so only finished jobs count.
  */
 export function failedJobNames(jobsJson) {
   const names = [];
   for (const job of jobsJson?.jobs ?? []) {
-    const failed = job.status === 'completed' ? FAILED.has(job.conclusion) : stepFailed(job);
-    if (failed && job.name) names.push(String(job.name));
+    if (job.status === 'completed' && FAILED.has(job.conclusion) && job.name) names.push(String(job.name));
   }
   return [...new Set(names)].sort();
 }
 
 /**
- * Whether every job other than this one finished green, so a green step may
- * close the issue. This job is the one still in progress (the step runs inside
- * it); a second job in progress is the other shard, not done yet, and then the
- * answer is no.
+ * What the run's finished jobs add up to: 'failure' when one failed or timed
+ * out, 'cancelled' when one was cancelled (a newer push superseded the run;
+ * nothing to report), else 'success'. The report job itself is the one still
+ * in progress and is left out.
  */
-export function othersAllGreen(jobsJson) {
-  const jobs = jobsJson?.jobs ?? [];
-  const running = jobs.filter((job) => job.status !== 'completed');
-  if (running.length !== 1 || stepFailed(running[0])) return false;
-  return jobs
-    .filter((job) => job.status === 'completed')
-    .every((job) => job.conclusion === 'success' || job.conclusion === 'skipped');
+export function runOutcome(jobsJson) {
+  const done = (jobsJson?.jobs ?? []).filter((job) => job.status === 'completed');
+  if (done.some((job) => FAILED.has(job.conclusion))) return 'failure';
+  if (done.length === 0 || done.some((job) => job.conclusion === 'cancelled')) return 'cancelled';
+  return 'success';
 }
 
 function sanitize(value) {
@@ -129,12 +115,14 @@ export function findOpenIssue(gh, { repo, title }) {
   return match ? match.number : null;
 }
 
-/** The newest run id the issue's body and comments link to, or 0. */
+/** The newest red run the issue reports, or 0: the `Run: <url>` line that
+ *  starts each failure body (renderFailureBody), in the body and comments.
+ *  Other links (a person's comment, "green again at") do not count. */
 export function newestReportedRun(issueJson) {
   const texts = [issueJson.body ?? '', ...(issueJson.comments ?? []).map((c) => c.body ?? '')];
   let newest = 0;
   for (const text of texts) {
-    for (const m of text.matchAll(/\/actions\/runs\/(\d+)/g)) newest = Math.max(newest, Number(m[1]));
+    for (const m of text.matchAll(/^Run: \S*\/actions\/runs\/(\d+)\s*$/gm)) newest = Math.max(newest, Number(m[1]));
   }
   return newest;
 }
@@ -148,15 +136,22 @@ function readJobs(gh, { repo, runId }) {
 }
 
 /**
- * One report. `state` is 'failure' or 'success'. `gh(args, { allowFailure })`
- * runs one command and returns its stdout; `log` prints a line. Returns what
- * it did: 'created', 'commented', 'closed' or 'none'.
+ * One report. `state` is 'failure', 'success', or 'auto' (the default): the
+ * run's finished jobs decide (runOutcome). `gh(args, { allowFailure })` runs
+ * one command and returns its stdout; `log` prints a line. Returns what it
+ * did: 'created', 'commented', 'closed' or 'none'.
  */
-export function report({ state, env, gh, log = () => undefined }) {
-  if (state !== 'failure' && state !== 'success') throw new Error(`--state must be failure or success, not ${state}`);
+export function report({ state = 'auto', env, gh, log = () => undefined }) {
+  if (!['failure', 'success', 'auto'].includes(state)) throw new Error(`--state must be failure, success or auto, not ${state}`);
   const repo = env.GITHUB_REPOSITORY;
   const title = issueTitle(env.GITHUB_WORKFLOW);
   const url = runUrl(env);
+  const jobsJson = readJobs(gh, { repo, runId: env.GITHUB_RUN_ID });
+  if (state === 'auto') state = runOutcome(jobsJson);
+  if (state === 'cancelled') {
+    log('the run was cancelled; nothing to report');
+    return 'none';
+  }
 
   const existing = findOpenIssue(gh, { repo, title });
 
@@ -172,16 +167,12 @@ export function report({ state, env, gh, log = () => undefined }) {
       log(`run ${env.GITHUB_RUN_ID} is older than red run ${newestRed}; leaving #${existing} open`);
       return 'none';
     }
-    if (!othersAllGreen(readJobs(gh, { repo, runId: env.GITHUB_RUN_ID }))) {
-      log(`another job in this run is not green (yet); leaving #${existing} open`);
-      return 'none';
-    }
     gh(['issue', 'close', String(existing), '-R', repo, '--comment', renderGreenComment(url)]);
     log(`closed #${existing}`);
     return 'closed';
   }
 
-  const jobs = failedJobNames(readJobs(gh, { repo, runId: env.GITHUB_RUN_ID }));
+  const jobs = failedJobNames(jobsJson);
   const body = renderFailureBody({ url, event: env.GITHUB_EVENT_NAME, sha: env.GITHUB_SHA, jobs });
 
   if (existing !== null) {
