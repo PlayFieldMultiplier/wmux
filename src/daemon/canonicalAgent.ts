@@ -161,18 +161,30 @@ export function mayPersistIdentity(
  *
  * The evidence stamp is upgraded once when a hook or a live process proves a
  * name the screen tier (or a legacy write) set, so a later launch can be told
- * from a guess without a write per event.
+ * from a guess without a write per event. It is also refreshed when the
+ * pane's saved conversation belongs to another agent and was captured after
+ * the stamp: the recovery pill trusts the name over that binding only when
+ * the stamp is the newer of the two, and a live same-name agent seen now is
+ * newer. That costs at most one write per binding capture.
  */
 export function recordPaneIdentity(
-  meta: { lastDetectedAgent?: AgentSlug; lastDetectedAgentEvidence?: { source: CanonicalAgentIdentity['source']; at: number } },
+  meta: {
+    lastDetectedAgent?: AgentSlug;
+    lastDetectedAgentEvidence?: { source: CanonicalAgentIdentity['source']; at: number };
+    resumeBinding?: { agent: string; ts: number };
+  },
   canonical: CanonicalAgentIdentity | undefined,
   now: number,
 ): boolean {
   if (!canonical) return false;
   if (meta.lastDetectedAgent === canonical.slug) {
-    const stamped = meta.lastDetectedAgentEvidence?.source;
-    const proven = stamped === 'hook' || stamped === 'process';
-    if (canonical.source === 'screen' || proven) return false;
+    if (canonical.source === 'screen') return false;
+    const stamp = meta.lastDetectedAgentEvidence;
+    const proven = stamp?.source === 'hook' || stamp?.source === 'process';
+    const binding = meta.resumeBinding;
+    const outdatedByBinding = proven && binding !== undefined && binding.agent !== canonical.slug
+      && typeof binding.ts === 'number' && binding.ts >= (stamp?.at ?? Infinity);
+    if (proven && !outdatedByBinding) return false;
   } else if (!mayPersistIdentity(meta.lastDetectedAgent, canonical)) {
     return false;
   }
