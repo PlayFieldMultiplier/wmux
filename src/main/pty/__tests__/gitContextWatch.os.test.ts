@@ -8,15 +8,17 @@ import {
   resolveRepo,
   resolveRepoState,
   readGitContext,
-  serialProbeIo,
   REMOTE_POLL_MS,
   REMOTE_RESOLVE_TIMEOUT_MS,
   REMOTE_POLL_DEADLINE_MS,
   REMOTE_POLL_MAX_MS,
+  type Probe,
+  type ProbeAnswer,
   type ProbeIo,
   type GitWatchFactory,
   type GitWatchListener,
 } from '../gitContextWatch';
+import { InProcessProbeReader, type ProbeReader } from '../shareReader';
 import { watchTarget } from '../../../shared/watchTarget';
 import { shortPathOf } from '../../../test-utils/shortPath';
 
@@ -740,7 +742,7 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events).toEqual([{ sessionId: 's1', branch: 'local', isWorktree: false }]);
   });
 
-  it('reads as unknown when the share does not answer in time, then applies the late answer', async () => {
+  it('reads as unknown when the share does not answer in time, then recovers on the next round', async () => {
     const root = tmp();
     initFakeRepo(root, 'main');
     const io = holdableIo();
@@ -752,7 +754,12 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
 
+    // The stuck read failed at its deadline; its late answer is dropped, and
+    // the poll walks the inconclusive cwd again.
     io.release();
+    await settle();
+    expect(events).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
     await settle();
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'main', isWorktree: false });
   });
@@ -819,8 +826,10 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     io.hold();
     w.update('s1', wt, (gitdir) => gitdir.replace('/home/me/repo', share));
     await vi.advanceTimersByTimeAsync(REMOTE_RESOLVE_TIMEOUT_MS);
-    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+    expect(events.at(-1)?.branch).toBeNull(); // not 'previous'
     io.release();
+    await settle();
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
     await settle();
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'linked', isWorktree: true });
   });
@@ -962,16 +971,17 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
 
-    // Backed off, and nothing stacked behind the stuck round.
-    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MAX_MS * 2);
-    expect(io.probes).toBe(stuck);
-    expect(watcher.probesOutstanding).toBe(1);
+    // Backed off, and never more than one read out at a time.
+    for (let step = 0; step < 8; step++) {
+      await vi.advanceTimersByTimeAsync(REMOTE_POLL_MAX_MS / 4);
+      expect(watcher.probesOutstanding).toBeLessThanOrEqual(1);
+    }
+    expect(io.probes - stuck).toBeLessThanOrEqual(5); // 10, 20, 40, 60, 60 s apart
 
-    // The late answer is dropped; the next round reads afresh and recovers.
+    // Once the share answers, a round reads afresh and recovers.
     fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/after\n');
     io.release();
     await settle();
-    expect(events.at(-1)?.branch).toBeNull();
     await vi.advanceTimersByTimeAsync(REMOTE_POLL_MAX_MS);
     await settle();
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'after', isWorktree: false });
@@ -1035,12 +1045,143 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(io.probes).toBe(1); // the first walk's first probe, now stuck
     for (let i = 0; i < 1_000; i++) watcher.update('s1', path.join(root, `d${i}`));
     await settle();
-    expect(watcher.probesOutstanding).toBe(1); // coalesced: nothing queued behind it
+    // The stuck read was let go; the walk took the last cwd only, and its one
+    // read waits in the distro's queue behind the stuck one.
+    expect(io.probes).toBe(1);
+    expect(watcher.probesOutstanding).toBe(1);
     watcher.remove('s1');
+    expect(watcher.probesOutstanding).toBe(0); // taken out of the queue
     io.release();
     await settle();
-    expect(io.probes).toBe(1);
+    expect(io.probes).toBe(1); // and never run
+    expect(watcher.walksRunning).toBe(0);
     expect(events).toEqual([]);
+  });
+
+  it('removing a pane whose poll round is stuck settles that read at once', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    watcher.update('s1', root);
+    await settle();
+    io.hold();
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    expect(watcher.probesOutstanding).toBe(1);
+    watcher.remove('s1');
+    expect(watcher.probesOutstanding).toBe(0);
+    expect(watcher.readerShares).toEqual([]);
+    io.release();
+  });
+
+  it('a hung read, then 1,000 panes created and removed: only the hung read is left', async () => {
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    const root = tmp();
+    io.hold();
+    watcher.update('hung', path.join(root, 'hung'));
+    await settle();
+    for (let i = 0; i < 1_000; i++) {
+      watcher.update(`p${i}`, path.join(root, `p${i}`));
+      await settle();
+      watcher.remove(`p${i}`);
+    }
+    await settle();
+    expect(watcher.probesOutstanding).toBe(1);
+    expect(watcher.walksRunning).toBe(1); // the hung pane's own walk
+    expect(watcher.size).toBe(0);
+    watcher.remove('hung');
+    await settle();
+    expect(watcher.probesOutstanding).toBe(0);
+    expect(watcher.walksRunning).toBe(0);
+    io.release();
+    await settle();
+    expect(io.probes).toBe(1); // none of the removed panes' queued reads ran
+  });
+
+  it.runIf(process.platform === 'win32')('a pane leaving a hung share for a healthy one resolves at once', async () => {
+    const answer: ProbeIo = ({ op, path: p }) => {
+      if (/^\\\\wsl\$\\A\\/i.test(p)) return new Promise(() => undefined); // distro A is wedged
+      if (op === 'stat') return Promise.resolve(p === '\\\\wsl$\\B\\repo\\.git' ? 'dir' : 'missing');
+      if (op === 'read') return Promise.resolve(p === '\\\\wsl$\\B\\repo\\.git\\HEAD' ? 'ref: refs/heads/b\n' : null);
+      return Promise.resolve(p);
+    };
+    const w = new GitContextWatcher(fake.factory, { io: answer });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', '\\\\wsl$\\A\\repo');
+    await settle();
+    w.update('s1', '\\\\wsl$\\B\\repo');
+    await settle(); // no timer: not the 5 s deadline, not the resolve timeout
+    expect(events).toEqual([{ sessionId: 's1', branch: 'b', isWorktree: false }]);
+    expect(w.readerShares).toEqual(['b']); // A's reader went with its last pane
+  });
+
+  it('a poll answer read before a newer update never lands over that update\'s answer', async () => {
+    // A reader that answers in whatever order the test says.
+    const asked: Array<{ probe: Probe; answer: (a: ProbeAnswer) => void }> = [];
+    const reader: ProbeReader = {
+      read: (probe) => new Promise((resolve) => asked.push({ probe, answer: resolve })),
+      get outstanding() { return asked.length; },
+      close() { /* nothing to stop */ },
+    };
+    const answerAll = async () => {
+      for (let entry = asked.shift(); entry; entry = asked.shift()) {
+        entry.answer(await localIo(entry.probe));
+        await settle();
+      }
+    };
+    const w = new GitContextWatcher(fake.factory, { isRemote: () => true, readers: () => reader });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    w.update('s1', root);
+    await answerAll();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+
+    // A poll round reads HEAD, and its answer is slow to come back.
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    const stale = asked.shift()!;
+    expect(stale.probe.op).toBe('read');
+    // Meanwhile the branch moves and the shell reports the same cwd again.
+    fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/next\n');
+    w.update('s1', root);
+    await answerAll();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'next', isWorktree: false });
+
+    stale.answer('ref: refs/heads/main\n');
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'next', isWorktree: false });
+    // The poll goes on, and reads the branch as it is.
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await answerAll();
+    expect(events.at(-1)?.branch).toBe('next');
+  });
+
+  it('closes a share\'s reader once the last pane on it leaves', async () => {
+    const opened: string[] = [];
+    const closed: string[] = [];
+    const readers = (share: string) => {
+      opened.push(share);
+      const reader = new InProcessProbeReader(localIo);
+      const close = reader.close.bind(reader);
+      reader.close = () => { closed.push(share); close(); };
+      return reader;
+    };
+    const w = new GitContextWatcher(fake.factory, { isRemote: () => true, readers });
+    watchers.push(w);
+    const a = tmp();
+    const b = tmp();
+    w.update('s1', a);
+    w.update('s2', b);
+    await settle();
+    expect(w.readerShares).toEqual(['']);
+    w.remove('s1');
+    expect(closed).toEqual([]); // s2 still watches there
+    w.remove('s2');
+    expect(closed).toEqual(['']);
+    expect(w.readerShares).toEqual([]);
   });
 
   it('1,000 cds behind a stuck probe walk only the last one', async () => {
@@ -1060,25 +1201,5 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     // The stuck probe, then the last cwd's own walk and HEAD read: `.git` is a
     // directory there, so two probes.
     expect(io.probes).toBe(1 + 2);
-  });
-
-  it('serialProbeIo runs one probe at a time', async () => {
-    const order: string[] = [];
-    let finishFirst: (() => void) | undefined;
-    const io = serialProbeIo((probe) => {
-      order.push(`start ${probe.path}`);
-      if (probe.path === 'a') {
-        return new Promise((resolve) => { finishFirst = () => { order.push('end a'); resolve('missing'); }; });
-      }
-      order.push(`end ${probe.path}`);
-      return Promise.resolve('missing');
-    });
-    const first = io({ op: 'stat', path: 'a' });
-    const second = io({ op: 'stat', path: 'b' });
-    await settle();
-    expect(order).toEqual(['start a']);
-    finishFirst?.();
-    await Promise.all([first, second]);
-    expect(order).toEqual(['start a', 'end a', 'start b', 'end b']);
   });
 });

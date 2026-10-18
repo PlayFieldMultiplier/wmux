@@ -71,6 +71,10 @@ describe.runIf(enabled)('daemon git watcher over a WSL pane cwd (#2407)', () => 
       const started = Date.now();
       await branch('switched');
       expect(Date.now() - started).toBeLessThan(REMOTE_POLL_MS * 2 + 1_000);
+      // The distro's reader process lives exactly as long as a pane there.
+      expect(watcher.readerShares).toEqual([distribution.toLowerCase()]);
+      watcher.remove('s');
+      expect(watcher.readerShares).toEqual([]);
     } finally {
       watcher.dispose();
       if (dir.startsWith('/tmp/wmux-2407.')) execute(['rm', '-rf', '--', dir]);
