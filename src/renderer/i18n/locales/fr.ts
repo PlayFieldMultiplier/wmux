@@ -614,6 +614,8 @@ export const fr = {
   'worktask.cleanup.preserved': 'Artefacts non commités conservés — commit/PR depuis le diff ou abandon, puis fermez à nouveau.',
   'worktask.cleanup.unpushed': 'Vous avez {count} commit(s) non poussé(s) — PR/push, puis fermez à nouveau.',
   'worktask.cleanup.closeFailed': 'échec de la fermeture : {error}',
+  'worktask.keepFolder.action': 'Fermer et conserver le dossier',
+  'worktask.keepFolder.done': 'Tâche fermée. Son dossier a été conservé dans {path}.',
 
   // ─── Élément d'espace de travail : avertissement de limite du worktree de tâche ───
   'workspace.cwdDeparted': 'Le cwd du panneau est sorti de la limite du worktree de la tâche : {cwd}',

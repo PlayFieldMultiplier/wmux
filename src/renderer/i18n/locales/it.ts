@@ -614,6 +614,8 @@ export const it = {
   'worktask.cleanup.preserved': 'Artefatti non committati conservati — commit/PR dal diff o scartali, poi richiudi.',
   'worktask.cleanup.unpushed': 'Hai {count} commit non pushati — PR/push, poi richiudi.',
   'worktask.cleanup.closeFailed': 'chiusura non riuscita: {error}',
+  'worktask.keepFolder.action': 'Chiudi e mantieni la cartella',
+  'worktask.keepFolder.done': 'Attività chiusa. La sua cartella è stata mantenuta in {path}.',
 
   // ─── Elemento area di lavoro: avviso confine del worktree dell'attività ───
   'workspace.cwdDeparted': "Il cwd del pannello è uscito dal confine del worktree dell'attività: {cwd}",

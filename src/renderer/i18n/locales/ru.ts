@@ -615,6 +615,8 @@ export const ru = {
   'worktask.cleanup.preserved': 'Незакоммиченные артефакты сохранены — сделайте commit/PR из diff или отбросьте, затем закройте снова.',
   'worktask.cleanup.unpushed': 'У вас {count} неотправленных коммитов — PR/push, затем закройте снова.',
   'worktask.cleanup.closeFailed': 'close не удался: {error}',
+  'worktask.keepFolder.action': 'Закрыть и сохранить папку',
+  'worktask.keepFolder.done': 'Задача закрыта. Её папка сохранена в {path}.',
 
   // ─── Workspace item: task worktree boundary warning ───
   'workspace.cwdDeparted': 'cwd панели вышел за границу worktree задачи: {cwd}',

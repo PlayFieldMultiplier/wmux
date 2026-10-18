@@ -6,6 +6,7 @@
 // workspace jump, and the task close (which refuses dirty or unpushed work).
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from '../../stores';
+import { keepFolderAction, keptFolderMessage } from '../WorkTask/closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { cachedReviewSummary, loadReviewSummary, type ReviewChangeSummary } from './reviewSummary';
 import type { PrStatus } from '../../../shared/types';
@@ -99,6 +100,19 @@ export function reviewPrUrl(entry: ReviewQueueEntry): string | undefined {
   return entry.pr?.url ?? entry.prUrl;
 }
 
+/** Dispose and remove the workspace of a task that closed; false when the
+ *  workspace may not be closed. Re-asked after the close: the workspace list
+ *  may have changed while it ran, and a refused removal must not follow a
+ *  dispose. */
+function removeClosedTaskWorkspace(workspaceId: string): boolean {
+  if (refuseWorkspaceClose(workspaceId)) return false;
+  const now = useStore.getState();
+  const ws = now.workspaces.find((w) => w.id === workspaceId);
+  if (ws) disposeWorkspacePtys(ws);
+  now.removeWorkspace(workspaceId);
+  return true;
+}
+
 /**
  * Close one task the way the sidebar's "Close finished tasks" does: re-check it
  * against the current store, run the real task close (it refuses a dirty or
@@ -124,20 +138,22 @@ export async function closeReviewTask(workspaceId: string, t: Translate): Promis
       TASK_CLOSE_TIMEOUT_MS,
     );
     if (res.ok) {
-      // Re-asked after the await: the workspace list may have changed while
-      // the task close ran, and a refused removal must not follow a dispose.
-      if (refuseWorkspaceClose(workspaceId)) return false;
-      const now = useStore.getState();
-      const ws = now.workspaces.find((w) => w.id === workspaceId);
-      if (ws) disposeWorkspacePtys(ws);
-      now.removeWorkspace(workspaceId);
-      push({ level: 'info', message: t('fleet.review.closed', { title: name }) });
+      if (!removeClosedTaskWorkspace(workspaceId)) return false;
+      push({ level: 'info', message: keptFolderMessage(res, t) ?? t('fleet.review.closed', { title: name }) });
       return true;
     }
     const reason = res.reason === 'dirty' ? t('worktask.cleanup.preserved')
       : res.reason === 'unpushed' ? t('worktask.cleanup.unpushed', { count: res.aheadCount ?? '' })
       : t('worktask.cleanup.closeFailed', { error: res.error ?? '' });
-    push({ level: 'warn', message: `${name}: ${reason}` });
+    push({
+      level: 'warn',
+      message: `${name}: ${reason}`,
+      // #2388: the way out of a close that keeps refusing. An unpushed
+      // branch has its own next step (push or a PR).
+      ...(res.reason !== 'unpushed'
+        ? { action: keepFolderAction(check.mission.id, check.mission.owner.verifiedWorkspaceId, t, () => { removeClosedTaskWorkspace(workspaceId); }) }
+        : {}),
+    });
   } catch (err) {
     push({ level: 'warn', message: `${name}: ${t('worktask.cleanup.closeFailed', { error: err instanceof Error ? err.message : String(err) })}` });
   }

@@ -610,6 +610,8 @@ export const hi = {
   'worktask.cleanup.preserved': 'बिना commit किए आर्टिफ़ैक्ट संरक्षित — diff से commit/PR करें या त्यागें, फिर दोबारा बंद करें।',
   'worktask.cleanup.unpushed': 'आपके पास {count} बिना push किए commit हैं — PR/push, फिर दोबारा बंद करें।',
   'worktask.cleanup.closeFailed': 'close विफल: {error}',
+  'worktask.keepFolder.action': 'बंद करें और फ़ोल्डर रखें',
+  'worktask.keepFolder.done': 'टास्क बंद किया गया। उसका फ़ोल्डर {path} पर रखा गया।',
 
   // ─── Workspace item: task worktree boundary warning ───
   'workspace.cwdDeparted': 'पैनल cwd टास्क worktree सीमा के बाहर चला गया: {cwd}',

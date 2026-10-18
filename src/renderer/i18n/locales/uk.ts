@@ -615,6 +615,8 @@ export const uk = {
   'worktask.cleanup.preserved': 'Незакомічені артефакти збережено — зробіть commit/PR з diff або відхиліть, потім закрийте знову.',
   'worktask.cleanup.unpushed': 'У вас {count} невідправлених комітів — PR/push, потім закрийте знову.',
   'worktask.cleanup.closeFailed': 'close не вдався: {error}',
+  'worktask.keepFolder.action': 'Закрити й зберегти теку',
+  'worktask.keepFolder.done': 'Задачу закрито. Її теку збережено в {path}.',
 
   // ─── Workspace item: task worktree boundary warning ───
   'workspace.cwdDeparted': 'cwd панелі вийшов за межу worktree задачі: {cwd}',

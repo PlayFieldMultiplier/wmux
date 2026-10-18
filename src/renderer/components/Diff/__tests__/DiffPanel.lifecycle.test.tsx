@@ -184,6 +184,34 @@ describe('DiffPanel — adopt and close lifecycle (#1461)', () => {
     expect(adoptButton(c)).toBeNull();
   });
 
+  // #2388: a refused close offers Close and keep folder (never for an
+  // unpushed branch); it closes the task through task:close with keepFolder
+  // and the panel shows the task closed.
+  it('offers Close and keep folder on a refused close, and closes the task keeping its folder', async () => {
+    const c = render();
+    await flush();
+    const offered = () => useStore.getState().toasts.filter((toast) => toast.action?.label === 'Close and keep folder');
+    const before = offered().length;
+
+    close.mockResolvedValueOnce({ ok: false, taskId: TASK_ID, reason: 'unpushed', error: '1 commit', aheadCount: 1 });
+    click(closeButton(c));
+    await flush();
+    expect(offered()).toHaveLength(before);
+
+    close.mockResolvedValueOnce({ ok: false, taskId: TASK_ID, reason: 'error', error: 'could not verify all processes exited' });
+    click(closeButton(c));
+    await flush();
+    const toast = offered().at(-1);
+    expect(offered()).toHaveLength(before + 1);
+
+    close.mockResolvedValueOnce({ ok: true, taskId: TASK_ID, archivePending: false, keptFolder: '/wt' });
+    await act(async () => { toast!.action!.onClick(); });
+    await flush();
+    expect(close).toHaveBeenLastCalledWith(TASK_ID, WS, { keepFolder: true });
+    expect(c.textContent).toContain('This task is closed');
+    expect(useStore.getState().toasts.some((x) => x.message === 'Task closed. Its folder was kept at /wt.')).toBe(true);
+  });
+
   it('re-lists the owner\'s tasks once Close succeeds, so the sidebar stops showing the task as open', async () => {
     // The mission bridge useRpcBridge installs; it answers with the daemon's
     // post-close row (the daemon commits the close before task:close returns).

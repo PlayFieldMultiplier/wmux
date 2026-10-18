@@ -611,6 +611,8 @@ export const ar = {
   'worktask.cleanup.preserved': 'حُفظت المنتجات غير المُلتزَمة — نفّذ commit/PR من diff أو تجاهلها، ثم أغلق مرة أخرى.',
   'worktask.cleanup.unpushed': 'لديك {count} commit لم يتم عمل push لها — PR/push، ثم أغلق مرة أخرى.',
   'worktask.cleanup.closeFailed': 'فشل close: {error}',
+  'worktask.keepFolder.action': 'إغلاق مع الاحتفاظ بالمجلد',
+  'worktask.keepFolder.done': 'أُغلقت المهمة. احتُفظ بمجلدها في {path}.',
 
   // ─── Workspace item: task worktree boundary warning ───
   'workspace.cwdDeparted': 'خرج cwd الخاص بالجزء عن حدود worktree للمهمة: {cwd}',

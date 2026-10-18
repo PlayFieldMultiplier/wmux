@@ -18,6 +18,7 @@ import { commentAnchor, numberHunkLines, type DiffLine } from '../../../shared/p
 import { sanitizeRemoteText } from '../../../shared/a2aRemoteDelivery';
 import { findLeaf } from '../../../shared/paneUtils';
 import { useStore } from '../../stores';
+import { keepFolderAction, keptFolderMessage } from '../WorkTask/closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { unwrapRpc } from '../../utils/unwrapRpc';
 import { findWorkspaceSurfaceById } from '../../utils/paneTraversal';
@@ -952,6 +953,29 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
     }
   }, [filesByPath, commentTarget]);
 
+  // The task closed (its worktree removed, or kept by Close and keep folder):
+  // hide the PR/Close buttons, drop the hunks and ticks so nothing can be
+  // adopted from it, discard any load still in flight, and re-list the
+  // owner's tasks.
+  const markTaskClosed = useCallback(() => {
+    // F11과 정합: close가 커밋됐으니 로컬 meta도 closed로 — PR/닫기 버튼이
+    // 제거된 worktree를 상대로 다시 눌리지 않게 즉시 숨긴다.
+    setMeta((m) => (m ? { ...m, status: 'closed', detached: false } : m));
+    loadGenRef.current += 1;
+    setLoading(false);
+    setData(null);
+    setSelection({});
+    setSelectionDigest({});
+    setApplyMsg(null);
+    setError(t('diff.taskClosed'));
+    // The daemon commits the close before task:close returns, so re-list the
+    // owner's tasks now: otherwise the sidebar and Fleet keep showing this
+    // task as open until the next 15 s mission poll. verifiedWorkspaceId is
+    // the owner (see Pane.tsx); on a legacy surface without one it is the
+    // task's own workspace, which owns no tasks, so the re-list is a no-op.
+    void useStore.getState().refreshMissions(verifiedWorkspaceId);
+  }, [t, verifiedWorkspaceId]);
+
   // J3 §1 — close(remove 성공→close 순서). 확인 1회 후 결과를 토스트로 구분
   // (dirty=보존/unpushed=경고+PR 제안/archivePending). main이 데몬 projection에서
   // 물질화 필드를 역참조하므로 taskId만 전달한다.
@@ -964,36 +988,20 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
     try {
       const res = await api.workTask.close(taskId, verifiedWorkspaceId);
       if (res.ok) {
-        // F11과 정합: close가 커밋됐으니 로컬 meta도 closed로 — PR/닫기 버튼이
-        // 제거된 worktree를 상대로 다시 눌리지 않게 즉시 숨긴다.
-        setMeta((m) => (m ? { ...m, status: 'closed', detached: false } : m));
-        // The worktree is gone: drop its hunks and ticks so nothing can be
-        // adopted from it, and discard any load still in flight.
-        loadGenRef.current += 1;
-        setLoading(false);
-        setData(null);
-        setSelection({});
-        setSelectionDigest({});
-        setApplyMsg(null);
-        setError(t('diff.taskClosed'));
-        // The daemon commits the close before task:close returns, so re-list the
-        // owner's tasks now: otherwise the sidebar and Fleet keep showing this
-        // task as open until the next 15 s mission poll. verifiedWorkspaceId is
-        // the owner (see Pane.tsx); on a legacy surface without one it is the
-        // task's own workspace, which owns no tasks, so the re-list is a no-op.
-        void useStore.getState().refreshMissions(verifiedWorkspaceId);
+        markTaskClosed();
         pushToast({
           level: res.archivePending ? 'warn' : 'info',
-          message: res.unmaterialized
+          message: keptFolderMessage(res, t) ?? (res.unmaterialized
             ? t('diff.closedUnmaterialized')
             : res.archivePending
               ? t('diff.closedArchiveDeferred')
-              : t('diff.closedFull'),
+              : t('diff.closedFull')),
         });
       } else if (res.reason === 'dirty') {
         pushToast({
           level: 'warn',
           message: t('diff.closePreserved'),
+          action: keepFolderAction(taskId, verifiedWorkspaceId, t, markTaskClosed),
         });
         // Right after an adopt the agent's edits are still uncommitted in the
         // worktree, so Close refuses. Keep the way out on screen (the toast
@@ -1006,14 +1014,18 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
           message: t('diff.closeUnpushed', { count: res.aheadCount ?? '' }),
         });
       } else {
-        pushToast({ level: 'error', message: t('diff.closeFailed', { error: res.error ?? '' }) });
+        pushToast({
+          level: 'error',
+          message: t('diff.closeFailed', { error: res.error ?? '' }),
+          action: keepFolderAction(taskId, verifiedWorkspaceId, t, markTaskClosed),
+        });
       }
     } catch (e) {
       pushToast({ level: 'error', message: t('diff.closeFailed', { error: e instanceof Error ? e.message : String(e) }) });
     } finally {
       setLifecycleBusy(null);
     }
-  }, [lifecycleBusy, taskId, verifiedWorkspaceId, meta, pushToast, t]);
+  }, [lifecycleBusy, taskId, verifiedWorkspaceId, meta, pushToast, t, markTaskClosed]);
 
   // J3 §2 — 1클릭 PR(확인 1회 포함). gh 4중 게이트·멱등 재진입은 main이 수행.
   const handleCreatePr = useCallback(async () => {

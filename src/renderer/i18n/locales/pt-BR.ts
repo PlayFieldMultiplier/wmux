@@ -615,6 +615,8 @@ export const ptBR = {
   'worktask.cleanup.preserved': 'Artefatos não commitados preservados — commit/PR pelo diff ou descarte, depois feche novamente.',
   'worktask.cleanup.unpushed': 'Você tem {count} commit(s) sem push — PR/push, depois feche novamente.',
   'worktask.cleanup.closeFailed': 'falha ao fechar: {error}',
+  'worktask.keepFolder.action': 'Fechar e manter a pasta',
+  'worktask.keepFolder.done': 'Tarefa fechada. A pasta dela foi mantida em {path}.',
 
   // ─── Item de espaço de trabalho: aviso de limite do worktree da tarefa ───
   'workspace.cwdDeparted': 'O cwd do painel saiu do limite do worktree da tarefa: {cwd}',

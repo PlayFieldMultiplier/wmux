@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../../stores';
+import { closeKeepingFolder, keptFolderMessage } from './closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { findLeafPanes, activePaneTerminalPty } from '../../hooks/a2aAddressing';
 import { formatBracketedPastePayload } from '../../utils/ptyMessageDelivery';
@@ -200,7 +201,7 @@ export default function WorktaskCleanupView() {
       try {
         const res = await api.close(taskId, closeAs);
         if (res.ok) {
-          pushToast({ level: 'info', message: t('worktask.cleanup.closed') });
+          pushToast({ level: 'info', message: keptFolderMessage(res, t) ?? t('worktask.cleanup.closed') });
           setCloseFailed((prev) => {
             const { [taskId]: _done, ...rest } = prev;
             return rest;
@@ -223,6 +224,26 @@ export default function WorktaskCleanupView() {
       }
     },
     [activeWorkspaceId, pushToast, runScan, t],
+  );
+
+  const handleCloseKeepFolder = useCallback(
+    async (taskId: string, ownerWorkspaceId: string | undefined) => {
+      const closeAs = ownerWorkspaceId || activeWorkspaceId;
+      if (!closeAs) return;
+      setBusyTaskId(taskId);
+      try {
+        if (await closeKeepingFolder(taskId, closeAs, t)) {
+          setCloseFailed((prev) => {
+            const { [taskId]: _done, ...rest } = prev;
+            return rest;
+          });
+        }
+      } finally {
+        setBusyTaskId(null);
+        void runScan();
+      }
+    },
+    [activeWorkspaceId, runScan, t],
   );
 
   // A phone worktree has no task to close: remove it by path. A worktree with
@@ -441,6 +462,19 @@ export default function WorktaskCleanupView() {
                             data-cleanup-open-worktree
                           >
                             {t('worktask.cleanup.openWorktree')}
+                          </Button>
+                        )}
+                        {/* #2388: the way out of a close that keeps refusing.
+                            The task closes; its folder stays as it is. */}
+                        {closeFailed[e.taskId] !== 'unpushed' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => void handleCloseKeepFolder(e.taskId!, e.ownerWorkspaceId)}
+                            disabled={busyTaskId !== null}
+                            data-cleanup-close-keep-folder
+                          >
+                            {t('worktask.keepFolder.action')}
                           </Button>
                         )}
                       </div>

@@ -32,6 +32,7 @@ import { selectWorkspaceAgentRoster } from '../../stores/selectors/workspaceAgen
 import { isTaskReadyForReview } from '../../stores/selectors/reviewQueue';
 import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 import { refuseWorkspaceClose } from '../Moa/moaHqGuard';
+import { keepFolderAction, keptFolderMessage } from '../WorkTask/closeKeepFolder';
 
 /**
  * An owner's tasks split by requesting pane (see selectOwnerPaneTaskSplit:
@@ -157,7 +158,8 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
 
   const closeFinished = useCallback(async (ids: readonly string[]) => {
     setClosing(true);
-    const kept: string[] = [];
+    const kept: Array<{ line: string; action?: { label: string; onClick: () => void } }> = [];
+    const keptFolders: string[] = [];
     let closed = 0;
     try {
       for (const id of ids) {
@@ -171,7 +173,7 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
         const name = displayWorkspaceName(st.workspaces.find((w) => w.id === id)?.name ?? id, true);
         const check = revalidateTaskForClose(st, id, ownerKey, (wsId) => selectWorkspaceAgentRoster(st, wsId).rows);
         if (!check.ok) {
-          kept.push(`${name}: ${t(SKIP_KEY[check.reason])}`);
+          kept.push({ line: `${name}: ${t(SKIP_KEY[check.reason])}` });
           continue;
         }
         const mission = check.mission;
@@ -185,18 +187,23 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
             window.electronAPI.workTask.close(mission.id, mission.owner.verifiedWorkspaceId),
             TASK_CLOSE_TIMEOUT_MS,
           );
+          // #2388: the way out of a close that keeps refusing. An unpushed
+          // branch has its own next step (push or a PR).
+          const keepFolder = keepFolderAction(mission.id, mission.owner.verifiedWorkspaceId, t, () => onCloseWorkspace(id));
           if (res.ok) {
             onCloseWorkspace(id);
             closed += 1;
+            const keptAt = keptFolderMessage(res, t);
+            if (keptAt) keptFolders.push(keptAt);
           } else if (res.reason === 'dirty') {
-            kept.push(`${name}: ${t('worktask.cleanup.preserved')}`);
+            kept.push({ line: `${name}: ${t('worktask.cleanup.preserved')}`, action: keepFolder });
           } else if (res.reason === 'unpushed') {
-            kept.push(`${name}: ${t('worktask.cleanup.unpushed', { count: res.aheadCount ?? '' })}`);
+            kept.push({ line: `${name}: ${t('worktask.cleanup.unpushed', { count: res.aheadCount ?? '' })}` });
           } else {
-            kept.push(`${name}: ${t('worktask.cleanup.closeFailed', { error: res.error ?? '' })}`);
+            kept.push({ line: `${name}: ${t('worktask.cleanup.closeFailed', { error: res.error ?? '' })}`, action: keepFolder });
           }
         } catch (err) {
-          kept.push(`${name}: ${t('worktask.cleanup.closeFailed', { error: err instanceof Error ? err.message : String(err) })}`);
+          kept.push({ line: `${name}: ${t('worktask.cleanup.closeFailed', { error: err instanceof Error ? err.message : String(err) })}` });
         }
       }
     } finally {
@@ -204,7 +211,8 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
     }
     const push = useStore.getState().pushToast;
     if (closed > 0) push({ level: 'info', message: t('sidebar.tasks.closeFinishedDone', { count: closed }) });
-    for (const line of kept) push({ level: 'warn', message: line });
+    for (const message of keptFolders) push({ level: 'info', message });
+    for (const k of kept) push({ level: 'warn', message: k.line, ...(k.action ? { action: k.action } : {}) });
   }, [ownerKey, onCloseWorkspace, t]);
 
   const menuHeight = toReview > 0 ? 88 : 48;

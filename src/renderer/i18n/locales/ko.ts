@@ -3651,6 +3651,8 @@ export const ko = {
   'worktask.cleanup.preserved': '미커밋 산출물 보존 — diff에서 커밋/PR 또는 폐기 후 다시 닫으세요.',
   'worktask.cleanup.unpushed': 'push되지 않은 커밋 {count}개 — PR/push 후 다시 닫으세요.',
   'worktask.cleanup.closeFailed': 'close 실패: {error}',
+  'worktask.keepFolder.action': '닫고 폴더 유지',
+  'worktask.keepFolder.done': '태스크를 닫았습니다. 폴더는 {path}에 남겨 두었습니다.',
   'worktask.cleanup.commitAndClose': '커밋하고 닫기',
   'worktask.cleanup.openWorktree': 'worktree 열기',
   'worktask.cleanup.commitLinePrepared': '커밋 명령을 태스크 페인에 입력했습니다 — 확인 후 Enter로 실행하세요.',
