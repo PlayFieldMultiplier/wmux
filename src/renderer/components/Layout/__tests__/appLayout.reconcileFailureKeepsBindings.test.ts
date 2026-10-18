@@ -111,4 +111,20 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
     expect(seqAt).toBeLessThan(listAt);
     expect(reconcile).toMatch(/examinedPtyIds\.filter\(\(id\) => !unsettledPtyIds\.has\(id\)\),\s*false,\s*\{ markedAtOrBefore: markSeqAtStart \},/);
   });
+
+  it('a failed or timed-out reconcile raises no error toast (startup and late passes alike)', () => {
+    // Its pty.list timing out against a held daemon toasted "An unknown error
+    // occurred" although the fallback handles it and each kept pane says
+    // "reattaching…". Every reconcile RPC goes through invokeReconcile.
+    expect(source).toMatch(/const \{ invoke: reconcileInvoke \} = useIpc\(\{ toastOnError: false \}\);/);
+    const start = source.indexOf('const reconcilePtys = useCallback');
+    const reconcile = source.slice(start, source.indexOf('// 앱 시작 시 세션 복원', start));
+    expect(reconcile).toMatch(/const invokeReconcile = async <T,>\(call: \(\) => Promise<T>\) => \{\s*const result = await reconcileInvoke<T>\(call\);/);
+    // No reconcile RPC bypasses it.
+    expect(reconcile).not.toMatch(/ipcInvoke/);
+    const calls = reconcile.match(/window\.electronAPI(\?)?\.pty(\?)?\.(list|promote)\(/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    expect(reconcile.match(/invokeReconcile<[^>]*>\(\(\) =>\s*window\.electronAPI(\?)?\.pty(\?)?\.(list|promote)\(/g)?.length)
+      .toBe(calls.length);
+  });
 });

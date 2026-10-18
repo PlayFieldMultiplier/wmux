@@ -969,7 +969,10 @@ export default function AppLayout() {
   useColdParkSweep();
   // Plugin host (B-1): ui.decoratePane push → uiSlice pane decorations.
   usePaneDecorationChannel();
-  const { invoke: ipcInvoke } = useIpc();
+  // The reconcile's RPCs only. A failed or timed-out pass is a handled state
+  // (#2398): its fallback keeps the bindings, logs, and each kept pane shows
+  // "reattaching…" — a generic "unknown error" toast on top only misleads.
+  const { invoke: reconcileInvoke } = useIpc({ toastOnError: false });
 
   // #517 — mirror the browser lightweight-mode setting to main whenever it
   // changes (Settings toggle or session load), so main immediately recomputes
@@ -1207,7 +1210,7 @@ export default function AppLayout() {
         // completion so startup's rolling watchdog measures a stalled stage,
         // not the total duration of a legitimate multi-RPC reconcile pass.
         const invokeReconcile = async <T,>(call: () => Promise<T>) => {
-          const result = await ipcInvoke<T>(call);
+          const result = await reconcileInvoke<T>(call);
           reportProgress?.();
           return result;
         };
@@ -1482,7 +1485,7 @@ export default function AppLayout() {
     })();
     reconcileInFlightRef.current = run;
     return run;
-  }, [ipcInvoke]);
+  }, [reconcileInvoke]);
 
   // 앱 시작 시 세션 복원 (Fix 0 — see state machine diagram at top of file)
   useEffect(() => {
