@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    setupFiles: ['./src/test-utils/isolateDataDir.ts'],
+    setupFiles: ['./src/test-utils/isolateDataDir.ts', './src/test-utils/jsdomEnv.ts'],
     include: [
       'src/**/__tests__/**/*.test.{ts,tsx}',
       // Operational scripts (migration tooling) keep their tests

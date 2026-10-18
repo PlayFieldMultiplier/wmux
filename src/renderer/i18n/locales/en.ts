@@ -4720,6 +4720,8 @@ export const en = {
   'botsPage.models.change': "Change",
   'botsPage.models.otherEngine': "Set by its engine",
   'botsPage.models.invalid': "\"{model}\" is not a model id: a letter or digit first, then letters, digits and . _ : -",
+  'botsPage.models.invalidBrain': "\"{model}\" is not a model id: a letter or digit first, then letters, digits and . _ : / @ - (up to 256), optionally ending in a [variant]",
+  'botsPage.models.storedInvalid': "The saved model \"{model}\" is not a model id wmux can pass on, so this bot runs on the default model. Change it to pick another.",
   'botsPage.models.saveFailed': "Could not save the model.",
   'botsPage.models.workersOn': "workers {model}",
   'botsPage.profile.workersUnavailable': "{name} (not available on this system)",

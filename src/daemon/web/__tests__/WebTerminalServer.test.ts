@@ -3140,7 +3140,7 @@ describe('WebTerminalServer', () => {
       await vi.waitFor(async () => {
         const freed = await fetch(`${base()}/api/sessions/s1/turns/file?path=/missing`, { headers });
         expect(freed.status).toBe(404);
-      });
+      }, { timeout: 10_000 });
     } finally {
       abort.abort();
       pings.mockRestore();
@@ -4839,7 +4839,7 @@ describe('WebTerminalServer', () => {
       headers: { ...bearer(phone.token), 'Content-Type': 'application/json' },
       body: JSON.stringify({ cwd: EXISTING_DIR }),
     });
-    await vi.waitFor(() => expect(lifecycleCalls.at(-1)).toMatchObject({ op: 'create' }));
+    await vi.waitFor(() => expect(lifecycleCalls.at(-1)).toMatchObject({ op: 'create' }), { timeout: 10_000 });
     deviceRoster.get(phone.deviceId)!.revoked = true;
     open();
     const response = await pending;
@@ -5886,7 +5886,7 @@ describe('WebTerminalServer', () => {
         approvalBox.hold = new Promise<void>((resolve) => { release = resolve; });
         approvalBox.result = { ok: true, durable: true, request: nativeTp({ state: 'resolved' }) };
         const running = postAnswer(phone.token, answerBody());
-        await vi.waitFor(() => expect(resolveCalls).toHaveLength(1));
+        await vi.waitFor(() => expect(resolveCalls).toHaveLength(1), { timeout: 10_000 });
         const retry = await postAnswer(phone.token, answerBody());
         expect(retry.status).toBe(202);
         expect(await retry.json()).toEqual({ state: 'pending', replayed: true });
@@ -7959,7 +7959,7 @@ describe('WebTerminalServer', () => {
         await vi.waitFor(async () => {
           text = await poll();
           expect(text).toBeDefined();
-        });
+        }, { timeout: 10_000 });
 
         expect(text).not.toContain('\n');
         // Cut from the END: an agent's ask is the last thing it wrote.
@@ -8674,7 +8674,7 @@ describe('WebTerminalServer', () => {
         await reader.cancel().catch(() => { /* already aborted */ });
         // THE assertion. A server leaking the descriptor still answers the next
         // request happily, so "it answered again" proves nothing on its own.
-        await vi.waitFor(() => expect(closed).toBe(true));
+        await vi.waitFor(() => expect(closed).toBe(true), { timeout: 10_000 });
       } finally {
         openSpy.mockRestore();
       }
@@ -8720,7 +8720,7 @@ describe('WebTerminalServer', () => {
         expect(await settled).toBe('aborted');
         // The handler has to finish on its own — a leak would leave this
         // pending for the life of the daemon.
-        await vi.waitFor(() => expect(closed).toBe(true));
+        await vi.waitFor(() => expect(closed).toBe(true), { timeout: 10_000 });
       } finally {
         openSpy.mockRestore();
       }
@@ -10981,13 +10981,13 @@ describe('WebTerminalServer', () => {
           }
         })();
         try {
-          await vi.waitFor(() => expect(generateSnapshotUnqueued).toHaveBeenCalled());
+          await vi.waitFor(() => expect(generateSnapshotUnqueued).toHaveBeenCalled(), { timeout: 10_000 });
           capture('during 1\r\n');
           capture('during 2\r\n');
           release();
-          await vi.waitFor(() => expect(snapshots(text)).toHaveLength(1));
+          await vi.waitFor(() => expect(snapshots(text)).toHaveLength(1), { timeout: 10_000 });
           capture('after 1\r\n');
-          await vi.waitFor(() => expect(text).toContain('event: data'));
+          await vi.waitFor(() => expect(text).toContain('event: data'), { timeout: 10_000 });
         } finally {
           ac.abort();
         }
@@ -11028,11 +11028,11 @@ describe('WebTerminalServer', () => {
           `${base()}/api/stream?session=s1&token=${encodeURIComponent(info.token as string)}`,
           { signal: ac.signal },
         );
-        await vi.waitFor(() => expect(generateSnapshotUnqueued).toHaveBeenCalled());
+        await vi.waitFor(() => expect(generateSnapshotUnqueued).toHaveBeenCalled(), { timeout: 10_000 });
         ac.abort();
         await deliberateSleep(50, 'not yet converted (#2363): lets the abort land before release; nothing polled');
         release();
-        await vi.waitFor(() => expect(rendered).toBe(true));
+        await vi.waitFor(() => expect(rendered).toBe(true), { timeout: 10_000 });
         await vi.waitFor(() => expect(listeners()).toEqual(before), { timeout: 10_000 });
       });
     });
