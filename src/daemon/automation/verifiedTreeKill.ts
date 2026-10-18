@@ -218,6 +218,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
   const tracked = new Map<number, WinTracked>([[rootPid, { pid: rootPid, ...root }]]);
   /** Processes whose ppid names one of ours but that could not be identified. */
   const unidentified = new Map<number, string>();
+  /** A process of the table that exited before it could be opened while it
+   *  still had children there: they cannot be told from strangers any more
+   *  (nothing pins its pid), so the tree is not known whole. */
+  const lostParents = new Set<number>();
   let released = false;
 
   /** One rescan: adds every new process of the tree. Returns how many were
@@ -240,7 +244,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
       for (const pid of children.get(parent.pid) ?? []) {
         if (tracked.has(pid)) continue;
         const opened = api.open(pid);
-        if ('gone' in opened) continue;
+        if ('gone' in opened) {
+          if ((children.get(pid) ?? []).some((c) => !tracked.has(c))) lostParents.add(pid);
+          continue;
+        }
         if ('failure' in opened) {
           // Its ppid names one of ours, pinned, so it is ours or an orphan
           // older than the process now holding that pid: unknown either way.
@@ -330,6 +337,9 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           if ('gone' in now) continue;
           if ('handle' in now) api.close(now.handle);
           survivors.push({ pid, reason });
+        }
+        for (const pid of lostParents) {
+          survivors.push({ pid, reason: 'it exited before its children could be identified; they may still run', unverified: true });
         }
         // The tree was still growing at the deadline: a child started last may
         // not have been seen.

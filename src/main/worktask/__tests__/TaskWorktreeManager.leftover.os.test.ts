@@ -335,6 +335,7 @@ describe("real git: the leftover is compared with the task's own commit", () => 
    *  part of it left in the folder (what a failed `git worktree remove` leaves). */
   function droppedWorktree(slug: string): { dir: string; head: string } {
     if (!fs.existsSync(path.join(repo, '.git'))) {
+      fs.mkdirSync(repo, { recursive: true });
       fs.writeFileSync(path.join(repo, 'a.txt'), 'a');
       run(repo, 'init');
       run(repo, 'add', '.');
@@ -366,6 +367,23 @@ describe("real git: the leftover is compared with the task's own commit", () => 
     expect(await finish(dir, head)).toEqual({ ok: true });
     expect(fs.existsSync(dir)).toBe(false);
     expect(run(repo, 'rev-parse', 'refs/heads/wtask/task-d')).toBe(head);
+  });
+
+  it('a file the task ignored is still ignored once git deleted the ignore file', { timeout: 60_000 }, async () => {
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'deps/\n');
+    fs.mkdirSync(path.join(repo, 'sub'));
+    fs.writeFileSync(path.join(repo, 'sub', '.gitignore'), '*.log\n');
+    fs.writeFileSync(path.join(repo, 'sub', 'keep.txt'), 'k');
+    const { dir, head } = droppedWorktree('task-g');
+    fs.mkdirSync(path.join(dir, 'deps', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'deps', 'pkg', 'index.js'), 'dependency');
+    fs.writeFileSync(path.join(dir, 'sub', 'run.log'), 'log');
+    // What git deleted before it stopped: the ignore files among them.
+    fs.rmSync(path.join(dir, '.gitignore'));
+    fs.rmSync(path.join(dir, 'sub', '.gitignore'));
+    expect(await finish(dir, head)).toEqual({ ok: true });
+    expect(fs.existsSync(dir)).toBe(false);
   });
 
   it('a leftover with a changed or a new file is kept as dirty', { timeout: 60_000 }, async () => {

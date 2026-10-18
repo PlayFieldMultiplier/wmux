@@ -17,6 +17,8 @@ interface FakeProc {
   unopenable?: boolean;
   /** Started by its parent when the parent is first terminated (a late child). */
   spawnsOnTerminate?: FakeProc;
+  /** Listed in the table, but exited before it can be opened. */
+  goneOnOpen?: boolean;
 }
 
 /** A Windows process table behind the ProcessHandleApi surface. */
@@ -36,7 +38,7 @@ function fakeWin(procs: FakeProc[], opts: { now?: bigint | ((tableReads: number)
     },
     open: (pid): ProcessOpenResult => {
       const p = table.get(pid);
-      if (!p || p.exited) return { gone: true };
+      if (!p || p.exited || p.goneOnOpen) return { gone: true };
       if (p.unopenable) return { failure: 'OpenProcess failed (error 5)' };
       const handle = { pid } as unknown as ProcessHandle;
       handles.set(handle, p);
@@ -134,6 +136,23 @@ describe('captureTreeWin32', () => {
     const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.survivors[0].reason).toMatch(/kept starting processes/);
+  });
+
+  it('fails closed when a process exits between the table and its opening while its children run', async () => {
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, goneOnOpen: true },
+      { pid: 12, ppid: 11, createdAt: 120n },
+    ]);
+    const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toEqual([expect.objectContaining({ pid: 11, unverified: true })]);
+    // A process that exits with no children left in the table is no question.
+    const g = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, goneOnOpen: true },
+    ]);
+    expect((await captureTreeWin32(10, g.api, { sleep: noWait })!.kill({ timeoutMs: 100 })).ok).toBe(true);
   });
 
   it('fails closed when a descendant does not exit', async () => {

@@ -977,6 +977,11 @@ export class TaskWorktreeManager {
       // once, so an unchanged one compares equal. It exits non-zero when some
       // file differs, which the comparison below reports.
       await this.runGit([...base, 'update-index', '-q', '--refresh'], folder, { env }).catch(() => undefined);
+      // An ignore file git already deleted still decides what counts as
+      // untracked: marked skip-worktree, git reads it from the index.
+      const ignoreFiles = (await this.runGit([...base, 'ls-files', '-z'], folder, { env })).stdout.split('\0')
+        .filter((f) => (f === '.gitignore' || f.endsWith('/.gitignore')) && !fs.existsSync(path.join(folder, f)));
+      if (ignoreFiles.length > 0) await this.runGit([...base, 'update-index', '--skip-worktree', '--', ...ignoreFiles], folder, { env });
       const changed = await this.runGit([...base, 'diff-files', '--name-status', '--ignore-submodules=none'], folder, { env });
       const untracked = await this.runGit([...base, 'ls-files', '--others', '--exclude-standard'], folder, { env });
       const lines = (s: string): string[] => s.split(/\r?\n/).filter((l) => l.length > 0);
