@@ -22,10 +22,11 @@ import {
   getProcessStartTime,
   getWin32BootId,
   getWin32BootIdSync,
-  isWin32ShellProcess,
+  isShellExecutable,
   parseWin32BootId,
   readPosixStartTime,
   readProcessCreatedAtFt,
+  readWin32ReapIdentity,
   resetNativeProcessReadWarn,
   resetWin32BootIdCache,
   setNativeProcessReadWarn,
@@ -216,28 +217,47 @@ describe('failed native reads', () => {
   });
 });
 
-describe('isWin32ShellProcess', () => {
-  it('matches the executable basename case-insensitively', async () => {
-    identityReturns('C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
-    await expect(isWin32ShellProcess(10, 'PowerShell.exe')).resolves.toBe(true);
+describe('isShellExecutable', () => {
+  it('matches the executable basename case-insensitively', () => {
+    expect(isShellExecutable('C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'PowerShell.exe')).toBe(true);
   });
 
-  it('matches a full expected path', async () => {
-    identityReturns('C:\\Program Files\\Git\\bin\\bash.exe');
-    await expect(isWin32ShellProcess(11, 'C:\\Program Files\\Git\\bin\\bash.exe')).resolves.toBe(true);
+  it('matches a full expected path', () => {
+    expect(isShellExecutable('C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files\\Git\\bin\\bash.exe')).toBe(true);
   });
 
-  it('rejects a different executable', async () => {
-    identityReturns('C:\\Windows\\System32\\notepad.exe');
-    await expect(isWin32ShellProcess(12, 'powershell.exe')).resolves.toBe(false);
+  it('rejects a different executable, or none', () => {
+    expect(isShellExecutable('C:\\Windows\\System32\\notepad.exe', 'powershell.exe')).toBe(false);
+    expect(isShellExecutable(null, 'cmd.exe')).toBe(false);
   });
+});
 
-  it('false when the path is withheld or the read fails', async () => {
-    identityReturns(null);
-    await expect(isWin32ShellProcess(13, 'cmd.exe')).resolves.toBe(false);
-    tryProcessIdentityMock.mockReturnValue({ failure: 'boom', gone: false });
-    await expect(isWin32ShellProcess(14, 'cmd.exe')).resolves.toBe(false);
+// #2416: the reaper takes the creation time and the executable from ONE read.
+describe('readWin32ReapIdentity', () => {
+  it('reads the creation time and the executable together', () => {
+    identityReturns('C:\\Windows\\System32\\cmd.exe');
+    expect(readWin32ReapIdentity(21, 'cmd.exe')).toEqual({ currentCreatedAtFt: FT, currentGone: false, looksLikeOurShell: true });
+    expect(tryProcessIdentityMock).toHaveBeenCalledTimes(1);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it('a failed read is no evidence, even if a second read would have succeeded', () => {
+    tryProcessIdentityMock
+      .mockReturnValueOnce({ failure: 'OpenProcess failed (error 5)', gone: false })
+      .mockReturnValue({ createdAt: FT, imagePath: 'C:\\Windows\\System32\\cmd.exe' });
+    const current = readWin32ReapIdentity(22, 'cmd.exe');
+    expect(current).toEqual({ currentCreatedAtFt: null, currentGone: false, looksLikeOurShell: false });
+    expect(tryProcessIdentityMock).toHaveBeenCalledTimes(1);
+    // A record with no stored start time: the recycled-pid case must not be
+    // killed on the executable name alone — not even if a separate executable
+    // read had matched.
+    expect(classifyReapIdentity(current)).toBe('unconfirmed');
+    expect(classifyReapIdentity({ ...current, looksLikeOurShell: true })).toBe('unconfirmed');
+  });
+
+  it('says gone for a pid that no longer exists', () => {
+    tryProcessIdentityMock.mockReturnValue({ failure: 'OpenProcess failed (error 87)', gone: true });
+    expect(readWin32ReapIdentity(23, 'cmd.exe')).toEqual({ currentCreatedAtFt: null, currentGone: true, looksLikeOurShell: false });
   });
 });
 

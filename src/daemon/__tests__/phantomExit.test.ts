@@ -109,9 +109,17 @@ describe('classifyReapIdentity', () => {
     expect(
       classifyReapIdentity({ storedStartTime: undefined, currentStartTime: T1, looksLikeOurShell: true }),
     ).toBe('heuristic');
+  });
+
+  it('an unreadable process never passes the heuristic, even when its executable matched (#2416)', () => {
+    // The two reads behind a reap can disagree: the start-time read fails and
+    // the executable read succeeds. Unknown must not authorize a kill.
     expect(
       classifyReapIdentity({ storedStartTime: null, currentStartTime: null, looksLikeOurShell: true }),
-    ).toBe('heuristic');
+    ).toBe('unconfirmed');
+    expect(
+      classifyReapIdentity({ currentCreatedAtFt: null, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
   });
 
   it('no recorded time and not our shell means no evidence at all', () => {

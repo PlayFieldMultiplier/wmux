@@ -303,16 +303,38 @@ export function readProcessCreatedAtFt(pid: number): ProcessStartRead<bigint> {
 }
 
 /**
- * Is the Windows pid running the shell executable we spawned? Matches the
- * basename or the full path, as the wmic-era check did. False when unsure.
+ * Is `imagePath` the shell executable we spawned? Matches the basename or the
+ * full path, as the wmic-era check did. False when the path is unknown.
  */
-export async function isWin32ShellProcess(pid: number, expectedCmd: string): Promise<boolean> {
-  const read = readWin32Process(pid);
-  const actualExe = read === 'gone' ? undefined : read?.imagePath?.toLowerCase();
+export function isShellExecutable(imagePath: string | null, expectedCmd: string): boolean {
+  const actualExe = imagePath?.toLowerCase();
   if (!actualExe) return false;
   const expectedExe = expectedCmd.toLowerCase();
   const expectedBase = expectedExe.split(/[\\/]/).pop() ?? expectedExe;
   return actualExe.endsWith(expectedBase) || actualExe === expectedExe;
+}
+
+/**
+ * Everything {@link classifyReapIdentity} needs about a Windows pid now, from
+ * ONE native read. Two reads (one for the creation time, one for the
+ * executable) could disagree: the first failing and the second succeeding
+ * left no creation time but an executable match, which the heuristic would
+ * accept for a record with no stored time — a recycled pid running the same
+ * shell would have been killed. A failed read yields no evidence at all.
+ */
+export function readWin32ReapIdentity(pid: number, expectedCmd: string): {
+  currentCreatedAtFt: bigint | null;
+  currentGone: boolean;
+  looksLikeOurShell: boolean;
+} {
+  const read = readWin32Process(pid);
+  if (read === 'gone') return { currentCreatedAtFt: null, currentGone: true, looksLikeOurShell: false };
+  if (read === null) return { currentCreatedAtFt: null, currentGone: false, looksLikeOurShell: false };
+  return {
+    currentCreatedAtFt: read.createdAt,
+    currentGone: false,
+    looksLikeOurShell: isShellExecutable(read.imagePath, expectedCmd),
+  };
 }
 
 /**
@@ -323,7 +345,10 @@ export async function isWin32ShellProcess(pid: number, expectedCmd: string): Pro
  *  - `heuristic`    — no creation time was recorded (a tombstone written by a
  *                     build predating it), but the executable still looks like
  *                     our shell. Weaker: any `powershell.exe` passes. Accepted
- *                     only so pre-existing orphans can still be cleaned up.
+ *                     only so pre-existing orphans can still be cleaned up,
+ *                     and only when the creation time could be read now too:
+ *                     an unreadable process is unknown, and unknown never
+ *                     authorizes a kill.
  *  - `unconfirmed`  — a creation time was recorded and does NOT match (the pid
  *                     belongs to something else now), or nothing corroborates
  *                     the pid at all. Never kill on this.
@@ -372,7 +397,8 @@ export function classifyReapIdentity(opts: {
     const current = opts.currentStartTime ?? null;
     return current !== null && current === opts.storedStartTime ? 'start-time' : 'unconfirmed';
   }
-  return opts.looksLikeOurShell ? 'heuristic' : 'unconfirmed';
+  const readNow = currentFt !== null || (opts.currentStartTime ?? null) !== null;
+  return readNow && opts.looksLikeOurShell ? 'heuristic' : 'unconfirmed';
 }
 
 /**

@@ -9,8 +9,8 @@ import {
   getProcessStartTime,
   getWin32BootId,
   getWin32BootIdSync,
-  isWin32ShellProcess,
   readProcessCreatedAtFt,
+  readWin32ReapIdentity,
   resetWin32BootIdCache,
 } from '../phantomExit';
 
@@ -97,14 +97,15 @@ describe.skipIf(!onWindows)('win32 probes (live)', () => {
   it('identity check recognizes the spawned cmd.exe and nothing else', async () => {
     child = spawnCmd();
     const pid = child.pid!;
-    expect(await isWin32ShellProcess(pid, 'cmd.exe')).toBe(true);
-    expect(await isWin32ShellProcess(pid, 'C:\\Windows\\System32\\cmd.exe')).toBe(true);
-    expect(await isWin32ShellProcess(pid, 'powershell.exe')).toBe(false);
+    expect(readWin32ReapIdentity(pid, 'cmd.exe').looksLikeOurShell).toBe(true);
+    expect(readWin32ReapIdentity(pid, 'C:\\Windows\\System32\\cmd.exe').looksLikeOurShell).toBe(true);
+    expect(readWin32ReapIdentity(pid, 'powershell.exe').looksLikeOurShell).toBe(false);
+    expect(readWin32ReapIdentity(pid, 'cmd.exe').currentCreatedAtFt).toBe(getProcessCreatedAtFt(pid));
   }, 20_000);
 
   it('a pid that does not exist reads as unknown', async () => {
     expect(await getProcessStartTime(99_999_996)).toBeNull();
-    expect(await isWin32ShellProcess(99_999_996, 'cmd.exe')).toBe(false);
+    expect(readWin32ReapIdentity(99_999_996, 'cmd.exe')).toEqual({ currentCreatedAtFt: null, currentGone: true, looksLikeOurShell: false });
     // ...and the native read tells the reaper it is gone, not unreadable.
     expect(readProcessCreatedAtFt(99_999_996)).toEqual({ value: null, gone: true });
   }, 20_000);

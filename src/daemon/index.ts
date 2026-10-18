@@ -141,11 +141,10 @@ import {
   getWin32BootId,
   getWin32BootIdSync,
   isPidAlive,
-  isWin32ShellProcess,
   isSameBootProven,
   mayReap,
   readPosixStartTime,
-  readProcessCreatedAtFt,
+  readWin32ReapIdentity,
   setNativeProcessReadWarn,
   shouldReconcileTombstone,
 } from './phantomExit';
@@ -1637,24 +1636,26 @@ async function reapIfIdentityConfirmed(opts: {
   storedStartTime?: string;
   reason: string;
 }): Promise<boolean> {
-  // Windows reads the FILETIME natively (#2398); posix keeps `ps -o lstart=`.
+  // Windows reads the FILETIME and the executable natively, in one read
+  // (#2398); posix keeps `ps -o lstart=` and `ps -o comm=`.
   const win32 = process.platform === 'win32';
-  const ftRead = win32 ? readProcessCreatedAtFt(opts.pid) : null;
-  const [startRead, looksLikeOurShell] = await Promise.all([
-    win32 ? null : readPosixStartTime(opts.pid),
-    // Only consulted when no creation time was recorded, but probing both in
-    // parallel keeps the slow path off the critical path of the common case.
-    isOurShellProcess(opts.pid, opts.cmd),
-  ]);
-  const currentCreatedAtFt = ftRead?.value ?? null;
-  const currentStartTime = startRead?.value ?? null;
+  let now: { currentCreatedAtFt: bigint | null; currentStartTime: string | null; currentGone: boolean; looksLikeOurShell: boolean };
+  if (win32) {
+    now = { ...readWin32ReapIdentity(opts.pid, opts.cmd), currentStartTime: null };
+  } else {
+    const [startRead, looksLikeOurShell] = await Promise.all([
+      readPosixStartTime(opts.pid),
+      // Only consulted when no creation time was recorded, but probing both in
+      // parallel keeps the slow path off the critical path of the common case.
+      isOurShellProcess(opts.pid, opts.cmd),
+    ]);
+    now = { currentCreatedAtFt: null, currentStartTime: startRead.value, currentGone: startRead.gone, looksLikeOurShell };
+  }
+  const { currentCreatedAtFt, currentStartTime, looksLikeOurShell } = now;
   const identity = classifyReapIdentity({
     storedCreatedAtFt: opts.storedCreatedAtFt,
     storedStartTime: opts.storedStartTime,
-    currentCreatedAtFt,
-    currentStartTime,
-    currentGone: (ftRead ?? startRead)?.gone ?? false,
-    looksLikeOurShell,
+    ...now,
   });
   if (identity === 'gone') {
     // Nothing to kill, and not a refusal: counting these as unconfirmed
@@ -1681,24 +1682,21 @@ async function reapIfIdentityConfirmed(opts: {
   return true;
 }
 
-/** Check if a PID belongs to the shell process we originally spawned.
+/** Check if a PID belongs to the shell process we originally spawned (posix;
+ *  Windows reads it with the creation time in readWin32ReapIdentity).
  *  Prevents killing unrelated processes after PID recycling (e.g. reboot). */
 async function isOurShellProcess(pid: number, expectedCmd: string): Promise<boolean> {
   try {
     const { execFile } = require('child_process');
     const { promisify } = require('util');
     const execFileAsync = promisify(execFile);
-    if (process.platform === 'win32') {
-      return await isWin32ShellProcess(pid, expectedCmd);
-    } else {
-      // Unix: check /proc/<pid>/exe or use ps
-      const { stdout } = await execFileAsync('ps', ['-o', 'comm=', '-p', String(pid)], {
-        encoding: 'utf-8', timeout: 3000,
-      });
-      const actualCmd = (stdout as string).trim();
-      const expectedBase = path.basename(expectedCmd);
-      return actualCmd === expectedBase || actualCmd.includes(expectedBase);
-    }
+    // Unix: check /proc/<pid>/exe or use ps
+    const { stdout } = await execFileAsync('ps', ['-o', 'comm=', '-p', String(pid)], {
+      encoding: 'utf-8', timeout: 3000,
+    });
+    const actualCmd = (stdout as string).trim();
+    const expectedBase = path.basename(expectedCmd);
+    return actualCmd === expectedBase || actualCmd.includes(expectedBase);
   } catch {
     // If we can't determine, err on the side of caution — don't kill
     return false;
