@@ -365,6 +365,9 @@ export class TranscriptActivityWatcher {
     const onLine = this.deps.onClaudeLine;
     if (!watch.replay || !onLine) return;
     watch.replay = false;
+    // The replay reads only the last window, so whatever came before it (and
+    // whatever was written while no watch read this file) is a gap.
+    this.deps.onClaudeGap?.(id);
     const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, watch.path, line); return []; } });
     // Go on from the last complete line the replay handed over: a line still
     // being written when the watch began is read whole once it ends, rather
@@ -391,9 +394,7 @@ export class TranscriptActivityWatcher {
       watch.offset = stat.size;
       watch.pending = undefined;
       // In this tick, before afterTick settles a pending error the new file
-      // may already have moved past. The replay reads only its last window,
-      // so what came before it is a gap.
-      if (watch.lines) this.deps.onClaudeGap?.(id);
+      // may already have moved past.
       watch.replay = watch.lines;
       this.replayLines(id, watch);
     } else if (stat.size - watch.offset > READ_CAP_BYTES) {

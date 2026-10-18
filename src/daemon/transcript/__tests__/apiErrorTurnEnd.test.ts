@@ -255,6 +255,17 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     g.advance(GRACE_MS);
     watcher.tick();
     expect(g.sent).toEqual([]);
+
+    // And through a watch that lost the file for a tick and was created again.
+    fs.appendFileSync(file, `${apiError('server_error', 'overloaded')}\n`);
+    watcher.tick();
+    fs.renameSync(file, next);
+    watcher.tick();
+    fs.appendFileSync(next, `${reply}\n${JSON.stringify({ type: 'system', subtype: 'blob', data: 'z'.repeat(100 * 1024) })}\n`);
+    fs.renameSync(next, file);
+    g.advance(GRACE_MS);
+    watcher.tick();
+    expect(g.sent).toEqual([]);
   });
 
   it('replays a transcript two panes share once, for the pane that keeps it', () => {
