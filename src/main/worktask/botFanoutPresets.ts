@@ -23,7 +23,8 @@
 //             it (main/factory/verifyGate.ts) — that record, not the worker's
 //             word, is what a verdict rests on.
 //   repro     reproduce an issue, write the failing test, attempt a minimal
-//             fix, open a DRAFT pull request.
+//             fix, open a DRAFT pull request while working and mark it
+//             ready (`gh pr ready`) once the test is pushed, so CI runs.
 //   maintain  bring the verify-wmux feature map up to date with merged PRs,
 //             run the affected recipes once, open a pull request.
 //   default   a bot's plain task: implement, gate, open a pull request — or,
@@ -98,9 +99,10 @@ const REPRO_PROMPT = (): string => [
   '- Reproduce the issue with the smallest steps you can find.',
   '- Write a test that fails because of it.',
   '- Attempt the minimal fix that makes that test pass, and run the repository gate (typecheck, lint, tests).',
-  '- Commit on your branch, push it with the `task_push` tool, and open a DRAFT pull request (`gh pr create --draft`) whose body has the repro steps and the test.',
+  '- Commit on your branch, push it with the `task_push` tool, and open a DRAFT pull request (`gh pr create --draft --head <your branch>`) whose body has the repro steps and the test.',
+  '- Once the failing test (and the fix, if there is one) is committed and pushed, mark the PR ready with `gh pr ready <number>`: CI skips drafts, so this is what starts it. When the issue does not reproduce, the PR stays a draft, if you opened one.',
   '',
-  'What you hand back (ledger summary, status review_requested): the repro steps, the failing test, the fix if there is one, and the draft PR link. When the issue does not reproduce, the summary starts with `no-repro` and lists what you tried.',
+  'What you hand back (ledger summary, status review_requested): the repro steps, the failing test, the fix if there is one, and the PR link. When the issue does not reproduce, the summary starts with `no-repro` and lists what you tried.',
 ].join('\n');
 
 const MAINTAIN_PROMPT = (): string => [
@@ -112,7 +114,7 @@ const MAINTAIN_PROMPT = (): string => [
   '- Read the merged pull requests the task names (`gh pr view <n> --json files,title`) and the renderer handles they touched.',
   '- Update the matching feature entries, keeping each entry\'s four-section shape.',
   '- Run each affected verify-wmux recipe once when it can run here, and note the ones that cannot.',
-  '- Commit, push with the `task_push` tool, and open a pull request with what changed and why.',
+  '- Commit, push with the `task_push` tool, and open a pull request (`gh pr create --head <your branch>`) with what changed and why.',
   '',
   'What you hand back (ledger summary, status review_requested): the entries you changed, the recipes you ran and their outcome, and the PR link; or `no-drift` when every entry already matched.',
 ].join('\n');
@@ -132,7 +134,7 @@ const DEFAULT_PROMPT = (): string => [
   '',
   'You are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin\'s default branch.',
   '',
-  'What you can do here: implement the task below within the files it names, run the repository gate (typecheck, lint, tests), commit, push your branch with the `task_push` tool, and open a pull request.',
+  'What you can do here: implement the task below within the files it names, run the repository gate (typecheck, lint, tests), commit, push your branch with the `task_push` tool, and open a pull request (`gh pr create --head <your branch>`).',
   'When the task asks a question instead of a change (research, a comparison, a look at the web), answer it: search, read the sources, and report; such a task opens no pull request.',
   '',
   'What you hand back (ledger summary, status review_requested): what landed, what you verified, and the PR link — or, for a question, your findings with a link to each source.',
@@ -151,7 +153,7 @@ export const BOT_FANOUT_PRESETS: Readonly<Record<BotFanoutPresetName, BotFanoutP
   },
   repro: {
     name: 'repro',
-    description: 'Reproduce an issue, write the failing test, attempt a minimal fix, open a draft PR.',
+    description: 'Reproduce an issue, write the failing test, attempt a minimal fix, open a PR and mark it ready for CI.',
     workerPrompt: REPRO_PROMPT,
     permissionMode: UNATTENDED,
     agent: CLAUDE,

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // #1472 review — stopping a worker must take its children with it. A
 // bypassPermissions run starts shell tools, builds and MCP servers; signalling
@@ -97,7 +98,7 @@ describe.skipIf(process.platform === 'win32')('terminateProcessTree (real proces
     terminateProcessTree(proc, 300);
 
     // Past SIGTERM, still running...
-    await new Promise((r) => setTimeout(r, 150));
+    await deliberateSleep(150, 'real timer: past SIGTERM, before the 300ms kill fallback');
     expect(proc.exitCode).toBeNull();
     expect(proc.signalCode).toBeNull();
     // ...until the fallback lands.

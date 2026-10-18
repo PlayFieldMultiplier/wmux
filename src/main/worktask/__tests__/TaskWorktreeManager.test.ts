@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { RunGitOptions } from '../TaskWorktreeManager';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 let home: string;
 let prevHome: string | undefined;
@@ -81,6 +82,42 @@ describe('slug 파생 (§3)', () => {
   it('긴 title은 24자로 절단', async () => {
     const { titleToSlug } = await loadModule();
     expect(titleToSlug('a'.repeat(50)).length).toBeLessThanOrEqual(24);
+  });
+});
+
+describe('preflight — the repository\'s common git dir', () => {
+  it('is read before any worker exists and resolved; one that cannot be read is left out', async () => {
+    const repoRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-repo-')));
+    fs.mkdirSync(path.join(repoRoot, '.git'));
+    const { TaskWorktreeManager } = await loadModule();
+    const withCommon = makeGitFake((args) => (args.includes('--git-common-dir') ? { stdout: '.git\n' } : args.includes('--show-toplevel') ? { stdout: `${repoRoot}\n` } : args.includes('--is-bare-repository') ? { stdout: 'false\n' } : {}));
+    const res = await new TaskWorktreeManager({ runGit: withCommon }).preflight(repoRoot, 'T', 'wtask-x-1');
+    expect(res.ok && res.plan.gitCommonDir).toBe(path.join(repoRoot, '.git'));
+    const missing = await new TaskWorktreeManager({ runGit: healthyRepoGit(repoRoot) }).preflight(repoRoot, 'T', 'wtask-x-1');
+    expect(missing.ok && missing.plan.gitCommonDir).toBeUndefined();
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('pins origin as the repository config holds it, read through that git dir', async () => {
+    const repoRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-repo-')));
+    fs.mkdirSync(path.join(repoRoot, '.git'));
+    const { TaskWorktreeManager } = await loadModule();
+    const calls: string[][] = [];
+    const withOrigin = (list: string) => makeGitFake((args) => {
+      calls.push(args);
+      if (args.includes('--git-common-dir')) return { stdout: '.git\n' };
+      if (args.includes('--show-toplevel')) return { stdout: `${repoRoot}\n` };
+      if (args.includes('--is-bare-repository')) return { stdout: 'false\n' };
+      if (args.includes('config') && args.includes('--list')) return { stdout: list };
+      return {};
+    });
+    const res = await new TaskWorktreeManager({ runGit: withOrigin('global\0url.ssh://git@git.corp.example/.insteadof\nhttps://git.corp.example/\0local\0remote.origin.url\nhttps://Git.Corp.Example/Team/App.git\0') }).preflight(repoRoot, 'T', 'wtask-x-1');
+    expect(res.ok && res.plan.originPin).toBe('https://Git.Corp.Example/Team/App.git');
+    expect(calls).toContainEqual([`--git-dir=${path.join(repoRoot, '.git')}`, 'config', '-z', '--list', '--show-scope']);
+    // A local-path origin has no pin.
+    const local = await new TaskWorktreeManager({ runGit: withOrigin('local\0remote.origin.url\n/srv/app.git\0') }).preflight(repoRoot, 'T', 'wtask-x-1');
+    expect(local.ok && local.plan.originPin).toBeUndefined();
+    fs.rmSync(repoRoot, { recursive: true, force: true });
   });
 });
 
@@ -342,7 +379,7 @@ describe('per-repo 직렬 큐 (§3 index.lock 경합 차단)', () => {
         if (args[0] === 'worktree' && args[1] === 'add') {
           active++;
           maxActive = Math.max(maxActive, active);
-          await new Promise((r) => setTimeout(r, 10));
+          await deliberateSleep(10, 'stub latency: overlapping worktree adds would show in maxActive');
           active--;
         }
         return { stdout: '', stderr: '' };
@@ -632,6 +669,54 @@ describe('T3 worktree base — origin default branch pinned to an OID, --no-trac
       fs.writeFileSync(path.join(wt, 'b.txt'), 'draft');
       expect(await mgr.removeWorktree(repo, 'real', wt)).toMatchObject({ ok: false, dirty: true, preserved: true });
       expect(fs.existsSync(path.join(wt, 'b.txt'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('rollback of a spawn that never launched (#2349)', () => {
+  it('real git: a forced removal takes a dirty worktree; the branch goes only while it is still at its base', { timeout: 30_000 }, async () => {
+    const { TaskWorktreeManager } = await loadModule();
+    const { execFileSync } = await import('node:child_process');
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', ...args], {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-twm-rollback-'));
+    try {
+      const repo = path.join(root, 'repo');
+      fs.mkdirSync(repo);
+      git(repo, 'init');
+      git(repo, 'commit', '--allow-empty', '-m', 'one');
+      const base = git(repo, 'rev-parse', 'HEAD');
+      const mgr = new TaskWorktreeManager();
+      const plan = (slug: string) => ({
+        repoRoot: repo, repoHash: 'real', taskSlug: slug, metaDir: path.join(root, 'm', slug),
+        worktreePath: path.join(root, 'wt', slug), branch: `wtask/${slug}`,
+      });
+
+      // Unchanged: a setup step left an untracked file. Forced removal takes
+      // it, and the branch (still at its base) goes too.
+      const a = plan('a');
+      expect((await mgr.createWorktree(a, base)).ok).toBe(true);
+      fs.writeFileSync(path.join(a.worktreePath, 'generated.txt'), 'setup output');
+      expect(await mgr.removeWorktree(repo, 'real', a.worktreePath)).toMatchObject({ ok: false, dirty: true });
+      expect(await mgr.removeWorktree(repo, 'real', a.worktreePath, undefined, { force: true })).toEqual({ ok: true });
+      expect(fs.existsSync(a.worktreePath)).toBe(false);
+      expect(await mgr.deleteBranchIfAt(repo, 'real', a.branch, base)).toEqual({ ok: true });
+      expect(() => git(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${a.branch}`)).toThrow();
+
+      // Moved: a commit on the branch is never lost.
+      const b = plan('b');
+      expect((await mgr.createWorktree(b, base)).ok).toBe(true);
+      git(b.worktreePath, 'commit', '--allow-empty', '-m', 'work');
+      const tip = git(b.worktreePath, 'rev-parse', 'HEAD');
+      expect(await mgr.removeWorktree(repo, 'real', b.worktreePath, undefined, { force: true })).toEqual({ ok: true });
+      expect(await mgr.deleteBranchIfAt(repo, 'real', b.branch, base)).toMatchObject({ ok: false });
+      expect(git(repo, 'rev-parse', `refs/heads/${b.branch}`)).toBe(tip);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

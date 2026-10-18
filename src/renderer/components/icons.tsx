@@ -302,6 +302,17 @@ export function IconBell({ size = 14 }: { size?: number }) {
   );
 }
 
+/** Bell with a slash — a pane whose notifications are muted. */
+export function IconBellOff({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <path d="M7 1.6a3.4 3.4 0 0 0-3.4 3.4c0 3.2-1.1 4.2-1.1 4.2h9c0 0-1.1-1-1.1-4.2A3.4 3.4 0 0 0 7 1.6Z" />
+      <path d="M5.9 11.4a1.2 1.2 0 0 0 2.2 0" />
+      <line x1="1.8" y1="1.8" x2="12.2" y2="12.2" />
+    </Icon>
+  );
+}
+
 /** Keyboard — rich input. Replaces the ⌨ emoji (same class as issue #145). */
 export function IconKeyboard({ size = 14 }: { size?: number }) {
   return (
@@ -526,6 +537,17 @@ export function IconPin({ size = 14 }: { size?: number }) {
     <Icon size={size}>
       <path d="M5 2.2 H9 L8.4 5.6 L10.4 7.6 H3.6 L5.6 5.6 Z" />
       <line x1="7" y1="7.6" x2="7" y2="11.8" />
+    </Icon>
+  );
+}
+
+/** A picture: a frame, a sun and a hill — attaching a photo. */
+export function IconImage({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <rect x="1.8" y="2.6" width="10.4" height="8.8" rx="1.6" />
+      <circle cx="5" cy="5.6" r="1" />
+      <path d="M2.2 10.2 L5.6 7.2 L8 9.2 L9.6 7.8 L11.8 9.8" />
     </Icon>
   );
 }

@@ -350,6 +350,21 @@ describe('createNotificationHandler (R4-R10)', () => {
     expect(harness.spies.setPaneNotificationRing).not.toHaveBeenCalled();
   });
 
+  it('R8c: a muted pane silences its own notifications but not a ptyId-less one resolved onto it', () => {
+    harness.state.workspaces[0].rootPane = { ...harness.state.workspaces[0].rootPane, notificationsMuted: true } as typeof harness.state.workspaces[0]['rootPane'];
+    harness.state.activeWorkspaceId = 'ws-other';
+    handle('pty-1', { type: 'info', title: 't', body: 'b' });
+    expect(harness.spies.addNotification).toHaveBeenCalledTimes(1);
+    expect(harness.spies.pushToast).not.toHaveBeenCalled();
+    expect(harness.spies.playSound).not.toHaveBeenCalled();
+
+    // `wmux notify` with only a workspace hint lands on the active pane, which
+    // is the muted one — it still interrupts.
+    handle(null, { type: 'info', title: 't2', body: 'b2', workspaceId: 'ws-a' });
+    expect(harness.spies.addNotification).toHaveBeenCalledTimes(2);
+    expect(harness.spies.pushToast).toHaveBeenCalledTimes(1);
+  });
+
   // R9 — toggling toastEnabled at runtime affects subsequent notifications.
   it('R9: flipping toastEnabled between calls toggles pushToast dispatch', () => {
     harness.state.activeWorkspaceId = 'ws-other';

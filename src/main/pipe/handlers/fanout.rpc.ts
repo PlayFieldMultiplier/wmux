@@ -98,7 +98,7 @@ import type { DaemonClient } from '../../DaemonClient';
 import { hostCwdForPane, type DaemonRpc } from '../../pty/wslCallerCwd';
 import { loadWorkspaceDecision } from '../../deck/deckDecisionStore';
 import type { FanOutRequest, FanOutService, FanOutTaskResult } from '../../worktask/FanOutService';
-import { getFanOutGuards, promptDigest, type FanOutGuards } from '../../worktask/fanoutGuards';
+import { getFanOutGuards, launchedAuditTask, promptDigest, refreshDormantTaskWorkspaces, type FanOutGuards } from '../../worktask/fanoutGuards';
 import { loadFanoutRequireApproval, loadFanoutWorkerPermissionMode } from '../../worktask/fanoutWorkerPolicy';
 import { workerLaunchFlags, type FanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
 import { loadFanoutPresets } from '../../worktask/fanoutPresets';
@@ -128,8 +128,9 @@ import { getWmuxDir } from '../../../daemon/config';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { GENERAL_THREAD, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
 import { normalizeRepoKey } from '../../../shared/repoKey';
+import { isOriginPin } from '../../../shared/originPin';
 import { parseRemoteKey } from '../../github/PrProvider';
-import { originUrlRepoKey } from '../../worktask/workerGit';
+import { originUrlRepoKey, readRawOriginUrl } from '../../worktask/workerGit';
 import { getFactorySettings } from '../../factory/factorySettings';
 import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
@@ -368,6 +369,12 @@ async function repoRootOf(dir: string): Promise<{ root: string | null; refusal: 
  */
 async function originRepoKeyOf(dir: string): Promise<string | null> {
   try {
+    // origin's URL as the repository config holds it first: the address
+    // task_push compares against (get-url applies an owner's
+    // `url.*.insteadOf`).
+    const raw = await readRawOriginUrl(runGit, dir);
+    const rawKey = raw === null ? null : normalizeRepoKey(parseRemoteKey(raw));
+    if (raw !== null && rawKey && originUrlRepoKey(raw) === rawKey) return rawKey;
     const res = await runGit(['remote', 'get-url', 'origin'], dir);
     if (res.code !== 0) return null;
     const url = res.stdout.trim();
@@ -1078,17 +1085,25 @@ export function registerFanOutRpc(
         : `${callerWorkspaceId}::${callerKey}`;
 
     // A bot's caps below count its live workers: read their panes as they are
-    // now, not as the previous check saw them (#2255). Here, ahead of the
-    // synchronous stretch from the poll branch to the booking. A key already
-    // known is answered from bookkeeping and never waits, and a new one waits
-    // at most LIVENESS_WAIT_MS, well inside the caller's own deadline.
+    // now, not as the previous check saw them (#2255). The live cap counts
+    // open task workspaces less the dormant ones: read those fresh too (#2387).
+    // A second layer: a task already seen gone is dormant from its durable
+    // fact without a read (agentGoneFacts.ts, #2393); the read adds the ones
+    // that ended since.
+    // Here, ahead of the synchronous stretch from the poll branch to the
+    // booking. A key already known is answered from bookkeeping and never
+    // waits, and a new one waits at most LIVENESS_WAIT_MS (both reads at
+    // once), well inside the caller's own deadline.
     const keyKnown = params['cancelPending'] === true
       || service.statusOf(key).state !== 'unknown'
       || pending.has(key)
       || terminal.has(key);
-    if (bot && !keyKnown) {
+    if (!keyKnown) {
       try {
-        await withinMs((deps.bot ?? defaultBotPort)()?.refreshLiveness?.(), LIVENESS_WAIT_MS);
+        await Promise.all([
+          bot ? withinMs((deps.bot ?? defaultBotPort)()?.refreshLiveness?.(), LIVENESS_WAIT_MS) : undefined,
+          refreshDormantTaskWorkspaces(LIVENESS_WAIT_MS),
+        ]);
       } catch {
         /* the caps count what is known */
       }
@@ -1621,6 +1636,8 @@ export function registerFanOutRpc(
       // of its own repository (factory/taskGate.ts), whatever the bot's
       // profile names later.
       ...(bot && !botResearch && normalizeRepoKey(botProfile?.repo?.repoKey) ? { repoKey: normalizeRepoKey(botProfile?.repo?.repoKey) as string } : {}),
+      // Its origin pin: the repository's origin must still match it.
+      ...(bot && !botResearch && isOriginPin(botProfile?.repo?.originPin) ? { originPin: botProfile?.repo?.originPin as string } : {}),
       // An owner's code task: its origin's, which task_fetch reads.
       ...(ownerRepoKey ? { repoKey: ownerRepoKey } : {}),
       ...(bot && secretNames ? { secretNames } : {}),
@@ -1797,12 +1814,7 @@ export function registerFanOutRpc(
               ...(presetName ? { preset: presetName } : {}),
               ...(agentLabels.length > 0 ? { agents: agentLabels } : {}),
               ...(outputBatchDir ? { outputBatchDir } : {}),
-              launched: tasks.map((t) => ({
-                title: t.title,
-                ...(t.workspaceId ? { workspaceId: t.workspaceId } : {}),
-                ...(t.initialCommand ? { command: t.initialCommand } : {}),
-                ...(t.error ? { error: t.error } : {}),
-              })),
+              launched: tasks.map(launchedAuditTask),
             });
           } catch (err) {
             console.warn(`[fanout.rpc] could not append the launch record for ${key}: ${String(err)}`);

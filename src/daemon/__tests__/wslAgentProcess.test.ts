@@ -371,8 +371,7 @@ describe.runIf(process.platform === 'linux' && fs.existsSync('/proc/sys/kernel/r
       const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
       const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
       execFileSync('/bin/sh', ['-c', SIGNAL_SCRIPT, 'wmux-kill', String(pid), start, boot, 'KILL']);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(fs.existsSync(`/proc/${kid}`) && !/\) Z /.test(fs.readFileSync(`/proc/${kid}/stat`, 'utf8'))).toBe(false);
+      await vi.waitFor(() => expect(fs.existsSync(`/proc/${kid}`) && !/\) Z /.test(fs.readFileSync(`/proc/${kid}/stat`, 'utf8'))).toBe(false), { timeout: 10_000 });
     } finally {
       parent.kill('SIGKILL');
     }

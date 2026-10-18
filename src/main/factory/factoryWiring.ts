@@ -47,7 +47,8 @@ import fs from 'node:fs';
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import type { BotProfile } from '../../shared/bot';
 import type { Fact, FactDraft } from '../../shared/facts';
-import type { MoaWakePayload, MoaWakeRefusalCode, MoaWakeResult } from '../../shared/moaWake';
+import type { MoaWakeAttachment, MoaWakePayload, MoaWakeRefusalCode, MoaWakeResult } from '../../shared/moaWake';
+import { photoPlaceholderTitle, type RoomAttachment } from '../../shared/roomAttachments';
 import type { BotGroup } from '../../shared/botGroup';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
@@ -61,6 +62,7 @@ import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
 import { setFactoryTriggerPorts, type BotDirectoryApi, type FactLogApi, type FactoryTrustApi } from './triggerEngine';
+import { ROOM_ATTACHMENTS_DIRNAME, RoomAttachmentStore, cardImages, getRoomAttachmentStore, setRoomAttachmentStore } from './roomAttachments';
 import { capBody, getRoomWriter, oneLine, setFactoryRoomPorts, type FactoryRoomPorts, type RoomBotHookEvent, type RoomWriter, type RunningWake } from './roomWriter';
 import { getBotRuntime, setBotRuntimePorts } from './BotRuntime';
 import { getHandoffRouter, summarizeHandoff } from './handoffRouter';
@@ -88,11 +90,12 @@ import { originDefaultRef, taskFolderFromMissions, worktreeFromMissions } from '
 import { completeCheckedTask, completeMergedTask, completeResearchTask, gateCardNoted, installTaskGate, recordNoChangesGate, worktreeHeadMerged } from './taskGate';
 import { liveNoChangesCheck } from './noChangesCheck';
 import { TaskBranchCache, setBotTaskSources } from './botTasks';
-import { installLateStopSweep, setFactoryStopPorts, type FactoryStopPorts } from './factoryStop';
+import { WORKSPACES_LOADING, installLateStopSweep, setFactoryStopPorts, type FactoryStopPorts } from './factoryStop';
 import { getRoutineStore } from './routines';
 import { getGroupStore } from './groupStore';
 import { getAgentSlots } from './agentSlots';
-import { getWorkerResumePorts, isWslWorkerPane, reclaimedWorkerState, stopResumedWorker, stopResumedWorkers, workerWorkspaceOf, type WorkerSessionInfo } from './workerReclaim';
+import { getWorkerResumePorts, isTaskOwnWorkerPane, isWslWorkerPane, reclaimedWorkerState, stopResumedWorker, stopResumedWorkers, workerWorkspaceOf, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
+import { botWorkerSessionRecord } from '../agents/botWorkerMergeGuard';
 import { getTaskFolderPorts } from './taskFolderCleanup';
 
 // ── Trigger cursor ─────────────────────────────────────────────────────────
@@ -352,12 +355,30 @@ export function runningWakeOf(botId: string): RunningWake | null {
   };
 }
 
+/** The photos of the owner card a `human` wake answers: its run names the
+ *  card (humanRunId), in the bot's own room. */
+export function wakeImagesOf(
+  writer: Pick<RoomWriter, 'get'> | null,
+  store: RoomAttachmentStore | null,
+  profile: Pick<BotProfile, 'workspaceId'>,
+  item: Pick<WakeItem, 'reason' | 'workspaceId'>,
+): { images: Array<{ mediaType: string; data: string }>; missing: number } | null {
+  if (item.reason.kind !== 'human') return null;
+  const cardId = humanCardIdOfRun(item.reason.runId);
+  if (!cardId || !writer) return null;
+  const card = writer.get(item.workspaceId || profile.workspaceId, cardId);
+  if (!card || card.kind !== 'human' || !card.attachments?.length) return null;
+  return cardImages(store, card.workspaceId, card.attachments);
+}
+
 // ── Phone ──────────────────────────────────────────────────────────────────
 
 export interface FactoryPhoneDeps {
   settings: () => FactorySettings;
   writer: () => RoomWriter | null;
   ports: () => Partial<FactoryRoomPorts>;
+  /** The room's photo store (roomAttachments.ts). Default: the factory's. */
+  attachments?: () => RoomAttachmentStore | null;
 }
 
 /**
@@ -369,6 +390,12 @@ export interface FactoryPhoneDeps {
  * member). A target that names no live bot or group, or one whose bots are
  * all off, is refused before anything is written. Null when the factory is
  * off (the daemon then takes the Moa path, or refuses a targeted message).
+ *
+ * Photos (`attachments`, targeted only): a first post copies each upload
+ * into the room's store, then posts; a retry of the same id reuses the
+ * first card's photos and copies nothing. Copies are removed only when no
+ * card was written: a full queue or a failed flush leaves the card, and its
+ * photos, for the retry. Synchronous from the lookup to the post.
  */
 export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneDeps): MoaWakeResult | null {
   const settings = deps.settings();
@@ -387,27 +414,54 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
   if ('code' in target) return { ok: false, code: target.code };
   const actor = crypto.createHash('sha256').update(payload.actor).digest('hex').slice(0, 16);
   const clientPostId = `phone:${actor}:${payload.clientMessageId}`.slice(0, ROOM_LIMITS.CLIENT_ID_MAX);
+  const uploads = payload.attachments ?? [];
   // A retry posts nothing new: the room answers with the id's first card and
   // queues that card's wakes. An id whose first card says other words (its
-  // body as the room stored it, secrets redacted) or sits in another thread
-  // is a reused id, never that card's retry: the daemon released the id when
-  // a queue was full, so it can come back here with another message.
+  // body as the room stored it, secrets redacted), sits in another thread or
+  // carries other photos is a reused id, never that card's retry: the daemon
+  // released the id when a queue was full, so it can come back here with
+  // another message.
   const prior = writer.find(target.workspaceId, (c) => c.clientPostId === clientPostId);
   // The text is processed whole and shortened last, as the room does for
   // short text.
   const whole = redactStoredSecrets(payload.text);
-  if (prior && (prior.threadId !== target.threadId || (prior.body ?? '') !== capBody(whole))) return { ok: false, code: 'id_reused' };
+  const words = whole.trim() ? capBody(whole) : '';
+  if (prior && (prior.threadId !== target.threadId || (prior.body ?? '') !== words || !sameUploads(prior.attachments, uploads))) {
+    return { ok: false, code: 'id_reused' };
+  }
+  let attachments: RoomAttachment[] = prior?.attachments ?? [];
+  const imported: string[] = [];
+  if (!prior && uploads.length > 0) {
+    const store = deps.attachments ? deps.attachments() : getRoomAttachmentStore();
+    if (!store) return { ok: false, code: 'busy' };
+    for (const upload of uploads) {
+      const r = store.importUpload(target.workspaceId, upload);
+      if (!r.ok) {
+        store.remove(target.workspaceId, imported);
+        return r.reason === 'full' ? { ok: false, code: 'attachments_full' } : { ok: false, code: 'attachment_refused', reason: r.reason };
+      }
+      imported.push(r.attachment.id);
+      attachments = [...attachments, r.attachment];
+    }
+  }
+  const photoOnly = !words && attachments.length > 0;
   const r = postHumanMessage(writer, ports, {
     workspaceId: target.workspaceId,
     threadId: target.threadId,
-    title: oneLine(whole, ROOM_LIMITS.TITLE_MAX) || 'Message',
-    body: capBody(whole),
+    title: photoOnly ? photoPlaceholderTitle(attachments.length) : oneLine(whole, ROOM_LIMITS.TITLE_MAX) || 'Message',
+    ...(words ? { body: words } : {}),
     // The card holds a capped copy; the bot's wake carries the whole message.
-    wakeText: payload.text,
+    wakeText: photoOnly ? PHOTO_ONLY_WAKE_TEXT : payload.text,
     ...(target.toBotId ? { toBotId: target.toBotId } : {}),
     clientPostId,
     source: 'phone',
+    ...(attachments.length > 0 ? { attachments } : {}),
   });
+  // Photos only the card can hold: none written (or another card answered),
+  // so these copies are no card's.
+  const kept = 'card' in r && r.card ? new Set((r.card.attachments ?? []).map((a) => a.id)) : new Set<string>();
+  const orphans = imported.filter((id) => !kept.has(id));
+  if (orphans.length > 0) (deps.attachments ? deps.attachments() : getRoomAttachmentStore())?.remove(target.workspaceId, orphans);
   // The card is up but a queue took no wake, even past its cap: a retryable
   // refusal, so the phone sends the same id again and that retry queues the
   // missing wakes once (postHumanMessage).
@@ -416,6 +470,15 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
   if (r.wakeId) return { ok: true, accepted: true, queued: true };
   // A retry whose card names no bot that is still on.
   return { ok: false, code: 'duplicate' };
+}
+
+/** The bot's words for a message that is only photos. */
+export const PHOTO_ONLY_WAKE_TEXT = '(The owner sent only photos, no words.)';
+
+/** Whether a stored card's photos came from exactly these uploads, in order. */
+function sameUploads(stored: readonly RoomAttachment[] | undefined, uploads: readonly MoaWakeAttachment[]): boolean {
+  const had = (stored ?? []).map((a) => a.upload ?? '');
+  return had.length === uploads.length && had.every((name, i) => name === uploads[i]!.uploadId);
 }
 
 /** Where a phone message goes: the phone bot's 1:1, or the conversation the
@@ -491,14 +554,45 @@ export function daemonRpc(client: () => Daemon | null): ((method: string, params
   return c ? (method, params) => c.rpc(method as never, params as Record<string, unknown> | undefined) : null;
 }
 
+/** A stop that met an unknown workspace tree (the app is still loading its
+ *  workspaces) and found WSL panes started in the task folder that it could
+ *  not judge (no session record names the task): those were left alone, the
+ *  rest was stopped (`workers`). Its caller reports the stop partial with
+ *  WORKSPACES_LOADING_MESSAGE, so the owner stops again in a moment. */
+export class WorkerStopPendingError extends Error {
+  readonly code = WORKSPACES_LOADING;
+  constructor(
+    readonly workers: number,
+    readonly pendingSessionIds: readonly string[],
+  ) {
+    super(`the app is still loading its workspaces; stop again in a moment (${pendingSessionIds.length} WSL pane(s) in the task folder were left alone)`);
+    this.name = 'WorkerStopPendingError';
+  }
+}
+
+export interface StopTaskWorkerOpts {
+  agentsOnly?: boolean;
+  platform?: NodeJS.Platform;
+  /** A pane's bot worker session record (botWorkerSessionRecord): with the
+   *  tree unknown, a WSL pane is the task's worker only when its record
+   *  names the task. Absent: none is identified. */
+  sessionRecordOf?: WorkerSessionRecordOf;
+}
+
 /** Stop the processes of a bot task's worker: the daemon sessions of its
  *  workspace started in its worktree (a research task's scratch folder), the
  *  folder kept. Each pane's agent and everything below it first (the daemon's
  *  session.stopAgent: asked to exit, killed after a grace, checked gone),
  *  then the pane itself, checked gone (stopSessionsInDir). `workspacePtys`:
- *  the panes a workspace owns, null when the workspace tree is not known (a
- *  session started in the folder then counts, a WSL pane excepted). A pane in another workspace,
- *  such as a terminal the owner opened in the folder, is never touched.
+ *  the panes a workspace owns, null when the workspace tree is not known.
+ *  A pane in another workspace, such as a terminal the owner opened in the
+ *  folder, is never touched. An unknown tree (right after start-up, a daemon
+ *  reconnect): a session started in the folder counts, but a WSL pane only
+ *  when its bot worker session record names the task (#2267); the folder
+ *  match alone cannot tell the worker from a WSL terminal the owner opened
+ *  there. Any other WSL pane in the folder is left alone, and the stop throws
+ *  WorkerStopPendingError after stopping the rest (its `workers`), so its
+ *  caller reports it partial: a stop once the tree is known reaches it.
  *  `agentsOnly` (the re-stop of a task stopped before): only a leftover
  *  agent is stopped; a pane is closed only when it still runs an agent the
  *  daemon cannot stop by itself (Codex, WSL, an exec unit), so a plain
@@ -514,7 +608,7 @@ export async function stopTaskWorker(
   entry: LedgerEntry,
   client: () => Daemon | null,
   workspacePtys?: (workspaceId: string) => readonly string[] | null,
-  opts: { agentsOnly?: boolean; platform?: NodeJS.Platform } = {},
+  opts: StopTaskWorkerOpts = {},
 ): Promise<number> {
   const rpc = daemonRpc(client);
   if (!rpc) throw new Error('the daemon is not connected');
@@ -522,14 +616,26 @@ export async function stopTaskWorker(
   if (!worktree) throw new Error('the task worktree is not known');
   const own = workspacePtys?.(entry.taskWorkspaceId) ?? null;
   type Session = WorkerSessionInfo & { pid?: number };
+  // An unknown tree: a WSL pane is the task's only when its bot worker
+  // session record names the task. The reclaim record is not consulted: it
+  // can list a pane the owner opened in the folder.
+  const identified = (x: Session): boolean => isTaskOwnWorkerPane(x, entry.id, [], opts.sessionRecordOf);
+  const agentsOnly = opts.agentsOnly === true;
+  let unidentifiedWsl: Session[] = [];
   const listSessions = async (): Promise<Session[]> => {
     const sessions = await rpc('daemon.listSessions', {});
     const all = Array.isArray(sessions) ? (sessions as Session[]) : [];
-    // An unknown tree: a WSL pane is never taken for the task's (its folder
-    // match alone cannot tell the worker from a pane the owner opened there).
-    return own ? all.filter((x) => own.includes(x.id)) : all.filter((x) => !x.wslTarget);
+    if (own) return all.filter((x) => own.includes(x.id));
+    unidentifiedWsl = all.filter((x) => !!x.wslTarget && !identified(x));
+    return all.filter((x) => !x.wslTarget || identified(x));
   };
   const before = await listSessions();
+  // The WSL panes in the folder this stop cannot judge and would act on
+  // (agentsOnly: only one still running a worker): left alone.
+  const unjudged = unidentifiedWsl.filter((x) => !agentsOnly || x.agentProcessAlive === true || isWslWorkerPane(x));
+  const leftAlone = unjudged.length > 0
+    ? await sessionsStartedIn([worktree], { listSessions: async () => unjudged, platform: opts.platform })
+    : [];
   const agentLive = new Set(before.filter((x) => x.agentProcessAlive === true || isWslWorkerPane(x)).map((x) => x.id));
   const stoppedAgents = new Set<string>();
   for (const id of await sessionsStartedIn([worktree], { listSessions: async () => before, platform: opts.platform })) {
@@ -543,7 +649,6 @@ export async function stopTaskWorker(
   }
   // agentsOnly: only panes still running an agent the stop above did not
   // reach are closed; every other pane stays.
-  const agentsOnly = opts.agentsOnly === true;
   const stopped = await stopSessionsInDir(worktree, {
     listSessions: agentsOnly
       ? async () => (await listSessions()).filter((x) => agentLive.has(x.id) && !stoppedAgents.has(x.id))
@@ -559,6 +664,10 @@ export async function stopTaskWorker(
   if (stopped.length > 0) console.log(`[factory] stopped ${stopped.length} session(s) of task ${entry.id}`);
   const workers = new Set([...stoppedAgents, ...stopped.filter((id) => agentLive.has(id))]);
   if (agentsOnly && workers.size > 0) console.log(`[factory] stopped ${workers.size} leftover agent(s) of task ${entry.id}`);
+  if (leftAlone.length > 0) {
+    console.warn(`[factory] stop of task ${entry.id}: the workspace tree is not known; ${leftAlone.length} WSL pane(s) in its folder were left alone`);
+    throw new WorkerStopPendingError(workers.size, leftAlone);
+  }
   return workers.size;
 }
 
@@ -660,6 +769,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     taskHandoff: (item) => taskWakeHandoff(item.reason, (id) => getTaskLedger().get(id)),
     readThreadTail: (workspaceId, threadId, n) => threadTail(getRoomWriter(), workspaceId, threadId, n),
     wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
+    wakeImages: (profile, item) => wakeImagesOf(getRoomWriter(), getRoomAttachmentStore(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),
     // The runtime starts before these modules (modules.ts): a wake restored
     // at launch waits for its handoff, thread and routine to be readable.
@@ -676,6 +786,13 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     }
   });
 
+  // The room's photo store: swept by age once at start (roomAttachments.ts).
+  const photos = new RoomAttachmentStore({
+    root: path.join(deps.wmuxDir(), 'factory', ROOM_ATTACHMENTS_DIRNAME),
+    uploadsDir: path.join(deps.wmuxDir(), 'uploads', 'phone'),
+  });
+  photos.sweep();
+  setRoomAttachmentStore(photos);
   setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
 
   const morning = new MorningSchedule({
@@ -770,9 +887,11 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
           // A task with no commits beyond its base is not gated.
           noChanges: liveNoChangesCheck({
             rpc: () => daemonRpc(daemon),
-            git,
             wmuxDir: deps.wmuxDir,
             botRepoKey: (botId) => getBotDirectory()?.get(botId)?.repo?.repoKey,
+            botRepoPath: (botId) => getBotDirectory()?.get(botId)?.repo?.repoPath,
+            botOriginPin: (botId) => getBotDirectory()?.get(botId)?.repo?.originPin,
+            recordOriginPin: (taskId, pin) => ledger.recordOriginPin(taskId, pin),
           }),
           recordNoChanges: (taskId, detail, headSha) => recordNoChangesGate(ledger, taskId, detail, Date.now, headSha),
           wake: (input) => {
@@ -817,7 +936,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         botIds: () => getBotStore()?.list({}).map((b) => b.id) ?? [],
         ledger,
         gates: getSharedTaskGateRunner,
-        stopWorker: (entry, opts) => stopTaskWorker(entry, daemon, taskWorkspacePtys, opts),
+        stopWorker: (entry, opts) => stopTaskWorker(entry, daemon, taskWorkspacePtys, { ...opts, sessionRecordOf: (id) => botWorkerSessionRecord(id) }),
         isOff: () => !settings().enabled,
         pauseRoutines: (botId) => getRoutineStore()?.pauseFor(botId, 'stop') ?? 0,
         stopResumed: async (botId) => {
@@ -862,6 +981,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       offHookFacts();
       hooks.dispose();
       setFactoryPhoneMessageHandler(null);
+      setRoomAttachmentStore(null);
       cursor.flush();
     },
   };

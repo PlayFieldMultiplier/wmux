@@ -320,7 +320,7 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
 
   it('English words match what main writes', () => {
     expect(noticeText(card({ notice: { code: 'worker.done', args: { status: 'failed' } } }), i18nT)?.body)
-      .toBe('Task failed: its Claude stopped to free memory. Its pane stays open until you have looked at it, then closes. The worktree is kept; no conversation was recorded to resume.');
+      .toBe('Task failed: its Claude stopped because the task ended. Its pane stays open until you have looked at it, then closes. The worktree is kept; no conversation was recorded to resume.');
   });
 
   it('a card saying a stopped worker can resume offers Resume while its task\'s worker is resumable', () => {

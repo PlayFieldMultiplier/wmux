@@ -12,6 +12,7 @@ import {
   detectProfile,
   isPermissionGateInstalled,
   allowFanoutWorkerTools,
+  updateHooks,
   type SetupHooksPaths,
 } from '../setupHooks';
 import { FANOUT_WORKER_ALLOWED_TOOLS } from '../../../shared/workerLaunch';
@@ -103,7 +104,7 @@ describe('installHooks', () => {
     expect(outcome.ok).toBe(true);
     expect(outcome.error).toBeNull();
     expect(outcome.events.sort()).toEqual(
-      ['PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
+      ['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
     );
     expect(fs.existsSync(bridgeDest)).toBe(true);
     expect(fs.readFileSync(bridgeDest, 'utf8')).toBe('BRIDGE_CONTENT_V1\n');
@@ -112,7 +113,7 @@ describe('installHooks', () => {
     const hooks = s.hooks as Record<string, unknown[]>;
     // Event KEYS (PreToolUse carries two groups: the gate + AskUserQuestion).
     expect(Object.keys(hooks).sort()).toEqual(
-      ['PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
+      ['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
     );
     // Each entry references the stable dest path, NOT the source/install dir.
     const stop = hooks.Stop[0] as { hooks: { command: string }[] };
@@ -273,7 +274,7 @@ describe('installHooks — plugin-aware', () => {
     const outcome = installHooks(paths());
     expect(outcome.ok).toBe(true);
     expect(outcome.pluginDetected).toBe(true);
-    expect(outcome.removedForPlugin).toBe(9);
+    expect(outcome.removedForPlugin).toBe(10);
     expect(outcome.events).toEqual([]);
 
     // No wmux command remains; both foreign hooks are preserved.
@@ -293,10 +294,10 @@ describe('installHooks — plugin-aware', () => {
     const outcome = installHooks(paths());
     expect(outcome.ok).toBe(true);
     expect(outcome.pluginDetected).toBe(false);
-    expect(outcome.events.sort()).toEqual(['PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
+    expect(outcome.events.sort()).toEqual(['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
     const hooks = readSettings().hooks as Record<string, unknown[]>;
     expect(Object.keys(hooks).sort()).toEqual(
-      ['PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
+      ['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
     );
   });
 
@@ -305,7 +306,7 @@ describe('installHooks — plugin-aware', () => {
     const outcome = installHooks(paths());
     expect(outcome.ok).toBe(true);
     expect(outcome.pluginDetected).toBe(false);
-    expect(outcome.events.sort()).toEqual(['PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
+    expect(outcome.events.sort()).toEqual(['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
     expect(allHookCommands().some((c) => c.includes('wmux-bridge.mjs'))).toBe(true);
   });
 
@@ -334,7 +335,7 @@ describe('installHooks — plugin-aware', () => {
     const outcome = installHooks(paths());
     expect(outcome.ok).toBe(true);
     expect(outcome.pluginDetected).toBe(false);
-    expect(outcome.events.sort()).toEqual(['PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
+    expect(outcome.events.sort()).toEqual(['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit']);
     expect(allHookCommands().some((c) => c.includes('wmux-bridge.mjs'))).toBe(true);
     // The user's enabledPlugins map is preserved untouched.
     expect((readSettings().enabledPlugins as Record<string, unknown>)[
@@ -378,7 +379,7 @@ describe('removeHooks', () => {
 
     const outcome = removeHooks(paths());
     expect(outcome.ok).toBe(true);
-    expect(outcome.removed).toBe(9);
+    expect(outcome.removed).toBe(10);
 
     const s = readSettings();
     expect(s.model).toBe('opus');
@@ -498,7 +499,7 @@ describe('statusHooks', () => {
     // installedEvents is a deduped event list, so PreToolUse appears once even
     // though it carries two wmux groups.
     expect(s.installedEvents.sort()).toEqual(
-      ['PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
+      ['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStop', 'UserPromptSubmit'],
     );
     expect(s.bridgeExists).toBe(true);
     expect(s.bridgeStale).toBe(false);
@@ -1062,6 +1063,143 @@ describe('hook profile (#970)', () => {
     expect(outcome.pluginDetected).toBe(true);
     expect(outcome.profile).toBe('full');
     expect(outcome.warning).toContain('--signals-only had no effect');
+  });
+});
+
+/**
+ * #2404 — an install made by an older build is compared with the hook set this
+ * build expects. Before this, `--status` and the Settings card had no row for a
+ * hook added later (Notification, #2390), so a missing one read as healthy.
+ */
+describe('hook set drift (#2404)', () => {
+  const GATE = '--permission-gate';
+
+  /** A settings.json as a build from before #2390 wrote it: no Notification. */
+  function preNotificationInstall(profile?: 'signals-only'): void {
+    installHooks(paths(), profile);
+    const settings = readSettings();
+    delete (settings.hooks as Record<string, unknown>)['Notification'];
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+  }
+
+  it('reports a pre-#2390 install as missing Notification, with an update available', () => {
+    preNotificationInstall();
+    const s = statusHooks(paths());
+    expect(s.updateAvailable).toBe(true);
+    expect(s.hooks.filter((h) => h.state !== 'ok').map((h) => h.label)).toEqual(['Notification:permission_prompt']);
+    expect(s.features.permissionPrompt.state).toBe('off');
+  });
+
+  it('lists every expected hook as ok on a current install, with nothing to update', () => {
+    installHooks(paths());
+    const s = statusHooks(paths());
+    expect(s.updateAvailable).toBe(false);
+    expect(s.hooks.length).toBeGreaterThan(0);
+    expect(s.hooks.every((h) => h.state === 'ok')).toBe(true);
+    expect(s.hooks.map((h) => h.label)).toContain('Notification:permission_prompt');
+    expect(s.features.permissionPrompt.state).toBe('ok');
+    const before = fs.readFileSync(settingsPath, 'utf8');
+    expect(updateHooks(paths())).toMatchObject({ ok: true, updated: [] });
+    expect(fs.readFileSync(settingsPath, 'utf8')).toBe(before);
+  });
+
+  it('offers no update when nothing is installed — that is an install, not drift', () => {
+    expect(statusHooks(paths()).updateAvailable).toBe(false);
+  });
+
+  it('★ the update adds only the missing wmux entry and keeps the user hooks and their order', () => {
+    preNotificationInstall();
+    const settings = readSettings();
+    const hooks = settings.hooks as Record<string, Array<{ matcher?: string; hooks: { type: string; command: string }[] }>>;
+    // A foreign group BEFORE and AFTER ours, a foreign leaf inside our group,
+    // and a foreign Notification hook of the user's own.
+    hooks.Stop.unshift({ matcher: '', hooks: [{ type: 'command', command: 'first.sh' }] });
+    hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: 'last.sh' }] });
+    hooks.SessionStart[0].hooks.push({ type: 'command', command: 'mine-too.sh' });
+    hooks.Notification = [{ matcher: 'idle_prompt', hooks: [{ type: 'command', command: 'notify-me.sh' }] }];
+    fs.writeFileSync(settingsPath, JSON.stringify(settings), 'utf8');
+    const before = readSettings();
+
+    const outcome = updateHooks(paths());
+    expect(outcome).toMatchObject({ ok: true, profile: 'full', updated: ['Notification:permission_prompt'], error: null });
+
+    const after = readSettings();
+    const afterHooks = after.hooks as Record<string, unknown[]>;
+    // The user's Notification hook stays first; wmux's lands after it.
+    expect(afterHooks.Notification[0]).toEqual((before.hooks as Record<string, unknown[]>).Notification[0]);
+    expect(afterHooks.Notification).toHaveLength(2);
+    expect(afterHooks.Notification[1]).toEqual({
+      matcher: 'permission_prompt',
+      hooks: [{ type: 'command', command: `node "${bridgeDest}" Notification` }],
+    });
+    // Everything else is byte-for-byte what it was, order included.
+    delete afterHooks.Notification;
+    delete (before.hooks as Record<string, unknown[]>).Notification;
+    expect(after).toEqual(before);
+    expect(statusHooks(paths()).updateAvailable).toBe(false);
+  });
+
+  it('★ a signals-only install from before #2390 stays signals-only through the update', () => {
+    preNotificationInstall('signals-only');
+    expect(detectProfile(readSettings())).toBe('signals-only');
+    const s = statusHooks(paths());
+    expect(s.profile).toBe('signals-only');
+    // The gate is not part of the signals-only set, so it is not "missing".
+    expect(s.hooks.some((h) => h.extraArgs === GATE)).toBe(false);
+    expect(s.hooks.filter((h) => h.state !== 'ok').map((h) => h.label)).toEqual(['Notification:permission_prompt']);
+    const outcome = updateHooks(paths());
+    expect(outcome.profile).toBe('signals-only');
+    expect(allHookCommands().some((c) => c.includes(GATE))).toBe(false);
+    expect(allHookCommands().filter((c) => c.endsWith(' Notification'))).toHaveLength(1);
+    expect(detectProfile(readSettings())).toBe('signals-only');
+  });
+
+  it('a bare re-run of setup-hooks also keeps a pre-#2390 signals-only profile', () => {
+    preNotificationInstall('signals-only');
+    expect(installHooks(paths()).profile).toBe('signals-only');
+    expect(allHookCommands().some((c) => c.includes(GATE))).toBe(false);
+    expect(statusHooks(paths()).updateAvailable).toBe(false);
+  });
+
+  it('flags a wmux entry under an older scope as outdated and rewrites only that entry', () => {
+    installHooks(paths());
+    const settings = readSettings();
+    const hooks = settings.hooks as Record<string, Array<{ matcher?: string; hooks: { type: string; command: string }[] }>>;
+    // The wide matcher:'' PostToolUse an older build wrote, sharing its group
+    // with a hook of the user's.
+    hooks.PostToolUse = [{ matcher: '', hooks: [
+      { type: 'command', command: `node "${bridgeDest}" PostToolUse` },
+      { type: 'command', command: 'audit.sh' },
+    ] }];
+    fs.writeFileSync(settingsPath, JSON.stringify(settings), 'utf8');
+
+    const s = statusHooks(paths());
+    expect(s.hooks.find((h) => h.label === 'PostToolUse:AskUserQuestion')?.state).toBe('outdated');
+    expect(s.updateAvailable).toBe(true);
+
+    expect(updateHooks(paths()).updated).toEqual(['PostToolUse:AskUserQuestion']);
+    expect((readSettings().hooks as Record<string, unknown[]>).PostToolUse).toEqual([
+      { matcher: '', hooks: [{ type: 'command', command: 'audit.sh' }] },
+      { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: `node "${bridgeDest}" PostToolUse` }] },
+    ]);
+    expect(statusHooks(paths()).hooks.every((h) => h.state === 'ok')).toBe(true);
+  });
+
+  it('refuses to update a corrupted settings.json', () => {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, '{ not json', 'utf8');
+    expect(updateHooks(paths()).ok).toBe(false);
+    expect(fs.readFileSync(settingsPath, 'utf8')).toBe('{ not json');
+    expect(statusHooks(paths())).toMatchObject({ hooks: [], updateAvailable: false });
+  });
+
+  it('leaves settings.json alone when the plugin owns the hooks', () => {
+    preNotificationInstall();
+    writePluginManifest(JSON.stringify({ plugins: ['wmux-claude-integration@wmux'] }));
+    const before = fs.readFileSync(settingsPath, 'utf8');
+    expect(statusHooks(paths()).updateAvailable).toBe(false);
+    expect(updateHooks(paths())).toMatchObject({ ok: true, updated: [] });
+    expect(fs.readFileSync(settingsPath, 'utf8')).toBe(before);
   });
 });
 

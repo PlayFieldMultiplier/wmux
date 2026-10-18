@@ -9,6 +9,7 @@ import {
   type DaemonLauncherDeps,
 } from '../daemonLauncherCore';
 import { importWithStubbedWin32Cmdline, undoModuleStubs } from './win32CmdlineStub';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 /**
  * #1025 redo (#1028) — the four requirements, each pinned here:
@@ -194,7 +195,7 @@ describe('killVerifiedDaemonPid — execution (#1025/#1028)', () => {
     child = spawn(process.execPath, [scriptPath, ...extraArgs], { stdio: 'ignore' });
     expect(child.pid).toBeTruthy();
     // Let the OS register the PID before tasklist/ps is asked about it.
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliberateSleep(300, 'not yet converted (#2363): lets tasklist/ps see the new PID; nothing polled');
     return child.pid as number;
   }
 
@@ -396,7 +397,7 @@ describe('ensureDaemon — cmdline-mismatch branch refuses instead of cleaning (
     fs.writeFileSync(scriptPath, 'setTimeout(() => {}, 30000);\n');
     child = spawn(process.execPath, [scriptPath], { stdio: 'ignore' });
     expect(child.pid).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliberateSleep(300, 'not yet converted (#2363): lets tasklist/ps see the new PID; nothing polled');
     fs.writeFileSync(path.join(wmuxDir, 'daemon.pid'), String(child.pid));
     return { pid: child.pid as number, scriptPath };
   }

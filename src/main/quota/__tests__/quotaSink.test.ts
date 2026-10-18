@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const quotaSink = require('../../../../integrations/agy/bin/quota-sink.js');
 const {
@@ -515,7 +516,7 @@ describe('quota-sink.js atomic file handling and realistic payload', () => {
     const mtime1 = fs.statSync(targetFile).mtimeMs;
 
     // Small delay to ensure that if a write occurred, mtime would change
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'clock: a rewrite would show as a newer mtime');
 
     // Second write with identical payload (within 30 s)
     spawnSync(process.execPath, [SINK_SCRIPT, 'agy'], {
@@ -554,7 +555,7 @@ describe('quota-sink.js atomic file handling and realistic payload', () => {
     expect(record.quotaCapturedAtMs).toBeUndefined();
 
     // 2. Later payload in same turn: quota arrives
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'clock: capture timestamps must differ');
     const payload2 = {
       conversation_id: 'conv-disk-1',
       version: '1.2.14',
@@ -575,7 +576,7 @@ describe('quota-sink.js atomic file handling and realistic payload', () => {
 
     // 3. Next turn starts: payload without quota arrives.
     // Quota kept across gap, quotaCapturedAtMs does not move.
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'clock: capture timestamps must differ');
     const payload3 = {
       conversation_id: 'conv-disk-2',
       version: '1.2.14',
@@ -593,7 +594,7 @@ describe('quota-sink.js atomic file handling and realistic payload', () => {
     expect(record.quotaCapturedAtMs).toBe(quotaCapturedAt1);
 
     // 4. Quota changes: quotaCapturedAtMs moves
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'clock: capture timestamps must differ');
     const payload4 = {
       conversation_id: 'conv-disk-2',
       version: '1.2.14',

@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { endedTaskAgentRuns, type WorkerSessionInfo } from '../../factory/workerReclaim';
 import {
   FANOUT_AUDIT_FILENAME,
   FANOUT_CAP_WINDOW_MS,
@@ -14,6 +15,8 @@ import {
   FANOUT_LINEAGE_FILENAME,
   FANOUT_LIVE_TASK_CAP,
   FanOutGuards,
+  launchedAuditTask,
+  liveCapMessage,
   promptDigest,
   setDormantTaskWorkspaces,
   stampFanoutTaskPane,
@@ -157,6 +160,27 @@ describe('audit log', () => {
     expect(recent.map((r) => r.idempotencyKey)).toEqual(['k2', 'k1']);
     expect(fs.readFileSync(path.join(dir, FANOUT_AUDIT_FILENAME), 'utf8').split('\n').filter(Boolean)).toHaveLength(2);
     expect(recent[1].promptSha256[0]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("a 'launched' entry for a task that got no workspace is not started and records no command", () => {
+    expect(launchedAuditTask({ title: 'a', workspaceId: 'ws-a', initialCommand: 'claude "a"' })).toEqual({
+      title: 'a',
+      workspaceId: 'ws-a',
+      command: 'claude "a"',
+    });
+    // A pane that came up but whose agent did not keeps its workspace and line.
+    expect(launchedAuditTask({ title: 'a', workspaceId: 'ws-a', initialCommand: 'claude "a"', error: 'agent did not start' })).toEqual({
+      title: 'a',
+      workspaceId: 'ws-a',
+      command: 'claude "a"',
+      error: 'agent did not start',
+    });
+    expect(launchedAuditTask({ title: 'b', initialCommand: 'claude "b"', error: 'PTY create failed' })).toEqual({
+      title: 'b',
+      started: false,
+      error: 'PTY create failed',
+    });
+    expect(launchedAuditTask({ title: 'c' })).toEqual({ title: 'c', started: false });
   });
 });
 
@@ -402,5 +426,82 @@ describe('FanOutGuards.refundStart', () => {
     // A fresh store (restart) sees the refund.
     const again = new FanOutGuards({ dir: d, countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     expect(again.reserve('k2', 8).ok).toBe(true);
+  });
+});
+
+describe('ended tasks hold no live slot (F25)', () => {
+  type Row = { id: string; title: string; status: string; ptys: string[] };
+  const ended = (status: string) => status === 'completed' || status === 'cancelled' || status === 'failed';
+  /** What the worker lifecycle host installs: open task workspaces whose task
+   *  ended and runs no agent (the daemon's sessions, the task's own panes). */
+  function dormantOf(rows: Map<string, Row>, sessions: WorkerSessionInfo[], own: (id: string) => { taskId?: string } | null): Set<string> {
+    const byId = new Map(sessions.map((x) => [x.id, x]));
+    const out = new Set<string>();
+    for (const [ws, r] of rows) if (ended(r.status) && !endedTaskAgentRuns(r.ptys, r.id, [], byId, own)) out.add(ws);
+    return out;
+  }
+
+  it('6 owner-stopped kept workspaces, one left stopping with no session, and 1 running: 1 live, and a fan-out is allowed', () => {
+    const rows = new Map<string, Row>();
+    // The owner's stop destroyed their sessions; the folders were kept.
+    for (let i = 0; i < 6; i++) rows.set(`ws-stopped-${i}`, { id: `t-stopped-${i}`, title: `stopped ${i}`, status: 'cancelled', ptys: [`p-stopped-${i}`] });
+    // A reclaim record stuck `stopping` for a task that ended; its pane is a shell at its prompt.
+    rows.set('ws-stuck', { id: 't-stuck', title: 'stuck', status: 'completed', ptys: ['p-stuck'] });
+    rows.set('ws-run', { id: 't-run', title: 'running', status: 'working', ptys: ['p-run'] });
+    const sessions: WorkerSessionInfo[] = [
+      { id: 'p-stuck', agentProcessAlive: undefined, commandRunning: false },
+      { id: 'p-run', agentProcessAlive: true },
+    ];
+    const g = new FanOutGuards({ dir: tmpDir(), now: () => 1_000_000, openWorkspaceIds: () => [...rows.keys()], ledgerTaskOwner: () => null, ledgerBotTask: () => null });
+    for (const ws of rows.keys()) g.markTask(ws, 'ws-owner');
+    try {
+      expect(g.reserve('before', 1).ok).toBe(false);
+      setDormantTaskWorkspaces(() => dormantOf(rows, sessions, () => null));
+      expect(g.liveTaskCount()).toBe(1);
+      expect(g.reserve('after', 1)).toEqual({ ok: true });
+    } finally {
+      setDormantTaskWorkspaces(null);
+    }
+  });
+
+  it('a task that ended with its agent still running holds its slot', () => {
+    const rows = new Map<string, Row>([['ws-done', { id: 't-done', title: 'done', status: 'completed', ptys: ['p-done'] }]]);
+    const g = new FanOutGuards({ dir: tmpDir(), now: () => 1_000_000, openWorkspaceIds: () => ['ws-done'], ledgerTaskOwner: () => null });
+    g.markTask('ws-done', 'ws-owner');
+    try {
+      setDormantTaskWorkspaces(() => dormantOf(rows, [{ id: 'p-done', agentProcessAlive: true }], () => null));
+      expect(g.liveTaskCount()).toBe(1);
+      // A WSL worker's launch line in its own pane, too.
+      const wsl: WorkerSessionInfo = { id: 'p-done', commandRunning: true, wslTarget: { distribution: 'Ubuntu' } };
+      setDormantTaskWorkspaces(() => dormantOf(rows, [wsl], (id) => (id === 'p-done' ? { taskId: 't-done' } : null)));
+      expect(g.liveTaskCount()).toBe(1);
+    } finally {
+      setDormantTaskWorkspaces(null);
+    }
+  });
+
+  it('the live-cap refusal names what holds the slots and how one frees', () => {
+    const tasks: Record<string, { title: string; status: string }> = {
+      'ws-1': { title: 'fix login', status: 'working' },
+      'ws-2': { title: 'perf A', status: 'review_requested' },
+      'ws-3': { title: 'docs', status: 'completed' },
+    };
+    const open = ['ws-1', 'ws-2', 'ws-3', 'ws-4', 'ws-5', 'ws-6', 'ws-7', 'ws-8'];
+    const g = new FanOutGuards({ dir: tmpDir(), now: () => 1_000_000, openWorkspaceIds: () => open, ledgerTaskOwner: () => null, ledgerTaskOf: (ws) => tasks[ws] ?? null });
+    for (const ws of open) g.markTask(ws, 'ws-owner');
+    const r = g.reserve('k', 1);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.message).toBe(
+      'fan-out refused: at most 8 fan-out tasks may be live at once across wmux (8 live now, 1 requested). ' +
+        'Held by: 2 open ("fix login", "perf A"); 1 ended whose agent is not known to have stopped ("docs"); 5 task workspaces with no task record. ' +
+        'A slot frees when a task ends and its agent stops, or when its task workspace is closed.',
+    );
+    expect(liveCapMessage(8, 2, { open: ['a', 'b', 'c', 'd', 'e'], ended: [], untracked: 0, starting: 3 })).toBe(
+      'fan-out refused: at most 8 fan-out tasks may be live at once across wmux (8 live now, 2 requested). ' +
+        'Held by: 5 open ("a", "b", "c" and 2 more); 3 starting. A slot frees when a task ends and its agent stops, or when its task workspace is closed.',
+    );
+    expect(liveCapMessage(7, 2, null)).toBe(
+      'fan-out refused: at most 8 fan-out tasks may be live at once across wmux (7 live now, 2 requested). A slot frees when a task ends and its agent stops, or when its task workspace is closed.',
+    );
   });
 });

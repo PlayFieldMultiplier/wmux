@@ -24,6 +24,7 @@ import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { getExecEnv } from '../../shared/execEnv';
+import { originPinFromConfigList } from './workerGit';
 
 const execFileAsync = promisify(execFile);
 
@@ -138,6 +139,13 @@ export interface TaskWorktreePlan {
   branch: string;
   /** 프롬프트 등 메타 파일 디렉토리(worktree 밖 — diff 청정성 §4). */
   metaDir: string;
+  /** The repository's common git dir, resolved; absent when it could not be
+   *  read. Recorded on the task's ledger row (LedgerDispatch.gitCommonDir). */
+  gitCommonDir?: string;
+  /** origin's pin, read through gitCommonDir; absent when origin is not a
+   *  plain https or ssh address. Recorded on the task's ledger row
+   *  (LedgerDispatch.originPin). */
+  originPin?: string;
 }
 
 export type PreflightResult =
@@ -145,7 +153,7 @@ export type PreflightResult =
   | { ok: false; error: string };
 
 export type CreateResult =
-  | { ok: true; worktreePath: string; branch: string }
+  | { ok: true; worktreePath: string; branch: string; gitWorktreeDir?: string }
   | { ok: false; error: string };
 
 /**
@@ -229,6 +237,56 @@ export class TaskWorktreeManager {
    *   - 전용 루트 쓰기 가능 + 경로 길이(260자) 검증.
    *   - branch·slug·경로 파생 반환(성공 시).
    */
+  /** The repository's common git dir (resolved) and origin's pin, read
+   *  through that git dir (origin's URL as the config holds it, no URL
+   *  rewrite applied); either absent when it cannot be read. Never throws. */
+  private async gitDirAndPin(realRoot: string): Promise<{ gitCommonDir?: string; originPin?: string }> {
+    let gitCommonDir: string | undefined;
+    try {
+      const { stdout } = await this.runGit(['rev-parse', '--git-common-dir'], realRoot);
+      const out = stdout.trim();
+      if (out) {
+        const resolved = path.resolve(realRoot, out);
+        try {
+          gitCommonDir = fs.realpathSync.native(resolved);
+        } catch {
+          // A repository inside a WSL distro, on a share Windows cannot
+          // resolve: the distro resolves the path itself (taskPush.ts).
+          gitCommonDir = process.platform === 'win32' && /^\\\\wsl(?:\$|\.localhost)\\/i.test(resolved) ? resolved : undefined;
+        }
+      }
+    } catch {
+      gitCommonDir = undefined;
+    }
+    if (!gitCommonDir) return {};
+    try {
+      const { stdout } = await this.runGit([`--git-dir=${gitCommonDir}`, 'config', '-z', '--list', '--show-scope'], realRoot);
+      const originPin = originPinFromConfigList(stdout) ?? undefined;
+      return { gitCommonDir, ...(originPin ? { originPin } : {}) };
+    } catch {
+      return { gitCommonDir };
+    }
+  }
+
+  /** origin's pin for the repository at `repoInput`, read as preflight reads
+   *  it; undefined when it cannot be read. Never throws. */
+  async readOriginPin(repoInput: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await this.runGit(['rev-parse', '--show-toplevel'], repoInput);
+      const top = stdout.trim();
+      if (!top) return undefined;
+      let realRoot = top;
+      try {
+        realRoot = fs.realpathSync(top);
+      } catch {
+        // kept as git printed it, as preflight does
+      }
+      return (await this.gitDirAndPin(realRoot)).originPin;
+    } catch {
+      return undefined;
+    }
+  }
+
   async preflight(
     repoPathRaw: string,
     title: string,
@@ -291,6 +349,9 @@ export class TaskWorktreeManager {
       realRoot = repoRoot;
     }
     const repoHash = crypto.createHash('sha256').update(realRoot).digest('hex').slice(0, 12);
+    // The git dir task_push and task_fetch later run on, and origin's pin,
+    // read here before any worker exists.
+    const { gitCommonDir, originPin } = await this.gitDirAndPin(realRoot);
 
     // 경로 파생.
     const taskSlug = buildTaskSlug(title, taskId);
@@ -337,7 +398,7 @@ export class TaskWorktreeManager {
       }
     }
 
-    return { ok: true, plan: { repoRoot: realRoot, repoHash, taskSlug, worktreePath, branch, metaDir } };
+    return { ok: true, plan: { repoRoot: realRoot, repoHash, taskSlug, worktreePath, branch, metaDir, ...(gitCommonDir ? { gitCommonDir } : {}), ...(originPin ? { originPin } : {}) } };
   }
 
   /**
@@ -506,13 +567,34 @@ export class TaskWorktreeManager {
       } catch (err) {
         return { ok: false, error: `createWorktree: git worktree add --detach failed: ${(err as Error).message}` };
       }
+      const gitWorktreeDir = await this.worktreeGitDir(safePath);
       try {
         this.onCreated?.(plan.repoRoot);
       } catch {
         /* best-effort: never fails a created worktree */
       }
-      return { ok: true, worktreePath: safePath, branch: '' };
+      return { ok: true, worktreePath: safePath, branch: '', ...(gitWorktreeDir ? { gitWorktreeDir } : {}) };
     });
+  }
+
+  /** The new worktree's own git dir (`<common>/worktrees/<id>`), read right
+   *  after `git worktree add` (no worker exists yet), resolved. Undefined when
+   *  it cannot be read: task_push then derives it from the recorded common dir. */
+  private async worktreeGitDir(worktreePath: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await this.runGit(['rev-parse', '--path-format=absolute', '--git-dir'], worktreePath);
+      const dir = stdout.trim();
+      if (!dir) return undefined;
+      try {
+        return fs.realpathSync.native(dir);
+      } catch {
+        // A repository inside a WSL distro, on a share Windows cannot resolve:
+        // the distro resolves the path itself (taskPush.ts).
+        return process.platform === 'win32' && /^\\\\wsl(?:\$|\.localhost)\\/i.test(dir) ? dir : undefined;
+      }
+    } catch {
+      return undefined;
+    }
   }
 
   /** `rev-parse --verify --quiet <ref>^{commit}` — the commit OID, or undefined. */
@@ -554,12 +636,13 @@ export class TaskWorktreeManager {
       } catch (err) {
         return { ok: false, error: `createWorktree: git worktree add failed: ${(err as Error).message}` };
       }
+      const gitWorktreeDir = await this.worktreeGitDir(safePath);
       try {
         this.onCreated?.(plan.repoRoot);
       } catch {
         /* best-effort: never fails a created worktree */
       }
-      return { ok: true, worktreePath: safePath, branch: safeBranch };
+      return { ok: true, worktreePath: safePath, branch: safeBranch, ...(gitWorktreeDir ? { gitWorktreeDir } : {}) };
     });
   }
 
@@ -570,25 +653,34 @@ export class TaskWorktreeManager {
   /**
    * `beforeRemove` runs only once removal is decided (the dirty check passed), so a refused close
    * never stops anything. If it throws, the worktree is kept.
+   *
+   * `force` is only for a worktree no agent ever worked in (a fan-out spawn
+   * refused before its pane existed, #2349): whatever is in it was written by
+   * wmux's own setup, so the dirty check is skipped and git is told
+   * `--force`. Commits are never at stake here; the branch is a separate step.
    */
   async removeWorktree(
     repoRoot: string,
     repoHash: string,
     worktreePath: string,
     beforeRemove?: (worktreePath: string) => Promise<void>,
+    opts?: { force?: boolean },
   ): Promise<RemoveResult> {
     return this.withRepoLock(repoHash, async () => {
       const safePath = validatePath(worktreePath, 'worktreePath');
+      const force = opts?.force === true;
 
       // dirty 검사: worktree 안에서 porcelain. 커밋 안 된 변경이 있으면 보존.
-      try {
-        const { stdout } = await this.runGit(['status', '--porcelain'], safePath);
-        if (stdout.trim().length > 0) {
-          return { ok: false, error: 'removeWorktree: worktree is dirty; preserved', preserved: true, dirty: true };
+      if (!force) {
+        try {
+          const { stdout } = await this.runGit(['status', '--porcelain'], safePath);
+          if (stdout.trim().length > 0) {
+            return { ok: false, error: 'removeWorktree: worktree is dirty; preserved', preserved: true, dirty: true };
+          }
+        } catch (err) {
+          // status 실패(경로 부재 등) — 보수적으로 제거 시도하지 않고 보존.
+          return { ok: false, error: `removeWorktree: status check failed: ${(err as Error).message}`, preserved: true };
         }
-      } catch (err) {
-        // status 실패(경로 부재 등) — 보수적으로 제거 시도하지 않고 보존.
-        return { ok: false, error: `removeWorktree: status check failed: ${(err as Error).message}`, preserved: true };
       }
 
       if (beforeRemove) {
@@ -604,7 +696,7 @@ export class TaskWorktreeManager {
       }
 
       try {
-        await this.runGit(['worktree', 'remove', safePath], repoRoot);
+        await this.runGit(['worktree', 'remove', ...(force ? ['--force'] : []), safePath], repoRoot);
       } catch (err) {
         // A process that outlived its pane can still hold files: keep the record so nothing is lost silently.
         return { ok: false, error: `removeWorktree: git worktree remove failed: ${(err as Error).message}`, preserved: true };
@@ -613,6 +705,30 @@ export class TaskWorktreeManager {
         return { ok: false, error: 'removeWorktree: files were left behind in the worktree folder', preserved: true };
       }
       return { ok: true };
+    });
+  }
+
+  /**
+   * Delete a task branch only while it still points at `expectedOid`, the
+   * commit it was created from: `git update-ref -d` compares and deletes in
+   * one step, so a branch that gained a commit is kept and nothing committed
+   * is ever lost. For a task whose worktree was rolled back (#2349).
+   */
+  async deleteBranchIfAt(
+    repoRoot: string,
+    repoHash: string,
+    branch: string,
+    expectedOid: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    return this.withRepoLock(repoHash, async () => {
+      const safeBranch = validateGitRef(branch, 'branch');
+      const safeOid = validateGitRef(expectedOid, 'expectedOid');
+      try {
+        await this.runGit(['update-ref', '-d', `refs/heads/${safeBranch}`, safeOid], repoRoot);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: `deleteBranchIfAt: ${(err as Error).message}` };
+      }
     });
   }
 

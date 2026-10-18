@@ -1,6 +1,7 @@
 import { registerTerminalCoreHandlers } from './handlers/terminalCore.handler';
 import { registerQuickCommandHandlers } from './handlers/quickCommand.handler';
 import { registerUsageLimitHandlers } from '../usageLimit/usageLimit.handler';
+import { registerContinueOnAccountHandler } from '../account/continueOnAccount.handler';
 import { registerWorkspaceSettle } from '../workspace/settle/workspaceSettleHost';
 import { ipcMain, nativeTheme, type BrowserWindow } from 'electron';
 import { PTYManager } from '../pty/PTYManager';
@@ -52,6 +53,7 @@ import { registerAccountRotationHandlers } from './handlers/accountRotation.hand
 import { registerAgyAccountHandlers } from './handlers/agyAccount.handler';
 import { liveFactoryState, registerRoomIpcHandlers } from './handlers/room.handler';
 import { registerApprovalIpcHandlers } from './handlers/approval.handler';
+import { registerPlanApprovalHandlers } from './handlers/planApproval.handler';
 import { createRpcInvokeHandler } from './rpcInvoke';
 import { createFlashFrameHandler } from '../window/flashFrame';
 import { applyUiZoom, winOverlayHeight } from '../window/uiZoom';
@@ -176,6 +178,7 @@ export function registerAllHandlers(
 ): () => void {
   const cleanupPty = registerPTYHandlers(ptyManager, ptyBridge, daemonClient, getWindow);
   const cleanupUsageLimit = registerUsageLimitHandlers(daemonClient, getWindow);
+  const cleanupContinueOnAccount = registerContinueOnAccountHandler(daemonClient);
   const cleanupWorkspaceSettle = registerWorkspaceSettle(getWindow, { daemonClient, ptyManager });
   // session/scrollback handlers: installed elsewhere (module-load in
   // main/index.ts) and intentionally NOT in this swap cycle. See the
@@ -234,6 +237,8 @@ export function registerAllHandlers(
   // live in the daemon session list). Renderer polls this ONLY while Fleet View
   // is visible, so a closed cockpit costs nothing.
   const cleanupPaneResources = daemonClient ? registerPaneResourcesHandlers(daemonClient) : null;
+  // Fleet's Plan card: Claude's plan dialogs live in the daemon's approval registry.
+  const cleanupPlanApprovals = daemonClient ? registerPlanApprovalHandlers(getWindow, daemonClient) : null;
 
   // wmux web — registered UNCONDITIONALLY (unlike LanLink above) so the titlebar
   // toggle always resolves. The getter closes over the `daemonClient` snapshot;
@@ -527,6 +532,7 @@ export function registerAllHandlers(
   return () => {
     cleanupPty();
     cleanupUsageLimit();
+    cleanupContinueOnAccount();
     cleanupWorkspaceSettle();
     // cleanupSession deliberately omitted — session/scrollback handlers
     // live outside this swap cycle (see import-block note above).
@@ -555,6 +561,7 @@ export function registerAllHandlers(
     if (cleanupLanLink) cleanupLanLink();
     if (cleanupA2aRemote) cleanupA2aRemote();
     if (cleanupPaneResources) cleanupPaneResources();
+    if (cleanupPlanApprovals) cleanupPlanApprovals();
     cleanupWeb();
     cleanupAutomation();
     cleanupChat();

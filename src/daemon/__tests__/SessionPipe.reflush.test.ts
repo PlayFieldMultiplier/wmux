@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -10,11 +10,9 @@ import {
 } from '../SessionPipe';
 import { RingBuffer } from '../RingBuffer';
 import { generateSnapshot } from '../HeadlessSnapshot';
-import { waitFor } from '../../test-utils/waitFor';
+import { waitFor, deliberateSleep } from '../../test-utils/waitFor';
 
 // ── helpers ─────────────────────────────────────────────────────────
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Unique per-test session id so named pipes / unix sockets never collide. */
 function uniqueSessionId(tag: string): string {
@@ -160,7 +158,7 @@ describe('SessionPipe.reflush — gap-free live re-flush', () => {
     cleanups.push(() => clearInterval(interval));
 
     // Fire the re-flush mid-flood; chunks keep arriving during generation.
-    await sleep(12);
+    await deliberateSleep(12, 'ordering: fire the re-flush mid-flood, while chunks still arrive');
     const result = await pipe.reflush({ bridge, cols: 80, rows: 24, generate: generateSnapshot });
     expect(result.mode).toBe('snapshot');
 
@@ -208,12 +206,12 @@ describe('SessionPipe.reflush — gap-free live re-flush', () => {
 
     // Deliberately slow generator so we can type into the socket mid-flight.
     const slowGenerate: typeof generateSnapshot = async (req) => {
-      await sleep(60);
+      await deliberateSleep(60, 'stub latency: a slow snapshot generator');
       return generateSnapshot(req);
     };
     const p = pipe.reflush({ bridge, cols: 80, rows: 24, generate: slowGenerate });
 
-    await sleep(15);
+    await deliberateSleep(15, 'ordering: type while the slow generator is still running');
     client.socket.write('typed-during-resync');
     const duringResync = Buffer.from('background output 한글');
     ring.write(duringResync);
@@ -224,8 +222,7 @@ describe('SessionPipe.reflush — gap-free live re-flush', () => {
     expect(result.mode).toBe('snapshot');
     expect(pipe.getMemoryDiagnostics().resyncQueuedBytes).toBe(0);
 
-    await sleep(20);
-    expect(Buffer.concat(inputs).toString()).toContain('typed-during-resync');
+    await vi.waitFor(() => expect(Buffer.concat(inputs).toString()).toContain('typed-during-resync'), { timeout: 10_000 });
   }, 20000);
 
   it('degrades to raw replay and ships the ring bytes verbatim on active margins', async () => {
@@ -270,7 +267,7 @@ describe('SessionPipe.reflush — gap-free live re-flush', () => {
     await waitFor(() => pipe.isFlushed, 3000);
 
     const slowGenerate: typeof generateSnapshot = async (req) => {
-      await sleep(60);
+      await deliberateSleep(60, 'stub latency: a slow snapshot generator');
       return generateSnapshot(req);
     };
     const first = pipe.reflush({ bridge, cols: 80, rows: 24, generate: slowGenerate });
@@ -314,12 +311,12 @@ describe('SessionPipe.reflush — gap-free live re-flush', () => {
     await waitFor(() => pipe.isFlushed, 3000);
 
     const slowGenerate: typeof generateSnapshot = async (req) => {
-      await sleep(80);
+      await deliberateSleep(80, 'stub latency: a slow snapshot generator');
       return generateSnapshot(req);
     };
     const p = pipe.reflush({ bridge, cols: 80, rows: 24, generate: slowGenerate });
 
-    await sleep(15);
+    await deliberateSleep(15, 'ordering: disconnect while the slow generator is still running');
     client.socket.destroy();
 
     await expect(p).rejects.toThrow('RESYNC_DISCONNECTED');

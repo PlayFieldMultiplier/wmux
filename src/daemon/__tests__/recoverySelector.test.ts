@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { selectRecoverableSessions, startLeftoverShellReaps } from '../recoverySelector';
 import type { DaemonSession, DaemonSessionState } from '../types';
+import { deliberateSleep } from '../../test-utils/waitFor';
 
 function session(
   id: string,
@@ -169,7 +170,7 @@ describe('startLeftoverShellReaps', () => {
       reap: async (s) => {
         running++;
         peak = Math.max(peak, running);
-        await new Promise((r) => setTimeout(r, 5));
+        await deliberateSleep(5, 'stub latency: overlapping reaps would show in the peak count');
         reaped.push([s.id, s.pidStartTime]);
         running--;
       },

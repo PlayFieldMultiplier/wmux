@@ -14,6 +14,7 @@ import type { MoaPaneFact } from '../moaPane';
 import type { ApprovalEvent, ApprovalRegistryApi, ApprovalRequest, ApprovalResolveParams, ApprovalResolveResult } from '../../approvals/types';
 import { TERMINAL_PROMPT_WEB_ANSWER } from '../../approvals/types';
 import { ApprovalRegistry, TERMINAL_PROMPT_MIN_ANSWER_AGE_MS } from '../../approvals/ApprovalRegistry';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 /**
  * The Moa (HQ brain) pane on the phone routes: which brain pane a paired
@@ -846,7 +847,7 @@ describe('the Moa pane on the phone routes', () => {
         const seen = wire.split('transcript.nudge').length;
         moa = null;
         server.emitTranscriptNudge('brain-hq');
-        await new Promise((r) => setTimeout(r, 1300));
+        await deliberateSleep(1300, 'negative: no nudge is sent once the brain is gone');
         expect(wire.split('transcript.nudge').length).toBe(seen);
       } finally {
         ac.abort();

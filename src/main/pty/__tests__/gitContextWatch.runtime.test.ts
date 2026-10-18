@@ -119,7 +119,7 @@ describe('GitContextWatcher (real fs.watch)', () => {
     });
 
     watcher.update('s1', short);
-    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false, absent: true }]);
 
     execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q'], { cwd: root, stdio: 'ignore' });
     await sawMain;

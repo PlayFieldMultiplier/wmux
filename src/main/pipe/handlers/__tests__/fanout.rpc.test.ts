@@ -41,7 +41,7 @@ import { loadWorkspaceDecision } from '../../../deck/deckDecisionStore';
 import { registerFanOutRpc, FANOUT_WIRE_AGENT_CMD, FANOUT_IDEMPOTENCY_KEY_MAX_BYTES } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
-import { FanOutGuards } from '../../../worktask/fanoutGuards';
+import { FanOutGuards, setDormantRefresh, setDormantTaskWorkspaces } from '../../../worktask/fanoutGuards';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
@@ -129,6 +129,8 @@ function setup(opts?: {
   /** The fan-out worker permission mode Settings holds, read at each use.
    *  Defaults to auto. */
   workerMode?: () => 'auto' | 'acceptEdits' | 'bypassPermissions' | 'manual';
+  /** What an immediate run resolves with. Defaults to no tasks. */
+  startResult?: FanOutResult;
 }): Harness {
   const commanderAnchorPtyId =
     opts?.commanderAnchorPtyId === undefined ? 'pty-1' : opts.commanderAnchorPtyId;
@@ -156,7 +158,7 @@ function setup(opts?: {
         releaseRun = (r) => resolve(settle(r));
       });
     }
-    return Promise.resolve(settle({ ok: true, tasks: [] }));
+    return Promise.resolve(settle(opts?.startResult ?? { ok: true, tasks: [] }));
   });
 
   const statusOf = vi.fn((key: string): FanOutStatus => state.get(key) ?? { state: 'unknown' });
@@ -1471,6 +1473,34 @@ describe('task.fanout.start — global caps', () => {
       'accepted',
     );
   });
+
+  it('counts the live tasks on a fresh dormant read, not the stale one (#2387)', async () => {
+    // 8 open task workspaces, all ended. The snapshot the guard last saw says
+    // none is dormant (a read before the workspace list was up); the fresh
+    // read finds all of them dormant.
+    const ended = ['1', '2', '3', '4', '5', '6', '7', '8'].map((n) => `ws-ended-${n}`);
+    const g = new FanOutGuards({ dir: tmp(), openWorkspaceIds: () => ended, ledgerTaskOwner: () => null });
+    for (const ws of ended) g.markTask(ws, 'ws-owner');
+    let dormant: ReadonlySet<string> = new Set();
+    const refresh = vi.fn(async () => {
+      dormant = new Set(ended);
+    });
+    try {
+      setDormantTaskWorkspaces(() => dormant);
+      setDormantRefresh(refresh);
+      expect(g.liveTaskCount()).toBe(8);
+      const h = setup({ guards: g });
+      expect((await h.call(goodParams({ idempotencyKey: 'fresh', titles: ['1', '2'] }))).status).toBe('accepted');
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(g.liveTaskCount()).toBe(0);
+      // A poll of a known key answers from bookkeeping and never waits.
+      await h.call(goodParams({ idempotencyKey: 'fresh', titles: ['1', '2'] }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      setDormantTaskWorkspaces(null);
+      setDormantRefresh(null);
+    }
+  });
 });
 
 describe('task.fanout.start — audit record', () => {
@@ -1499,6 +1529,36 @@ describe('task.fanout.start — audit record', () => {
     expect(rec.promptSha256).toEqual([sha('do the thing\n\npa'), sha('do the thing')]);
     // No prompt body in the log.
     expect(fs.readFileSync(nodePath.join(dir, 'fanout-audit.jsonl'), 'utf8')).not.toMatch(/do the thing/);
+  });
+
+  it('marks a task that got no workspace as not started, with no command', async () => {
+    const g = guardsIn(tmp());
+    const h = setup({
+      guards: g,
+      approval: { approved: true, outcome: 'auto' },
+      startResult: {
+        ok: false,
+        tasks: [
+          { index: 0, title: 'a', ok: true, taskId: 't-a', workspaceId: 'ws-a', initialCommand: 'claude "a"' },
+          {
+            index: 1,
+            title: 'b',
+            ok: false,
+            initialCommand: 'claude "b"',
+            error: 'renderer spawn failed: PTY create failed',
+          },
+        ],
+      },
+    });
+    await h.call(goodParams({ titles: ['a', 'b'] }));
+    await h.flush();
+    await h.flush();
+    const [launched] = g.recentAudit(1);
+    expect(launched.kind).toBe('launched');
+    expect(launched.launched).toEqual([
+      { title: 'a', workspaceId: 'ws-a', command: 'claude "a"' },
+      { title: 'b', started: false, error: 'renderer spawn failed: PTY create failed' },
+    ]);
   });
 
   it('marks a dialog approval as human', async () => {
