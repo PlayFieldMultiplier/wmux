@@ -29,7 +29,7 @@ import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
 import { killProcessTree } from './automation/treeKill';
-import { captureProcessTree, matchesRecordedStart, type CapturedTree } from './automation/verifiedTreeKill';
+import { captureProcessTree, matchesRecordedStart, recordedStartOf, type CapturedTree } from './automation/verifiedTreeKill';
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
@@ -2628,7 +2628,8 @@ function registerRpcHandlers(
     let captured: CapturedTree | null = null;
     const live = p.killTree === true ? sessionManager.getSession(p.id)?.meta : undefined;
     if (live && (live.state === 'attached' || live.state === 'detached') && live.pid > 0) {
-      captured = await captureProcessTree(live.pid, { rootIsOurs: (start) => matchesRecordedStart(live.pidStartTime, start) });
+      const recorded = recordedStartOf(live);
+      captured = await captureProcessTree(live.pid, { rootIsOurs: (start) => matchesRecordedStart(recorded, start) });
     }
     try {
       sessionManager.destroySession(p.id);

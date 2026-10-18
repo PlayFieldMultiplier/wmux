@@ -1279,7 +1279,7 @@ export interface DaemonDestroySessionParams extends DaemonSessionIdParams {
  *  tree exited, and which did not. */
 export type DaemonDestroySessionTree =
   | { ok: true; killed: number[] }
-  | { ok: false; killed: number[]; survivors: Array<{ pid: number; reason: string; startTime?: string }> };
+  | { ok: false; killed: number[]; survivors: Array<{ pid: number; reason: string; startTime?: string; unverified?: true }> };
 
 /**
  * X6 ③: persist a resume binding on a session (daemon-side, saveImmediate).

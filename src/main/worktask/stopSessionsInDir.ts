@@ -137,7 +137,12 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
   for (const s of inside) {
     const tree = await port.destroySession(s.id);
     if (tree) {
-      if (!tree.ok) treeSurvivors.push(...tree.survivors);
+      if (!tree.ok) {
+        treeSurvivors.push(...tree.survivors);
+        // Kept before the next destroy: if that one throws, this pane is
+        // already gone and only this record still names its survivors.
+        lingering.set(key, [...treeSurvivors]);
+      }
     } else if (typeof s.pid === 'number' && s.pid > 0) {
       unreported.push(s.pid);
     }
@@ -148,7 +153,6 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
     await port.sleep(EXIT_POLL_MS);
   }
   const survivors = [...treeSurvivors, ...unreported.filter((p) => port.isAlive(p)).map((pid) => ({ pid, reason: 'still running' }))];
-  if (treeSurvivors.length > 0) lingering.set(key, treeSurvivors);
   if (survivors.length > 0) throw new PanesStillRunningError(survivors.map((x) => x.pid), survivors.map((x) => `${x.pid}: ${x.reason}`));
   return inside.map((s) => s.id);
 }

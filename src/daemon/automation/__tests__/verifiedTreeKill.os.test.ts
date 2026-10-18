@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
+import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, recordedStartOf, survivorsStillRunning, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
 import type { ProcessHandle, ProcessHandleApi, ProcessOpenResult } from '../../../main/pty/winSnapshotNative';
 
 const noWait = async (): Promise<void> => undefined;
@@ -296,6 +296,26 @@ describe('matchesRecordedStart', () => {
   it.skipIf(process.platform === 'win32')('POSIX: lstart, however many spaces pad the day', () => {
     expect(matchesRecordedStart('Sat Oct  4 10:00:00 2026', 'Sat Oct 4 10:00:00 2026')).toBe(true);
     expect(matchesRecordedStart('Sat Oct  4 10:00:00 2026', 'Sat Oct 4 10:00:01 2026')).toBe(false);
+  });
+});
+
+describe('recordedStartOf', () => {
+  it('Windows: the FILETIME a session records, else its older start time', () => {
+    expect(recordedStartOf({ pidCreatedAtFt: '133', pidStartTime: '20220615210000.123456+540' }, 'win32')).toBe('133');
+    expect(recordedStartOf({ pidStartTime: '20220615210000.123456+540' }, 'win32')).toBe('20220615210000.123456+540');
+  });
+
+  it('POSIX: the lstart', () => {
+    expect(recordedStartOf({ pidCreatedAtFt: '133', pidStartTime: 'Sat Oct 18 10:00:00 2026' }, 'linux')).toBe('Sat Oct 18 10:00:00 2026');
+  });
+});
+
+describe('survivorsStillRunning', () => {
+  it('drops a process that is gone, and always keeps a tree that could not be checked whole', async () => {
+    // A pid far above any this machine hands out: gone.
+    const gone = { pid: 0x7ffffff0, reason: 'still running', startTime: '1' };
+    const unchecked = { pid: 0x7ffffff0, reason: 'the process table could not be read', unverified: true as const };
+    expect(await survivorsStillRunning([gone, unchecked])).toEqual([unchecked]);
   });
 });
 

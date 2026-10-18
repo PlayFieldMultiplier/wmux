@@ -111,6 +111,23 @@ describe('stopSessionsInDir', () => {
     expect(later.p.stillRunning).not.toHaveBeenCalled();
   });
 
+  it('remembers a pane\'s survivors even when destroying a later pane fails', async () => {
+    const survivor = { pid: 70, reason: 'still running', startTime: '123' };
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }, { id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux', {
+      trees: { s: { ok: false, killed: [7], survivors: [survivor] } },
+    });
+    const destroy = first.p.destroySession;
+    first.p.destroySession = async (id) => {
+      if (id === 'u') throw new Error('daemon offline');
+      return destroy(id);
+    };
+    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('daemon offline');
+
+    const later = port([], 'linux');
+    later.p.stillRunning = async () => [survivor];
+    await expect(stopSessionsInDir('/w/t', later.p)).rejects.toBeInstanceOf(PanesStillRunningError);
+  });
+
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {
     const isAlive = vi.fn(() => true);
     const { p } = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7, 70] } } });
