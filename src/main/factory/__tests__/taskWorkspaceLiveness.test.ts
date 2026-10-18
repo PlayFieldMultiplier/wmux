@@ -27,7 +27,9 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
     sessions: WorkerSessionInfo[] | 'down' | 'hang';
     recoveryDone: boolean;
     records: ReclaimedWorker[];
-  } = { entries: null, sessions: [], recoveryDone: true, records: [] };
+    /** The task a session's worker record names. */
+    ownerOf: Record<string, string>;
+  } = { entries: null, sessions: [], recoveryDone: true, records: [], ownerOf: {} };
   const open = (): void => {
     state.entries = Object.entries(tasks).map(([ws, task]) => ({ id: ws, name: ws, ptyIds: [task.pty] }) as WorkspaceListEntry);
   };
@@ -54,7 +56,7 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
     endedRows: () => Object.entries(closed).map(([ws, x]) => rowOf(ws, x) as LedgerEntry),
     records: () => state.records,
     recordedSessions: () => [],
-    sessionRecordOf: () => null,
+    sessionRecordOf: (id) => (state.ownerOf[id] ? { taskId: state.ownerOf[id] } : null),
     facts,
     refreshMs: REFRESH_MS,
     now: () => t.now,
@@ -321,6 +323,24 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     await w.liveness.refresh();
     expect(w.facts.get('t-closed')).toMatchObject({ taskWorkspaceId: 'ws-closed', sessions: [] });
     expect([...w.liveness.goneTasks()]).toEqual(['t-closed']);
+  });
+
+  it('a task\'s worker pane seen running in another workspace clears its fact', async () => {
+    const w = world({ 'ws-other': { id: 't-other', status: 'working', pty: 'p-other' } }, {
+      closed: { 'ws-closed': { id: 't-closed', status: 'completed', pty: 'p-closed' } },
+    });
+    w.open();
+    w.state.sessions = [exited('p-other')];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-closed')).not.toBeNull();
+    // The owner adopted the task's worker pane into ws-other and resumed it.
+    w.state.entries = (w.state.entries ?? []).map((e) => ({ ...e, ptyIds: ['p-other', 'p-closed'] }));
+    w.state.ownerOf = { 'p-closed': 't-closed' };
+    w.state.sessions = [exited('p-other'), running('p-closed')];
+    w.t.now += REFRESH_MS + 1;
+    await w.liveness.refresh();
+    expect(w.facts.get('t-closed')).toBeNull();
+    expect(w.liveness.goneTasks().size).toBe(0);
   });
 
   it('a closed workspace is no proof while a session outside the tree is at work, or while the task\'s own pane runs', async () => {

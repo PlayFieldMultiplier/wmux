@@ -19,7 +19,7 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, botWorkerLaunchTask, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, botWorkerLaunchTask, botWorkerSessionRecord, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
 import { isPlainCmdLaunchLine, namesClaude } from '../../../shared/botWorkerGuard';
 import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
@@ -1051,7 +1051,7 @@ export function registerPTYHandlers(
     }
     // An agent starts again in this pane, now or at the owner's Enter: an
     // ended task it belongs to is not known gone any more (agentGoneFacts.ts).
-    noteSessionAgentLaunched(id, submit === true);
+    noteSessionAgentLaunched(id, submit === true, botPane ? botWorkerSessionRecord(id)?.taskId : undefined);
   }));
 
   // Per-session scheduled prompts. Unlike Command Deck schedules, these

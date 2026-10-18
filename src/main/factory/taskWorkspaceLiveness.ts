@@ -118,6 +118,24 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     const busy = new Set<string>();
     const endedNoAgent = new Set<string>();
     const withAgent = new Set<string>();
+    // A task's own worker pane seen running wherever it is now (adopted into
+    // another workspace, or one the tree lost): the task runs again.
+    const recordedOwner = new Map<string, string>();
+    for (const r of ports.records()) for (const x of r.sessions) recordedOwner.set(x.sessionId, r.taskId);
+    for (const x of reply.sessions) {
+      let taskId = recordedOwner.get(x.id);
+      if (!taskId) {
+        try {
+          taskId = ports.sessionRecordOf?.(x.id)?.taskId;
+        } catch {
+          taskId = undefined;
+        }
+      }
+      if (!taskId || !endedTaskAgentRuns([x.id], taskId, ports.recordedSessions(taskId), byId, ports.sessionRecordOf, false)) continue;
+      ports.facts?.seenRunning(taskId, at);
+      const ws = ports.row(taskId)?.taskWorkspaceId;
+      if (ws) withAgent.add(ws);
+    }
     for (const e of entries) {
       const ptys = Array.isArray(e.ptyIds) ? e.ptyIds : [];
       if (ptys.some((id) => paneShowsWork(byId.get(id)))) busy.add(e.id);

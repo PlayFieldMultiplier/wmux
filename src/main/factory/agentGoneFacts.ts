@@ -63,6 +63,8 @@ export class AgentGoneFacts {
   /** Sessions an agent launch was submitted in, and when, until their new
    *  agent is seen running (in memory). */
   private readonly launchedAt = new Map<string, number>();
+  /** The same, by the task a launched session is the worker of. */
+  private readonly taskLaunchedAt = new Map<string, number>();
 
   constructor(
     private readonly file: string,
@@ -107,6 +109,7 @@ export class AgentGoneFacts {
   note(fact: AgentGoneFact): void {
     if ((this.taskRanAt.get(fact.taskId) ?? -Infinity) >= fact.at) return;
     if (fact.sessions.some((s) => fact.at <= (this.launchedAt.get(s) ?? -Infinity) + LAUNCH_SETTLE_MS)) return;
+    if (fact.at <= (this.taskLaunchedAt.get(fact.taskId) ?? -Infinity) + LAUNCH_SETTLE_MS) return;
     const prior = this.facts.get(fact.taskId);
     const sessions = [...new Set(fact.sessions)].sort();
     if (prior && prior.taskWorkspaceId === fact.taskWorkspaceId && prior.sessions.length === sessions.length
@@ -134,6 +137,8 @@ export class AgentGoneFacts {
    *  recorded after that read started (a close that stopped the panes while
    *  it was answered) is newer and stays. */
   seenRunning(taskId: string, at: number): void {
+    const launched = this.taskLaunchedAt.get(taskId);
+    if (launched !== undefined && launched < at) this.taskLaunchedAt.delete(taskId);
     const f = this.facts.get(taskId);
     if (f && f.at > at) return;
     this.clear(taskId, 'an agent was seen running in its workspace', at);
@@ -143,8 +148,13 @@ export class AgentGoneFacts {
    *  the pane): a fact naming that session goes, and none names it again
    *  until its new agent is seen running (sessionAgentSeen) or
    *  LAUNCH_SETTLE_MS has passed. */
-  sessionLaunched(sessionId: string, at: number = this.now()): void {
+  sessionLaunched(sessionId: string, at: number = this.now(), taskId?: string): void {
     remember(this.launchedAt, sessionId, at);
+    // The task the session is the worker of, wherever its workspace is now.
+    if (taskId) {
+      remember(this.taskLaunchedAt, taskId, at);
+      this.clear(taskId, `an agent was launched in its worker session ${sessionId}`, at);
+    }
     for (const f of [...this.facts.values()]) {
       if (f.sessions.includes(sessionId)) this.clear(f.taskId, `an agent was launched in ${sessionId}`, at);
     }
@@ -210,26 +220,26 @@ export function noteTaskPanesStopped(taskId: string, taskWorkspaceId: string, se
 
 /** Sessions an agent launch line was typed into without Enter
  *  (pty:write-launch, submit false): the Enter the owner types later starts it. */
-const stagedLaunches = new Set<string>();
+const stagedLaunches = new Map<string, string | undefined>();
 const STAGED_LAUNCHES_MAX = 200;
 
 /** An agent launch line was typed into `sessionId` (pty:write-launch):
- *  submitted, or staged for the owner's Enter. Either way its fact goes and
- *  the launch window starts; a staged one starts again at that Enter
- *  (noteSessionInput). Never throws. */
-export function noteSessionAgentLaunched(sessionId: string, submitted: boolean): void {
+ *  submitted, or staged for the owner's Enter. Either way the facts of the
+ *  session, and of `taskId` (the task it is the worker of, when its record
+ *  says), go and the launch window starts; a staged one starts again at that
+ *  Enter (noteSessionInput). Never throws. */
+export function noteSessionAgentLaunched(sessionId: string, submitted: boolean, taskId?: string): void {
   try {
-    if (submitted) stagedLaunches.delete(sessionId);
-    else {
-      stagedLaunches.delete(sessionId);
-      stagedLaunches.add(sessionId);
+    stagedLaunches.delete(sessionId);
+    if (!submitted) {
+      stagedLaunches.set(sessionId, taskId);
       while (stagedLaunches.size > STAGED_LAUNCHES_MAX) {
-        const oldest = stagedLaunches.values().next();
+        const oldest = stagedLaunches.keys().next();
         if (oldest.done) break;
         stagedLaunches.delete(oldest.value);
       }
     }
-    hosted?.sessionLaunched(sessionId);
+    hosted?.sessionLaunched(sessionId, undefined, taskId);
   } catch {
     /* best effort: the next good read decides */
   }
@@ -239,9 +249,10 @@ export function noteSessionAgentLaunched(sessionId: string, submitted: boolean):
  *  launch line submits it. Cheap when none is staged. Never throws. */
 export function noteSessionInput(sessionId: string, data: string): void {
   if (stagedLaunches.size === 0 || !stagedLaunches.has(sessionId) || !data.includes('\r')) return;
+  const taskId = stagedLaunches.get(sessionId);
   stagedLaunches.delete(sessionId);
   try {
-    hosted?.sessionLaunched(sessionId);
+    hosted?.sessionLaunched(sessionId, undefined, taskId);
   } catch {
     /* best effort: the next good read decides */
   }
