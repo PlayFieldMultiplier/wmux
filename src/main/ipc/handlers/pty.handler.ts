@@ -25,6 +25,7 @@ import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
 import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
+import { noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -566,7 +567,12 @@ export function registerPTYHandlers(
       const sessionId = `daemon-${crypto.randomUUID().slice(0, 8)}`;
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       // Recorded before the session exists, so a restart always knows it.
-      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });
+      if (botWorker) {
+        const launchTask = botWorkerLaunchTask(botWorker);
+        noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });
+        // A new worker session for the task (a respawn or a resume): its agent runs again.
+        if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
+      }
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -886,12 +892,14 @@ export function registerPTYHandlers(
       const instance = await ptyManager.createAsync({ shell, ...(wslArgs ? { shellArgs: wslArgs } : {}), cols, rows, workspaceId, surfaceId, env, cwd: effectiveCwd, spawnKind, wslAccountLoginEnvKey, ...(wslTaskGit ? { wslTaskGit } : {}) });
       logCwdResolution(instance.id, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       if (botWorker) {
+        const launchTask = botWorkerLaunchTask(botWorker);
         try {
-          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });
+          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });
         } catch (err) {
           ptyManager.dispose(instance.id);
           throw err;
         }
+        if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
       }
       ptyBridge.setupDataForwarding(instance.id);
       const actualCwd = instance.cwd || effectiveCwd || homedir();

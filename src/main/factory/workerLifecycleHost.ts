@@ -33,6 +33,7 @@ import { noticeBot } from './botNotices';
 import { getFactLog } from './factLog';
 import { getWakeQueue } from './wakeQueue';
 import {
+  RECLAIM_CATCHUP_MS,
   REPORTED_IDLE_MS,
   RESUMED_IDLE_MS,
   ReclaimedWorkers,
@@ -67,7 +68,8 @@ import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTask
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantRefresh, setDormantTaskWorkspaces } from '../worktask/fanoutGuards';
-import { createTaskWorkspaceLiveness } from './taskWorkspaceLiveness';
+import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
+import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
 import type { FanOutService } from '../worktask/FanOutService';
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
@@ -140,20 +142,38 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const s = await rpc('daemon.listSessions', {});
     return Array.isArray(s) ? (s as WorkerSessionInfo[]) : [];
   };
+  // Ended tasks whose agent was seen gone, kept across restarts
+  // (agentGoneFacts.ts). A file this version cannot read leaves none.
+  const goneFacts = AgentGoneFacts.at(deps.wmuxDir());
+  goneFacts.load();
+  setAgentGoneFacts(goneFacts);
+  offs.push(() => setAgentGoneFacts(null));
   // What the agent budget knows of the workers' panes: the open workspaces
   // (the mirror, read now) and those whose panes all run no agent any more
   // (the daemon's sessions, read at most every LIVENESS_REFRESH_MS; until
   // the first read, none). A cap check awaits a fresh read (refreshSlotLiveness).
   const taskLiveness = createTaskWorkspaceLiveness({
     entries: () => getWorkspaceMirror().getEntries(),
-    listSessions,
+    // Asked with the daemon's recovery state: a read while it still restores
+    // its sessions is no read (taskWorkspaceLiveness.ts).
+    readSessions: async () => parseSessionRead(await rpc('daemon.listSessions', { withRecovery: true })),
     workspaceRow: (ws) => ledger.findByTaskWorkspace(ws),
     row: (taskId) => ledger.get(taskId),
+    endedRows: () => {
+      const since = Date.now() - RECLAIM_CATCHUP_MS;
+      return ledger.list({}).filter((e) => e.updatedAt >= since && (e.status === 'completed' || e.status === 'cancelled' || e.status === 'failed'));
+    },
     records: () => (reclaimOn ? reclaimed.all() : []),
     recordedSessions: (taskId) => reclaimedStore?.get(taskId)?.sessions.map((x) => x.sessionId) ?? [],
     sessionRecordOf: botWorkerSessionRecord,
+    facts: goneFacts,
     refreshMs: LIVENESS_REFRESH_MS,
   });
+  // A task that runs again loses its fact: its row reopened (a resume of its
+  // reclaimed worker and a new worker session clear it where they happen).
+  offs.push(ledger.onTransition((t) => {
+    if (t.to === 'working' || t.to === 'input_required' || t.to === 'review_requested') goneFacts.clear(t.entry.id, `its row reopened (${t.to})`);
+  }));
   const idle = taskLiveness.idle;
   // Bot tasks whose worker main stopped since the row last changed (paused
   // for review, or reclaimed at its end) and did not resume.
@@ -540,6 +560,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     setResumedLiveCount(resumedLive);
     offs.push(() => setResumedLiveCount(null));
     reclaimed.onStateChange = (rec, from, to, at) => {
+      // A resumed worker runs again: a fact that said it was gone goes.
+      if (to === 'resumed') goneFacts.clear(rec.taskId, 'its worker was resumed');
       // A resumed worker stopped again: its kept folder's 7 days start now.
       if (from === 'resumed' && to === 'stopped' && folderPorts) void noteKeptFolderStopped(folderPorts, rec.taskId, at);
       const store = getBotStore();
@@ -625,10 +647,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     cap: () => getFactorySettings().maxConcurrentAgents,
     runningBots: () => runningBotNames().length,
     // Open bot tasks whose worker still runs, ended bot tasks whose worker
-    // is not reclaimed yet, resumed workers. The owner's own fan-outs and a
-    // row whose worker is gone do not count (rowHoldsAgentSlot).
+    // is not reclaimed yet and not known gone (taskWorkspaceLiveness.ts),
+    // resumed workers. The owner's own fan-outs and a row whose worker is
+    // gone do not count (rowHoldsAgentSlot).
     liveWorkers: () => slotRows().length
-      + (reclaimOn ? unreclaimedEndedWorkers(ledger.list({}), reclaimed, Date.now()) + resumedLive() : 0),
+      + (reclaimOn ? unreclaimedEndedWorkers(ledger.list({}), reclaimed, Date.now(), taskLiveness.goneTasks()) + resumedLive() : 0),
     // A spawned worker whose row was not written: while its workspace lives
     // and still no row names it.
     stillHeld: (workspaceId) => !ledger.findByTaskWorkspace(workspaceId)

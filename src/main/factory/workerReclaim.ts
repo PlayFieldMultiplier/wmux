@@ -1745,10 +1745,11 @@ async function launched(
 }
 
 /** Ended bot tasks (in the catch-up window) whose worker was not reclaimed
- *  yet: still live for the agent budget. Pure over its inputs. */
-export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number): number {
+ *  yet: still live for the agent budget, unless their agent is known gone
+ *  (`gone`: task ids, taskWorkspaceLiveness.ts). Pure over its inputs. */
+export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number, gone: ReadonlySet<string> = new Set()): number {
   const since = now - RECLAIM_CATCHUP_MS;
-  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e)).length;
+  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e) && !gone.has(e.id)).length;
 }
 
 /** How the Bots page shows a reclaimed worker (BotTaskView.worker). Pure. */

@@ -784,7 +784,10 @@ export function setDormantTaskWorkspaces(source: (() => ReadonlySet<string>) | n
   dormantSource = source ?? (() => new Set());
 }
 
-/** How long a live-cap check waits for a fresh dormant read (#2387). */
+/** How long a live-cap check waits for a fresh dormant read (#2387). A
+ *  second layer: the root fix is the durable "agent seen gone" fact
+ *  (factory/agentGoneFacts.ts, #2393), which answers without any read; this
+ *  wait only lets a task that ended since the last read count on a fresh one. */
 export const DORMANT_REFRESH_WAIT_MS = 2_000;
 
 let dormantRefresh: (() => Promise<void>) | null = null;

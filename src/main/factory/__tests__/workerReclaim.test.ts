@@ -782,6 +782,12 @@ describe('unreclaimedEndedWorkers', () => {
     expect(store.get('wtask-f-00000001')?.ended).toBe('failed');
     expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(1);
   });
+
+  it('an ended bot task whose agent is known gone holds no slot, reclaimed or not (#2393)', () => {
+    const store = ReclaimedWorkers.at(dir);
+    const rows = [row('failed', { id: 'wtask-f-00000001', updatedAt: 4_000 }), row('completed', { id: 'wtask-c-00000001', updatedAt: 4_000 })];
+    expect(unreclaimedEndedWorkers(rows, store, 5_000, new Set(['wtask-c-00000001']))).toBe(1);
+  });
 });
 
 describe('reclaim state and reopen (review fixes, PR #2164)', () => {

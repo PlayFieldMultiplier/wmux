@@ -1086,8 +1086,10 @@ export function registerFanOutRpc(
 
     // A bot's caps below count its live workers: read their panes as they are
     // now, not as the previous check saw them (#2255). The live cap counts
-    // open task workspaces less the dormant ones: read those fresh too, so an
-    // empty or stale snapshot never counts long-ended tasks as live (#2387).
+    // open task workspaces less the dormant ones: read those fresh too (#2387).
+    // A second layer: a task already seen gone is dormant from its durable
+    // fact without a read (agentGoneFacts.ts, #2393); the read adds the ones
+    // that ended since.
     // Here, ahead of the synchronous stretch from the poll branch to the
     // booking. A key already known is answered from bookkeeping and never
     // waits, and a new one waits at most LIVENESS_WAIT_MS (both reads at
