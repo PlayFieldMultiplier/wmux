@@ -925,8 +925,17 @@ describe('Bots page', () => {
     const owner = () => container.querySelector(`[data-room-card-id="${cards.at(-1)!.id}"]`)!;
     await vi.waitFor(() => expect(owner().querySelector(`[data-bots-photo="${id}"] img`)?.getAttribute('src')).toBe('data:image/jpeg;base64,/9j/'), { timeout: 10_000 });
     expect(owner().querySelector('.wmux-bots-bubble-owner')).toBeNull();
-    act(() => owner().querySelector<HTMLButtonElement>(`[data-bots-photo="${id}"]`)!.click());
+    const thumb = owner().querySelector<HTMLButtonElement>(`[data-bots-photo="${id}"]`)!;
+    thumb.focus();
+    act(() => thumb.click());
     expect(document.querySelector('[data-testid="bots-photo-viewer"] img')?.getAttribute('src')).toBe('data:image/jpeg;base64,/9j/');
+    // A visible ×, Escape and the backdrop each close it; focus goes back to the thumbnail.
+    act(() => document.querySelector<HTMLButtonElement>('[data-testid="bots-photo-viewer-close"]')!.click());
+    expect(document.querySelector('[data-testid="bots-photo-viewer"]')).toBeNull();
+    expect(document.activeElement).toBe(thumb);
+    act(() => thumb.click());
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(document.querySelector('[data-testid="bots-photo-viewer"]')).toBeNull();
   });
 
   it('a group message goes to every bot of the group unless some are picked: "To: everyone ▾", a ticked box or a typed @name; picks reset after send', async () => {

@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import type { RoomCard as RoomCardData } from '../../../shared/room';
 import { ROOM_ATTACHMENT_LIMITS } from '../../../shared/roomAttachments';
 import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
-import Dialog from '../ui/Dialog';
+import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -92,10 +92,15 @@ export function CardPhotos({ card, api, t }: { card: RoomCardData; api: RoomsApi
         ))}
       </div>
       {open && (
-        <Dialog onClose={() => setOpen(null)} width={1100} closeOnBackdrop ariaLabel={t('room.photo.viewer')} data-testid="bots-photo-viewer">
-          <div className="wmux-bots-photo-viewer">
-            <img src={open} alt="" />
-          </div>
+        // Escape, the × and a click on the backdrop close it; focus goes back
+        // to the thumbnail that opened it (the dialog's opener).
+        <Dialog onClose={() => setOpen(null)} width={1100} closeOnBackdrop data-testid="bots-photo-viewer">
+          <DialogHeader title={t('room.photo.viewer')} closeLabel={t('room.photo.close')} closeTestId="bots-photo-viewer-close" />
+          <DialogBody>
+            <div className="wmux-bots-photo-viewer">
+              <img src={open} alt="" />
+            </div>
+          </DialogBody>
         </Dialog>
       )}
     </>

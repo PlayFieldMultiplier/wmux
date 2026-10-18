@@ -2021,6 +2021,7 @@ export const en = {
   'room.photo.unavailable': "Photo unavailable",
   'room.photo.loading': "Loading photo",
   'room.photo.viewer': "Photo",
+  'room.photo.close': "Close",
   'room.photo.count': "{count} photo(s)",
   'room.composer.to': "Send to",
   'room.composer.queuedFor': "Queued for {name}",

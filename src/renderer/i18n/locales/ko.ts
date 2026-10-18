@@ -1521,6 +1521,7 @@ export const ko = {
   'room.photo.unavailable': "사진을 볼 수 없음",
   'room.photo.loading': "사진 불러오는 중",
   'room.photo.viewer': "사진",
+  'room.photo.close': "닫기",
   'room.photo.count': "사진 {count}장",
   'room.composer.to': "받는 봇",
   'room.composer.queuedFor': "{name} 대기열에 들어감",
