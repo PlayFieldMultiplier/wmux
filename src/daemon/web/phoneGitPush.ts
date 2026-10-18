@@ -7,7 +7,7 @@ import { getWmuxDir } from '../config';
 import { atomicWriteJSONSync } from '../util/atomicWrite';
 import { getExecEnv } from '../../shared/execEnv';
 import { readWorkerFile } from '../../shared/readWorkerFile';
-import { parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, type RawGitConfigEntry } from '../../shared/taskGitRelay';
+import { parseRawGitConfigList, relayGitConfigArgs, type RawGitConfigEntry } from '../../shared/taskGitRelay';
 import { buildGitEnv, gitArgv, type GitRunResult } from './sessionDiff';
 import { canonicalPath, pathKey } from './phoneGitRead';
 import { GitWriteReceipts, type GhTokenResult } from './phoneGitWriteGate';
@@ -30,7 +30,9 @@ import {
  *   same common dir, and from then on names both explicitly (`--git-dir` and
  *   `GIT_COMMON_DIR`); nothing is looked up through the worktree again. The
  *   preview pins both dirs and the execute must find the same ones. HEAD is
- *   read from the git dir's own HEAD file, strictly (`parseTaskHead`).
+ *   read from the git dir's own HEAD file, strictly: a commit id or
+ *   `ref: refs/heads/<name>` with a name `git check-ref-format` accepts. A ref
+ *   store other than `files` is refused.
  * - Before any network call: the repository's own config may not set
  *   transport, credential or URL keys (`isolatedConfigKey`), and the
  *   effective `origin` URLs must be `https://github.com/<owner>/<repo>`.
@@ -46,7 +48,10 @@ import {
  *   the push created has no upstream until the pane sets one; the next push
  *   from it goes to the same-named remote branch as a fast-forward.
  * - Global and system git config are never loaded; the argv fixes every push
- *   option a repository's config could otherwise change. Never forced.
+ *   option a repository's config could otherwise change. The push leases the
+ *   verified remote tip; a matching lease is a forced update for git, so git's
+ *   own fast-forward rule is asked first, in the relay (`merge-base
+ *   --is-ancestor`), and a non-fast-forward is never sent.
  *   No git call fetches a missing object on its own (`GIT_NO_LAZY_FETCH`),
  *   and a partial clone is refused.
  * - Every network git child runs in its own process group (a tree on
@@ -263,7 +268,9 @@ const NETWORK_CONFIG: readonly string[] = [
  * The push argv: to the validated URL, exactly one refspec. A lease pins the
  * verified remote tip (empty when the branch is being created), so the update
  * lands only while the remote is still what the fast-forward was verified
- * against; the push is otherwise never forced.
+ * against. While the lease matches, git updates the remote ref even when the
+ * update is not a fast-forward (a forced update): the caller checks the
+ * fast-forward in the relay before it runs this.
  */
 export function pushArgv(pushUrl: string, expectedHead: string, targetRef: string, expectedTip: string | null): string[] {
   return [
@@ -478,62 +485,73 @@ const PUSH_ANCESTRY_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * Whether `tip` is an ancestor of `head`, from commits whose content hashes to
- * their own ids: the walk from `head` reads each commit's raw object
- * (`cat-file --batch`, replacement refs off), re-hashes it, and follows only
- * the parents written in it. `unverified` when an object is not a commit
- * matching its id, the walk passes PUSH_ANCESTRY_MAX_COMMITS, or git fails.
+ * their own ids. One `rev-list head ^tip` (replacement refs off) names the
+ * candidates; one `cat-file --batch` reads their raw objects, each is
+ * re-hashed, and the walk from `head` then follows only the parents written in
+ * re-hashed commits. Every commit on a path from `head` to `tip` other than
+ * `tip` is in `head ^tip`, so an honest graph always holds the path; when the
+ * graph lies (grafts, an object that does not hash to its id) the path is
+ * missing or fails the re-hash. `unverified` then, and also when the list
+ * passes PUSH_ANCESTRY_MAX_COMMITS or git fails: never `not-ancestor` from a
+ * walk that did not reach the tip.
  */
 async function verifiedAncestor(
   deps: PhoneGitPushDeps, dirs: PaneGitDirs, env: NodeJS.ProcessEnv, objectFormat: 'sha1' | 'sha256', tip: string, head: string,
-): Promise<'ancestor' | 'not-ancestor' | 'unverified'> {
+): Promise<'ancestor' | 'unverified'> {
   const idRe = objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : /^[0-9a-f]{40}$/;
   if (!idRe.test(tip) || !idRe.test(head)) return 'unverified';
   if (tip === head) return 'ancestor';
   const pinned = { ...env, GIT_COMMON_DIR: dirs.commonDir, GIT_NO_REPLACE_OBJECTS: '1' };
-  const seen = new Set<string>([head]);
-  let frontier = [head];
-  let bytes = 0;
-  while (frontier.length > 0) {
-    const out = await deps.gitInput(local(`--git-dir=${dirs.gitDir}`, 'cat-file', '--batch'), os.homedir(), pinned, `${frontier.join('\n')}\n`, PUSH_ANCESTRY_MAX_BYTES - bytes);
-    if (!out.ok) return 'unverified';
-    bytes += out.stdout.length;
-    const next: string[] = [];
-    let at = 0;
-    for (const oid of frontier) {
-      const nl = out.stdout.indexOf(0x0a, at);
-      if (nl < 0) return 'unverified';
-      const header = out.stdout.subarray(at, nl).toString('latin1').split(' ');
-      // A missing parent (a shallow boundary) ends that line of history.
-      if (header.length === 2 && header[0] === oid && header[1] === 'missing') { at = nl + 1; continue; }
-      if (header.length !== 3 || header[0] !== oid || header[1] !== 'commit' || !/^\d+$/.test(header[2] as string)) return 'unverified';
-      const size = Number(header[2]);
-      const body = out.stdout.subarray(nl + 1, nl + 1 + size);
-      if (body.length !== size || out.stdout[nl + 1 + size] !== 0x0a) return 'unverified';
-      at = nl + 2 + size;
-      const id = crypto.createHash(objectFormat).update(`commit ${size}\0`).update(body).digest('hex');
-      if (id !== oid) return 'unverified';
-      // A commit's parents are the `parent` lines right after `tree`, and only
-      // those: git stops at the first header line that is not `parent`, so a
-      // later `parent` (after `author`/`committer`) is not an ancestor edge.
-      const end = body.indexOf('\n\n');
-      const headerLines = body.subarray(0, end < 0 ? body.length : end).toString('latin1').split('\n');
-      if (!headerLines[0]?.startsWith('tree ')) return 'unverified';
-      for (let k = 1; k < headerLines.length; k++) {
-        const line = headerLines[k] as string;
-        if (!line.startsWith('parent ')) break;
-        const parent = line.slice('parent '.length);
-        if (!idRe.test(parent)) return 'unverified';
-        if (parent === tip) return 'ancestor';
-        if (seen.has(parent)) continue;
-        seen.add(parent);
-        next.push(parent);
-      }
+  const list = await deps.git(local(`--git-dir=${dirs.gitDir}`, 'rev-list', `--max-count=${PUSH_ANCESTRY_MAX_COMMITS + 1}`, head, `^${tip}`, '--'), os.homedir(), pinned);
+  if (!list.ok) return 'unverified';
+  const ids = list.stdout.split('\n').filter(Boolean);
+  if (ids.length === 0 || ids.length > PUSH_ANCESTRY_MAX_COMMITS || !ids.every((id) => idRe.test(id))) return 'unverified';
+  const out = await deps.gitInput(local(`--git-dir=${dirs.gitDir}`, 'cat-file', '--batch'), os.homedir(), pinned, `${ids.join('\n')}\n`, PUSH_ANCESTRY_MAX_BYTES);
+  if (!out.ok) return 'unverified';
+  /** Re-hashed commits only, by id, to the parents written in them. */
+  const parents = new Map<string, string[]>();
+  let at = 0;
+  for (const oid of ids) {
+    const nl = out.stdout.indexOf(0x0a, at);
+    if (nl < 0) return 'unverified';
+    const header = out.stdout.subarray(at, nl).toString('latin1').split(' ');
+    // A missing object (a shallow boundary) ends that line of history.
+    if (header.length === 2 && header[0] === oid && header[1] === 'missing') { at = nl + 1; continue; }
+    if (header.length !== 3 || header[0] !== oid || header[1] !== 'commit' || !/^\d+$/.test(header[2] as string)) return 'unverified';
+    const size = Number(header[2]);
+    const body = out.stdout.subarray(nl + 1, nl + 1 + size);
+    if (body.length !== size || out.stdout[nl + 1 + size] !== 0x0a) return 'unverified';
+    at = nl + 2 + size;
+    const id = crypto.createHash(objectFormat).update(`commit ${size}\0`).update(body).digest('hex');
+    if (id !== oid) return 'unverified';
+    // A commit's parents are the `parent` lines right after `tree`, and only
+    // those: git stops at the first header line that is not `parent`, so a
+    // later `parent` (after `author`/`committer`) is not an ancestor edge.
+    const end = body.indexOf('\n\n');
+    const headerLines = body.subarray(0, end < 0 ? body.length : end).toString('latin1').split('\n');
+    if (!headerLines[0]?.startsWith('tree ')) return 'unverified';
+    const own: string[] = [];
+    for (let k = 1; k < headerLines.length; k++) {
+      const line = headerLines[k] as string;
+      if (!line.startsWith('parent ')) break;
+      const parent = line.slice('parent '.length);
+      if (!idRe.test(parent)) return 'unverified';
+      own.push(parent);
     }
-    if (at !== out.stdout.length) return 'unverified';
-    if (seen.size > PUSH_ANCESTRY_MAX_COMMITS) return 'unverified';
-    frontier = next;
+    parents.set(oid, own);
   }
-  return 'not-ancestor';
+  if (at !== out.stdout.length) return 'unverified';
+  const seen = new Set<string>([head]);
+  const queue = [head];
+  for (let i = 0; i < queue.length; i += 1) {
+    for (const parent of parents.get(queue[i] as string) ?? []) {
+      if (parent === tip) return 'ancestor';
+      if (seen.has(parent) || !parents.has(parent)) continue;
+      seen.add(parent);
+      queue.push(parent);
+    }
+  }
+  return 'unverified';
 }
 
 /**
@@ -546,8 +564,7 @@ async function verifiedFastForward(
   deps: PhoneGitPushDeps, dirs: PaneGitDirs, env: NodeJS.ProcessEnv, objectFormat: 'sha1' | 'sha256',
   tip: string, head: string, ownerRepo: string, net: NodeJS.ProcessEnv,
 ): Promise<boolean> {
-  const walked = await verifiedAncestor(deps, dirs, env, objectFormat, tip, head);
-  if (walked !== 'unverified') return walked === 'ancestor';
+  if (await verifiedAncestor(deps, dirs, env, objectFormat, tip, head) === 'ancestor') return true;
   const cmp = await deps.gh(['api', '--hostname', 'github.com', `repos/${ownerRepo}/compare/${tip}...${head}`], net);
   if (!cmp.ok) return false;
   try {
@@ -610,6 +627,9 @@ async function gather(ctx: GitWriteSessionContext, deps: PhoneGitPushDeps, pin?:
   const objectFormat: 'sha1' | 'sha256' = format;
   // A partial clone would fetch what it lacks; this push never runs on one.
   if (config.some((e) => e.key === 'extensions.partialclone' || /^remote\..+\.promisor$/.test(e.key))) return failed({ error: 'remote-unsupported' });
+  // Another ref store keeps HEAD out of the HEAD file (reftable writes `refs/heads/.invalid`).
+  const refStorage = own('extensions.refstorage');
+  if (refStorage !== undefined && refStorage.toLowerCase() !== 'files') return failed({ error: 'remote-unsupported' });
 
   let ref: string;
   let head: string;
@@ -620,11 +640,16 @@ async function gather(ctx: GitWriteSessionContext, deps: PhoneGitPushDeps, pin?:
     head = pin.head;
   } else {
     // HEAD from the git dir's own file, strictly: a branch or a commit id.
+    // The name only reaches argv here, so git's own ref-name rule applies
+    // (`check-ref-format`, which also refuses control characters), not a task's.
     const text = await readWorkerFile(path.join(dirs.gitDir, 'HEAD'));
-    const parsed = text === null ? null : parseTaskHead(text, objectFormat);
-    if (!parsed) return gitFailed();
-    if (parsed.kind === 'oid') return failed({ error: 'detached-head' });
-    ref = parsed.ref;
+    const body = text === null ? null : text.endsWith('\n') ? text.slice(0, -1) : text;
+    if (body === null) return gitFailed();
+    if ((objectFormat === 'sha256' ? /^[0-9a-f]{64}$/ : /^[0-9a-f]{40}$/).test(body)) return failed({ error: 'detached-head' });
+    if (!body.startsWith('ref: refs/heads/') || body.length === 'ref: refs/heads/'.length) return gitFailed();
+    ref = body.slice('ref: '.length);
+    const valid = await run('check-ref-format', ref);
+    if (!valid.ok) return gitFailed();
     const h = await run('rev-parse', '--verify', '-q', '--end-of-options', `${ref}^{commit}`);
     if (!h.ok || !GIT_WRITE_OID.test(h.stdout.trim())) return gitFailed();
     head = h.stdout.trim();
@@ -923,6 +948,16 @@ export function createPhoneGitPushHandlers(deps: PhoneGitPushDeps = defaultPushD
       // The relay is made before the receipt goes in flight: when it cannot
       // be, nothing was sent.
       const ran = await withRelay(deps, g.source, async (relay) => {
+        // A matching lease lets git replace the remote tip even when the
+        // update is not a fast-forward, so git's own rule is asked first, in
+        // the relay (none of the pane's replacements, grafts or commit-graph).
+        if (intent.remoteTip !== null) {
+          const ff = await deps.git(local(...inRelay(relay, 'merge-base', '--is-ancestor', intent.remoteTip, intent.expectedHead)), relay, isolatedEnv(deps.baseEnv()));
+          if (!ff.ok) {
+            const body: GitWriteErrorBody = ff.ran !== false && ff.code === 1 ? { error: 'non-fast-forward', remoteTip: intent.remoteTip } : { error: 'git-operation-failed' };
+            return { state: 'refused' as const, body };
+          }
+        }
         ctx.markInFlight();
         return pushAndRead(ctx, intent, net, relay);
       });

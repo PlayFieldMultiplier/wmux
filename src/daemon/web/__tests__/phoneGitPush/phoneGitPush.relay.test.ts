@@ -402,6 +402,75 @@ describe('phone git push relay', { timeout: 60_000 }, () => {
       expect(allowed.facts).toMatchObject({ fastForward: true, behind: 0 });
     });
 
+    it('reads the commits ahead with a bounded number of git processes', async () => {
+      const { tip } = ahead();
+      for (let i = 0; i < 49; i++) commit(work, `more ${i}`);
+      let stdinCalls = 0;
+      gitInput = async (...a) => { stdinCalls += 1; return defaultPushDeps.gitInput(...a); };
+      const { facts } = await okPreview(work);
+      expect(facts).toMatchObject({ remoteTip: tip, fastForward: true, behind: 0, ahead: 50 });
+      expect(compares).toEqual([]);
+      expect(stdinCalls).toBeLessThanOrEqual(2);
+    });
+
+    it('refuses a non-fast-forward in the relay before the lease could force it, whatever the checks before said', async () => {
+      const { tip } = ahead();
+      // A head that diverges from the remote tip, grafted onto it so the
+      // pane's own walk counts nothing behind.
+      git(work, 'reset', '-q', '--hard', 'main');
+      const diverged = commit(work, 'diverged');
+      git(work, 'replace', '--graft', diverged, tip);
+      expect(git(work, 'rev-list', '--count', tip, `^${diverged}`)).toBe('0');
+      // Compare says ahead: a stand-in for any wrong yes before the push.
+      compareStatus = 'ahead';
+      const { facts, pins } = await okPreview(work);
+      expect(facts).toMatchObject({ remoteTip: tip, fastForward: true });
+      expect(await executeAndSettle(work, pins, diverged)).toMatchObject({ state: 'refused', error: 'non-fast-forward' });
+      expect(network.filter((c) => c.args.includes('push'))).toEqual([]);
+      expect(git(bare, 'rev-parse', 'refs/heads/feat')).toBe(tip);
+    });
+  });
+
+  it('accepts branch names git accepts, quotes and dollar signs included', async () => {
+    for (const name of ['fix(ui)', "it's-done", 'cost$']) {
+      git(work, 'checkout', '-q', '-b', name, 'main');
+      commit(work, `on ${name}`);
+      const { facts } = await okPreview(work);
+      expect(facts).toMatchObject({ branch: name, ref: `refs/heads/${name}`, target: { ref: `refs/heads/${name}`, create: true } });
+    }
+  });
+
+  it('refuses a HEAD file whose branch name holds a newline', async () => {
+    git(work, 'checkout', '-q', '-b', 'feat');
+    commit(work, 'x');
+    rewrite(path.join(work, '.git', 'HEAD'), 'ref: refs/heads/feat\nmain\n');
+    const calls: string[][] = [];
+    const r = await createPhoneGitPushHandlers({
+      ...deps(), git: (args, cwd, e) => { calls.push([...args]); return defaultPushDeps.git(args, cwd, e); },
+    }).preview!(ctx(work));
+    expect(r).toEqual({ ok: false, body: { error: 'git-operation-failed' } });
+    expect(network).toEqual([]);
+    // git's ref-name rule refuses it, and no other git call ever sees the name.
+    expect(calls.some((c) => c.includes('check-ref-format'))).toBe(true);
+    expect(calls.filter((c) => !c.includes('check-ref-format') && c.some((x) => x.includes('\n')))).toEqual([]);
+  });
+
+  const hasReftable = spawnSync('git', ['init', '-q', '--bare', '--ref-format=reftable', path.join(os.tmpdir(), `wmux-reftable-probe-${process.pid}`)]).status === 0;
+  fs.rmSync(path.join(os.tmpdir(), `wmux-reftable-probe-${process.pid}`), { recursive: true, force: true });
+
+  it.skipIf(!hasReftable)('refuses a reftable repository as remote-unsupported before reading HEAD', async () => {
+    const rt = path.join(root, 'rt');
+    fs.mkdirSync(rt);
+    git(rt, 'init', '-q', '--ref-format=reftable', '-b', 'main');
+    git(rt, 'config', 'user.name', 'R');
+    git(rt, 'config', 'user.email', 'r@example.invalid');
+    git(rt, 'remote', 'add', 'origin', URL_);
+    commit(rt, 'base');
+    git(rt, 'checkout', '-q', '-b', 'topic');
+    commit(rt, 'topic work');
+    const r = await createPhoneGitPushHandlers(deps()).preview!({ ...ctx(rt), repo: { commonReal: path.join(rt, '.git') } as GitWriteSessionContext['repo'] });
+    expect(r).toEqual({ ok: false, body: { error: 'remote-unsupported' } });
+    expect(network).toEqual([]);
   });
 
   it('refuses a partial clone before any network call', async () => {
