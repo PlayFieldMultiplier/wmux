@@ -16,19 +16,39 @@ import { findWorkspaceSurfaceByPtyId } from '../utils/paneTraversal';
 export const RECONCILE_REQUEST_COALESCE_MS = 300;
 
 let requester: ((reason: string) => void) | null = null;
+/** Whether a requester was ever registered: this renderer runs reconciles. */
+let registeredOnce = false;
+/** A request made while AppLayout was remounting (HMR, StrictMode). */
+let pending: string | null = null;
 
 /** Register the requester; returns the unregister function. */
 export function setReconcileRequester(fn: (reason: string) => void): () => void {
   requester = fn;
+  registeredOnce = true;
+  if (pending !== null) {
+    const reason = pending;
+    pending = null;
+    fn(reason);
+  }
   return () => {
     if (requester === fn) requester = null;
   };
 }
 
-/** Ask for a pass. False when nothing is registered to run one. */
+/**
+ * Ask for a pass. False when this renderer never registered a requester (no
+ * AppLayout runs reconciles here). Between an unregister and the next
+ * register — AppLayout remounting — the request is held for the next one:
+ * answering false there made the pane clear a binding the reconcile could
+ * still have rebound.
+ */
 export function requestReconcile(reason: string): boolean {
-  if (!requester) return false;
-  requester(reason);
+  if (requester) {
+    requester(reason);
+    return true;
+  }
+  if (!registeredOnce) return false;
+  pending ??= reason;
   return true;
 }
 

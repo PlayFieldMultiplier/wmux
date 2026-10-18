@@ -1,16 +1,38 @@
-import { describe, it, expect, vi } from 'vitest';
-import { awaitsReconcile, requestReconcile, setReconcileRequester } from '../reconcileRequest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createWorkspace, type PaneLeaf } from '../../../shared/types';
 
+// Module state (the requester, a held request) is per renderer: each test
+// starts from a fresh copy.
+let awaitsReconcile: typeof import('../reconcileRequest').awaitsReconcile;
+let requestReconcile: typeof import('../reconcileRequest').requestReconcile;
+let setReconcileRequester: typeof import('../reconcileRequest').setReconcileRequester;
+beforeEach(async () => {
+  vi.resetModules();
+  ({ awaitsReconcile, requestReconcile, setReconcileRequester } = await import('../reconcileRequest'));
+});
+
 describe('reconcileRequest (#2398)', () => {
-  it('reports false with no requester, and reaches the registered one', () => {
+  it('reports false when no requester was ever registered, and reaches the registered one', () => {
     expect(requestReconcile('x')).toBe(false);
     const fn = vi.fn();
     const off = setReconcileRequester(fn);
     expect(requestReconcile('pane a')).toBe(true);
     expect(fn).toHaveBeenCalledWith('pane a');
     off();
-    expect(requestReconcile('y')).toBe(false);
+  });
+
+  it('a request made while AppLayout remounts reaches the next requester (review P3)', () => {
+    const first = vi.fn();
+    setReconcileRequester(first)();
+    // Unregistered (remount in progress): held, and the pane keeps its binding.
+    expect(requestReconcile('pane b')).toBe(true);
+    expect(requestReconcile('pane c')).toBe(true);
+    expect(first).not.toHaveBeenCalled();
+    const next = vi.fn();
+    setReconcileRequester(next);
+    // One pass serves every held request.
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledWith('pane b');
   });
 
   it('an old unregister does not remove a newer requester', () => {
