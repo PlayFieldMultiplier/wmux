@@ -61,8 +61,8 @@ export function resolveRepo(startDir: string): ResolvedRepo | null {
  * reached the filesystem root and every `.git` probe on the way said "no
  * such file", along the cwd as given and along its physical path. A walk
  * that hit MAX_WALK_UP, an unreadable `.git`, a `.git` file without a
- * `gitdir:` line, or a cwd whose real path cannot be read is inconclusive —
- * git may still find a repo.
+ * `gitdir:` line, a directory holding a `HEAD` (a bare repository), or a cwd
+ * whose real path cannot be read is inconclusive — git may still find a repo.
  */
 export function resolveRepoState(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
   const lexical = walkUp(startDir);
@@ -103,6 +103,15 @@ function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: bool
       // answer; anything else (EACCES, EPERM) might be hiding a repo.
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') conclusive = false;
+    }
+    // A bare repository has no `.git`, only `HEAD` and friends at its top:
+    // git finds it, this walk does not, so a `HEAD` here makes it no answer.
+    if (conclusive) {
+      try {
+        if (fs.statSync(path.join(dir, 'HEAD'), { throwIfNoEntry: false })) conclusive = false;
+      } catch {
+        conclusive = false;
+      }
     }
     const parent = path.dirname(dir);
     if (parent === dir) return { repo: null, conclusive };

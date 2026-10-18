@@ -371,6 +371,18 @@ describe('GitContextWatcher', () => {
     expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
   });
 
+  it('a bare repository (no .git, HEAD at the top) is unknown, not absent', () => {
+    const bare = tmp();
+    fs.writeFileSync(path.join(bare, 'HEAD'), 'ref: refs/heads/main\n');
+    fs.mkdirSync(path.join(bare, 'objects'));
+    fs.mkdirSync(path.join(bare, 'refs'));
+    const sub = path.join(bare, 'objects');
+    expect(resolveRepoState(bare).conclusive).toBe(false);
+    expect(resolveRepoState(sub).conclusive).toBe(false);
+    makeWatcher().update('s1', bare);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
   it('a non-repo cwd that cannot be resolved to a real path is unknown', () => {
     const gone = path.join(tmp(), 'gone');
     expect(resolveRepoState(gone)).toEqual({ repo: null, conclusive: false });
