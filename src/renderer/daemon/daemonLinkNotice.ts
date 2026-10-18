@@ -5,7 +5,8 @@
 // anything typed into it never reaches its shell. This module turns main's
 // daemon:* events into one notice per affected pane, so each pane says so at
 // once — reconnecting, reconnected (cleared on its own), or gave up (stays) —
-// and remembers which panes took input during the gap.
+// and remembers which panes lost input: main reports every write it dropped
+// (IPC.PTY_WRITE_DROPPED), so no input path can slip past.
 //
 // Notices are keyed by surface, not ptyId: a reconcile after the reconnect may
 // rebind a surface to a new session, and the notice has to follow the pane.
@@ -14,8 +15,8 @@
 // sent in between is still dropped.
 //
 // Module-level like daemonMode.ts: the IPC events are wired once (AppLayout),
-// input is noted from outside React (useTerminal's key and paste paths), and
-// Terminal.tsx reads it through useSyncExternalStore.
+// user input is noted from outside React (useTerminal's key and paste paths),
+// and Terminal.tsx reads it through useSyncExternalStore.
 
 export type DaemonLinkState = 'reconnecting' | 'reconnected' | 'gave-up';
 
@@ -23,7 +24,7 @@ export interface PaneLinkNotice {
   state: DaemonLinkState;
   /** Respawn attempt in flight (1-based); 0 before the first is scheduled. */
   attempt: number;
-  /** The user typed or pasted into this pane while it was cut off. */
+  /** Main dropped input sent to this pane while it was cut off. */
   inputLost: boolean;
 }
 
@@ -135,9 +136,9 @@ export function notePaneReattached(ptyId: string, resolveSurfaceId: () => string
 }
 
 /**
- * How notePaneInput finds the surface of a ptyId it has not mapped: a
- * reconcile may rebind a cut-off surface to a new session before that
- * session's flush-complete, and input sent to it then is still lost.
+ * How a write drop or user input finds the surface of a ptyId the drop did
+ * not map: a reconcile may rebind a cut-off surface to a new session before
+ * that session's flush-complete.
  */
 export function setDaemonLinkSurfaceResolver(resolve: (ptyId: string) => string | null): void {
   resolveSurfaceForPty = resolve;
@@ -152,32 +153,43 @@ export function noteDaemonGaveUp(): void {
   notify();
 }
 
+/** The notice of the surface `ptyId` is bound to, mapping a rebound id. */
+function surfaceWithNotice(ptyId: string): string | null {
+  // Every keystroke can land here; with no notice there is nothing to look up.
+  if (notices.size === 0) return null;
+  const mapped = surfaceByPty.get(ptyId);
+  if (mapped) return notices.has(mapped) ? mapped : null;
+  // A surface rebound to a new session keeps its notice; a pane opened
+  // during the gap has none, so it stays unmapped.
+  const resolved = resolveSurfaceForPty(ptyId);
+  if (!resolved || !notices.has(resolved)) return null;
+  surfaceByPty.set(ptyId, resolved);
+  return resolved;
+}
+
 /**
- * The user sent input to `ptyId`. While the pane is cut off this marks the
- * input as possibly lost; once it is reconnected, typing there means the
- * user has moved on, so the notice goes.
+ * Main dropped a write for `ptyId` (IPC.PTY_WRITE_DROPPED): those bytes never
+ * reached the shell, whichever path sent them. The notice says so and stays
+ * until the user types there again or dismisses it.
  */
-export function notePaneInput(ptyId: string): void {
-  // Every keystroke lands here; with no notice there is nothing to look up.
-  if (notices.size === 0) return;
-  let surfaceId = surfaceByPty.get(ptyId);
-  if (!surfaceId) {
-    // A surface rebound to a new session keeps its notice; a pane opened
-    // during the gap has none, so it stays unmapped.
-    const resolved = resolveSurfaceForPty(ptyId);
-    if (!resolved || !notices.has(resolved)) return;
-    surfaceByPty.set(ptyId, resolved);
-    surfaceId = resolved;
-  }
-  const n = notices.get(surfaceId);
-  if (!n) return;
-  if (n.state === 'reconnected') {
-    drop(surfaceId);
-  } else if (!n.inputLost) {
-    notices.set(surfaceId, { ...n, inputLost: true });
-  } else {
-    return;
-  }
+export function notePaneWriteDropped(ptyId: string): void {
+  const surfaceId = surfaceWithNotice(ptyId);
+  const n = surfaceId ? notices.get(surfaceId) : undefined;
+  if (!surfaceId || !n || n.inputLost) return;
+  cancelClearTimer(surfaceId);
+  notices.set(surfaceId, { ...n, inputLost: true });
+  notify();
+}
+
+/**
+ * The user typed or pasted into `ptyId`. Once the pane is reconnected that
+ * means they have moved on, so the notice goes. Only a user action calls
+ * this: a terminal's own replies must not clear the warning.
+ */
+export function notePaneUserInput(ptyId: string): void {
+  const surfaceId = surfaceWithNotice(ptyId);
+  if (!surfaceId || notices.get(surfaceId)?.state !== 'reconnected') return;
+  drop(surfaceId);
   notify();
 }
 

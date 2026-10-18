@@ -3,6 +3,9 @@ import { QUICK_LAUNCH_IPC } from './quickLaunchIpc';
 export const IPC = {
   PTY_CREATE: 'pty:create',
   PTY_WRITE: 'pty:write',
+  // Main → renderer: a pty:write for this id was dropped (no live session
+  // pipe, or the local fallback has no such pty). Payload: (id).
+  PTY_WRITE_DROPPED: 'pty:write-dropped',
   // A whole launch line (a resume) typed into a pane: main applies the bot
   // worker merge guard first (main/agents/botWorkerMergeGuard.ts).
   PTY_WRITE_LAUNCH: 'pty:write-launch',

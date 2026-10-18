@@ -98,7 +98,7 @@ import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } fr
 import { serializeTerminalBuffer } from '../../utils/scrollbackDump';
 import { pastePtyChunked } from '../../utils/clipboardChunk';
 import { isDaemonModeActive, setDaemonModeActive } from '../../daemon/daemonMode';
-import { hasPendingReattach, noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, setDaemonLinkSurfaceResolver, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
+import { hasPendingReattach, noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, notePaneWriteDropped, setDaemonLinkSurfaceResolver, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
 import { planAgentCandidateSeed, planLiveAgentSeed, asAgentSlug, markSeedAttempted } from '../../channels/agentCandidateSeed';
 import { agentSlugToDisplay } from '../../../shared/agentIdentity';
 import { RECONCILE_TIMEOUT_MS } from '../../../shared/timeouts';
@@ -1754,6 +1754,10 @@ export default function AppLayout() {
       if (!hasPendingReattach()) return;
       notePaneReattached(ptyId, () => surfaceForPty(ptyId));
     });
+    // Main dropped a write: whatever sent it, it never reached the shell.
+    const offWriteDropped = window.electronAPI.pty.onWriteDropped((ptyId) => {
+      notePaneWriteDropped(ptyId);
+    });
     const offReconnecting = window.electronAPI.daemon.onReconnecting(({ attempt }) => {
       noteDaemonReconnecting(attempt);
     });
@@ -1773,6 +1777,7 @@ export default function AppLayout() {
       offReconnecting();
       offRespawnExhausted();
       offFlushComplete();
+      offWriteDropped();
     };
   }, []);
 

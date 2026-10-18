@@ -981,13 +981,20 @@ export function registerPTYHandlers(
   }
 
   ipcMain.removeAllListeners(IPC.PTY_WRITE);
+  // Tell the writing renderer its bytes were dropped, so the pane can say
+  // that input may not have reached the shell (daemonLinkNotice.ts). A focus
+  // report is xterm's, not the user's, and is not reported.
+  const reportWriteDropped = (event: Electron.IpcMainEvent, id: string, data: string): void => {
+    if (data === '\x1b[I' || data === '\x1b[O') return;
+    if (!event.sender.isDestroyed()) event.sender.send(IPC.PTY_WRITE_DROPPED, id);
+  };
   if (useDaemon && daemonClient) {
     // Per-session diagnostic: log the first dropped write so silent
     // input-mute leaves a paper trail in main.log without spamming on
     // every keystroke if a pipe stays dead. Reset when a write succeeds
     // so future regressions still log their first occurrence.
     const writeDropLogged = new Set<string>();
-    const onPtyWrite = (_event: Electron.IpcMainEvent, id: string, data: string): void => {
+    const onPtyWrite = (event: Electron.IpcMainEvent, id: string, data: string): void => {
       if (typeof data !== 'string') return;
       if (data.length > PTY_WRITE_HARD_LIMIT) {
         console.error(`[PTY_WRITE] refused payload exceeding hard limit: ${data.length} chars > ${PTY_WRITE_HARD_LIMIT}. Caller must fix.`);
@@ -1014,6 +1021,7 @@ export function registerPTYHandlers(
         }
       }
       if (!allDelivered) {
+        reportWriteDropped(event, id, data);
         if (!writeDropLogged.has(id)) {
           writeDropLogged.add(id);
           console.warn(`[PTY_WRITE] drop sessionId=${id} reason=no-live-session-pipe (first occurrence; suppressing further logs for this id until next successful write)`);
@@ -1024,9 +1032,14 @@ export function registerPTYHandlers(
     };
     ipcMain.on(IPC.PTY_WRITE, onPtyWrite);
   } else {
-    const onPtyWrite = (_event: Electron.IpcMainEvent, id: string, data: string): void => {
-      if (!ptyManager.get(id)) return;
+    const onPtyWrite = (event: Electron.IpcMainEvent, id: string, data: string): void => {
       if (typeof data !== 'string') return;
+      // While the daemon is down this handler stands in for it, and a daemon
+      // pane's pty is not here: its input is dropped.
+      if (!ptyManager.get(id)) {
+        reportWriteDropped(event, id, data);
+        return;
+      }
       if (data.length > PTY_WRITE_HARD_LIMIT) {
         console.error(`[PTY_WRITE] refused payload exceeding hard limit: ${data.length} chars > ${PTY_WRITE_HARD_LIMIT}. Caller must fix.`);
         return;

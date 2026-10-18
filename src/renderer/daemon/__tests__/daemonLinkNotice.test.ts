@@ -7,8 +7,9 @@ import {
   noteDaemonDisconnected,
   noteDaemonGaveUp,
   noteDaemonReconnecting,
-  notePaneInput,
   notePaneReattached,
+  notePaneUserInput,
+  notePaneWriteDropped,
   resetDaemonLinkNoticeForTests,
   setDaemonLinkSurfaceResolver,
 } from '../daemonLinkNotice';
@@ -26,11 +27,13 @@ describe('daemon link notice', () => {
     vi.useRealTimers();
   });
 
-  it('tells every attached pane at once and flags input only where it was typed', () => {
+  it('tells every attached pane at once and flags input only where main dropped it', () => {
     noteDaemonDisconnected(PANES);
     noteDaemonReconnecting(2);
-    notePaneInput('b');
-    notePaneInput('later-local-pane');
+    // Typing alone flags nothing: only main knows the write was dropped.
+    notePaneUserInput('a');
+    notePaneWriteDropped('b');
+    notePaneWriteDropped('later-local-pane');
 
     expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnecting', attempt: 2, inputLost: false });
     expect(getPaneLinkNotice('sB')).toEqual({ state: 'reconnecting', attempt: 2, inputLost: true });
@@ -38,14 +41,14 @@ describe('daemon link notice', () => {
     // daemon:connected alone is not "reconnected": the pane's pipe is not back
     // yet, so input sent now is still lost.
     noteDaemonConnected();
-    notePaneInput('a');
+    notePaneWriteDropped('a');
     expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnecting', attempt: 2, inputLost: true });
 
     notePaneReattached('b', none);
     vi.advanceTimersByTime(RECONNECTED_NOTICE_MS);
     // Input lost → stays until the user types there again.
     expect(getPaneLinkNotice('sB')).toEqual({ state: 'reconnected', attempt: 2, inputLost: true });
-    notePaneInput('b');
+    notePaneUserInput('b');
     expect(getPaneLinkNotice('sB')).toBeNull();
   });
 
@@ -59,14 +62,24 @@ describe('daemon link notice', () => {
     expect(getPaneLinkNotice('sB')?.state).toBe('reconnecting');
   });
 
+  it('keeps a reconnected notice when a drop is reported after the reattach', () => {
+    noteDaemonDisconnected(PANES);
+    noteDaemonConnected();
+    notePaneReattached('a', none);
+    // The drop of a write sent just before the replay arrives late.
+    notePaneWriteDropped('a');
+    vi.advanceTimersByTime(RECONNECTED_NOTICE_MS * 2);
+    expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnected', attempt: 0, inputLost: true });
+  });
+
   it('flags input sent to a rebound session before its replay finished', () => {
     noteDaemonDisconnected(PANES);
     noteDaemonConnected();
     setDaemonLinkSurfaceResolver((ptyId) => (ptyId === 'a-new' ? 'sA' : ptyId === 'local' ? 'sLocal' : null));
     // Reconcile rebound sA to a-new; its pipe has not replayed yet.
-    notePaneInput('a-new');
+    notePaneWriteDropped('a-new');
     // A pane opened during the gap has no notice and stays unflagged.
-    notePaneInput('local');
+    notePaneWriteDropped('local');
     expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnecting', attempt: 0, inputLost: true });
     expect(getPaneLinkNotice('sLocal')).toBeNull();
     notePaneReattached('a-new', none);
@@ -78,7 +91,9 @@ describe('daemon link notice', () => {
     noteDaemonDisconnected(PANES);
     noteDaemonGaveUp();
     vi.advanceTimersByTime(RECONNECTED_NOTICE_MS * 10);
-    notePaneInput('a');
+    notePaneWriteDropped('a');
+    // Typing into a pane that is still cut off does not clear it.
+    notePaneUserInput('a');
     expect(getPaneLinkNotice('sA')).toEqual({ state: 'gave-up', attempt: 0, inputLost: true });
     dismissPaneLinkNotice('sA');
     expect(getPaneLinkNotice('sA')).toBeNull();

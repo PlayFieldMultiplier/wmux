@@ -18,7 +18,7 @@ import BookmarkIndicator from './BookmarkIndicator';
 import ContextMenu from './ContextMenu';
 import ScrollToBottomButton from './ScrollToBottomButton';
 import { paneTagDropText } from '../../utils/paneTagDrag';
-import { dismissPaneLinkNotice, getPaneLinkNotice, notePaneInput, subscribeDaemonLinkNotice } from '../../daemon/daemonLinkNotice';
+import { dismissPaneLinkNotice, getPaneLinkNotice, notePaneUserInput, subscribeDaemonLinkNotice } from '../../daemon/daemonLinkNotice';
 import '@xterm/xterm/css/xterm.css';
 
 const ChatView = lazy(() => import('../Chat/ChatView'));
@@ -386,7 +386,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       // pasteClipboardImage, which routes them to the agent's own image-paste
       // key or to the temp-PNG path (#1196).
       const text = await window.clipboardAPI.readText();
-      notePaneInput(ptyId);
+      notePaneUserInput(ptyId);
       if (text) {
         // Async chunked write: paces the IPC queue so the conpty input
         // pipe drains between chunks, normalizes line endings to \r so
@@ -449,7 +449,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
     e.preventDefault();
     const terminal = terminalRef.current;
     const modes = (terminal as unknown as { modes?: { bracketedPasteMode?: boolean } })?.modes;
-    notePaneInput(ptyId);
+    notePaneUserInput(ptyId);
     // A pane header dropped here types its tag (`#w1-2 `), not its markdown.
     void pastePtyChunked(
       (d) => window.electronAPI.pty.write(ptyId, d),
@@ -540,7 +540,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
           up, attention for input that may not have reached the shell. */}
       {!recoveryError && linkNotice && ownerSurfaceId && (
         <div role={linkNotice.state === 'reconnecting' ? 'status' : 'alert'} aria-live={linkNotice.state === 'reconnecting' ? 'polite' : undefined}
-          className="absolute inset-x-2 top-2 z-20 flex flex-wrap items-start gap-3 rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
+          className="absolute inset-x-2 top-2 z-20 flex max-h-[calc(100%-1rem)] flex-wrap items-start gap-3 overflow-y-auto rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
           {/* The text keeps at least ~14rem and never shrinks below its
               longest word, so a narrow pane wraps Dismiss onto its own row
               instead of squeezing the text into a column that breaks words. */}
