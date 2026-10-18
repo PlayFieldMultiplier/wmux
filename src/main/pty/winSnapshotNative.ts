@@ -158,6 +158,7 @@ interface NativeBindings {
   TerminateProcess: (handle: Handle, exitCode: number) => number;
   WaitForSingleObject: (handle: Handle, ms: number) => number;
   GetSystemTimeAsFileTime: (out: Buffer) => void;
+  GetExitCodeProcess: (handle: Handle, code: Buffer) => number;
 }
 
 /** undefined = load not attempted yet; null = attempted and unavailable. */
@@ -228,6 +229,9 @@ function loadBindings(): NativeBindings | null {
       GetSystemTimeAsFileTime: kernel32.func('GetSystemTimeAsFileTime', 'void', [
         'void *',
       ]) as NativeBindings['GetSystemTimeAsFileTime'],
+      GetExitCodeProcess: kernel32.func('GetExitCodeProcess', 'int', [
+        'int64', 'void *',
+      ]) as NativeBindings['GetExitCodeProcess'],
     };
   } catch (err) {
     warn(`koffi load failed — native snapshot disabled: ${err instanceof Error ? err.message : String(err)}`);
@@ -659,4 +663,67 @@ export function tryProcessHandleApi(): ProcessHandleApi | null {
       return out.readBigUInt64LE(0);
     },
   };
+}
+
+/** GetExitCodeProcess's answer while the process is still running. */
+export const STILL_ACTIVE = 259;
+
+/** One read of a held process handle. */
+export type ProcessExitRead =
+  | { state: 'running' }
+  | { state: 'exited'; code: number }
+  | { state: 'failed'; failure: string };
+
+/** An open handle to one process, kept so its exit code outlives the process. */
+export interface ProcessExitHandle {
+  read(): ProcessExitRead;
+  close(): void;
+}
+
+/**
+ * Open a handle to `pid` for reading its exit code later. The handle has to be
+ * taken while the process is alive: once it exits with no handle open, Windows
+ * frees the process object, the code is gone and the pid can name another
+ * process. Holding it keeps the exit code readable after the process dies, and
+ * it stays bound to this process even if the pid is reused.
+ *
+ * Never throws. The caller must close() it.
+ */
+export function tryOpenProcessExitHandle(pid: number): ProcessExitHandle | { failure: string } {
+  if (!Number.isInteger(pid) || pid <= 0) return { failure: `invalid pid ${pid}` };
+  const b = loadFailed ? null : loadBindings();
+  if (!b) {
+    loadFailed = true;
+    return { failure: 'native process reads are unavailable' };
+  }
+  try {
+    const raw = b.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    const handle = typeof raw === 'bigint' ? raw : BigInt(raw);
+    if (handle === 0n) return { failure: `OpenProcess failed (error ${b.GetLastError()})` };
+    let open = true;
+    const code = Buffer.alloc(4);
+    return {
+      read: () => {
+        if (!open) return { state: 'failed', failure: 'handle closed' };
+        try {
+          if (!b.GetExitCodeProcess(raw, code)) {
+            return { state: 'failed', failure: `GetExitCodeProcess failed (error ${b.GetLastError()})` };
+          }
+          const value = code.readUInt32LE(0);
+          // A process that exits with 259 itself reads as running; nothing
+          // can tell the two apart, and no wmux daemon exits with it.
+          return value === STILL_ACTIVE ? { state: 'running' } : { state: 'exited', code: value };
+        } catch (err) {
+          return { state: 'failed', failure: err instanceof Error ? err.message : String(err) };
+        }
+      },
+      close: () => {
+        if (!open) return;
+        open = false;
+        try { b.CloseHandle(raw); } catch { /* nothing left to do */ }
+      },
+    };
+  } catch (err) {
+    return { failure: err instanceof Error ? err.message : String(err) };
+  }
 }

@@ -79,6 +79,7 @@ function makeHarness(
     ensureDaemonImpl?: () => Promise<DaemonInfo>;
     config?: Parameters<typeof buildController>[1];
     replacement?: DaemonReplacementHooks;
+    watchDaemonExit?: DaemonRespawnDeps['watchDaemonExit'];
   } = {},
 ): Harness {
   const logs: { level: string; msg: string }[] = [];
@@ -108,6 +109,7 @@ function makeHarness(
       error: (msg) => { logs.push({ level: 'error', msg }); },
     },
     replacement: opts.replacement,
+    watchDaemonExit: opts.watchDaemonExit,
   };
 
   const controller = buildController(deps, opts.config);
@@ -914,5 +916,117 @@ describe('DaemonRespawnController stale-daemon replacement', () => {
     expect(result).toBeNull();
     expect(ensureCall).toBe(1);            // fresh spawn never attempted
     expect(h.deps.onInstall).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The daemon's exit code in main's log (daemonExitWatch.ts). The watch itself
+// is covered in daemonExitWatch.test.ts; these pin when the controller starts
+// one, for which pid, and when it asks for a report.
+// ---------------------------------------------------------------------------
+
+function makeExitWatches() {
+  const watches: Array<{ pid: number | null; reports: string[]; disposed: boolean }> = [];
+  const factory = (pid: number | null) => {
+    const w = { pid, reports: [] as string[], disposed: false };
+    watches.push(w);
+    return {
+      report: async (reason: string) => { w.reports.push(reason); },
+      dispose: () => { w.disposed = true; },
+    };
+  };
+  return { watches, factory };
+}
+
+describe('DaemonRespawnController daemon exit watch', () => {
+  it('watches the installed daemon pid and reports at socket close', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({ config: { baseBackoffMs: 100, healthIntervalMs: 0 }, watchDaemonExit: ew.factory });
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+
+    await h.controller.bootstrap();
+    expect(ew.watches).toEqual([{ pid: 1234, reports: [], disposed: false }]);
+
+    c1.fireDisconnect();
+    expect(ew.watches[0].reports).toEqual(['socket close']);
+  });
+
+  it('a respawned daemon gets a fresh watch; the old one is retired', async () => {
+    let pid = 1000;
+    const ew = makeExitWatches();
+    const h = makeHarness({
+      config: { baseBackoffMs: 100, healthIntervalMs: 0 },
+      watchDaemonExit: ew.factory,
+      ensureDaemonImpl: async () => ({ pid: ++pid, authToken: 'tok', pipeName: 'pipe', spawned: true }),
+    });
+    const c1 = new FakeDaemonClient();
+    const c2 = new FakeDaemonClient();
+    h.clientQueue.push(c1, c2);
+
+    await h.controller.bootstrap();
+    c1.fireDisconnect();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(ew.watches.map((w) => w.pid)).toEqual([1001, 1002]);
+    expect(ew.watches[0].disposed).toBe(true);
+    expect(ew.watches[1].disposed).toBe(false);
+  });
+
+  it('a health-probe hang reports whether the daemon was still alive', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({
+      config: { healthIntervalMs: 1000, healthTimeoutMs: 100, hangFailureThreshold: 2, baseBackoffMs: 50_000 },
+      watchDaemonExit: ew.factory,
+    });
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+    let pings = 0;
+    c1.rpcImpl = async () => {
+      if (++pings === 1) return {};
+      throw new Error('ping timeout');
+    };
+
+    await h.controller.bootstrap();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(c1.disconnectSyncCalls).toBe(1);
+    expect(ew.watches[0].reports).toEqual(['health probe hang']);
+  });
+
+  it('dispose retires the watch without a report (a detach Quit leaves the daemon alive)', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({ config: { healthIntervalMs: 0 }, watchDaemonExit: ew.factory });
+    h.clientQueue.push(new FakeDaemonClient());
+
+    await h.controller.bootstrap();
+    h.controller.dispose();
+
+    expect(ew.watches[0]).toMatchObject({ reports: [], disposed: true });
+  });
+
+  it('a replaced stale daemon is watched by the fresh pid, not the one replaced', async () => {
+    let ensureCall = 0;
+    const ew = makeExitWatches();
+    const h = makeHarness({
+      replacement: makeReplacementHooks(),
+      config: { healthIntervalMs: 0 },
+      watchDaemonExit: ew.factory,
+      ensureDaemonImpl: async () => {
+        ensureCall++;
+        return ensureCall === 1
+          ? { pid: 4242, authToken: 'tok', pipeName: 'pipe', spawned: false }
+          : { pid: 5000, authToken: 'tok2', pipeName: 'pipe', spawned: true };
+      },
+    });
+    const oldClient = new FakeDaemonClient();
+    oldClient.rpcImpl = async () => OLD_PONG;
+    const freshClient = new FakeDaemonClient();
+    freshClient.rpcImpl = async () => NEW_PONG;
+    h.clientQueue.push(oldClient, freshClient);
+
+    await h.controller.bootstrap();
+
+    expect(ew.watches.map((w) => w.pid)).toEqual([5000]);
   });
 });

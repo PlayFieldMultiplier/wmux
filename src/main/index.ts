@@ -196,6 +196,7 @@ import { toastManager } from './notification/ToastManager';
 import { WorkspaceContextRouter } from './metadata/WorkspaceContextRouter';
 import { ensureDaemon, killDaemonByPidFile, describeDaemonKillOutcome, killVerifiedDaemonPid, checkProcessLiveness, isDaemonPipeGone } from './daemon/launcher';
 import { DaemonRespawnController } from './daemon/DaemonRespawnController';
+import { createDaemonExitWatch } from './daemon/daemonExitWatch';
 import { loadConfig, getWmuxDir } from '../daemon/config';
 import { CHANNELS_EPOCH } from '../shared/channels';
 import { createTray, destroyTray, updateTraySessionCount } from './tray';
@@ -2361,6 +2362,10 @@ app.on('ready', async () => {
       warn: (msg) => { logLine('warn', 'daemon-respawn', msg); },
       error: (msg) => { logLine('error', 'daemon-respawn', msg); },
     },
+    // The daemon's exit code when it goes, native faults included.
+    watchDaemonExit: (pid) => createDaemonExitWatch(pid, {
+      log: (level, msg) => { logLine(level, 'daemon-exit', msg); },
+    }),
     // B′ stale-daemon auto-replacement (plans/daemon-auto-replace-plan-
     // 2026-07-05.md). Fires only when a REUSED daemon is positively older
     // than this app; the whole destructive path rides the daemon's own

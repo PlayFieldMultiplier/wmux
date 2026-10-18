@@ -965,6 +965,11 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
         return;
       }
 
+      // Its exit code, for main's log line when it dies (daemonExitWatch.ts).
+      const spawnedPid = child.pid;
+      trackSpawnedDaemon(spawnedPid);
+      child.on('exit', (code, signal) => settleSpawnedDaemon(spawnedPid, code, signal));
+
       watch({
         pid: child.pid,
         isAlive: () => child.exitCode === null,
@@ -1011,6 +1016,58 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
     }
   });
 }
+
+/** How a daemon this process spawned ended: Node's child 'exit' arguments. */
+export interface SpawnedDaemonExit {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+type SpawnedDaemonRecord = { exit: SpawnedDaemonExit | null; listeners: Array<(exit: SpawnedDaemonExit) => void> };
+
+/** Daemons spawned directly by this process, by pid. Only the latest few are kept. */
+const spawnedDaemons = new Map<number, SpawnedDaemonRecord>();
+const SPAWNED_DAEMONS_KEPT = 8;
+
+function trackSpawnedDaemon(pid: number): void {
+  spawnedDaemons.delete(pid);
+  spawnedDaemons.set(pid, { exit: null, listeners: [] });
+  for (const oldest of spawnedDaemons.keys()) {
+    if (spawnedDaemons.size <= SPAWNED_DAEMONS_KEPT) break;
+    spawnedDaemons.delete(oldest);
+  }
+}
+
+function settleSpawnedDaemon(pid: number, code: number | null, signal: NodeJS.Signals | null): void {
+  const record = spawnedDaemons.get(pid);
+  if (!record || record.exit) return;
+  record.exit = { code, signal };
+  const listeners = record.listeners;
+  record.listeners = [];
+  for (const cb of listeners) {
+    try { cb(record.exit); } catch { /* one listener must not starve the others */ }
+  }
+}
+
+/**
+ * Call `cb` once with how the daemon `pid` ended, if this process spawned it
+ * directly (at once when it already has). Returns null for a daemon this
+ * process did not spawn — one it found running, or one launchd started — and
+ * otherwise a function that drops `cb`.
+ */
+export function onSpawnedDaemonExit(pid: number, cb: (exit: SpawnedDaemonExit) => void): (() => void) | null {
+  const record = spawnedDaemons.get(pid);
+  if (!record) return null;
+  if (record.exit) {
+    cb(record.exit);
+    return () => { /* already delivered */ };
+  }
+  record.listeners.push(cb);
+  return () => { record.listeners = record.listeners.filter((l) => l !== cb); };
+}
+
+/** Test seam: record a spawned daemon, and settle it. */
+export const spawnedDaemonRegistryForTest = { track: trackSpawnedDaemon, settle: settleSpawnedDaemon, clear: () => spawnedDaemons.clear() };
 
 /** The error an exit before readiness maps to — see the watch() exit hook. */
 function daemonStartupExitError(code: number | null): Error {

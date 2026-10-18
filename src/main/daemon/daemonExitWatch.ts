@@ -1,0 +1,199 @@
+/**
+ * Main's record of how the daemon ended.
+ *
+ * The daemon logs every exit JS can see (src/daemon/exitEvidence.ts), but a
+ * native fault ends the process before any JS runs: in #2398 a node-pty access
+ * violation killed it with nothing in any log, and the exit code 0xC0000005 —
+ * the one fact that named the cause — had to be dug out with a debugger. Main
+ * is the process that outlives the daemon, so it writes that code down:
+ *
+ *   daemon pid 1234 exited 0xC0000005 (access violation) — at socket close
+ *
+ * Two sources, whichever answers:
+ *  - the child 'exit' event, for a daemon this process spawned;
+ *  - on Windows, a process handle opened when the daemon is installed. It must
+ *    be open before the daemon dies: afterwards the exit code is gone and the
+ *    pid may name another process.
+ * A daemon found running on POSIX has neither; the line then says so.
+ *
+ * A graceful shutdown closes the pipe first and exits up to ~11 s later, so a
+ * socket close starts a bounded poll. A daemon still running at its end is
+ * logged as such: main dropped the connection to a live daemon.
+ */
+
+import { SHUTDOWN_KILL_EXIT_CODE } from '../../daemon/shutdownKill';
+import { DAEMON_EXIT_ALREADY_RUNNING } from '../../shared/constants';
+import { onSpawnedDaemonExit, type SpawnedDaemonExit } from '../../shared/daemon/daemonLauncherCore';
+import { tryOpenProcessExitHandle, type ProcessExitHandle } from '../pty/winSnapshotNative';
+
+type Level = 'info' | 'warn' | 'error';
+
+/** Descriptions for the exit codes a daemon has been seen to die with. */
+const KNOWN_EXIT_CODES = new Map<number, string>([
+  [0, 'clean exit'],
+  [1, 'exit(1)'],
+  [3, 'abort()'],
+  [DAEMON_EXIT_ALREADY_RUNNING, 'another daemon already runs'],
+  [0xc0000005, 'access violation'],
+  [0xc0000017, 'out of memory'],
+  [0xc00000fd, 'stack overflow'],
+  [0xc000013a, 'Ctrl+C / Ctrl+Break'],
+  [0xc0000374, 'heap corruption'],
+  [0xc0000409, 'fail-fast / stack buffer overrun'],
+  [SHUTDOWN_KILL_EXIT_CODE, 'terminated by a debugger or console close'],
+]);
+
+/** `0xC0000005` for any exit code, read as the unsigned 32-bit value Windows reports. */
+export function hexExitCode(code: number): string {
+  return `0x${(code >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+}
+
+/** `0xC0000005 (access violation)`; unknown codes carry their decimal value instead. */
+export function describeExitCode(code: number): string {
+  const unsigned = code >>> 0;
+  return `${hexExitCode(unsigned)} (${KNOWN_EXIT_CODES.get(unsigned) ?? `code ${unsigned}`})`;
+}
+
+export interface DaemonExitWatch {
+  /**
+   * The daemon's socket closed (or main gave up on it): find out how the
+   * process ended and log it, once. Resolves when the line is written.
+   */
+  report(reason: string): Promise<void>;
+  /** Stop watching. A report already running finishes first. */
+  dispose(): void;
+}
+
+export interface DaemonExitWatchDeps {
+  log: (level: Level, msg: string) => void;
+  platform?: NodeJS.Platform;
+  /** Windows: open a handle now for reading the exit code later. */
+  openHandle?: (pid: number) => ProcessExitHandle | { failure: string };
+  /** The exit of a daemon this process spawned; null when it did not spawn `pid`. */
+  onChildExit?: (pid: number, cb: (exit: SpawnedDaemonExit) => void) => (() => void) | null;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** How long a report waits for the process to exit. */
+  budgetMs?: number;
+}
+
+/** Waits between reads: quick at first (a crash is over in milliseconds), then 1 s apart. */
+const POLL_STEPS_MS = [0, 50, 100, 200, 400];
+const POLL_LATER_MS = 1_000;
+/** Covers the daemon's 10 s shutdown timeout plus its 1 s forced exit. */
+const DEFAULT_BUDGET_MS = 15_000;
+
+/**
+ * Start watching daemon `pid` (null when the launcher could not tell it).
+ * Call when the daemon is installed, so the handle is open while it lives.
+ */
+export function createDaemonExitWatch(pid: number | null, deps: DaemonExitWatchDeps): DaemonExitWatch {
+  const platform = deps.platform ?? process.platform;
+  const openHandle = deps.openHandle ?? tryOpenProcessExitHandle;
+  const onChildExit = deps.onChildExit ?? onSpawnedDaemonExit;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = deps.now ?? Date.now;
+  const budgetMs = deps.budgetMs ?? DEFAULT_BUDGET_MS;
+
+  let logged = false;
+  let disposed = false;
+  let reporting = false;
+  let childExit: SpawnedDaemonExit | null = null;
+  let handle: ProcessExitHandle | null = null;
+  let handleFailure: string | null = null;
+  let stopChildWatch: (() => void) | null = null;
+
+  const closeHandle = (): void => {
+    handle?.close();
+    handle = null;
+  };
+  const release = (): void => {
+    stopChildWatch?.();
+    stopChildWatch = null;
+    closeHandle();
+  };
+
+  const logExit = (exit: SpawnedDaemonExit | { code: number; signal: null }, when: string): void => {
+    if (logged) return;
+    logged = true;
+    if (exit.signal) {
+      deps.log('warn', `daemon pid ${pid} was killed by ${exit.signal} — ${when}`);
+    } else if (exit.code === null) {
+      deps.log('warn', `daemon pid ${pid} exited, exit code unavailable: the child reported none — ${when}`);
+    } else {
+      deps.log(exit.code === 0 ? 'info' : 'warn', `daemon pid ${pid} exited ${describeExitCode(exit.code)} — ${when}`);
+    }
+  };
+
+  if (pid === null) {
+    handleFailure = 'the launcher did not report the daemon pid';
+  } else {
+    // The child 'exit' event arrives without any socket close to wait for:
+    // log it as soon as it comes.
+    stopChildWatch = onChildExit(pid, (exit) => {
+      childExit = exit;
+      logExit(exit, 'child exit');
+      if (!reporting) release();
+    });
+    if (platform === 'win32' && !logged) {
+      const opened = openHandle(pid);
+      if ('failure' in opened) handleFailure = opened.failure;
+      else handle = opened;
+    } else if (stopChildWatch === null) {
+      handleFailure = platform === 'win32'
+        ? 'no process handle'
+        : 'this process did not spawn the daemon, so it gets no exit event';
+    }
+  }
+
+  /** One look at how the process stands. */
+  const readOnce = (): { exited: SpawnedDaemonExit | { code: number; signal: null } } | { running: true } | { unavailable: string } => {
+    if (childExit) return { exited: childExit };
+    if (handle) {
+      const r = handle.read();
+      if (r.state === 'exited') return { exited: { code: r.code, signal: null } };
+      if (r.state === 'running') return { running: true };
+      return { unavailable: r.failure };
+    }
+    // A spawned child with no handle (POSIX): alive until its exit event.
+    if (stopChildWatch) return { running: true };
+    return { unavailable: handleFailure ?? 'no way to read it' };
+  };
+
+  return {
+    async report(reason: string): Promise<void> {
+      if (logged || reporting || disposed) return;
+      reporting = true;
+      try {
+        const startedAt = now();
+        for (let step = 0; ; step++) {
+          const wait = POLL_STEPS_MS[step] ?? POLL_LATER_MS;
+          if (wait > 0) await sleep(wait);
+          if (logged) return;
+          const r = readOnce();
+          if ('exited' in r) {
+            logExit(r.exited, `at ${reason}`);
+            return;
+          }
+          if ('unavailable' in r) {
+            logged = true;
+            deps.log('warn', `daemon pid ${pid ?? '?'} ${reason}, exit code unavailable: ${r.unavailable}`);
+            return;
+          }
+          if (now() - startedAt >= budgetMs) {
+            logged = true;
+            deps.log('warn', `daemon pid ${pid} still running ${now() - startedAt}ms after ${reason} — exit code unavailable: it has not exited`);
+            return;
+          }
+        }
+      } finally {
+        reporting = false;
+        if (logged || disposed) release();
+      }
+    },
+    dispose(): void {
+      disposed = true;
+      if (!reporting) release();
+    },
+  };
+}
