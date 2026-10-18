@@ -212,4 +212,43 @@ describe('reconnectPtyWithRetry (RCA A1 non-destructive contract)', () => {
    // Still non-destructive: the pane keeps its id and its scrollback, which is
    // the whole point of offering the fresh start instead of a close.
    expect(clearPtyId).not.toHaveBeenCalled();
- });
+ 
+});
+
+// #2398 — after a failed startup reconcile, a pane's own reattach must not
+// clear a binding the reconcile never looked at: the surface's session may
+// live on under another id, which only the reconcile can rebind.
+describe('reconnectPtyWithRetry — an unconfirmed binding reported gone (#2398)', () => {
+  const gone = async () => ({ success: false, transient: false, error: 'Session not found or dead' });
+
+  it('is handed to the reconcile, kept, and waits without a banner', async () => {
+    const clearPtyId = vi.fn();
+    const onRecoveryError = vi.fn();
+    const requestReconcile = vi.fn(() => true);
+    await reconnectPtyWithRetry('pty-kept', alwaysCurrent, {
+      reconnect: vi.fn(gone), clearPtyId, onRecoveryError, requestReconcile,
+      isUnconfirmed: (id) => id === 'pty-kept', sleep: noSleep, log: noLog,
+    });
+    expect(clearPtyId).not.toHaveBeenCalled();
+    expect(requestReconcile).toHaveBeenCalledTimes(1);
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { awaitingReconcile: true });
+  });
+
+  it('a confirmed binding reported gone still clears at once', async () => {
+    const clearPtyId = vi.fn();
+    const requestReconcile = vi.fn(() => true);
+    await reconnectPtyWithRetry('pty-dead', alwaysCurrent, {
+      reconnect: vi.fn(gone), clearPtyId, requestReconcile, isUnconfirmed: () => false, sleep: noSleep, log: noLog,
+    });
+    expect(clearPtyId).toHaveBeenCalledWith('pty-dead', undefined);
+    expect(requestReconcile).not.toHaveBeenCalled();
+  });
+
+  it('with nothing to run a reconcile, it clears as before', async () => {
+    const clearPtyId = vi.fn();
+    await reconnectPtyWithRetry('pty-kept', alwaysCurrent, {
+      reconnect: vi.fn(gone), clearPtyId, requestReconcile: () => false, isUnconfirmed: () => true, sleep: noSleep, log: noLog,
+    });
+    expect(clearPtyId).toHaveBeenCalledWith('pty-kept', undefined);
+  });
+});

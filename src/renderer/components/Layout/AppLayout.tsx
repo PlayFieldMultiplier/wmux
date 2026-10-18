@@ -93,6 +93,7 @@ import { resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
 import { runWithProgressTimeout } from '../../hooks/reconcileProgressTimeout';
 import { createLateReconcileOnConnect } from '../../hooks/lateReconcileOnConnect';
 import { applyStartupReconcileFallback } from '../../hooks/startupReconcileFallback';
+import { RECONCILE_REQUEST_COALESCE_MS, setReconcileRequester } from '../../hooks/reconcileRequest';
 import { ptyLifecycle } from '../../hooks/ptyLifecycle';
 import ProjectConfigDialog from '../Project/ProjectConfigDialog';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
@@ -1440,6 +1441,8 @@ export default function AppLayout() {
               console.warn(`[lifecycle] reconcile clearing ptyId=${a.stalePtyId} surface=${a.surfaceId} (absent from TWO daemon snapshots, no surface match) → Terminal self-create`);
             }
             useStore.getState().updateSurfacePtyId(a.paneId, a.surfaceId, a.newPtyId);
+            // The stale id is settled either way; its unconfirmed mark goes with it.
+            useStore.getState().setPtysUnconfirmed([a.stalePtyId], false);
           }
         }
         console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
@@ -1748,8 +1751,21 @@ export default function AppLayout() {
     });
     lateReconcileRef.current = late;
     const remove = window.electronAPI.daemon.onConnected(late.onConnected);
+    // #2398 — panes whose unconfirmed binding the daemon no longer has ask
+    // for a pass (reconnectPtyWithRetry). They ask together after a stall, so
+    // the requests are coalesced into one.
+    let pendingRequest: ReturnType<typeof setTimeout> | null = null;
+    const unregister = setReconcileRequester((reason) => {
+      if (pendingRequest !== null) return;
+      pendingRequest = setTimeout(() => {
+        pendingRequest = null;
+        late.rerun(reason);
+      }, RECONCILE_REQUEST_COALESCE_MS);
+    });
     return () => {
       if (lateReconcileRef.current === late) lateReconcileRef.current = null;
+      unregister();
+      if (pendingRequest !== null) clearTimeout(pendingRequest);
       late.dispose();
       remove();
     };

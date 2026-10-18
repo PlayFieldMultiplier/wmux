@@ -174,4 +174,25 @@ describe('createLateReconcileOnConnect', () => {
     await vi.runAllTimersAsync();
     expect(log).toHaveBeenCalledWith('warn', '[lifecycle] late reconcile failed — preserving ptyIds (no clear):', expect.any(Error));
   });
+
+  it('a rerun during a pass waits for it, then runs once, never aborting it (#2398)', async () => {
+    const signals: AbortSignal[] = [];
+    let finish: () => void = () => undefined;
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>((signal) => {
+      signals.push(signal);
+      return new Promise<void>((resolve) => { finish = resolve; });
+    });
+    const { late } = make({ reconcile, timeoutMs: 60_000 });
+    late.rerun('startup reconcile failed');
+    late.rerun('unconfirmed binding a reported gone');
+    late.rerun('unconfirmed binding b reported gone');
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(signals[0].aborted).toBe(false);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+  });
 });

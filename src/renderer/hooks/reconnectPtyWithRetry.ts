@@ -41,10 +41,20 @@ export interface ReconnectResult {
   rows?: number;
 }
 
+/** Why an attempt settled without a session pipe; absent once it attached. */
+export interface ReconnectSettleInfo {
+  cwdMissing?: boolean;
+  rateLimited?: boolean;
+  /** Retries ran out; the id is kept unconfirmed (#2398). */
+  unconfirmed?: boolean;
+  /** The daemon no longer has the id; a reconcile decides rebind or clear (#2398). */
+  awaitingReconcile?: boolean;
+}
+
 export interface ReconnectDeps {
   /** Invoke the pty.reconnect RPC. */
   reconnect: (id: string) => Promise<ReconnectResult>;
-  onRecoveryError?: (message: string | null, info?: { cwdMissing?: boolean; rateLimited?: boolean; unconfirmed?: boolean }) => void;
+  onRecoveryError?: (message: string | null, info?: ReconnectSettleInfo) => void;
   /** Clear the surface's ptyId so the next mount self-creates. */
   clearPtyId: (id: string, recovery?: DeadPaneRecovery) => void;
   /**
@@ -52,6 +62,13 @@ export interface ReconnectDeps {
    * ran out without an answer (the id is kept), false once it attached.
    */
   setUnconfirmed?: (id: string, unconfirmed: boolean) => void;
+  /** #2398 — whether this binding is one kept unconfirmed (see setUnconfirmed). */
+  isUnconfirmed?: (id: string) => boolean;
+  /**
+   * #2398 — ask for a reconcile pass. Returns false when none can run (no
+   * requester registered), and the caller then clears as before.
+   */
+  requestReconcile?: (reason: string) => boolean;
   /** Sleep between retries. Injectable so tests don't wait real time. */
   sleep?: (ms: number) => Promise<void>;
   /** Optional structured logger. Defaults to console. */
@@ -121,6 +138,20 @@ export async function reconnectPtyWithRetry(
       return null; // Keep the original id, binding and scrollback. Retry is explicit.
     }
     lastErr = result?.error ?? '<no error>';
+    // #2398 — an unconfirmed binding was kept through a failed startup
+    // reconcile, so no reconcile has looked at it yet. Its id may be gone while
+    // the surface's session lives on under another id (a reboot recovery, a
+    // reconnect after a respawn), which only the reconcile can rebind: it
+    // matches the session's surface id, re-lists twice, and stages a dead
+    // session's recovery. Clearing here instead self-created a second shell
+    // for the surface — and, after a long daemon stall, a burst of them.
+    // Hand the binding to the reconcile and keep it until that pass answers.
+    if (result?.transient === false && deps.isUnconfirmed?.(ptyId)
+      && deps.requestReconcile?.(`unconfirmed binding ${ptyId} reported gone`)) {
+      log('warn', `[useTerminal] pty.reconnect ${ptyId} reports the session gone (${lastErr}) — unconfirmed binding, deferring to the reconcile`);
+      if (isCurrent()) deps.onRecoveryError?.(null, { awaitingReconcile: true });
+      return null;
+    }
     // Permanent failure (daemon says the session is dead): clear now, no retry.
     if (result?.transient === false) {
       log('warn', `[useTerminal] pty.reconnect ${ptyId} permanent failure (${lastErr}) — clearing ptyId for self-create`);

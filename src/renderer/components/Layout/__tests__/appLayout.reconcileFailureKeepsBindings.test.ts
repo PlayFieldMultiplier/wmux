@@ -64,4 +64,17 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
     expect(offAt).toBeGreaterThanOrEqual(0);
     expect(region.slice(offAt, offAt + 400)).toMatch(/ptyLifecycle\.invalidateAll\(\);\s*clearAllPtyState\(\);/);
   });
+
+  it('panes can ask for a pass; their requests are coalesced into one rerun', () => {
+    const at = source.indexOf('setReconcileRequester((reason) => {');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const body = source.slice(at, at + 400);
+    expect(body).toMatch(/if \(pendingRequest !== null\) return;/);
+    expect(body).toMatch(/late\.rerun\(reason\);\s*\}, RECONCILE_REQUEST_COALESCE_MS\)/);
+    expect(source).toMatch(/unregister\(\);/);
+  });
+
+  it('a rebind or clear drops the stale id’s unconfirmed mark', () => {
+    expect(source).toMatch(/updateSurfacePtyId\(a\.paneId, a\.surfaceId, a\.newPtyId\);\s*(?:\/\/[^\n]*\n\s*)*useStore\.getState\(\)\.setPtysUnconfirmed\(\[a\.stalePtyId\], false\);/);
+  });
 });

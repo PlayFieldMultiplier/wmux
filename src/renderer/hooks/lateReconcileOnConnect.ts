@@ -48,13 +48,18 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
   /**
    * #2398 — run the same guarded reconcile for another reason than a connect:
    * the startup reconcile timed out and kept every binding unconfirmed, and
-   * no daemon:connected is coming (the daemon never disconnected).
+   * no daemon:connected is coming (the daemon never disconnected); or a pane
+   * found its unconfirmed binding gone. Unlike a connect it never aborts a
+   * pass in flight: it runs once more after that pass settles, so a stream of
+   * requests cannot keep restarting a reconcile before it finishes.
    */
   rerun: (reason: string) => void;
   /** Abort any in-flight late reconcile (effect cleanup). */
   dispose: () => void;
 } {
   let activeCtl: AbortController | null = null;
+  let running = false;
+  let rerunAfter: string | null = null;
   const log =
     deps.log ??
     ((level: 'log' | 'warn', message: string, err?: unknown) => {
@@ -70,13 +75,23 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
     activeCtl?.abort();
     const ctl = new AbortController();
     activeCtl = ctl;
+    running = true;
     const timer = setTimeout(() => ctl.abort(), deps.timeoutMs);
     void deps
       .reconcile(ctl.signal)
       .catch((err: unknown) => {
         log('warn', '[lifecycle] late reconcile failed — preserving ptyIds (no clear):', err);
       })
-      .finally(() => clearTimeout(timer));
+      .finally(() => {
+        clearTimeout(timer);
+        if (activeCtl !== ctl) return;
+        running = false;
+        const reason = rerunAfter;
+        rerunAfter = null;
+        if (reason !== null && !ctl.signal.aborted && deps.getPaneGate() === 'ready') {
+          run(`[lifecycle] ${reason} — re-reconciling PTYs`);
+        }
+      });
   };
 
   return {
@@ -89,9 +104,14 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
     },
     rerun: (reason) => {
       if (deps.getPaneGate() !== 'ready') return;
+      if (running) {
+        rerunAfter ??= reason;
+        return;
+      }
       run(`[lifecycle] ${reason} — re-reconciling PTYs`);
     },
     dispose: () => {
+      rerunAfter = null;
       activeCtl?.abort();
     },
   };

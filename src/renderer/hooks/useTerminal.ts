@@ -83,7 +83,8 @@ import {
   promoteTerminalToPriorityDrain,
   rebindTerminalOutputWriter,
 } from '../terminal/terminalOutputScheduler';
-import { reconnectPtyWithRetry as reconnectPtyWithRetryImpl } from './reconnectPtyWithRetry';
+import { reconnectPtyWithRetry as reconnectPtyWithRetryImpl, type ReconnectSettleInfo } from './reconnectPtyWithRetry';
+import { requestReconcile } from './reconcileRequest';
 import { adoptTerminal, parkTerminal, restoreParkedViewport, type ParkedTerminal } from '../terminal/terminalPark';
 import { captureColdFrame, clearPersistedColdFrames, coldFrameFits, dropColdFrame, persistColdFrames, splitTrailingEscape, takeColdFrame, WarmFrameSwap, COLD_FRAME_MAX_ENTRIES, FULL_RESET, REPAINT_BEGIN, REPAINT_END, type ColdFrame } from '../terminal/coldFrame';
 
@@ -650,12 +651,14 @@ let webglTokenSeq = 0;
 
 // RCA A1 — reconnect-with-retry policy lives in its own module so it can be
 // unit-tested without xterm/zustand/electron. Bound to the live deps here.
-function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: { cwdMissing?: boolean; rateLimited?: boolean; unconfirmed?: boolean }) => void): Promise<{ cols: number; rows: number } | null> {
+function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: ReconnectSettleInfo) => void): Promise<{ cols: number; rows: number } | null> {
   return reconnectPtyWithRetryImpl(ptyId, isCurrent, {
     reconnect: (id) => window.electronAPI.pty.reconnect(id),
     onRecoveryError,
     clearPtyId: (id, recovery) => useStore.getState().clearSurfacePtyIdByPty(id, recovery),
     setUnconfirmed: (id, unconfirmed) => useStore.getState().setPtysUnconfirmed([id], unconfirmed),
+    isUnconfirmed: (id) => Boolean(useStore.getState().ptyUnconfirmedById?.[id]),
+    requestReconcile,
   });
 }
 
@@ -3699,9 +3702,10 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       revealTiming(id, 'reattach-start', `reason=${reason}`);
       return reconnectPtyWithRetry(id, () => ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
         // A non-null message means the attempt settled WITHOUT a session pipe
-        // (rate limited, WSL recovery pending); null means it attached.
-        reconnectPendingRef.current = message !== null;
-        if ((info?.rateLimited || info?.unconfirmed) && slowRetry === null) {
+        // (rate limited, WSL recovery pending); null means it attached —
+        // unless it is waiting on the reconcile (#2398), which shows no banner.
+        reconnectPendingRef.current = message !== null || info?.awaitingReconcile === true;
+        if ((info?.rateLimited || info?.unconfirmed || info?.awaitingReconcile) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
         onRecoveryErrorRef.current?.(message, info);
