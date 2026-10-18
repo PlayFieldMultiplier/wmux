@@ -255,6 +255,15 @@ describe('FanOutService — detached checkout + dispatch record', () => {
     expect(r.spawn).toHaveBeenCalledTimes(1);
     expect(res.tasks[1]).toMatchObject({ ok: false, error: 'not launched: no agent slot freed within 30 minutes' });
     expect(r.calls.filter((c) => c.method === 'task.mission.close')).toHaveLength(1);
+    // No pane was ever started in it: its worktree is rolled back (#2349)
+    // and the task still gets its cancelled row.
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(r.worktrees.removeWorktree).toHaveBeenCalledWith('/repo', 'h', expect.any(String), undefined, { force: true });
+    expect(res.tasks[1].preservedWorktree).toBeUndefined();
+    const row = ledger.get(res.tasks[1].taskId!);
+    expect(row).toMatchObject({ status: 'cancelled' });
+    expect(row!.summary).toContain('not launched: no agent slot freed within 30 minutes');
+    expect(row!.summary).toContain('its worktree was removed');
   });
 
   it('a slot granted to a task whose launch is then refused is given back', async () => {

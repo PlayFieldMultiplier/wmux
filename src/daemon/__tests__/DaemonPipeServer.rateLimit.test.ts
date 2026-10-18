@@ -64,6 +64,7 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     server.onRpc('task.mission.list', async () => ({ ok: true, tasks: [] }));
     server.onRpc('daemon.createSession', async () => ({ created: true }));
     server.onRpc('daemon.attachSession', async () => ({ attached: true }));
+    server.onRpc('daemon.destroySession', async () => ({ destroyed: true }));
     await server.start();
   });
 
@@ -81,6 +82,28 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     const replies = await sendBatch(pipeName, methods);
     expect(replies.get('250')).toMatchObject({ ok: true, result: { created: true } });
     expect(replies.get('251')).toMatchObject({ ok: true, result: { attached: true } });
+  });
+
+  it('dispatches destroySession (the pty:create rollback) after a background flood used up the global budget', async () => {
+    const methods = [...Array.from({ length: 250 }, () => 'task.mission.list'), 'daemon.destroySession'];
+    const replies = await sendBatch(pipeName, methods);
+    expect(replies.get('249')).toMatchObject({ ok: false, error: 'rate limited (global)' });
+    expect(replies.get('250')).toMatchObject({ ok: true, result: { destroyed: true } });
+  });
+
+  it('bounds interactive calls across all sockets by the aggregate cap, apart from background traffic', async () => {
+    // Three clients, each under its own 100/s cap, 270 together: 200 pass.
+    const interactive = Array.from({ length: 90 }, (_, i) => (i % 2 === 0 ? 'daemon.createSession' : 'daemon.attachSession'));
+    const all: Reply[] = [];
+    for (let c = 0; c < 3; c++) all.push(...(await sendBatch(pipeName, interactive)).values());
+    expect(all.filter((r) => r.ok)).toHaveLength(200);
+    const refused = all.filter((r) => !r.ok);
+    expect(refused).toHaveLength(70);
+    for (const r of refused) expect(r.error).toBe('rate limited (interactive)');
+    // The interactive class neither used nor shares the background budget.
+    const background = [...(await sendBatch(pipeName, Array.from({ length: 210 }, () => 'daemon.ping'))).values()];
+    expect(background.filter((r) => r.ok)).toHaveLength(200);
+    expect(background.filter((r) => r.error === 'rate limited (global)')).toHaveLength(10);
   });
 
   it('still refuses background calls past the global limit in the same second', async () => {

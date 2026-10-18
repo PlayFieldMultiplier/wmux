@@ -319,8 +319,8 @@ export interface FanOutRequest {
   dependsOn?: number[][];
   /** Asked right before each task's agent pane is spawned, after its
    *  worktree is ready: a reason refuses that task (its mission is closed,
-   *  its worktree kept as for any task that did not launch, nothing is
-   *  launched). A bot's fan-out answers from the
+   *  nothing is launched, and since no pane was ever started in it, its
+   *  worktree is rolled back; see rollbackTaskWorktree). A bot's fan-out answers from the
    *  factory switch, so turning the factory off stops a launch in progress. */
   mayLaunch?: () => string | null;
   /** Awaited right before mayLaunch for each task: a launch slot under the
@@ -1467,8 +1467,9 @@ export class FanOutService {
       if (!slot.ok) {
         discardTempDir();
         const error = `not launched: ${slot.reason}`;
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
-        return { ...base, error, ...preserved };
+        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
+        return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
       }
       // Released or held once; whatever is left is released on the way out.
       let settled = false;
@@ -2131,7 +2132,7 @@ export class FanOutService {
 
   /**
    * #2349 — take back the worktree of a spawn that was refused before any pane
-   * could exist (the launch check, a missing secret, or the renderer reporting
+   * could exist (no launch slot, the launch check, a missing secret, or the renderer reporting
    * that pty:create failed: it rolls its workspace back in that case). Nothing
    * but wmux's own setup ever wrote there, so the removal is forced. The branch
    * goes only while it still points at the commit it was created from; a

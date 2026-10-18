@@ -117,6 +117,8 @@ export class DaemonPipeServer {
   // Per-socket budget for INTERACTIVE_METHODS, separate from `rateLimits`.
   private readonly interactiveRateLimits = new Map<net.Socket, { count: number; resetAt: number }>();
   private globalRate = { count: 0, resetAt: 0 };
+  // Aggregate budget for INTERACTIVE_METHODS across every socket.
+  private interactiveGlobalRate = { count: 0, resetAt: 0 };
   private connectionRate = { count: 0, resetAt: 0 };
 
   private static readonly MAX_CONNECTIONS = 20;
@@ -136,15 +138,22 @@ export class DaemonPipeServer {
   // the user just asked for was refused with `rate limited (global)`. These
   // methods get their own per-socket budget instead: they are neither counted
   // in nor refused by the global and per-socket counters above, so background
-  // traffic is still capped exactly as before and cannot starve them. Only the
-  // two calls that open a pane are here: `pty:create` runs createSession then
-  // attachSession, and `pty:reconnect` ends in attachSession. The cap bounds
-  // each client: 100/s is 4x the attach peak seen restoring ~94 panes.
+  // traffic is still capped exactly as before and cannot starve them. The calls
+  // that open a pane are here: `pty:create` runs createSession then
+  // attachSession, and `pty:reconnect` ends in attachSession. So is
+  // destroySession: pty:create's rollback (withDaemonCreateRollback) destroys a
+  // session whose attach or pipe connect failed, and a destroy refused in the
+  // same storm (its one retry included) leaks that attached session for the
+  // daemon's lifetime. The per-socket cap bounds each client (100/s is 4x the
+  // attach peak seen restoring ~94 panes); the aggregate cap bounds the class
+  // across all sockets, so it can never add more than that to the total.
   private static readonly INTERACTIVE_METHODS: ReadonlySet<string> = new Set([
     'daemon.createSession',
     'daemon.attachSession',
+    'daemon.destroySession',
   ]);
   private static readonly INTERACTIVE_PER_SOCKET_RATE_LIMIT = 100;
+  private static readonly INTERACTIVE_GLOBAL_RATE_LIMIT = 200;
   private static readonly MAX_NEW_CONNECTIONS_PER_SEC = 20;
 
   private activePipeName: string;
@@ -656,6 +665,15 @@ export class DaemonPipeServer {
     }
 
     if (DaemonPipeServer.INTERACTIVE_METHODS.has(method)) {
+      if (now > this.interactiveGlobalRate.resetAt) {
+        this.interactiveGlobalRate = { count: 0, resetAt: now + 1000 };
+      }
+      this.interactiveGlobalRate.count++;
+      if (this.interactiveGlobalRate.count > DaemonPipeServer.INTERACTIVE_GLOBAL_RATE_LIMIT) {
+        const res = JSON.stringify({ id: request.id, ok: false, error: 'rate limited (interactive)' });
+        socket.write(res + '\n');
+        return;
+      }
       let interactive = this.interactiveRateLimits.get(socket);
       if (!interactive || now > interactive.resetAt) {
         interactive = { count: 0, resetAt: now + 1000 };
