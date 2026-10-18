@@ -1,5 +1,6 @@
-// A task close that kept its folder (#2388) says where. Every locale owns
-// the line, so none falls back to English.
+// Close and keep folder (#2388): the action a refused task close offers, and
+// the line saying where the folder was kept. Every locale owns both, so none
+// falls back to English.
 import { describe, expect, it } from 'vitest';
 import { LOCALE_OPTIONS, type Locale } from '../index';
 import { ar } from '../locales/ar';
@@ -26,7 +27,7 @@ import { vi } from '../locales/vi';
 import { zhTW } from '../locales/zh-TW';
 import { zh } from '../locales/zh';
 
-const KEYS = ['worktask.keepFolder.done'] as const;
+const KEYS = ['worktask.keepFolder.action', 'worktask.keepFolder.done'] as const;
 
 const LOCALE_TRANSLATIONS = {
   en,
@@ -56,7 +57,7 @@ const LOCALE_TRANSLATIONS = {
 
 const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;
 
-describe('kept folder locale contract', () => {
+describe('Close and keep folder locale contract', () => {
   for (const { value: locale } of LOCALE_OPTIONS) {
     for (const key of KEYS) {
       it(`${locale}: owns "${key}"`, () => {
@@ -64,8 +65,9 @@ describe('kept folder locale contract', () => {
         expect(Object.prototype.hasOwnProperty.call(translations, key), `${locale} falls back for "${key}"`).toBe(true);
         const copy = translations[key] ?? '';
         expect(copy.trim().length > 0 && copy !== key).toBe(true);
-        // The kept path is named.
-        expect(copy).toContain('{path}');
+        // The kept path is named; the action takes no vars.
+        if (key === 'worktask.keepFolder.done') expect(copy).toContain('{path}');
+        else expect(copy).not.toMatch(/\{[a-zA-Z]+\}/);
         if (locale !== 'ko') expect(HANGUL.test(copy), `${locale} "${key}" carries Hangul`).toBe(false);
       });
     }

@@ -1099,6 +1099,7 @@ export const zh = {
   'worktask.cleanup.preserved': '已保留未 commit 的产物 — 请从 diff commit/PR 或丢弃后再次关闭。',
   'worktask.cleanup.unpushed': '你有 {count} 个未 push 的 commit — 请 PR/push 后再次关闭。',
   'worktask.cleanup.closeFailed': 'close 失败：{error}',
+  'worktask.keepFolder.action': '关闭并保留文件夹',
   'worktask.keepFolder.done': '任务已关闭。其文件夹保留在 {path}。',
 
   // ─── 工作区条目: 任务工作树边界警告 ───

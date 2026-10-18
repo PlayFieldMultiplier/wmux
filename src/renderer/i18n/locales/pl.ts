@@ -4169,6 +4169,7 @@ export const pl = {
   'worktask.cleanup.preserved': 'Zachowano niezatwierdzone artefakty — wykonaj commit/PR z diff lub odrzuć, a następnie zamknij ponownie.',
   'worktask.cleanup.unpushed': 'Masz {count} niewypchniętych commitów — PR/push, a następnie zamknij ponownie.',
   'worktask.cleanup.closeFailed': 'close nie powiódł się: {error}',
+  'worktask.keepFolder.action': 'Zamknij i zachowaj folder',
   'worktask.keepFolder.done': 'Zadanie zamknięte. Jego folder zachowano w {path}.',
   'worktask.cleanup.commitAndClose': 'Zatwierdź i zamknij',
   'worktask.cleanup.openWorktree': 'Otwórz worktree',

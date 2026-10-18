@@ -609,6 +609,7 @@ export const th = {
   'worktask.cleanup.preserved': 'เก็บอาร์ติแฟกต์ที่ยังไม่ commit ไว้ — commit/PR จาก diff หรือทิ้ง แล้วปิดอีกครั้ง',
   'worktask.cleanup.unpushed': 'คุณมี {count} commit ที่ยังไม่ได้ push — PR/push แล้วปิดอีกครั้ง',
   'worktask.cleanup.closeFailed': 'close ล้มเหลว: {error}',
+  'worktask.keepFolder.action': 'ปิดและเก็บโฟลเดอร์ไว้',
   'worktask.keepFolder.done': 'ปิดงานแล้ว เก็บโฟลเดอร์ไว้ที่ {path}',
 
   // ─── Workspace item: task worktree boundary warning ───

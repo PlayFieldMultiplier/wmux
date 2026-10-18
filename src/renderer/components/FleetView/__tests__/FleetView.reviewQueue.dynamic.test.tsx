@@ -242,18 +242,52 @@ describe('FleetView — Ready to review', () => {
     expect(useStore.getState().toasts.some((toast) => toast.level === 'warn' && /Uncommitted/.test(toast.message))).toBe(true);
   });
 
-  // #2388: a half-removed folder whose repository is gone is kept, and the
-  // close says where it stays.
-  it('a close that kept the folder (its repository is gone) says where', async () => {
-    close.mockResolvedValueOnce({ ok: true, taskId: 't1', archivePending: false, unmaterialized: true, keptFolder: '/wt/t1' });
-    mount();
-    await settle();
+  // #2388: a refused close offers Close and keep folder; an unpushed branch
+  // does not (its next step is a push or a PR).
+  const closeFromRow = async (): Promise<void> => {
     const row = reviewRow('ws-t1')!;
     act(() => { row.focus(); });
     key(row, 'Backspace');
     await act(async () => { container.querySelector<HTMLButtonElement>('[data-fleet-review-confirm="close"]')!.click(); });
     await settle();
+  };
+  const keepFolderToast = () => useStore.getState().toasts.find((toast) => toast.action?.label === 'Close and keep folder');
+
+  it('a refused close offers Close and keep folder, which closes the task keeping its folder', async () => {
+    close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
+    mount();
+    await settle();
+    expect(keepFolderToast()).toBeUndefined();
+    await closeFromRow();
+    const offered = keepFolderToast();
+    expect(offered).toBeDefined();
+    expect(useStore.getState().workspaces.map((w) => w.id)).toContain('ws-t1');
+    close.mockResolvedValueOnce({ ok: true, taskId: 't1', archivePending: false, keptFolder: '/wt/t1' });
+    await act(async () => { offered!.action!.onClick(); });
+    await settle();
+    expect(close).toHaveBeenLastCalledWith('t1', 'ws-o', { keepFolder: true });
     expect(useStore.getState().workspaces.map((w) => w.id)).not.toContain('ws-t1');
+    expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
+  });
+
+  it('offers no Close and keep folder for an unpushed branch, nor after a close that worked', async () => {
+    close.mockResolvedValueOnce({ ok: false, reason: 'unpushed', aheadCount: 2 });
+    mount();
+    await settle();
+    await closeFromRow();
+    expect(useStore.getState().toasts.some((toast) => /unpushed/.test(toast.message))).toBe(true);
+    expect(keepFolderToast()).toBeUndefined();
+    await closeFromRow();
+    expect(useStore.getState().workspaces.map((w) => w.id)).not.toContain('ws-t1');
+    expect(keepFolderToast()).toBeUndefined();
+    expect(close.mock.calls.every((c) => c.length === 2)).toBe(true);
+  });
+
+  it('a close that kept the folder (its repository is gone) says where', async () => {
+    close.mockResolvedValueOnce({ ok: true, taskId: 't1', archivePending: false, unmaterialized: true, keptFolder: '/wt/t1' });
+    mount();
+    await settle();
+    await closeFromRow();
     expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
   });
 

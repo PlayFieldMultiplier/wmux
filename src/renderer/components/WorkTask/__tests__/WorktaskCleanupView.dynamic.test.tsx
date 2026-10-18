@@ -228,6 +228,39 @@ describe('WorktaskCleanupView', () => {
     });
   });
 
+  // #2388: Close and keep folder shows only after a refused close, never for
+  // an unpushed branch, and closes the task through task:close with keepFolder.
+  it('offers Close and keep folder after a refused close, and it closes keeping the folder', async () => {
+    act(() => root.render(createElement(WorktaskCleanupView)));
+    await flush();
+    expect(container.querySelector('[data-cleanup-close-keep-folder]')).toBeNull();
+    act(() => button('Close').click());
+    await flush();
+    await act(async () => { finishClose({ ok: false, reason: 'error', error: 'could not verify all processes exited' }); });
+    await flush();
+    const keep = container.querySelector('[data-cleanup-close-keep-folder]') as HTMLButtonElement;
+    expect(keep?.textContent).toBe('Close and keep folder');
+    act(() => keep.click());
+    await flush();
+    const close = (window as unknown as { electronAPI: { workTask: { close: ReturnType<typeof vi.fn> } } }).electronAPI.workTask.close;
+    expect(close).toHaveBeenLastCalledWith('task-1', 'ws-task', { keepFolder: true });
+    await act(async () => { finishClose({ ok: true, taskId: 'task-1', archivePending: false, keptFolder: '/wt/fix-parser' }); });
+    await flush();
+    expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/fix-parser.')).toBe(true);
+    expect(container.querySelector('[data-cleanup-close-keep-folder]')).toBeNull();
+  });
+
+  it('offers no Close and keep folder for an unpushed branch', async () => {
+    act(() => root.render(createElement(WorktaskCleanupView)));
+    await flush();
+    act(() => button('Close').click());
+    await flush();
+    await act(async () => { finishClose({ ok: false, reason: 'unpushed', aheadCount: 1 }); });
+    await flush();
+    expect(container.querySelector('[data-cleanup-close-failed]')).not.toBeNull();
+    expect(container.querySelector('[data-cleanup-close-keep-folder]')).toBeNull();
+  });
+
   it('Commit & close leaves focus on the terminal holding the prepared line', async () => {
     act(() => root.render(createElement(WorktaskCleanupView)));
     await flush();

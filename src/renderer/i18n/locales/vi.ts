@@ -609,6 +609,7 @@ export const vi = {
   'worktask.cleanup.preserved': 'Đã giữ lại các sản phẩm chưa commit — commit/PR từ diff hoặc loại bỏ, rồi đóng lại.',
   'worktask.cleanup.unpushed': 'Bạn có {count} commit chưa push — PR/push, rồi đóng lại.',
   'worktask.cleanup.closeFailed': 'close thất bại: {error}',
+  'worktask.keepFolder.action': 'Đóng và giữ thư mục',
   'worktask.keepFolder.done': 'Đã đóng tác vụ. Thư mục của nó được giữ tại {path}.',
 
   // ─── Workspace item: task worktree boundary warning ───

@@ -650,6 +650,7 @@ export const zhTW = {
   'worktask.cleanup.preserved': '已保留未 commit 的產物 — 請從 diff commit/PR 或捨棄後再次關閉。',
   'worktask.cleanup.unpushed': '你有 {count} 個未 push 的 commit — 請 PR/push 後再次關閉。',
   'worktask.cleanup.closeFailed': 'close 失敗：{error}',
+  'worktask.keepFolder.action': '關閉並保留資料夾',
   'worktask.keepFolder.done': '任務已關閉。其資料夾保留在 {path}。',
 
   // ─── 工作區項目: 任務 worktree 邊界警告 ───
