@@ -30,9 +30,13 @@
 //
 // Not covered, by construction: a process that left the tree before the
 // capture (a POSIX daemon re-parented to init, a Windows process whose
-// parent had already exited and been released), and the Linux side of a WSL
-// pane, which the Windows process table does not show. Kept independent of
-// any caller (the worktree removal, a future Job Object, #2398).
+// parent had already exited and been released); on Windows, a grandchild
+// whose parent was started and exited between two tables, so no table ever
+// listed that parent (nothing freezes a Windows tree; containing it takes a
+// Job Object, #2398); and the Linux side of a WSL pane, which the Windows
+// process table does not show. A caller that deletes files keeps its own
+// checks for what this cannot see. Kept independent of any caller (the
+// worktree removal, the Job Object of #2398).
 
 import { execFile } from 'node:child_process';
 import { collectDescendants } from './treeKill';

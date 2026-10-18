@@ -117,6 +117,23 @@ export async function sessionsStartedIn(dirs: readonly string[], port: Pick<Sess
 }
 
 /**
+ * Nothing runs in `dir` that a stop would have to end, checked without
+ * stopping anything (the sweep at start, which must never close a pane the
+ * owner just opened): no session was started in it, and no process an
+ * earlier stop left is still running. Throws when one is.
+ */
+export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirPort, 'listSessions' | 'realpath' | 'platform' | 'stillRunning'>): Promise<void> {
+  const platform = port.platform ?? process.platform;
+  const started = await sessionsStartedIn([dir], port);
+  if (started.length > 0) throw new Error(`${started.length} pane(s) were started in the folder`);
+  const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
+  const earlier = lingering.get(key);
+  if (!earlier) return;
+  const still = await (port.stillRunning ?? survivorsStillRunning)(earlier);
+  if (still.length > 0) throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: ${x.reason}`));
+}
+
+/**
  * Destroy every daemon session that was started in `dir` or below it, each
  * with its process tree, and confirm every process exited (the daemon checks
  * the tree; a shell the daemon did not report on is waited for, up to 5 s).

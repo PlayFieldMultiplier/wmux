@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { PanesStillRunningError, destroyedTreeOf, resetLingeringSurvivors, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
+import { PanesStillRunningError, assertNothingRunsIn, destroyedTreeOf, resetLingeringSurvivors, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
 import type { DaemonDestroySessionTree } from '../../../shared/rpc';
 
 type Session = { id: string; pid?: number; cwd?: string; spawnCwd?: string; wslTarget?: { distribution: string } };
@@ -163,6 +163,21 @@ describe('stopSessionsInDir', () => {
     const third = port([], 'linux');
     third.p.stillRunning = async (list) => list.filter((x) => x.unverified);
     await expect(stopSessionsInDir('/w/t', third.p)).rejects.toThrow(/did not finish/);
+  });
+
+  it('the sweep\'s check stops nothing: a pane opened in the folder, or an earlier survivor, keeps it', async () => {
+    const opened = port([{ id: 'new', pid: 9, spawnCwd: '/w/t' }], 'linux');
+    await expect(assertNothingRunsIn('/w/t', opened.p)).rejects.toThrow(/started in the folder/);
+    expect(opened.p.destroySession).not.toHaveBeenCalled();
+    expect(opened.alive.has(9)).toBe(true);
+
+    const survivor = { pid: 70, reason: 'access denied', startTime: '1' };
+    await expect(stopSessionsInDir('/w/t', port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: false, killed: [7], survivors: [survivor] } } }).p)).rejects.toThrow();
+    const empty = port([], 'linux');
+    empty.p.stillRunning = async () => [survivor];
+    await expect(assertNothingRunsIn('/w/t', empty.p)).rejects.toBeInstanceOf(PanesStillRunningError);
+    empty.p.stillRunning = async () => [];
+    await expect(assertNothingRunsIn('/w/t', empty.p)).resolves.toBeUndefined();
   });
 
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {

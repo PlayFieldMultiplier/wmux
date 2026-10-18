@@ -31,7 +31,7 @@ import { PendingWorktreeRemovals, sweepPendingRemovals } from '../../worktask/pe
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
-import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
+import { TREE_DESTROY_TIMEOUT_MS, assertNothingRunsIn, destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
 import { deletePhoneBranch, removePhoneWorktree } from '../../worktask/PhoneWorktreeRemoval';
@@ -141,9 +141,19 @@ export function registerWorktaskHandlers(
           return Array.isArray(r?.sessions) ? { sessions: r.sessions, recoveryDone: r.recoveryDone === true } : null;
         },
         startedIn: (folder, sessions) => sessionsStartedIn([folder], { listSessions: async () => sessions }),
-        // The same stop as a close: it also refuses while a process an
-        // earlier stop left is still running.
-        finish: (folder) => worktrees.finishPendingRemoval(folder, async (f) => { await stopPanesIn(f); }),
+        // Checked again under the repository lock, right before the removal,
+        // and without stopping anything: a pane opened in the folder since,
+        // or a process an earlier stop left, keeps it.
+        finish: (folder) => worktrees.finishPendingRemoval(folder, async (f) => {
+          const dc = getDaemonClient();
+          if (!dc) throw new Error('Daemon not connected');
+          await assertNothingRunsIn(f, {
+            listSessions: async () => {
+              const sessions = await dc.rpc('daemon.listSessions', {});
+              return Array.isArray(sessions) ? sessions : [];
+            },
+          });
+        }),
         log: (message) => console.warn(message),
       }).then((done) => {
         if (!done && attempt < PENDING_SWEEP_ATTEMPTS) sweep(attempt + 1);
