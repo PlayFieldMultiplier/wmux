@@ -95,6 +95,9 @@ export interface LaunchRequest {
   /** The folder its pane is created in: the pane's create reads the task
    *  and generation back from it (inflight). */
   cwd?: string;
+  /** A relaunch in an existing pane: the pane and its workspace name the
+   *  new generation in the same write, before the line is typed. */
+  pane?: { sessionId: string; workspaceId: string };
 }
 
 /** The task and generation a workspace was created (or relaunched) for. */
@@ -107,8 +110,9 @@ export class WorkerSlots {
   private readonly tasks = new Map<string, TaskLaunch>();
   private readonly panes = new Map<string, TaskPane>();
   private readonly workspaces = new Map<string, TaskRef>();
-  /** Launches under way: owner and folder → task and generation. */
-  private readonly inflight = new Map<string, TaskRef>();
+  /** Launches under way, and abandoned ones (a pane created late for one
+   *  is refused): owner and folder → task and generation. Bounded. */
+  private readonly inflight = new Map<string, TaskRef & { released?: true }>();
   /** `memory`: a newer version's file is on disk, entries live in memory and
    *  launches go on; `broken`: the file could not be read nor moved aside,
    *  so nothing can be recorded and every launch is refused. */
@@ -173,6 +177,7 @@ export class WorkerSlots {
       this.warn(`[factory] worker slots not rebuilt from the task ledger: ${String(err)}`);
     }
     for (const r of rows) {
+      if (r.taskWorkspaceId) this.workspaces.set(r.taskWorkspaceId, { taskId: r.id, gen: 1 });
       const origin = r.dispatch?.origin;
       const bot = origin?.kind === 'bot' && typeof origin.botId === 'string' && origin.botId.length > 0;
       const open = r.status === 'working' || r.status === 'input_required' || r.status === 'review_requested';
@@ -187,6 +192,7 @@ export class WorkerSlots {
       });
     }
     this.bound();
+    trim(this.workspaces, WORKER_PANES_MAX);
     try {
       this.write();
     } catch (err) {
@@ -224,7 +230,7 @@ export class WorkerSlots {
   /** The launch under way for an owner's pane in `cwd`, or null. */
   inflightFor(ownerWorkspaceId: string, cwd: string): { taskId: string; gen: number } | null {
     const hit = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
-    return hit ? { ...hit } : null;
+    return hit && !hit.released ? { taskId: hit.taskId, gen: hit.gen } : null;
   }
 
   /** A launch (a first spawn, a respawn or a resume) is about to start: its
@@ -247,17 +253,34 @@ export class WorkerSlots {
       state: 'launching',
     };
     if (this.mode === 'broken') throw new Error(`the task's launch could not be recorded: ${this.file} is unreadable and could not be moved aside`);
+    const prevPane = req.pane ? this.panes.get(req.pane.sessionId) : undefined;
+    const prevSpace = req.pane ? this.workspaces.get(req.pane.workspaceId) : undefined;
     this.tasks.delete(req.taskId);
     this.tasks.set(req.taskId, next);
+    if (req.pane) {
+      this.setPane(req.pane.sessionId, { taskId: req.taskId, gen: next.gen, workspaceId: req.pane.workspaceId });
+      if (req.pane.workspaceId) this.setWorkspace(req.pane.workspaceId, { taskId: req.taskId, gen: next.gen });
+    }
     this.bound();
     try {
       this.write();
     } catch (err) {
       if (prior) this.tasks.set(req.taskId, prior);
       else this.tasks.delete(req.taskId);
+      if (req.pane) {
+        if (prevPane) this.panes.set(req.pane.sessionId, prevPane);
+        else this.panes.delete(req.pane.sessionId);
+        if (prevSpace) this.workspaces.set(req.pane.workspaceId, prevSpace);
+        else this.workspaces.delete(req.pane.workspaceId);
+      }
       throw new Error(`the task's launch could not be recorded: ${String(err)}`);
     }
-    if (req.cwd) this.inflight.set(inflightKey(req.ownerWorkspaceId, req.cwd), { taskId: req.taskId, gen: next.gen });
+    if (req.cwd) {
+      const key = inflightKey(req.ownerWorkspaceId, req.cwd);
+      this.inflight.delete(key);
+      this.inflight.set(key, { taskId: req.taskId, gen: next.gen });
+      trim(this.inflight, WORKER_PANES_MAX);
+    }
     return { gen: next.gen, launchedAt: next.launchedAt };
   }
 
@@ -279,8 +302,14 @@ export class WorkerSlots {
    *  session exists. THROWS when it cannot be written (the create fails).
    *  Returns the task, or null when no launch is under way there. */
   recordCreate(ownerWorkspaceId: string, cwd: string, workspaceId: string, sessionId: string): TaskRef | null {
-    const ref = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
-    if (!ref || this.tasks.get(ref.taskId)?.gen !== ref.gen) return null;
+    const hit = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
+    if (!hit) return null;
+    // A launch abandoned (its spawn timed out or failed) or replaced by a
+    // newer one: its pane is not started.
+    if (hit.released || this.tasks.get(hit.taskId)?.gen !== hit.gen) {
+      throw new Error(`PTY_CREATE: the launch this task pane is for was abandoned (${hit.taskId}, generation ${hit.gen})`);
+    }
+    const ref: TaskRef = { taskId: hit.taskId, gen: hit.gen };
     const prevPane = this.panes.get(sessionId);
     const prevSpace = this.workspaces.get(workspaceId);
     this.setPane(sessionId, { taskId: ref.taskId, gen: ref.gen, workspaceId });
@@ -301,7 +330,12 @@ export class WorkerSlots {
    *  began since. */
   released(taskId: string, gen: number, cwd?: string): boolean {
     const t = this.tasks.get(taskId);
-    if (cwd) this.dropInflight(t?.ownerWorkspaceId, cwd, taskId, gen);
+    // Kept, marked: a pane its create brings up late is refused.
+    if (cwd && t) {
+      const key = inflightKey(t.ownerWorkspaceId, cwd);
+      const hit = this.inflight.get(key);
+      if (hit && hit.taskId === taskId && hit.gen === gen) this.inflight.set(key, { ...hit, released: true });
+    }
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'released' });
     this.persist();
@@ -393,6 +427,32 @@ export function getWorkerSlots(): WorkerSlots {
 /** Tests only: swap the hosted store (null = re-create lazily). */
 export function setWorkerSlotsForTests(next: WorkerSlots | null): void {
   hosted = next;
+}
+
+/** A launch line is about to be typed into an existing pane (pty:write-launch,
+ *  worktask:refire): when the pane is a task's, that is a new launch of the
+ *  task, recorded now with the pane and its workspace. THROWS when it cannot
+ *  be recorded (nothing is typed). Returns how to settle it once typed, or
+ *  null for a pane no task is known for. */
+export function beginPaneRelaunch(sessionId: string): ((typed: boolean) => void) | null {
+  const slots = getWorkerSlots();
+  const pane = slots.paneOf(sessionId);
+  const bot = pane ? null : botWorkerSessionRecord(sessionId);
+  const taskId = pane?.taskId ?? bot?.taskId;
+  if (!taskId) return null;
+  const prior = slots.launchOf(taskId);
+  const workspaceId = pane?.workspaceId ?? bot?.workspaceId ?? '';
+  const { gen } = slots.beginLaunch({
+    taskId,
+    origin: prior?.origin ?? (bot ? 'bot' : 'owner'),
+    ...(prior?.botId ? { botId: prior.botId } : {}),
+    ownerWorkspaceId: prior?.ownerWorkspaceId ?? '',
+    pane: { sessionId, workspaceId },
+  });
+  return (typed) => {
+    if (typed) slots.launched(taskId, gen, workspaceId, sessionId);
+    else slots.released(taskId, gen);
+  };
 }
 
 /** The task and generation a pane belongs to: its own record, else the bot

@@ -1599,7 +1599,10 @@ async function resumeOnce(
   // A new launch of the task, on disk before the line is typed.
   let gen: number | null = null;
   try {
-    gen = ports.launches?.beginLaunch({ taskId: rec.taskId, origin: 'bot', botId: rec.botId, ownerWorkspaceId: rec.ownerWorkspaceId }).gen ?? null;
+    gen = ports.launches?.beginLaunch({
+      taskId: rec.taskId, origin: 'bot', botId: rec.botId, ownerWorkspaceId: rec.ownerWorkspaceId,
+      pane: { sessionId: pane.sessionId, workspaceId: workerWorkspaceOf(rec) },
+    }).gen ?? null;
   } catch (err) {
     return refuse('not_typed', `the resume was not typed: ${(err as Error).message}`);
   }

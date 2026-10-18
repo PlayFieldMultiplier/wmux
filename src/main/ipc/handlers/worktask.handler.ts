@@ -29,6 +29,7 @@ import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
+import { beginPaneRelaunch } from '../../factory/workerSlots';
 import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
@@ -283,8 +284,17 @@ export function registerWorktaskHandlers(
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
       }
+      // A task's pane: a new launch of the task, on disk before the line is
+      // typed (factory/workerSlots.ts); not recorded, not typed.
+      let settleRelaunch: ((typed: boolean) => void) | null;
+      try {
+        settleRelaunch = beginPaneRelaunch(ptyId);
+      } catch (err) {
+        return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+      }
       // 정상 경로(scheduleInitialCommand.write)와 동일: sanitize + CR.
-      dc.writeToSession(ptyId, sanitizePtyText(line) + '\r');
+      const typed = dc.writeToSession(ptyId, sanitizePtyText(line) + '\r') !== false;
+      settleRelaunch?.(typed);
       return { ok: true as const };
     }),
   );

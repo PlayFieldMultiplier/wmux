@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
@@ -194,6 +194,35 @@ describe('round 1 review (#2393 identity)', () => {
     // Its entry dropped by the bound (simulated): its pane still names gen 2.
     (s as unknown as { tasks: Map<string, unknown> }).tasks.delete('t');
     expect(s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' }).gen).toBe(second + 1);
+  });
+});
+
+describe('round 2 review (#2393 identity)', () => {
+  it('a launch line typed into a task\'s pane is its next generation, the pane and workspace named before it is typed', () => {
+    const s = store(tmp());
+    setWorkerSlotsForTests(s);
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+    s.launched('t', gen, 'ws-t', 'pty-t');
+    const settle = beginPaneRelaunch('pty-t');
+    expect(s.paneOf('pty-t')?.gen).toBe(gen + 1);
+    expect(s.workspaceOf('ws-t')?.gen).toBe(gen + 1);
+    settle?.(true);
+    expect(s.launchOf('t')).toMatchObject({ gen: gen + 1, state: 'launched', ownerWorkspaceId: 'ws-owner' });
+    // A pane no task is known for: nothing to record.
+    expect(beginPaneRelaunch('pty-plain')).toBeNull();
+  });
+
+  it('a pane created late for a launch that was abandoned is refused', () => {
+    const s = store(tmp());
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
+    s.released('t', gen, '/w/t');
+    expect(s.inflightFor('ws-owner', '/w/t')).toBeNull();
+    expect(() => s.recordCreate('ws-owner', '/w/t', 'ws-late', 'pty-late')).toThrow(/abandoned/);
+  });
+
+  it('the rebuild from the ledger names each task\'s workspace', () => {
+    const s = store(tmp(), { rows: [row('a')] });
+    expect(s.workspaceOf('ws-a')).toEqual({ taskId: 'a', gen: 1 });
   });
 });
 

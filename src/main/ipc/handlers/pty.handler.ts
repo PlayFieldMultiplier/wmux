@@ -26,6 +26,7 @@ import { getMcpTarget } from '../../../shared/mcpTargets';
 import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { noteSessionAgentLaunched, noteSessionInput, noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
+import { beginPaneRelaunch } from '../../factory/workerSlots';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -1051,12 +1052,26 @@ export function registerPTYHandlers(
       throw new Error('PTY_WRITE_LAUNCH: a bot worker\'s line for a Command Prompt pane holds characters cmd would read as more than one command');
     }
     const line = sanitizePtyText(guardedText) + (submit === true ? '\r' : '');
-    if (useDaemon && daemonClient) {
-      if (!daemonClient.writeToSession(id, line)) throw new Error('PTY_WRITE_LAUNCH: the session is not live');
-    } else {
-      if (!ptyManager.get(id)) throw new Error('PTY_WRITE_LAUNCH: no such session');
-      ptyManager.write(id, line);
+    // A task's pane: a new launch of the task, on disk before the line is
+    // typed (factory/workerSlots.ts); not recorded, not typed.
+    let settleRelaunch: ((typed: boolean) => void) | null;
+    try {
+      settleRelaunch = beginPaneRelaunch(id);
+    } catch (err) {
+      throw new Error(`PTY_WRITE_LAUNCH: ${(err as Error).message}`);
     }
+    try {
+      if (useDaemon && daemonClient) {
+        if (!daemonClient.writeToSession(id, line)) throw new Error('PTY_WRITE_LAUNCH: the session is not live');
+      } else {
+        if (!ptyManager.get(id)) throw new Error('PTY_WRITE_LAUNCH: no such session');
+        ptyManager.write(id, line);
+      }
+    } catch (err) {
+      settleRelaunch?.(false);
+      throw err;
+    }
+    settleRelaunch?.(true);
     // An agent starts again in this pane, now or at the owner's Enter: an
     // ended task it belongs to is not known gone any more (agentGoneFacts.ts).
     noteSessionAgentLaunched(id, submit === true, botPane ? botWorkerSessionRecord(id)?.taskId : undefined);
