@@ -225,9 +225,16 @@ export function registerWorktaskTools(server: McpServer, deps: WorktaskToolDeps)
   server.tool(
     'task_close',
     'Close a task and remove its git worktree. Destructive and deliberately picky: it refuses ({ reason: "unpushed" }) while the branch has commits nobody has pushed, and refuses ({ reason: "dirty" }, preserving the worktree) while there are uncommitted changes — so a close never silently destroys work. ' +
-      'Harvest first (task_adopt, or task_pr), then close. Only tasks your own workspace owns can be closed.',
-    { task_id: TASK_ID },
-    async ({ task_id }) => callTask('task.close', { taskId: task_id }, deps, CLOSE_REFUSAL),
+      'Harvest first (task_adopt, or task_pr), then close. Only tasks your own workspace owns can be closed. ' +
+      'keep_folder: true closes the task and leaves its folder on disk as it is (returns { keptFolder }): the way out of a close that keeps refusing.',
+    {
+      task_id: TASK_ID,
+      keep_folder: z
+        .boolean()
+        .optional()
+        .describe('Close the task without removing anything: its folder stays on disk. Default false.'),
+    },
+    async ({ task_id, keep_folder }) => callTask('task.close', { taskId: task_id, ...(keep_folder === true ? { keepFolder: true } : {}) }, deps, CLOSE_REFUSAL),
   );
 
   server.tool(

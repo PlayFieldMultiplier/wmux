@@ -90,6 +90,14 @@ describe('the wire call', () => {
     expect(resolveCalls).toBe(1);
   });
 
+  it('task_close passes keep_folder as keepFolder only when it is true (#2388)', async () => {
+    await tools.get('task_close')?.({ task_id: 'wtask-1', keep_folder: true });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', keepFolder: true, senderPtyId: 'pty-mine' });
+    await tools.get('task_close')?.({ task_id: 'wtask-1', keep_folder: false });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', senderPtyId: 'pty-mine' });
+    expect(Object.keys(shapes.get('task_close') ?? {})).toEqual(['task_id', 'keep_folder']);
+  });
+
   it('passes an optional adopt commit flag and omits it otherwise', async () => {
     await tools.get('task_adopt')?.({ task_id: 'wtask-1', commit: true });
     expect(mockSendRpc).toHaveBeenLastCalledWith('task.adopt', {
