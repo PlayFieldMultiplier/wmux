@@ -171,7 +171,7 @@ describe('Watchdog', () => {
     let healthCheck: Mock<() => { sessions: number; memory: number; uptime: number }>;
 
     beforeEach(() => {
-      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => undefined);
       wd = new Watchdog(30_000);
       memoryBytes = 1538 * MB;
       healthCheck = vi.fn(() => ({ sessions: 120, memory: memoryBytes, uptime: 10 }));
