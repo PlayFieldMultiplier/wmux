@@ -1,5 +1,6 @@
-// @wmux-lane unit — every case injects the platform and a fake handle or
-// child-exit source; nothing opens a real process or calls into Windows.
+// @wmux-lane unit — every case injects the platform and a fake child-exit
+// source; nothing opens a real process. The Windows handle cases live in
+// daemonExitWatch.os.test.ts, so they run on Windows.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,6 @@ import {
   hexExitCode,
   type DaemonExitWatchDeps,
 } from '../daemonExitWatch';
-import type { ProcessExitRead } from '../../pty/winSnapshotNative';
 import {
   onSpawnedDaemonExit,
   spawnedDaemonRegistryForTest,
@@ -36,24 +36,12 @@ describe('describeExitCode', () => {
   });
 });
 
-/** A fake handle whose reads come from a script; the last entry repeats. */
-function scriptedHandle(reads: ProcessExitRead[]) {
-  const state = { reads: 0, closed: false };
-  return {
-    state,
-    handle: {
-      read: (): ProcessExitRead => reads[Math.min(state.reads++, reads.length - 1)],
-      close: () => { state.closed = true; },
-    },
-  };
-}
-
 function harness(over: Partial<DaemonExitWatchDeps> = {}) {
   const lines: Array<{ level: string; msg: string }> = [];
   let clock = 0;
   const deps: DaemonExitWatchDeps = {
     log: (level, msg) => { lines.push({ level, msg }); },
-    platform: 'win32',
+    platform: 'linux',
     onChildExit: () => null,
     sleep: async (ms) => { clock += ms; },
     now: () => clock,
@@ -61,74 +49,6 @@ function harness(over: Partial<DaemonExitWatchDeps> = {}) {
   };
   return { lines, deps };
 }
-
-describe('createDaemonExitWatch (Windows handle)', () => {
-  it('logs the exit code in hex once the process has exited', async () => {
-    const h = scriptedHandle([{ state: 'running' }, { state: 'running' }, { state: 'exited', code: 0xc0000005 }]);
-    const { lines, deps } = harness({ openHandle: () => h.handle });
-    const watch = createDaemonExitWatch(4321, false, deps);
-
-    await watch.report('socket close');
-
-    expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 4321 exited 0xC0000005 (access violation) — at socket close' }]);
-    expect(h.state.closed).toBe(true);
-  });
-
-  it('logs a clean exit at info', async () => {
-    const h = scriptedHandle([{ state: 'exited', code: 0 }]);
-    const { lines, deps } = harness({ openHandle: () => h.handle });
-    await createDaemonExitWatch(7, false, deps).report('socket close');
-    expect(lines).toEqual([{ level: 'info', msg: 'daemon pid 7 exited 0x00000000 (clean exit) — at socket close' }]);
-  });
-
-  it('says so when the daemon is still running at the end of the budget', async () => {
-    const h = scriptedHandle([{ state: 'running' }]);
-    const { lines, deps } = harness({ openHandle: () => h.handle, budgetMs: 3000 });
-    await createDaemonExitWatch(99, false, deps).report('health probe hang');
-    expect(lines).toHaveLength(1);
-    expect(lines[0].msg).toMatch(/^daemon pid 99 still running \d+ms after health probe hang — exit code unavailable: it has not exited$/);
-    expect(h.state.closed).toBe(true);
-  });
-
-  it('says why when no handle could be opened', async () => {
-    const { lines, deps } = harness({ openHandle: () => ({ failure: 'OpenProcess failed (error 5)' }) });
-    await createDaemonExitWatch(12, false, deps).report('socket close');
-    expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 12 socket close, exit code unavailable: OpenProcess failed (error 5)' }]);
-  });
-
-  it('says why when the pid is unknown', async () => {
-    const { lines, deps } = harness({ openHandle: () => { throw new Error('must not open'); } });
-    await createDaemonExitWatch(null, false, deps).report('socket close');
-    expect(lines[0].msg).toBe('daemon pid ? socket close, exit code unavailable: the launcher did not report the daemon pid');
-  });
-
-  it('logs once, however many reports ask', async () => {
-    const h = scriptedHandle([{ state: 'exited', code: 1 }]);
-    const { lines, deps } = harness({ openHandle: () => h.handle });
-    const watch = createDaemonExitWatch(5, false, deps);
-    await Promise.all([watch.report('socket close'), watch.report('health probe hang')]);
-    await watch.report('socket close');
-    expect(lines).toHaveLength(1);
-  });
-
-  it('dispose closes the handle without logging; a report already running still finishes', async () => {
-    const quiet = scriptedHandle([{ state: 'running' }]);
-    const a = harness({ openHandle: () => quiet.handle });
-    createDaemonExitWatch(1, false, a.deps).dispose();
-    expect(quiet.state.closed).toBe(true);
-    expect(a.lines).toEqual([]);
-
-    const later = scriptedHandle([{ state: 'running' }, { state: 'exited', code: 3 }]);
-    const b = harness({ openHandle: () => later.handle });
-    const watch = createDaemonExitWatch(2, false, b.deps);
-    const reported = watch.report('socket close');
-    watch.dispose();
-    expect(later.state.closed).toBe(false);
-    await reported;
-    expect(b.lines[0].msg).toBe('daemon pid 2 exited 0x00000003 (abort()) — at socket close');
-    expect(later.state.closed).toBe(true);
-  });
-});
 
 describe('createDaemonExitWatch (spawned child)', () => {
   function childExitSource() {
@@ -160,40 +80,12 @@ describe('createDaemonExitWatch (spawned child)', () => {
     expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 8 exited 0x0000004D (code 77) — child exit' }]);
   });
 
-  it('a found daemon ignores a launcher record left by an earlier daemon with the same pid (Codex P2)', async () => {
-    // The pid was reused: the record says an older process exited 1. The
-    // launcher withholds an ended record when asked for live ones only.
-    const stale = (_pid: number, cb: (exit: SpawnedDaemonExit) => void, liveOnly: boolean) => {
-      if (liveOnly) return null;
-      cb({ code: 1, signal: null });
-      return () => { /* delivered */ };
-    };
-    const h = scriptedHandle([{ state: 'running' }, { state: 'exited', code: 0xc0000005 }]);
-    const { lines, deps } = harness({ onChildExit: stale, openHandle: () => h.handle });
-    await createDaemonExitWatch(66, false, deps).report('socket close');
-    expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 66 exited 0xC0000005 (access violation) — at socket close' }]);
-  });
-
   it('a reconnect to a daemon this process spawned earlier still gets its child exit (Codex P2)', () => {
     const src = childExitSource();
     const { lines, deps } = harness({ platform: 'linux', onChildExit: src.onChildExit });
     createDaemonExitWatch(404, false, deps);
     src.exit({ code: 1, signal: null });
     expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 404 exited 0x00000001 (exit(1)) — child exit' }]);
-  });
-
-  it('a failed handle read waits for the child exit event instead of giving up (Codex P2)', async () => {
-    const src = childExitSource();
-    let clock = 0;
-    const h = scriptedHandle([{ state: 'failed', failure: 'GetExitCodeProcess failed (error 6)' }]);
-    const { lines, deps } = harness({
-      onChildExit: src.onChildExit,
-      openHandle: () => h.handle,
-      now: () => clock,
-      sleep: async (ms) => { clock += ms; if (clock >= 300) src.exit({ code: 0xc0000005, signal: null }); },
-    });
-    await createDaemonExitWatch(31, true, deps).report('socket close');
-    expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 31 exited 0xC0000005 (access violation) — child exit' }]);
   });
 
   it('on POSIX, a daemon this process did not spawn has no exit code to read', async () => {
