@@ -752,6 +752,68 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)?.absent).toBe(true);
   });
 
+  it('polls a host-drive worktree whose repository is on the share', async () => {
+    // `/mnt/d/wt` made by git in the distro for a repo under `/home/…`: the
+    // cwd is local, the HEAD it points at is not.
+    const share = tmp();
+    initFakeRepo(share);
+    const wtGitDir = path.join(share, '.git', 'worktrees', 'wt');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/linked\n');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /home/me/repo/.git/worktrees/wt\n');
+    const w = new GitContextWatcher(fake.factory, { isRemote: (p) => p.startsWith(share), io: localIo });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+
+    w.update('s1', wt, (gitdir) => gitdir.replace('/home/me/repo', share));
+    expect(events).toEqual([]); // HEAD is not read on the event loop
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'linked', isWorktree: true }]);
+    expect(fake.arms).toHaveLength(0);
+
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/moved\n');
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('moved');
+  });
+
+  it('resync() while moving to another cwd keeps the move', async () => {
+    const a = tmp();
+    const b = tmp();
+    initFakeRepo(b, 'dest');
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    watcher.update('s1', a);
+    await settle();
+    expect(events.at(-1)?.absent).toBe(true);
+
+    io.hold();
+    watcher.update('s1', b);
+    watcher.resync(); // an app subscribing mid-move
+    io.release();
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'dest', isWorktree: false });
+
+    fs.writeFileSync(path.join(b, '.git', 'HEAD'), 'ref: refs/heads/dest2\n');
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('dest2');
+  });
+
+  it('finds a .git created before the first round after an inconclusive walk', async () => {
+    const root = tmp();
+    fs.writeFileSync(path.join(root, 'HEAD'), 'not a repo\n'); // makes the walk inconclusive
+    makeRemoteWatcher().update('s1', root);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+
+    initFakeRepo(root, 'early');
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'early', isWorktree: false });
+  });
+
   it('serialProbeIo runs one probe at a time', async () => {
     const order: string[] = [];
     let finishFirst: (() => void) | undefined;

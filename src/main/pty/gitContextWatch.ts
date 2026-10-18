@@ -304,7 +304,7 @@ export class GitContextWatcher extends EventEmitter {
   private readonly isRemote: (cwd: string) => boolean;
   private readonly io: ProbeIo;
   /** The WSL-share resolve each session is waiting for; a stale one is dropped. */
-  private pending = new Map<string, number>();
+  private pending = new Map<string, { seq: number; cwd: string }>();
   private resolveSeq = 0;
 
   /**
@@ -331,7 +331,10 @@ export class GitContextWatcher extends EventEmitter {
     }
     // A local answer supersedes a WSL-share resolve still in flight.
     this.pending.delete(sessionId);
-    this.apply(sessionId, cwd, mapGitDir, resolveRepoState(cwd, mapGitDir), 'local');
+    const state = resolveRepoState(cwd, mapGitDir);
+    // A worktree on a host drive whose repository lives in a distro: the
+    // walk was local, but its HEAD is on the share.
+    this.apply(sessionId, cwd, mapGitDir, state, state.repo && this.isRemote(state.repo.gitDir) ? 'remote' : 'local');
   }
 
   /**
@@ -341,8 +344,8 @@ export class GitContextWatcher extends EventEmitter {
    */
   private updateRemote(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
     const seq = ++this.resolveSeq;
-    this.pending.set(sessionId, seq);
-    const current = () => this.pending.get(sessionId) === seq;
+    this.pending.set(sessionId, { seq, cwd });
+    const current = () => this.pending.get(sessionId)?.seq === seq;
     // Another directory: stop the old poll now, so it cannot re-resolve the
     // old cwd over this one.
     const existing = this.sessions.get(sessionId);
@@ -424,6 +427,10 @@ export class GitContextWatcher extends EventEmitter {
       const watch = this.sessions.get(sessionId);
       if (!watch) continue;
       watch.lastEmitted = null;
+      // Moving to another cwd on a WSL share: that resolve emits when it
+      // lands; re-resolving the old cwd here would supersede it.
+      const moving = this.pending.get(sessionId);
+      if (moving && moving.cwd !== watch.cwd) continue;
       if (!watch.repo) this.update(sessionId, watch.cwd, watch.mapGitDir);
       // update() emitted already if it found a repo; otherwise emit here.
       const current = this.sessions.get(sessionId);
@@ -527,7 +534,9 @@ export class GitContextWatcher extends EventEmitter {
         const headEntry = await this.io({ op: 'stat', path: path.join(watch.cwd, 'HEAD') });
         if (closed) return;
         const seen = `${gitEntry} ${headEntry}`;
-        const changed = entries !== null && seen !== entries;
+        // Without a baseline, a `.git` already there (created before this
+        // first round) is reason enough to look again.
+        const changed = entries === null ? gitEntry !== 'missing' : seen !== entries;
         entries = seen;
         if (changed) this.update(sessionId, watch.cwd, watch.mapGitDir);
       }
