@@ -1276,6 +1276,8 @@ export default function AppLayout() {
         // mid-rehydrate), so clearing on the first cycle could destroy a live
         // session. We defer the destructive decision to a 2-strike re-query.
         const absentCandidates: { paneId: string; surfaceId: string; ptyId: string; stashed: boolean }[] = [];
+        // Every binding this pass looks at (#2398, see the end of the pass).
+        const examinedPtyIds: string[] = [];
         const collect = (pane: PaneLeaf, stashed: boolean) => {
           if (signal?.aborted) return;
           for (const surface of pane.surfaces) {
@@ -1286,6 +1288,7 @@ export default function AppLayout() {
               console.log(`[AppLayout] Surface ${surface.id}: no ptyId, Terminal will self-create`);
               continue;
             }
+            examinedPtyIds.push(surface.ptyId);
             if (activeIds.has(surface.ptyId)) {
               console.log(`[AppLayout] Surface ${surface.id}: ptyId ${surface.ptyId} alive in daemon, Terminal will reconnect on mount`);
               // Leave ptyId in place. useTerminal mount reconnects.
@@ -1445,6 +1448,13 @@ export default function AppLayout() {
             useStore.getState().setPtysUnconfirmed([a.stalePtyId], false);
           }
         }
+        // #2398 — a completed pass has given every binding it looked at its
+        // chance to be rebound, so none of them is unconfirmed any more: a
+        // pane whose reattach then finds its id gone clears it and creates,
+        // instead of asking for yet another pass. Without this, a daemon that
+        // lists nothing (the empty-list guard above preserves every id) would
+        // leave such a pane waiting on reconciles forever.
+        if (!signal?.aborted) useStore.getState().setPtysUnconfirmed(examinedPtyIds, false);
         console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
       } finally {
         reconcileInFlightRef.current = null;

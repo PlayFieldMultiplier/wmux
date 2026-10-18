@@ -77,4 +77,16 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
   it('a rebind or clear drops the stale id’s unconfirmed mark', () => {
     expect(source).toMatch(/updateSurfacePtyId\(a\.paneId, a\.surfaceId, a\.newPtyId\);\s*(?:\/\/[^\n]*\n\s*)*useStore\.getState\(\)\.setPtysUnconfirmed\(\[a\.stalePtyId\], false\);/);
   });
+
+  it('a completed pass unmarks every binding it looked at, so a gone one can clear (Codex P2)', () => {
+    const start = source.indexOf('const reconcilePtys = useCallback');
+    const reconcile = source.slice(start, source.indexOf('// 앱 시작 시 세션 복원', start));
+    // Every bound surface the walk sees is recorded…
+    expect(reconcile).toMatch(/examinedPtyIds\.push\(surface\.ptyId\);\s*if \(activeIds\.has\(surface\.ptyId\)\)/);
+    // …and unmarked once the pass completes (not when it was aborted).
+    const completeAt = reconcile.indexOf('Reconcile cycle #${reconcileCycleRef.current} complete');
+    const unmarkAt = reconcile.indexOf('if (!signal?.aborted) useStore.getState().setPtysUnconfirmed(examinedPtyIds, false);');
+    expect(unmarkAt).toBeGreaterThan(reconcile.indexOf('resolveReconcileRebind('));
+    expect(unmarkAt).toBeLessThan(completeAt);
+  });
 });
