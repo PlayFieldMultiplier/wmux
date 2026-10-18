@@ -440,14 +440,16 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(fs.existsSync(dir)).toBe(true);
     expect(removeTree).not.toHaveBeenCalled();
     expect(store.get(dir)).toMatchObject({ repoRoot: gone });
-    // A close (keepWhenRepoGone) ends it, keeping the folder.
+    // A close (keepWhenRepoGone) marks it kept, keeping the folder; the
+    // close itself ends the record once the task closed (TaskCloseService).
     expect(await mgr.finishPendingRemoval(dir, undefined, { keepWhenRepoGone: true })).toEqual({ ok: true, keptFolder: dir });
     expect(fs.existsSync(dir)).toBe(true);
-    expect(store.get(dir)).toBeNull();
+    expect(store.get(dir)).toMatchObject({ keep: true });
   });
 
   // Close and keep folder while a finish of the same folder is under way
-  // (the sweep at start): nothing is deleted, and the record ends after it.
+  // (the sweep at start): nothing is deleted, and the record is marked kept
+  // once that finish is over.
   it('Close and keep folder chosen while a finish runs its checks: the folder is kept', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
@@ -462,7 +464,7 @@ describe('a removal that could not finish is recorded for a later close', () => 
     const { mgr, removeTree } = manager(git as unknown as ReturnType<typeof fakeGit>['git'], { pendingRemovals: store });
     const finishing = mgr.finishPendingRemoval(dir);
     await vi.waitFor(() => expect(git.mock.calls.some(([a]) => a.includes('ls-files'))).toBe(true), { timeout: 5_000 });
-    const keeping = mgr.forgetPendingRemoval(dir);
+    const keeping = mgr.markPendingRemovalKept(dir);
     // It waits for the finish under way: until then a finish could still
     // reach the deletion, so it must not have let go of the folder yet.
     let kept = false;
@@ -476,20 +478,43 @@ describe('a removal that could not finish is recorded for a later close', () => 
     if (res && !res.ok) expect(res.error).toMatch(/Close and keep folder was chosen/);
     expect(removeTree).not.toHaveBeenCalled();
     expect(fs.existsSync(dir)).toBe(true);
-    expect(store.get(dir)).toBeNull();
+    expect(store.get(dir)).toMatchObject({ keep: true });
   });
 
-  it('a finish queued behind Close and keep folder finds no record and deletes nothing', async () => {
+  it('a record marked kept deletes nothing, across a restart too, and locks no pane', async () => {
     const dir = leftover();
-    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');
+    const store = new PendingWorktreeRemovals(file);
     await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
     const { mgr, removeTree } = manager(fakeGit().git, { pendingRemovals: store });
-    const keeping = mgr.forgetPendingRemoval(dir);
+    const keeping = mgr.markPendingRemovalKept(dir);
     const finishing = mgr.finishPendingRemoval(dir);
     await keeping;
-    expect(await finishing).toBeNull();
+    expect(await finishing).toMatchObject({ ok: false, preserved: true });
+    // Read back as a restart reads it: the sweep keeps it.
+    const reread = new PendingWorktreeRemovals(file);
+    reread.load();
+    expect(reread.get(dir)).toMatchObject({ keep: true });
+    const { mgr: later, removeTree: laterRemove } = manager(fakeGit().git, { pendingRemovals: reread });
+    const lines: string[] = [];
+    await sweepPendingRemovals({
+      paths: () => later.pendingRemovalPaths(),
+      sessions: async () => ({ sessions: [], recoveryDone: true }),
+      startedIn: async () => [],
+      finish: (folder) => later.finishPendingRemoval(folder),
+      log: (m) => lines.push(m),
+    });
+    expect(lines).toEqual([expect.stringMatching(/kept .*Close and keep folder was chosen/)]);
     expect(removeTree).not.toHaveBeenCalled();
+    expect(laterRemove).not.toHaveBeenCalled();
     expect(fs.existsSync(dir)).toBe(true);
+    setActivePendingRemovals(reread);
+    try {
+      expect(pendingRemovalRefusal(dir)).toBeNull();
+    } finally {
+      setActivePendingRemovals(null);
+    }
+    expect(pendingRemovalRefusalAt(path.join(tmp, 'wmux'), dir)).toBeNull();
   });
 
   it('a folder git still lists ends its record even when its .git names a live git dir (a locked worktree)', async () => {

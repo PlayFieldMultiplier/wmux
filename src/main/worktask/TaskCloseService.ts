@@ -147,59 +147,80 @@ export class TaskCloseService {
       return { ok: true, taskId, archivePending: false, ...(named && fs.existsSync(named) ? { keptFolder: named } : {}) };
     }
 
-    // Close and keep folder: the task closes, the folder stays as it is.
-    // It closes detached: the folder is the owner's from now on, so nothing
-    // that cleans up after closed tasks (the bots' task folder cleanup, the
-    // cleanup list's orphan check) takes it.
-    if (input.keepFolder) {
-      const folder = input.worktreePath ?? input.leftoverPath;
-      // Held from the start: a finish of it under way (the sweep at start)
-      // must not delete it. Its pending removal ends on disk BEFORE the task
-      // closes, so no restart finds a removal queued for a folder that was
-      // kept; when that cannot be written, the task stays open.
-      let release: () => void = () => undefined;
-      let releaseTask: () => void = () => undefined;
-      try {
-        if (folder) {
-          release = this.worktrees.holdFolder(folder);
-          // A bot's task: its folder cleanup (one under way is waited for)
-          // leaves the folder alone from here on.
-          if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
-          await this.worktrees.forgetPendingRemoval(folder);
-        }
-        const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
-        if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-        // The daemon records a detach only on an open task: one closed before
-        // has nothing that keeps its folder from the cleanups after a restart.
-        if (!closed.detached) {
-          return {
-            ok: false,
-            taskId,
-            reason: 'error',
-            error: 'close: the task was already closed, so its folder cannot be marked kept; it stays where it is, but the cleanup of closed tasks may still take it',
-          };
-        }
-        this.kept.add(taskId);
-        if (folder) {
-          this.forgetFolderStops(folder);
-          try {
-            this.noteFolderKept?.(taskId);
-          } catch {
-            // The detached mission still keeps it from every later pass.
-          }
-        }
-        // A finish that was already deleting it when this was chosen (it
-        // deletes only a folder that holds nothing but what git left) leaves
-        // nothing to name.
-        return { ok: true, taskId, archivePending: closed.archivePending, ...(folder && fs.existsSync(folder) ? { keptFolder: folder } : {}) };
-      } catch (err) {
-        return { ok: false, taskId, reason: 'error', error: (err as Error).message };
-      } finally {
-        releaseTask();
-        release();
-      }
+    // Close and keep folder, or a close of a folder it was chosen for whose
+    // close did not finish: the keep way.
+    if (input.keepFolder || (named && this.worktrees.pendingRemovalKept(named))) {
+      return this.keepClose(input);
     }
 
+    return this.closeNow(input);
+  }
+
+  /**
+   * Close and keep folder: the task closes, the folder stays as it is. It
+   * closes detached: the folder is the owner's from now on, so nothing that
+   * cleans up after closed tasks (the bots' task folder cleanup, the cleanup
+   * list's orphan check) takes it.
+   */
+  private async keepClose(input: CloseTaskInput): Promise<CloseTaskResult> {
+    const { taskId } = input;
+    const folder = input.worktreePath ?? input.leftoverPath;
+    // Held from the start: a finish of it under way (the sweep at start)
+    // must not delete it. Its pending removal is marked kept on disk
+    // BEFORE the task closes, and ends only once the close is confirmed:
+    // no restart finds a removal that could delete it, and a close that
+    // failed is taken the keep way again. When the mark cannot be written,
+    // the task stays open.
+    let release: () => void = () => undefined;
+    let releaseTask: () => void = () => undefined;
+    try {
+      if (folder) {
+        release = this.worktrees.holdFolder(folder);
+        // A bot's task: its folder cleanup (one under way is waited for)
+        // leaves the folder alone from here on.
+        if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
+        await this.worktrees.markPendingRemovalKept(folder);
+      }
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
+      if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+      // The daemon records a detach only on an open task: one closed before
+      // has nothing that keeps its folder from the cleanups after a restart.
+      if (!closed.detached) {
+        return {
+          ok: false,
+          taskId,
+          reason: 'error',
+          error: 'close: the task was already closed, so its folder cannot be marked kept; it stays where it is, but the cleanup of closed tasks may still take it',
+        };
+      }
+      this.kept.add(taskId);
+      if (folder) {
+        this.forgetFolderStops(folder);
+        try {
+          this.noteFolderKept?.(taskId);
+        } catch {
+          // The detached mission still keeps it from every later pass.
+        }
+        await this.worktrees.forgetPendingRemoval(folder).catch((err: unknown) => {
+          // Still marked kept: it deletes nothing, and a later close of the
+          // task ends it.
+          console.warn(`[worktask] the kept folder ${folder} stays recorded: ${(err as Error).message}`);
+        });
+      }
+      // A finish that was already deleting it when this was chosen (it
+      // deletes only a folder that holds nothing but what git left) leaves
+      // nothing to name.
+      return { ok: true, taskId, archivePending: closed.archivePending, ...(folder && fs.existsSync(folder) ? { keptFolder: folder } : {}) };
+    } catch (err) {
+      return { ok: false, taskId, reason: 'error', error: (err as Error).message };
+    } finally {
+      releaseTask();
+      release();
+    }
+  }
+
+  private async closeNow(input: CloseTaskInput): Promise<CloseTaskResult> {
+    const { taskId } = input;
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.
     if (!input.worktreePath) {
       // #2388: a folder an earlier close left half removed is finished first.
@@ -222,15 +243,11 @@ export class TaskCloseService {
       if (finished && !finished.ok) {
         return { ok: false, taskId, reason: finished.dirty ? 'dirty' : 'error', error: finished.error, preservedWorktree: input.leftoverPath };
       }
-      const leftKept = finished?.ok ? finished.keptFolder : undefined;
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, leftKept ? { detach: true } : {});
+      // Its repository gone, the folder is marked kept: the task closes the
+      // keep way.
+      if (finished?.ok && finished.keptFolder) return this.keepClose({ ...input, keepFolder: true });
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-      // Named kept only once the daemon recorded the task detached.
-      const kept = leftKept && closed.detached ? leftKept : undefined;
-      if (kept) {
-        this.kept.add(taskId);
-        this.forgetFolderStops(kept);
-      }
       if (stopped.ids) {
         try {
           this.panesStopped?.(taskId, stopped.ids);
@@ -243,7 +260,6 @@ export class TaskCloseService {
         taskId,
         archivePending: closed.archivePending,
         unmaterialized: true,
-        ...(kept ? { keptFolder: kept } : {}),
       };
     }
 

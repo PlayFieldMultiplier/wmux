@@ -29,6 +29,10 @@ export interface PendingWorktreeRemoval {
   /** The commit the worktree had checked out when it was found clean: what a
    *  leftover folder is compared with before it is deleted. */
   head?: string;
+  /** Close and keep folder was chosen: the folder is never deleted, the
+   *  lock is off, and the record waits only for its task's detached close
+   *  to be confirmed (a close that failed is kept again by the next one). */
+  keep?: true;
   at: number;
 }
 
@@ -37,6 +41,7 @@ function isRecord(v: unknown): v is PendingWorktreeRemoval {
   const r = v as Record<string, unknown>;
   return typeof r.path === 'string' && path.isAbsolute(r.path) && typeof r.repoRoot === 'string' && typeof r.repoHash === 'string'
     && (r.head === undefined || (typeof r.head === 'string' && /^[0-9a-f]{40,64}$/.test(r.head)))
+    && (r.keep === undefined || r.keep === true)
     && typeof r.at === 'number';
 }
 
@@ -174,6 +179,8 @@ function refusalAmong(
 ): string | null {
   const want = canonicalKey(sessionHostDir(cwd, session, platform));
   for (const rec of records) {
+    // A folder Close and keep folder kept is the owner's: no lock.
+    if (rec.keep) continue;
     const held = canonicalKey(rec.path);
     if (want === held || want.startsWith(held + path.sep)) {
       return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or use Close and keep folder on its task`;

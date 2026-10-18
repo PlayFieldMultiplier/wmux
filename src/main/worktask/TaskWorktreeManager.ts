@@ -864,6 +864,9 @@ export class TaskWorktreeManager {
       // record while this waited.
       const rec = this.pendingRemovals?.get(worktreePath);
       if (!rec) return null;
+      // Close and keep folder was chosen: nothing deletes it. Its task's close
+      // ends the record (TaskCloseService takes such a close the keep way).
+      if (rec.keep) return { ok: false, error: 'removeWorktree: Close and keep folder was chosen for the folder; it is kept until its task\'s close is done', preserved: true };
       if (!fs.existsSync(rec.path)) {
         await this.forgetPending(rec.path);
         return { ok: true };
@@ -872,12 +875,13 @@ export class TaskWorktreeManager {
         if (!opts.keepWhenRepoGone) {
           return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, so nothing can check the folder; it was kept; ${KEEP_FOLDER_HINT}`, preserved: true };
         }
-        // Dropped on disk, or the task stays open: a record left in the file
-        // would be finished once the repository is back.
+        // Marked kept on disk, or the task stays open: an unmarked record
+        // would be finished once the repository is back. The task's close
+        // goes the keep way from here (TaskCloseService), and ends it.
         try {
-          await this.pendingRemovals?.delete(rec.path);
+          await this.pendingRemovals?.put({ ...rec, keep: true });
         } catch (err) {
-          return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, and the folder's pending removal could not be dropped: ${(err as Error).message}`, preserved: true };
+          return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, and the folder could not be marked kept: ${(err as Error).message}`, preserved: true };
         }
         console.warn(`[worktask] the repository of ${rec.path} (${rec.repoRoot}) is not there; the task closes and the folder is kept`);
         return { ok: true, keptFolder: rec.path };
@@ -935,23 +939,43 @@ export class TaskWorktreeManager {
     };
   }
 
-  /** Close and keep folder: the removal of `worktreePath` is no longer
-   *  pending (the folder stays where it is). Held meanwhile (holdFolder);
-   *  the record ends once a finish under way is over (the repository
-   *  lock), so a later one finds none. Throws when the record could not be
-   *  dropped on disk: a restart would find the removal still queued. */
-  async forgetPendingRemoval(worktreePath: string): Promise<void> {
+  /** Close and keep folder, before the task closes: a pending removal of
+   *  `worktreePath` is marked kept on disk (nothing deletes it from then on,
+   *  across a restart too), once a finish under way is over (the repository
+   *  lock). Throws when that cannot be written, or the store could not be
+   *  read: a removal recorded there could still undo the keep. */
+  async markPendingRemovalKept(worktreePath: string): Promise<void> {
     const safePath = validatePath(worktreePath, 'worktreePath');
     const release = this.holdFolder(safePath);
     try {
       const store = this.pendingRemovals;
       const unreadable = store?.unreadable?.() ?? null;
       if (unreadable !== null) throw new Error(`the pending removals could not be read (${unreadable}), so one of this folder may still be recorded`);
-      const rec = store?.get(safePath);
-      if (store && rec) await this.withRepoLock(rec.repoHash, () => store.delete(safePath));
+      const queued = store?.get(safePath);
+      if (!store || !queued || queued.keep) return;
+      await this.withRepoLock(queued.repoHash, async () => {
+        const rec = store.get(safePath);
+        if (rec && !rec.keep) await store.put({ ...rec, keep: true });
+      });
     } finally {
       release();
     }
+  }
+
+  /** Whether Close and keep folder marked the pending removal of
+   *  `worktreePath` kept (its task's close did not finish yet). */
+  pendingRemovalKept(worktreePath: string): boolean {
+    return this.pendingRemovals?.get(worktreePath)?.keep === true;
+  }
+
+  /** Close and keep folder, once the task closed detached: the record of the
+   *  folder ends. Throws when that cannot be written (the record stays
+   *  marked kept, which deletes nothing). */
+  async forgetPendingRemoval(worktreePath: string): Promise<void> {
+    const safePath = validatePath(worktreePath, 'worktreePath');
+    const store = this.pendingRemovals;
+    const rec = store?.get(safePath);
+    if (store && rec) await this.withRepoLock(rec.repoHash, () => store.delete(safePath));
   }
 
   /** The removals the pending store holds (the sweep at start). */
