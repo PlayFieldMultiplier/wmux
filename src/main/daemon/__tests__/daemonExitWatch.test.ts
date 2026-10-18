@@ -26,7 +26,7 @@ describe('describeExitCode', () => {
   });
 
   it('names the code Electron’s Crashpad client ends a crashed daemon with', () => {
-    // What the packaged daemon exited with when node-pty faulted (#2398).
+    // What a packaged daemon exited with in one of two runs where node-pty faulted (#2398).
     expect(describeExitCode(0xffff7003)).toBe('0xFFFF7003 (native crash; Crashpad had no handler, the fault code is lost)');
   });
 

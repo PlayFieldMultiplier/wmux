@@ -42,10 +42,10 @@ const KNOWN_EXIT_CODES = new Map<number, string>([
   [0xc0000409, 'fail-fast / stack buffer overrun'],
   [SHUTDOWN_KILL_EXIT_CODE, 'terminated by a debugger or console close'],
   // Crashpad's own codes (crashpad/util/win/termination_codes.h). The daemon
-  // runs on Electron's binary, whose Crashpad client catches a native fault
-  // and, with no handler to hand the dump to, ends the process with 0xFFFF7003
-  // in place of the fault's own code: in the packaged app the #2398 node-pty
-  // access violation reads as this, not 0xC0000005.
+  // runs on Electron's binary, whose Crashpad client can catch a native fault
+  // and, with no handler to hand the dump to, end the process with 0xFFFF7003
+  // in place of the fault's own code. The #2398 node-pty access violation read
+  // as this in one packaged run and as 0xC0000005 in another.
   [0xffff7001, 'native crash; the Crashpad handler did not respond'],
   [0xffff7002, 'native crash; the Crashpad snapshot failed'],
   [0xffff7003, 'native crash; Crashpad had no handler, the fault code is lost'],
