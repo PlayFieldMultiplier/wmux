@@ -901,6 +901,11 @@ const electronAPI = {
         ipcRenderer.invoke(IPC.HOOKS_BRIDGE_INSTALL) as Promise<
           import('../cli/commands/setupHooks').InstallOutcome
         >,
+      // #2404 — Settings' Update: adds only what a newer build expects.
+      update: () =>
+        ipcRenderer.invoke(IPC.HOOKS_BRIDGE_UPDATE) as Promise<
+          import('../cli/commands/setupHooks').UpdateOutcome
+        >,
       allowWorkerTools: () =>
         ipcRenderer.invoke(IPC.HOOKS_BRIDGE_ALLOW_WORKER_TOOLS) as Promise<
           import('../cli/commands/setupHooks').AllowWorkerToolsOutcome

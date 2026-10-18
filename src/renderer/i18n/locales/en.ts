@@ -3332,6 +3332,7 @@ export const en = {
   'integrationSetup.recommended': '· recommended',
   'integrationSetup.installButton': 'Install',
   'integrationSetup.registerButton': 'Register',
+  'integrationSetup.updateButton': 'Update',
   'integrationSetup.working': 'Working…',
   'integrationSetup.installFailed': 'Failed',
   'integrationSetup.replaceButton': 'Replace',
@@ -3349,6 +3350,7 @@ export const en = {
     'Claude Code\'s settings.json is not valid JSON, so wmux left it alone. Fix the file and try again.',
   'integrationSetup.state.installed': 'installed',
   'integrationSetup.state.missing': 'not installed',
+  'integrationSetup.state.outdated': 'update available',
   'integrationSetup.state.working': 'working',
   'integrationSetup.state.unknown': 'unknown',
   'integrationSetup.state.error': 'failed',
@@ -3356,6 +3358,8 @@ export const en = {
   'integrationSetup.hooks.title': 'Hook bridge',
   'integrationSetup.hooks.promptSuppressed': 'The install prompt is turned off.',
   'integrationSetup.hooks.promptReenable': 'Ask again',
+  'integrationSetup.hooks.updateNote':
+    'This install is older than the hook set the current wmux expects: {hooks}. Update writes only these and leaves your other hooks as they are.',
   'integrationSetup.hooks.description':
     'Turn completion, approval prompts, and subagent activity. Without it these are read off the screen instead.',
   'integrationSetup.mcp.title': 'MCP tools',

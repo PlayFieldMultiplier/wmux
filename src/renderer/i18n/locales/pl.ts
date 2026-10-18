@@ -3307,6 +3307,7 @@ export const pl = {
   'integrationSetup.recommended': '· zalecane',
   'integrationSetup.installButton': 'Zainstaluj',
   'integrationSetup.registerButton': 'Zarejestruj',
+  'integrationSetup.updateButton': 'Zaktualizuj',
   'integrationSetup.working': 'Trwa…',
   'integrationSetup.installFailed': 'Niepowodzenie',
   'integrationSetup.replaceButton': 'Zastąp',
@@ -3324,6 +3325,7 @@ export const pl = {
     'Plik settings.json Claude Code nie jest poprawnym JSON-em, więc wmux zostawił go bez zmian. Napraw plik i spróbuj ponownie.',
   'integrationSetup.state.installed': 'zainstalowano',
   'integrationSetup.state.missing': 'niezainstalowane',
+  'integrationSetup.state.outdated': 'dostępna aktualizacja',
   'integrationSetup.state.working': 'trwa',
   'integrationSetup.state.unknown': 'nieznane',
   'integrationSetup.state.error': 'niepowodzenie',
@@ -3331,6 +3333,8 @@ export const pl = {
   'integrationSetup.hooks.title': 'Mostek hooków',
   'integrationSetup.hooks.promptSuppressed': 'Monit instalacyjny jest wyłączony.',
   'integrationSetup.hooks.promptReenable': 'Zapytaj ponownie',
+  'integrationSetup.hooks.updateNote':
+    'Ta instalacja jest starsza niż zestaw hooków, którego oczekuje bieżący wmux: {hooks}. Aktualizacja zapisze tylko je, a pozostałe hooki zostawi bez zmian.',
   'integrationSetup.hooks.description':
     'Ukończenie tury, monity o zatwierdzenie i aktywność subagenta. Bez tego są one odczytywane z ekranu.',
   'integrationSetup.mcp.title': 'Narzędzia MCP',
