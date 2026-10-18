@@ -69,7 +69,7 @@ import { normalizeRepoKey } from '../../shared/repoKey';
 import { isOriginPin } from '../../shared/originPin';
 import { emptyUsage, pruneUsage, sanitizeUsage, type BotUsage } from './budget';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
-import { LEGACY_TRIAGE_TRIGGERS, defaultTriggers } from './roleDefaults';
+import { LEGACY_TRIAGE_TRIGGERS, LEGACY_VERIFIER_TRIGGERS, defaultTriggers } from './roleDefaults';
 import { parseBotAvatar } from './botAvatar';
 import { validateBotWorkerAgent } from '../../shared/botWorkerAgent';
 import { BOT_BRAIN_MODEL_MAX, validateBotBrainModel, validateFanoutModel } from '../../shared/fanoutPreset';
@@ -422,6 +422,8 @@ export class BotStore implements BotDirectoryApi {
   private readonly listeners = new Set<() => void>();
   /** Triage bots moved off the old default triggers by the last load. */
   private migrated: string[] = [];
+  /** Verifier bots moved off the old PR-event triggers by the last load. */
+  private migratedVerifiers: string[] = [];
 
   constructor(private readonly file: string, opts: BotStoreOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -432,8 +434,9 @@ export class BotStore implements BotDirectoryApi {
   }
 
   /** Read the file (missing → empty). Throws on another version. A triage
-   *  profile still on the old default triggers gets the current defaults
-   *  (written back); triggers the owner edited are kept as they are. */
+   *  or verifier profile still on its role's old default triggers gets the
+   *  current defaults (written back); triggers the owner edited are kept as
+   *  they are. */
   load(): void {
     const raw = readVersionedFile(this.file, BOTS_FILE_VERSION);
     this.bots.clear();
@@ -449,6 +452,7 @@ export class BotStore implements BotDirectoryApi {
     const list = Array.isArray(raw.bots) ? raw.bots : [];
     let migrated = false;
     this.migrated = [];
+    this.migratedVerifiers = [];
     for (const entry of list) {
       const bot = parseBotProfile(entry);
       if (!bot || this.bots.has(bot.id)) {
@@ -460,6 +464,12 @@ export class BotStore implements BotDirectoryApi {
         bot.updatedAt = this.now();
         migrated = true;
         this.migrated.push(bot.id);
+      }
+      if (bot.role === 'verifier' && JSON.stringify(bot.triggers) === JSON.stringify(LEGACY_VERIFIER_TRIGGERS)) {
+        bot.triggers = defaultTriggers('verifier');
+        bot.updatedAt = this.now();
+        migrated = true;
+        this.migratedVerifiers.push(bot.id);
       }
       // A profile written before templates (no `template` on disk) is
       // written back with the one parseBotProfile derived from its role, and
@@ -493,6 +503,11 @@ export class BotStore implements BotDirectoryApi {
   /** The triage bots the last load moved to the current default triggers. */
   migratedTriageBots(): string[] {
     return [...this.migrated];
+  }
+
+  /** The verifier bots the last load moved off the old PR-event triggers. */
+  migratedVerifierBots(): string[] {
+    return [...this.migratedVerifiers];
   }
 
   private snapshot(): unknown {

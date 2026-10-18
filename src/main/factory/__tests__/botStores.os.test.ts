@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BotStore, botsFilePath, parseBotProfile } from '../botStore';
-import { LEGACY_TRIAGE_TRIGGERS, defaultTriggers } from '../roleDefaults';
+import { LEGACY_TRIAGE_TRIGGERS, LEGACY_VERIFIER_TRIGGERS, defaultTriggers } from '../roleDefaults';
 import { WakeQueue, sanitizeWakeReason, wakeQueuePath, WAKE_RECORD_MAX, WAKE_RECORD_RETAIN_MS, HUMAN_RETRY_WINDOW_MS, OVER_CAP_RESERVE, setWakeQueue, currentWakeId, currentWakeThread } from '../wakeQueue';
 import {
   budgetLeft,
@@ -237,11 +237,12 @@ describe('BotStore', () => {
     expect(r.bot.budget).toEqual(DEFAULT_BOT_BUDGETS.verifier);
     expect(r.bot.engine).toEqual({ kind: 'claude-sdk' });
     expect(r.bot.enabled).toBe(true);
-    // No triggers given: the role's defaults; an explicit empty list stays empty.
+    // No triggers given: the role's defaults (a verifier's are none: it
+    // verifies on request); triggers given are kept.
     expect(r.bot.triggers).toEqual(defaultTriggers('verifier'));
-    expect(r.bot.triggers.length).toBeGreaterThan(0);
-    const quiet = s.create({ workspaceId: 'ws-3', role: 'verifier', triggers: [] });
-    expect(quiet.ok && quiet.bot.triggers).toEqual([]);
+    expect(r.bot.triggers).toEqual([]);
+    const watching = s.create({ workspaceId: 'ws-3', role: 'verifier', triggers: [{ kind: 'pr.opened', filter: { authorTrusted: true } }] });
+    expect(watching.ok && watching.bot.triggers).toEqual([{ kind: 'pr.opened', filter: { authorTrusted: true } }]);
     expect(r.bot.template).toBe('reviewer');
     expect(s.create({ workspaceId: 'ws-1', role: 'verifier' }).ok).toBe(true);
     expect(s.create({ workspaceId: 'ws-1', role: 'moa' }).ok).toBe(true);
@@ -451,6 +452,41 @@ describe('BotStore', () => {
     t.load();
     expect(t.get('bot-0a0a0a01')?.triggers).toEqual(defaultTriggers('triage'));
     expect(JSON.parse(fs.readFileSync(botsFilePath(dir), 'utf8')).bots[0].triggers).toEqual(defaultTriggers('triage'));
+  });
+
+  it('moves a verifier on the old PR-event triggers to on-request (none) on load, and drops its queued PR-event wakes; edited triggers stay', async () => {
+    fs.mkdirSync(path.dirname(botsFilePath(dir)), { recursive: true });
+    const base = { version: 1, workspaceId: 'ws-1', role: 'verifier', name: 'Reviewer', engine: { kind: 'claude-sdk' }, budget: DEFAULT_BOT_BUDGETS.verifier, enabled: true, createdAt: 1, updatedAt: 1 };
+    // As 4.6.1 wrote it to disk.
+    const legacy = { ...base, id: 'bot-0b0b0b01', triggers: JSON.parse(JSON.stringify(LEGACY_VERIFIER_TRIGGERS)) };
+    const custom = { ...base, id: 'bot-0b0b0b02', workspaceId: 'ws-2', triggers: [{ kind: 'pr.opened', filter: { authorTrusted: true } }] };
+    const lead = { ...base, id: 'bot-0b0b0b03', role: 'lead', name: 'Lead', triggers: LEGACY_VERIFIER_TRIGGERS };
+    fs.writeFileSync(botsFilePath(dir), JSON.stringify({ version: 1, bots: [legacy, custom, lead] }));
+    const s = newStore();
+    s.load();
+    expect(s.get('bot-0b0b0b01')?.triggers).toEqual([]);
+    expect(s.get('bot-0b0b0b02')?.triggers).toEqual([{ kind: 'pr.opened', filter: { authorTrusted: true } }]);
+    expect(s.get('bot-0b0b0b03')?.triggers).toEqual(LEGACY_VERIFIER_TRIGGERS);
+    expect(s.migratedVerifierBots()).toEqual(['bot-0b0b0b01']);
+    expect(s.migratedTriageBots()).toEqual([]);
+    // PR-event wakes queued under the old triggers never run; a request does.
+    const q = new WakeQueue(wakeQueuePath(dir), { now });
+    pendingFlush.push(() => q.flush());
+    const opened = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f1'], trigger: { kind: 'pr.opened', filter: { authorTrusted: true } } }, priority: 2 });
+    const moved = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f2'], trigger: { kind: 'pr.head_moved', filter: { authorTrusted: true } } }, priority: 2 });
+    const gated = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f3'], trigger: { kind: 'task.done' } }, priority: 2 });
+    const human = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'human', text: 'verify #1', source: 'desktop' }, priority: 0 });
+    expect(q.dropPrEventWakes('bot-0b0b0b01')).toBe(2);
+    expect(q.get(opened?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
+    expect(q.get(moved?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
+    expect(q.get(gated?.id ?? '')?.state).toBe('queued');
+    expect(q.get(human?.id ?? '')?.state).toBe('queued');
+    // Written back, and a second load moves nothing.
+    await s.flush();
+    const t = newStore();
+    t.load();
+    expect(t.get('bot-0b0b0b01')?.triggers).toEqual([]);
+    expect(t.migratedVerifierBots()).toEqual([]);
   });
 
   it('a cap the owner saved after templates survives a reload, even at an old default; an unknown template is Custom', async () => {

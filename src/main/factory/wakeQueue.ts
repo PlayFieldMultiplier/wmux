@@ -478,6 +478,24 @@ export class WakeQueue implements WakeSinkApi {
     return n;
   }
 
+  /** Drop the queued PR-event wakes (pr.opened, pr.head_moved, ci.failed) of
+   *  a verifier moved to on-request verification: nobody asked for those
+   *  heads. Code `expired`. */
+  dropPrEventWakes(botId: string): number {
+    let n = 0;
+    for (const i of this.items) {
+      if (i.botId !== botId || i.state !== 'queued' || i.reason.kind !== 'facts') continue;
+      const k = i.reason.trigger.kind;
+      if (k === 'pr.opened' || k === 'pr.head_moved' || k === 'ci.failed') {
+        i.state = 'dropped';
+        i.dropped = { code: 'expired' };
+        n++;
+      }
+    }
+    if (n > 0) this.changed();
+    return n;
+  }
+
   /** Drop the queued issue wakes of a bot whose trigger does not check the
    *  author (queued under triggers that no longer apply). Code `expired`. */
   dropUnfilteredIssueWakes(botId: string): number {
