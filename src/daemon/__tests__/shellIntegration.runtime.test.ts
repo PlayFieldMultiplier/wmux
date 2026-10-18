@@ -1,7 +1,7 @@
 /**
  * Runtime integration tests for OSC 133 shell integration.
  *
- * Unlike DaemonSessionManager.test.ts (which mocks node-pty), this suite
+ * Unlike DaemonSessionManager.os.test.ts (which mocks node-pty), this suite
  * spawns real ConPTY / Git Bash processes to verify the end-to-end flow:
  *
  *   shell init → OSC 133 markers → OscParser → PromptEventLog

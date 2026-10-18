@@ -32,6 +32,7 @@ import { clearFanoutPortReservationsForTest } from '../fanoutEnvironment';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, setFanOutGuardsForTests } from '../fanoutGuards';
+import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../../factory/workerSlots';
 
 let metaRoot: string;
 let lineage: FanOutGuards;
@@ -464,6 +465,55 @@ describe('T3 worktree base — one fetch per fan-out, OID pinned, warning surfac
     const res = await svc.start(baseReq());
     expect(res.ok).toBe(false);
     expect(worktrees.resolveBase).not.toHaveBeenCalled();
+  });
+});
+
+describe('each task\'s launch generation (#2393)', () => {
+  function launches(dir: string): WorkerSlots {
+    const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    s.load();
+    return s;
+  }
+
+  it('records each task\'s launch before its spawn, and its workspace stamp names the task', async () => {
+    const slots = launches(metaRoot);
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake(), launches: slots });
+    const res = await svc.start(baseReq());
+    for (const t of res.tasks) {
+      expect(slots.launchOf(t.taskId as string)).toMatchObject({ gen: 1, state: 'launched', origin: 'owner', ownerWorkspaceId: 'ws-ceo' });
+      expect(slots.paneOf(t.ptyId as string)).toEqual({ taskId: t.taskId, gen: 1, workspaceId: t.workspaceId });
+      expect(lineage.taskOfWorkspace(t.workspaceId as string)).toEqual({ taskId: t.taskId, gen: 1 });
+    }
+    // Each spawn carries its launch to the pane's create.
+    expect(renderer.spawned.map((p) => (p as { fanoutLaunch?: unknown }).fanoutLaunch)).toEqual(res.tasks.map((t) => ({ taskId: t.taskId, gen: 1 })));
+  });
+
+  it('a launch that cannot be recorded is not spawned', async () => {
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees: makeWorktreesFake(),
+      launches: { beginLaunch: () => { throw new Error('the task\'s launch could not be recorded: disk full'); }, launched: () => true, released: () => true },
+    });
+    const res = await svc.start(baseReq());
+    expect(renderer.port.spawnWorkspace).not.toHaveBeenCalled();
+    for (const t of res.tasks) expect(t.error).toMatch(/not launched: the task's launch could not be recorded/);
+  });
+
+  it('a respawn is the task\'s next generation; a failed one is released', async () => {
+    const slots = launches(metaRoot);
+    slots.beginLaunch({ taskId: 'wtask-x', origin: 'bot', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-ceo' });
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake(), launches: slots });
+    const input = { ownerWorkspaceId: 'ws-ceo', botId: 'bot-0000000a', taskId: 'wtask-x', title: 'x', cwd: metaRoot, command: 'claude', workerPermissionMode: 'manual' as const, tainted: false };
+    const r = await svc.spawnBotTaskPane(input);
+    expect('workspaceId' in r && lineage.taskOfWorkspace(r.workspaceId)).toEqual({ taskId: 'wtask-x', gen: 2 });
+    expect(slots.launchOf('wtask-x')).toMatchObject({ gen: 2, state: 'launched' });
+    const failing = new FanOutService({ daemon: makeDaemonFake().port, renderer: makeRendererFake({ spawnFailOn: () => true }).port, worktrees: makeWorktreesFake(), launches: slots });
+    expect('error' in (await failing.spawnBotTaskPane(input))).toBe(true);
+    expect(slots.launchOf('wtask-x')).toMatchObject({ gen: 3, state: 'released' });
   });
 });
 
