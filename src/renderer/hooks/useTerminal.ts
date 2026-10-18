@@ -84,7 +84,7 @@ import {
   rebindTerminalOutputWriter,
 } from '../terminal/terminalOutputScheduler';
 import { reconnectPtyWithRetry as reconnectPtyWithRetryImpl, type ReconnectSettleInfo } from './reconnectPtyWithRetry';
-import { requestReconcile } from './reconcileRequest';
+import { awaitsReconcile, requestReconcile } from './reconcileRequest';
 import { adoptTerminal, parkTerminal, restoreParkedViewport, type ParkedTerminal } from '../terminal/terminalPark';
 import { captureColdFrame, clearPersistedColdFrames, coldFrameFits, dropColdFrame, persistColdFrames, splitTrailingEscape, takeColdFrame, WarmFrameSwap, COLD_FRAME_MAX_ENTRIES, FULL_RESET, REPAINT_BEGIN, REPAINT_END, type ColdFrame } from '../terminal/coldFrame';
 
@@ -657,7 +657,7 @@ function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecove
     onRecoveryError,
     clearPtyId: (id, recovery) => useStore.getState().clearSurfacePtyIdByPty(id, recovery),
     setUnconfirmed: (id, unconfirmed) => useStore.getState().setPtysUnconfirmed([id], unconfirmed),
-    isUnconfirmed: (id) => Boolean(useStore.getState().ptyUnconfirmedById?.[id]),
+    isUnconfirmed: (id) => awaitsReconcile(useStore.getState(), id),
     requestReconcile,
   });
 }

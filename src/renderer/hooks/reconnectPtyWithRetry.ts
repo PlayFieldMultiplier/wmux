@@ -62,7 +62,12 @@ export interface ReconnectDeps {
    * ran out without an answer (the id is kept), false once it attached.
    */
   setUnconfirmed?: (id: string, unconfirmed: boolean) => void;
-  /** #2398 — whether this binding is one kept unconfirmed (see setUnconfirmed). */
+  /**
+   * #2398 — whether this binding is one kept unconfirmed (see setUnconfirmed)
+   * that a reconcile can settle. The reconcile walks workspace surfaces only,
+   * so a binding held elsewhere (the floating pane) must answer false, or it
+   * would wait on passes that never look at it.
+   */
   isUnconfirmed?: (id: string) => boolean;
   /**
    * #2398 — ask for a reconcile pass. Returns false when none can run (no

@@ -9,6 +9,9 @@
  * way they read the daemon-mode flag, without a React path between them.
  */
 
+import type { Workspace } from '../../shared/types';
+import { findWorkspaceSurfaceByPtyId } from '../utils/paneTraversal';
+
 /** Requests within this window share one pass (panes ask together after a stall). */
 export const RECONCILE_REQUEST_COALESCE_MS = 300;
 
@@ -27,4 +30,18 @@ export function requestReconcile(reason: string): boolean {
   if (!requester) return false;
   requester(reason);
   return true;
+}
+
+/**
+ * Whether a pane's binding should wait on a reconcile when the daemon reports
+ * it gone: it is kept unconfirmed, and it is a workspace surface's binding —
+ * the reconcile walks surfaces only, so anything else (the floating pane)
+ * would wait on passes that never look at it, and clears at once instead.
+ */
+export function awaitsReconcile(
+  state: { ptyUnconfirmedById?: Record<string, true>; workspaces: readonly Workspace[] },
+  ptyId: string,
+): boolean {
+  if (!state.ptyUnconfirmedById?.[ptyId]) return false;
+  return state.workspaces.some((ws) => findWorkspaceSurfaceByPtyId(ws, ptyId) !== null);
 }
