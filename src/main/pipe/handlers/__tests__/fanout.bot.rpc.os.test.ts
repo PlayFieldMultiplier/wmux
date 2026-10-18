@@ -112,6 +112,10 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
   const defaultBranchReads: Rig['defaultBranchReads'] = [];
   let defaultBranchNote: { name: string | null; recorded: boolean } = { name: 'develop', recorded: true };
   const p = profile(role, over);
+  const guards = new FanOutGuards({ dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-fanout-bot-')), countLiveTasks: () => 0, ledgerTaskOwner: () => null });
+  /** Bot fan-outs booked and not through their start: the holder set counts
+   *  them (factory/workerHolders.ts). */
+  const booked = (botId?: string): number => guards.reservedTasks().filter((u) => u.botId && (botId === undefined || u.botId === botId)).length;
   const port: Rig['port'] = {
     started: [],
     exhausted: [],
@@ -131,7 +135,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     currentWakeThread: () => thread as ThreadId | null,
     currentWakeTainted: () => tainted,
     currentWakeHandoff: () => (wake ? 'h-dispatch' : null),
-    openWorkers: () => open,
+    openWorkers: (botId) => ({ bot: open.bot + booked(botId), factory: open.factory + booked(), botStarting: booked(botId) }),
     usage: () => emptyUsage(),
     workersStarted: (_b, ids) => {
       port.started.push([...ids]);
@@ -141,7 +145,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     },
   };
   registerFanOutRpc(router, service, () => null, {
-    guards: new FanOutGuards({ dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-fanout-bot-')), countLiveTasks: () => 0, ledgerTaskOwner: () => null }),
+    guards,
     workerPermissionMode: () => 'auto',
     requireApproval: () => false,
     presets: () => PRESETS,

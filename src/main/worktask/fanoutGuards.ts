@@ -36,6 +36,7 @@ import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { sanitizeFanoutOrigin, type FanoutLineageEntry, type FanoutOrigin } from '../../shared/fanoutOrigin';
 import { BOT_ID_RE } from '../../shared/bot';
 import { getWorkerSlots, parseLaunchToken, type WorkerSlots } from '../factory/workerSlots';
+import { holderCounts, liveHolders, type LiveHolders, type ReservedTask } from '../factory/workerHolders';
 
 export const FANOUT_LIVE_TASK_CAP = 8;
 export const FANOUT_HOURLY_TASK_CAP = 24;
@@ -257,6 +258,12 @@ export class FanOutGuards {
    *  leaves this count as it settles (see taskSettled), by which time its
    *  stamped workspace is what counts it. */
   private readonly spawning = new Map<string, number>();
+  /** The same bookings, one per task (#2393): what the holder set reads
+   *  (factory/workerHolders.ts), so a booked task, the workspace it is
+   *  spawned in and its ledger row are one holder. A task minted by the
+   *  fan-out names its booking (bindTask) before its launch is recorded; its
+   *  workspace is then the task's by that record (factory/workerSlots.ts). */
+  private reserved: ReservedTask[] = [];
 
   constructor(opts: FanOutGuardsOptions = {}) {
     this.dir = opts.dir ?? getWmuxDir();
@@ -410,7 +417,23 @@ export class FanOutGuards {
    */
   liveTaskCount(): number {
     if (this.countLiveOverride) return this.countLiveOverride();
+    const holders = this.holders();
+    if (holders) return holderCounts(holders.holders).live;
     return this.liveTaskWorkspaces().length;
+  }
+
+  /** The holder set every live-worker cap filters (factory/workerHolders.ts),
+   *  read only by the hosted instance, whose bookings it holds; null while
+   *  the worker lifecycle host has not installed it. THROWS when the open
+   *  workspaces are unknown or the lineage store cannot be trusted, as the
+   *  workspace count does: the live cap then refuses. */
+  private holders(): LiveHolders | null {
+    if (hosted !== this) return null;
+    const live = liveHolders();
+    if (!live) return null;
+    if (!live.workspacesKnown) throw new Error('the open workspace list is not available yet');
+    this.loadLineage();
+    return live;
   }
 
   /** The workspaces liveTaskCount counts (it throws the same way). A task
@@ -429,6 +452,18 @@ export class FanOutGuards {
   private liveSlotHolders(starting: number): LiveSlotHolders | null {
     if (this.countLiveOverride) return null;
     try {
+      const set = this.holders();
+      if (set) {
+        const out: LiveSlotHolders = { open: [], ended: [], untracked: 0, starting: 0 };
+        for (const h of set.holders) {
+          if (h.state === 'free') continue;
+          if (h.why === 'starting' && !h.status) out.starting++;
+          else if (h.status === 'completed' || h.status === 'cancelled' || h.status === 'failed') out.ended.push(h.title ?? h.taskId);
+          else if (h.status || h.why === 'resumed') out.open.push(h.title ?? h.taskId);
+          else out.untracked++;
+        }
+        return out;
+      }
       const holders: LiveSlotHolders = { open: [], ended: [], untracked: 0, starting };
       for (const ws of this.liveTaskWorkspaces()) {
         const task = this.ledgerTaskOf(ws);
@@ -495,7 +530,7 @@ export class FanOutGuards {
    * under `key`. Synchronous, so the claim that follows it happens in the same
    * tick and two concurrent calls cannot both squeeze under a cap.
    */
-  reserve(key: string, count: number): CapReservation {
+  reserve(key: string, count: number, who?: { ownerWorkspaceId: string; botId?: string }): CapReservation {
     const now = this.now();
     const windowStart = now - FANOUT_CAP_WINDOW_MS;
     const hourly = this.loadHourly().filter((s) => s.at > windowStart);
@@ -504,16 +539,18 @@ export class FanOutGuards {
     for (const n of this.pending.values()) pendingCount += n;
     let spawningCount = 0;
     for (const n of this.spawning.values()) spawningCount += n;
-    let liveNow: number;
+    let live: number;
     try {
-      liveNow = this.liveTaskCount();
+      // The holder set counts the bookings itself, one per task; the
+      // workspace count adds them.
+      const holders = this.countLiveOverride ? null : this.holders();
+      live = holders ? holderCounts(holders.holders).live : this.liveTaskCount() + pendingCount + spawningCount;
     } catch (err) {
       return {
         ok: false,
         message: `fan-out refused: the live-task count is unavailable (${(err as Error).message}); retry shortly`,
       };
     }
-    const live = liveNow + pendingCount + spawningCount;
     if (live + count > FANOUT_LIVE_TASK_CAP) {
       return { ok: false, message: liveCapMessage(live, count, this.liveSlotHolders(pendingCount + spawningCount)) };
     }
@@ -547,6 +584,10 @@ export class FanOutGuards {
     }
 
     this.pending.set(key, count);
+    this.reserved = this.reserved.filter((u) => !(u.key === key && u.phase === 'pending'));
+    for (let i = 0; i < count; i++) {
+      this.reserved.push({ key, ownerWorkspaceId: who?.ownerWorkspaceId ?? '', ...(who?.botId ? { botId: who.botId } : {}), phase: 'pending' });
+    }
     return { ok: true };
   }
 
@@ -554,6 +595,20 @@ export class FanOutGuards {
    *  throw): its reservation stops counting against either cap. */
   release(key: string): void {
     this.pending.delete(key);
+    this.reserved = this.reserved.filter((u) => !(u.key === key && u.phase === 'pending'));
+  }
+
+  /** The tasks booked now, one per task (copies). */
+  reservedTasks(): ReservedTask[] {
+    return this.reserved.map((u) => ({ ...u }));
+  }
+
+  /** A started fan-out minted `taskId`: one of its bookings is that task's
+   *  from now on. */
+  bindTask(key: string, taskId: string): void {
+    const unit = this.reserved.find((u) => u.taskId === taskId)
+      ?? this.reserved.find((u) => u.key === key && u.phase === 'spawning' && !u.taskId);
+    if (unit) unit.taskId = taskId;
   }
 
   /**
@@ -568,6 +623,7 @@ export class FanOutGuards {
     if (count === undefined) return;
     this.pending.delete(key);
     this.spawning.set(key, (this.spawning.get(key) ?? 0) + count);
+    for (const u of this.reserved) if (u.key === key) u.phase = 'spawning';
     // Tasks that wait on dependencies are booked live now but stamped on the
     // hour only when they actually start (stampDeferredStart): stamped now,
     // one that waited past the window would start uncounted.
@@ -641,16 +697,21 @@ export class FanOutGuards {
   }
 
   /** One task of a started fan-out finished its spawn (either way). From here
-   *  its stamped workspace, if it got one, is what counts it. */
-  taskSettled(key: string): void {
+   *  its stamped workspace, if it got one, is what counts it. `taskId`: the
+   *  task, when it was minted. */
+  taskSettled(key: string, taskId?: string): void {
     const left = (this.spawning.get(key) ?? 0) - 1;
     if (left > 0) this.spawning.set(key, left);
     else this.spawning.delete(key);
+    const of = this.reserved.filter((u) => u.key === key && u.phase === 'spawning');
+    const unit = (taskId ? of.find((u) => u.taskId === taskId) : undefined) ?? of.find((u) => !u.taskId) ?? of[0];
+    if (unit) this.reserved = this.reserved.filter((u) => u !== unit);
   }
 
   /** The fan-out's run returned: whatever is still booked for it is dropped. */
   settleStarted(key: string): void {
     this.spawning.delete(key);
+    this.reserved = this.reserved.filter((u) => !(u.key === key && u.phase === 'spawning'));
   }
 
   // ── audit ────────────────────────────────────────────────────────────────

@@ -410,4 +410,40 @@ describe('readers of the recorded launch', () => {
     expect(rowHoldsAgentSlot(edited, { ...live, launchedAt: () => now - SLOT_ROW_GRACE_MS - 1 })).toBe(false);
     expect(rowHoldsAgentSlot(edited, { ...live, launchedAt: () => now - 1_000 })).toBe(true);
   });
+
+  it('a workspace recorded for one task is never reassigned to another; the refusal is logged once', () => {
+    const warn: string[] = [];
+    const s = store(tmp(), { warn });
+    const a = s.beginLaunch({ taskId: 'a', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
+    s.recordCreate({ taskId: 'a', gen: a.gen }, 'ws-w', 'p-a');
+    s.launched('a', a.gen, 'ws-w', 'p-a');
+    // b's pane, adopted into ws-w, resumed where it is now.
+    for (let i = 0; i < 2; i++) {
+      const b = s.beginLaunch({ taskId: 'b', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner', pane: { sessionId: 'p-b', workspaceId: 'ws-w' } });
+      s.launched('b', b.gen, 'ws-w', 'p-b');
+    }
+    expect(s.workspaceOf('ws-w')?.taskId).toBe('a');
+    expect(s.paneOf('p-b')?.taskId).toBe('b');
+    expect(warn.filter((l) => l.includes('ws-w'))).toHaveLength(1);
+    // A create naming another task's workspace is refused the same way.
+    const c = s.beginLaunch({ taskId: 'c', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
+    s.recordCreate({ taskId: 'c', gen: c.gen }, 'ws-w', 'p-c');
+    expect(s.workspaceOf('ws-w')?.taskId).toBe('a');
+  });
+
+  it('a relaunch in a pane claims no workspace: the owner\'s stays unrecorded, the task\'s own is refreshed', () => {
+    const s = store(tmp());
+    const first = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
+    s.recordCreate({ taskId: 't', gen: first.gen }, 'ws-t', 'p-t');
+    s.launched('t', first.gen, 'ws-t', 'p-t');
+    // Resumed in its pane, moved into the owner's workspace.
+    const moved = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner', pane: { sessionId: 'p-t', workspaceId: 'ws-owner' } });
+    s.launched('t', moved.gen, 'ws-owner', 'p-t');
+    expect(s.workspaceOf('ws-owner')).toBeNull();
+    expect(s.paneOf('p-t')).toMatchObject({ taskId: 't', gen: moved.gen });
+    // Relaunched in its own workspace: that record names the new generation.
+    const back = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner', pane: { sessionId: 'p-t', workspaceId: 'ws-t' } });
+    s.launched('t', back.gen, 'ws-t', 'p-t');
+    expect(s.workspaceOf('ws-t')).toEqual({ taskId: 't', gen: back.gen });
+  });
 });

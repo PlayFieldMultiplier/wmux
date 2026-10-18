@@ -1433,8 +1433,9 @@ export interface WorkerResumePorts {
   senderTainted?: (botId: string) => boolean;
   /** Why the bot's own worker budget refuses one more worker now, or null
    *  (a bot's resume starts a worker like its fan-out does). `starting`:
-   *  the bot's other resumes under way, not yet counted as resumed. */
-  botWorkerRefusal?: (botId: string, starting: number) => string | null;
+   *  the bot's other resumes under way, not yet counted as resumed;
+   *  `taskId`: the task this resume is for. */
+  botWorkerRefusal?: (botId: string, starting: number, taskId?: string) => string | null;
   /** Whether the owner stopped this task (Stop, or bots switched off): a
    *  bot does not start its worker again. Absent: never. */
   stoppedByOwner?: (taskId: string) => boolean;
@@ -1560,7 +1561,7 @@ async function resumeOnce(
     }
     let budget: string | null = null;
     try {
-      budget = ports.botWorkerRefusal?.(by.botId, botStarting.get(by.botId) ?? 0) ?? null;
+      budget = ports.botWorkerRefusal?.(by.botId, botStarting.get(by.botId) ?? 0, taskId) ?? null;
     } catch (err) {
       budget = `the worker budget could not be read: ${String(err)}`;
     }
