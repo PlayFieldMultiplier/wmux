@@ -33,6 +33,7 @@ import {
   type SetupHooksPaths,
 } from '../../../cli/commands/setupHooks';
 import { getAccountStore, type Account } from '../../account/accountStore';
+import { copiesSettingsJson } from '../../account/accountProvision';
 import {
   loadHooksPromptPreference,
   setHooksPromptSuppressed,
@@ -83,7 +84,8 @@ function isUncPath(dir: string): boolean {
  *  account on a local folder whose settings file is its own (not the default
  *  config's, which the card's own row covers). */
 function ownAccountSettings(account: Account, base: SetupHooksPaths): SetupHooksPaths | null {
-  if (account.vendor !== 'claude' || isUncPath(account.configDir)) return null;
+  // Only a vendor whose account folders copy Claude Code's settings.json.
+  if (!copiesSettingsJson(account.vendor) || isUncPath(account.configDir)) return null;
   const paths = accountHookPaths(base, account);
   return physicalPath(paths.settingsPath) === physicalPath(base.settingsPath) ? null : paths;
 }
