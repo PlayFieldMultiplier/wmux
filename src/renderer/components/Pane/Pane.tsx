@@ -929,13 +929,22 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       }
       // Seen only by the screen tier: skip, but keep the offer (#2408).
       if (resumeAgentOnScreenByPtyId[ptyId] !== undefined) return;
-      if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
-      // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
-      // A refused line keeps the pill, so the pane can still be resumed by hand.
-      window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
-        () => useStore.getState().clearResumeHint(ptyId),
-        (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
-      );
+      // The store's sighting is as old as the last list, and an agent banner
+      // can land after it: ask the daemon once more right before typing. A
+      // list that fails types nothing; the pill stays.
+      void window.electronAPI.pty.list().then((sessions) => {
+        const now = sessions.find((s) => s.id === ptyId);
+        if (!now || now.resumeAgentOnScreen !== undefined || now.commandRunning === true || now.agentProcessAlive === true) return;
+        if (!useStore.getState().claudeResumeOnStart) return;
+        if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return;
+        if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
+        // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
+        // A refused line keeps the pill, so the pane can still be resumed by hand.
+        window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
+          () => useStore.getState().clearResumeHint(ptyId),
+          (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
+        );
+      }, () => undefined);
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
