@@ -4,8 +4,8 @@
 // scripts/flaky-report.mjs reads the reports of one run. A flake that shows up
 // once a day in a different PR never looks like much there; across a week it
 // is the same test, in eight runs, on two operating systems. This module finds
-// the week's runs, downloads their `test-report-*` artifacts (one folder per
-// run, since every run's artifacts have the same names), and merges the
+// the week's runs, downloads their `test-report-retries-*` artifacts (one
+// folder per run, since every run's artifacts have the same names), and merges the
 // reports so each test is one row with the number of runs it needed the retry
 // in. scripts/flaky-weekly.mjs is the command line and opens or updates the
 // weekly issue.
@@ -19,18 +19,21 @@
 //   and ci.yml alone has more than that in a week, so runs are listed one day
 //   at a time.
 // - The workflow's token has 1,000 API calls an hour. `gh run download` costs
-//   one call to list a run's artifacts and one per artifact, and most runs
-//   (cancelled, superseded, docs-only) have none. The repository's artifact
-//   listing (100 per call) says which runs have a report, so only those are
-//   downloaded. If the limit is hit anyway, downloading stops and the rendered
-//   coverage line says so.
+//   one call to list a run's artifacts and one per artifact. The workflows
+//   upload the retry reports as `test-report-retries-*` only when one lists a
+//   retried test (scripts/flaky-report.mjs sets the step output), so most runs
+//   have none, and the repository's artifact listing (100 per call) says which
+//   runs do: only those are downloaded. If the limit is hit anyway,
+//   downloading stops and the rendered coverage line says so.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { describeReport, findReportFiles, readReport } from './test-retries.mjs';
 
 export const WORKFLOWS = ['ci.yml', 'ci-cross-platform-baseline.yml', 'runtime.yml', 'windows.yml'];
-export const ARTIFACT_PREFIX = 'test-report-';
+// Uploaded only by a run with a retried test. Every run also uploads its whole
+// test-results/ folder as `test-report-*`; that one is not read here.
+export const ARTIFACT_PREFIX = 'test-report-retries-';
 export const ISSUE_LABEL = 'flaky';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -107,11 +110,11 @@ export function listRuns(gh, { workflows = WORKFLOWS, window, repo, warn = ignor
 }
 
 /**
- * Run ids that have an unexpired `test-report-*` artifact created inside the
+ * Run ids that have an unexpired `<prefix>*` artifact created inside the
  * window, from the repository's artifact listing (newest first, so paging
  * stops once a page has nothing inside the window).
  */
-export function runsWithReports(gh, { window, repo }) {
+export function runsWithReports(gh, { window, repo, prefix = ARTIFACT_PREFIX }) {
   const base = repo ? `repos/${repo}` : 'repos/{owner}/{repo}';
   const ids = new Set();
   for (let page = 1; ; page++) {
@@ -125,7 +128,7 @@ export function runsWithReports(gh, { window, repo }) {
     for (const a of artifacts) {
       if (new Date(a.created_at) < window.since) continue;
       inWindow += 1;
-      if (a.expired || !a.name?.startsWith(ARTIFACT_PREFIX)) continue;
+      if (a.expired || !a.name?.startsWith(prefix)) continue;
       const runId = a.workflow_run?.id;
       if (runId != null) ids.add(String(runId));
     }
@@ -144,8 +147,8 @@ const RATE_LIMITED = /rate limit|HTTP 403|HTTP 429/i;
  * (or only expired) artifacts is empty, not a failure.
  * Returns { ok: true } | { ok: true, empty: true } | { ok: false, rateLimited, error }.
  */
-export function downloadRun(gh, { runId, dir, repo }) {
-  const result = gh(['run', 'download', String(runId), ...repoArgs(repo), '-p', `${ARTIFACT_PREFIX}*`, '-D', dir]);
+export function downloadRun(gh, { runId, dir, repo, prefix = ARTIFACT_PREFIX }) {
+  const result = gh(['run', 'download', String(runId), ...repoArgs(repo), '-p', `${prefix}*`, '-D', dir]);
   if (result.status === 0) return { ok: true };
   const stderr = (result.stderr || '').trim();
   if (NOTHING_TO_DOWNLOAD.test(stderr)) return { ok: true, empty: true };
@@ -157,7 +160,7 @@ export function downloadRun(gh, { runId, dir, repo }) {
  * the reports back. Stops at the first rate-limit failure; any other failure
  * leaves that run unread and moves on.
  */
-export function collectReports(gh, { runs, withReports, root, repo, warn = ignore }) {
+export function collectReports(gh, { runs, withReports, root, repo, prefix = ARTIFACT_PREFIX, warn = ignore }) {
   const candidates = runs.filter((r) => withReports.has(String(r.databaseId)));
   const entries = [];
   let read = 0;
@@ -165,7 +168,7 @@ export function collectReports(gh, { runs, withReports, root, repo, warn = ignor
   let stoppedReason = null;
   for (const run of candidates) {
     const dir = path.join(root, String(run.databaseId));
-    const result = downloadRun(gh, { runId: run.databaseId, dir, repo });
+    const result = downloadRun(gh, { runId: run.databaseId, dir, repo, prefix });
     if (!result.ok) {
       warn(`run ${run.databaseId}: download failed: ${result.error}`);
       if (result.rateLimited) {
@@ -230,11 +233,11 @@ export function mergeWeek(entries) {
 }
 
 /** The issue body / printed report. */
-export function renderWeekly({ window, flaky, coverage }) {
+export function renderWeekly({ window, flaky, coverage, prefix = ARTIFACT_PREFIX }) {
   const lines = [
     `Tests that failed at least once and then passed on vitest's CI retry, in completed runs of ${WORKFLOWS.join(', ')} ` +
       `created between ${window.since.toISOString().slice(0, 16)}Z and ${window.until.toISOString().slice(0, 16)}Z. ` +
-      'Generated by scripts/flaky-weekly.mjs from the runs\' `test-report-*` artifacts.',
+      `Generated by scripts/flaky-weekly.mjs from the runs' \`${prefix}*\` artifacts.`,
     '',
     `Coverage: read the retry reports of ${coverage.read} of ${coverage.candidates} runs that uploaded one ` +
       `(${coverage.listed} completed runs in the window).` +
@@ -279,14 +282,17 @@ function cell(text) {
  * Returns { title, body, flaky, coverage, published } where `published` is
  * publishIssue's result, or null when nothing was published.
  */
-export function runWeekly(gh, { now = new Date(), days = 7, issue = false, root, repo, warn = ignore }) {
+export function runWeekly(
+  gh,
+  { now = new Date(), days = 7, issue = false, root, repo, prefix = ARTIFACT_PREFIX, warn = ignore },
+) {
   const window = weekWindow(now, days);
   const runs = listRuns(gh, { window, repo, warn });
-  const withReports = runsWithReports(gh, { window, repo });
-  const { entries, coverage } = collectReports(gh, { runs, withReports, root, repo, warn });
+  const withReports = runsWithReports(gh, { window, repo, prefix });
+  const { entries, coverage } = collectReports(gh, { runs, withReports, root, repo, prefix, warn });
   const flaky = mergeWeek(entries);
   const title = issueTitle(window.monday);
-  const body = renderWeekly({ window, flaky, coverage });
+  const body = renderWeekly({ window, flaky, coverage, prefix });
   const published = issue && flaky.length > 0 ? publishIssue(gh, { title, body, bodyDir: root, repo }) : null;
   return { title, body, flaky, coverage, published };
 }

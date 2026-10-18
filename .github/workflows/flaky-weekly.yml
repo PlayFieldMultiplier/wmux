@@ -1,9 +1,9 @@
 name: Flaky tests weekly
 
 # The week's flaky tests in one issue. Every CI run retries a failed test once
-# and uploads the retried tests as a `test-report-*` artifact
-# (scripts/vitest-retry-reporter.mjs); scripts/flaky-report.mjs shows them on
-# that run's summary. A green run hides them, though, and a flake that turns
+# and records the retried tests (scripts/vitest-retry-reporter.mjs);
+# scripts/flaky-report.mjs shows them on that run's summary, and a run with a
+# retried test uploads them as a `test-report-retries-*` artifact. A green run hides them, though, and a flake that turns
 # up once a day in a different pull request never looks like much on its own.
 # scripts/flaky-weekly.mjs reads the reports of every completed run of ci.yml,
 # ci-cross-platform-baseline.yml, runtime.yml and windows.yml from the last

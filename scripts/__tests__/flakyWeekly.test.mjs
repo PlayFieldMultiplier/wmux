@@ -136,11 +136,11 @@ describe('weekly rollup', () => {
       },
       artifacts: {
         1: {
-          'test-report-validate-1': [report({ shard: '1/2', tests: [t] })],
-          'test-report-validate-2': [report({ shard: '2/2', tests: [t] })],
+          'test-report-retries-validate-1': [report({ shard: '1/2', tests: [t] })],
+          'test-report-retries-validate-2': [report({ shard: '2/2', tests: [t] })],
         },
-        2: { 'test-report-validate-1': [report({ shard: '1/2', tests: [t] })] },
-        3: { 'test-report-windows-1': [report({ suite: 'integration', platform: 'darwin', tests: [t, flakyTest('other > once', 'b.test.ts')] })] },
+        2: { 'test-report-retries-validate-1': [report({ shard: '1/2', tests: [t] })] },
+        3: { 'test-report-retries-windows-1': [report({ suite: 'integration', platform: 'darwin', tests: [t, flakyTest('other > once', 'b.test.ts')] })] },
       },
     });
     const { flaky, coverage } = rollup(fake);
@@ -166,14 +166,14 @@ describe('weekly rollup', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z'), run(2, '2026-10-14T10:00:00Z')] },
       artifacts: {
-        1: { 'test-report-validate-1': [report({ tests: [flakyTest('a')] })] },
-        2: { 'test-report-validate-1': [report({ tests: [flakyTest('a')] })] },
+        1: { 'test-report-retries-validate-1': [report({ tests: [flakyTest('a')] })] },
+        2: { 'test-report-retries-validate-1': [report({ tests: [flakyTest('a')] })] },
       },
     });
     rollup(fake);
     const dirs = fake.calls.filter((a) => a[1] === 'download').map((a) => a[a.indexOf('-D') + 1]);
     expect(dirs).toEqual([path.join(root, '1'), path.join(root, '2')]);
-    expect(fs.existsSync(path.join(root, '1', 'test-report-validate-1', 'retries-unit.json'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '1', 'test-report-retries-validate-1', 'retries-unit.json'))).toBe(true);
   });
 
   it('ignores a failed-every-attempt test and a passing report', () => {
@@ -181,7 +181,7 @@ describe('weekly rollup', () => {
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z')] },
       artifacts: {
         1: {
-          'test-report-validate-1': [
+          'test-report-retries-validate-1': [
             report({ tests: [{ file: 'f.test.ts', name: 'broken', line: 1, state: 'failed', retryCount: 1 }] }),
           ],
         },
@@ -194,7 +194,7 @@ describe('weekly rollup', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z'), run(2, '2026-10-14T10:00:00Z')] },
       // Listed with a report artifact, but gone by the time of the download.
-      artifacts: { 1: { 'test-report-validate-1': [report({ tests: [flakyTest('a')] })] }, 2: { 'test-report-validate-1': [] } },
+      artifacts: { 1: { 'test-report-retries-validate-1': [report({ tests: [flakyTest('a')] })] }, 2: { 'test-report-retries-validate-1': [] } },
       downloadErrors: { 2: 'no artifact matches any of the names or patterns provided\n' },
     });
     const { flaky, coverage } = rollup(fake);
@@ -205,7 +205,7 @@ describe('weekly rollup', () => {
   it('skips runs without a report artifact without downloading them', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z'), run(2, '2026-10-14T10:00:00Z', { conclusion: 'cancelled' })] },
-      artifacts: { 1: { 'test-report-validate-1': [report({ tests: [] })] } },
+      artifacts: { 1: { 'test-report-retries-validate-1': [report({ tests: [] })] } },
     });
     const { coverage } = rollup(fake);
     expect(coverage).toMatchObject({ listed: 2, candidates: 1, read: 1 });
@@ -216,9 +216,9 @@ describe('weekly rollup', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z'), run(2, '2026-10-14T10:00:00Z'), run(3, '2026-10-15T10:00:00Z')] },
       artifacts: {
-        1: { 'test-report-validate-1': [report({ tests: [flakyTest('a')] })] },
-        2: { 'test-report-validate-1': [] },
-        3: { 'test-report-validate-1': [] },
+        1: { 'test-report-retries-validate-1': [report({ tests: [flakyTest('a')] })] },
+        2: { 'test-report-retries-validate-1': [] },
+        3: { 'test-report-retries-validate-1': [] },
       },
       downloadErrors: { 1: 'HTTP 500: server error', 2: 'HTTP 403: API rate limit exceeded' },
     });
@@ -232,7 +232,7 @@ describe('weekly rollup', () => {
   });
 
   it('pages the artifact listing until a page has nothing inside the window', () => {
-    const artifact = (id, runId, createdAt, name = 'test-report-validate-1') => ({
+    const artifact = (id, runId, createdAt, name = 'test-report-retries-validate-1') => ({
       id,
       name,
       expired: false,
@@ -243,7 +243,13 @@ describe('weekly rollup', () => {
     const pages = [
       // An older artifact among newer ones does not end the listing.
       [artifact(1, 1, '2026-10-18T00:00:00Z'), artifact(2, 2, '2026-10-01T00:00:00Z'), ...filler(98, '2026-10-17T00:00:00Z')],
-      [artifact(3, 3, '2026-10-13T00:00:00Z'), artifact(4, 4, '2026-10-13T00:00:00Z', 'test-report-x'), ...filler(98, '2026-10-01T00:00:00Z')],
+      [
+        artifact(3, 3, '2026-10-13T00:00:00Z'),
+        artifact(4, 4, '2026-10-13T00:00:00Z', 'test-report-retries-x'),
+        // Every run's whole test-results/ folder: not a sign of a retry.
+        artifact(6, 6, '2026-10-13T00:00:00Z', 'test-report-validate-1'),
+        ...filler(97, '2026-10-01T00:00:00Z'),
+      ],
       filler(100, '2026-10-01T00:00:00Z'),
       [artifact(5, 5, '2026-10-18T00:00:00Z')], // never reached
     ];
@@ -307,7 +313,7 @@ describe('runWeekly', () => {
   it('opens no issue in a week without a retry', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z')] },
-      artifacts: { 1: { 'test-report-validate-1': [report({ tests: [] })] } },
+      artifacts: { 1: { 'test-report-retries-validate-1': [report({ tests: [] })] } },
     });
     const result = runWeekly(fake.gh, { now: NOW, issue: true, root });
     expect(result.flaky).toEqual([]);
@@ -319,7 +325,7 @@ describe('runWeekly', () => {
   it('edits the week\'s open issue when there is one', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z')] },
-      artifacts: { 1: { 'test-report-validate-1': [report({ tests: [flakyTest('a')] })] } },
+      artifacts: { 1: { 'test-report-retries-validate-1': [report({ tests: [flakyTest('a')] })] } },
       issues: [{ number: 11, title: 'Flaky tests: week of 2026-10-12' }],
     });
     const result = runWeekly(fake.gh, { now: NOW, issue: true, root });
@@ -330,7 +336,7 @@ describe('runWeekly', () => {
   it('publishes nothing without --issue', () => {
     const fake = fakeGh({
       runs: { 'ci.yml': [run(1, '2026-10-13T10:00:00Z')] },
-      artifacts: { 1: { 'test-report-validate-1': [report({ tests: [flakyTest('a')] })] } },
+      artifacts: { 1: { 'test-report-retries-validate-1': [report({ tests: [flakyTest('a')] })] } },
     });
     const result = runWeekly(fake.gh, { now: NOW, root });
     expect(result.flaky).toHaveLength(1);
