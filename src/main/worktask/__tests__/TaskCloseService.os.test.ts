@@ -10,6 +10,7 @@ import { TaskCloseService } from '../TaskCloseService';
 import type { CloseDaemonPort } from '../TaskCloseService';
 import { TaskWorktreeManager } from '../TaskWorktreeManager';
 import { PendingWorktreeRemovals } from '../pendingWorktreeRemovals';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 let repoRoot: string;
 let wtBase: string;
@@ -336,16 +337,54 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(forgetStops).toHaveBeenCalledWith(left);
   });
 
-  it('keepFolder leaves the task open when the mission does not close', async () => {
+  it('keepFolder ends the pending removal on disk before the task closes, and keeps the task open when it cannot', async () => {
     const left = path.join(wtBase, 'left-k3');
     fs.mkdirSync(left, { recursive: true });
+    const file = path.join(wtBase, 'wmux', 'worktask', 'pending-removals.json');
     const store = storeIn(wtBase);
     await store.put({ path: left, repoRoot, repoHash: 'closehash', at: 1 });
-    const { port } = makeDaemon({ ok: false, error: { message: 'mission is gone' } });
+    const onDisk = (): unknown[] => (JSON.parse(fs.readFileSync(file, 'utf8')) as { removals: unknown[] }).removals;
+    let atClose: unknown[] | null = null;
+    const port: CloseDaemonPort = { rpc: vi.fn(async (_m, params) => { atClose = onDisk(); return { ok: true, taskId: params['taskId'] }; }) };
     const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ pendingRemovals: store }) });
-    const res = await svc.closeTask({ taskId: 'wtask-k3', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true });
+    expect(await svc.closeTask({ taskId: 'wtask-k3', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true })).toMatchObject({ ok: true, keptFolder: left });
+    // A restart right after the close would find no removal queued.
+    expect(atClose).toEqual([]);
+
+    // The record cannot be dropped on disk: nothing is closed.
+    const failing = { get: () => ({ path: left, repoRoot, repoHash: 'closehash', at: 1 }), all: () => [], put: async () => undefined, delete: async () => { throw new Error('EACCES: the store cannot be written'); } };
+    const { port: port2, calls } = makeDaemon();
+    const svc2 = new TaskCloseService({ daemon: port2, worktrees: new TaskWorktreeManager({ pendingRemovals: failing }) });
+    const res = await svc2.closeTask({ taskId: 'wtask-k3b', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true });
     expect(res).toMatchObject({ ok: false, reason: 'error' });
-    expect(store.get(left)).not.toBeNull();
+    if (!res.ok) expect(res.error).toMatch(/EACCES/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a close of a task waits for the one already running for it: a keep asked during a removal never races it', async () => {
+    const order: string[] = [];
+    let finishRemove: () => void = () => undefined;
+    const worktrees = {
+      removeWorktree: vi.fn(async () => {
+        order.push('remove start');
+        await new Promise<void>((r) => { finishRemove = r; });
+        order.push('remove end');
+        return { ok: true };
+      }),
+      holdFolder: vi.fn(() => { order.push('hold'); return () => undefined; }),
+      forgetPendingRemoval: vi.fn(async () => undefined),
+    } as unknown as TaskWorktreeManager;
+    const { port } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees });
+    const removing = svc.closeTask({ taskId: 'wtask-k6', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'h', worktreePath: path.join(wtBase, 'gone') });
+    await vi.waitFor(() => expect(order).toContain('remove start'), { timeout: 5_000 });
+    const keeping = svc.closeTask({ taskId: 'wtask-k6', verifiedWorkspaceId: 'ws-owner', leftoverPath: path.join(wtBase, 'gone'), keepFolder: true });
+    await deliberateSleep(50, 'a negative check: the keep must not start while the removal runs');
+    expect(order).toEqual(['remove start']);
+    finishRemove();
+    await removing;
+    await keeping;
+    expect(order).toEqual(['remove start', 'remove end', 'hold']);
   });
 
   it('keepFolder holds the folder from the start: a sweep that ends its checks while the close is asked deletes nothing', async () => {
@@ -374,6 +413,7 @@ describe('a close that keeps the folder (#2388)', () => {
     const closing = svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true });
     openChecks();
     expect(await sweeping).toMatchObject({ ok: false, preserved: true });
+    await vi.waitFor(() => expect(port.rpc).toHaveBeenCalled(), { timeout: 5_000 });
     answer({ ok: true, taskId: 'wtask-k5' });
     expect(await closing).toMatchObject({ ok: true, keptFolder: left });
     expect(removeTree).not.toHaveBeenCalled();

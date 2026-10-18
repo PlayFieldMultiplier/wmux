@@ -932,14 +932,15 @@ export class TaskWorktreeManager {
   /** Close and keep folder: the removal of `worktreePath` is no longer
    *  pending (the folder stays where it is). Held meanwhile (holdFolder);
    *  the record ends once a finish under way is over (the repository
-   *  lock), so a later one finds none. */
+   *  lock), so a later one finds none. Throws when the record could not be
+   *  dropped on disk: a restart would find the removal still queued. */
   async forgetPendingRemoval(worktreePath: string): Promise<void> {
     const safePath = validatePath(worktreePath, 'worktreePath');
     const release = this.holdFolder(safePath);
     try {
-      const rec = this.pendingRemovals?.get(safePath);
-      if (rec) await this.withRepoLock(rec.repoHash, () => this.forgetPending(safePath));
-      else await this.forgetPending(safePath);
+      const store = this.pendingRemovals;
+      const rec = store?.get(safePath);
+      if (store && rec) await this.withRepoLock(rec.repoHash, () => store.delete(safePath));
     } finally {
       release();
     }

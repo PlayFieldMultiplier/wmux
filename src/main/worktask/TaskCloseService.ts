@@ -106,7 +106,26 @@ export class TaskCloseService {
     this.pushedHead = opts.pushedHead;
   }
 
-  async closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
+  /** The close running for each task. */
+  private readonly closing = new Map<string, Promise<CloseTaskResult>>();
+
+  /**
+   * Close a task. Closes of one task run one at a time (#2388): a Close and
+   * keep folder asked while a close that removes the worktree runs would
+   * otherwise race it, and the removal deletes what the keep promised to
+   * leave. One asked meanwhile starts once the earlier one is over.
+   */
+  closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
+    const prev = this.closing.get(input.taskId) ?? Promise.resolve();
+    const run = prev.catch(() => undefined).then(() => this.closeTaskNow(input));
+    this.closing.set(input.taskId, run);
+    void run.finally(() => {
+      if (this.closing.get(input.taskId) === run) this.closing.delete(input.taskId);
+    }).catch(() => undefined);
+    return run;
+  }
+
+  private async closeTaskNow(input: CloseTaskInput): Promise<CloseTaskResult> {
     const { taskId } = input;
 
     // Close and keep folder: the task closes, the folder stays as it is.
@@ -116,16 +135,18 @@ export class TaskCloseService {
     if (input.keepFolder) {
       const folder = input.worktreePath ?? input.leftoverPath;
       // Held from the start: a finish of it under way (the sweep at start)
-      // must not delete it while the close is asked for.
+      // must not delete it. Its pending removal ends on disk BEFORE the task
+      // closes, so no restart finds a removal queued for a folder that was
+      // kept; when that cannot be written, the task stays open.
       let release: () => void = () => undefined;
       try {
-        if (folder) release = this.worktrees.holdFolder(folder);
+        if (folder) {
+          release = this.worktrees.holdFolder(folder);
+          await this.worktrees.forgetPendingRemoval(folder);
+        }
         const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
         if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-        if (folder) {
-          await this.worktrees.forgetPendingRemoval(folder).catch(() => undefined);
-          this.forgetFolderStops(folder);
-        }
+        if (folder) this.forgetFolderStops(folder);
         // A finish that was already deleting it when this was chosen (it
         // deletes only a folder that holds nothing but what git left) leaves
         // nothing to name.
