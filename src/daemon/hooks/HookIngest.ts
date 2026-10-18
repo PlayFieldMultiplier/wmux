@@ -1369,6 +1369,11 @@ export class HookIngest {
       // stop can announce).
       if (signal.kind === 'agent.session_start' || signal.kind === 'agent.user_prompt_submit') this.bumpDialogEpoch(sessionId);
       if (signal.kind === 'agent.session_start') this.permissionNotifyPanes.delete(sessionId);
+      // A submitted prompt means no dialog is up any more. As a working cue it
+      // cannot rebut a firm attention window, which would then still confirm a
+      // stale "needs you" (and a detector report that replaced the window's
+      // callback carries no epoch guard of its own), so it answers the window.
+      if (signal.kind === 'agent.user_prompt_submit') this.alarm.observe(sessionId, signal.agent, { class: 'answered' });
       this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
       // M2: a fresh session on this pane means the question the PREVIOUS
       // session asked will never be answered — the same reasoning that makes
@@ -1916,6 +1921,15 @@ export class HookIngest {
       return;
     }
     const epoch = this.dialogEpochOf(sessionId);
+    const raised = this.secondLayerRaised.get(sessionId);
+    if (raised !== undefined && raised.epoch === epoch) {
+      // The dialog this layer already raised is still unsettled; another
+      // request (a background agent's) is not a second dialog to raise. Its
+      // close moves the epoch: the answer keystroke, or the awaiting
+      // verifier's screen-cleared release, both reach noteAnswered.
+      this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId}: the screen check already raised the open dialog`);
+      return;
+    }
     const open = this.tentativeDialogs.get(sessionId);
     if (open && open.epoch === epoch) {
       open.fanOut = fanOut;

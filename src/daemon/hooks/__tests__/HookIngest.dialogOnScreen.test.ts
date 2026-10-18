@@ -412,6 +412,42 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     expect(f.awaiting()).toEqual([]);
   });
 
+  it('another request while the raised dialog is still unsettled adds no second toast; after it closes, a new one can', async () => {
+    const screen = vi.fn(async () => true);
+    const f = makeIngest(screen);
+    f.ingest.handle(makeSignal());
+    await runSecondLayer(f);
+    expect(f.toasts()).toBe(1);
+    f.ingest.handle(makeSignal({ ts: 20_000 }));
+    await runSecondLayer(f);
+    expect(f.toasts()).toBe(1);
+    // The dialog closes (answer keystroke or the verifier's screen-cleared).
+    f.ingest.noteAnswered('pty-a', 'claude');
+    f.ingest.handle(makeSignal({ ts: 40_000 }));
+    await runSecondLayer(f);
+    expect(f.awaiting()).toHaveLength(2);
+  });
+
+  it('a detector report that replaced the raised window still stands down on a new prompt', async () => {
+    for (const raiseBy of ['notification', 'screen'] as const) {
+      const f = makeIngest(async () => true);
+      if (raiseBy === 'notification') {
+        f.ingest.handle(notification());
+      } else {
+        f.ingest.handle(makeSignal());
+        f.advance(PERMISSION_NOTIFY_GRACE_MS);
+        await settle();
+      }
+      f.advance(300);
+      f.ingest.arbitrateDetector('pty-a', { agent: 'Claude Code', status: 'awaiting_input', message: 'Approval requested' });
+      f.advance(300);
+      f.ingest.handle(makeSignal({ kind: 'agent.user_prompt_submit', payload: {}, ts: 9_000 }));
+      f.advance(DEFAULT_ALARM_WINDOW_MS * 2);
+      await settle();
+      expect(f.toasts(), raiseBy).toBe(0);
+    }
+  });
+
   it('the Notification landing during the read leaves exactly one alarm', async () => {
     let resolve: (up: boolean | null) => void = () => undefined;
     const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
