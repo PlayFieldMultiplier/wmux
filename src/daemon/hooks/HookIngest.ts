@@ -780,7 +780,7 @@ export class HookIngest {
    * Per pane, the open tentative PermissionRequest (see holdTentativeDialog):
    * its grace timer, and the fan-out of the latest request it stands for.
    */
-  private readonly tentativeDialogs = new Map<string, { epoch: number; cancel: () => void; fanOut: () => unknown }>();
+  private readonly tentativeDialogs = new Map<string, { epoch: number; cancel: () => void; fanOut: (repeat?: boolean) => unknown }>();
   /**
    * Panes whose Claude has sent a `permission_prompt` Notification this
    * session: the hook is registered there, so a PermissionRequest that gets
@@ -1497,8 +1497,11 @@ export class HookIngest {
     }
 
     const { status, message } = eventShapeFor(signal.kind);
-    const fanOut = (): HookSignalResponse => {
-      const decision = this.router.recordHook(signal, sessionId, this.now());
+    // `repeat`: the second layer re-raising a dialog it already raised, which
+    // refreshes the pane's state but is no new toast (see holdTentativeDialog).
+    const fanOut = (repeat = false): HookSignalResponse => {
+      const routed = this.router.recordHook(signal, sessionId, this.now());
+      const decision = repeat ? 'dedup' : routed;
       if (signal.kind === 'agent.stop') {
         this.deps.approvals?.expireForSession(sessionId, 'turn-ended');
       }
@@ -1529,7 +1532,8 @@ export class HookIngest {
       this.holdTentativeDialog(sessionId, signal.agent, fanOut);
       return { ok: true };
     }
-    let resume: () => unknown = fanOut;
+    // Called bare: the alarm hands its resume a ConfirmedWindow, never `repeat`.
+    let resume: () => unknown = () => fanOut();
     if (permissionNotification) {
       // The root signal took over: no second layer for this dialog, and none
       // on this pane while its session lasts.
@@ -1932,7 +1936,7 @@ export class HookIngest {
    * fan-out: a stream of requests (the reported storm, one every 2 s) must
    * not postpone the check forever behind a dialog that is really up.
    */
-  private holdTentativeDialog(sessionId: string, slug: string, fanOut: () => unknown): void {
+  private holdTentativeDialog(sessionId: string, slug: string, fanOut: (repeat?: boolean) => unknown): void {
     this.permissionRequests.set(sessionId, (this.permissionRequests.get(sessionId) ?? 0) + 1);
     const epoch = this.dialogEpochOf(sessionId);
     const open = this.tentativeDialogs.get(sessionId);
@@ -1941,7 +1945,7 @@ export class HookIngest {
       return;
     }
     this.clearTentativeDialog(sessionId);
-    const entry: { epoch: number; cancel: () => void; fanOut: () => unknown } = { epoch, cancel: () => undefined, fanOut };
+    const entry: { epoch: number; cancel: () => void; fanOut: (repeat?: boolean) => unknown } = { epoch, cancel: () => undefined, fanOut };
     // Asked while a dialog this layer raised is still open: this request waits
     // behind it, and the next epoch move may be that dialog's close, not this
     // one's. The screen decides then, instead of the epoch.
@@ -1975,23 +1979,22 @@ export class HookIngest {
       }
       const raise = (): void => {
         // Judged when the dialog would be raised, not when the request came:
-        // a dialog this layer already raised that is still unsettled is the
-        // one on screen (Claude shows one at a time), and another request (a
-        // background agent's) must not raise it again. Its close moves the
-        // epoch within seconds — the answer keystroke, or the awaiting
-        // verifier's screen-cleared release, both reach noteAnswered — so a
-        // genuine next dialog is checked on its own grace.
+        // a dialog this layer already raised that is still unsettled is most
+        // likely the one on screen (Claude shows one at a time), and another
+        // request (a background agent's) must not toast it again. Its close
+        // usually moves the epoch within seconds (the answer keystroke, or the
+        // awaiting verifier's screen-cleared release, both reach
+        // noteAnswered), but not always (a click answer, a next dialog drawn
+        // at once), so the repeat still goes out, as a `dedup`: the pane's
+        // "needs you" is refreshed, only the second toast is withheld.
         const raised = this.secondLayerRaised.get(sessionId);
-        if (raised !== undefined && raised.epoch === this.dialogEpoch.get(sessionId)) {
-          this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId}: the screen check already raised the open dialog`);
-          return;
-        }
+        const repeat = raised !== undefined && raised.epoch === this.dialogEpoch.get(sessionId);
         // Recorded as the window opens. Whatever closes a firm window either
         // moves the epoch (an answer, a turn-ending stop, a prompt, a session
         // boundary) or replaces it with one that still alerts (the detector's
         // report, the Notification), so the record never outlives its alert.
-        this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
-        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => entry.fanOut()));
+        if (!repeat) this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
+        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => entry.fanOut(repeat)));
       };
       const verifyOnScreen = this.deps.dialogOnScreen;
       if (!verifyOnScreen) {

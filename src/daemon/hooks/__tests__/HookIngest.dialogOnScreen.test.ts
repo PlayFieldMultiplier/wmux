@@ -416,6 +416,17 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     expect(f.awaiting()).toEqual([]);
   });
 
+  it('a next dialog whose predecessor closed with no epoch move (a click answer) still marks the pane, as a dedup', async () => {
+    const f = makeIngest(async () => true);
+    f.ingest.handle(makeSignal());
+    await runSecondLayer(f);
+    f.ingest.handle(makeSignal({ ts: 30_000 }));
+    await runSecondLayer(f);
+    expect(f.awaiting()).toHaveLength(2);
+    expect(f.awaiting().map((e) => e.decision)).toEqual(['emit', 'dedup']);
+    expect(f.toasts()).toBe(1);
+  });
+
   it('another request while the raised dialog is still unsettled adds no second toast; after it closes, a new one can', async () => {
     const screen = vi.fn(async () => true);
     const f = makeIngest(screen);
@@ -429,7 +440,7 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     f.ingest.noteAnswered('pty-a', 'claude');
     f.ingest.handle(makeSignal({ ts: 40_000 }));
     await runSecondLayer(f);
-    expect(f.awaiting()).toHaveLength(2);
+    expect(f.toasts()).toBe(2);
   });
 
   it('a request during the in-flight screen read does not raise the same dialog twice', async () => {
