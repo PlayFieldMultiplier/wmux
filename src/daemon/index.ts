@@ -3,6 +3,7 @@ import '../shared/exeSearchGuard';
 import { isInternalForkPayload } from '../shared/hooks/internalFork';
 import { terminalCoreRuntime, terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
+import { createStartupRecovery } from './startupRecovery';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
@@ -3015,6 +3016,13 @@ function registerRpcHandlers(
   pipeServer.onRpc('daemon.listSessions', async (rawParams) => {
     const params = (rawParams ?? {}) as Record<string, unknown>;
     const includeSuspended = params['includeSuspended'] === true;
+    // #2393: asked with `withRecovery`, the list comes as `{sessions,
+    // recoveryDone}`, so a client can tell "still restoring" from "no
+    // sessions". Additive: without it the reply stays the bare list, and a
+    // client that gets a bare list back (an older daemon) takes it as
+    // recovered, as every read was taken before.
+    const withRecovery = params['withRecovery'] === true;
+    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone: startupRecovery.done() } : sessions);
     // X8: join the supervisor's volatile runtime (restart counts, pending
     // backoff) onto supervised sessions — additive field consumed by
     // `wmux list --json` and the sidebar badge.
@@ -3122,9 +3130,9 @@ function registerRpcHandlers(
           createdAt: s.createdAt,
           lastActivity: s.lastActivity,
         }));
-      return [...activeSessions, ...suspendedEntries];
+      return reply([...activeSessions, ...suspendedEntries]);
     }
-    return activeSessions;
+    return reply(activeSessions);
   });
 
   // daemon.promoteSession — on-demand recovery of a cap-skipped suspended
@@ -3311,9 +3319,12 @@ function registerRpcHandlers(
     if (shuttingDown) return;
     const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
     const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
+    const promotions: Array<Promise<unknown>> = [];
     for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
-      void promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err));
+      promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
     }
+    // Recovery is done for daemon.listSessions once these settle.
+    startupRecovery.track(promotions);
   });
 
 
@@ -7179,6 +7190,9 @@ let disposeContextWatchers: (() => void) | null = null;
 
 /** X8: set in main(); shutdown() cancels pending supervised restarts through it. */
 let paneSupervisorRef: PaneSupervisor | null = null;
+// Whether the background recovery pass after boot has settled
+// (startupRecovery.ts); `daemon.listSessions` says it when asked.
+const startupRecovery = createStartupRecovery({ log: (line) => log('info', line) });
 // Module-level so the standalone shutdown() can dispose the LanLink listener
 // (close the net.Server, drop live connections, remove the firewall rules).
 let lanLinkServerRef: LanLinkServer | null = null;
