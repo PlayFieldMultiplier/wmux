@@ -1,8 +1,25 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AccountStore, AccountError, getAccountsPath } from '../accountStore';
+
+// Lets one test fail the next account-groups.json write; every other write
+// goes through to the real atomic writer.
+const writeFault = vi.hoisted(() => ({ failNextGroupsWrite: false }));
+vi.mock('../../../daemon/util/atomicWrite', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../daemon/util/atomicWrite')>();
+  return {
+    ...real,
+    atomicWriteJSON: (async (filePath: string, ...rest: unknown[]) => {
+      if (writeFault.failNextGroupsWrite && filePath.endsWith('account-groups.json')) {
+        writeFault.failNextGroupsWrite = false;
+        throw new Error('EIO: injected');
+      }
+      return (real.atomicWriteJSON as (...a: unknown[]) => Promise<void>)(filePath, ...rest);
+    }) as typeof real.atomicWriteJSON,
+  };
+});
 
 // Each test gets an isolated temp data dir so the store's accounts.json never
 // touches the real wmux data dir.
@@ -263,6 +280,21 @@ describe('AccountStore groups (account-groups.json)', () => {
     await store.removeAccount(c.id);
     expect(readFile()).toEqual({ version: 1, groups: { [b.id]: 'Work' } });
     expect(new AccountStore(dir).listAccounts().map((x) => [x.id, x.group])).toEqual([[b.id, 'Work']]);
+  });
+
+  it('a failed groups write after the removal committed leaves only an inert entry, pruned by the next write', async () => {
+    const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
+    const b = await store.addAccount({ name: 'b', vendor: 'claude', configDir: mkConfigDir('b') });
+    await store.setAccountGroup(a.id, 'Work');
+    await store.setAccountGroup(b.id, 'Personal');
+    writeFault.failNextGroupsWrite = true;
+    // accounts.json is durable before the groups write, so the removal holds.
+    await expect(store.removeAccount(a.id)).resolves.toEqual([]);
+    expect(store.listAccounts().map((x) => [x.id, x.group])).toEqual([[b.id, 'Personal']]);
+    const readFile = () => JSON.parse(fs.readFileSync(path.join(dir, 'account-groups.json'), 'utf8'));
+    expect(readFile().groups[a.id]).toBe('Work');
+    await store.renameAccount(b.id, 'b 2');
+    expect(readFile()).toEqual({ version: 1, groups: { [b.id]: 'Personal' } });
   });
 
   it("prunes an orphan an older build's removal left, on the next account write", async () => {
