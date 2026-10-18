@@ -1831,12 +1831,12 @@ export default function AppLayout() {
         const commandRunningSnapshot: Record<string, boolean> = {};
         // Process-truth agent liveness — the chip's edge-trigger gate.
         const agentAliveSnapshot: Record<string, boolean> = {};
-        // #2408: a live agent sighted on a recovered pane's screen hides its pill.
-        const onScreenSnapshot: Record<string, true> = {};
+        // #2408: an agent sighted on a recovered pane; on screen hides its pill.
+        const onScreenSnapshot: Record<string, boolean> = {};
         for (const s of sessions) {
           if (s.supervision) snapshot[s.id] = s.supervision;
           if (s.resumeAgent) resumeSnapshot[s.id] = s.resumeAgent as AgentSlug;
-          if (s.resumeAgentOnScreen === true) onScreenSnapshot[s.id] = true;
+          if (s.resumeAgentOnScreen !== undefined) onScreenSnapshot[s.id] = s.resumeAgentOnScreen;
           if (s.resumeBinding) resumeBindingSnapshot[s.id] = s.resumeBinding;
           if (s.commandRunning !== undefined) commandRunningSnapshot[s.id] = s.commandRunning;
           if (s.agentProcessAlive !== undefined) agentAliveSnapshot[s.id] = s.agentProcessAlive;
@@ -1925,12 +1925,12 @@ export default function AppLayout() {
         // #2408: the on-screen sighting rides along, so a hidden pill comes
         // back once the agent leaves the screen. Not a hint: a consumed pill
         // stays consumed.
-        const onScreenSnapshot: Record<string, true> = {};
+        const onScreenSnapshot: Record<string, boolean> = {};
         for (const s of sessions) {
           if (s.resumeBinding) snapshot[s.id] = s.resumeBinding;
           if (s.commandRunning !== undefined) cmdSnapshot[s.id] = s.commandRunning;
           if (s.agentProcessAlive !== undefined) agentAliveSnapshot[s.id] = s.agentProcessAlive;
-          if (s.resumeAgentOnScreen === true) onScreenSnapshot[s.id] = true;
+          if (s.resumeAgentOnScreen !== undefined) onScreenSnapshot[s.id] = s.resumeAgentOnScreen;
         }
         useStore.getState().hydrateResumeBindings(snapshot);
         useStore.getState().hydrateCommandRunning(cmdSnapshot);

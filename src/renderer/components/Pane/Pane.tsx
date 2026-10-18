@@ -406,15 +406,19 @@ export function planAutoResume(args: {
   commandRunning?: boolean;
   /** Process truth: the pane's agent process is alive. */
   agentAlive?: boolean;
-  /** #2408: the screen tier sees a live agent in the pane right now. */
-  agentOnScreen?: boolean;
+  /** #2408: the screen tier sighted an agent in the pane since the restart,
+   *  whether or not it is on screen now (the read may still be pending). */
+  agentSighted?: boolean;
 }): string | null {
   const agent = args.agent;
   if (!args.enabled || !agent || !AUTO_RESUME_AGENTS.has(agent)) return null;
   // The daemon outlives an app quit, so a pane it recovered once keeps its
   // resume hint across app restarts while the resumed agent runs in it. Typing
   // then would land in the agent's own input box. Unknown signals do not block.
-  if (recoveryAgentLive(args)) return null;
+  if (args.commandRunning === true || args.agentAlive === true) return null;
+  // An agent was started in the pane by hand since the restart (#2408): the
+  // pill may still offer the resume, but nothing is typed on its own.
+  if (args.agentSighted === true) return null;
   const { binding } = args;
   // Validate the session id before typing it: only a well-formed session id (a
   // UUID, for Claude and Codex alike) is ever put on the line; anything else
@@ -908,7 +912,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       roleBinding: paneRoleBinding,
       commandRunning: useStore.getState().commandRunningByPtyId[ptyId],
       agentAlive: useStore.getState().agentAliveByPtyId[ptyId],
-      agentOnScreen: useStore.getState().resumeAgentOnScreenByPtyId[ptyId] === true,
+      agentSighted: useStore.getState().resumeAgentOnScreenByPtyId[ptyId] !== undefined,
     });
     if (!line) return;
     // A beat after the first output, so the prompt is up and reading input.
@@ -923,12 +927,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         useStore.getState().clearResumeHint(ptyId);
         return;
       }
-      // Seen only on the screen: skip, but keep the offer (#2408).
-      if (recoveryAgentLive({
-        agentAlive: agentAliveByPtyId[ptyId],
-        commandRunning: commandRunningByPtyId[ptyId],
-        agentOnScreen: resumeAgentOnScreenByPtyId[ptyId] === true,
-      })) return;
+      // Seen only by the screen tier: skip, but keep the offer (#2408).
+      if (resumeAgentOnScreenByPtyId[ptyId] !== undefined) return;
       if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
       // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
       // A refused line keeps the pill, so the pane can still be resumed by hand.

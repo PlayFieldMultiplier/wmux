@@ -108,15 +108,16 @@ export interface ResumeSlice {
   hydrateAgentAlive: (snapshot: Record<string, boolean>) => void;
 
   /**
-   * #2408: recovered ptys whose screen shows a live agent the daemon's screen
-   * tier sighted since the restart (`resumeAgentOnScreen`). Hides the pill
-   * only: the hint and its binding stay, and the pill is back once a snapshot
-   * no longer reports it. Absent key = not reported (an older daemon too).
+   * #2408: recovered ptys whose agent the daemon's screen tier sighted since
+   * the restart (`resumeAgentOnScreen`): true while it is on screen, which
+   * hides the pill only (the hint and its binding stay, and the pill is back
+   * once a snapshot reports false); false while it is gone or not read yet.
+   * Absent key = no sighting reported (an older daemon too).
    */
-  resumeAgentOnScreenByPtyId: Record<string, true>;
+  resumeAgentOnScreenByPtyId: Record<string, boolean>;
 
   /** Replace the on-screen sighting map from a `pty.list` snapshot. */
-  hydrateResumeAgentOnScreen: (snapshot: Record<string, true>) => void;
+  hydrateResumeAgentOnScreen: (snapshot: Record<string, boolean>) => void;
 }
 
 export const createResumeSlice: StateCreator<

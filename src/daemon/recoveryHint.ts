@@ -1,5 +1,5 @@
 import { agentDisplayToSlug } from '../shared/agentIdentity';
-import { screenShowsActiveDialog } from './transcript/chatScreenGate';
+import { screenShowsActiveDialog, screenShowsAgentDialog } from './transcript/chatScreenGate';
 
 /**
  * The recovery hint for a pane, or undefined once process truth shows the
@@ -59,6 +59,24 @@ const CLAUDE_RULE_ROW = /^─{8,}/;
 /** Codex's footer under its composer: the model/cwd row or the shortcut hint. */
 const CODEX_FOOTER_ROW = /^\s+(?:\S.+ · (?:[A-Za-z]:[\\/]|\/|~)|(?:← for agents · )?\? for shortcuts?\b)/;
 
+/** A row an agent draws last on its screen: indented, or a dialog's key hints
+ *  (`Enter to select · … · Esc to cancel`, drawn from column 0). */
+const AGENT_BOTTOM_ROW = /^\s|\b(?:esc|enter) to\b/i;
+
+/**
+ * A dialog of the agent's owns the bottom of the screen: the last row is one
+ * the agent draws, and the awaiting verifier's strict test or, past it, any
+ * dialog sign on the screen holds (plan approvals, narrow or wrapped
+ * pickers). A shell row at the bottom (its prompt, `Killed`) means the
+ * dialog's rows were left behind.
+ */
+function dialogAtBottom(rows: readonly string[]): boolean {
+  let last = rows.length - 1;
+  while (last >= 0 && rows[last].trim().length === 0) last--;
+  if (last < 0 || !AGENT_BOTTOM_ROW.test(rows[last])) return false;
+  return screenShowsActiveDialog(rows) || screenShowsAgentDialog(rows);
+}
+
 /**
  * Is the sighted agent still on the visible screen? Its composer, empty or
  * holding a draft, at the bottom of the grid, or a dialog it owns there.
@@ -75,7 +93,7 @@ const CODEX_FOOTER_ROW = /^\s+(?:\S.+ · (?:[A-Za-z]:[\\/]|\/|~)|(?:← for agen
  * here would show the pill over a live agent.
  */
 export function screenShowsLiveAgent(rows: readonly string[], slug: 'claude' | 'codex'): boolean {
-  if (screenShowsActiveDialog(rows)) return true;
+  if (dialogAtBottom(rows)) return true;
   const isPrompt = slug === 'claude'
     ? (row: string) => /^❯(?:\s|$)/.test(row)
     : (row: string) => /^\s*›(?:\s|$)/.test(row);

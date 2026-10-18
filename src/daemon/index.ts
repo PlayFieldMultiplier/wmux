@@ -3123,10 +3123,13 @@ function registerRpcHandlers(
       const withRuntime = base.supervision
         ? { ...base, supervisionRuntime: paneSupervisor.getRuntime(s.id) }
         : base;
-      // #2408: additive; an older daemon sends no `resumeAgentOnScreen` and the
-      // renderer then gates the pill as before.
+      // #2408: additive, and present only for a pane whose screen tier sighted
+      // Claude or Codex since the restart: true while the last read shows it
+      // on screen, false while it is gone or not read yet. An older daemon
+      // sends none and the renderer gates the pill as before.
+      const sighted = !!resumeAgent && !!sightedRecoveredAgent(sessionManager.getSession(s.id)?.bridge.getLastAgent());
       const withAgent = resumeAgent
-        ? { ...withRuntime, resumeAgent, ...(recoveredSighting.get(s.id)?.onScreen === true ? { resumeAgentOnScreen: true as const } : {}) }
+        ? { ...withRuntime, resumeAgent, ...(sighted ? { resumeAgentOnScreen: recoveredSighting.get(s.id)?.onScreen === true } : {}) }
         : withRuntime;
       // Binding to SURFACE: the recovery-transient one (recovered-this-boot,
       // cwd+transcript guarded) OR the durable meta binding re-probed for

@@ -15,6 +15,8 @@
  * the pill gate.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { AgentDetector } from '../../../../main/pty/AgentDetector';
 import { generateTextSnapshot } from '../../../../daemon/HeadlessSnapshot';
 import { liveRecoveryHint, namedAgentAlive, screenShowsLiveAgent, sightedRecoveredAgent } from '../../../../daemon/recoveryHint';
@@ -69,10 +71,10 @@ function recoveryOffer(id: string) {
 /** One `pty.list` hydration, as AppLayout runs it. */
 function hydrate(sessions: Array<{ id: string; resumeAgent?: 'claude'; resumeAgentOnScreen?: boolean }>) {
   const hints: Record<string, 'claude'> = {};
-  const onScreen: Record<string, true> = {};
+  const onScreen: Record<string, boolean> = {};
   for (const s of sessions) {
     if (s.resumeAgent) hints[s.id] = s.resumeAgent;
-    if (s.resumeAgentOnScreen === true) onScreen[s.id] = true;
+    if (s.resumeAgentOnScreen !== undefined) onScreen[s.id] = s.resumeAgentOnScreen;
   }
   useStore.getState().hydrateResume(hints);
   useStore.getState().hydrateResumeBindings({ A: { agent: 'claude', sessionId: SID, cwd: CWD, ts: 1 } });
@@ -127,8 +129,24 @@ describe('recovery pill: a screen-tier sighting hides it and never consumes the 
       binding: { agent: 'claude', sessionId: SID, cwd: CWD },
       paneCwds: [CWD],
       roleBinding: undefined,
-      agentOnScreen: true,
+      agentSighted: true,
     })).toBeNull();
+  });
+
+  it('a sighting not read yet, or gone, shows the pill but types nothing on its own', () => {
+    hydrate([{ id: 'A', resumeAgent: 'claude', resumeAgentOnScreen: false }]);
+    expect(pillShown('A')).toBe(true);
+    const plan = (agentSighted: boolean | undefined) => planAutoResume({
+      enabled: true,
+      agent: 'claude',
+      binding: { agent: 'claude', sessionId: SID, cwd: CWD },
+      paneCwds: [CWD],
+      roleBinding: undefined,
+      agentSighted,
+    });
+    expect(plan(true)).toBeNull();
+    // No sighting reported (an older daemon too): the automatic resume as before.
+    expect(plan(undefined)).toBe(`claude --resume ${SID}`);
   });
 
   it('the pill is back once the banner is gone and the shell prompt is back', async () => {
@@ -192,6 +210,18 @@ describe('recovery pill: a screen-tier sighting hides it and never consumes the 
     expect(screenShowsLiveAgent(['› fix the', '  flaky test', '', '  gpt-5 high · ~/repo'], 'codex')).toBe(true);
     expect(screenShowsLiveAgent([...codex, 'me@devbox:~/repo$'], 'codex')).toBe(false);
     expect(screenShowsLiveAgent(['me@devbox:~/repo$ codex'], 'codex')).toBe(false);
+  });
+
+  it('reads the captured Claude and Codex dialogs as live, and not once a shell row is under them', () => {
+    const dir = resolve(__dirname, '../../../../daemon/approvals/__tests__/fixtures/terminal-prompts');
+    const dialogs = readdirSync(dir).filter((f) => /^(?:claude|codex)-.*\.json$/.test(f));
+    expect(dialogs.length).toBeGreaterThan(20);
+    for (const file of dialogs) {
+      const fixture = JSON.parse(readFileSync(resolve(dir, file), 'utf8')) as { tui: string; screen: string[] };
+      const slug = fixture.tui.startsWith('codex') ? 'codex' : 'claude';
+      expect(screenShowsLiveAgent(fixture.screen, slug), file).toBe(true);
+      expect(screenShowsLiveAgent([...fixture.screen, 'Killed', 'me@devbox:~/repo$'], slug), file).toBe(false);
+    }
   });
 
   it('quoted agent text in a different, still-recovering pane keeps that pill', async () => {
