@@ -463,17 +463,22 @@ describe('toResumeCommand (X6)', () => {
     it('EXCLUDES supervised units', () => {
       expect(resumeOfferForRecovered({ supervision: { restart: 'always' }, lastDetectedAgent: 'claude' })).toBeUndefined();
     });
-    it('prefers the saved binding\'s agent over a contradicting screen guess', () => {
+    it('falls back to the saved binding\'s agent when the detection is missing or unresumable', () => {
       // A Claude-only pane whose detector got taken over by a row naming
-      // another agent: the binding is the hook's own word, the guess is not.
+      // Gemini: the guess cannot be resumed, the binding is the hook's own word.
       const resumeBinding = { agent: 'claude', sessionId: 'abc', cwd: '/w' };
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', resumeBinding })).toBe('claude');
-      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding })).toBe('claude');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'aider', resumeBinding })).toBe('claude');
       expect(resumeOfferForRecovered({ resumeBinding })).toBe('claude');
     });
-    it('falls back to lastDetectedAgent when the binding is unusable or unresumable', () => {
-      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding: { agent: 'claude', sessionId: '', cwd: '/w' } })).toBe('codex');
-      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding: { agent: 'gemini', sessionId: 'x', cwd: '/w' } })).toBe('codex');
+    it('a resumable detection is newer evidence and still wins over the binding', () => {
+      // Claude ran (binding), then Codex with no Codex binding captured: the
+      // pill must offer Codex's picker, not the older Claude conversation.
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding: { agent: 'claude', sessionId: 'abc', cwd: '/w' } })).toBe('codex');
+    });
+    it('an unusable or unresumable binding offers nothing', () => {
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', resumeBinding: { agent: 'claude', sessionId: '', cwd: '/w' } })).toBeUndefined();
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', resumeBinding: { agent: 'gemini', sessionId: 'x', cwd: '/w' } })).toBeUndefined();
     });
   });
 });

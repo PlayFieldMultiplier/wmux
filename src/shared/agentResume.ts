@@ -630,16 +630,16 @@ export function resumeOfferForRecovered(session: {
   resumeBinding?: unknown;
 }): string | undefined {
   if (session.exec || session.supervision) return undefined;
-  // The saved conversation names its agent with certainty: the binding is
-  // written only by that agent's own hook or spool. lastDetectedAgent is the
-  // screen detector's last guess and can be overwritten by a row that merely
-  // named another agent (a Claude reply comparing models, `cd ~/gemini`).
-  // When the two disagree the pill used to carry the guess, and Pane's
-  // `resumeBinding.agent === launcher` gate then dropped the session id —
-  // a Claude-only pane offered "Resume Gemini" and opened a picker for an
-  // agent the user never ran. Prefer the binding whenever it is usable.
+  const detected = session.lastDetectedAgent;
+  if (detected && RESUME_BY_LAUNCHER.has(detected)) return detected;
+  // No resumable detection — nothing was detected, or the screen detector's
+  // last guess is an agent wmux cannot resume. The latter is how a row that
+  // merely named Gemini (a Claude reply comparing models, `cd ~/gemini`) on a
+  // pane whose Claude gate was unconfirmed cost the pane its pill: the guess
+  // was persisted as lastDetectedAgent and this returned undefined. The saved
+  // conversation is the agent's own hook's word, so it stands in. A resumable
+  // detection still wins above: it is newer evidence, and a later Codex run
+  // on a Claude pane must not be offered the older Claude conversation.
   const bound = isUsableResumeBinding(session.resumeBinding) ? session.resumeBinding.agent : undefined;
-  const agent = bound && RESUME_BY_LAUNCHER.has(bound) ? bound : session.lastDetectedAgent;
-  if (!agent || !RESUME_BY_LAUNCHER.has(agent)) return undefined;
-  return agent;
+  return bound && RESUME_BY_LAUNCHER.has(bound) ? bound : undefined;
 }

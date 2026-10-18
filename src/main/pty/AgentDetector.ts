@@ -400,9 +400,12 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // models, `cd ~/projects/gemini`, `npm i -g @google/gemini-cli` — and on
     // a pane whose Claude gate was not yet confirmed (or whose Claude had
     // exited) that made Gemini the pane's lastAgent. The daemon persists that
-    // slug as lastDetectedAgent, so after a restart a Claude-only pane
-    // offered "Resume Gemini" and the exact-session resume never matched.
-    gate: /[Gg]emini/,
+    // slug as lastDetectedAgent, so after a restart a Claude-only pane lost
+    // its resume pill (Gemini has no resume grammar) or offered another
+    // agent's picker. The hint names the composer and the footer, not the
+    // word: a cwd like `~/gemini-cli` sits in Claude's statusline on every
+    // repaint and must not pay for candidateLines on each chunk.
+    gate: /Type your message or |gemini-|Gemini CLI update/,
     chrome: (line) => isGeminiChrome(line),
     patterns: [
       { regex: /^gemini>\s*$/,                   status: 'waiting',   message: 'Waiting for input' },
@@ -760,19 +763,29 @@ function isCodexChrome(line: string): boolean {
 }
 
 /**
- * The Gemini CLI's own chrome, as opposed to a row that merely names Gemini:
- * the status footer (`~/repo  no sandbox (see /docs)  gemini-2.5-pro (98%
- * context left)`), which the TUI redraws under the composer for the whole
- * session, or a row whose visible text STARTS with `Gemini CLI` (the update
- * notice, `Gemini CLI update available`). Prose, a shell command or a
- * package name that contains the word does not count.
+ * The Gemini CLI's own chrome, as opposed to a row that merely names Gemini.
+ * From the upstream TUI (packages/cli/src/ui/components, read 2026-10-18):
+ *   - the empty composer's placeholder, `>   Type your message or
+ *     @path/to/file` (voice mode: `… or hold space to talk (Esc to exit)`),
+ *     redrawn whenever the composer is empty — the one row every session
+ *     shows, in every footer configuration;
+ *   - the footer's model column with the context display beside it:
+ *     `gemini-2.5-pro 12% used`, `gemini-2.5-pro 12%`, or the older
+ *     `gemini-2.5-pro (88% context left)`. The percentage is hidden by
+ *     default and the model may read `auto`, so this is a second chance,
+ *     not the main one;
+ *   - the update notice, `Gemini CLI update available …`.
+ * A row that STARTS with `Gemini CLI` is not enough: a Claude reply's table
+ * (`│ Gemini CLI │ Google │`) or wrapped prose begins the same way once the
+ * frame is stripped, and those rows are the bug this check exists to stop.
  */
 function isGeminiChrome(line: string): boolean {
   const stripped = stripAnsi(line);
   if (SOURCE_LINE_RE.test(stripped)) return false;
   const v = visibleChrome(stripped);
-  return /\bgemini-[\w.-]+\s*\(\d+%\s*context\s*left\)/i.test(v)
-    || /^Gemini CLI\b/.test(v);
+  return /^[>!*]?\s*Type your message or (?:@path\/to\/file|(?:hold )?space to talk)/.test(v)
+    || /\bgemini-[\w.-]+\s+(?:\d+%(?:\s+used)?(?:\s|$)|\(\d+%\s*context\s*left\))/i.test(v)
+    || /^Gemini CLI update available/.test(v);
 }
 
 /**
