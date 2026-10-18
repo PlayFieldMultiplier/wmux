@@ -4629,11 +4629,11 @@ function registerRpcHandlers(
       // Chat View P1 — the tail nudge rides the existing hook signals rather
       // than a new hook. Fired for every resolved kind; a no-op for panes with
       // no Chat surface open.
-      onTranscriptNudge: (sessionId, kind, agentSessionId) => {
+      onTranscriptNudge: (sessionId, kind, agentSessionId, ts) => {
         projector.nudge(sessionId, kind, agentSessionId);
         // A hook-fed session's own activity line wins over the transcript.
         transcriptActivity?.noteHookSignal(sessionId, kind);
-        apiErrorTurnEnds?.noteHookSignal(sessionId, kind);
+        apiErrorTurnEnds?.noteHookSignal(sessionId, kind, ts);
         // #782 — phone turn-view nudge. Non-recording: bypasses attentionLog so
         // a busy pane cannot evict a pending approval and blank the badge on
         // replay (CRITICAL 3). Delivered only to devices watching this pane; a

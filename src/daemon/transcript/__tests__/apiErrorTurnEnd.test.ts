@@ -17,9 +17,11 @@ const apiError = (error: string, text: string, timestamp = '2026-10-17T02:31:37.
 const turnDuration = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 458, timestamp: '2026-10-17T02:31:37.653Z' });
 const reply = JSON.stringify({ type: 'assistant', uuid: 'a2', timestamp: '2026-10-17T02:31:39.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'retried fine' }] } });
 
-function gate(opts: { turnOpen?: boolean; isReader?: (id: string, path: string) => boolean } = {}) {
-  // The daemon clock, just after Claude Code wrote the entry.
-  let now = Date.parse('2026-10-17T02:31:37.700Z');
+const JUST_AFTER_ENTRY = Date.parse('2026-10-17T02:31:37.700Z');
+
+function gate(opts: { turnOpen?: boolean; isReader?: (id: string, path: string) => boolean; start?: number } = {}) {
+  // The daemon clock, by default just after Claude Code wrote the entry.
+  let now = opts.start ?? JUST_AFTER_ENTRY;
   const sent: AgentSignal[] = [];
   const turnEnds = new ApiErrorTurnEnds({
     // The pane's open turn started at TURN_OPENED_AT.
@@ -45,10 +47,11 @@ describe('apiErrorFromTranscriptLine', () => {
 
 describe('ApiErrorTurnEnds', () => {
   it('closes the current open turn with the stop_failure the hook would have sent, once', () => {
-    const g = gate();
+    const g = gate({ start: TURN_OPENED_AT });
     // The previous turn's Stop, then this turn's prompt: neither speaks for its end.
     g.turnEnds.noteHookSignal('pty-1', 'agent.stop');
     g.turnEnds.noteHookSignal('pty-1', 'agent.user_prompt_submit');
+    g.advance(JUST_AFTER_ENTRY - TURN_OPENED_AT);
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('rate_limit', "You've hit your limit · resets 3pm"));
     g.turnEnds.noteLine('pty-1', '/t.jsonl', turnDuration);
     g.turnEnds.settle();
@@ -94,6 +97,19 @@ describe('ApiErrorTurnEnds', () => {
     expect(closed.sent).toEqual([]);
   });
 
+  it('leaves a retry alone: a new prompt drops the pending error and an older one never re-arms', () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('server_error', 'overloaded'));
+    g.advance(1000);
+    // The user retries before the grace runs out; the retry's entries are late.
+    g.turnEnds.noteHookSignal('pty-1', 'agent.user_prompt_submit');
+    // A new watch replays the old error after the prompt.
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('server_error', 'overloaded'));
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent).toEqual([]);
+  });
+
   it('still closes the turn when a background subagent writes after the lead turn died', () => {
     const g = gate();
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
@@ -137,6 +153,27 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     watcher.tick();
     expect(lines).toEqual([apiError('oauth_org_not_allowed', NOTICE), turnDuration, reply, turnDuration]);
     expect(ticks).toBe(4);
+  });
+
+  it('hands over an error line that was still being written when the watch began', () => {
+    const file = path.join(dir, 's.jsonl');
+    const error = apiError('oauth_org_not_allowed', NOTICE);
+    fs.writeFileSync(file, `${turnDuration}\n${error.slice(0, 40)}`);
+    const binding: ResumeBinding = { agent: 'claude', sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+    const lines: string[] = [];
+    const watcher = new TranscriptActivityWatcher({
+      listSessionIds: () => ['pty-1'],
+      getBinding: () => binding,
+      isAgentAlive: () => true,
+      emit: () => undefined,
+      onClaudeLine: (_id, _p, line) => { lines.push(line); },
+      minGapMs: 0,
+    });
+    watcher.tick();
+    expect(lines).toEqual([turnDuration]);
+    fs.appendFileSync(file, `${error.slice(40)}\n`);
+    watcher.tick();
+    expect(lines).toEqual([turnDuration, error]);
   });
 
   it('replays a transcript two panes share once, for the pane that keeps it', () => {

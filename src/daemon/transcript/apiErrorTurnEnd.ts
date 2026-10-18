@@ -22,7 +22,8 @@
 //     the install has the hook: nothing is sent. The previous turn's Stop
 //     does not count.
 //   - Only a turn end. A later assistant or user entry before the grace runs
-//     out means the turn went on, so the entry was not its end.
+//     out means the turn went on, so the entry was not its end. So does a new
+//     prompt hook (a retry), and an entry older than that prompt is ignored.
 //   - Only the pane that still reads the file. Two panes bound to one
 //     transcript (a resumed session) read it one at a time; an entry the
 //     losing pane read before the handover is not its turn end.
@@ -113,6 +114,10 @@ export class ApiErrorTurnEnds {
   private readonly pending = new Map<string, Pending>();
   /** Newest turn-closing hook (Stop / StopFailure) since the pane's last prompt. */
   private readonly turnEndHookAt = new Map<string, number>();
+  /** When the pane's last prompt hook fired. Claude Code runs the hook before
+   *  it sends the prompt, so an error of that turn is written after this; an
+   *  older one belongs to a turn the prompt moved past. */
+  private readonly promptAt = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ApiErrorTurnEndDeps) {
@@ -122,15 +127,21 @@ export class ApiErrorTurnEnds {
   /** One complete line of the pane's Claude transcript, in file order. */
   noteLine(sessionId: string, path: string, line: string): void {
     const end = apiErrorFromTranscriptLine(line);
+    if (end && end.at < (this.promptAt.get(sessionId) ?? -Infinity)) return;
     if (end) this.pending.set(sessionId, { end, path, seenAt: this.now() });
     else if (this.pending.has(sessionId) && isTurnProgress(line)) this.pending.delete(sessionId);
   }
 
-  /** Every resolved hook signal for the session. */
-  noteHookSignal(sessionId: string, kind: string): void {
+  /** Every resolved hook signal for the session; `ts` is when the hook fired. */
+  noteHookSignal(sessionId: string, kind: string, ts?: number): void {
     if (kind === 'agent.stop' || kind === 'agent.stop_failure') this.turnEndHookAt.set(sessionId, this.now());
-    // A new turn: the last turn's end hook speaks for nothing in it.
-    else if (kind === 'agent.user_prompt_submit') this.turnEndHookAt.delete(sessionId);
+    // A new turn (a retry too): the last turn's end hook and its error speak
+    // for nothing in it.
+    else if (kind === 'agent.user_prompt_submit') {
+      this.turnEndHookAt.delete(sessionId);
+      this.pending.delete(sessionId);
+      this.promptAt.set(sessionId, typeof ts === 'number' && Number.isFinite(ts) ? ts : this.now());
+    }
     // A new session: whatever the old one wrote is not this pane's turn now.
     else if (kind === 'agent.session_start') {
       this.pending.delete(sessionId);
@@ -142,6 +153,7 @@ export class ApiErrorTurnEnds {
   dropSession(sessionId: string): void {
     this.pending.delete(sessionId);
     this.turnEndHookAt.delete(sessionId);
+    this.promptAt.delete(sessionId);
   }
 
   /** Decide every entry whose grace ran out. */

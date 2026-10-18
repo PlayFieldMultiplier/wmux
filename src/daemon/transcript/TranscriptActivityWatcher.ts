@@ -363,7 +363,11 @@ export class TranscriptActivityWatcher {
     const onLine = this.deps.onClaudeLine;
     if (watch.replay && onLine) {
       watch.replay = false;
-      readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, watch.path, line); return []; } });
+      const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, watch.path, line); return []; } });
+      // Go on from the last complete line the replay handed over: a line still
+      // being written when the watch began is read whole once it ends, rather
+      // than its tail failing the line-boundary check and being skipped.
+      if (page && page.cursor.fileSize >= watch.offset) watch.offset = page.cursor.tailOffset;
     }
     const stat = statTranscript(watch.path);
     if (!stat) {

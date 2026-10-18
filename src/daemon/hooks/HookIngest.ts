@@ -317,6 +317,8 @@ export interface HookIngestDeps {
     kind: AgentSignalKind,
     /** The signal's own agent session id, when it carried one. */
     agentSessionId?: string,
+    /** When the hook fired (the bridge's clock). */
+    ts?: number,
   ) => void;
   /**
    * CompletionAlarm — emit a DETECTOR-sourced `agent.event` whose completion
@@ -1021,7 +1023,7 @@ export class HookIngest {
 
     // Transcript nudge: a PreToolUse means the agent is active.
     try {
-      this.deps.onTranscriptNudge?.(sessionId, signal.kind, signal.agentSessionId);
+      this.deps.onTranscriptNudge?.(sessionId, signal.kind, signal.agentSessionId, signal.ts);
     } catch (err) {
       this.deps.log?.('warn', `[hooks] transcript nudge failed for ${sessionId}: ${String(err)}`);
     }
@@ -1354,7 +1356,7 @@ export class HookIngest {
     // hook, and is wrapped because a projector failure must not turn into a
     // fatal hook — the bridge treats an RPC error as one.
     try {
-      this.deps.onTranscriptNudge?.(sessionId, signal.kind, signal.agentSessionId);
+      this.deps.onTranscriptNudge?.(sessionId, signal.kind, signal.agentSessionId, signal.ts);
     } catch (err) {
       this.deps.log?.('warn', `[hooks] transcript nudge failed for ${sessionId}: ${String(err)}`);
     }
