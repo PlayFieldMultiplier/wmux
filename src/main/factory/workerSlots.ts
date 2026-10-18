@@ -326,8 +326,7 @@ export class WorkerSlots {
       this.seed();
       return this.beginLaunch(req);
     }
-    const prevPane = req.pane ? this.panes.get(req.pane.sessionId) : undefined;
-    const prevSpace = req.pane ? this.workspaces.get(req.pane.workspaceId) : undefined;
+    const before = this.snapshot();
     this.tasks.delete(req.taskId);
     this.tasks.set(req.taskId, next);
     if (req.pane) {
@@ -338,14 +337,7 @@ export class WorkerSlots {
     try {
       this.write();
     } catch (err) {
-      if (prior) this.tasks.set(req.taskId, prior);
-      else this.tasks.delete(req.taskId);
-      if (req.pane) {
-        if (prevPane) this.panes.set(req.pane.sessionId, prevPane);
-        else this.panes.delete(req.pane.sessionId);
-        if (prevSpace) this.workspaces.set(req.pane.workspaceId, prevSpace);
-        else this.workspaces.delete(req.pane.workspaceId);
-      }
+      this.restore(before);
       throw new Error(`the task's launch could not be recorded: ${String(err)}`);
     }
     this.underway.set(req.taskId, next.gen);
@@ -371,17 +363,13 @@ export class WorkerSlots {
    *  cannot be written: the create fails. */
   recordCreate(token: TaskRef, workspaceId: string, sessionId: string): TaskRef {
     const ref = this.claimLaunch(token);
-    const prevPane = this.panes.get(sessionId);
-    const prevSpace = this.workspaces.get(workspaceId);
+    const before = this.snapshot();
     this.setPane(sessionId, { taskId: ref.taskId, gen: ref.gen, workspaceId });
     this.setWorkspace(workspaceId, ref);
     try {
       this.write();
     } catch (err) {
-      if (prevPane) this.panes.set(sessionId, prevPane);
-      else this.panes.delete(sessionId);
-      if (prevSpace) this.workspaces.set(workspaceId, prevSpace);
-      else this.workspaces.delete(workspaceId);
+      this.restore(before);
       throw new Error(`PTY_CREATE: the task pane could not be recorded: ${String(err)}`);
     }
     return { ...ref };
@@ -396,6 +384,19 @@ export class WorkerSlots {
     this.tasks.set(taskId, { ...t, state: 'released' });
     this.persist();
     return true;
+  }
+
+  /** The three maps as they are (entries and order), for a gating write
+   *  that fails to put back, evictions by the bound included. */
+  private snapshot(): { tasks: Map<string, TaskLaunch>; panes: Map<string, TaskPane>; workspaces: Map<string, TaskRef> } {
+    return { tasks: new Map(this.tasks), panes: new Map(this.panes), workspaces: new Map(this.workspaces) };
+  }
+
+  private restore(s: ReturnType<WorkerSlots['snapshot']>): void {
+    for (const [from, to] of [[s.tasks, this.tasks], [s.panes, this.panes], [s.workspaces, this.workspaces]] as Array<[Map<string, unknown>, Map<string, unknown>]>) {
+      to.clear();
+      for (const [k, v] of from) to.set(k, v);
+    }
   }
 
   private setPane(sessionId: string, pane: TaskPane): void {

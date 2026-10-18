@@ -359,6 +359,21 @@ describe('GLM review (#2411)', () => {
     expect(store(dir).launchOf('b')).toBeNull();
   });
 
+  it('a gating write that fails puts back what the bound dropped for it', () => {
+    const dir = tmp();
+    const rows = Array.from({ length: WORKER_SLOTS_MAX }, (_, i) => row(`r${i}`, { updatedAt: 10 + i }));
+    const s = store(dir, { rows });
+    const mkdir = fs.mkdirSync;
+    (fs as { mkdirSync: typeof fs.mkdirSync }).mkdirSync = (() => { throw new Error('ENOSPC'); }) as typeof fs.mkdirSync;
+    try {
+      expect(() => s.beginLaunch({ taskId: 'new', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
+    } finally {
+      (fs as { mkdirSync: typeof fs.mkdirSync }).mkdirSync = mkdir;
+    }
+    expect(s.launchOf('r0')).not.toBeNull();
+    expect(s.launchOf('new')).toBeNull();
+  });
+
   it('the ledger seed keeps every open row and the newest ended ones within the bound', () => {
     const rows = [row('open', { updatedAt: 1 }), ...Array.from({ length: WORKER_SLOTS_MAX + 5 }, (_, i) => row(`e${i}`, { status: 'completed', updatedAt: 10 + i }))];
     const s = store(tmp(), { rows });
