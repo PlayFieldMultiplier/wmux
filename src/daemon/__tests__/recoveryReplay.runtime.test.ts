@@ -1,7 +1,7 @@
 /**
  * #1464 — the recovery replay decision against a REAL ConPTY.
  *
- * DaemonSessionManager.test.ts covers the same decision with a mocked PTY;
+ * DaemonSessionManager.os.test.ts covers the same decision with a mocked PTY;
  * the Windows branch (keep ConPTY's stale-geometry discard) only means
  * something against the real thing, and nobody on the team runs Windows. This
  * suite is that dogfood: it runs on the CI windows-latest runner and is

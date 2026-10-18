@@ -137,7 +137,7 @@ describe('merge lane predicates on recorded fixtures', () => {
     expect(notWindowsPath(FORK)).toEqual({ ok: false, reason: 'windows-path' });
     expect(notWindowsPath(MERGED)).toEqual({ ok: true });
     for (const p of [
-      'src/main/pty/winSnapshotNative.ts', 'src/shared/wslDistro.ts', 'src/daemon/__tests__/win32Probe.test.ts',
+      'src/main/pty/winSnapshotNative.ts', 'src/shared/wslDistro.ts', 'src/daemon/__tests__/win32Probe.os.test.ts',
       'src/shared/conptyWindows.ts', 'src/main/squirrel.ts', 'src/main/pty/shell-hooks/pwsh.ps1', 'install.ps1',
       'chocolatey/wmux.nuspec', 'native/computer-use-windows/src/Core/X.cs', 'scripts/setup.bat',
     ]) expect(isWindowsPath(p), p).toBe(true);

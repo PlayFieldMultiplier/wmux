@@ -38,6 +38,7 @@ import {
   type WorkerSessionInfo,
 } from '../workerReclaim';
 import { STOPPED_BY_OWNER } from '../factoryStop';
+import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import { taskFolderFromMissions } from '../verifyPreset';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
@@ -630,6 +631,24 @@ describe('resumeWorker', () => {
     // Its agent exiting makes it resumable again.
     expect(noteWorkerAgentExit(store, 'daemon-1', 10_000)).toBe(true);
     expect(reclaimedWorkerState(store.get('wtask-abc-12345678'))).toBe('resumable');
+  });
+
+  it('a resume in the pane is the task\'s next launch generation, recorded before the line is typed (#2393)', async () => {
+    const store = await reclaimed();
+    const launches = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    launches.load();
+    launches.beginLaunch({ taskId: 'wtask-abc-12345678', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
+    const { ports } = resumePorts(store, [session({ agentProcessAlive: false })], { launches });
+    expect(await resumeWorker(ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: true });
+    expect(launches.launchOf('wtask-abc-12345678')).toMatchObject({ gen: 2, state: 'launched' });
+    expect(launches.paneOf('daemon-1')).toMatchObject({ taskId: 'wtask-abc-12345678', gen: 2 });
+    // Not recorded, not typed.
+    const store2 = await reclaimed();
+    const refusing = resumePorts(store2, [session({ agentProcessAlive: false })], {
+      launches: { beginLaunch: () => { throw new Error('the task\'s launch could not be recorded: disk full'); }, launched: () => true, released: () => true },
+    });
+    expect(await resumeWorker(refusing.ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_typed' });
+    expect(refusing.typeLine).not.toHaveBeenCalled();
   });
 
   it('refuses another bot, a closed or moved pane, a running agent, and a line the guard did not type', async () => {

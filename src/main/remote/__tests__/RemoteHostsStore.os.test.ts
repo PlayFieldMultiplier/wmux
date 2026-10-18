@@ -238,7 +238,7 @@ describe('RemoteHostsStore', () => {
   });
 
   it('writes the token file with owner-only permissions (POSIX)', () => {
-    if (process.platform === 'win32') return; // ACL semantics differ on Windows — see security.test.ts
+    if (process.platform === 'win32') return; // ACL semantics differ on Windows — see security.os.test.ts
     const store = new RemoteHostsStore(filePath);
     store.add('https://office-mac.example:9600/?token=secret-abc');
 

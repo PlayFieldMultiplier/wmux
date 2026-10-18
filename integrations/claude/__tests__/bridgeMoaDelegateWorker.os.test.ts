@@ -6,7 +6,7 @@
  * answer ever retires. The worker's settings set WMUX_MOA_DELEGATE_WORKER=1,
  * and the bridge sends nothing then. Without it, the report goes out as before.
  *
- * Same harness as bridgePermissionRequest.test.ts: the real bridge as a
+ * Same harness as bridgePermissionRequest.os.test.ts: the real bridge as a
  * subprocess against a fake daemon socket.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

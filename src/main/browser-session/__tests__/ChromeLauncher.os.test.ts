@@ -19,7 +19,7 @@ vi.mock('node:fs', async (orig) => {
     ...real,
     existsSync: () => true, // a binary always "exists"
     // Label seeding must not touch the real filesystem in these tests
-    // (covered by ChromeLauncher.label.test.ts against a real tmpdir).
+    // (covered by ChromeLauncher.label.os.test.ts against a real tmpdir).
     mkdirSync: () => undefined,
     readFileSync: vi.fn((p: unknown) => {
       // join() emits platform separators; keys are stored with forward

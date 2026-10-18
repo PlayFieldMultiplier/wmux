@@ -6,7 +6,8 @@
 # `npm run lint` lints the whole tree and still reports errors that predate
 # most changes, so a gate built on it fails every change and says nothing
 # about the change itself. This one checks what the change touches:
-#   1. eslint on the changed .ts/.tsx files (errors fail, warnings do not),
+#   1. eslint on the changed .ts/.tsx files (errors fail, warnings do not);
+#      a pure rename (content identical to the base's) is not linted,
 #   2. the typecheck,
 #   3. the vitest files related to the change (`vitest --changed`), in the
 #      main lane and the runtime lane,
@@ -36,10 +37,21 @@ if ! base="$(git merge-base HEAD "$base_ref" 2>/dev/null)"; then
   exit 2
 fi
 
+# Destinations of pure renames, base against the working tree, one per line:
+# their content is the base's, so they bring nothing new to lint, and errors
+# that predate the change would fail it (renaming a lane's test files moved
+# hundreds at once). Newline-delimited rather than an associative array, which
+# the bash 3.2 macOS ships does not have.
+pure_renames=$'\n'
+while IFS= read -r -d '' status && IFS= read -r -d '' _from && IFS= read -r -d '' to; do
+  if [ "$status" = "R100" ]; then pure_renames+="$to"$'\n'; fi
+done < <(git diff -z --name-status -M --diff-filter=R "$base")
+
 changed=0
 ts_files=()
 while IFS= read -r -d '' f; do
   changed=$((changed + 1))
+  case "$pure_renames" in *$'\n'"$f"$'\n'*) continue ;; esac
   case "$f" in
     *.ts | *.tsx) if [ -f "$f" ]; then ts_files+=("$f"); fi ;;
   esac

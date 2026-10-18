@@ -73,12 +73,15 @@ export class AgentGoneFacts {
     private readonly file: string,
     private readonly warn: (line: string) => void = (l) => console.warn(l),
     private readonly now: () => number = Date.now,
+    /** When the task's worker was last launched, on disk (workerSlots.ts):
+     *  an observation that started before it is stale, across a restart too. */
+    private readonly recordedLaunchAt: (taskId: string) => number | undefined = () => undefined,
   ) {
     this.persister = createFilePersister(file, () => ({ version: AGENT_GONE_VERSION, facts: [...this.facts.values()] }));
   }
 
-  static at(wmuxDir: string): AgentGoneFacts {
-    return new AgentGoneFacts(path.join(wmuxDir, 'factory', AGENT_GONE_FILENAME));
+  static at(wmuxDir: string, launchedAt?: (taskId: string) => number | undefined): AgentGoneFacts {
+    return new AgentGoneFacts(path.join(wmuxDir, 'factory', AGENT_GONE_FILENAME), undefined, undefined, launchedAt);
   }
 
   /** Read the file (missing → none). One a newer version wrote leaves no
@@ -135,6 +138,7 @@ export class AgentGoneFacts {
    *  held for the same workspace and sessions is kept as it is (no write). */
   note(fact: AgentGoneFact): void {
     if ((this.taskRanAt.get(fact.taskId) ?? -Infinity) >= fact.at) return;
+    if ((this.recordedLaunchAt(fact.taskId) ?? -Infinity) >= fact.at) return;
     if (fact.sessions.some((s) => fact.at <= (this.launchedAt.get(s) ?? -Infinity) + LAUNCH_SETTLE_MS)) return;
     if (fact.at <= (this.taskLaunchedAt.get(fact.taskId) ?? -Infinity) + LAUNCH_SETTLE_MS) return;
     const prior = this.facts.get(fact.taskId);

@@ -656,7 +656,7 @@ describe('T3 worktree base — origin default branch pinned to an OID, --no-trac
     expect(add?.[0]).toEqual(['worktree', 'add', path.resolve('/wt/s'), '-b', 'wtask/s']);
   });
 
-  // Real git processes: sized for a loaded CI runner, like diff.handler.test.ts.
+  // Real git processes: sized for a loaded CI runner, like diff.handler.os.test.ts.
   it('real git: narrowed fetch refspec, stale local checkout, OID pinned across tasks, no upstream', { timeout: 30_000 }, async () => {
     const { TaskWorktreeManager } = await loadModule();
     const { execFileSync } = await import('node:child_process');

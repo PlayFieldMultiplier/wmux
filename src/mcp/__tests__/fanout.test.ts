@@ -2,7 +2,7 @@
 //
 // The tool is a thin pass-through over `task.fanout.start` — the trust boundary
 // itself lives main-side (src/main/pipe/handlers/fanout.rpc.ts, tested in
-// fanout.rpc.test.ts). What matters HERE is the tool's shape:
+// fanout.rpc.os.test.ts). What matters HERE is the tool's shape:
 //
 //  1. It exposes no agent-command input. A schema field would invite callers to
 //     send a value that main ignores — and would read as if choosing the agent
