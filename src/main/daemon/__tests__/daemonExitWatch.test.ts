@@ -182,6 +182,20 @@ describe('createDaemonExitWatch (spawned child)', () => {
     expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 404 exited 0x00000001 (exit(1)) — child exit' }]);
   });
 
+  it('a failed handle read waits for the child exit event instead of giving up (Codex P2)', async () => {
+    const src = childExitSource();
+    let clock = 0;
+    const h = scriptedHandle([{ state: 'failed', failure: 'GetExitCodeProcess failed (error 6)' }]);
+    const { lines, deps } = harness({
+      onChildExit: src.onChildExit,
+      openHandle: () => h.handle,
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; if (clock >= 300) src.exit({ code: 0xc0000005, signal: null }); },
+    });
+    await createDaemonExitWatch(31, true, deps).report('socket close');
+    expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 31 exited 0xC0000005 (access violation) — child exit' }]);
+  });
+
   it('on POSIX, a daemon this process did not spawn has no exit code to read', async () => {
     const { lines, deps } = harness({ platform: 'darwin' });
     await createDaemonExitWatch(55, false, deps).report('socket close');

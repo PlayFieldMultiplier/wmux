@@ -166,6 +166,8 @@ export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps
       const r = handle.read();
       if (r.state === 'exited') return { exited: { code: r.code, signal: null } };
       if (r.state === 'running') return { running: true };
+      // A child exit event can still bring the code; keep waiting for it.
+      if (stopChildWatch) return { running: true };
       return { unavailable: r.failure };
     }
     // A spawned child with no handle (POSIX): alive until its exit event.
