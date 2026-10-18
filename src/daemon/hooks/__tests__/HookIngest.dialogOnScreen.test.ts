@@ -457,6 +457,24 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     expect(f.toasts()).toBe(2);
   });
 
+  it('the detector replacing the raised window still counts as raised: a later request does not re-alert the open dialog', async () => {
+    const f = makeIngest(async () => true);
+    f.ingest.handle(makeSignal());
+    f.advance(PERMISSION_NOTIFY_GRACE_MS);
+    await settle();
+    f.advance(300);
+    f.ingest.arbitrateDetector('pty-a', { agent: 'Claude Code', status: 'awaiting_input', message: 'Approval requested' });
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.toasts()).toBe(1);
+    f.advance(2_000);
+    f.ingest.handle(makeSignal({ ts: 22_000 }));
+    await runSecondLayer(f);
+    await runSecondLayer(f);
+    expect(f.toasts()).toBe(1);
+    expect(f.ingest.permissionRequestCount('pty-a')).toBe(2);
+  });
+
   it('a request queued behind a raised dialog, then a turn end, on an unreadable grid → no alarm', async () => {
     let grid: boolean | null = true;
     const f = makeIngest(async () => grid);

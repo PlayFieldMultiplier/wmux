@@ -6423,14 +6423,15 @@ function wireEvents(
   // defers Claude's Notification) is looked at again every few seconds,
   // since its answer may come with no hook and no awaiting state to report
   // it; bounded, and the Notification takes over once the typing stops.
-  // A record minted meanwhile belongs to a newer request, whose own lapse or
-  // alert decides it: the sweep stands down if the pane's pending
-  // terminal_prompt records changed.
+  // A newer PermissionRequest owns whatever record is pending (its dialog may
+  // not be drawn yet): the sweep expires nothing until that request's own
+  // lapse rebases it. Records are not tracked by id, since the registry
+  // replaces the same dialog's record with a new one as it re-reads it.
   const LAPSE_SWEEP_GAP_MS = 3_000;
   const LAPSE_SWEEP_LOOKS = 40;
   const sweepDelay = (ms: number): Promise<void> => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); });
-  // One sweep per pane at a time. A later lapse while it runs asks it to
-  // take the pane's current records as its own (they are that request's).
+  // One sweep per pane at a time. A later lapse while it runs rebases it onto
+  // that request.
   const lapseSweeps = new Map<string, { rebase: boolean }>();
   tentativeDialogLapsed = (sessionId) => {
     const registry = approvalRegistry;
@@ -6440,11 +6441,11 @@ function wireEvents(
       running.rebase = true;
       return;
     }
-    const pendingPrompts = (): string => registry.list().pending
-      .filter((r) => r.sessionId === sessionId && r.kind === 'terminal_prompt')
-      .map((r) => r.id).join(',');
-    let before = pendingPrompts();
-    if (before === '') return;
+    const hasPrompt = (): boolean => registry.list().pending
+      .some((r) => r.sessionId === sessionId && r.kind === 'terminal_prompt');
+    const requests = (): number => hookIngest?.permissionRequestCount(sessionId) ?? 0;
+    if (!hasPrompt()) return;
+    let baseline = requests();
     const sweep = { rebase: false };
     lapseSweeps.set(sessionId, sweep);
     void (async () => {
@@ -6452,14 +6453,15 @@ function wireEvents(
         if (look > 0) await sweepDelay(LAPSE_SWEEP_GAP_MS);
         if (sweep.rebase) {
           sweep.rebase = false;
-          before = pendingPrompts();
+          baseline = requests();
           look = 0;
         }
-        if (before === '' || pendingPrompts() !== before || !sessionManager.getSession(sessionId)) return;
+        if (!hasPrompt() || !sessionManager.getSession(sessionId)) return;
+        if (requests() !== baseline) continue;
         if (!(await registry.dialogGoneFromScreen(sessionId))) continue;
         await sweepDelay(DIALOG_RECHECK_MS);
         if (!(await registry.dialogGoneFromScreen(sessionId))) continue;
-        if (sweep.rebase || pendingPrompts() !== before) continue;
+        if (sweep.rebase || requests() !== baseline) continue;
         await registry.expireForSession(sessionId, 'screen-cleared', 'terminal_prompt');
         return;
       }

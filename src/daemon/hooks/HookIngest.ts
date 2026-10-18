@@ -794,6 +794,8 @@ export class HookIngest {
    * came after the grace) must not alert a second time.
    */
   private readonly secondLayerRaised = new Map<string, { epoch: number; at: number }>();
+  /** Per pane, how many Claude PermissionRequests have landed (see permissionRequestCount). */
+  private readonly permissionRequests = new Map<string, number>();
   /** #1823: panes already logged for a provider mismatch (log once per pane). */
   private readonly mismatchLogged = new Set<string>();
   /** Foreign-process senders already logged (`pane|reason`), bounded like the rest. */
@@ -1925,6 +1927,7 @@ export class HookIngest {
    * not postpone the check forever behind a dialog that is really up.
    */
   private holdTentativeDialog(sessionId: string, slug: string, fanOut: () => unknown): void {
+    this.permissionRequests.set(sessionId, (this.permissionRequests.get(sessionId) ?? 0) + 1);
     const epoch = this.dialogEpochOf(sessionId);
     const open = this.tentativeDialogs.get(sessionId);
     if (open && open.epoch === epoch) {
@@ -1977,12 +1980,12 @@ export class HookIngest {
           this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId}: the screen check already raised the open dialog`);
           return;
         }
-        // Recorded when the alert is actually sent: a window something else
-        // cancelled raised nothing, and must not hold the next check back.
-        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => {
-          this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
-          entry.fanOut();
-        }));
+        // Recorded as the window opens. Whatever closes a firm window either
+        // moves the epoch (an answer, a turn-ending stop, a prompt, a session
+        // boundary) or replaces it with one that still alerts (the detector's
+        // report, the Notification), so the record never outlives its alert.
+        this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
+        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => entry.fanOut()));
       };
       const verifyOnScreen = this.deps.dialogOnScreen;
       if (!verifyOnScreen) {
@@ -1997,6 +2000,16 @@ export class HookIngest {
     timer.unref?.();
     entry.cancel = () => clearTimeout(timer);
     this.tentativeDialogs.set(sessionId, entry);
+  }
+
+  /**
+   * How many Claude PermissionRequests this pane has had. The daemon's lapse
+   * sweep compares it across its reads: a newer request owns whatever record
+   * is pending now (its dialog may not be drawn yet), so the sweep waits for
+   * that request's own lapse instead of expiring under it.
+   */
+  permissionRequestCount(sessionId: string): number {
+    return this.permissionRequests.get(sessionId) ?? 0;
   }
 
   /**
@@ -2101,6 +2114,7 @@ export class HookIngest {
     this.clearTentativeDialog(sessionId);
     this.permissionNotifyPanes.delete(sessionId);
     this.secondLayerRaised.delete(sessionId);
+    this.permissionRequests.delete(sessionId);
     this.router.dropPty(sessionId);
     this.leadTurnEnded.delete(sessionId);
     this.lastPromptAt.delete(sessionId);
