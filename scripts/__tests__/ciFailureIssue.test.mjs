@@ -39,7 +39,10 @@ const REPORT = job('Report to issue', 'in_progress', '', ['success']);
 const RED = job('validate-runtime', 'completed', 'failure');
 const GREEN = job('validate-runtime', 'completed', 'success');
 
-function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {}, greenRuns = [] } = {}) {
+function fakeGh({
+  issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {}, greenRuns = [],
+  issuesAfterCreate = null, createdUrl = 'https://github.com/acme/app/issues/30\n',
+} = {}) {
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
@@ -50,7 +53,12 @@ function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] }, an
       const id = /check-runs\/(\d+)\/annotations$/.exec(args[2])?.[1];
       return (annotations[id] ?? []).join('\n');
     }
-    if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify(issues);
+    if (args[0] === 'issue' && args[1] === 'list') {
+      // The second list (after a create) sees what other jobs opened meanwhile.
+      const listed = calls.filter((c) => c.args[0] === 'issue' && c.args[1] === 'list').length;
+      return JSON.stringify(listed > 1 && issuesAfterCreate ? issuesAfterCreate : issues);
+    }
+    if (args[0] === 'issue' && args[1] === 'create') return createdUrl;
     if (args[0] === 'issue' && args[1] === 'view') return JSON.stringify(issue);
     if (args[0] === 'run' && args[1] === 'view') return JSON.stringify({ jobs });
     return '';
@@ -265,6 +273,34 @@ describe('report --state auto (the report job)', () => {
   it('reports a red run newer than the last green one', () => {
     const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [40] });
     expect(report({ env: ENV, gh: fake.gh })).toBe('created');
+  });
+
+  it('converges when another report job opened the same issue meanwhile: the older one stays', () => {
+    const fake = fakeGh({
+      issues: [],
+      jobs: [RED, REPORT],
+      createdUrl: 'https://github.com/acme/app/issues/31\n',
+      issuesAfterCreate: [{ number: 30, title: 'Nightly red: Runtime suite' }, { number: 31, title: 'Nightly red: Runtime suite' }],
+    });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('commented');
+    const writes = fake.writes().map((c) => c.args.slice(0, 3));
+    expect(writes).toEqual([
+      ['label', 'create', 'ci-nightly'],
+      ['issue', 'create', '-R'],
+      ['issue', 'comment', '30'],
+      ['issue', 'close', '31'],
+    ]);
+  });
+
+  it('keeps its issue when it is the oldest open one', () => {
+    const fake = fakeGh({
+      issues: [],
+      jobs: [RED, REPORT],
+      createdUrl: 'https://github.com/acme/app/issues/30\n',
+      issuesAfterCreate: [{ number: 30, title: 'Nightly red: Runtime suite' }, { number: 31, title: 'Nightly red: Runtime suite' }],
+    });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('created');
+    expect(fake.writes().map((c) => c.args[1])).toEqual(['create', 'create']);
   });
 
   it('does nothing for a cancelled run', () => {

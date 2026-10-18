@@ -104,14 +104,6 @@ jobs:
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # One report at a time per workflow, whatever the event: a nightly and a
-    # push run in flight together would otherwise both find no open issue
-    # and both open one. GitHub keeps one waiting job per group: a third
-    # report replaces the one waiting, which is fine, since the newest run's
-    # result is the one that matters.
-    concurrency:
-      group: nightly-issue-${{ github.workflow }}
-      cancel-in-progress: false
     # Files and closes the issue (issues), reads the run's jobs and recent
     # runs (actions) and a cancelled job's annotations (checks: a timeout).
     # The workflow default stays read-only.

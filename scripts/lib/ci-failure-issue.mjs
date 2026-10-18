@@ -222,7 +222,19 @@ export function report({ state = 'auto', env, gh, log = () => undefined }) {
   // Exists after the first time; the failure is ignored like `|| true`.
   gh(['label', 'create', LABEL, '-R', repo, '--color', LABEL_COLOR, '--description', LABEL_DESCRIPTION],
     { allowFailure: true });
-  gh(['issue', 'create', '-R', repo, '--title', title, '--label', 'bug', '--label', LABEL, '--body', body]);
-  log(`opened "${title}"`);
+  const createdUrl = gh(['issue', 'create', '-R', repo, '--title', title, '--label', 'bug', '--label', LABEL, '--body', body]);
+  const created = Number(/\/issues\/(\d+)/.exec(createdUrl ?? '')?.[1]) || null;
+  log(`opened "${title}"${created ? ` (#${created})` : ''}`);
+  // Two report jobs (a nightly and a push run) can both find no open issue
+  // and both create one; GitHub has no lock to stop that. Converge instead:
+  // the oldest open issue with the title is the one, and a newer duplicate
+  // hands its report over as a comment and closes.
+  const oldest = findOpenIssue(gh, { repo, title });
+  if (created && oldest !== null && oldest < created) {
+    gh(['issue', 'comment', String(oldest), '-R', repo, '--body', body]);
+    gh(['issue', 'close', String(created), '-R', repo, '--comment', `Duplicate of #${oldest}, which carries this report.`]);
+    log(`#${created} duplicated #${oldest}; moved the report there and closed it`);
+    return 'commented';
+  }
   return 'created';
 }
