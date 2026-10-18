@@ -16,6 +16,7 @@ vi.mock('../../../hooks/useTerminal', () => ({
 
 import { useStore } from '../../../stores';
 import { setLocale } from '../../../i18n';
+import { en } from '../../../i18n/locales/en';
 import WorktaskCleanupView from '../WorktaskCleanupView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -172,6 +173,23 @@ describe('WorktaskCleanupView', () => {
       act(() => root.render(createElement(WorktaskCleanupView)));
       await flush();
       expect(container.textContent).toContain('No task or task record links to it — check it, then delete it.');
+      expect(container.textContent).not.toContain('RAW-FROM-MAIN');
+    });
+
+    // Each code shows its own situation's line (a swapped mapping fails here).
+    it.each([
+      ['unmaterialized', 'worktask.cleanup.detail.unmaterialized'],
+      ['preserved', 'worktask.cleanup.detail.preserved'],
+      ['phone', 'worktask.cleanup.detail.phone'],
+      ['orphan-ended', 'worktask.cleanup.detail.orphanEnded'],
+      ['orphan-unlinked', 'worktask.cleanup.detail.orphanUnlinked'],
+      ['orphan-meta', 'worktask.cleanup.detail.orphanMeta'],
+      ['disk-missing', 'worktask.cleanup.detail.diskMissing'],
+    ] as const)('detail code %s shows %s', async (code, key) => {
+      scanReturns([{ category: 'orphan-dir', worktreePath: '/wt/abc/x', detailCode: code, detail: 'RAW-FROM-MAIN' }]);
+      act(() => root.render(createElement(WorktaskCleanupView)));
+      await flush();
+      expect(container.textContent).toContain(en[key]);
       expect(container.textContent).not.toContain('RAW-FROM-MAIN');
     });
 
