@@ -473,7 +473,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
 });
 
 describe('agent-gone facts file', () => {
-  it('a file of another version, or one that cannot be read, means no facts and is never written over', async () => {
+  it('a file a newer version wrote means no facts and is never written over', async () => {
     const dir = tmpDir();
     const file = nodePath.join(dir, 'factory', AGENT_GONE_FILENAME);
     fs.mkdirSync(nodePath.dirname(file), { recursive: true });
@@ -488,11 +488,43 @@ describe('agent-gone facts file', () => {
     await facts.written();
     expect(facts.get('t-b')).not.toBeNull();
     expect(fs.readFileSync(file, 'utf8')).toBe(foreign);
+  });
 
+  it('a file no version can read is moved aside, and facts are kept on disk again', async () => {
+    const dir = tmpDir();
+    const file = nodePath.join(dir, 'factory', AGENT_GONE_FILENAME);
+    fs.mkdirSync(nodePath.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{not json');
-    const broken = new AgentGoneFacts(file, () => undefined);
+    const broken = new AgentGoneFacts(file, () => undefined, () => 7);
     expect(() => broken.load()).not.toThrow();
     expect(broken.all()).toEqual([]);
+    expect(fs.readFileSync(`${file}.unreadable-7`, 'utf8')).toBe('{not json');
+    broken.note({ taskId: 't-b', taskWorkspaceId: 'ws-b', sessions: ['p-b'], at: 2 });
+    await broken.written();
+    const again = new AgentGoneFacts(file, () => undefined);
+    again.load();
+    expect(again.get('t-b')).not.toBeNull();
+  });
+
+  it('a respawned worker gets the launch window: a read before its agent is seen adds no fact', () => {
+    let now = 1_000;
+    const facts = new AgentGoneFacts(nodePath.join(tmpDir(), 'factory', AGENT_GONE_FILENAME), () => undefined, () => now);
+    facts.load();
+    setAgentGoneFacts(facts);
+    try {
+      noteTaskWorkerLaunched('t-a');
+      // A read that started after the launch, while the new agent is still starting.
+      now += 1;
+      facts.note({ taskId: 't-a', taskWorkspaceId: 'ws-a', sessions: ['p-a'], at: now });
+      expect(facts.get('t-a')).toBeNull();
+      // Seen running, then seen gone: the fact is written.
+      facts.seenRunning('t-a', now + 1);
+      now += 2;
+      facts.note({ taskId: 't-a', taskWorkspaceId: 'ws-a', sessions: ['p-a'], at: now });
+      expect(facts.get('t-a')).not.toBeNull();
+    } finally {
+      setAgentGoneFacts(null);
+    }
   });
 
   it('a close that stopped the task\'s panes adds a fact; a new worker session for the task clears it', () => {

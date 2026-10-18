@@ -19,9 +19,11 @@
 // running in its workspace again. A task whose agent was running at shutdown
 // has no fact, so it holds its slot until a read sees it exit.
 //
-// A file this version cannot read means "no facts": nothing is written over
-// it, and admission never fails for that reason.
+// A file a newer version wrote means "no facts": nothing is written over it,
+// and admission never fails for that reason. A file no version can read is
+// moved aside, and facts are kept on disk again from then on.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 
@@ -78,8 +80,10 @@ export class AgentGoneFacts {
     return new AgentGoneFacts(path.join(wmuxDir, 'factory', AGENT_GONE_FILENAME));
   }
 
-  /** Read the file (missing → none). An unreadable file or one of another
-   *  version leaves no facts and is never written over. Never throws. */
+  /** Read the file (missing → none). One a newer version wrote leaves no
+   *  facts and is never written over; one no version can read is moved
+   *  aside, so a corrupt file does not stop facts from being kept for good.
+   *  Never throws. */
   load(): void {
     this.facts.clear();
     try {
@@ -88,8 +92,29 @@ export class AgentGoneFacts {
       for (const f of list) if (isFact(f)) this.facts.set(f.taskId, { ...f, sessions: [...f.sessions] });
       this.writable = true;
     } catch (err) {
-      this.writable = false;
-      this.warn(`[factory] agent-gone facts not read, none are kept on disk: ${String(err)}`);
+      if (this.newerVersionOnDisk()) {
+        this.writable = false;
+        this.warn(`[factory] agent-gone facts not read, none are kept on disk: ${String(err)}`);
+        return;
+      }
+      try {
+        fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
+        this.writable = true;
+        this.warn(`[factory] agent-gone facts unreadable, moved aside and started empty: ${String(err)}`);
+      } catch (moveErr) {
+        this.writable = false;
+        this.warn(`[factory] agent-gone facts not read, none are kept on disk: ${String(err)}; ${String(moveErr)}`);
+      }
+    }
+  }
+
+  /** Whether the file parses and names a version above this one's. */
+  private newerVersionOnDisk(): boolean {
+    try {
+      const v = (JSON.parse(fs.readFileSync(this.file, 'utf8')) as { version?: unknown } | null)?.version;
+      return typeof v === 'number' && v > AGENT_GONE_VERSION;
+    } catch {
+      return false;
     }
   }
 
@@ -148,6 +173,13 @@ export class AgentGoneFacts {
    *  the pane): a fact naming that session goes, and none names it again
    *  until its new agent is seen running (sessionAgentSeen) or
    *  LAUNCH_SETTLE_MS has passed. */
+  /** A worker session was launched for the task (a respawn or a resume):
+   *  no read adds a fact for it until its agent is seen running or
+   *  LAUNCH_SETTLE_MS has passed. */
+  taskLaunched(taskId: string, at: number = this.now()): void {
+    remember(this.taskLaunchedAt, taskId, at);
+  }
+
   sessionLaunched(sessionId: string, at: number = this.now(), taskId?: string): void {
     remember(this.launchedAt, sessionId, at);
     // The task the session is the worker of, wherever its workspace is now.
@@ -202,6 +234,9 @@ export function setAgentGoneFacts(next: AgentGoneFacts | null): void {
  *  its agent runs again, so a fact that says it is gone goes. Never throws. */
 export function noteTaskWorkerLaunched(taskId: string): void {
   try {
+    // The new agent is not seen running yet: no read adds a fact for the
+    // task until it is, or LAUNCH_SETTLE_MS has passed (as sessionLaunched).
+    hosted?.taskLaunched(taskId);
     hosted?.clear(taskId, 'a new worker session was launched');
   } catch {
     /* best effort: the next good read decides */
