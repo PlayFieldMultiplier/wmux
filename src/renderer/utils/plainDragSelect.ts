@@ -262,8 +262,6 @@ export interface WheelClearsSelectionHintDeps {
   /** True for an agent that keeps its own selection while it scrolls
    *  (Claude Code, agentSelectsOnDrag): no xterm selection to lose there. */
   isExempt: () => boolean;
-  /** Ends the wheel's window once its dispatch is over. Default: a 0 ms timeout. */
-  afterDispatch?: (fn: () => void) => void;
 }
 
 /** Panes that were told already (by pty id), across mounts. */
@@ -282,10 +280,9 @@ const wheelHintedPanes = new Set<string>();
  * pane that the app scrolls its own transcript and that Shift+drag
  * (Option+drag on macOS) selects what is on screen.
  *
- * Only a clear that happens while the wheel event is being dispatched counts:
- * the capture listener opens a window that closes when the dispatch is over,
- * and xterm fires its selection event synchronously inside its own wheel
- * handler. A wheel xterm ignores (Shift+wheel, a delta too small for a line)
+ * Only a clear that happens while the wheel event is being dispatched counts
+ * (its `eventPhase` is not NONE yet): xterm fires its selection event
+ * synchronously inside its own wheel handler. A wheel xterm ignores (Shift+wheel, a delta too small for a line)
  * clears nothing, and a clear from anything else lands outside the window.
  * Nothing is swallowed: the listener only reads state.
  */
@@ -294,28 +291,27 @@ export function installWheelClearsSelectionHint(
   term: WheelSelectionTerminal,
   deps: WheelClearsSelectionHintDeps,
 ): () => void {
-  const afterDispatch = deps.afterDispatch ?? ((fn: () => void) => { setTimeout(fn, 0); });
-  let wheelPane: string | null = null;
-  const onWheel = (): void => {
-    if (wheelPane !== null) return;
+  let wheel: { event: Event; pane: string } | null = null;
+  const onWheel = (e: Event): void => {
+    wheel = null;
     const pane = deps.paneId();
     if (!pane || wheelHintedPanes.has(pane)) return;
     if ((term.modes?.mouseTrackingMode ?? 'none') === 'none' || !isAltScreen(term)) return;
     if (!term.hasSelection?.() || deps.isExempt()) return;
-    wheelPane = pane;
-    afterDispatch(() => { wheelPane = null; });
+    wheel = { event: e, pane };
   };
   const selection = term.onSelectionChange(() => {
-    if (wheelPane === null || term.hasSelection?.()) return;
-    wheelHintedPanes.add(wheelPane);
-    wheelPane = null;
+    if (!wheel || wheel.event.eventPhase === Event.NONE || term.hasSelection?.()) return;
+    const { pane } = wheel;
+    wheel = null;
+    wheelHintedPanes.add(pane);
     deps.show();
   });
   // Capture: xterm's own wheel handler cancels the event under tracking, so a
   // bubbling listener here would never run.
   container.addEventListener('wheel', onWheel, { capture: true, passive: true });
   return () => {
-    wheelPane = null;
+    wheel = null;
     selection.dispose();
     container.removeEventListener('wheel', onWheel, true);
   };

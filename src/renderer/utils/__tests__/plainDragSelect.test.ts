@@ -313,19 +313,16 @@ describe('installWheelClearsSelectionHint (#2293)', () => {
       e.preventDefault();
       e.stopPropagation();
     });
-    const ends: Array<() => void> = [];
     const show = vi.fn();
     const id = opts.id ?? `pty-${++pane}`;
     const install = () => installWheelClearsSelectionHint(container, term, {
       show,
       paneId: () => id,
       isExempt: () => opts.exempt === true,
-      afterDispatch: (fn) => { ends.push(fn); },
     });
     let detach = install();
     const wheel = (): void => {
       screen.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100 }));
-      ends.splice(0).forEach((fn) => fn());
     };
     return { term, show, wheel, detach: () => detach(), reinstall: () => { detach(); detach = install(); } };
   }
