@@ -202,6 +202,11 @@ describe('laneDrift', () => {
     expect(laneDrift({ integration: fresh.integration, text }, fresh)).toEqual([]);
   });
 
+  it('is empty for the generated file checked out with CRLF (Windows, core.autocrlf)', () => {
+    const text = renderLanesFile(fresh.integration).replace(/\n/g, '\r\n');
+    expect(laneDrift({ integration: fresh.integration, text }, fresh)).toEqual([]);
+  });
+
   it('names the file, the reason, the command and the pragma', () => {
     const [line] = laneDrift({ integration: [], text: renderLanesFile([]) }, fresh);
     expect(line).toContain('src/a/__tests__/spawns.test.ts touches the OS (imports node:child_process)');

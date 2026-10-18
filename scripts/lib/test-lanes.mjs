@@ -327,7 +327,9 @@ export function laneDrift(listed, lanes) {
         : `${file} is in the integration lane but is not a test file any more (renamed or deleted?). Run ${fix}.`,
     );
   }
-  if (problems.length === 0 && listed.text !== renderLanesFile(lanes.integration)) {
+  // A Windows checkout (core.autocrlf) holds the file with CRLF; that is the
+  // generated form too.
+  if (problems.length === 0 && listed.text.replace(/\r\n/g, '\n') !== renderLanesFile(lanes.integration)) {
     problems.push(`${path.relative(ROOT, LANES_FILE)} lists the right files but not in the generated form. Run ${fix}.`);
   }
   return problems;
