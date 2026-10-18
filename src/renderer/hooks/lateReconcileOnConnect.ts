@@ -60,6 +60,7 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
   let activeCtl: AbortController | null = null;
   let running = false;
   let rerunAfter: string | null = null;
+  let disposed = false;
   const log =
     deps.log ??
     ((level: 'log' | 'warn', message: string, err?: unknown) => {
@@ -88,7 +89,9 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
         running = false;
         const reason = rerunAfter;
         rerunAfter = null;
-        if (reason !== null && !ctl.signal.aborted && deps.getPaneGate() === 'ready') {
+        // A pass that timed out still lets the queued one run; only disposal
+        // (or a newer connect, which replaced activeCtl above) drops it.
+        if (reason !== null && !disposed && deps.getPaneGate() === 'ready') {
           run(`[lifecycle] ${reason} — re-reconciling PTYs`);
         }
       });
@@ -111,6 +114,7 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
       run(`[lifecycle] ${reason} — re-reconciling PTYs`);
     },
     dispose: () => {
+      disposed = true;
       rerunAfter = null;
       activeCtl?.abort();
     },

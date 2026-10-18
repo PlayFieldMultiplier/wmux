@@ -195,4 +195,28 @@ describe('createLateReconcileOnConnect', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(reconcile).toHaveBeenCalledTimes(2);
   });
+
+  it('a rerun queued behind a pass that times out still runs (Codex P2)', async () => {
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>((signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('aborted')));
+    }));
+    const { late } = make({ reconcile, timeoutMs: 1_000 });
+    late.rerun('startup reconcile failed');
+    late.rerun('unconfirmed binding a reported gone');
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispose drops a queued rerun', async () => {
+    let finish: () => void = () => undefined;
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const { late } = make({ reconcile, timeoutMs: 60_000 });
+    late.rerun('a');
+    late.rerun('b');
+    late.dispose();
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
 });
