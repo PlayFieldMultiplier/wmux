@@ -379,9 +379,11 @@ export class TranscriptActivityWatcher {
       || (watch.offset > 0 && watch.offset <= stat.size && !isLineBoundary(watch.path, watch.offset));
     if (replaced || stat.size < watch.offset) {
       // Rewritten, replaced or rotated: re-seat at the new end, report nothing.
+      // The Claude lines of the new file are owed once, as for a new watch.
       watch.ino = stat.ino;
       watch.offset = stat.size;
       watch.pending = undefined;
+      watch.replay = watch.lines;
     } else if (stat.size - watch.offset > READ_CAP_BYTES) {
       const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: watch.parse });
       if (!page) { this.watches.delete(id); return; }

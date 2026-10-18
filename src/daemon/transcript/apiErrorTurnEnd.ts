@@ -138,9 +138,12 @@ export class ApiErrorTurnEnds {
     // A new turn (a retry too): the last turn's end hook and its error speak
     // for nothing in it.
     else if (kind === 'agent.user_prompt_submit') {
+      const at = typeof ts === 'number' && Number.isFinite(ts) ? ts : this.now();
       this.turnEndHookAt.delete(sessionId);
-      this.pending.delete(sessionId);
-      this.promptAt.set(sessionId, typeof ts === 'number' && Number.isFinite(ts) ? ts : this.now());
+      // A hook ingested late (a stalled daemon) keeps its own turn's error.
+      const p = this.pending.get(sessionId);
+      if (p && p.end.at < at) this.pending.delete(sessionId);
+      this.promptAt.set(sessionId, at);
     }
     // A new session: whatever the old one wrote is not this pane's turn now.
     else if (kind === 'agent.session_start') {

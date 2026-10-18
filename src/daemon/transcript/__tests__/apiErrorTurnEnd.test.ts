@@ -110,6 +110,16 @@ describe('ApiErrorTurnEnds', () => {
     expect(g.sent).toEqual([]);
   });
 
+  it('keeps the error of the turn whose prompt hook arrived late', () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
+    // The prompt hook fired before the error was written, but is ingested after.
+    g.turnEnds.noteHookSignal('pty-1', 'agent.user_prompt_submit', TURN_OPENED_AT);
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent.map((s) => s.ptyId)).toEqual(['pty-1']);
+  });
+
   it('still closes the turn when a background subagent writes after the lead turn died', () => {
     const g = gate();
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
@@ -172,6 +182,29 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     watcher.tick();
     expect(lines).toEqual([turnDuration]);
     fs.appendFileSync(file, `${error.slice(40)}\n`);
+    watcher.tick();
+    expect(lines).toEqual([turnDuration, error]);
+  });
+
+  it('hands over the tail of a transcript replaced at the same path', () => {
+    const file = path.join(dir, 's.jsonl');
+    fs.writeFileSync(file, `${turnDuration}\n`);
+    const binding: ResumeBinding = { agent: 'claude', sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+    const lines: string[] = [];
+    const watcher = new TranscriptActivityWatcher({
+      listSessionIds: () => ['pty-1'],
+      getBinding: () => binding,
+      isAgentAlive: () => true,
+      emit: () => undefined,
+      onClaudeLine: (_id, _p, line) => { lines.push(line); },
+      minGapMs: 0,
+    });
+    watcher.tick();
+    const error = apiError('oauth_org_not_allowed', NOTICE);
+    const next = `${file}.next`;
+    fs.writeFileSync(next, `${error}\n`);
+    fs.renameSync(next, file);
+    watcher.tick();
     watcher.tick();
     expect(lines).toEqual([turnDuration, error]);
   });
