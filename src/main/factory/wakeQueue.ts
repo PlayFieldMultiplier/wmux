@@ -478,13 +478,14 @@ export class WakeQueue implements WakeSinkApi {
     return n;
   }
 
-  /** Drop the queued PR-event wakes (pr.opened, pr.head_moved, ci.failed) of
-   *  a verifier moved to on-request verification: nobody asked for those
-   *  heads. Code `expired`. */
+  /** Drop the queued and parked PR-event wakes (pr.opened, pr.head_moved,
+   *  ci.failed) of a verifier moved to on-request verification: nobody asked
+   *  for those heads, and a parked one would run once its park lifts. Code
+   *  `expired`. */
   dropPrEventWakes(botId: string): number {
     let n = 0;
     for (const i of this.items) {
-      if (i.botId !== botId || i.state !== 'queued' || i.reason.kind !== 'facts') continue;
+      if (i.botId !== botId || (i.state !== 'queued' && i.state !== 'parked') || i.reason.kind !== 'facts') continue;
       const k = i.reason.trigger.kind;
       if (k === 'pr.opened' || k === 'pr.head_moved' || k === 'ci.failed') {
         i.state = 'dropped';

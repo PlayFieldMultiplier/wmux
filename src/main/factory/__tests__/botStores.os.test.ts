@@ -475,8 +475,12 @@ describe('BotStore', () => {
     const opened = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f1'], trigger: { kind: 'pr.opened', filter: { authorTrusted: true } } }, priority: 2 });
     const moved = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f2'], trigger: { kind: 'pr.head_moved', filter: { authorTrusted: true } } }, priority: 2 });
     const gated = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f3'], trigger: { kind: 'task.done' } }, priority: 2 });
+    const failed = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f4'], trigger: { kind: 'ci.failed', filter: { authorTrusted: true } } }, priority: 2 });
+    // Parked by a provider limit: it would run once the park lifts.
+    expect(q.park(failed?.id ?? '')?.state).toBe('parked');
     const human = q.enqueue({ botId: 'bot-0b0b0b01', workspaceId: 'ws-1', reason: { kind: 'human', text: 'verify #1', source: 'desktop' }, priority: 0 });
-    expect(q.dropPrEventWakes('bot-0b0b0b01')).toBe(2);
+    expect(q.dropPrEventWakes('bot-0b0b0b01')).toBe(3);
+    expect(q.get(failed?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
     expect(q.get(opened?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
     expect(q.get(moved?.id ?? '')).toMatchObject({ state: 'dropped', dropped: { code: 'expired' } });
     expect(q.get(gated?.id ?? '')?.state).toBe('queued');
