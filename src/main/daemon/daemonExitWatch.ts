@@ -86,8 +86,11 @@ const DEFAULT_BUDGET_MS = 15_000;
 /**
  * Start watching daemon `pid` (null when the launcher could not tell it).
  * Call when the daemon is installed, so the handle is open while it lives.
+ * `spawned` says this process just spawned it: only then is the launcher's
+ * child-exit record about this process and not an earlier one that had the
+ * same pid.
  */
-export function createDaemonExitWatch(pid: number | null, deps: DaemonExitWatchDeps): DaemonExitWatch {
+export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps: DaemonExitWatchDeps): DaemonExitWatch {
   const platform = deps.platform ?? process.platform;
   const openHandle = deps.openHandle ?? tryOpenProcessExitHandle;
   const onChildExit = deps.onChildExit ?? onSpawnedDaemonExit;
@@ -130,11 +133,13 @@ export function createDaemonExitWatch(pid: number | null, deps: DaemonExitWatchD
   } else {
     // The child 'exit' event arrives without any socket close to wait for:
     // log it as soon as it comes.
-    stopChildWatch = onChildExit(pid, (exit) => {
-      childExit = exit;
-      logExit(exit, 'child exit');
-      if (!reporting) release();
-    });
+    stopChildWatch = spawned
+      ? onChildExit(pid, (exit) => {
+        childExit = exit;
+        logExit(exit, 'child exit');
+        if (!reporting) release();
+      })
+      : null;
     if (platform === 'win32' && !logged) {
       const opened = openHandle(pid);
       if ('failure' in opened) handleFailure = opened.failure;

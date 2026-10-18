@@ -2363,7 +2363,7 @@ app.on('ready', async () => {
       error: (msg) => { logLine('error', 'daemon-respawn', msg); },
     },
     // The daemon's exit code when it goes, native faults included.
-    watchDaemonExit: (pid) => createDaemonExitWatch(pid, {
+    watchDaemonExit: (pid, spawned) => createDaemonExitWatch(pid, spawned, {
       log: (level, msg) => { logLine(level, 'daemon-exit', msg); },
     }),
     // B′ stale-daemon auto-replacement (plans/daemon-auto-replace-plan-

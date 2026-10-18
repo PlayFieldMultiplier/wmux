@@ -926,9 +926,9 @@ describe('DaemonRespawnController stale-daemon replacement', () => {
 // ---------------------------------------------------------------------------
 
 function makeExitWatches() {
-  const watches: Array<{ pid: number | null; reports: string[]; disposed: boolean }> = [];
-  const factory = (pid: number | null) => {
-    const w = { pid, reports: [] as string[], disposed: false };
+  const watches: Array<{ pid: number | null; spawned: boolean; reports: string[]; disposed: boolean }> = [];
+  const factory = (pid: number | null, spawned: boolean) => {
+    const w = { pid, spawned, reports: [] as string[], disposed: false };
     watches.push(w);
     return {
       report: async (reason: string) => { w.reports.push(reason); },
@@ -946,7 +946,7 @@ describe('DaemonRespawnController daemon exit watch', () => {
     h.clientQueue.push(c1);
 
     await h.controller.bootstrap();
-    expect(ew.watches).toEqual([{ pid: 1234, reports: [], disposed: false }]);
+    expect(ew.watches).toEqual([{ pid: 1234, spawned: true, reports: [], disposed: false }]);
 
     c1.fireDisconnect();
     expect(ew.watches[0].reports).toEqual(['socket close']);
@@ -1027,6 +1027,20 @@ describe('DaemonRespawnController daemon exit watch', () => {
 
     await h.controller.bootstrap();
 
-    expect(ew.watches.map((w) => w.pid)).toEqual([5000]);
+    expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[5000, true]]);
+  });
+
+  it('a daemon found running is watched as not spawned by this process', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({
+      config: { healthIntervalMs: 0 },
+      watchDaemonExit: ew.factory,
+      ensureDaemonImpl: async () => ({ pid: 777, authToken: 'tok', pipeName: 'pipe', spawned: false }),
+    });
+    h.clientQueue.push(new FakeDaemonClient());
+
+    await h.controller.bootstrap();
+
+    expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[777, false]]);
   });
 });

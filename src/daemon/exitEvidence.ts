@@ -142,9 +142,12 @@ export function installExitEvidence(proc: ExitEvidenceProcess, opts: ExitEvidenc
     try {
       // A report carries the environment by default, and the daemon's holds
       // whatever credentials it inherited (API keys, tokens). Leave it out;
-      // a Node that cannot do that writes no reports at all.
-      proc.report.excludeEnv = true;
-      if (proc.report.excludeEnv !== true) {
+      // a Node that cannot do that writes no reports at all. The setting has
+      // to exist before it is set: on a Node without it, the assignment only
+      // adds a plain property that reads back true and changes nothing.
+      const canExcludeEnv = 'excludeEnv' in proc.report;
+      if (canExcludeEnv) proc.report.excludeEnv = true;
+      if (!canExcludeEnv || proc.report.excludeEnv !== true) {
         opts.log('warn', '[exit] diagnostic reports off: this Node cannot leave the environment out of them');
         return;
       }

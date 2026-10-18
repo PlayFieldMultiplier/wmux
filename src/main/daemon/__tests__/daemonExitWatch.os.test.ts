@@ -32,7 +32,7 @@ describe('daemon exit line (runtime)', () => {
     child.on('exit', (code, signal) => spawnedDaemonRegistryForTest.settle(pid, code, signal));
 
     const lines: string[] = [];
-    createDaemonExitWatch(pid, { log: (level, msg) => { lines.push(`[${level}] ${msg}`); } });
+    createDaemonExitWatch(pid, true, { log: (level, msg) => { lines.push(`[${level}] ${msg}`); } });
     await new Promise<void>((resolve) => child.on('exit', () => setImmediate(resolve)));
 
     expect(lines).toEqual([`[warn] daemon pid ${pid} exited 0x0000004D (code 77) — child exit`]);
@@ -44,10 +44,9 @@ describe('daemon exit line (runtime)', () => {
       const { pid } = startStandIn('setInterval(() => {}, 1000);');
 
       const lines: string[] = [];
-      // Not spawned by this process as far as the watch knows: only the handle.
-      const watch = createDaemonExitWatch(pid, {
+      // A daemon main found running rather than spawned: only the handle.
+      const watch = createDaemonExitWatch(pid, false, {
         log: (level, msg) => { lines.push(`[${level}] ${msg}`); },
-        onChildExit: () => null,
       });
 
       // End it the way a native fault does: no JS runs, the code is set by the OS.
@@ -73,9 +72,8 @@ describe('daemon exit line (runtime)', () => {
     async () => {
       const { pid } = startStandIn('setInterval(() => {}, 1000);');
       const lines: string[] = [];
-      const watch = createDaemonExitWatch(pid, {
+      const watch = createDaemonExitWatch(pid, false, {
         log: (level, msg) => { lines.push(`[${level}] ${msg}`); },
-        onChildExit: () => null,
         budgetMs: 300,
       });
       await watch.report('health probe hang');

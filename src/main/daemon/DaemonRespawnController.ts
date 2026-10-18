@@ -62,7 +62,7 @@ export interface DaemonRespawnDeps {
    * logged when its socket closes (daemonExitWatch.ts). Optional: absent means
    * no exit line, as before.
    */
-  watchDaemonExit?: (pid: number | null) => DaemonExitWatch;
+  watchDaemonExit?: (pid: number | null, spawned: boolean) => DaemonExitWatch;
 }
 
 export interface DaemonReplacementHooks {
@@ -204,8 +204,8 @@ export class DaemonRespawnController {
    * session suspended on disk (Codex #4 + Claude #2).
    */
   private replacementDeadEnd = false;
-  /** Pid of the daemon behind the client spawnAndConnect last returned. */
-  private connectedPid: number | null = null;
+  /** The daemon behind the client spawnAndConnect last returned: its pid, and whether this process spawned it. */
+  private connectedDaemon: { pid: number | null; spawned: boolean } = { pid: null, spawned: false };
   /** Watches the installed daemon's process for its exit code. */
   private exitWatch: DaemonExitWatch | null = null;
 
@@ -293,7 +293,7 @@ export class DaemonRespawnController {
     this.deps.logger.info(
       `daemon ${info.spawned ? 'spawned' : 'found'} (pid=${info.pid})`,
     );
-    this.connectedPid = info.pid;
+    this.connectedDaemon = { pid: info.pid, spawned: info.spawned };
     const client = this.deps.createClient(info.pipeName, info.authToken);
     const connected = await client.connect();
     if (!connected) {
@@ -457,7 +457,7 @@ export class DaemonRespawnController {
     this.deps.logger.info(
       `stale daemon replaced (old pid=${oldInfo.pid} → new pid=${freshInfo.pid})`,
     );
-    this.connectedPid = freshInfo.pid;
+    this.connectedDaemon = { pid: freshInfo.pid, spawned: freshInfo.spawned };
     return freshClient;
   }
 
@@ -482,7 +482,7 @@ export class DaemonRespawnController {
     // Watch this daemon's process from now on: its exit code can only be read
     // through a handle opened while it is alive.
     this.exitWatch?.dispose();
-    this.exitWatch = this.deps.watchDaemonExit?.(this.connectedPid) ?? null;
+    this.exitWatch = this.deps.watchDaemonExit?.(this.connectedDaemon.pid, this.connectedDaemon.spawned) ?? null;
     const exitWatch = this.exitWatch;
     // Wire the disconnected listener BEFORE we hand control to onInstall.
     // If a disconnect raced the install path itself, we still observe it.
