@@ -25,9 +25,10 @@
 //   one leaves the issue alone and the last shard to finish decides; if both
 //   finish the same second, neither may close it, and the next green run does.
 // - Runs of one workflow overlap: a push run and the nightly sit in separate
-//   concurrency groups. A green run closes the issue only when it started
-//   after the newest red run the issue records (run ids grow with creation
-//   time), so an older green run finishing late never hides a newer red one.
+//   concurrency groups. A green run closes the issue only when it is not
+//   older than the newest red run the issue records (run ids grow with
+//   creation time; a rerun keeps its id), so an older green run finishing
+//   late never hides a newer red one, and a green rerun still closes.
 
 export const LABEL = 'ci-nightly';
 export const LABEL_COLOR = 'B60205';
@@ -165,7 +166,9 @@ export function report({ state, env, gh, log = () => undefined }) {
       return 'none';
     }
     const newestRed = newestReportedRun(readIssue(gh, { repo, number: existing }));
-    if (Number(env.GITHUB_RUN_ID) <= newestRed) {
+    // Equal is this run's own red attempt: a rerun keeps GITHUB_RUN_ID and
+    // bumps GITHUB_RUN_ATTEMPT, and a green rerun may close.
+    if (Number(env.GITHUB_RUN_ID) < newestRed) {
       log(`run ${env.GITHUB_RUN_ID} is older than red run ${newestRed}; leaving #${existing} open`);
       return 'none';
     }

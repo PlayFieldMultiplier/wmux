@@ -182,6 +182,12 @@ describe('report --state success', () => {
     expect(fake.writes()).toEqual([]);
   });
 
+  it('lets a green rerun of the red run itself close the issue (same run id, later attempt)', () => {
+    const issue = { body: 'Run: https://github.com/acme/app/actions/runs/42', comments: [] };
+    const fake = fakeGh({ issues: [{ number: 12, title: 'Nightly red: Runtime suite' }], jobs: [SELF_GREEN], issue });
+    expect(report({ state: 'success', env: ENV, gh: fake.gh })).toBe('closed');
+  });
+
   it('reads the newest run id from the body and every comment', () => {
     expect(newestReportedRun({ body: 'runs/7 and /actions/runs/31', comments: [{ body: '/actions/runs/12' }] })).toBe(31);
     expect(newestReportedRun({})).toBe(0);
