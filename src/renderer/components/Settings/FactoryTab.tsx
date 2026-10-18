@@ -782,8 +782,12 @@ function TaskFoldersRow({ port, t, disabled }: { port: FactorySettingsPort; t: T
                 void clean()
                   .then((r) => {
                     if (!live.current) return;
+                    // The folders it could not remove, by path, with why (in English).
+                    const notRemoved = r.ok && r.notRemoved && r.notRemoved.length > 0
+                      ? ` ${t('settings.factory.taskFolders.notRemoved', { list: r.notRemoved.map((f) => `${f.path} (${f.reason})`).join('; ') })}`
+                      : '';
                     setNote(r.ok
-                      ? { text: t('settings.factory.taskFolders.cleaned', { removed: r.removed, kept: r.keptDirty, busy: r.busy }), tone: 'muted' }
+                      ? { text: t('settings.factory.taskFolders.cleaned', { removed: r.removed, kept: r.keptDirty, busy: r.busy }) + notRemoved, tone: notRemoved ? 'danger' : 'muted' }
                       : { text: t('settings.factory.taskFolders.cleanFailed', { message: r.message }), tone: 'danger' });
                   })
                   .catch((err: unknown) => { if (live.current) setNote({ text: t('settings.factory.taskFolders.cleanFailed', { message: String(err) }), tone: 'danger' }); })

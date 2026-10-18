@@ -21,6 +21,7 @@ import {
 } from '../fanoutEnvironment';
 import { parseFanoutPortRange } from '../../../shared/wmuxProjectConfig';
 import type { ProjectConfigState, ProjectTrustState } from '../../../shared/wmuxProjectConfig';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 beforeEach(() => {
   clearFanoutPortReservationsForTest();
@@ -209,7 +210,7 @@ describe('runFanoutSetup', () => {
     if (!res.ok) expect(res.error).toContain('timed out');
 
     // Give the grandchild's timer more than enough time to fire if it lived.
-    await new Promise((r) => setTimeout(r, 3500));
+    await deliberateSleep(3500, 'negative: the grandchild\'s timer never fires');
     expect(fs.existsSync(marker)).toBe(false);
     const pid = Number(fs.readFileSync(pidFile, 'utf8'));
     let alive = true;

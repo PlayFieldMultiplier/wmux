@@ -27,6 +27,7 @@ import { createA2aRoutes } from '../routes';
 import { A2aServer } from '../server';
 import type { SessionClient } from '../session';
 import { freePort } from './a2aServerRig';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // Two PCs each mint a certificate and every step is a TLS handshake: slow CI
 // runners (Windows) need far more than the default per-test budget.
@@ -342,7 +343,7 @@ describe('cross-host delivery, end to end', () => {
     pcs.splice(pcs.indexOf(b), 1);
     await b.stop();
     const taskId = await sendTask(a, linkId, 'while you were away');
-    await new Promise((r) => setTimeout(r, 300));
+    await deliberateSleep(300, 'negative: the task stays queued while the peer is away');
     // The task, not counting A's receipt for B's earlier task (also owed to B).
     expect(a.delivery.outbox.pending(b.hostId).filter((r) => r.envelope.kind !== 'receipt')).toHaveLength(1);
     await until(() => a.delivery.status()[0]?.state !== 'connected');
@@ -355,7 +356,7 @@ describe('cross-host delivery, end to end', () => {
       linkId, from: { workspaceId: 'ws-b', name: 'Backend', paneId: 'pane-b' }, title: 'two', text: 'two',
     })) as { taskId: string };
     await until(() => taskSends(a).length === 2);
-    await new Promise((r) => setTimeout(r, 300));
+    await deliberateSleep(300, 'negative: no extra task send arrives');
     expect(taskSends(a).map((p) => p['presetTaskId'])).toEqual([early.taskId, more.taskId]);
     expect(taskSends(b)).toHaveLength(1);
   });
@@ -385,7 +386,7 @@ describe('cross-host delivery, end to end', () => {
     const posts = b.received.filter((e) => (e as { kind?: string }).kind === 'task');
     expect(posts).toHaveLength(2); // the original and the resend
     await until(() => taskSends(b).length === 1);
-    await new Promise((r) => setTimeout(r, 300));
+    await deliberateSleep(300, 'negative: the resend is not delivered twice');
     expect(taskSends(b)).toHaveLength(1);
     expect(b.tasks.getTask(taskId)).toBeDefined();
   });
@@ -416,7 +417,7 @@ describe('cross-host delivery, end to end', () => {
     await until(() => a.delivery.status()[0]?.state === 'identity-changed');
     const before = b.received.length;
     await sendTask(a, linkId, 'must not leave');
-    await new Promise((r) => setTimeout(r, 400));
+    await deliberateSleep(400, 'negative: nothing leaves for a peer whose identity changed');
     expect(b.received.length).toBe(before);
     expect(a.delivery.outbox.pending(b.hostId)).toHaveLength(1);
   });
@@ -486,7 +487,7 @@ describe('cross-host delivery, end to end', () => {
         if (Date.now() > end) throw new Error('not held');
         await new Promise((r) => setTimeout(r, 50));
       }
-      await new Promise((r) => setTimeout(r, 400));
+      await deliberateSleep(400, 'negative: a held delivery is never re-rendered on its own');
       expect(reRendered).toEqual([]);
       // A person's "send again" is the only way it is written once more.
       expect(await fresh.retryHeld(taskId)).toMatchObject({ ok: true, results: [{ outcome: 'delivered' }] });
@@ -656,13 +657,13 @@ describe('Moa to Moa across PCs (brain links), end to end', () => {
     b.moa.ready = false;
     const taskId = await moaSend(a, HQ_A, linkId, 'are you there?');
     await until(() => (b.tasks.getTask(taskId)?.metadata.remote as { held?: string } | undefined)?.held === 'brain-unavailable');
-    await new Promise((r) => setTimeout(r, 300));
+    await deliberateSleep(300, 'negative: nothing is emitted while the brain is unavailable');
     expect(b.emitted).toEqual([]);
     expect((b.tasks.getTask(taskId)!.metadata.remote as { delivered?: boolean }).delivered).toBe(false);
     b.moa.ready = true;
     b.moa.changed();
     await until(() => b.emitted.some((e) => e.taskId === taskId));
-    await new Promise((r) => setTimeout(r, 300));
+    await deliberateSleep(300, 'negative: the held task is emitted once, not twice');
     expect(b.emitted.filter((e) => e.taskId === taskId)).toHaveLength(1);
     expect(b.tasks.getTask(taskId)!.metadata.remote).toMatchObject({ delivered: true });
     expect(b.tasks.getTask(taskId)!.metadata.remote).not.toHaveProperty('held');

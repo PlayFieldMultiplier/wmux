@@ -25,6 +25,11 @@ import { setBotGroupPort, type BotGroupPort } from '../../Room/botGroups';
 import type { BotGroup } from '../../../../shared/botGroup';
 import { botHueIndex } from '../../Room/BotAvatar';
 
+// A worker's panel mounts its pane; these tests check the panel, not the
+// terminal in it. A real xterm here needs a canvas and the pty bridge, and
+// without them it only threw into the pane's ErrorBoundary on every mount.
+vi.mock('../../Terminal/Terminal', () => ({ default: () => null }));
+
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const LEAD = 'bot-0000000a';

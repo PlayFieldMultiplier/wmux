@@ -87,6 +87,11 @@ export interface BotSessionRecord {
   /** The repository the conversation worked on (null: none). A session is
    *  resumed only on the same one; a record without it predates it. */
   repoPath?: string | null;
+  /** The bot's own model pin the conversation ran on (null: none). A session
+   *  is resumed only on the same pin, because claude restores a resumed
+   *  conversation's last model whenever no --model is given; a record
+   *  without it predates it. */
+  model?: string | null;
   updatedAt: number;
 }
 
@@ -119,10 +124,12 @@ export class BotSessionStore {
       if (!Number.isSafeInteger(r.updatedAt)) continue;
       const accountId = typeof r.accountId === 'string' || r.accountId === null ? r.accountId : undefined;
       const repoPath = typeof r.repoPath === 'string' || r.repoPath === null ? r.repoPath : undefined;
+      const model = typeof r.model === 'string' || r.model === null ? r.model : undefined;
       this.sessions.set(botId, {
         sessionId: r.sessionId,
         ...(accountId !== undefined ? { accountId } : {}),
         ...(repoPath !== undefined ? { repoPath } : {}),
+        ...(model !== undefined ? { model } : {}),
         updatedAt: r.updatedAt as number,
       });
     }
@@ -200,6 +207,11 @@ export interface BotWorkerLoad {
 
 /** What a live session is bound to: its engine and the repository it
  *  reads (botEngines.ts gives the adapter the root at spawn). */
+/** The bot's own model pin, as a session record keeps it (null: none). */
+function modelPin(profile: Pick<BotProfile, 'engine'>): string | null {
+  return 'model' in profile.engine ? profile.engine.model ?? null : null;
+}
+
 function sessionKey(profile: Pick<BotProfile, 'engine' | 'repo'>): string {
   return JSON.stringify([profile.engine, profile.repo?.repoPath ?? null]);
 }
@@ -913,9 +925,15 @@ export class BotRuntime {
       return { ok: false, message: String(err) };
     }
     if (!spawned.ok) return { ok: false, message: spawned.message };
-    // A conversation about another repository is not resumed.
+    // A conversation about another repository is not resumed, nor one that
+    // ran on another model pin: with no --model, claude resumes it on the
+    // model it last ran on, so a cleared pin would not take effect.
     const prior = this.deps.sessions.get(profile.id);
-    const saved = prior && (prior.repoPath === undefined || prior.repoPath === (profile.repo?.repoPath ?? null)) ? prior : null;
+    const saved = prior
+      && (prior.repoPath === undefined || prior.repoPath === (profile.repo?.repoPath ?? null))
+      && (prior.model === undefined || prior.model === modelPin(profile))
+      ? prior
+      : null;
     spawned.adapter.start({
       systemPrompt: redactStoredSecrets((this.deps.systemPrompt ?? ports.systemPrompt ?? defaultBotSystemPrompt)(profile)),
       ...(saved ? { resumeSessionId: saved.sessionId, ...(saved.accountId !== undefined ? { resumeAccountId: saved.accountId } : {}) } : {}),
@@ -992,7 +1010,7 @@ export class BotRuntime {
         const sessionId = result.sessionId ?? s.live.adapter.sessionId;
         if (sessionId) {
           const accountId = s.live.adapter.conversationAccountId;
-          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, updatedAt: this.now() });
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), updatedAt: this.now() });
         }
         // A reply to the owner the bot wrote as plain text instead of a
         // room_post would reach nobody: it becomes the bot's card, while the

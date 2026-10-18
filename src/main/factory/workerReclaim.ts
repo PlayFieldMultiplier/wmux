@@ -21,7 +21,8 @@
 // A task that was reported for review (`review_requested`) and whose worker
 // then sat idle for REPORTED_IDLE_MS (workerPanesIdle: its panes reported
 // their turn's end and nothing happened in them since, counted from their own
-// last turn end and input, never while the owner views them) has
+// last turn end and input, never while the owner views them and typed
+// into or focused them within VIEWED_ATTENTION_MS) has
 // its worker's agent stopped and recorded the same way, so a report whose
 // gate did not complete it (refused, failed) holds no memory and no agent
 // slot. The task stays `review_requested` and its workspace stays open:
@@ -477,6 +478,52 @@ export function workerPanesIdle(panes: readonly PaneActivity[], floor: number, n
     && (p.turnStartAt === undefined || p.turnEndAt >= p.turnStartAt)
     && p.status !== 'running' && p.status !== 'awaiting_input'
     && now - Math.max(floor, p.turnEndAt, p.inputAt ?? -Infinity) >= ms);
+}
+
+/** How long a worker the owner is shown (the active workspace, or the Bots
+ *  worker panel) stays protected from the idle stops after the owner last
+ *  typed into it or focused it (owner decision 2026-10-17): a worker left
+ *  open in a panel does not live forever. */
+export const VIEWED_ATTENTION_MS = 30 * 60_000;
+
+/** Whether being shown still protects a worker at `now`: the owner focused
+ *  it (`focusedAt`: it became the active workspace, its active pane changed,
+ *  or the Bots panel opened on it) or typed into one of its panes
+ *  (`inputAts`) within `ms`. Staying shown, or the panel closing, is no
+ *  focus. After
+ *  that the usual idle test decides; it never stops a pane with a live turn
+ *  or a prompt waiting (workerPanesIdle). Pure. */
+export function viewProtects(focusedAt: number | undefined, inputAts: ReadonlyArray<number | undefined>, now: number, ms: number = VIEWED_ATTENTION_MS): boolean {
+  const last = [focusedAt, ...inputAts].reduce<number>((a, b) => (b !== undefined && b > a ? b : a), -Infinity);
+  return now - last < ms;
+}
+
+/** When the owner last focused each shown workspace, from the renderer's
+ *  pushes: the viewed (active) workspace or its active pane changing, or the
+ *  Bots panel opening (or showing again) on it. The panel closing is no
+ *  focus. A workspace no longer shown is forgotten. */
+export interface ViewAttention {
+  observe(viewed: { workspaceId: string; paneId: string | null } | null, panelWorkspaceId: string | null, at: number): void;
+  /** Undefined: not focused while shown. */
+  focusedAt(workspaceId: string): number | undefined;
+}
+
+export function createViewAttention(): ViewAttention {
+  const focused = new Map<string, number>();
+  let last: { workspaceId: string; paneId: string | null } | null = null;
+  let lastPanel: string | null = null;
+  return {
+    observe(viewed, panelWorkspaceId, at) {
+      if (viewed?.workspaceId && (viewed.workspaceId !== last?.workspaceId || viewed.paneId !== last.paneId)) focused.set(viewed.workspaceId, at);
+      if (panelWorkspaceId && panelWorkspaceId !== lastPanel) focused.set(panelWorkspaceId, at);
+      last = viewed?.workspaceId ? { workspaceId: viewed.workspaceId, paneId: viewed.paneId } : null;
+      lastPanel = panelWorkspaceId || null;
+      for (const id of [...focused.keys()]) if (id !== viewed?.workspaceId && id !== panelWorkspaceId) focused.delete(id);
+    },
+    focusedAt(workspaceId) {
+      return focused.get(workspaceId);
+    },
+  };
 }
 
 /** One pane's turn as the daemon reports it (DaemonClient.getAgentState). */
@@ -1789,8 +1836,9 @@ export interface ResumedIdlePorts extends Pick<WorkerResumePorts, 'store' | 'sto
   /** What main knows of a pane's activity (workerPanesIdle). */
   paneActivity: (sessionId: string) => PaneActivity;
   /** Whether the owner is viewing the workspace now (the active one, or the
-   *  one the Bots worker panel shows; unknown: false): a worker the owner
-   *  looks at is never stopped as idle. Absent: never. */
+   *  one the Bots worker panel shows; unknown: false) and typed into it or
+   *  focused it within VIEWED_ATTENTION_MS (viewProtects): such a worker
+   *  is not stopped as idle. Absent: never. */
   viewed?: (workspaceId: string) => boolean;
   /** Default RESUMED_IDLE_MS. */
   idleMs?: number;

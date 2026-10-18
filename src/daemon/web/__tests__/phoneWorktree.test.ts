@@ -11,6 +11,7 @@ import { pathWithin, samePath } from '../phoneGitRead';
 import { PHONE_WORKTREE_RECEIPTS_FILE, PHONE_WORKTREE_RECEIPTS_PER_OWNER, PhoneWorktreeReceipts } from '../phoneWorktreeReceipts';
 import { parseWorktreeCreateBody, PHONE_WORKTREE_RECEIPT_TTL_MS, PHONE_WORKTREE_RETRY_AFTER_MS } from '../../../shared/phoneGitV1';
 import { windowsDirectoryHold } from '../../../shared/directoryHold';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
 let root: string;
@@ -490,7 +491,7 @@ describe('phone worktree creation', { timeout: 60_000 }, () => {
     // Windows runners take seconds to reach the add; then give the other job
     // ample time to get there too, which it must not.
     await vi.waitFor(() => expect(gated).not.toBeNull(), { timeout: 30_000, interval: 50 });
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await deliberateSleep(2_000, 'negative: the other job must not reach the add');
     expect(events).toEqual([`start ${gated}`]);
     release();
     await Promise.all([first.done, second.done]);

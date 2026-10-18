@@ -1,7 +1,7 @@
 import { TerminalEngineSetting } from './TerminalEngineSetting';
 import { QuickCommandsSection } from './QuickCommandsSection';
 import { SecretHookSetting } from './SecretHookSetting';
-import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react';
 import { BROWSER_BACKENDS, isBrowserBackend } from '../../../shared/browserBackend';
 import { isWslShellPath } from '../../../shared/wslDistro';
 import type { ImagePasteMode } from '../../../shared/imagePaste';
@@ -104,7 +104,7 @@ import { resolveAttentionRemindMs } from '../Sidebar/attentionBlink';
 import Badge from '../ui/Badge';
 import TokenUsageTab from './tabs/TokenUsageTab';
 import './settings.css';
-import { SettingsSection, SettingRow, SettingNote } from './SettingsLayout';
+import { SettingsSection, SettingRow, SettingNote, OwnedDialogContext, useOwnedDialog } from './SettingsLayout';
 import { MAX_WORKSPACE_IDLE_DAYS, MIN_WORKSPACE_IDLE_DAYS } from '../../../shared/workspaceSettle';
 import { sendWorkspaceSettleIdleDays } from '../../hooks/useWorkspaceSettleBridge';
 import { FactoryTab } from './FactoryTab';
@@ -4388,25 +4388,6 @@ function TabNotifications() {
       onChangeWorkspacePrWakeChecksPassed={(id, enabled) => updateWorkspaceMetadata(id, { wakeOnPrChecksPassed: enabled })}
     />
   );
-}
-
-// ─── Dialogs Settings owns ───────────────────────────────────────────────────
-//
-// A modal opened FROM Settings (key capture, paired devices) is the top-most
-// layer: Escape closes only it and Ctrl/Cmd+F must not pull focus to the
-// search box behind it. Settings' own key handler runs first (window,
-// capture), so it has to know when one is open. Each owner registers while it
-// is open; a DOM query for any aria-modal dialog would also match dialogs
-// Settings does not own (the floating terminal stays mounted, hidden).
-const OwnedDialogContext = createContext<(delta: number) => void>(() => undefined);
-
-function useOwnedDialog(open: boolean): void {
-  const register = useContext(OwnedDialogContext);
-  useEffect(() => {
-    if (!open) return;
-    register(1);
-    return () => register(-1);
-  }, [open, register]);
 }
 
 // ─── Key capture overlay ──────────────────────────────────────────────────────

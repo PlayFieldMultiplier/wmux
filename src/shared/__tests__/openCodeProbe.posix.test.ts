@@ -19,9 +19,10 @@ describe.skipIf(process.platform === 'win32')('probeOpenCodeVersion against a hu
       const { probeOpenCodeVersion } = await import('../openCodeTerminalChatIntegration');
       expect(await probeOpenCodeVersion(3000, 500)).toMatchObject({ state: 'timeout' });
       const [shell, sleeper] = fs.readFileSync(pids, 'utf8').trim().split(' ').map(Number);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      expect(alive(shell)).toBe(false);
-      expect(alive(sleeper)).toBe(false);
+      await vi.waitFor(() => {
+        expect(alive(shell)).toBe(false);
+        expect(alive(sleeper)).toBe(false);
+      }, { timeout: 10_000 });
     } finally {
       process.env.PATH = originalPath;
       fs.rmSync(dir, { recursive: true, force: true });

@@ -18,6 +18,7 @@ import type { ManagedSession } from '../DaemonSessionManager';
 import { DaemonSessionManager } from '../DaemonSessionManager';
 import type { PromptEvent } from '../PromptEventLog';
 import { FACTORY_DEFAULT_SCOPES, __setPolicyProbeForTests } from '../../shared/pwshExecutionPolicy';
+import { deliberateSleep } from '../../test-utils/waitFor';
 
 const SYS = process.env.SystemRoot || 'C:\\Windows';
 const PF = process.env.ProgramFiles || 'C:\\Program Files';
@@ -493,7 +494,7 @@ describe.runIf(hasPowerShell)('mid-line cwd report — powershell.exe (#1941)', 
     await waitForOutputAfter(managed, before, /PINGSTART\[1\]/, 'the capped line reaching the program');
     // The hook would have written OSC 7 ahead of the marker; give the daemon a
     // moment to parse the stream, while ping -n 8 still runs for about 7 s.
-    await new Promise((r) => setTimeout(r, 500));
+    await deliberateSleep(500, 'negative: the program on the capped line has not finished yet');
     expect(managed.ringBuffer.readAll().subarray(before).toString('utf8')).not.toMatch(/PINGDONE\[1\]/);
     expect(real(managed.meta.cwd)).toBe(real(start));
     await waitForOutputAfter(managed, before, /PINGDONE\[1\]/, 'the program on the capped line ending');

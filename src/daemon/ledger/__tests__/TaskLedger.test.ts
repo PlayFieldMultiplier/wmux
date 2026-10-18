@@ -372,6 +372,45 @@ describe('TaskLedger — transition matrix', () => {
     expect((await a.recordGate('wtask-3', PASS)).ok).toBe(true);
   });
 
+  it('a dispatch keeps the recorded git dir when it is an absolute path with no control character, across a reload', async () => {
+    const a = open();
+    const ok = ['/home/me/repo/.git', 'C:\\Users\\me\\repo\\.git', '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo\\.git'];
+    for (const [i, dir] of ok.entries()) {
+      await a.register({ id: `wtask-${i}`, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'lane', dispatch: { origin: { kind: 'bot', botId: 'b1' }, gitCommonDir: dir } });
+      expect(open().get(`wtask-${i}`)?.dispatch?.gitCommonDir).toBe(dir);
+    }
+    for (const [i, dir] of ['repo/.git', '/r/.git\n', ''].entries()) {
+      await a.register({ id: `wtask-bad-${i}`, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'lane', dispatch: { origin: { kind: 'bot', botId: 'b1' }, gitCommonDir: dir } });
+      expect(a.get(`wtask-bad-${i}`)?.dispatch?.gitCommonDir).toBeUndefined();
+    }
+  });
+
+  it('a dispatch keeps origin\'s pin, a plain address as written, across a reload', async () => {
+    const a = open();
+    const pin = 'ssh://git@git.corp.example:2222/Team/App';
+    await a.register({ id: 'wtask-pin', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'lane', dispatch: { origin: { kind: 'bot', botId: 'b1' }, originPin: pin } });
+    expect(open().get('wtask-pin')?.dispatch?.originPin).toBe(pin);
+    for (const [i, bad] of [' https://x.example/o/r', 'file:///x/o/r', '/srv/r.git', ''].entries()) {
+      await a.register({ id: `wtask-pin-bad-${i}`, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'lane', dispatch: { origin: { kind: 'bot', botId: 'b1' }, originPin: bad } });
+      expect(a.get(`wtask-pin-bad-${i}`)?.dispatch?.originPin).toBeUndefined();
+    }
+  });
+
+  it('a row with no pin is pinned once: a recorded pin is never replaced, and survives a reload', async () => {
+    const a = open();
+    await a.register({ id: 'wtask-old', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'lane', dispatch: { origin: { kind: 'bot', botId: 'b1' }, repoKey: 'github.com/acme/app' } });
+    const rev = a.get('wtask-old')?.rev;
+    expect(await a.recordOriginPin('wtask-old', 'not a pin')).toBeNull();
+    expect(await a.recordOriginPin('wtask-old', 'git@github.com:acme/app')).toBe('git@github.com:acme/app');
+    expect(await a.recordOriginPin('wtask-old', 'https://github.com:443/acme/app')).toBe('git@github.com:acme/app');
+    const reloaded = open().get('wtask-old');
+    expect(reloaded?.dispatch).toMatchObject({ repoKey: 'github.com/acme/app', originPin: 'git@github.com:acme/app' });
+    expect(reloaded?.rev).toBe(rev);
+    await a.register({ id: 'wtask-none', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'lane' });
+    expect(await a.recordOriginPin('wtask-none', 'git@github.com:acme/app')).toBeNull();
+    expect(await a.recordOriginPin('wtask-missing', 'git@github.com:acme/app')).toBeNull();
+  });
+
   it('a dispatch keeps the base commit main created the branch from, a full commit id only, across a reload', async () => {
     const a = open();
     const base = 'b'.repeat(40);

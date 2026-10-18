@@ -725,6 +725,8 @@ const electronAPI = {
       >,
     rename: (args: { id: string; name: string }) =>
       ipcRenderer.invoke(IPC.ACCOUNT_RENAME, args) as Promise<{ ok: boolean }>,
+    setGroup: (args: { id: string; group: string }) =>
+      ipcRenderer.invoke(IPC.ACCOUNT_SET_GROUP, args) as Promise<{ ok: boolean }>,
     remove: (id: string) =>
       ipcRenderer.invoke(IPC.ACCOUNT_REMOVE, { id }) as Promise<{
         ok: boolean;

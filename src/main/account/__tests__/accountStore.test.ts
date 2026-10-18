@@ -219,3 +219,43 @@ describe('AccountStore corrupt file', () => {
     expect(s.resolveAccountEnv('ws-1', 'claude')).toEqual({});
   });
 });
+
+describe('AccountStore groups (account-groups.json)', () => {
+  it('keeps groups out of accounts.json, so an older build rewriting it cannot drop them', async () => {
+    const work = await store.addAccount({ name: 'work', vendor: 'claude', configDir: mkConfigDir('w') });
+    const personal = await store.addAccount({ name: 'personal', vendor: 'claude', configDir: mkConfigDir('p') });
+    await store.setAccountGroup(work.id, '  Work ');
+    await store.setAccountGroup(personal.id, 'Personal');
+    await expect(store.setAccountGroup(work.id, 'a\u0007b')).rejects.toBeInstanceOf(AccountError);
+    expect(fs.readFileSync(getAccountsPath(dir), 'utf8')).not.toContain('"group"');
+    // An older build's write: every row rebuilt from its fixed field list.
+    const raw = JSON.parse(fs.readFileSync(getAccountsPath(dir), 'utf8')) as { accounts: Record<string, unknown>[] };
+    raw.accounts = raw.accounts.map(({ id, name, vendor, configDir, createdAt }) => ({ id, name, vendor, configDir, createdAt }));
+    fs.writeFileSync(getAccountsPath(dir), JSON.stringify({ ...raw, bindings: { ws: { claude: work.id } } }));
+    const fresh = new AccountStore(dir);
+    expect(fresh.listAccounts().map((a) => a.group)).toEqual(['Work', 'Personal']);
+    // A mutation on this build keeps them too.
+    await fresh.renameAccount(personal.id, 'personal 2');
+    expect(fresh.getAccount(personal.id)?.group).toBe('Personal');
+    await fresh.setAccountGroup(work.id, '');
+    expect(new AccountStore(dir).getAccount(work.id)?.group).toBeUndefined();
+  });
+
+  it('falls back to the backup when the groups file has the wrong shape', async () => {
+    const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
+    const file = path.join(dir, 'account-groups.json');
+    fs.writeFileSync(`${file}.bak`, JSON.stringify({ version: 1, groups: { [a.id]: 'Work' } }));
+    fs.writeFileSync(file, '{}');
+    expect(new AccountStore(dir).getAccount(a.id)?.group).toBe('Work');
+  });
+
+  it('prunes a removed account from the groups file on the next group write', async () => {
+    const a = await store.addAccount({ name: 'a', vendor: 'claude', configDir: mkConfigDir('a') });
+    const b = await store.addAccount({ name: 'b', vendor: 'claude', configDir: mkConfigDir('b') });
+    await store.setAccountGroup(a.id, 'Work');
+    await store.removeAccount(a.id);
+    await store.setAccountGroup(b.id, 'Work');
+    const groups = JSON.parse(fs.readFileSync(path.join(dir, 'account-groups.json'), 'utf8'));
+    expect(groups).toEqual({ version: 1, groups: { [b.id]: 'Work' } });
+  });
+});

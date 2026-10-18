@@ -8,7 +8,7 @@
 import { getConnectorStore } from './connectorStore';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
-import type { CardNotice, ThreadId } from '../../shared/room';
+import { dmThreadId, parseThreadId, type CardNotice, type ThreadId } from '../../shared/room';
 import type { LedgerEntry } from '../../shared/ledger';
 import { BOT_EVENT } from '../../shared/bot';
 import { sanitizePtyText } from '../../shared/types';
@@ -38,6 +38,7 @@ import {
   ReclaimedWorkers,
   createDaemonTurnSeed,
   createResumedIdleSweep,
+  createViewAttention,
   createWorkerClear,
   dormantTaskWorkspaceSet,
   endedTaskAgentRuns,
@@ -56,6 +57,7 @@ import {
   type WorkerResumePorts,
   type WorkerSessionInfo,
   unreclaimedEndedWorkers,
+  viewProtects,
   workerPanesIdle,
 } from './workerReclaim';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
@@ -63,7 +65,7 @@ import { createDeadPaneSweep } from './deadWorkerPanes';
 import path from 'node:path';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { TaskWorktreeManager } from '../worktask/TaskWorktreeManager';
-import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, restoreTaskFolder, setTaskFolderPorts, type TaskMission } from './taskFolderCleanup';
+import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantTaskWorkspaces } from '../worktask/fanoutGuards';
@@ -329,8 +331,17 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         ...(inputAt !== undefined ? { inputAt } : {}),
       }, turnSeed.activity(id));
     };
-    const viewed = (workspaceId: string): boolean => mirror.getViewed()?.workspaceId === workspaceId
-      || mirror.getPanelWorkspaceId() === workspaceId;
+    // Shown protects a worker only while the owner typed into it or focused
+    // it (it became the active workspace, its active pane changed, the Bots
+    // panel opened on it) in the last VIEWED_ATTENTION_MS; the panel closing
+    // is no focus. Then the usual idle test applies.
+    const attention = createViewAttention();
+    const observeView = (): void => attention.observe(mirror.getViewed(), mirror.getPanelWorkspaceId(), Date.now());
+    observeView();
+    offs.push(mirror.onSnapshot(observeView));
+    const viewed = (workspaceId: string): boolean => (mirror.getViewed()?.workspaceId === workspaceId
+      || mirror.getPanelWorkspaceId() === workspaceId)
+      && viewProtects(attention.focusedAt(workspaceId), (workspacePtys(workspaceId) ?? []).map((id) => paneActivity(id).inputAt), Date.now());
     const reportedIdle = (entry: LedgerEntry): boolean => {
       if (viewed(entry.taskWorkspaceId)) return false;
       const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
@@ -411,10 +422,30 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       },
       listSessions,
       workerState: (taskId: string) => reclaimed.get(taskId)?.state ?? null,
+      workerStoppedAt: (taskId: string) => {
+        const r = reclaimed.get(taskId);
+        return r?.state === 'stopped' ? r.at : undefined;
+      },
       worktrees: folderWorktrees,
       repoInfo: gitRepoInfo,
       gateRunning: (taskId: string) => getSharedTaskGateRunner()?.isRunning(taskId) === true,
       changed,
+      // A kept folder removed after its TTL: one card in the task's thread
+      // (recorded when it was kept), else the bot's 1:1 in its room.
+      keptFolderCleaned: (c: KeptFolderCleaned) => {
+        const workspaceId = c.workspaceId ?? getBotStore()?.get(c.botId)?.workspaceId;
+        if (!workspaceId) return;
+        const threadId = parseThreadId(c.threadId) ?? dmThreadId(c.botId);
+        const research = c.kind === 'research';
+        note(
+          workspaceId,
+          threadId,
+          `Removed the kept folder of "${c.title}"`,
+          `It sat ${c.days} days with no changes.${research ? '' : ' Its branch stays.'}`,
+          { code: 'task.keptFolderCleaned', args: { title: c.title, days: c.days, ...(research ? { kind: 'research' } : {}) } },
+          c.taskId,
+        );
+      },
       allRows: () => ledger.list({}),
     } : null;
     if (folderPorts) {
@@ -539,6 +570,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     setResumedLiveCount(resumedLive);
     offs.push(() => setResumedLiveCount(null));
     reclaimed.onStateChange = (rec, from, to, at) => {
+      // A resumed worker stopped again: its kept folder's 7 days start now.
+      if (from === 'resumed' && to === 'stopped' && folderPorts) void noteKeptFolderStopped(folderPorts, rec.taskId, at);
       const store = getBotStore();
       if (!store?.get(rec.botId)) return;
       if (to === 'resumed') store.mutateUsage(rec.botId, (u) => recordWorkerStart(u, rec.taskId, at, { resumed: true }));

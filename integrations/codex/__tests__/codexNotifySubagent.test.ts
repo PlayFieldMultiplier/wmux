@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import {
   uuidV7Millis, findRolloutFile, parseSessionMeta, classifyCodexThread, codexRolloutMissing,
 } from '../bin/wmux-codex-notify.mjs';
+import { deliberateSleep } from '../../../src/test-utils/waitFor';
 
 // #1696: a Codex sub-agent thread inherits the pane env, so its
 // turn-complete notify arrives pane-exact. Sent as agent.stop it stole the
@@ -335,7 +336,7 @@ describe('wmux-codex-notify with a sub-agent thread', () => {
 
   it('looks again before calling a rollout missing (#1765)', async () => {
     const exited = run(ROOT);
-    await new Promise((r) => setTimeout(r, 600));
+    await deliberateSleep(600, 'real timer: the rollout must land after the notifier\'s first look');
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
     expect(await exited).toBe(0);
     expect(received[0].params?.payload).toEqual({ 'turn-id': 'turn-1', rolloutMissing: false });
@@ -344,7 +345,7 @@ describe('wmux-codex-notify with a sub-agent thread', () => {
   it('reclassifies a rollout that lands after the first look: a late sub-agent is not a pane stop (#1765)', async () => {
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
     const exited = run(CHILD);
-    await new Promise((r) => setTimeout(r, 600));
+    await deliberateSleep(600, 'real timer: the rollout must land after the notifier\'s first look');
     writeRollout(path.join(codexHome, 'sessions'), CHILD, meta(CHILD, spawnSource(ROOT), ROOT));
     expect(await exited).toBe(0);
     expect(received).toHaveLength(1);

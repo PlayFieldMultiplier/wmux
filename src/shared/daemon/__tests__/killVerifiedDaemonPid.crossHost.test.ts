@@ -5,6 +5,7 @@ import path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import { killVerifiedDaemonPid } from '../daemonLauncherCore';
 import { importWithStubbedWin32Cmdline, undoModuleStubs } from './win32CmdlineStub';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 /**
  * CodeRabbit finding on #1019 (critical): the pre-#1001 image-name check
@@ -70,7 +71,7 @@ describe('killVerifiedDaemonPid — cross-host image mismatch (#1019)', () => {
     expect(pid).toBeTruthy();
     // Give the OS a moment to register the process before probing it —
     // tasklist/ps can race a just-spawned PID on a loaded CI box.
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliberateSleep(300, 'not yet converted (#2363): lets tasklist/ps see the new PID; nothing polled');
 
     // This test process's own image is `node`/`node.exe` (unrenamed) — the
     // spawned child's image is the renamed copy, so this IS the mismatch
@@ -102,7 +103,7 @@ describe('killVerifiedDaemonPid — cross-host image mismatch (#1019)', () => {
     child = spawn(renamedNodePath, [scriptPath], { stdio: 'ignore' });
     const pid = child.pid;
     expect(pid).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliberateSleep(300, 'not yet converted (#2363): lets tasklist/ps see the new PID; nothing polled');
 
     const killed = killVerifiedDaemonPid(pid as number, { definitiveOnly: false });
     expect(killed).toBe(false);
@@ -130,7 +131,7 @@ describe('killVerifiedDaemonPid — cross-host image mismatch (#1019)', () => {
     child = spawn(renamedNodePath, [scriptPath], { stdio: 'ignore' });
     const pid = child.pid;
     expect(pid).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliberateSleep(300, 'not yet converted (#2363): lets tasklist/ps see the new PID; nothing polled');
 
     const killed = killVerifiedDaemonPid(pid as number, { definitiveOnly: false });
     expect(killed).toBe(false);

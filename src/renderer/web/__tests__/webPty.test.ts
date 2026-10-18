@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Terminal } from '@xterm/headless';
 import { createWebPty, snapshotTail, STREAM_FAIL_LIMIT, WEB_LIVE_STREAM_CAP, type WebPtyDeps } from '../webPty';
 import { installViewerParser } from '../viewerParser';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 type Listener = (ev: MessageEvent) => void;
 
@@ -284,7 +285,7 @@ describe('input', () => {
     const { hub, inputs } = make({ deps: { isReplaying: () => replaying } });
     hub.setAllowInput(true);
     const sent = ['e', 'c', 'h', 'o', '\x1b[200~multi\rline\x1b[201~'].map((k) => hub.pty.write('a', k));
-    await new Promise((r) => setTimeout(r, 60));
+    await deliberateSleep(60, 'negative: no input is sent while replaying');
     expect(inputs()).toEqual([]);
     replaying = false;
     await Promise.all(sent);
@@ -294,7 +295,7 @@ describe('input', () => {
   it('keys typed before the grant is known wait for it', async () => {
     const { hub, inputs } = make();
     const p = hub.pty.write('a', 'x');
-    await new Promise((r) => setTimeout(r, 40));
+    await deliberateSleep(40, 'negative: no input is sent before the grant is known');
     expect(inputs()).toEqual([]);
     hub.setAllowInput(true);
     await p;

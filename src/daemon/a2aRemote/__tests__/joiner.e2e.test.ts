@@ -8,6 +8,7 @@ import { PinnedTlsClient } from '../pinnedClient';
 import { forgetHostCascade, registerA2aRemoteRpc } from '../rpc';
 import { PAIR_BACKOFF_BASE_MS, PAIR_BACKOFF_MAX_MS, PAIR_FREE_FAILURES } from '../server';
 import { disposeAll, freePort, makePc, type Pc } from './a2aServerRig';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 afterEach(async () => {
   await disposeAll();
@@ -151,12 +152,12 @@ describe('cross-host pairing, end to end', () => {
     a.peers.mint = async (params) => {
       const c = await realMint(params);
       minted.push(formatPeerCredential(c));
-      if (slow) await new Promise((r) => setTimeout(r, 600));
+      if (slow) await deliberateSleep(600, 'stub latency: a mint slower than the joiner\'s request timeout');
       return c;
     };
     const lost = await joinRemoteHost(formatInvite(inviteOf(a)), { ...joinerDeps(b), timeouts: { connectMs: 2_000, requestMs: 300 } });
     expect(lost).toMatchObject({ ok: false, error: 'timeout' });
-    await new Promise((r) => setTimeout(r, 700));
+    await deliberateSleep(700, 'negative: the slow mint (600ms) finishes and leaves no orphan credential');
     expect(a.peers.list().filter((p) => p.revokedAt === undefined)).toHaveLength(1);
     expect(b.remoteHosts.list()).toHaveLength(0);
 

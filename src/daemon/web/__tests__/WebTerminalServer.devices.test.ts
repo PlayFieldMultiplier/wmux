@@ -9,6 +9,7 @@ import { WebTerminalServer, type WebDeviceResolver, type WebTerminalStartOptions
 import { DeviceStore } from '../DeviceStore';
 import { DeviceAuditLog } from '../deviceAudit';
 import type { DaemonSessionManager } from '../../DaemonSessionManager';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 /**
  * Phone device management (`/api/devices`) against a REAL DeviceStore in a
@@ -267,7 +268,7 @@ describe('device management routes', () => {
       const bystanderEvents = await openEvents(bearer(bystander.token));
       expect(victimEvents.res.status).toBe(200);
       expect(bystanderEvents.res.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'not yet converted (#2363): lets both event streams register; nothing polled');
 
       const res = await revoke(bearer(victim.token), victim.deviceId);
 
@@ -364,7 +365,7 @@ describe('device management routes', () => {
       const typer = await pair('Typer', true);
       const events = await openEvents(bearer(typer.token));
       expect(events.res.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'not yet converted (#2363): lets the event stream register; nothing polled');
 
       const res = await patchGrants(bearer(typer.token), typer.deviceId, { input: false });
 
@@ -384,7 +385,7 @@ describe('device management routes', () => {
       const viewer = await pair('Viewer', false);
       const events = await openEvents(bearer(viewer.token));
       expect(events.res.status).toBe(200);
-      await new Promise((r) => setTimeout(r, 30));
+      await deliberateSleep(30, 'not yet converted (#2363): lets the event stream register; nothing polled');
       const disconnect = vi.spyOn(server, 'disconnectDevice');
 
       for (let i = 0; i < 3; i++) {

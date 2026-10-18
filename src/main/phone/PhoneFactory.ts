@@ -368,7 +368,9 @@ function conversationActivity(
     lastSeq: newest?.lastSeq ?? 0,
     ...(card ? { lastPreview: card.title, lastActor: card.actor } : {}),
     unread: scope.own?.unread ?? null,
-    openQuestions: scope.all.reduce((n, t) => n + t.openQuestions, 0),
+    // Only the conversation's own thread: the phone cannot answer in the
+    // task threads it started, so their questions would never clear.
+    openQuestions: scope.own?.openQuestions ?? 0,
   };
 }
 

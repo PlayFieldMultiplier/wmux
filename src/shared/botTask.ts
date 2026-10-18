@@ -81,7 +81,7 @@ export interface FactoryTaskFolderUsage {
 
 /** What Clean up now did to ended bot tasks' folders. */
 export type FactoryTaskFolderCleanResult =
-  | { ok: true; removed: number; keptDirty: number; busy: number; failed: number }
+  | { ok: true; removed: number; keptDirty: number; busy: number; failed: number; notRemoved?: Array<{ path: string; reason: string }> }
   | { ok: false; code: string; message: string };
 
 /** Longest BotTaskView.summary. */

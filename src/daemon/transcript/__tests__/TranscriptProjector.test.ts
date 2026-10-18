@@ -6,6 +6,7 @@ import { BUDGET_BYTES, TranscriptProjector } from '../TranscriptProjector';
 import type { ResumeBinding } from '../../../shared/agentResume';
 import type { TranscriptAppendData } from '../../../shared/transcript/turnEvents';
 import { shortPathOf } from '../../../test-utils/shortPath';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 
@@ -197,7 +198,7 @@ describe('TranscriptProjector — transcript path containment (every writer)', (
       message: { role: 'user', content: 'more private' },
     }) + '\n', 'utf8');
     harness.projector.nudge('pty-1', 'agent.stop');
-    await delay(40);
+    await deliberateSleep(40, 'negative: nothing is projected');
     expect(harness.appends).toHaveLength(0);
   });
 
@@ -268,12 +269,12 @@ describe('TranscriptProjector.subscribe / unsubscribe — per (client, session)'
     // the conversation" promise would hold only for whoever came first.
     harness.bindings.set('pty-1', binding({ transcriptPath: fixture('claude-basic.jsonl') }));
     harness.projector.subscribe('c1', 'pty-1');
-    await delay(40);
+    await vi.waitFor(() => expect(harness.appends.length).toBeGreaterThan(0), { timeout: 10_000 });
     const before = harness.appends.length;
     expect(before).toBeGreaterThan(0);
 
     harness.projector.subscribe('c2', 'pty-1');
-    await delay(40);
+    await vi.waitFor(() => expect(harness.appends.length).toBeGreaterThan(before), { timeout: 10_000 });
     const joined = harness.appends.slice(before);
     expect(joined.length).toBeGreaterThan(0);
     const seed = joined[joined.length - 1];
@@ -427,12 +428,12 @@ describe('TranscriptProjector.nudge', () => {
     await waitFor(() => harness.appends.length === 1);
 
     harness.projector.nudge('pty-1', 'agent.session_start', 'second-session');
-    await delay(40);
+    await deliberateSleep(40, 'ordering: let the session_start nudge settle before the next nudges');
     // Nothing re-adopted: the old transcript must not be presented as the new
     // session's, and repeated nudges must not sneak it back in either.
     harness.projector.nudge('pty-1', 'agent.activity');
     harness.projector.nudge('pty-1', 'agent.stop');
-    await delay(40);
+    await deliberateSleep(40, 'negative: repeated nudges do not re-adopt the old transcript');
     expect(harness.appends).toHaveLength(1);
 
     // The genuine binding refresh releases the hold.
@@ -482,7 +483,7 @@ describe('TranscriptProjector.nudge', () => {
 
     harness.projector.nudge('pty-1', 'agent.activity');
     harness.projector.nudge('pty-1', 'agent.activity');
-    await delay(30);
+    await deliberateSleep(30, 'negative: activity nudges add no append');
     expect(harness.appends).toHaveLength(1);
   });
 
@@ -491,7 +492,7 @@ describe('TranscriptProjector.nudge', () => {
     harness.projector.subscribe('c1', 'pty-1');
     harness.projector.dispose();
     harness.projector.nudge('pty-1', 'agent.stop');
-    await delay(20);
+    await deliberateSleep(20, 'negative: nothing is projected after dispose');
     expect(harness.appends).toHaveLength(0);
   });
 });
@@ -562,7 +563,7 @@ describe('TranscriptProjector — draining a burst (D3) and stalling on an overs
     // Repeated nudges (a mid-turn agent nudges often) must not spin: nothing is
     // emitted and the cursor stays on the last good boundary.
     for (let i = 0; i < 5; i++) harness.projector.nudge('pty-1', 'agent.activity');
-    await delay(60);
+    await deliberateSleep(60, 'negative: repeated nudges do not spin');
     expect(harness.appends).toHaveLength(1);
     expect(harness.appends[0].data.cursor.tailOffset).toBe(settled);
 

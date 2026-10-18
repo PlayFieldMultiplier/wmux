@@ -175,7 +175,7 @@ const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
   ['research.completed', true], ['research.notCompleted', false], ['task.merged', true],
   ['budget.exhausted', true], ['budget.held', true], ['bot.usageLimit', false],
   ['task.done', false], ['task.reported', false], ['task.failed', false], ['task.cancelled', false],
-  ['task.stoppedByOwner', false], ['task.inputRequired', false],
+  ['task.stoppedByOwner', false], ['task.inputRequired', false], ['task.keptFolderCleaned', true],
   ['verify.passed', false], ['verify.killed', false], ['verify.failed', false], ['verify.skipped', false],
   ['verify.busy', true], ['verify.refused', false],
   ['verify.notRunNoBot', true], ['verify.notRunNoWorktree', true], ['verify.notRunNoBaseRef', true],
@@ -325,7 +325,7 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
   // A PR closed with no title known says only its number; a worker card
   // written before it named its task says what happened only.
   const titleKey = UNTITLED_NOTICE_CODES.has(notice.code) && args.title === undefined ? `${key}.untitled` : key;
-  const bodyKey = args.kind === 'research' && RESUMABLE_NOTICE_CODES.has(notice.code) ? `${key}.body.research` : `${key}.body`;
+  const bodyKey = args.kind === 'research' && (RESUMABLE_NOTICE_CODES.has(notice.code) || notice.code === 'task.keptFolderCleaned') ? `${key}.body.research` : `${key}.body`;
   return { title: t(titleKey, vars), body: wordedBody ? t(bodyKey, vars) : (card.body ?? '') };
 }
 

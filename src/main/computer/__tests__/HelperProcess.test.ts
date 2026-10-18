@@ -7,6 +7,7 @@ import { PassThrough } from 'stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ComputerError } from '../../../shared/computer/errors';
 import { HelperProcess } from '../HelperProcess';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const TARGET = { pid: 1, windowId: 'w1' };
 const FAKE = path.join(__dirname, 'fixtures', 'fakeHelper.mjs');
@@ -186,7 +187,7 @@ describe('HelperProcess', () => {
     expect(await codeOf(queued)).toBe('aborted');
     // The queued type never reaches a helper; only the release does.
     expect(await waitFor(() => requests().length === 2)).toBe(true);
-    await new Promise((r) => setTimeout(r, 200));
+    await deliberateSleep(200, 'negative: the queued type never reaches a helper');
     expect(requests()).toEqual(['click', 'releaseInput']);
   });
 
@@ -305,7 +306,7 @@ describe('HelperProcess', () => {
     // The dead helper answers the live one's id, then sends garbage.
     dead.say({ id: release.id, ok: true, result: { released: true } });
     dead.say({ nonsense: true });
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'negative: the dead helper\'s lines do not kill the live one');
     expect(live.killed).toBe(false);
     live.say({ id: release.id, ok: true, result: { released: true } });
     const apps = helper.request('listApps', {});
@@ -339,7 +340,7 @@ describe('HelperProcess', () => {
     expect(await waitFor(() => live.sent.length === 2)).toBe(true);
     // The killed helper writes to stderr after it was replaced.
     dead.stderr.write('stale line from the dead helper\n');
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'negative: stderr from a replaced helper is ignored');
     expect(helper.lastStderr).toBe('');
     (live.child as unknown as EventEmitter).emit('exit', 1, null);
     const err = await apps.catch((e: unknown) => e);
@@ -367,7 +368,7 @@ describe('HelperProcess', () => {
     const apps = helper.request('listApps', {});
     expect(await waitFor(() => children.length === 1 && children[0].sent.length === 1)).toBe(true);
     children[0].stderr.write('fatal: C:\\Users\\me\\secret path\n');
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'not yet converted (#2363): lets the stderr line be read before exit; nothing polled');
     (children[0].child as unknown as EventEmitter).emit('exit', 3, null);
     const err = await apps.catch((e: unknown) => e);
     expect((err as ComputerError).code).toBe('helper_unavailable');
@@ -413,7 +414,7 @@ describe('HelperProcess', () => {
     helpers.push(helper);
     const apps = helper.request('listApps', {});
     // The configure request is in flight (never answered) when dispose runs.
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'not yet converted (#2363): lets the configure request go out before dispose; nothing polled');
     helper.dispose();
     expect(await codeOf(apps)).toBe('shutting_down');
   });
@@ -459,7 +460,7 @@ describe('HelperProcess', () => {
     helper.dispose();
     helper.abort();
     expect(await codeOf(click)).toBe('shutting_down');
-    await new Promise((r) => setTimeout(r, 300));
+    await deliberateSleep(300, 'negative: no respawn after dispose');
     expect(spawns).toBe(1);
     expect(requests()).toEqual(['click']);
   });
