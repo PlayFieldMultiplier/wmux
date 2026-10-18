@@ -274,8 +274,24 @@ describe('review safeguards', () => {
   it('leaves a folder Close and keep folder kept alone, even to a pass that read the mission before that close', async () => {
     const wt = await taskWorktree(new TaskWorktreeManager());
     const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
-    noteTaskFolderKept('wtask-kept-12345678');
+    await noteTaskFolderKept('wtask-kept-12345678', null);
     expect(await cleanTaskFolder(ports(), row('completed', { id: 'wtask-kept-12345678' }), mission, [])).toBe('skipped');
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('a kept folder\'s cleanup record ends on disk, so Clean up now after a restart finds nothing of it', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager());
+    const p = ports();
+    await p.store.put({ taskId: 'wtask-kept2-12345678', kind: 'worktree', path: wt, state: 'kept_stopped', stopped: { botId: BOT }, at: 1 });
+    await p.store.put({ taskId: 'wtask-gone-12345678', kind: 'worktree', path: `${wt}-gone`, state: 'removed', at: 1 });
+    await noteTaskFolderKept('wtask-kept2-12345678', p.store);
+    await noteTaskFolderKept('wtask-gone-12345678', p.store);
+    // A restart: a fresh store reads the file.
+    const after = ports();
+    after.store.load();
+    expect(after.store.get('wtask-kept2-12345678')).toBeNull();
+    expect(after.store.get('wtask-gone-12345678')).toMatchObject({ state: 'removed' });
+    await cleanTaskFolders(after, [], { force: true });
     expect(fs.existsSync(wt)).toBe(true);
   });
 

@@ -366,14 +366,13 @@ describe('a close that keeps the folder (#2388)', () => {
   it('keepFolder of a task closed before (the daemon records no detach) promises no keep', async () => {
     const left = path.join(wtBase, 'left-k10');
     fs.mkdirSync(left, { recursive: true });
-    const noteFolderKept = vi.fn();
+    const noteFolderKept = vi.fn(async () => undefined);
     // An already-closed task: the daemon acks the close without detached.
     const { port } = makeDaemon({ ok: true, taskId: 'wtask-k10' });
     const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), noteFolderKept });
     const res = await svc.closeTask({ taskId: 'wtask-k10', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true });
     expect(res).toMatchObject({ ok: false, reason: 'error' });
     if (!res.ok) expect(res.error).toMatch(/already closed, so its folder cannot be marked kept/);
-    expect(noteFolderKept).not.toHaveBeenCalled();
     expect(fs.existsSync(left)).toBe(true);
   });
 
@@ -422,7 +421,7 @@ describe('a close that keeps the folder (#2388)', () => {
 
   it('keepFolder holds and marks the task\'s folder for the bots\' cleanup even with no folder named', async () => {
     const holdTaskFolder = vi.fn(async () => () => undefined);
-    const noteFolderKept = vi.fn();
+    const noteFolderKept = vi.fn(async () => undefined);
     const { port } = makeDaemon();
     const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept });
     expect(await svc.closeTask({ taskId: 'wtask-k13', verifiedWorkspaceId: 'ws-owner', keepFolder: true })).toMatchObject({ ok: true });
@@ -463,18 +462,25 @@ describe('a close that keeps the folder (#2388)', () => {
     fs.mkdirSync(left, { recursive: true });
     const order: string[] = [];
     const holdTaskFolder = vi.fn(async (id: string) => { order.push(`hold ${id}`); return () => { order.push('release'); }; });
-    const noteFolderKept = vi.fn((id: string) => { order.push(`kept ${id}`); });
+    const noteFolderKept = vi.fn(async (id: string) => { order.push(`kept ${id}`); });
     const port: CloseDaemonPort = { rpc: vi.fn(async (_m, params) => { order.push('close'); return { ok: true, taskId: params['taskId'], detached: true }; }) };
     const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept });
     expect(await svc.closeTask({ taskId: 'wtask-k7', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true })).toMatchObject({ ok: true, keptFolder: left });
-    expect(order).toEqual(['hold wtask-k7', 'close', 'kept wtask-k7', 'release']);
+    // Marked before the close: no restart in between loses it.
+    expect(order).toEqual(['hold wtask-k7', 'kept wtask-k7', 'close', 'release']);
 
-    // A close the daemon refuses marks nothing kept.
+    // A close the daemon refuses: the task stays open, its folder kept.
     order.length = 0;
     const refusing: CloseDaemonPort = { rpc: vi.fn(async () => ({ ok: false, error: { message: 'no' } })) };
     const svc2 = new TaskCloseService({ daemon: refusing, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept });
     expect(await svc2.closeTask({ taskId: 'wtask-k8', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true })).toMatchObject({ ok: false });
-    expect(order).toEqual(['hold wtask-k8', 'release']);
+    expect(order).toEqual(['hold wtask-k8', 'kept wtask-k8', 'release']);
+
+    // The cleanup's record cannot be dropped: nothing is closed.
+    const { port: port3, calls } = makeDaemon();
+    const svc3 = new TaskCloseService({ daemon: port3, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept: async () => { throw new Error('EACCES: task-folders.json'); } });
+    expect(await svc3.closeTask({ taskId: 'wtask-k8b', verifiedWorkspaceId: 'ws-owner', leftoverPath: left, keepFolder: true })).toMatchObject({ ok: false });
+    expect(calls).toHaveLength(0);
   });
 
   it('a close of a task waits for the one already running for it: a keep asked during a removal never races it', async () => {

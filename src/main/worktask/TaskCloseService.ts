@@ -89,7 +89,7 @@ export interface TaskCloseServiceOptions {
    *  bots' task folder cleanup (waiting for one under way), and mark it
    *  kept once the task closed (holdTaskFolder, noteTaskFolderKept). */
   holdTaskFolder?: (taskId: string) => Promise<() => void>;
-  noteFolderKept?: (taskId: string) => void;
+  noteFolderKept?: (taskId: string) => Promise<void>;
 }
 
 export class TaskCloseService {
@@ -101,7 +101,7 @@ export class TaskCloseService {
   private readonly pushedHead?: (taskId: string) => string | null;
   private readonly forgetStops?: (folder: string) => void;
   private readonly holdTaskFolder?: (taskId: string) => Promise<() => void>;
-  private readonly noteFolderKept?: (taskId: string) => void;
+  private readonly noteFolderKept?: (taskId: string) => Promise<void>;
 
   constructor(opts: TaskCloseServiceOptions) {
     this.forgetStops = opts.forgetStops;
@@ -175,8 +175,11 @@ export class TaskCloseService {
     let releaseTask: () => void = () => undefined;
     try {
       // A bot's task: its folder cleanup (one under way is waited for)
-      // leaves the folder alone from here on, whichever folder it is.
+      // leaves the folder alone from here on, whichever folder it is, and
+      // its record of the folder ends on disk before the task closes (a
+      // close that then fails keeps more, never less).
       if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
+      await this.noteFolderKept?.(taskId);
       if (folder) {
         release = this.worktrees.holdFolder(folder);
         await this.worktrees.markPendingRemovalKept(folder);
@@ -194,11 +197,6 @@ export class TaskCloseService {
         };
       }
       this.kept.add(taskId);
-      try {
-        this.noteFolderKept?.(taskId);
-      } catch {
-        // The detached mission still keeps it from every later pass.
-      }
       if (folder) {
         this.forgetFolderStops(folder);
         await this.worktrees.forgetPendingRemoval(folder).catch((err: unknown) => {

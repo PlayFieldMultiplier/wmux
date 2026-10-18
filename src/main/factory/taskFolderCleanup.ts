@@ -527,10 +527,19 @@ const folderHolds = new Map<string, number>();
  *  mission it read before that close; this is read when a cleanup starts. */
 const keptByOwner = new Set<string>();
 
-/** Close and keep folder closed `taskId`: no cleanup removes its folder.
- *  Taken while holdTaskFolder holds it, so no cleanup is under way. */
-export function noteTaskFolderKept(taskId: string): void {
+/**
+ * Close and keep folder is closing `taskId`: no cleanup removes its folder.
+ * Taken while holdTaskFolder holds it, so no cleanup is under way. The
+ * cleanup's own record of the folder (a folder a stop kept, one a removal
+ * left half done) ends on disk too: Clean up now and the pass for folders
+ * whose ledger row is gone work from those records alone, and would apply
+ * the rules to it after a restart. A record of a folder already removed
+ * stays (what a resume would put back). Throws when that cannot be written.
+ */
+export async function noteTaskFolderKept(taskId: string, store: Pick<TaskFolders, 'get' | 'delete'> | null = getTaskFolderPorts()?.store ?? null): Promise<void> {
   keptByOwner.add(taskId);
+  const rec = store?.get(taskId);
+  if (store && rec && rec.state !== 'removed') await store.delete(taskId);
 }
 
 /**
