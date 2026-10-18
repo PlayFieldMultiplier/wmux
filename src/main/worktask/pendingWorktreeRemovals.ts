@@ -104,16 +104,33 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
     return [...this.records.values()].map((r) => ({ ...r }));
   }
 
-  put(rec: PendingWorktreeRemoval): Promise<void> {
-    if (this.loadError !== null) return Promise.reject(new Error(`${this.file} could not be read (${this.loadError}), so nothing is recorded in it`));
+  /** A record whose write fails is not taken (the write throws): memory
+   *  goes back to what the file holds, so a retry writes again rather than
+   *  find the change made. */
+  async put(rec: PendingWorktreeRemoval): Promise<void> {
+    if (this.loadError !== null) throw new Error(`${this.file} could not be read (${this.loadError}), so nothing is recorded in it`);
     const key = pendingRemovalKey(rec.path);
+    const prev = this.records.get(key);
+    const next = { ...rec };
     this.records.delete(key);
-    this.records.set(key, { ...rec });
-    for (const k of this.records.keys()) {
+    this.records.set(key, next);
+    const dropped: Array<[string, PendingWorktreeRemoval]> = [];
+    for (const [k, v] of this.records) {
       if (this.records.size <= PENDING_REMOVALS_MAX) break;
-      if (k !== key) this.records.delete(k);
+      if (k === key) continue;
+      this.records.delete(k);
+      dropped.push([k, v]);
     }
-    return this.write();
+    try {
+      await this.write();
+    } catch (err) {
+      if (this.records.get(key) === next) {
+        if (prev) this.records.set(key, prev);
+        else this.records.delete(key);
+      }
+      for (const [k, v] of dropped) if (!this.records.has(k)) this.records.set(k, v);
+      throw err;
+    }
   }
 
   /** A record whose deletion cannot be written stays (the write throws):

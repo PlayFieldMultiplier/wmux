@@ -248,6 +248,18 @@ describe('task:close keepFolder', () => {
   });
 });
 
+describe('task:close keepFolder of a research task', () => {
+  it('names its output folder, which it keeps', async () => {
+    const out = join(base, 'research', 'batch-1', 't');
+    mkdirSync(out, { recursive: true });
+    const task = { id: 'wtask-r', title: 'R', status: 'open' as const, owner: 'parent-ws', outputDir: out };
+    daemon = makeDaemon([task]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    const res = (await call(IPC.TASK_CLOSE, { taskId: 'wtask-r', verifiedWorkspaceId: 'parent-ws', keepFolder: true })) as { ok: boolean; keptFolder?: string };
+    expect(res).toMatchObject({ ok: true, keptFolder: out });
+  });
+});
+
 describe('task:close of a detached task', () => {
   it('keeps its folder: it is the owner\'s', async () => {
     const wt = seedWorktree('task-detached', false);

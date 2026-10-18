@@ -576,6 +576,22 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(pendingRemovalRefusalAt(wmuxDir, dir)).toBeNull();
   });
 
+  it('a kept mark that cannot be written is not taken, so a retry writes it again', async () => {
+    const dir = leftover();
+    const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');
+    const store = new PendingWorktreeRemovals(file);
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr } = manager(fakeGit().git, { pendingRemovals: store });
+    const folder = path.dirname(file);
+    fs.rmSync(folder, { recursive: true });
+    fs.writeFileSync(folder, 'not a folder');
+    await expect(mgr.markPendingRemovalKept(dir)).rejects.toThrow();
+    expect(store.get(dir)?.keep).toBeUndefined();
+    fs.rmSync(folder);
+    await mgr.markPendingRemovalKept(dir);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).removals).toEqual([expect.objectContaining({ path: dir, keep: true })]);
+  });
+
   it('a refused finish of a leftover names Close and keep folder', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));

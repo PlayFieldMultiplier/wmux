@@ -194,7 +194,8 @@ export function registerWorktaskHandlers(
       // Close and keep folder (#2388): the task closes, its folder stays. A
       // detached task's folder is the owner's: its close never removes it.
       if ((raw as { keepFolder?: unknown } | null)?.keepFolder === true || task.detachedAt !== undefined) {
-        return closeService.closeTask({ taskId, verifiedWorkspaceId, keepFolder: true, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
+        const folder = task.worktreePath ?? task.outputDir;
+        return closeService.closeTask({ taskId, verifiedWorkspaceId, keepFolder: true, ...(folder ? { leftoverPath: folder } : {}) });
       }
 
       // F3 — close-only 라우팅: worktreePath 부재(미물질화 CX4) / 디스크 결측

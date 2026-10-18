@@ -224,6 +224,8 @@ interface ProjectionTask {
   status: 'open' | 'closed';
   branch?: string;
   worktreePath?: string;
+  /** worktree:false fan-out (a bot's research task) output folder. */
+  outputDir?: string;
   detachedAt?: number;
 }
 
@@ -816,7 +818,8 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
 
     // Close and keep folder (#2388): the task closes, its folder stays.
     if (keepFolder) {
-      return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId, keepFolder: true, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
+      const folder = task.worktreePath ?? task.outputDir;
+      return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId, keepFolder: true, ...(folder ? { leftoverPath: folder } : {}) });
     }
 
     if (!task.worktreePath || !fileExists(task.worktreePath)) {

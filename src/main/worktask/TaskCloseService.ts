@@ -174,11 +174,11 @@ export class TaskCloseService {
     let release: () => void = () => undefined;
     let releaseTask: () => void = () => undefined;
     try {
+      // A bot's task: its folder cleanup (one under way is waited for)
+      // leaves the folder alone from here on, whichever folder it is.
+      if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
       if (folder) {
         release = this.worktrees.holdFolder(folder);
-        // A bot's task: its folder cleanup (one under way is waited for)
-        // leaves the folder alone from here on.
-        if (this.holdTaskFolder) releaseTask = await this.holdTaskFolder(taskId);
         await this.worktrees.markPendingRemovalKept(folder);
       }
       const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
@@ -194,13 +194,13 @@ export class TaskCloseService {
         };
       }
       this.kept.add(taskId);
+      try {
+        this.noteFolderKept?.(taskId);
+      } catch {
+        // The detached mission still keeps it from every later pass.
+      }
       if (folder) {
         this.forgetFolderStops(folder);
-        try {
-          this.noteFolderKept?.(taskId);
-        } catch {
-          // The detached mission still keeps it from every later pass.
-        }
         await this.worktrees.forgetPendingRemoval(folder).catch((err: unknown) => {
           // Still marked kept: it deletes nothing, and a later close of the
           // task ends it.

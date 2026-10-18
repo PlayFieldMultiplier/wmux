@@ -420,6 +420,16 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(fs.existsSync(left)).toBe(true);
   });
 
+  it('keepFolder holds and marks the task\'s folder for the bots\' cleanup even with no folder named', async () => {
+    const holdTaskFolder = vi.fn(async () => () => undefined);
+    const noteFolderKept = vi.fn();
+    const { port } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ pendingRemovals: storeIn(wtBase) }), holdTaskFolder, noteFolderKept });
+    expect(await svc.closeTask({ taskId: 'wtask-k13', verifiedWorkspaceId: 'ws-owner', keepFolder: true })).toMatchObject({ ok: true });
+    expect(holdTaskFolder).toHaveBeenCalledWith('wtask-k13');
+    expect(noteFolderKept).toHaveBeenCalledWith('wtask-k13');
+  });
+
   it('a close queued behind Close and keep folder removes nothing', async () => {
     const { worktreePath } = await makeWorktree('keep-q');
     const { port } = makeDaemon();
