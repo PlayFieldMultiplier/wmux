@@ -1804,7 +1804,7 @@ export const pl = {
   'botsPage.templateJob.coordinator': "Koordynuj zespół: śledź, co robi każdy bot, przynoś mi w jednej wiadomości to, co jest gotowe do scalenia lub decyzji, i przekazuj moje decyzje botowi, który je wykona.",
   'botsPage.templateJob.developer': "Buduj to, o co proszę ja lub inne boty: podziel to na zadania workerów, doprowadź każde do scalonego pull requesta i zdaj relację.",
   'botsPage.templateJob.reviewer': "Recenzuj pull requesty: weryfikuj każdy head workerem, zapisuj wynik z dowodem z bramki i mów, co znalazłeś.",
-  'botsPage.templateJob.issue': "Zajmuj się nowymi zgłoszeniami: odtwórz każde workerem, znajdź przyczynę, otwórz poprawkę jako szkic pull requesta i powiedz, co znalazłeś.",
+  'botsPage.templateJob.issue': "Zajmuj się nowymi zgłoszeniami: odtwórz każde workerem, znajdź przyczynę, otwórz pull request z poprawką i powiedz, co znalazłeś.",
   'botsPage.templateJob.researcher': "Badaj to, o co pytam — konkurencję, użytkowników, rynek — i raportuj wyniki ze źródłami.",
   'settings.factory.addBotTemplate': "Szablon",
   'settings.factory.addBotJob': "Zadanie",

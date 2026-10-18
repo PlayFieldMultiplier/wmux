@@ -1826,7 +1826,7 @@ export const en = {
   'botsPage.templateJob.coordinator': "Coordinate the team: keep track of what every bot is doing, bring me what is ready to merge or decide in one message, and pass my decisions to the bot that acts on them.",
   'botsPage.templateJob.developer': "Build what I or the other bots ask for: split it into worker tasks, see each through to a merged pull request, and report back.",
   'botsPage.templateJob.reviewer': "Review pull requests: verify each head with a worker, record a pass or fail with the gate's evidence, and say what you found.",
-  'botsPage.templateJob.issue': "Handle new issues: reproduce each one with a worker, find the root cause, open a fix as a draft pull request, and tell me what you found.",
+  'botsPage.templateJob.issue': "Handle new issues: reproduce each one with a worker, find the root cause, open a pull request with the fix, and tell me what you found.",
   'botsPage.templateJob.researcher': "Research what I ask about — competitors, users, the market — and report findings with their sources.",
   'settings.factory.addBotTemplate': "Start from",
   'settings.factory.addBotJob': "Job",

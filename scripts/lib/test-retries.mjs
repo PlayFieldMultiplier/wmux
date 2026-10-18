@@ -3,14 +3,15 @@
 // CI retries a failed test once (vitest.config.ts, `retry` on CI only). A test
 // that then passes no longer fails the job, which is the point, but it is still
 // flaky, and a green job hides that. scripts/vitest-retry-reporter.mjs writes
-// every retried test to test-results/retries-<suite>.json; this module holds the
-// pure parts (collect, merge, render) so they can be tested without a vitest run,
-// and scripts/flaky-report.mjs is the command line that prints them.
+// every retried test to test-results/retries-<suite>.json, one file per vitest
+// project that ran, named after the project; this module holds the pure parts
+// (collect, merge, render) so they can be tested without a vitest run, and
+// scripts/flaky-report.mjs is the command line that prints them.
 //
 // Report format (version 1):
 //   {
 //     "version": 1,
-//     "suite": "unit",               // which config wrote it
+//     "suite": "unit",               // the vitest project, or the config's suite
 //     "shard": "1/2",                // null when not sharded
 //     "platform": "win32",
 //     "retry": 1,                    // the configured retry count
@@ -30,13 +31,20 @@ export const REPORT_PREFIX = 'retries-';
 
 /**
  * Every test that was retried at least once, from vitest's reported test
- * modules (the `onTestRunEnd` argument). Duck-typed on the public reporter API:
- * TestModule.relativeModuleId / children.allTests(), TestCase.fullName /
- * diagnostic() / result() / location.
+ * modules (the `onTestRunEnd` argument), grouped by the vitest project that ran
+ * it: a Map from project name to its tests. Every project that ran a module has
+ * an entry, an empty one included, so a project with no retry still gets a
+ * report. The name is '' for a config without `projects`; the reporter labels
+ * that with its configured suite. Duck-typed on the public reporter API:
+ * TestModule.project.name / relativeModuleId / children.allTests(),
+ * TestCase.fullName / diagnostic() / result() / location.
  */
 export function collectRetriedTests(testModules) {
-  const tests = [];
+  const byProject = new Map();
   for (const module of testModules) {
+    const project = module.project?.name ?? '';
+    if (!byProject.has(project)) byProject.set(project, []);
+    const tests = byProject.get(project);
     for (const test of module.children.allTests()) {
       const retryCount = test.diagnostic()?.retryCount ?? 0;
       if (retryCount === 0) continue;
@@ -51,8 +59,12 @@ export function collectRetriedTests(testModules) {
       });
     }
   }
-  tests.sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
-  return tests;
+  for (const tests of byProject.values()) sortTests(tests);
+  return byProject;
+}
+
+export function sortTests(tests) {
+  return tests.sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
 }
 
 export function buildReport({ suite, shard, platform, retry, tests }) {

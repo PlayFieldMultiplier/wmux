@@ -653,25 +653,34 @@ export class TaskWorktreeManager {
   /**
    * `beforeRemove` runs only once removal is decided (the dirty check passed), so a refused close
    * never stops anything. If it throws, the worktree is kept.
+   *
+   * `force` is only for a worktree no agent ever worked in (a fan-out spawn
+   * refused before its pane existed, #2349): whatever is in it was written by
+   * wmux's own setup, so the dirty check is skipped and git is told
+   * `--force`. Commits are never at stake here; the branch is a separate step.
    */
   async removeWorktree(
     repoRoot: string,
     repoHash: string,
     worktreePath: string,
     beforeRemove?: (worktreePath: string) => Promise<void>,
+    opts?: { force?: boolean },
   ): Promise<RemoveResult> {
     return this.withRepoLock(repoHash, async () => {
       const safePath = validatePath(worktreePath, 'worktreePath');
+      const force = opts?.force === true;
 
       // dirty 검사: worktree 안에서 porcelain. 커밋 안 된 변경이 있으면 보존.
-      try {
-        const { stdout } = await this.runGit(['status', '--porcelain'], safePath);
-        if (stdout.trim().length > 0) {
-          return { ok: false, error: 'removeWorktree: worktree is dirty; preserved', preserved: true, dirty: true };
+      if (!force) {
+        try {
+          const { stdout } = await this.runGit(['status', '--porcelain'], safePath);
+          if (stdout.trim().length > 0) {
+            return { ok: false, error: 'removeWorktree: worktree is dirty; preserved', preserved: true, dirty: true };
+          }
+        } catch (err) {
+          // status 실패(경로 부재 등) — 보수적으로 제거 시도하지 않고 보존.
+          return { ok: false, error: `removeWorktree: status check failed: ${(err as Error).message}`, preserved: true };
         }
-      } catch (err) {
-        // status 실패(경로 부재 등) — 보수적으로 제거 시도하지 않고 보존.
-        return { ok: false, error: `removeWorktree: status check failed: ${(err as Error).message}`, preserved: true };
       }
 
       if (beforeRemove) {
@@ -687,7 +696,7 @@ export class TaskWorktreeManager {
       }
 
       try {
-        await this.runGit(['worktree', 'remove', safePath], repoRoot);
+        await this.runGit(['worktree', 'remove', ...(force ? ['--force'] : []), safePath], repoRoot);
       } catch (err) {
         // A process that outlived its pane can still hold files: keep the record so nothing is lost silently.
         return { ok: false, error: `removeWorktree: git worktree remove failed: ${(err as Error).message}`, preserved: true };
@@ -696,6 +705,30 @@ export class TaskWorktreeManager {
         return { ok: false, error: 'removeWorktree: files were left behind in the worktree folder', preserved: true };
       }
       return { ok: true };
+    });
+  }
+
+  /**
+   * Delete a task branch only while it still points at `expectedOid`, the
+   * commit it was created from: `git update-ref -d` compares and deletes in
+   * one step, so a branch that gained a commit is kept and nothing committed
+   * is ever lost. For a task whose worktree was rolled back (#2349).
+   */
+  async deleteBranchIfAt(
+    repoRoot: string,
+    repoHash: string,
+    branch: string,
+    expectedOid: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    return this.withRepoLock(repoHash, async () => {
+      const safeBranch = validateGitRef(branch, 'branch');
+      const safeOid = validateGitRef(expectedOid, 'expectedOid');
+      try {
+        await this.runGit(['update-ref', '-d', `refs/heads/${safeBranch}`, safeOid], repoRoot);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: `deleteBranchIfAt: ${(err as Error).message}` };
+      }
     });
   }
 

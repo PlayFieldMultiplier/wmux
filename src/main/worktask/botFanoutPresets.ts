@@ -23,7 +23,8 @@
 //             it (main/factory/verifyGate.ts) — that record, not the worker's
 //             word, is what a verdict rests on.
 //   repro     reproduce an issue, write the failing test, attempt a minimal
-//             fix, open a DRAFT pull request.
+//             fix, open a DRAFT pull request while working and mark it
+//             ready (`gh pr ready`) once the test is pushed, so CI runs.
 //   maintain  bring the verify-wmux feature map up to date with merged PRs,
 //             run the affected recipes once, open a pull request.
 //   default   a bot's plain task: implement, gate, open a pull request — or,
@@ -99,8 +100,9 @@ const REPRO_PROMPT = (): string => [
   '- Write a test that fails because of it.',
   '- Attempt the minimal fix that makes that test pass, and run the repository gate (typecheck, lint, tests).',
   '- Commit on your branch, push it with the `task_push` tool, and open a DRAFT pull request (`gh pr create --draft --head <your branch>`) whose body has the repro steps and the test.',
+  '- Once the failing test (and the fix, if there is one) is committed and pushed, mark the PR ready with `gh pr ready <number>`: CI skips drafts, so this is what starts it. When the issue does not reproduce, the PR stays a draft, if you opened one.',
   '',
-  'What you hand back (ledger summary, status review_requested): the repro steps, the failing test, the fix if there is one, and the draft PR link. When the issue does not reproduce, the summary starts with `no-repro` and lists what you tried.',
+  'What you hand back (ledger summary, status review_requested): the repro steps, the failing test, the fix if there is one, and the PR link. When the issue does not reproduce, the summary starts with `no-repro` and lists what you tried.',
 ].join('\n');
 
 const MAINTAIN_PROMPT = (): string => [
@@ -151,7 +153,7 @@ export const BOT_FANOUT_PRESETS: Readonly<Record<BotFanoutPresetName, BotFanoutP
   },
   repro: {
     name: 'repro',
-    description: 'Reproduce an issue, write the failing test, attempt a minimal fix, open a draft PR.',
+    description: 'Reproduce an issue, write the failing test, attempt a minimal fix, open a PR and mark it ready for CI.',
     workerPrompt: REPRO_PROMPT,
     permissionMode: UNATTENDED,
     agent: CLAUDE,

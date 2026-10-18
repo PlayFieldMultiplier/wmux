@@ -123,6 +123,64 @@ export function detectorSuppressedBy(
   return canonical !== undefined && canonical.source !== 'screen' && canonical.slug !== screenSlug;
 }
 
+/**
+ * May this identity be written to the pane's persisted `lastDetectedAgent`?
+ *
+ * `lastDetectedAgent` is the sole basis of the post-restart resume pill, and
+ * a screen-tier identity is the weakest evidence there is: a banner row the
+ * detector matched with no process or hook behind it. That is enough to
+ * NAME a pane that has no agent yet (the first banner on an unarmed pane,
+ * before the probe lands), but not to FLIP a pane that already names one.
+ * The flip is how a Claude pane became "codex" for the pill: a Claude reply
+ * quoting Codex's banner row, a shell echo after Claude exited — persisted
+ * with saveImmediate, surviving the restart, and contradicting the Claude
+ * resume binding the hook had written. A hook or a live process may still
+ * change the name; the user switching agents in a pane is seen by the
+ * tracker as a launch, which is process-tier.
+ */
+export function mayPersistIdentity(
+  current: AgentSlug | undefined,
+  canonical: CanonicalAgentIdentity,
+): boolean {
+  if (current === canonical.slug) return false;
+  if (!current) return true;
+  return canonical.source !== 'screen';
+}
+
+/**
+ * Record a canonical identity on the pane's persisted meta. Returns true when
+ * the meta changed and must be saved.
+ *
+ * The one writer for every site that learns identity: a detector event, a
+ * process launch or death edge, and a hook signal. The hook site is what
+ * corrects a rename the screen tier was refused: Claude persisted, the user
+ * starts Codex, Codex's banner arrives before the probe attributes it (screen
+ * tier, refused), and attribution then fails; Codex's own exact hook resolves
+ * hook-tier through the same freshness, routing and process-contradiction
+ * rules and renames the pane here.
+ *
+ * The evidence stamp is upgraded once when a hook or a live process proves a
+ * name the screen tier (or a legacy write) set, so a later launch can be told
+ * from a guess without a write per event.
+ */
+export function recordPaneIdentity(
+  meta: { lastDetectedAgent?: AgentSlug; lastDetectedAgentEvidence?: { source: CanonicalAgentIdentity['source']; at: number } },
+  canonical: CanonicalAgentIdentity | undefined,
+  now: number,
+): boolean {
+  if (!canonical) return false;
+  if (meta.lastDetectedAgent === canonical.slug) {
+    const stamped = meta.lastDetectedAgentEvidence?.source;
+    const proven = stamped === 'hook' || stamped === 'process';
+    if (canonical.source === 'screen' || proven) return false;
+  } else if (!mayPersistIdentity(meta.lastDetectedAgent, canonical)) {
+    return false;
+  }
+  meta.lastDetectedAgent = canonical.slug;
+  meta.lastDetectedAgentEvidence = { source: canonical.source, at: now };
+  return true;
+}
+
 /** #1307 — true only when the tracked process is alive and of the
  *  expected slug, the one tier with a death edge; hook and screen
  *  carry none, so neither can stand in for this check. */

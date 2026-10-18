@@ -5,7 +5,7 @@
 
 import { arr, botCards, botId, cardsOfKind, criterion, factsOfKind, handoffsOfKind, wakesOf } from './common.mjs';
 
-/** 20. triage-real-issue: a triage card and a draft PR from its repro worker. */
+/** 20. triage-real-issue: a triage card and a PR (draft or ready) from its repro worker. */
 export function triageRealIssue(snap, expect) {
   const cards = botCards(snap, expect.bot);
   const triage = cards.filter((c) => c.kind === 'triage');
@@ -16,7 +16,7 @@ export function triageRealIssue(snap, expect) {
     criterion('triage_card_in_issue_thread', triage.length >= 1 && triage.every((c) => c.threadId === expect.thread), triage.map((c) => c.threadId).join(', ') || 'none'),
     criterion('repro_worker_started', tasks.some((e) => e.dispatch?.preset === 'repro'), tasks.map((e) => e.dispatch?.preset).join(', ') || 'none'),
     criterion('names_the_bug', triage.some((c) => new RegExp(expect.bugPattern, 'i').test(`${c.title}\n${c.body ?? ''}`)), expect.bugPattern),
-    criterion('draft_pr_or_no_repro', prs.some((p) => p.isDraft) || cards.some((c) => /no-repro/i.test(c.body ?? '')), `${prs.length} PR(s)`),
+    criterion('pr_or_no_repro', prs.length > 0 || cards.some((c) => /no-repro/i.test(c.body ?? '')), `${prs.length} PR(s)`),
     criterion('within_turns', turns > 0 && turns <= (expect.maxTurns ?? 6), `${turns} turn(s)`),
   ];
 }

@@ -128,7 +128,7 @@ import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
 import { CommandStartAgentProbe } from './commandStartAgentProbe';
-import { resolveCanonicalAgentIdentity, detectorSuppressedBy, reportedAgentName, provesLiveAgent, type CanonicalAgentIdentity } from './canonicalAgent';
+import { resolveCanonicalAgentIdentity, detectorSuppressedBy, reportedAgentName, provesLiveAgent, type CanonicalAgentIdentity, recordPaneIdentity } from './canonicalAgent';
 import { decideLaunchPresence, launchPresenceNeedsProcessRead, type IdleShellRead } from './launchPresence';
 import { promptLineState } from '../shared/promptLineState';
 import { parseWriteExpectation, writeIfUnchanged } from './writeIfUnchanged';
@@ -2218,6 +2218,7 @@ async function recoverSessions(
       if (!managed) continue;
       if (persisted.lastDetectedAgent && !managed.meta.lastDetectedAgent) {
         managed.meta.lastDetectedAgent = persisted.lastDetectedAgent;
+        if (persisted.lastDetectedAgentEvidence) managed.meta.lastDetectedAgentEvidence = persisted.lastDetectedAgentEvidence;
       }
       if (persisted.resumeBinding && !managed.meta.resumeBinding) {
         managed.meta.resumeBinding = persisted.resumeBinding;
@@ -2373,7 +2374,10 @@ async function restartSupervisedSession(
   const fresh = sessionManager.getSession(recovered.id);
   if (fresh) {
     if (meta.resumeBinding && !fresh.meta.resumeBinding) fresh.meta.resumeBinding = meta.resumeBinding;
-    if (meta.lastDetectedAgent && !fresh.meta.lastDetectedAgent) fresh.meta.lastDetectedAgent = meta.lastDetectedAgent;
+    if (meta.lastDetectedAgent && !fresh.meta.lastDetectedAgent) {
+      fresh.meta.lastDetectedAgent = meta.lastDetectedAgent;
+      if (meta.lastDetectedAgentEvidence) fresh.meta.lastDetectedAgentEvidence = meta.lastDetectedAgentEvidence;
+    }
     if (meta.codexRelayResume && !fresh.meta.codexRelayResume) fresh.meta.codexRelayResume = meta.codexRelayResume;
     if (meta.handoffFrom && !fresh.meta.handoffFrom) fresh.meta.handoffFrom = meta.handoffFrom;
     if (meta.paneAccount && !fresh.meta.paneAccount) fresh.meta.paneAccount = meta.paneAccount;
@@ -3249,6 +3253,7 @@ function registerRpcHandlers(
         if (!startFresh) {
           promotedSession.meta.resumeBinding = session.resumeBinding;
           promotedSession.meta.lastDetectedAgent = session.lastDetectedAgent;
+          promotedSession.meta.lastDetectedAgentEvidence = session.lastDetectedAgentEvidence;
           promotedSession.meta.codexRelayResume = session.codexRelayResume;
           const offer = resumeOfferForRecovered(promotedSession.meta);
           if (offer) recoveredAgentShellIds.set(sessionId, offer as AgentSlug);
@@ -4542,6 +4547,20 @@ function registerRpcHandlers(
         const managed = sessionManager.getSession(sessionId);
         if (!managed) return;
         sessionManager.confirmAgent(sessionId);
+        // The hook tier changed: persist it like the banner and process sites
+        // do. This is what corrects a rename the screen tier was refused when
+        // the agent's attribution then fails. The tier rule keeps a stale,
+        // cwd-routed or process-contradicted hook out, and the write happens
+        // once per transition, not per tool use.
+        const screenAgent = managed.bridge.getLastAgent();
+        const canonical = canonicalIdentityFor(
+          agentProcessTracker,
+          sessionId,
+          screenAgent ? agentDisplayToSlug(screenAgent) : undefined,
+        );
+        if (recordPaneIdentity(managed.meta, canonical, Date.now())) {
+          stateWriter.saveImmediate(buildState(sessionManager));
+        }
         const wslTarget = managed.meta.wslTarget;
         if (!wslTarget) {
           agentProcessTracker.arm(sessionId, managed.meta.pid);
@@ -6846,15 +6865,17 @@ function wireEvents(
     // unarmed pane still resolves screen-tier — corrected on the tracker's
     // attribution callback or the next event once the probe lands.
     const canonical = canonicalIdentityFor(agentProcessTracker, payload.sessionId, slug);
-    if (canonical && managed && managed.meta.lastDetectedAgent !== canonical.slug) {
-      managed.meta.lastDetectedAgent = canonical.slug;
+    // A screen-tier identity may name an unnamed pane, never rename one
+    // (mayPersistIdentity): the flip is what made a Claude pane "codex" for
+    // the resume pill after a quoted banner row or a post-exit shell echo.
+    if (managed && recordPaneIdentity(managed.meta, canonical, Date.now())) {
       // X6 ②: persist IMMEDIATELY, not debounced. lastDetectedAgent is the
       // SOLE basis for the post-reboot resume offer (resumeOfferForRecovered
       // reads it off the persisted session). A real OS reboot SIGKILLs the
       // daemon — flush()/process.on('exit') never run — so a 30s debounce
       // (or the periodic snapshot) can drop a fresh detection that has no
-      // other state-changing event to opportunistically flush it. The
-      // !== slug guard above bounds this to one sync write per agent
+      // other state-changing event to opportunistically flush it.
+      // recordPaneIdentity bounds this to one sync write per agent
       // transition (effectively once per idle agent pane), so the cost is
       // negligible vs. the durability it buys.
       stateWriter.saveImmediate(buildState(sessionManager));
@@ -8541,8 +8562,10 @@ async function main(): Promise<void> {
       sessionId,
       screenSlug ? agentDisplayToSlug(screenSlug) : undefined,
     );
-    if (canonical && managed.meta.lastDetectedAgent !== canonical.slug) {
-      managed.meta.lastDetectedAgent = canonical.slug;
+    // Same rule as the live banner site: on the exit edge the dead process
+    // no longer counts, so the screen's last guess would otherwise rename the
+    // pane to whatever row scrolled by last.
+    if (recordPaneIdentity(managed.meta, canonical, Date.now())) {
       stateWriter.saveImmediate(buildState(sessionManager));
     }
   });
