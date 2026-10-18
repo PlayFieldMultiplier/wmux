@@ -6421,13 +6421,22 @@ function wireEvents(
   // screen-cleared answer, once two reads a moment apart show no dialog (one
   // read is one sample); a dialog still up (someone typing at it, which defers
   // Claude's Notification) keeps it.
+  // A record minted meanwhile belongs to a newer request, whose own lapse or
+  // alert decides it: the sweep stands down if the pane's pending
+  // terminal_prompt records changed during the reads.
   tentativeDialogLapsed = (sessionId) => {
     const registry = approvalRegistry;
     if (!registry) return;
+    const pendingPrompts = (): string => registry.list().pending
+      .filter((r) => r.sessionId === sessionId && r.kind === 'terminal_prompt')
+      .map((r) => r.id).join(',');
+    const before = pendingPrompts();
+    if (before === '') return;
     void (async () => {
       if (!(await registry.dialogGoneFromScreen(sessionId))) return;
       await new Promise<void>((resolve) => { setTimeout(resolve, DIALOG_RECHECK_MS).unref?.(); });
       if (!(await registry.dialogGoneFromScreen(sessionId))) return;
+      if (pendingPrompts() !== before) return;
       await registry.expireForSession(sessionId, 'screen-cleared', 'terminal_prompt');
     })().catch((err: unknown) => log('warn', `[approvals] lapsed permission request sweep failed for ${sessionId}: ${String(err)}`));
   };
