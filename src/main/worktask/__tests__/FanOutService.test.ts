@@ -612,7 +612,11 @@ describe('depth-1 lineage stamp', () => {
     await svc.start(baseReq());
     // Once per task, the failed one included.
     expect(settled).toHaveBeenCalledTimes(2);
-    expect(settled).toHaveBeenCalledWith('fo-key-1');
+    // Each with its task, so the booking that task held is the one dropped.
+    for (const [key, taskId] of settled.mock.calls) {
+      expect(key).toBe('fo-key-1');
+      expect(taskId).toMatch(/\S/);
+    }
   });
 });
 
