@@ -363,12 +363,15 @@ export class GitContextWatcher extends EventEmitter {
       if (current()) this.apply(sessionId, cwd, mapGitDir, { repo: null, conclusive: false }, 'timeout');
     }, REMOTE_RESOLVE_TIMEOUT_MS);
     timer.unref?.();
+    // A superseded walk stops at its next probe instead of queueing the rest
+    // behind the live sessions' probes.
+    const io: ProbeIo = (probe) => (current() ? this.io(probe) : Promise.reject(new Error('superseded')));
     void (async () => {
       let state: RepoState = { repo: null, conclusive: false };
       let head: GitContext | undefined;
       try {
-        state = await resolveRepoStateAsync(cwd, this.io, mapGitDir);
-        if (state.repo) head = await readGitContextAsync(state.repo, this.io);
+        state = await resolveRepoStateAsync(cwd, io, mapGitDir);
+        if (state.repo) head = await readGitContextAsync(state.repo, io);
       } catch { /* an io that throws reads as unknown */ }
       clearTimeout(timer);
       if (!current()) return;
@@ -517,8 +520,9 @@ export class GitContextWatcher extends EventEmitter {
 
   /**
    * The watch for a WSL share: one async probe round every REMOTE_POLL_MS.
-   * Inside a repo, re-read HEAD; outside, look at the cwd's `.git` and `HEAD`
-   * and re-resolve when either changes (a `git init` or clone). Each tick is
+   * Inside a repo, re-read HEAD; outside, look at the cwd's `.git` (and the
+   * text of a `.git` file) and `HEAD`, and re-resolve when any of it changes
+   * (a `git init`, a clone, a gitdir line written in place). Each tick is
    * scheduled only once the last one's probes settled, so a wedged distro
    * queues at most one round per session. No git process is spawned.
    */
@@ -527,7 +531,7 @@ export class GitContextWatcher extends EventEmitter {
     let closed = false;
     // A conclusive walk saw neither entry in the cwd; otherwise the first
     // round only records what is there.
-    let entries: string | null = watch.conclusive ? 'missing missing' : null;
+    let entries: string | null = watch.conclusive ? 'missing missing ' : null;
     const tick = async () => {
       timer = null;
       if (watch.repo) {
@@ -537,8 +541,10 @@ export class GitContextWatcher extends EventEmitter {
       } else {
         const gitEntry = await this.io({ op: 'stat', path: path.join(watch.cwd, '.git') });
         const headEntry = await this.io({ op: 'stat', path: path.join(watch.cwd, 'HEAD') });
+        // A `.git` file without a `gitdir:` line can be fixed in place.
+        const gitText = gitEntry === 'file' ? await this.io({ op: 'read', path: path.join(watch.cwd, '.git') }) : '';
         if (closed) return;
-        const seen = `${gitEntry} ${headEntry}`;
+        const seen = `${gitEntry} ${headEntry} ${gitText}`;
         // Without a baseline, a `.git` already there (created before this
         // first round) is reason enough to look again.
         const changed = entries === null ? gitEntry !== 'missing' : seen !== entries;

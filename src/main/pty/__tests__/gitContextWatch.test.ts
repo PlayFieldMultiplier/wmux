@@ -865,6 +865,41 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'early', isWorktree: false });
   });
 
+  it('picks up a .git file whose gitdir line is written in place', async () => {
+    const main = tmp();
+    initFakeRepo(main);
+    const wtGitDir = path.join(main, '.git', 'worktrees', 'wt');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/fixed\n');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), 'garbage\n');
+    makeRemoteWatcher().update('s1', wt);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS); // the first round takes its baseline
+    await settle();
+
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${wtGitDir}\n`);
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'fixed', isWorktree: true });
+  });
+
+  it('a superseded walk sends no further probes', async () => {
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    const dirs = Array.from({ length: 5 }, () => path.join(tmp(), 'a', 'b'));
+    io.hold();
+    for (const dir of dirs) watcher.update('s1', dir);
+    watcher.remove('s1');
+    const queued = io.probes; // the first probe of each walk
+    expect(queued).toBe(dirs.length);
+    io.release();
+    await settle();
+    expect(io.probes).toBe(queued);
+    expect(events).toEqual([]);
+  });
+
   it('serialProbeIo runs one probe at a time', async () => {
     const order: string[] = [];
     let finishFirst: (() => void) | undefined;
