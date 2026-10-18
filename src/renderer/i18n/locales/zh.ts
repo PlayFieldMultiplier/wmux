@@ -1905,7 +1905,7 @@ export const zh = {
   'botsPage.templateJob.coordinator': "协调团队：跟踪每个机器人在做什么，把可以合并或需要决定的事一次性汇总给我，并把我的决定转交给负责执行的机器人。",
   'botsPage.templateJob.developer': "完成我或其他机器人交代的工作：拆分为工作者任务，跟进每个直到拉取请求合并，并汇报结果。",
   'botsPage.templateJob.reviewer': "审查拉取请求：用工作者验证每个 head，附上门禁证据记录通过或失败，并说明发现。",
-  'botsPage.templateJob.issue': "处理新议题：用工作者复现每个议题，找到根本原因，以草稿拉取请求提交修复，并告诉我发现了什么。",
+  'botsPage.templateJob.issue': "处理新议题：用工作者复现每个议题，找到根本原因，以拉取请求提交修复，并告诉我发现了什么。",
   'botsPage.templateJob.researcher': "调研我提出的问题——竞品、用户、市场——并附上来源汇报结果。",
   'settings.factory.addBotTemplate': "模板",
   'settings.factory.addBotJob': "职责",

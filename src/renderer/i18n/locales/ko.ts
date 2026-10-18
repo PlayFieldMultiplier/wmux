@@ -1326,7 +1326,7 @@ export const ko = {
   'botsPage.templateJob.coordinator': "팀을 이끌어요: 봇들이 무엇을 하는지 챙기고, 머지하거나 결정할 것을 한 번에 모아 나에게 알려주고, 내 결정을 맡을 봇에게 전달해요.",
   'botsPage.templateJob.developer': "나나 다른 봇이 맡긴 일을 만들어요: 워커 작업으로 나누고, 각각 PR 머지까지 챙기고, 결과를 보고해요.",
   'botsPage.templateJob.reviewer': "PR을 리뷰해요: 워커로 각 헤드를 검증하고, 게이트 증거와 함께 통과·실패를 기록하고, 발견한 것을 알려줘요.",
-  'botsPage.templateJob.issue': "새 이슈를 맡아요: 워커로 재현하고, 근본 원인을 찾아 수정 초안 PR을 열고, 찾은 것을 알려줘요.",
+  'botsPage.templateJob.issue': "새 이슈를 맡아요: 워커로 재현하고, 근본 원인을 찾아 수정 PR을 열고, 찾은 것을 알려줘요.",
   'botsPage.templateJob.researcher': "내가 묻는 것을 조사해요 — 경쟁 제품, 사용자, 시장 — 그리고 출처와 함께 보고해요.",
   'settings.factory.addBotTemplate': "템플릿",
   'settings.factory.addBotJob': "업무",
