@@ -226,6 +226,8 @@
     "src/main/ipc/handlers/__tests__/worktree.handler.test.ts",
     "src/main/mcp/__tests__/brokerLifecycle.dynamic.test.ts",
     "src/main/menu/__tests__/appMenu.quitAndStop.test.ts",
+    "src/main/metadata/__tests__/MetadataCollector.test.ts",
+    "src/main/metadata/__tests__/watcherBranchState.test.ts",
     "src/main/perf/__tests__/appCpu.test.ts",
     "src/main/phone/__tests__/phoneBots.routes.test.ts",
     "src/main/phone/__tests__/phoneRoomAttachments.routes.test.ts",

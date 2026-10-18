@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   MetadataCollector,
   GIT_BRANCH_HIT_TTL_MS,
@@ -109,5 +113,61 @@ describe('MetadataCollector.getGitBranch — per-directory cache', () => {
     await f.c.getGitBranch('/d0');
     await f.c.getGitBranch(`/d${GIT_BRANCH_CACHE_MAX + 9}`);
     expect(f.exec).toHaveBeenCalledTimes(GIT_BRANCH_CACHE_MAX + 10 + 1);
+  });
+});
+
+describe('MetadataCollector.getGitBranch — WSL paths', () => {
+  it('never spawns host git for a WSL path, in either slash style', async () => {
+    const f = make({});
+    for (const cwd of ['\\\\wsl$\\Ubuntu\\home\\me', '//wsl.localhost/Ubuntu/home/me/repo', '\\\\wsl.localhost\\Debian\\srv']) {
+      for (let i = 0; i < 12; i++) expect(await f.c.getGitBranch(cwd)).toBeUndefined();
+    }
+    expect(f.exec).not.toHaveBeenCalled();
+  });
+
+  it('a Windows drive path or another UNC share still asks git', async () => {
+    const f = make({ 'C:/Users/me/repo': 'main', '//server/share/repo': 'dev' });
+    expect(await f.c.getGitBranch('C:/Users/me/repo')).toBe('main');
+    expect(await f.c.getGitBranch('//server/share/repo')).toBe('dev');
+    expect(f.exec).toHaveBeenCalledTimes(2);
+  });
+});
+
+function hasGit(): boolean {
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
+}
+
+describe.runIf(hasGit())('MetadataCollector.getGitBranch — real git', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* win32 lock */ }
+    }
+  });
+  function repo(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-collector-'));
+    dirs.push(dir);
+    execFileSync('git', ['-c', 'init.defaultBranch=trunk', 'init', '-q', dir], { stdio: 'ignore' });
+    return dir;
+  }
+  function git(cwd: string, ...args: string[]): void {
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'ignore' });
+  }
+
+  it('an unborn branch (fresh init) shows its name, as the watcher does', async () => {
+    expect(await new MetadataCollector().getGitBranch(repo())).toBe('trunk');
+  });
+
+  it('a detached HEAD shows `HEAD`, as `rev-parse --abbrev-ref` did', async () => {
+    const dir = repo();
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'x');
+    git(dir, 'checkout', '-q', '--detach');
+    expect(await new MetadataCollector().getGitBranch(dir)).toBe('HEAD');
+  });
+
+  it('a committed branch shows its name', async () => {
+    const dir = repo();
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'x');
+    expect(await new MetadataCollector().getGitBranch(dir)).toBe('trunk');
   });
 });

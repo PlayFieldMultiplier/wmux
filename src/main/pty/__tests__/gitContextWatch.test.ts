@@ -139,7 +139,7 @@ describe('GitContextWatcher', () => {
   const DEBOUNCE_MS = 50;
 
   let fake: ReturnType<typeof fakeWatchFactory>;
-  let events: Array<{ sessionId: string; branch: string | null; isWorktree: boolean }>;
+  let events: Array<{ sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }>;
 
   /** Build a watcher wired to the fake factory, with events collected. */
   function makeWatcher(): GitContextWatcher {
@@ -277,6 +277,86 @@ describe('GitContextWatcher', () => {
     expect(events).toHaveLength(2);
     expect(events[1].branch).toBeNull();
     expect(events[1].isWorktree).toBe(false);
+    expect(events[1].absent).toBe(true);
+  });
+
+  it('repo → non-repo → repo: known absent only while outside a repo', () => {
+    const a = tmp();
+    initFakeRepo(a, 'main');
+    const plain = tmp();
+    const b = tmp();
+    initFakeRepo(b, 'feat');
+    const watcher = makeWatcher();
+    watcher.update('s1', a);
+    watcher.update('s1', plain);
+    watcher.update('s1', b);
+    expect(events).toEqual([
+      { sessionId: 's1', branch: 'main', isWorktree: false },
+      { sessionId: 's1', branch: null, isWorktree: false, absent: true },
+      { sessionId: 's1', branch: 'feat', isWorktree: false },
+    ]);
+  });
+
+  it('an unreadable HEAD inside a repo is unknown, not absent', () => {
+    const root = tmp();
+    fs.mkdirSync(path.join(root, '.git')); // no HEAD file
+    makeWatcher().update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('outside a repo with no live watch, "no branch" is unknown', () => {
+    const w = new GitContextWatcher(() => { throw new Error('EPERM'); });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', tmp());
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('a non-repo watch that errors turns known absent back into unknown', () => {
+    let onError: (() => void) | undefined;
+    const w = new GitContextWatcher(() => ({
+      close() { /* nothing armed */ },
+      on(_event: 'error', listener: () => void) { onError = listener; return this; },
+    }));
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', tmp());
+    expect(events.at(-1)?.absent).toBe(true);
+    onError?.();
+    expect(events).toHaveLength(2);
+    expect(events[1]).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+  });
+
+  it('a repeated same-cwd update with a live watch skips the synchronous walk up', () => {
+    const root = tmp();
+    const nested = path.join(root, 'a', 'b');
+    fs.mkdirSync(nested, { recursive: true });
+    initFakeRepo(root, 'main');
+    const watcher = makeWatcher();
+    watcher.update('s1', nested);
+    const stat = vi.spyOn(fs, 'statSync');
+    try {
+      for (let i = 0; i < 5; i++) watcher.update('s1', nested);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
+    expect(events).toHaveLength(1);
+  });
+
+  it('a same-cwd update re-resolves when there is no live watch', () => {
+    const w = new GitContextWatcher(() => { throw new Error('EPERM'); });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    const root = tmp();
+    w.update('s1', root);
+    const stat = vi.spyOn(fs, 'statSync');
+    try {
+      w.update('s1', root);
+      expect(stat).toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it('picks up a git init in a previously non-repo cwd without polling', () => {

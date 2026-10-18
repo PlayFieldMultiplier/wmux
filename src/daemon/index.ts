@@ -7106,12 +7106,14 @@ function wireContextWatchers(
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
 
-  gitWatcher.on('git', (payload: { sessionId: string; branch: string | null; isWorktree: boolean }) => {
+  gitWatcher.on('git', (payload: { sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }) => {
     try {
       const event: DaemonEvent = {
         type: 'context.git',
         sessionId: payload.sessionId,
-        data: { branch: payload.branch, isWorktree: payload.isWorktree },
+        data: payload.absent
+          ? { branch: payload.branch, isWorktree: payload.isWorktree, absent: true }
+          : { branch: payload.branch, isWorktree: payload.isWorktree },
       };
       pipeServer.broadcast(event);
     } catch (err) {

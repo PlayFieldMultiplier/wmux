@@ -10,7 +10,7 @@ import { watchTarget } from '../../shared/watchTarget';
  *   - `gitBranch`/`gitIsWorktree` come from an fs.watch on `<cwd>/.git/HEAD`
  *     (with linked-worktree `gitdir:` indirection). **No polling.**
  *   - Daemon broadcasts `{ type: 'context.git', sessionId,
- *     data: { branch: string | null, isWorktree: boolean } }`.
+ *     data: { branch: string | null, isWorktree: boolean, absent?: true } }`.
  *
  * Shared between the daemon (DaemonSessionManager wiring in daemon/index.ts)
  * and local-mode main (localContextWatch) exactly like cwdDetect — both PTY
@@ -20,6 +20,15 @@ import { watchTarget } from '../../shared/watchTarget';
 export interface GitContext {
   branch: string | null;
   isWorktree: boolean;
+  /**
+   * Set only when `branch` is null because the cwd is outside any repository
+   * and a live watch on the cwd will report a `.git` appearing: a known "no
+   * branch", which main answers without spawning git. A null branch without
+   * it (HEAD unreadable or unparseable, or no live watch) is unknown, and
+   * main may still ask git. Additive: a sender that predates it reads as
+   * unknown, which is the old behaviour.
+   */
+  absent?: true;
 }
 
 interface ResolvedRepo {
@@ -127,7 +136,7 @@ interface SessionWatch {
  * Tracks the git branch per PTY session with fs.watch (no polling).
  *
  * Events:
- *  - 'git' → { sessionId: string, branch: string | null, isWorktree: boolean }
+ *  - 'git' → { sessionId: string, branch: string | null, isWorktree: boolean, absent?: true }
  *
  * `update(sessionId, cwd)` is called on session create and on every cwd
  * change (OSC 7 / prompt scrape). When the cwd is outside any repository the
@@ -149,6 +158,15 @@ export class GitContextWatcher extends EventEmitter {
 
   update(sessionId: string, cwd: string): void {
     const existing = this.sessions.get(sessionId);
+    // Same cwd and its watch is live: the watch itself reports HEAD moves and
+    // a `.git` appearing, so skip the synchronous walk up (up to 24 stats, each
+    // a round trip on a network share or a `\\wsl$` path). Local mode calls
+    // this on every prompt (OSC 7); the daemon already drops repeated cwds.
+    if (existing && existing.cwd === cwd && existing.watcher) return;
+    this.resolve(sessionId, cwd, existing);
+  }
+
+  private resolve(sessionId: string, cwd: string, existing: SessionWatch | undefined): void {
     const repo = resolveRepo(cwd);
 
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir) {
@@ -214,8 +232,9 @@ export class GitContextWatcher extends EventEmitter {
         watch.debounce = setTimeout(() => {
           watch.debounce = null;
           if (!watch.repo) {
-            // `.git` may have just appeared — re-resolve and re-arm.
-            this.update(sessionId, watch.cwd);
+            // `.git` may have just appeared — re-resolve and re-arm. Not
+            // update(): its guard would keep this same-cwd watch.
+            this.resolve(sessionId, watch.cwd, this.sessions.get(sessionId));
             return;
           }
           this.readAndEmit(sessionId, watch);
@@ -226,6 +245,9 @@ export class GitContextWatcher extends EventEmitter {
         // Directory vanished (worktree pruned, repo deleted) — drop the
         // watcher; the next cwd update re-arms.
         this.teardown(watch);
+        // Outside a repo, "no branch" was known only while the watch could
+        // see a `.git` appear; without it the answer is unknown again.
+        if (!watch.repo && this.sessions.get(sessionId) === watch) this.readAndEmit(sessionId, watch);
       });
     } catch {
       // Watch target unreadable — degrade to "value at update time" only.
@@ -236,7 +258,9 @@ export class GitContextWatcher extends EventEmitter {
   private readAndEmit(sessionId: string, watch: SessionWatch): void {
     const ctx: GitContext = watch.repo
       ? readGitContext(watch.repo)
-      : { branch: null, isWorktree: false };
+      : watch.watcher
+        ? { branch: null, isWorktree: false, absent: true }
+        : { branch: null, isWorktree: false };
     const encoded = JSON.stringify(ctx);
     if (encoded === watch.lastEmitted) return;
     watch.lastEmitted = encoded;
