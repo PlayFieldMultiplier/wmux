@@ -1456,8 +1456,10 @@ const electronAPI = {
   // 미발사 재발사. 물질화 필드는 main이 데몬 projection에서 역참조하므로 렌더러는
   // taskId + verifiedWorkspaceId만 싣는다.
   workTask: {
-    close: (taskId: string, verifiedWorkspaceId: string) =>
-      ipcRenderer.invoke(IPC.TASK_CLOSE, { taskId, verifiedWorkspaceId }) as Promise<
+    /** `keepFolder`: Close and keep folder — the task closes and its folder
+     *  stays on disk as it is (#2388). */
+    close: (taskId: string, verifiedWorkspaceId: string, opts?: { keepFolder?: boolean }) =>
+      ipcRenderer.invoke(IPC.TASK_CLOSE, { taskId, verifiedWorkspaceId, ...(opts?.keepFolder === true ? { keepFolder: true } : {}) }) as Promise<
         import('../shared/workTask').CloseTaskResultWire
       >,
     createPr: (taskId: string, verifiedWorkspaceId: string) =>

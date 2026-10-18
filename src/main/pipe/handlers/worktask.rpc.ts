@@ -617,7 +617,9 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     effect: string,
     extra: { branchTip?: string } = {},
   ): Promise<{ ok: false; error: { code: string; message: string } } | null> => {
-    const key = `${workspaceId}\u0000${task.id}\u0000${action}`;
+    // The effect is part of the question: a close that keeps the folder and
+    // one that removes it are not the same approval (#2388).
+    const key = `${workspaceId}\u0000${task.id}\u0000${action}\u0000${effect}`;
     let pending = inFlightApprovals.get(key);
     if (!pending) {
       const open = pendingPerWorkspace.get(workspaceId) ?? 0;
@@ -794,6 +796,7 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     const owned = await resolveOwnedTask(deps, params, ctx);
     if (!('task' in owned)) return deny(owned.code, owned.message);
     const { task, workspaceId } = owned;
+    const keepFolder = (params as { keepFolder?: unknown }).keepFolder === true;
 
     // Asked BEFORE the ordering contract starts, so a denial leaves the task
     // exactly as it was — TaskCloseService's first step is the unpushed check,
@@ -802,11 +805,18 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
       'close',
       workspaceId,
       task,
-      task.worktreePath
-        ? `remove the worktree at ${task.worktreePath} and close the task (refused if the branch is dirty or has unpushed commits)`
-        : 'close the task (it has no worktree on disk)',
+      keepFolder
+        ? `close the task and keep its folder${task.worktreePath ? ` at ${task.worktreePath}` : ''} on disk as it is`
+        : task.worktreePath
+          ? `remove the worktree at ${task.worktreePath} and close the task (refused if the branch is dirty or has unpushed commits)`
+          : 'close the task (it has no worktree on disk)',
     );
     if (refused) return refused;
+
+    // Close and keep folder (#2388): the task closes, its folder stays.
+    if (keepFolder) {
+      return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId, keepFolder: true, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
+    }
 
     if (!task.worktreePath || !fileExists(task.worktreePath)) {
       // Nothing on disk to remove — close-only, exactly as the IPC path

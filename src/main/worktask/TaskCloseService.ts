@@ -46,11 +46,17 @@ export interface CloseTaskInput {
    *  worktree (#2388): a removal recorded as pending there is finished
    *  before the task closes, and the task stays open when it cannot be. */
   leftoverPath?: string;
+  /** Close and keep folder (#2388): close the task and leave its folder on
+   *  disk as it is, with nothing checked, stopped or removed. The way out
+   *  of a close that keeps refusing. The folder is `worktreePath`, or
+   *  `leftoverPath`. */
+  keepFolder?: boolean;
 }
 
 export type CloseTaskResult =
-  /** `keptFolder`: the task closed and this folder stays on disk (its
-   *  repository is gone, so nothing could check it before a deletion). */
+  /** `keptFolder`: the task closed and this folder stays on disk (the owner
+   *  chose Close and keep folder, or its repository is gone, so nothing
+   *  could check it before a deletion). */
   | { ok: true; taskId: string; archivePending: boolean; unmaterialized?: boolean; keptFolder?: string }
   | {
       ok: false;
@@ -79,6 +85,8 @@ export interface TaskCloseServiceOptions {
   /** The commit task_push last published for the task (main's record), or
    *  null: a worktree whose HEAD is that commit counts as pushed. */
   pushedHead?: (taskId: string) => string | null;
+  /** Close and keep folder: forget what earlier stops of the folder left. */
+  forgetStops?: (folder: string) => void;
 }
 
 export class TaskCloseService {
@@ -88,8 +96,10 @@ export class TaskCloseService {
   private readonly panesStopped?: (taskId: string, sessionIds: string[]) => void;
   private readonly removeRelay?: (taskId: string) => void | Promise<void>;
   private readonly pushedHead?: (taskId: string) => string | null;
+  private readonly forgetStops?: (folder: string) => void;
 
   constructor(opts: TaskCloseServiceOptions) {
+    this.forgetStops = opts.forgetStops;
     this.daemon = opts.daemon;
     this.worktrees = opts.worktrees;
     this.stopPanesIn = opts.stopPanesIn;
@@ -100,6 +110,25 @@ export class TaskCloseService {
 
   async closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
     const { taskId } = input;
+
+    // Close and keep folder: the task closes, the folder stays as it is.
+    if (input.keepFolder) {
+      const folder = input.worktreePath ?? input.leftoverPath;
+      if (folder) {
+        // The pending removal ends first: one left on disk would be finished
+        // later and delete the folder the owner chose to keep.
+        try {
+          await this.worktrees.forgetPendingRemoval(folder);
+        } catch (err) {
+          return { ok: false, taskId, reason: 'error', error: `close: the folder's pending removal could not be ended, so the task stays open: ${(err as Error).message}`, preservedWorktree: folder };
+        }
+        this.forgetFolderStops(folder);
+      }
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
+      if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+      console.warn(`[worktask] task ${taskId} closed with Close and keep folder: the owner chose to keep its folder${folder ? ` ${folder}` : ''} on disk as it is`);
+      return { ok: true, taskId, archivePending: closed.archivePending, ...(folder ? { keptFolder: folder } : {}) };
+    }
 
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.
     if (!input.worktreePath) {
@@ -244,6 +273,15 @@ export class TaskCloseService {
     }
 
     return { ok: true, taskId, archivePending: closed.archivePending };
+  }
+
+  /** A folder that stays: what earlier stops of it left is not checked again. */
+  private forgetFolderStops(folder: string): void {
+    try {
+      this.forgetStops?.(folder);
+    } catch {
+      // Best effort: only a later stop of the same folder reads it.
+    }
   }
 
   /** mission.close 데몬 RPC — archive 실패 여부(archivePending)를 결과에 전달(CX2). */

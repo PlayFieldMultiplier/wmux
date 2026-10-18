@@ -70,6 +70,12 @@ function identified(survivors: readonly TreeKillSurvivor[]): TreeKillSurvivor[] 
   return survivors.filter((x) => !x.unverified && x.startTime !== undefined);
 }
 
+/** Close and keep folder: forget what earlier stops of `dir` left, since
+ *  nothing will remove the folder. */
+export function forgetFolderStops(dir: string, port: Pick<SessionsInDirPort, 'realpath' | 'platform'> = {}): void {
+  lingering.delete(normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), port.platform ?? process.platform));
+}
+
 /** Test seam: forget every earlier stop's survivors. */
 export function resetLingeringSurvivors(): void {
   lingering.clear();

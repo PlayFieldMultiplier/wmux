@@ -635,6 +635,16 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(removeTree).not.toHaveBeenCalled();
   });
 
+  it('a refused finish of a leftover names Close and keep folder', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr } = manager(fakeGit({ leftoverUntracked: 'notes.md\n' }).git, { pendingRemovals: store });
+    const res = await mgr.finishPendingRemoval(dir);
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/not what git left.*use Close and keep folder/);
+  });
+
   it('looks for panes once more right before deleting: one opened during the git checks keeps the folder', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));

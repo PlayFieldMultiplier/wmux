@@ -185,6 +185,9 @@ export interface RunGitOptions {
 
 type RunGit = (args: string[], cwd: string, opts?: RunGitOptions) => Promise<{ stdout: string; stderr: string }>;
 
+/** What a refused finish of a half-removed folder tells the person to do. */
+const KEEP_FOLDER_HINT = 'use Close and keep folder to close the task and keep its files';
+
 export type RemoveResult =
   /** `keptFolder`: the task may close, but its folder stays on disk (the
    *  repository it came from is gone, so nothing could check it). */
@@ -922,10 +925,25 @@ export class TaskWorktreeManager {
     if (leftover.registered) await this.forgetPending(rec.path);
     return {
       ok: false,
-      error: leftover.registered ? 'removeWorktree: the folder is a worktree of its repository again; it was kept' : `removeWorktree: ${leftover.error}`,
+      error: leftover.registered ? 'removeWorktree: the folder is a worktree of its repository again; it was kept' : `removeWorktree: ${leftover.error}; ${KEEP_FOLDER_HINT}`,
       preserved: true,
       ...(leftover.dirty ? { dirty: true } : {}),
     };
+  }
+
+  /** Close and keep folder: the removal of `worktreePath` is no longer
+   *  pending (the folder stays where it is). Throws when the record cannot
+   *  be ended: one left on disk would be finished later, deleting the folder
+   *  the owner chose to keep. */
+  async forgetPendingRemoval(worktreePath: string): Promise<void> {
+    const safePath = validatePath(worktreePath, 'worktreePath');
+    const rec = this.pendingRemovals?.get(safePath);
+    if (!rec) return;
+    // Under the repository's lock: a finish of the same folder under way
+    // ends first, and none starts until the record is gone.
+    await this.withRepoLock(rec.repoHash, async () => {
+      await this.pendingRemovals?.delete(safePath);
+    });
   }
 
   /** The removals the pending store holds (the sweep at start). */
