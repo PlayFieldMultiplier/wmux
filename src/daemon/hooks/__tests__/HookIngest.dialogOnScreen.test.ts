@@ -168,6 +168,30 @@ describe('HookIngest — the permission_prompt Notification is the firm signal',
     expect(screen).not.toHaveBeenCalled();
   });
 
+  it('a later request (a background agent\'s, auto-decided) does not erase the pending Notification alarm', async () => {
+    const f = makeIngest(async () => false);
+    f.ingest.handle(makeSignal());
+    f.advance(6_000);
+    f.ingest.handle(notification());
+    f.advance(500);
+    f.ingest.handle(makeSignal({ ts: 7_500 }));
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('a new prompt or a turn end inside the Notification\'s window stands it down', async () => {
+    for (const kind of ['agent.user_prompt_submit', 'agent.stop'] as const) {
+      const f = makeIngest();
+      f.ingest.handle(notification());
+      f.advance(500);
+      f.ingest.handle(makeSignal({ kind, payload: {}, ts: 7_500 }));
+      f.advance(DEFAULT_ALARM_WINDOW_MS);
+      await settle();
+      expect(f.awaiting(), kind).toEqual([]);
+    }
+  });
+
   it('a Notification with no request before it (a sandboxed network prompt) alarms too', async () => {
     const f = makeIngest(async () => false);
     f.ingest.handle(notification());
@@ -215,6 +239,14 @@ describe('HookIngest — the permission_prompt Notification is the firm signal',
     await settle();
     expect(f.emitted).toEqual([]);
     expect(f.cards).toEqual([]);
+    // Nor does one replace a real dialog's pending alarm.
+    const h = makeIngest();
+    h.ingest.handle(notification());
+    h.advance(500);
+    h.ingest.handle(makeSignal({ payload: { hook_event_name: 'Notification', notification_type: 'idle_prompt' } }));
+    h.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(h.awaiting()).toHaveLength(1);
     // And it does not mark the pane as one that sends the permission prompt.
     const screen = vi.fn(async () => true);
     const g = makeIngest(screen);
@@ -352,6 +384,32 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
       expect(f.awaiting()).toEqual([]);
       expect(f.logs.some((l) => l.includes('stood down'))).toBe(true);
     }
+  });
+
+  it('a dialog drawn late: the second layer raises it, and its Notification after the grace adds no second toast', async () => {
+    for (const notifyAfter of [500, DEFAULT_ALARM_WINDOW_MS + 500]) {
+      const f = makeIngest(async () => true);
+      f.ingest.handle(makeSignal());
+      f.advance(PERMISSION_NOTIFY_GRACE_MS);
+      await settle();
+      f.advance(notifyAfter);
+      f.ingest.handle(notification(10_000));
+      f.advance(DEFAULT_ALARM_WINDOW_MS * 2);
+      await settle();
+      expect(f.toasts(), `Notification ${notifyAfter} ms after the read`).toBe(1);
+    }
+  });
+
+  it('a new prompt after a positive read, inside the alarm window, stands it down', async () => {
+    const f = makeIngest(async () => true);
+    f.ingest.handle(makeSignal());
+    f.advance(PERMISSION_NOTIFY_GRACE_MS);
+    await settle();
+    f.advance(500);
+    f.ingest.handle(makeSignal({ kind: 'agent.user_prompt_submit', payload: {}, ts: 9_500 }));
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toEqual([]);
   });
 
   it('the Notification landing during the read leaves exactly one alarm', async () => {

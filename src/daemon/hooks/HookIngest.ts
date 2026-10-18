@@ -781,6 +781,12 @@ export class HookIngest {
    * Cleared on SessionStart (the settings may differ) and pane disposal.
    */
   private readonly permissionNotifyPanes = new Set<string>();
+  /**
+   * Per pane, when the second layer last raised a dialog, at which epoch: a
+   * `permission_prompt` Notification for that same dialog (drawn late, so it
+   * came after the grace) must not alert a second time.
+   */
+  private readonly secondLayerRaised = new Map<string, { epoch: number; at: number }>();
   /** #1823: panes already logged for a provider mismatch (log once per pane). */
   private readonly mismatchLogged = new Set<string>();
   /** Foreign-process senders already logged (`pane|reason`), bounded like the rest. */
@@ -1189,8 +1195,16 @@ export class HookIngest {
     // User answered a pending approval locally — no turn boundary, just expire the request.
     // The alarm is fed FIRST: an `answered` cue cancels a pending ATTENTION
     // window, and these kinds return before any other cue-feeding site below.
+    // Claude's permission request and Notification feed the alarm below, on
+    // their own terms: a firm attention cue here, with no resume, would
+    // replace a real dialog's pending window (a tentative request's, or a
+    // Notification the second layer already raised).
     if (signal.kind === 'agent.input_answered' || signal.kind === 'agent.permission_answered') this.bumpDialogEpoch(sessionId);
-    this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
+    const claudeNotification = signal.kind === 'agent.awaiting_input'
+      && signal.payload?.['hook_event_name'] === 'Notification' && isClaudeFamilyAgent(signal.agent);
+    if (!isClaudePermissionRequest(signal) && !claudeNotification) {
+      this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
+    }
     if (signal.kind === 'agent.input_answered') {
       const permId = openCodeRequestId(signal);
       if (permId && this.deps.approvals?.expireHookAwaiting) {
@@ -1459,8 +1473,7 @@ export class HookIngest {
     const permissionNotification = isClaudePermissionNotification(signal);
     // The bridge forwards no other notification type; one from an older or
     // foreign sender (idle, auth, elicitation) says nothing about a dialog.
-    if (signal.kind === 'agent.awaiting_input' && !permissionNotification
-        && signal.payload?.['hook_event_name'] === 'Notification' && isClaudeFamilyAgent(signal.agent)) {
+    if (claudeNotification && !permissionNotification) {
       return { ok: true };
     }
     if (signal.kind === 'agent.awaiting_input' && !permissionNotification) {
@@ -1500,15 +1513,27 @@ export class HookIngest {
       this.holdTentativeDialog(sessionId, signal.agent, fanOut);
       return { ok: true };
     }
+    let resume: () => unknown = fanOut;
     if (permissionNotification) {
       // The root signal took over: no second layer for this dialog, and none
-      // on this pane while its session lasts. The bump stands down a
-      // second-layer screen read already in flight.
+      // on this pane while its session lasts.
       this.permissionNotifyPanes.add(sessionId);
       this.clearTentativeDialog(sessionId);
+      const raised = this.secondLayerRaised.get(sessionId);
+      this.secondLayerRaised.delete(sessionId);
+      if (raised !== undefined && raised.epoch === this.dialogEpoch.get(sessionId)
+          && this.now() - raised.at < PERMISSION_NOTIFY_GRACE_MS) {
+        // The second layer already raised this dialog (drawn late, so the
+        // Notification came after the grace): one alert per dialog, and its
+        // window, if still open, is left to confirm.
+        this.deps.log?.('debug', `[hooks] permission_prompt Notification on ${sessionId}: already raised by the screen check`);
+        return { ok: true };
+      }
+      // Stands down a second-layer screen read already in flight.
       this.bumpDialogEpoch(sessionId);
+      resume = this.unlessSettled(sessionId, fanOut);
     }
-    const outcome = this.alarm.observe(sessionId, signal.agent, cue, fanOut);
+    const outcome = this.alarm.observe(sessionId, signal.agent, cue, resume);
     if (outcome === 'hold') {
       // The bridge is answered NOW; the broadcast fires at confirmation (or
       // never, if a rebuttal cue lands inside the window).
@@ -1903,7 +1928,8 @@ export class HookIngest {
       this.tentativeDialogs.delete(sessionId);
       if (this.dialogEpoch.get(sessionId) !== epoch) return;
       const raise = (): void => {
-        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, () => { entry.fanOut(); });
+        this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
+        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => entry.fanOut()));
       };
       const verifyOnScreen = this.deps.dialogOnScreen;
       if (!verifyOnScreen) {
@@ -1915,6 +1941,22 @@ export class HookIngest {
     timer.unref?.();
     entry.cancel = () => clearTimeout(timer);
     this.tentativeDialogs.set(sessionId, entry);
+  }
+
+  /**
+   * `fanOut`, unless the dialog was settled (answered, turn ended, new prompt)
+   * while its firm window ran: working cues cannot rebut a firm window, so a
+   * new prompt would otherwise still be followed by a stale "needs you".
+   */
+  private unlessSettled(sessionId: string, fanOut: () => unknown): () => void {
+    const epoch = this.dialogEpochOf(sessionId);
+    return () => {
+      if (this.dialogEpoch.get(sessionId) !== epoch) {
+        this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} stood down: settled before it confirmed`);
+        return;
+      }
+      fanOut();
+    };
   }
 
   private clearTentativeDialog(sessionId: string): void {
@@ -1993,6 +2035,7 @@ export class HookIngest {
     this.dialogEpoch.delete(sessionId);
     this.clearTentativeDialog(sessionId);
     this.permissionNotifyPanes.delete(sessionId);
+    this.secondLayerRaised.delete(sessionId);
     this.router.dropPty(sessionId);
     this.leadTurnEnded.delete(sessionId);
     this.lastPromptAt.delete(sessionId);
