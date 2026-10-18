@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { watchTarget } from '../../shared/watchTarget';
+import { wslPathToHost } from '../../mcp/wslPaths';
 
 /**
  * X1 workspace-context sidebar — git branch tracking via fs.watch.
@@ -74,6 +75,20 @@ export function resolveRepoState(startDir: string): { repo: ResolvedRepo | null;
   return real === startDir ? lexical : walkUp(real);
 }
 
+/**
+ * A `gitdir:` value as this process can open it (#2407). A worktree added by
+ * Linux git on a Windows drive (`/mnt/d/repo` from WSL) records its gitdir
+ * as `/mnt/d/repo/.git/worktrees/x`; on win32 `path.resolve` would read that
+ * as rooted on the current drive (`D:\mnt\d\…`), a directory that does not
+ * exist, so HEAD could not be read. The drive mount is the host folder it
+ * names (`D:\repo\.git\worktrees\x`); any other value is kept as given.
+ */
+function gitdirAsHostPath(value: string): string {
+  if (process.platform !== 'win32' || !value.startsWith('/') || value.startsWith('//')) return value;
+  const host = wslPathToHost(value, undefined);
+  return 'path' in host ? host.path : value;
+}
+
 function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
   let dir = startDir;
   let conclusive = true;
@@ -89,7 +104,7 @@ function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: bool
         const content = fs.readFileSync(dotGit, 'utf8');
         const m = content.match(/^gitdir:\s*(.+)\s*$/m);
         if (m) {
-          const target = path.resolve(dir, m[1].trim());
+          const target = path.resolve(dir, gitdirAsHostPath(m[1].trim()));
           // A submodule also uses the gitdir file (…/.git/modules/…); only
           // `…/worktrees/<name>` is a linked worktree. Either way the HEAD
           // at the target describes this checkout.

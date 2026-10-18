@@ -119,6 +119,25 @@ describe('resolveRepo', () => {
     expect(readGitContext(repo!)).toEqual({ branch: 'feature-x', isWorktree: true });
   });
 
+  // #2407: a worktree added by Linux git on a Windows drive records its gitdir
+  // as the WSL path of the host folder.
+  it.runIf(process.platform === 'win32')('resolves a gitdir written as a WSL drive-mount path', () => {
+    const main = tmp();
+    initFakeRepo(main);
+    const wtGitDir = path.join(main, '.git', 'worktrees', 'wt2');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/feature-wsl\n');
+    // `C:\Users\me\x` → `/mnt/c/Users/me/x`
+    const asWsl = '/mnt/' + wtGitDir[0].toLowerCase() + wtGitDir.slice(2).replace(/\\/g, '/');
+
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${asWsl}\n`);
+
+    const repo = resolveRepo(wt);
+    expect(repo?.gitDir.toLowerCase()).toBe(wtGitDir.toLowerCase());
+    expect(readGitContext(repo!)).toEqual({ branch: 'feature-wsl', isWorktree: true });
+  });
+
   it('returns null outside any repository', () => {
     // os.tmpdir() itself could theoretically sit in a repo on a dev box; a
     // fresh nested dir without .git anywhere within MAX_WALK_UP of the drive
