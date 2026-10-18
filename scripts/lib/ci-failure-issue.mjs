@@ -137,6 +137,19 @@ function readJobs(gh, { repo, runId }) {
   return parseJson(gh(['run', 'view', String(runId), '-R', repo, '--json', 'jobs']) || '{}', 'gh run view');
 }
 
+/**
+ * The newest green run of this workflow on this branch, or 0. A red run that
+ * finishes after a newer run already came back green reports a state the
+ * branch has left, so it files nothing.
+ */
+export function newestGreenRun(gh, { repo, workflow, branch }) {
+  if (!branch) return 0;
+  const out = gh(['run', 'list', '-R', repo, '--workflow', workflow, '--branch', branch,
+    '--status', 'success', '--limit', '1', '--json', 'databaseId']);
+  const runs = parseJson(out || '[]', 'gh run list');
+  return runs.length > 0 ? Number(runs[0].databaseId) || 0 : 0;
+}
+
 const TIMED_OUT = /exceeded the maximum execution time/i;
 
 /**
@@ -192,6 +205,11 @@ export function report({ state = 'auto', env, gh, log = () => undefined }) {
     return 'closed';
   }
 
+  const newestGreen = newestGreenRun(gh, { repo, workflow: env.GITHUB_WORKFLOW, branch: env.GITHUB_REF_NAME });
+  if (newestGreen > Number(env.GITHUB_RUN_ID)) {
+    log(`run ${env.GITHUB_RUN_ID} is older than green run ${newestGreen}; not reporting a stale red`);
+    return 'none';
+  }
   const jobs = failedJobNames(jobsJson);
   const body = renderFailureBody({ url, event: env.GITHUB_EVENT_NAME, sha: env.GITHUB_SHA, jobs });
 

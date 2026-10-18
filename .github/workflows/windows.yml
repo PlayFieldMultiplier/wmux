@@ -112,12 +112,14 @@ jobs:
     concurrency:
       group: nightly-issue-${{ github.workflow }}
       cancel-in-progress: false
-    # Files and closes the issue (issues) and reads the run's jobs (actions).
+    # Files and closes the issue (issues), reads the run's jobs and recent
+    # runs (actions) and a cancelled job's annotations (checks: a timeout).
     # The workflow default stays read-only.
     permissions:
       contents: read
       issues: write
       actions: read
+      checks: read
     steps:
       # Same pins as validate in ci.yml. Node built-ins and gh only: no npm ci.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

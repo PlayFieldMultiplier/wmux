@@ -21,6 +21,7 @@ const ENV = {
   GITHUB_WORKFLOW: 'Runtime suite',
   GITHUB_EVENT_NAME: 'schedule',
   GITHUB_SHA: 'a'.repeat(40),
+  GITHUB_REF_NAME: 'main',
 };
 const RUN_URL = 'https://github.com/acme/app/actions/runs/42';
 
@@ -38,10 +39,11 @@ const REPORT = job('Report to issue', 'in_progress', '', ['success']);
 const RED = job('validate-runtime', 'completed', 'failure');
 const GREEN = job('validate-runtime', 'completed', 'success');
 
-function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {} } = {}) {
+function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {}, greenRuns = [] } = {}) {
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
+    if (args[0] === 'run' && args[1] === 'list') return JSON.stringify(greenRuns.map((databaseId) => ({ databaseId })));
     if (args[0] === 'api') {
       const id = /check-runs\/(\d+)\/annotations$/.exec(args[1])?.[1];
       return JSON.stringify((annotations[id] ?? []).map((message) => ({ annotation_level: 'failure', message })));
@@ -246,6 +248,21 @@ describe('report --state auto (the report job)', () => {
     });
     expect(report({ env: ENV, gh: fake.gh })).toBe('none');
     expect(fake.writes()).toEqual([]);
+  });
+
+  it('does not report a red run older than the newest green run on the branch', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [57] });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('none');
+    expect(fake.writes()).toEqual([]);
+    expect(fake.calls.find((c) => c.args[1] === 'list' && c.args[0] === 'run').args).toEqual([
+      'run', 'list', '-R', 'acme/app', '--workflow', 'Runtime suite', '--branch', 'main',
+      '--status', 'success', '--limit', '1', '--json', 'databaseId',
+    ]);
+  });
+
+  it('reports a red run newer than the last green one', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [40] });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('created');
   });
 
   it('does nothing for a cancelled run', () => {

@@ -55,6 +55,7 @@ function dryRunGh(args) {
   console.log(`gh ${args.map(quote).join(' ')}`);
   if (args[0] === 'issue' && args[1] === 'list') return '[]';
   if (args[0] === 'run' && args[1] === 'view') return '{"jobs":[]}';
+  if (args[0] === 'run' && args[1] === 'list') return '[]';
   return '';
 }
 
