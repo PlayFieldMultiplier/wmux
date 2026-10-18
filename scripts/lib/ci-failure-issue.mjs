@@ -32,6 +32,10 @@
 // followed by a read that converges on the newest run: a duplicate issue
 // hands its report to the oldest and closes; a close that raced a newer red
 // comment reopens; a red comment that raced an older green close reopens.
+// One window stays open, by choice: an older red run can open an issue just
+// after a newer green run's report found none to close (that green run is
+// not "completed" yet, so newestGreenRun cannot see it). The cost is a stale
+// open issue that the next green run closes; a red result is never lost.
 
 export const LABEL = 'ci-nightly';
 export const LABEL_COLOR = 'B60205';
