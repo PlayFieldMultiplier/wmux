@@ -127,4 +127,25 @@ describe('createSessionAsync registers only a PTY whose pid is known (#2398)', (
     spawned[0].emit('exit', { exitCode: 87 });
     await expect(pending).rejects.toThrow(/^Session creation cancelled$/);
   });
+
+  it('a cancelled create cannot release the reservation of its replacement under the same id', async () => {
+    const cfg = createDefaultConfig();
+    cfg.session.maxSessions = 2;
+    manager.setConfig(cfg);
+    const cancelled = manager.createSessionAsync({ id: 'a', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    manager.destroySession('a');
+    const replacement = manager.createSessionAsync({ id: 'a', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    spawned[0].connect(8001);
+    await expect(cancelled).rejects.toThrow('Session creation cancelled');
+    const b = manager.createSessionAsync({ id: 'b', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    await expect(manager.createSessionAsync({ id: 'c', cmd: process.execPath, cwd: process.cwd() }))
+      .rejects.toThrow(/^Cannot create new terminal: 2 active sessions/);
+    spawned[1].connect(8002);
+    spawned[2].connect(8003);
+    await Promise.all([replacement, b]);
+    expect(spawned).toHaveLength(3);
+  });
 });

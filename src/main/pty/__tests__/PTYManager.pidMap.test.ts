@@ -147,4 +147,25 @@ describe('PTYManager pid-map anchors', () => {
       await expect(pending).rejects.toThrow(/^PTY creation cancelled$/);
     } finally { manager.disposeAll(); }
   });
+
+  it('counts creates whose pid is pending against the instance limit, before spawning', async () => {
+    const pending: Array<ReturnType<typeof deferredPty>> = [];
+    spawn.mockImplementation(() => { const p = deferredPty(); pending.push(p); return p as never; });
+    const manager = new PTYManager();
+    try {
+      const creates = Array.from({ length: 21 }, () => manager.createAsync({}));
+      const settled = Promise.allSettled(creates);
+      await new Promise<void>((r) => setImmediate(r));
+      expect(pending).toHaveLength(20);
+      pending.forEach((p, i) => { p.pid = 9000 + i; p._socket.emit('ready_datapipe'); });
+      const results = await settled;
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(20);
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      expect(rejected.map((r) => String(r.reason?.message))).toEqual([expect.stringContaining('Maximum PTY instances reached')]);
+    } finally {
+      manager.disposeAll();
+      spawn.mockReset();
+      spawn.mockImplementation(() => ({ pid: 4321, kill: vi.fn(), onData: vi.fn(), onExit: vi.fn(), write: vi.fn(), resize: vi.fn() }));
+    }
+  });
 });

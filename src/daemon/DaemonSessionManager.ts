@@ -289,11 +289,12 @@ export class DaemonSessionManager extends EventEmitter {
   private pendingRecovery = new Map<string, DaemonSession>();
   private pendingCreates = new Map<string, symbol>();
   /**
-   * Ids whose PTY is spawned but whose pid is still pending (#2398). They
-   * count against maxSessions, so overlapping creates cannot all pass the
-   * cap before any of them registers.
+   * Creates whose PTY is spawned but whose pid is still pending (#2398), by
+   * their pendingCreates token: a cancelled attempt and its replacement under
+   * the same id hold separate reservations. They count against maxSessions,
+   * so overlapping creates cannot all pass the cap before any registers.
    */
-  private spawningIds = new Set<string>();
+  private spawningCreates = new Set<symbol>();
 
   cancelPendingCreates(): void { this.pendingCreates.clear(); }
 
@@ -389,7 +390,7 @@ export class DaemonSessionManager extends EventEmitter {
       const cancelled = (): boolean => this.pendingCreates.get(params.id) !== token || this.sessions.has(params.id);
       let conptyBackend: ConptyBackend = 'inbox';
       let ptyProcess: IPty;
-      this.spawningIds.add(params.id);
+      this.spawningCreates.add(token);
       try {
         ptyProcess = await spawnPty(this.spawnRequest(prepared, (backend) => { conptyBackend = backend; }));
       } catch (err) {
@@ -399,7 +400,7 @@ export class DaemonSessionManager extends EventEmitter {
         if (cancelled()) throw new Error('Session creation cancelled');
         throw this.spawnFailure(prepared, err);
       } finally {
-        this.spawningIds.delete(params.id);
+        this.spawningCreates.delete(token);
       }
       // Re-checked after the await: the create may have been cancelled, or the
       // id taken, while the pid was pending. Never keep a half-made session.
@@ -557,7 +558,7 @@ export class DaemonSessionManager extends EventEmitter {
     // map (it is a disk-only state the shutdown path demotes live sessions to
     // before persisting, and recovery re-creates them as `detached`).
     const maxSessions = cfg.session.maxSessions;
-    let liveCount = this.spawningIds.size;
+    let liveCount = this.spawningCreates.size;
     for (const m of this.sessions.values()) {
       if (m.meta.state === 'attached' || m.meta.state === 'detached') liveCount++;
     }

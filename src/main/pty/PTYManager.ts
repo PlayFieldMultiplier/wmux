@@ -207,12 +207,15 @@ export class PTYManager {
       if (cancelled()) throw new Error('PTY creation cancelled');
       const prepared = this.prepareSpawn({ ...options, shell }, wsl, id);
       let ptyProcess: IPty;
+      this.spawningIds.add(id);
       try {
         ptyProcess = await spawnPty(this.spawnRequest(prepared));
       } catch (err) {
         // A cancelled create reports the cancel, not the spawn error.
         if (cancelled()) throw new Error('PTY creation cancelled');
         throw this.spawnFailure(prepared, err);
+      } finally {
+        this.spawningIds.delete(id);
       }
       // Re-checked after the await. Never keep a half-made pane.
       if (cancelled() || this.instances.size >= MAX_PTY_INSTANCES) {
@@ -250,6 +253,12 @@ export class PTYManager {
     return cancelled;
   }
 
+  /**
+   * Ids whose PTY is spawned but whose pid is still pending (#2398). They
+   * count against MAX_PTY_INSTANCES, so a burst of creates cannot all pass
+   * the limit and start shells before any of them registers.
+   */
+  private spawningIds = new Set<string>();
   /** Ids reserved by createAsync that have not finished spawning yet. */
   private pendingCreates = new Set<string>();
   /** #1305 — surfaceId → every id `pendingCreates` has reserved for it. */
@@ -281,7 +290,7 @@ export class PTYManager {
      */
     spawnKind?: SpawnKind;
   }, wsl?: ResolvedWslCwd, reservedId?: string): PreparedSpawn {
-    if (this.instances.size >= MAX_PTY_INSTANCES) {
+    if (this.instances.size + this.spawningIds.size >= MAX_PTY_INSTANCES) {
       throw new Error('Maximum PTY instances reached');
     }
     const id = reservedId ?? `pty-${++this.nextId}`;
