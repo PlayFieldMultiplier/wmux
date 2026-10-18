@@ -13,6 +13,7 @@ import { useDaemonModeActive } from '../../hooks/useDaemonMode';
 import { IconUsers } from '../icons';
 import type { PaneActionItem } from './PaneActionsMenu';
 import { agentRow } from '../../../shared/agentIdentity';
+import { accountGroupOf, groupAccountsBoundFirst } from '../../../shared/accountGroup';
 
 /** Key of the main-menu item that opens the account submenu. */
 export const PANE_CONTINUE_ACCOUNT_KEY = 'continue-on-account';
@@ -38,6 +39,9 @@ export function usePaneContinueOnAccount(opts: {
   ptyId: string | undefined;
   /** False for a read-only mirror, whose ptyIds are not this main's panes. */
   allowed: boolean;
+  /** The pane's workspace: its bound Claude account's group is listed first
+   *  (the pane itself may run on a rotated account of that group). */
+  workspaceId?: string;
   /** Switch the open menu to the account submenu (pane menu only). */
   openSubmenu?: () => void;
 }): {
@@ -46,11 +50,13 @@ export function usePaneContinueOnAccount(opts: {
   mainItems: PaneActionItem[];
   subItems: PaneActionItem[];
 } {
-  const { ptyId, allowed, openSubmenu } = opts;
+  const { ptyId, allowed, openSubmenu, workspaceId } = opts;
   const t = useT();
   const daemon = useDaemonModeActive();
   const isClaude = useStore((s) => (ptyId ? !!agentRow(s.surfaceAgent[ptyId]?.slug)?.continueOnAccount : false));
-  const [accounts, setAccounts] = useState<{ id: string; name: string }[]>([]);
+  const [accounts, setAccounts] = useState<{ id: string; name: string; group?: string; loggedIn: boolean }[]>([]);
+  /** Index of the first account outside the bound account's group; -1 when none or nothing is bound. */
+  const [otherFrom, setOtherFrom] = useState(-1);
   const ready = allowed && daemon && isClaude && !!ptyId && !!window.electronAPI?.accounts?.continuePane;
 
   // Fetched when a menu opens, not per pane mount.
@@ -58,9 +64,13 @@ export function usePaneContinueOnAccount(opts: {
     const api = window.electronAPI?.accounts;
     if (!api || !ready) return;
     void api.list().then((res) => {
-      setAccounts(res.accounts.filter((a) => agentRow(a.vendor)?.continueOnAccount).map((a) => ({ id: a.id, name: a.name })));
+      const rows = res.accounts.filter((a) => agentRow(a.vendor)?.continueOnAccount);
+      const bound = workspaceId ? rows.find((a) => a.id === res.bindings[workspaceId]?.claude) : undefined;
+      const buckets = groupAccountsBoundFirst(rows, bound ? accountGroupOf(bound) : null);
+      setAccounts(buckets.flatMap((b) => b.accounts).map((a) => ({ id: a.id, name: a.name, group: a.group, loggedIn: a.status.loggedIn })));
+      setOtherFrom(bound && buckets.length > 1 ? buckets[0].accounts.length : -1);
     }).catch(() => { /* menu keeps the last rows */ });
-  }, [ready]);
+  }, [ready, workspaceId]);
 
   const continueOn = useCallback(async (account: { id: string; name: string }) => {
     const api = window.electronAPI?.accounts;
@@ -88,11 +98,20 @@ export function usePaneContinueOnAccount(opts: {
     onSelect: openSubmenu,
   }] : []), [enabled, openSubmenu, t]);
 
-  const subItems: PaneActionItem[] = useMemo(() => accounts.map((account) => ({
-    key: `continue-account:${account.id}`,
-    label: t('pane.continueOnAccountNamed', { name: account.name }),
-    onSelect: () => { void continueOn(account); },
-  })), [accounts, continueOn, t]);
+  // Once any account has a group: the bound account's group first, one
+  // divider before the other groups, and each account's group under its name.
+  // A logged-out account cannot take the conversation.
+  const subItems: PaneActionItem[] = useMemo(() => {
+    const sectioned = accounts.some((a) => accountGroupOf(a) !== '');
+    return accounts.map((account, i) => ({
+      key: `continue-account:${account.id}`,
+      label: t('pane.continueOnAccountNamed', { name: account.name }),
+      onSelect: () => { void continueOn(account); },
+      ...(sectioned ? { detail: accountGroupOf(account) || t('accounts.noGroup') } : {}),
+      ...(i > 0 && i === otherFrom ? { separatorBefore: true } : {}),
+      ...(account.loggedIn ? {} : { disabled: true, title: t('accounts.notLoggedIn') }),
+    }));
+  }, [accounts, otherFrom, continueOn, t]);
 
   return { enabled, reload, mainItems, subItems };
 }

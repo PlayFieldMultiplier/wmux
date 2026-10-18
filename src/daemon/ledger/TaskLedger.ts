@@ -45,6 +45,7 @@
 import * as fs from 'node:fs';
 import { assertNotLiveWmuxPath } from '../../shared/constants';
 import { normalizeRepoKey } from '../../shared/repoKey';
+import { isOriginPin } from '../../shared/originPin';
 import * as path from 'node:path';
 import {
   LEDGER_GATE_TAIL_MAX_BYTES,
@@ -246,12 +247,22 @@ function isEntryShape(v: unknown): v is LedgerEntry {
   );
 }
 
+/** An absolute path (POSIX, a Windows drive or a UNC share) with no control
+ *  character. */
+function isRecordedGitDir(v: unknown): v is string {
+  // eslint-disable-next-line no-control-regex
+  return typeof v === 'string' && v.length <= 4096 && /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(v) && !/[\x00-\x1f\x7f]/.test(v);
+}
+
 function copyDispatch(d: LedgerDispatch): LedgerDispatch {
   return {
     origin: { kind: d.origin.kind, ...(d.origin.botId ? { botId: d.origin.botId } : {}), ...(typeof d.origin.tainted === 'boolean' ? { tainted: d.origin.tainted } : {}) },
     ...(d.preset ? { preset: d.preset } : {}),
     // Only the factory's own spelling of a repository (shared/repoKey.ts).
     ...(typeof d.repoKey === 'string' && normalizeRepoKey(d.repoKey) === d.repoKey ? { repoKey: d.repoKey } : {}),
+    ...(isRecordedGitDir(d.gitCommonDir) ? { gitCommonDir: d.gitCommonDir } : {}),
+    ...(isRecordedGitDir(d.gitWorktreeDir) ? { gitWorktreeDir: d.gitWorktreeDir } : {}),
+    ...(isOriginPin(d.originPin) ? { originPin: d.originPin } : {}),
     ...(d.checkout ? { checkout: { sha: d.checkout.sha, detached: true as const } } : {}),
     ...(typeof d.baseOid === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(d.baseOid) ? { baseOid: d.baseOid } : {}),
     ...(d.threadId ? { threadId: d.threadId } : {}),
@@ -639,6 +650,24 @@ export class TaskLedger {
       }
       this.entries.set(input.id, updated);
       return { ok: true, entry: updated };
+    });
+  }
+
+  /** The origin pin of a task whose dispatch records none (a row written
+   *  before pins existed), set once: a recorded pin is never replaced.
+   *  Resolves with the pin the row holds afterwards, or null when the row has
+   *  no dispatch or `pin` is not a pin. No status change, no rev bump, no
+   *  transition event. */
+  recordOriginPin(id: string, pin: string): Promise<string | null> {
+    return this.serialize(async () => {
+      const entry = this.entries.get(id);
+      if (!entry?.dispatch) return null;
+      if (entry.dispatch.originPin) return entry.dispatch.originPin;
+      if (!isOriginPin(pin)) return null;
+      const updated: LedgerEntry = this.redact({ ...entry, dispatch: copyDispatch({ ...entry.dispatch, originPin: pin }) });
+      await this.append({ op: 'entry', entry: updated });
+      this.entries.set(id, updated);
+      return pin;
     });
   }
 

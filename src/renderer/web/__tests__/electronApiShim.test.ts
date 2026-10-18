@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElectronApiShim, ElectronApiDeniedError } from '../electronApiShim';
 import { platformFromNavigator, webElectronApiImpl } from '../webElectronApi';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 type AnyApi = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -56,7 +57,7 @@ describe('deny-by-default electronAPI shim', () => {
     const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
     process.on('unhandledRejection', onUnhandled);
     void api.shell.openExternal('https://example.com');
-    await new Promise((r) => setTimeout(r, 20));
+    await deliberateSleep(20, 'negative: a denied call leaves no unhandled rejection');
     process.off('unhandledRejection', onUnhandled);
     expect(unhandled).toEqual([]);
     expect(denied).toEqual(['shell.openExternal']);

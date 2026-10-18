@@ -199,6 +199,19 @@ describe('GET /api/bots and POST /api/rooms/:workspaceId/messages', () => {
       expect(rows[4]).not.toHaveProperty('lastPreview');
     });
 
+    it("a row's open questions are its own thread's, not those of the task threads it started", async () => {
+      const { get } = await start();
+      const ask = (threadId: string, title: string) => writer.post({
+        workspaceId: 'ws-1', threadId: threadId as never, kind: 'question', title, state: 'open',
+        actor: { kind: 'bot', workspaceId: 'ws-1', botId: LEAD.id },
+      });
+      ask('handoff:h-1', 'Should I take the old task?');
+      ask(GROUP.threadId, 'Crew: ship it?');
+      const rows = (await get('/api/bots')).body.conversations as Array<Record<string, unknown>>;
+      expect(rows.find((c) => c.threadId === 'general')).toMatchObject({ openQuestions: 0 });
+      expect(rows.find((c) => c.threadId === GROUP.threadId)).toMatchObject({ openQuestions: 1 });
+    });
+
     it('the factory off still lists, and says so', async () => {
       enabled = false;
       const { get } = await start();

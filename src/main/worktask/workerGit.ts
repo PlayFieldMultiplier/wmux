@@ -13,7 +13,9 @@
 // refspec, no URL rewrite may exist, and the URL must be a plain https or ssh
 // address of the repository main expects.
 
+import path from 'node:path';
 import { git, type GitResult } from '../git/git';
+import { isOriginPin } from '../../shared/originPin';
 
 /** Runs git with `args` in the worktree; never throws. */
 export type WorkerGitRun = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -134,6 +136,36 @@ export function originUrlRepoKey(url: string): string | null {
   return null;
 }
 
+/** origin's URL from `git --git-dir=<common> config -z --list --show-scope`
+ *  output: the repository's own single `remote.origin.url` as written (no
+ *  `url.*.insteadOf` applied, unlike `remote get-url`), or null. Pure. */
+export function originUrlFromConfigList(stdout: string): string | null {
+  const urls = parseGitConfigList(stdout).filter((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === 'remote.origin.url');
+  return urls.length === 1 ? urls[0].value : null;
+}
+
+/** origin's pin (shared/originPin.ts) from the same output: that URL when it
+ *  is a plain https or ssh address, else null. Pure. */
+export function originPinFromConfigList(stdout: string): string | null {
+  const url = originUrlFromConfigList(stdout);
+  return isOriginPin(url) ? url : null;
+}
+
+/** origin's URL as the repository config of the checkout at `dir` holds it,
+ *  read through its common git dir, or null. The source task_push and
+ *  task_fetch compare against. Never throws. */
+export async function readRawOriginUrl(run: (args: string[], cwd: string) => Promise<{ code: number; stdout: string }>, dir: string): Promise<string | null> {
+  try {
+    const common = await run(['rev-parse', '--git-common-dir'], dir);
+    const out = common.code === 0 ? common.stdout.trim() : '';
+    if (!out) return null;
+    const list = await run([`--git-dir=${path.resolve(dir, out)}`, 'config', '-z', '--list', '--show-scope'], dir);
+    return list.code === 0 ? originUrlFromConfigList(list.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Main's git in a worker's worktree for a read (status, rev-parse,
  *  hash-object): the config check first; a refusal comes back as a failed
  *  call with the reason. */
@@ -145,10 +177,10 @@ export async function runWorkerGitRead(args: string[], cwd: string): Promise<Git
 }
 
 /** Read the worktree's config and refuse what main does not run git with. */
-export async function workerGitPreflight(run: WorkerGitRun, mode: 'all' | 'read' = 'all'): Promise<{ ok: true; entries: GitConfigEntry[] } | { ok: false; error: string }> {
+export async function workerGitPreflight(run: WorkerGitRun, mode: 'all' | 'read' = 'all'): Promise<{ ok: true; entries: GitConfigEntry[]; stdout: string } | { ok: false; error: string }> {
   const r = await run(['config', '-z', '--list', '--show-scope']);
   if (r.code !== 0) return { ok: false, error: `git config --list failed: ${r.stderr.trim().slice(0, 300)}` };
   const entries = parseGitConfigList(r.stdout);
   const refusal = workerGitConfigRefusal(entries, mode);
-  return refusal ? { ok: false, error: refusal } : { ok: true, entries };
+  return refusal ? { ok: false, error: refusal } : { ok: true, entries, stdout: r.stdout };
 }

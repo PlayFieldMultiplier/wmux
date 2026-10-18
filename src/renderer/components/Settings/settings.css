@@ -90,6 +90,8 @@
 .settings-column :is(.ui-field-description, .ui-row-detail):not(:is([role="dialog"], [role="alertdialog"], .ui-popover, [role="listbox"]) *) { font-size: 12px; line-height: 16px; color: var(--text-sub); }
 .settings-row .ui-field-text { flex: 1; }
 .settings-clamp { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+/* Accounts: a one-line summary, then the rest on its own line behind Learn more. */
+[data-setting-id="claudeacct"] > .settings-section-desc p { white-space: pre-line; }
 .settings-more {
   align-self: flex-start;
   margin-top: 2px;

@@ -4402,6 +4402,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `task.failed` | `title` string | `Task failed: {title}` | — |
 | `task.cancelled` | `title` string | `Task cancelled: {title}` | — |
 | `task.stoppedByOwner` | `title` string | `Task cancelled · stopped by owner: {title}` | — |
+| `task.keptFolderCleaned` | `title` string, `days` number, `kind` string | `Removed the kept folder of "{title}"` | A folder kept after the owner stopped the task, removed by wmux after `days` days with no changes. `kind`: `research` for a research task's folder (no branch); absent for a worktree, whose branch stays. |
 | `task.inputRequired` | `title` string, `why` string | `Task needs input: {title}` | `why`: `trustDialog`, `firstRun` or `launchFailed`. |
 | `pr.merged` | `pr` number, `title` string | `PR #{pr} merged: {title}`<br>`PR #{pr} merged` | The second title when there is no `title`. |
 | `pr.closed` | `pr` number, `title` string | `PR #{pr} closed: {title}`<br>`PR #{pr} closed` | As `pr.merged`. |
@@ -4505,7 +4506,9 @@ a client that calls these routes reads replies as room cards by definition.
     writes "You: …" for the owner and, in a group, "<bot name>: …".
   - `unread` — cards after the owner's read position in its own thread, or
     `null` when none is known (not zero).
-  - `openQuestions` — questions asked in it that are not answered yet.
+  - `openQuestions` — questions asked in its own thread that are not answered
+    yet. Questions in the threads it started (`work`) are not counted: the
+    phone cannot answer there.
   - `work` — the work this conversation handed off: one entry per thread it
     started (a coordinator's request thread, `handoff:<id>`), the card the
     desktop draws in its place, newest first, at most 20. Absent when there
@@ -6661,6 +6664,13 @@ receipt {"requestId": "…", "state": "done", "pushed": "<oid>", "target": "refs
 - **Where it pushes.** To the upstream branch, which may have a different
   name than the local branch; show `target.ref`. `create:true` means a new
   remote branch (the app shows its own copy on the same sheet).
+- **A branch with no upstream.** The push goes to the same-named remote
+  branch: `create:true` when the remote has none, a fast-forward
+  (`create:false`) when the remote branch is already in the local branch's
+  history, and `remote-branch-exists` otherwise. The daemon writes nothing
+  into the pane's repository, so a branch the push created still has no
+  upstream afterwards (the branch list shows no ahead/behind for it), and the
+  pane's remote-tracking ref moves only when the pane fetches.
 - **`fastForward:false`.** The push will fail with `non-fast-forward`.
   Disable the button.
 - **Never force-pushes.** There is no override.

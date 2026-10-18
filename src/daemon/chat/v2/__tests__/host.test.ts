@@ -13,6 +13,7 @@ import { ClaudeDriver } from '../claude/claudeDriver';
 import { createChatV2Host } from '../host';
 import type { ChatV2Host, ChatV2HostDeps } from '../types';
 import { FakeClaude, tick, until } from './fakeClaude';
+import { deliberateSleep } from '../../../../test-utils/waitFor';
 
 // The login-shell PATH probe would run the user's real shell.
 vi.mock('../../../../shared/execEnv', () => ({
@@ -412,7 +413,7 @@ describe('chat v2 host', () => {
     const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'chatv2-cwd-')));
     const shell = spawn('sleep', ['30'], { cwd: work, stdio: 'ignore' });
     try {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await deliberateSleep(100, 'not yet converted (#2363): lets the spawned shell start; nothing to poll');
       // The reported directory is ignored: the shell process's own directory decides.
       const r = rig({ panePid: shell.pid!, paneCwd: '/elsewhere' });
       expect(await r.host.call('bindingForPane', { paneId: PANE }, 'main')).toMatchObject({ ok: true, binding: null, cwd: work });

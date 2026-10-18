@@ -546,7 +546,12 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       {/* xterm mount point. draggable={false} is explicit: xterm's selection
           handler must own pointer events here, otherwise a long-press on
           selected text could be interpreted as a native drag start and
-          clash with the SurfaceTabs drag-export feature. */}
+          clash with the SurfaceTabs drag-export feature.
+          content-box with calc(): FitAddon sizes the grid from this element's
+          computed width/height and subtracts only the .xterm element's own
+          padding. Under border-box those values include this 4px padding, so
+          the fit got 8px of height it did not have and the last row was cut
+          off whenever the cell height fit into that extra 8px. */}
       <div
         ref={containerRef}
         inert={chatView}
@@ -554,7 +559,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
         draggable={false}
         onDragOver={handleTerminalDragOver}
         onDrop={handleTerminalDrop}
-        style={{ width: '100%', height: '100%', padding: '4px', visibility: chatView ? 'hidden' : undefined }}
+        style={{ boxSizing: 'content-box', width: 'calc(100% - 8px)', height: 'calc(100% - 8px)', padding: '4px', visibility: chatView ? 'hidden' : undefined }}
       />
 
       {/* Scrollback bookmark markers on the left edge. #1256: bound to the

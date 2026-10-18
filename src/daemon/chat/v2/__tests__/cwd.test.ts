@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { decodeLsofName, driverCwd, readProcessCwd, type DriverCwdDeps } from '../cwd';
+import { deliberateSleep } from '../../../../test-utils/waitFor';
 
 const SPAWN = '/spawn/dir';
 const posix = process.platform === 'darwin' || process.platform === 'linux';
@@ -21,7 +22,7 @@ function deps(over: Partial<DriverCwdDeps> = {}): DriverCwdDeps {
 async function withChild<T>(cwd: string, run: (pid: number) => Promise<T>): Promise<T> {
   const child = spawn('sleep', ['30'], { cwd, stdio: 'ignore' });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await deliberateSleep(100, 'not yet converted (#2363): lets the spawned shell start; nothing to poll');
     return await run(child.pid!);
   } finally {
     child.kill();
