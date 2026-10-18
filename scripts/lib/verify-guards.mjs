@@ -23,15 +23,23 @@ export function parseGuardList(text) {
     .filter((line) => line !== '');
 }
 
-/** The list as committed at `base`; '' when that commit has none (or `base`
- *  cannot be read, e.g. before the list existed). */
+/** The list as committed at `base`; '' when that commit has none (e.g.
+ *  before the list existed). A `base` git cannot read throws: running the
+ *  tree's list alone would let a change drop a guard unnoticed. */
 function listAtBase(root, base) {
   if (!base) return '';
+  const opts = { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
   try {
-    return execFileSync('git', ['show', `${base}:${GUARD_LIST}`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], opts);
+  } catch {
+    throw new Error(`verify-guards: cannot read base commit ${base}`);
+  }
+  try {
+    execFileSync('git', ['cat-file', '-e', `${base}:${GUARD_LIST}`], opts);
   } catch {
     return '';
   }
+  return execFileSync('git', ['show', `${base}:${GUARD_LIST}`], opts);
 }
 
 function listInTree(root) {
@@ -39,6 +47,18 @@ function listInTree(root) {
     return fs.readFileSync(path.join(root, GUARD_LIST), 'utf8');
   } catch (err) {
     if (err && err.code === 'ENOENT') return '';
+    throw err;
+  }
+}
+
+/** `fs.statSync`, or undefined when nothing is there: a missing entry, or one
+ *  under a path that is a file (ENOTDIR). Any other error (EACCES) throws,
+ *  since the entry may exist but cannot be checked. */
+function statIfPresent(full) {
+  try {
+    return fs.statSync(full);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) return undefined;
     throw err;
   }
 }
@@ -59,7 +79,7 @@ export function guardTests({ root, base }) {
     const full = path.resolve(root, entry);
     const rel = path.relative(root, full);
     const inside = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-    if (inside && fs.statSync(full, { throwIfNoEntry: false })?.isFile()) run.push(entry);
+    if (inside && statIfPresent(full)?.isFile()) run.push(entry);
     else missing.push(entry);
   }
   return { run, missing };

@@ -93,12 +93,23 @@ describe('guardTests', () => {
     }
   });
 
-  it('uses the tree list alone when the base cannot be read', () => {
+  it('refuses a base it cannot read instead of running the tree list alone', () => {
     const root = tempRepo();
     try {
       write(root, 'g/a.test.ts', '');
       write(root, GUARD_LIST, 'g/a.test.ts\n');
-      expect(guardTests({ root, base: 'no-such-ref' })).toEqual({ run: ['g/a.test.ts'], missing: [] });
+      expect(() => guardTests({ root, base: 'no-such-ref' })).toThrow(/cannot read base commit no-such-ref/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('names a listed path under a file (ENOTDIR) as missing', () => {
+    const root = tempRepo();
+    try {
+      write(root, 'g/a.test.ts', '');
+      write(root, GUARD_LIST, 'g/a.test.ts\ng/a.test.ts/inner.test.ts\n');
+      expect(guardTests({ root, base: '' })).toEqual({ run: ['g/a.test.ts'], missing: ['g/a.test.ts/inner.test.ts'] });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
