@@ -23,6 +23,7 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 type Level = 'info' | 'warn' | 'error';
 
@@ -46,6 +47,11 @@ export interface ExitEvidenceOptions {
 
 /** What Windows ends a process with on Ctrl+C / Ctrl+Break when nothing handles it. */
 export const STATUS_CONTROL_C_EXIT = 0xc000013a;
+
+/** Node's report file name: `report.<YYYYMMDD>.<HHMMSS>.<pid>.<tid>.<seq>.json`. */
+const REPORT_FILE = /^report\.\d{8}\.\d{6}\.\d+\.\d+\.\d+\.json$/;
+const REPORTS_KEPT = 10;
+const REPORT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** Reasons beyond this many keep only the latest (a storm must not grow one line without bound). */
 const MAX_REASONS = 6;
@@ -145,6 +151,8 @@ export function installExitEvidence(proc: ExitEvidenceProcess, opts: ExitEvidenc
       // a Node that cannot do that writes no reports at all. The setting has
       // to exist before it is set: on a Node without it, the assignment only
       // adds a plain property that reads back true and changes nothing.
+      // A report still carries the daemon's command line (argv) and working
+      // directory.
       const canExcludeEnv = 'excludeEnv' in proc.report;
       if (canExcludeEnv) proc.report.excludeEnv = true;
       if (!canExcludeEnv || proc.report.excludeEnv !== true) {
@@ -152,11 +160,73 @@ export function installExitEvidence(proc: ExitEvidenceProcess, opts: ExitEvidenc
         return;
       }
       fs.mkdirSync(opts.reportDir, { recursive: true });
+      // In the background: startup must not wait on the disk.
+      void pruneCrashReports(opts.reportDir, { log: opts.log, now });
       proc.report.directory = opts.reportDir;
       proc.report.reportOnFatalError = true;
       opts.log('info', `[exit] a fatal error writes a diagnostic report (environment excluded) to ${opts.reportDir}`);
     } catch (err) {
       opts.log('warn', `[exit] diagnostic reports unavailable (${err instanceof Error ? err.message : String(err)})`);
     }
+  }
+}
+
+/**
+ * Keep the report directory bounded. A fault that recurs on every start (an
+ * out-of-memory the session data reproduces, under a service manager that
+ * restarts the daemon every 2 s) would otherwise fill the disk that session
+ * saves need. Removes the reports beyond the newest REPORTS_KEPT, and any
+ * older than REPORT_MAX_AGE_MS. Only files named like Node's reports are
+ * touched, each checked with lstat: a link or a directory under that name is
+ * left alone, and so is a report directory that is itself a link.
+ *
+ * Never throws: a failure is one warn line and the daemon carries on.
+ */
+export async function pruneCrashReports(
+  dir: string,
+  opts: { log: (level: Level, msg: string) => void; now?: () => number },
+): Promise<void> {
+  const now = opts.now ?? Date.now;
+  let failed = 0;
+  let firstError = '';
+  const fail = (err: unknown): void => {
+    if (failed++ === 0) firstError = err instanceof Error ? err.message : String(err);
+  };
+  let removed = 0;
+  try {
+    if (!(await fs.promises.lstat(dir)).isDirectory()) {
+      opts.log('warn', `[exit] old diagnostic reports not pruned: ${dir} is not a plain directory`);
+      return;
+    }
+    const reports: Array<{ file: string; mtimeMs: number }> = [];
+    for (const name of await fs.promises.readdir(dir)) {
+      if (!REPORT_FILE.test(name)) continue;
+      const file = path.join(dir, name);
+      try {
+        const st = await fs.promises.lstat(file);
+        if (st.isFile()) reports.push({ file, mtimeMs: st.mtimeMs });
+      } catch (err) {
+        fail(err);
+      }
+    }
+    reports.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const cutoff = now() - REPORT_MAX_AGE_MS;
+    for (const [i, r] of reports.entries()) {
+      if (i < REPORTS_KEPT && r.mtimeMs >= cutoff) continue;
+      try {
+        await fs.promises.unlink(r.file);
+        removed++;
+      } catch (err) {
+        fail(err);
+      }
+    }
+  } catch (err) {
+    fail(err);
+  }
+  try {
+    if (removed > 0) opts.log('info', `[exit] removed ${removed} old diagnostic report(s) from ${dir}`);
+    if (failed > 0) opts.log('warn', `[exit] pruning old diagnostic reports in ${dir} hit ${failed} error(s), first: ${firstError}`);
+  } catch {
+    // Evidence must never be what breaks the daemon.
   }
 }
