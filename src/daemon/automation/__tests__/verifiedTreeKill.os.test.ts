@@ -292,6 +292,14 @@ describe('captureTreePosix', () => {
     expect(f.signals.some(([p]) => p === 200)).toBe(false);
   });
 
+  it('does not walk a root nothing confirms: unverified, the root named for a later check, nothing signalled', async () => {
+    const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
+    const r = await (await captureTreePosix(100, f.deps, { sleep: noWait, rootIsOurs: () => null }))!.kill({ timeoutMs: 0 });
+    expect(r).toMatchObject({ ok: false, killed: [], captured: [{ pid: 100, startTime: 't100' }] });
+    if (!r.ok) expect(r.survivors[0]).toMatchObject({ pid: 100, unverified: true });
+    expect(f.signals).toEqual([]);
+  });
+
   it('counts a pid another process took as gone', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { reuse: { 101: 'later' } });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 100 });
