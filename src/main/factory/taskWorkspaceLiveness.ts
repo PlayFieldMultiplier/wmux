@@ -10,7 +10,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { WorkspaceListEntry } from '../../shared/workspaceMirror';
 import { IdleSnapshot, paneRunsNoAgent, paneShowsWork } from './agentSlots';
 import type { AgentGoneFact, AgentGoneFacts } from './agentGoneFacts';
-import { dormantTaskWorkspaceSet, endedTaskAgentRuns, isTaskOwnWorkerPane, type ReclaimedWorker, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
+import { endedTaskAgentRuns, isTaskOwnWorkerPane, type ReclaimedWorker, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
 
 const isEndedStatus = (status: LedgerEntry['status']): boolean => status === 'completed' || status === 'cancelled' || status === 'failed';
 
@@ -53,7 +53,7 @@ export interface TaskWorkspaceLivenessPorts {
   /** Ended rows that may still hold a slot (the agent budget's catch-up
    *  window): one whose workspace is closed has its panes gone. */
   endedRows: () => readonly LedgerEntry[];
-  /** The reclaim records the dormant set reads ([] while the reclaim is off). */
+  /** The reclaim records ([] while the reclaim is off): the sessions each names are that task's. */
   records: () => readonly ReclaimedWorker[];
   /** The session ids a task's reclaim record holds. */
   recordedSessions: (taskId: string) => string[];
@@ -75,8 +75,6 @@ export interface TaskWorkspaceLiveness {
   idle: IdleSnapshot;
   /** Open workspaces with a pane at work, as of the last good read. */
   busyWorkspaces: () => ReadonlySet<string>;
-  /** Task workspaces that hold no live fan-out slot. */
-  dormant: () => ReadonlySet<string>;
   /** Ended tasks whose agent is known gone: they hold no agent slot. */
   goneTasks: () => ReadonlySet<string>;
   /** Workspaces an agent was seen running in (the last good read, less
@@ -273,26 +271,6 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     const newer = new Set((ports.facts?.all() ?? []).filter((f) => f.at > readAt && holds(f, entries)).map((f) => f.taskWorkspaceId));
     return newer.size === 0 ? agentWorkspaces : new Set([...agentWorkspaces].filter((ws) => !newer.has(ws)));
   };
-  const factWorkspaces = (): string[] => {
-    const entries = ports.entries();
-    return (ports.facts?.all() ?? []).filter((f) => holds(f, entries)).map((f) => f.taskWorkspaceId);
-  };
-
-  const dormant = (): ReadonlySet<string> => {
-    idle.get();
-    // The facts (every ended task a good read saw with no agent is one), or
-    // the last good read when none are kept. With no fact for it (a cold
-    // start before the first read, a task running at shutdown), an ended
-    // task holds its slot: its agent may still run.
-    return dormantTaskWorkspaceSet({
-      records: ports.records(),
-      row: ports.row,
-      workspaceRow: ports.workspaceRow,
-      endedNoAgent: ports.facts ? factWorkspaces() : endedNoAgentWorkspaces,
-      agentWorkspaces: seenRunning(),
-    });
-  };
-
   const goneTasks = (): ReadonlySet<string> => {
     idle.get();
     const entries = ports.entries();
@@ -319,7 +297,6 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
   return {
     idle,
     busyWorkspaces: () => busyWorkspaces,
-    dormant,
     goneTasks,
     agentSeen: seenRunning,
     readState,

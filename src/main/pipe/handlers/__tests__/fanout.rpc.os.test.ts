@@ -41,7 +41,9 @@ import { loadWorkspaceDecision } from '../../../deck/deckDecisionStore';
 import { registerFanOutRpc, FANOUT_WIRE_AGENT_CMD, FANOUT_IDEMPOTENCY_KEY_MAX_BYTES } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
-import { FanOutGuards, setDormantRefresh, setDormantTaskWorkspaces } from '../../../worktask/fanoutGuards';
+import { FanOutGuards, setDormantRefresh, setFanOutGuardsForTests } from '../../../worktask/fanoutGuards';
+import { setHolderSource } from '../../../factory/workerHolders';
+import type { LedgerEntry } from '../../../../shared/ledger';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
@@ -1474,30 +1476,45 @@ describe('task.fanout.start — global caps', () => {
     );
   });
 
-  it('counts the live tasks on a fresh dormant read, not the stale one (#2387)', async () => {
-    // 8 open task workspaces, all ended. The snapshot the guard last saw says
-    // none is dormant (a read before the workspace list was up); the fresh
-    // read finds all of them dormant.
+  it('counts the live tasks on a fresh read, not the stale one (#2387)', async () => {
+    // 8 open task workspaces, all ended. The read the holder set last saw
+    // knows none of their agents gone (a read before the workspace list was
+    // up); the fresh read finds all of them gone.
     const ended = ['1', '2', '3', '4', '5', '6', '7', '8'].map((n) => `ws-ended-${n}`);
     const g = new FanOutGuards({ dir: tmp(), openWorkspaceIds: () => ended, ledgerTaskOwner: () => null });
     for (const ws of ended) g.markTask(ws, 'ws-owner');
-    let dormant: ReadonlySet<string> = new Set();
+    const rows = ended.map((ws) => ({
+      schemaVersion: 1, id: `t-${ws}`, taskWorkspaceId: ws, ownerWorkspaceId: 'ws-owner', title: ws, status: 'completed', rev: 1, updatedAt: 0,
+      updatedBy: { kind: 'worker', workspaceId: ws }, dispatch: { origin: { kind: 'pane' } },
+    }) as LedgerEntry);
+    let gone: ReadonlySet<string> = new Set();
     const refresh = vi.fn(async () => {
-      dormant = new Set(ended);
+      gone = new Set(rows.map((r) => r.id));
     });
+    // What the worker lifecycle host installs: the holder set over these.
+    setFanOutGuardsForTests(g);
+    setHolderSource(() => ({
+      now: Date.now(), rows, reclaimable: new Set(), catchupMs: 86_400_000,
+      workspaces: new Set(ended), ptys: new Map(ended.map((ws) => [ws, [`p-${ws}`]])),
+      stamps: new Map(ended.map((ws) => [ws, { owner: 'ws-owner' }])),
+      read: 'ok', readAt: Date.now(), idle: new Set(), busy: new Set(), agentSeen: new Set(), gone,
+      records: [], verdicted: new Set(), reservations: g.reservedTasks(), grants: [], heldWorkspaces: [],
+      taskOfWorkspace: () => null, taskOfPane: () => null, launchAt: () => undefined, launchOf: () => null,
+    }));
     try {
-      setDormantTaskWorkspaces(() => dormant);
       setDormantRefresh(refresh);
       expect(g.liveTaskCount()).toBe(8);
       const h = setup({ guards: g });
       expect((await h.call(goodParams({ idempotencyKey: 'fresh', titles: ['1', '2'] }))).status).toBe('accepted');
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(g.liveTaskCount()).toBe(0);
+      // The ended tasks hold nothing; the 2 tasks just booked count.
+      expect(g.liveTaskCount()).toBe(2);
       // A poll of a known key answers from bookkeeping and never waits.
       await h.call(goodParams({ idempotencyKey: 'fresh', titles: ['1', '2'] }));
       expect(refresh).toHaveBeenCalledTimes(1);
     } finally {
-      setDormantTaskWorkspaces(null);
+      setHolderSource(null);
+      setFanOutGuardsForTests(null);
       setDormantRefresh(null);
     }
   });

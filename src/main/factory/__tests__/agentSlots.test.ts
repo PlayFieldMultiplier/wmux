@@ -1,17 +1,24 @@
 // One budget for bots and workers: a bot's new worker past it waits for a
 // slot, first come first served, and a stop ends the wait.
 import { describe, expect, it, vi } from 'vitest';
-import { countOpenBotWorkers } from '../openBotWorkers';
-import { WAKE_LIMITS } from '../../../shared/wake';
-import { AgentSlots, IdleSnapshot, SLOT_GRANT_MAX_MS, SLOT_HOLDERS_SHOWN_MAX, SLOT_ROW_GRACE_MS, paneRunsNoAgent, paneShowsWork, rowHoldsAgentSlot, slotHolderArgs, type AgentSlotPorts, type SlotLiveness } from '../agentSlots';
+import { AgentSlots, IdleSnapshot, SLOT_GRANT_MAX_MS, SLOT_HOLDERS_SHOWN_MAX, paneRunsNoAgent, paneShowsWork, rowHoldsAgentSlot, slotHolderArgs, type AgentSlotPorts } from '../agentSlots';
+
+/** The slots granted and held by `s`: what the holder set counts of them. */
+const ownSlots = (s: AgentSlots): number => {
+  const p = s.pendingSlots();
+  return p.grants.length + p.held.length;
+};
 
 function slots(over: Partial<AgentSlotPorts> & { bots?: () => number; workers?: () => number } = {}) {
   let now = 0;
   const onWaiting = vi.fn();
-  const s = new AgentSlots({
+  const workers = over.workers ?? (() => 0);
+  const s: AgentSlots = new AgentSlots({
     cap: () => 3,
     runningBots: over.bots ?? (() => 1),
-    liveWorkers: over.workers ?? (() => 0),
+    // Live workers include this budget's grants and held slots, as the
+    // holder set's count does.
+    liveWorkers: () => workers() + ownSlots(s),
     onWaiting,
     now: () => now,
     pollMs: 60_000,
@@ -23,7 +30,7 @@ const w = (taskId: string) => ({ taskId, title: taskId, botId: 'bot-0000000a', o
 
 describe('AgentSlots', () => {
   it('when the holder set cannot be read, the slots granted and held here still count (fail closed)', async () => {
-    const { s } = slots({ liveWorkersIncludeGrants: true, stillHeld: () => true, workers: () => { throw new Error('snapshot unreadable'); } });
+    const { s } = slots({ stillHeld: () => true, workers: () => { throw new Error('snapshot unreadable'); } });
     const a = await s.acquire(w('a'));
     const b = await s.acquire(w('b'));
     if (b.ok) b.hold('ws-b');
@@ -146,56 +153,27 @@ describe('AgentSlots grants (review fixes, PR #2164)', () => {
   });
 });
 
-describe('rowHoldsAgentSlot', () => {
-  const now = 100 * SLOT_ROW_GRACE_MS;
-  const old = now - SLOT_ROW_GRACE_MS;
+// Which open row's worker still runs is the holder set's (workerHolders.ts,
+// workerHolders.test.ts); before it is installed, every open bot row counts.
+describe('rowHoldsAgentSlot (no holder set yet)', () => {
   const bot = { kind: 'bot', botId: 'bot-0000000a' };
-  const live: SlotLiveness = { workspaces: new Set(['ws-live', 'ws-idle']), idleWorkspaces: new Set(['ws-idle']), now };
-  const row = (taskWorkspaceId: string, origin?: { kind: string; botId?: string }, updatedAt = old) =>
-    ({ taskWorkspaceId, updatedAt, ...(origin ? { dispatch: { origin } } : {}) });
+  const row = (origin?: { kind: string; botId?: string }) => ({ ...(origin ? { dispatch: { origin } } : {}) });
 
-  it('a bot worker whose workspace is open and whose agent runs holds a slot', () => {
-    expect(rowHoldsAgentSlot(row('ws-live', bot), live)).toBe(true);
+  it('an open bot task holds a slot', () => {
+    expect(rowHoldsAgentSlot(row(bot))).toBe(true);
+    expect(rowHoldsAgentSlot({ ...row(bot), status: 'review_requested' })).toBe(true);
   });
 
   it('the owner\'s and the orchestrator\'s fan-outs, and rows with no dispatch, never count', () => {
-    expect(rowHoldsAgentSlot(row('ws-live', { kind: 'orchestrator' }), live)).toBe(false);
-    expect(rowHoldsAgentSlot(row('ws-live', { kind: 'pane' }), live)).toBe(false);
-    // A row from before dispatch existed (or a stray test fixture).
-    expect(rowHoldsAgentSlot(row('ws-task-1'), live)).toBe(false);
+    expect(rowHoldsAgentSlot(row({ kind: 'orchestrator' }))).toBe(false);
+    expect(rowHoldsAgentSlot(row({ kind: 'pane' }))).toBe(false);
+    expect(rowHoldsAgentSlot(row())).toBe(false);
   });
 
-  it('an open row whose workspace is gone, or whose agent exited, holds nothing', () => {
-    expect(rowHoldsAgentSlot(row('ws-gone', bot), live)).toBe(false);
-    expect(rowHoldsAgentSlot(row('ws-idle', bot), live)).toBe(false);
-  });
-
-  it('a completed, cancelled or failed row never holds a slot, even recent and with its workspace open', () => {
+  it('a completed, cancelled or failed row never holds a slot', () => {
     for (const status of ['completed', 'cancelled', 'failed'] as const) {
-      expect(rowHoldsAgentSlot({ ...row('ws-live', bot, now - 1_000), status }, live), status).toBe(false);
-      expect(rowHoldsAgentSlot({ ...row('ws-live', bot), status }, null), status).toBe(false);
+      expect(rowHoldsAgentSlot({ ...row(bot), status }), status).toBe(false);
     }
-    expect(rowHoldsAgentSlot({ ...row('ws-live', bot), status: 'review_requested' }, live)).toBe(true);
-  });
-
-  it('a recent row counts while its worker comes up; with nothing known every bot row counts', () => {
-    expect(rowHoldsAgentSlot(row('ws-gone', bot, now - 1_000), live)).toBe(true);
-    expect(rowHoldsAgentSlot(row('ws-gone', bot), { ...live, workspaces: null })).toBe(true);
-    expect(rowHoldsAgentSlot(row('ws-gone', bot), null)).toBe(true);
-  });
-
-  it('stale and foreign rows no longer starve the bots: only the live bot worker counts', async () => {
-    const rows = [
-      row('ws-task-1'), row('ws-task-3'), row('ws-task-4'), // leaked fixtures: no dispatch
-      row('ws-gone-1', { kind: 'orchestrator' }), row('ws-gone-2', { kind: 'orchestrator' }),
-      row('ws-gone-3', bot), row('ws-idle', bot),
-      row('ws-live', bot),
-    ];
-    const s = new AgentSlots({ cap: () => 2, runningBots: () => 1, liveWorkers: () => rows.filter((r) => rowHoldsAgentSlot(r, live)).length, pollMs: 60_000 });
-    expect(s.inUse()).toBe(2);
-    rows.pop();
-    const g = await s.acquire({ taskId: 't', title: 't', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-1' });
-    expect(g.ok).toBe(true);
   });
 });
 
@@ -218,58 +196,8 @@ describe('paneRunsNoAgent (F22: after a cold start)', () => {
     expect(paneRunsNoAgent({ state: 'detached', agentProcessAlive: true })).toBe(false);
   });
 
-  it('after a cold start the bot\'s worker in review holds no slot, so a new worker gets one', async () => {
-    const now = 100 * SLOT_ROW_GRACE_MS;
-    const sessions = new Map([['pty-r', { state: 'detached', recoveredAgentUnconfirmed: true }]]);
-    const idle = new Set(['ws-review'].filter(() => ['pty-r'].every((id) => paneRunsNoAgent(sessions.get(id)))));
-    const live: SlotLiveness = { workspaces: new Set(['ws-review']), idleWorkspaces: idle, now };
-    const rows = [{ taskWorkspaceId: 'ws-review', updatedAt: now - SLOT_ROW_GRACE_MS, status: 'review_requested' as const, dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' } } }];
-    const s = new AgentSlots({ cap: () => 1, runningBots: () => 0, liveWorkers: () => rows.filter((r) => rowHoldsAgentSlot(r, live)).length, pollMs: 60_000 });
-    expect(s.inUse()).toBe(0);
-    expect((await s.acquire({ taskId: 't', title: 't', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-1' })).ok).toBe(true);
-  });
-});
-
-describe('the factory-wide worker cap over paused review workers (F22)', () => {
-  const now = 100 * SLOT_ROW_GRACE_MS;
-  const bot = { kind: 'bot', botId: 'bot-0000000a' };
-  const review = (id: string, ws: string) => ({ id, taskWorkspaceId: ws, status: 'review_requested' as const, updatedAt: now - SLOT_ROW_GRACE_MS, dispatch: { origin: bot } });
-  /** What fanout.rpc admits: open (counted as openBotWorkers counts) + booked + n within the cap. */
-  const admits = (rows: ReturnType<typeof review>[], live: SlotLiveness, n: number) => {
-    const open = countOpenBotWorkers(rows.filter((r) => rowHoldsAgentSlot(r, live)), 'bot-0000000a', () => new Set());
-    return open.factory + n <= WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS;
-  };
-
-  it('three review tasks whose workers were paused leave room for a new worker', () => {
-    const rows = [review('t1', 'ws-1'), review('t2', 'ws-2'), review('t3', 'ws-3')];
-    // Their WSL panes run no agent the daemon attributed: liveness alone keeps them.
-    const live: SlotLiveness = { workspaces: new Set(['ws-1', 'ws-2', 'ws-3']), idleWorkspaces: new Set(), now };
-    expect(admits(rows, live, 1)).toBe(false);
-    expect(admits(rows, { ...live, stoppedTasks: new Set(['t1', 't2', 't3']) }, 1)).toBe(true);
-  });
-
-  it('two running workers and one paused: one more is admitted, not two', () => {
-    const rows = [review('t1', 'ws-1'), review('t2', 'ws-2'), review('t3', 'ws-3')];
-    const live: SlotLiveness = { workspaces: new Set(['ws-1', 'ws-2', 'ws-3']), idleWorkspaces: new Set(), stoppedTasks: new Set(['t3']), now };
-    expect(admits(rows, live, 1)).toBe(true);
-    expect(admits(rows, live, 2)).toBe(false);
-  });
-
-  it('a recent row whose worker was stopped since holds nothing; one never stopped still counts while it comes up', () => {
-    const fresh = { ...review('t1', 'ws-gone'), updatedAt: now - 1_000 };
-    const live: SlotLiveness = { workspaces: new Set(), idleWorkspaces: new Set(), now };
-    expect(rowHoldsAgentSlot(fresh, live)).toBe(true);
-    expect(rowHoldsAgentSlot(fresh, { ...live, stoppedTasks: new Set(['t1']) })).toBe(false);
-  });
-
-  it('a stopped task\'s worker relaunched by hand holds its slot again', () => {
-    const row = review('t1', 'ws-1');
-    const live: SlotLiveness = { workspaces: new Set(['ws-1']), idleWorkspaces: new Set(), stoppedTasks: new Set(['t1']), now };
-    expect(rowHoldsAgentSlot(row, live)).toBe(false);
-    for (const pane of [{ agentProcessAlive: true }, { commandRunning: true }]) {
-      expect(paneShowsWork(pane)).toBe(true);
-      expect(rowHoldsAgentSlot(row, { ...live, busyWorkspaces: new Set(['ws-1']) })).toBe(true);
-    }
+  it('an agent seen alive or a foreground command shows work (a stopped worker relaunched by hand)', () => {
+    for (const pane of [{ agentProcessAlive: true }, { commandRunning: true }]) expect(paneShowsWork(pane)).toBe(true);
     expect(paneShowsWork({ commandRunning: false })).toBe(false);
   });
 });
@@ -305,12 +233,12 @@ describe('IdleSnapshot (#2255)', () => {
       return new Set([...agentAlive].filter(([, alive]) => !alive).map(([ws]) => ws));
     });
     const idle = new IdleSnapshot(read, REFRESH_MS, () => now);
-    const rows = ['ws-a', 'ws-b', 'ws-c'].map((ws) => ({ dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' } }, taskWorkspaceId: ws, updatedAt: 0 }) as never);
-    // The factory-wide cap of 3: one more worker fits only below it.
+    // The factory-wide cap of 3: one more worker fits only below it (a
+    // worker whose workspace reads idle holds nothing, as in the holder set).
     const capAllowsOneMore = async (): Promise<boolean> => {
       await idle.fresh();
-      const live: SlotLiveness = { workspaces: new Set(agentAlive.keys()), idleWorkspaces: idle.get(), now };
-      return rows.filter((r) => rowHoldsAgentSlot(r, live)).length + 1 <= 3;
+      const idleNow = idle.get();
+      return [...agentAlive.keys()].filter((ws) => !idleNow.has(ws)).length + 1 <= 3;
     };
 
     expect(await capAllowsOneMore()).toBe(false);

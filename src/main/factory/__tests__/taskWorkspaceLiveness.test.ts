@@ -6,10 +6,10 @@ import type { LedgerEntry } from '../../../shared/ledger';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
 import { AGENT_GONE_FILENAME, AGENT_GONE_MAX, AgentGoneFacts, LAUNCH_SETTLE_MS, noteSessionAgentLaunched, noteSessionInput, noteTaskPanesStopped, noteTaskWorkerLaunched, setAgentGoneFacts } from '../agentGoneFacts';
 import { createTaskWorkspaceLiveness, parseSessionRead, type TaskWorkspaceLivenessPorts } from '../taskWorkspaceLiveness';
-import { computeHolders, holderCounts } from '../workerHolders';
+import { computeHolders, holderCounts, setHolderSource, type HolderSnapshot } from '../workerHolders';
 import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
-import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setDormantTaskWorkspaces } from '../../worktask/fanoutGuards';
+import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setFanOutGuardsForTests } from '../../worktask/fanoutGuards';
 
 const REFRESH_MS = 10_000;
 
@@ -77,16 +77,36 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
     ledgerTaskOwner: () => null,
   });
   for (const ws of Object.keys(tasks)) guards.markTask(ws, 'ws-owner');
-  setDormantTaskWorkspaces(liveness.dormant);
+  // What the worker lifecycle host installs: the holder set every live cap
+  // reads (workerHolders.ts), over this reader and these rows.
+  const snapshot = (): HolderSnapshot => {
+    const open = Object.keys(tasks);
+    const rows = Object.entries({ ...tasks, ...closed }).map(([ws, x]) => ({ ...(rowOf(ws, x) as LedgerEntry), ownerWorkspaceId: 'ws-owner', title: x.id }));
+    return {
+      now: t.now, rows, reclaimable: new Set(), catchupMs: 86_400_000,
+      workspaces: new Set(open),
+      ptys: new Map(open.map((ws) => [ws, state.entries?.find((e) => e.id === ws)?.ptyIds ?? [tasks[ws].pty]])),
+      stamps: new Map(open.map((ws) => [ws, { owner: 'ws-owner' }])),
+      read: liveness.readState(), readAt: liveness.lastReadAt(), idle: liveness.idle.get(), busy: liveness.busyWorkspaces(),
+      agentSeen: liveness.agentSeen(), agentTasks: liveness.agentSeenTasks(), gone: liveness.goneTasks(),
+      records: state.records, verdicted: new Set(), reservations: guards.reservedTasks(), grants: [], heldWorkspaces: [],
+      taskOfWorkspace: () => null, taskOfPane: () => null, launchAt: () => undefined, launchOf: () => null,
+    };
+  };
+  setFanOutGuardsForTests(guards);
+  setHolderSource(snapshot);
   setDormantRefresh(liveness.refresh);
-  return { t, dir, state, open, reads, facts, liveness, guards };
+  /** The task workspaces that hold a live slot now (the holder set). */
+  const live = (): string[] => computeHolders(snapshot()).filter((h) => h.state !== 'free' && h.workspaceId).map((h) => h.workspaceId as string).sort();
+  return { t, dir, state, open, reads, facts, liveness, guards, live };
 }
 
 const exited = (pty: string): WorkerSessionInfo => ({ id: pty, agentProcessAlive: false });
 const running = (pty: string): WorkerSessionInfo => ({ id: pty, agentProcessAlive: true });
 
 afterEach(() => {
-  setDormantTaskWorkspaces(null);
+  setHolderSource(null);
+  setFanOutGuardsForTests(null);
   setDormantRefresh(null);
   vi.useRealTimers();
 });
@@ -105,7 +125,7 @@ describe('task workspace liveness (#2387)', () => {
     w.open();
     await w.liveness.refresh();
     expect(w.reads).toHaveBeenCalledTimes(1);
-    expect([...w.liveness.dormant()].sort()).toEqual(['ws-a', 'ws-b']);
+    expect([...w.liveness.goneTasks()].sort()).toEqual(['t-a', 't-b']);
     expect([...w.liveness.idle.get()].sort()).toEqual(['ws-a', 'ws-b']);
     expect(w.guards.liveTaskCount()).toBe(0);
 
@@ -113,7 +133,7 @@ describe('task workspace liveness (#2387)', () => {
     w.t.now += REFRESH_MS + 1;
     w.state.entries = null;
     await w.liveness.refresh();
-    expect([...w.liveness.dormant()].sort()).toEqual(['ws-a', 'ws-b']);
+    expect([...w.liveness.goneTasks()].sort()).toEqual(['t-a', 't-b']);
     expect([...w.liveness.idle.get()].sort()).toEqual(['ws-a', 'ws-b']);
   });
 
@@ -149,7 +169,7 @@ describe('task workspace liveness (#2387)', () => {
     w.state.sessions = 'down';
     w.t.now += REFRESH_MS + 1;
     await refreshDormantTaskWorkspaces();
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-agent']);
+    expect(w.live()).toEqual(['ws-agent']);
   });
 
   it('an empty workspace list is not kept: the restored tree is read at once', async () => {
@@ -165,29 +185,30 @@ describe('task workspace liveness (#2387)', () => {
     w.open();
     await w.liveness.refresh();
     expect(w.reads).toHaveBeenCalledTimes(1);
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-agent']);
+    expect(w.live()).toEqual(['ws-agent']);
   });
 
   it('a task that ends after the last good read holds its slot while reads fail: nothing says its agent is gone', async () => {
     const tasks: Record<string, Task> = { 'ws-x': { id: 't-x', status: 'working', pty: 'p-x' } };
     const w = world(tasks);
     w.open();
-    // The last good read: the task is still working, its agent has exited.
+    // The last good read: the task is still working, its agent has exited
+    // (an open task whose panes run no agent holds nothing, workerHolders.ts).
     w.state.sessions = [exited('p-x')];
     await w.liveness.refresh();
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.live()).toEqual([]);
     // The task completes, then the daemon cannot be read.
     tasks['ws-x'].status = 'completed';
     w.state.sessions = 'down';
     w.t.now += REFRESH_MS + 1;
     await refreshDormantTaskWorkspaces();
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.live()).toEqual(['ws-x']);
     // The next good read sees it gone (after the read the check above set off).
     await w.liveness.refresh();
     w.state.sessions = [exited('p-x')];
     w.t.now += REFRESH_MS + 1;
     await refreshDormantTaskWorkspaces();
-    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect(w.live()).toEqual([]);
   });
 
   it('a fresh read that never answers holds the check for 2 s at most, then the facts decide (second layer)', async () => {
@@ -212,7 +233,7 @@ describe('task workspace liveness (#2387)', () => {
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-run']);
+    expect(w.live()).toEqual(['ws-run']);
   });
 });
 
@@ -235,7 +256,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     after.open();
     after.state.sessions = 'down';
     await refreshDormantTaskWorkspaces();
-    expect(after.guards.liveTaskWorkspaces()).toEqual(['ws-held']);
+    expect(after.live()).toEqual(['ws-held']);
     expect([...after.liveness.goneTasks()].sort()).toEqual(['t-cancel', 't-done']);
     expect(after.guards.reserve('k', 7)).toEqual({ ok: true });
   });
@@ -252,7 +273,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.state.recoveryDone = false;
     await w.liveness.refresh();
     expect(w.reads).toHaveBeenCalledTimes(1);
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-a', 'ws-b']);
+    expect(w.live()).toEqual(['ws-a', 'ws-b']);
     expect(w.facts.all()).toEqual([]);
     expect(w.liveness.goneTasks().size).toBe(0);
     // Not cached as fresh, and not asked again for 2 s: a cap check looks
@@ -268,7 +289,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.state.recoveryDone = true;
     w.t.now += 2_000;
     await w.liveness.refresh();
-    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect(w.live()).toEqual([]);
     await w.facts.written();
     expect(w.facts.all().map((f) => [f.taskId, f.taskWorkspaceId, f.sessions])).toEqual([['t-a', 'ws-a', ['p-a']], ['t-b', 'ws-b', ['p-b']]]);
     const onDisk = JSON.parse(fs.readFileSync(nodePath.join(dir, 'factory', AGENT_GONE_FILENAME), 'utf8')) as { version: number; facts: unknown[] };
@@ -288,7 +309,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.t.now += REFRESH_MS + 1;
     await w.liveness.refresh();
     expect(w.facts.get('t-x')).not.toBeNull();
-    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect(w.live()).toEqual([]);
     // The owner started an agent in the ended task's pane (read after the
     // read the check above set off).
     await w.liveness.refresh();
@@ -296,14 +317,14 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.t.now += REFRESH_MS + 1;
     await w.liveness.refresh();
     expect(w.facts.get('t-x')).toBeNull();
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.live()).toEqual(['ws-x']);
     await w.facts.written();
     // Running at the next shutdown: after the restart it holds its slot.
     const after = world(tasks, { dir });
     after.open();
     after.state.sessions = 'down';
     await refreshDormantTaskWorkspaces();
-    expect(after.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(after.live()).toEqual(['ws-x']);
   });
 
   it('a fact does not hold for a reopened row, a resumed worker, or a pane it does not name', async () => {
@@ -323,8 +344,10 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     tasks['ws-open'].status = 'working';
     w.state.records = [{ taskId: 't-resumed', state: 'resumed', taskWorkspaceId: 'ws-resumed', sessions: [] } as unknown as ReclaimedWorker];
     w.state.entries = (w.state.entries ?? []).map((e) => (e.id === 'ws-split' ? { ...e, ptyIds: ['p-split', 'p-new'] } : e));
-    expect(w.guards.liveTaskWorkspaces().sort()).toEqual(['ws-open', 'ws-resumed', 'ws-split']);
+    // No fact holds any more. The reopened row is an open task again, and
+    // its panes read idle: the open-task rule frees it (workerHolders.ts).
     expect(w.liveness.goneTasks().size).toBe(0);
+    expect(w.live()).toEqual(['ws-resumed', 'ws-split']);
   });
 
   it('an ended task whose workspace is closed is recorded gone: its panes are gone', async () => {
@@ -384,7 +407,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.facts.sessionLaunched('p-x', before);
     await reading;
     expect(w.facts.get('t-x')).toBeNull();
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.live()).toEqual(['ws-x']);
   });
 
   it('after a launch in the pane, a read that still says its old agent exited adds no fact until the new one is seen or the launch settles', async () => {
@@ -450,7 +473,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.facts.note({ taskId: 't-x', taskWorkspaceId: 'ws-x', sessions: ['p-x'], at: w.t.now });
     await reading;
     expect(w.facts.get('t-x')).not.toBeNull();
-    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect(w.live()).toEqual([]);
   });
 
   it('a close that stopped only some of the workspace\'s panes does not outweigh a sighting of the agent', async () => {
@@ -462,7 +485,7 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.t.now += 1;
     w.facts.note({ taskId: 't-x', taskWorkspaceId: 'ws-x', sessions: ['p-x'], at: w.t.now });
     w.state.sessions = 'down';
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.live()).toEqual(['ws-x']);
     expect(w.liveness.goneTasks().size).toBe(0);
   });
 
@@ -471,11 +494,11 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     w.open();
     w.state.sessions = [running('p-x')];
     await w.liveness.refresh();
-    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.live()).toEqual(['ws-x']);
     w.t.now += 1;
     w.facts.note({ taskId: 't-x', taskWorkspaceId: 'ws-x', sessions: ['p-x'], at: w.t.now });
     w.state.sessions = 'down';
-    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+    expect(w.live()).toEqual([]);
     expect([...w.liveness.goneTasks()]).toEqual(['t-x']);
   });
 });

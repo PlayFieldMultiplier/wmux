@@ -225,7 +225,6 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
         const h = computeHolders(build());
         return holderCounts(h).agents;
       },
-      liveWorkersIncludeGrants: true,
       stillHeld: () => true,
       pollMs: 60_000,
     }),

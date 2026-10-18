@@ -23,7 +23,7 @@ import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { taskFolderFromMissions } from './verifyPreset';
-import { AgentSlots, getAgentSlots, rowHoldsAgentSlot, setAgentSlots, setSlotLiveness, slotHolderArgs, type SlotLiveness } from './agentSlots';
+import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
@@ -50,7 +50,6 @@ import {
   noteWorkerAgentExit,
   reportedWorkerPanes,
   resumedAgentAlive,
-  setResumedLiveCount,
   setWorkerResumePorts,
   type PaneActivity,
   type WorkerRespawnInput,
@@ -67,7 +66,7 @@ import { TaskWorktreeManager } from '../worktask/TaskWorktreeManager';
 import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { STOPPED_BY_OWNER } from './factoryStop';
-import { getFanOutGuards, setDormantRefresh, setDormantTaskWorkspaces, taskOfWorkspace } from '../worktask/fanoutGuards';
+import { getFanOutGuards, setDormantRefresh, taskOfWorkspace } from '../worktask/fanoutGuards';
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
 import { getWorkerSlots, taskOfPane } from './workerSlots';
@@ -192,50 +191,15 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     if (t.to === 'working' || t.to === 'input_required' || t.to === 'review_requested') goneFacts.clear(t.entry.id, `its row reopened (${t.to})`);
   }));
   const idle = taskLiveness.idle;
-  // Bot tasks whose worker main stopped since the row last changed (paused
-  // for review, or reclaimed at its end) and did not resume.
-  const stoppedTasks = (): Set<string> => {
-    const out = new Set<string>();
-    for (const r of reclaimedStore?.all() ?? []) {
-      if (r.state !== 'stopped') continue;
-      const row = ledger.get(r.taskId);
-      if (row && isReclaimedSince(r, row)) out.add(r.taskId);
-    }
-    return out;
-  };
-  const liveness = (): SlotLiveness => {
-    const idleWorkspaces = idle.get();
-    const entries = getWorkspaceMirror().getEntries();
-    return {
-      workspaces: entries ? new Set(entries.map((e) => e.id)) : null,
-      idleWorkspaces,
-      stoppedTasks: stoppedTasks(),
-      busyWorkspaces: taskLiveness.busyWorkspaces(),
-      launchedAt: (taskId) => launches.liveLaunchAt(taskId),
-      now: Date.now(),
-    };
-  };
-  /** Open bot task rows whose worker holds an agent slot. */
-  const slotRows = (): ReturnType<typeof ledger.list> => {
-    const live = liveness();
-    return ledger.list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r, live));
-  };
-  setSlotLiveness(liveness, () => idle.fresh());
-  offs.push(() => setSlotLiveness(null));
+  // A cap check awaits a fresh read of the daemon's sessions first
+  // (refreshSlotLiveness): what the holder set reads (workerHolders.ts).
+  setSlotLivenessRefresh(() => idle.fresh());
+  offs.push(() => setSlotLivenessRefresh(null));
   /** Whether a task's row is open (a reclaimed task can reopen: failed → working). */
   const taskOpen = (taskId: string): boolean => {
     const st = ledger.get(taskId)?.status;
     return st === 'working' || st === 'input_required' || st === 'review_requested';
   };
-  /** Resumed workers still live outside an open row: resumed after their
-   *  task's last end (an open row, or an end not reclaimed yet, counts them
-   *  already). */
-  const resumedLive = (botId?: string): number => reclaimed.all().filter((r) => {
-    if (r.state !== 'resumed' || (botId !== undefined && r.botId !== botId)) return false;
-    const row = ledger.get(r.taskId);
-    return !row || (!taskOpen(r.taskId) && isReclaimedSince(r, row));
-  }).length;
-
   // Reclaim + resume. A record file this version cannot read leaves the
   // reclaim off (workers keep running, as before), never overwritten.
   const reclaimed = ReclaimedWorkers.at(deps.wmuxDir());
@@ -247,15 +211,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     reclaimOn = false;
     console.warn(`[factory] worker reclaim off: ${String(err)}`);
   }
-  // Task workspaces that hold no live fan-out slot (dormantTaskWorkspaceSet).
-  // Installed whether or not the reclaim is on: an ended task with no agent
-  // left needs no reclaim record.
-  setDormantTaskWorkspaces(taskLiveness.dormant);
+  // The fan-out's bounded wait for a fresh read before its live-cap check.
   setDormantRefresh(taskLiveness.refresh);
-  offs.push(() => {
-    setDormantTaskWorkspaces(null);
-    setDormantRefresh(null);
-  });
+  offs.push(() => setDormantRefresh(null));
   if (reclaimOn) {
     // Clear: an ended task's workspace closes once its agent is stopped.
     const mirror = getWorkspaceMirror();
@@ -563,9 +521,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         // before its check, so those that passed theirs are `starting`, and
         // this one is the one added below.
         const live = liveHolders();
-        const open = live
-          ? holderCounts(live.holders.filter((h) => h.taskId !== taskId && h.why !== 'resuming'), botId).bot + starting
-          : slotRows().filter((r) => r.dispatch?.origin.botId === botId).length + resumedLive(botId) + starting;
+        if (!live) return 'the bot\'s worker count is not available yet';
+        const open = holderCounts(live.holders.filter((h) => h.taskId !== taskId && h.why !== 'resuming'), botId).bot + starting;
         const c = checkWorkers(profile.budget, store.usageOf(botId), open, 1, Date.now());
         return c.ok ? null : `this bot's worker budget refuses another worker now (${c.reason})`;
       },
@@ -588,9 +545,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     });
     offs.push(() => setWorkerResumePorts(null));
     // A resumed worker runs on its bot's worker budget: counted live by the
-    // fan-out's check, and its run (resume to stop) in the bot's hours.
-    setResumedLiveCount(resumedLive);
-    offs.push(() => setResumedLiveCount(null));
+    // holder set, and its run (resume to stop) in the bot's hours.
     reclaimed.onStateChange = (rec, from, to, at) => {
       // A resumed worker runs again: a fact that said it was gone goes.
       if (to === 'resumed') goneFacts.clear(rec.taskId, 'its worker was resumed');
@@ -733,7 +688,6 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     // or known gone, resumed workers, and the slots granted or held here. The
     // owner's own fan-outs do not count.
     liveWorkers: () => holderCounts(liveHolders()?.holders ?? []).agents,
-    liveWorkersIncludeGrants: true,
     // A spawned worker whose row was not written: while its workspace lives
     // and still no row names it.
     stillHeld: (workspaceId) => !ledger.findByTaskWorkspace(workspaceId)

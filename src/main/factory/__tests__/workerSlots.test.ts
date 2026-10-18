@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
-import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
@@ -401,14 +400,6 @@ describe('readers of the recorded launch', () => {
     expect(facts.get('t')).toBeNull();
     facts.note({ taskId: 't', taskWorkspaceId: 'ws-t', sessions: ['p'], at: launchedAt + 1 });
     expect(facts.get('t')).not.toBeNull();
-  });
-
-  it('a row\'s start-up grace runs from its worker\'s recorded launch, not from the row\'s last edit', () => {
-    const now = 100 * 60_000;
-    const edited = { ...row('t'), updatedAt: now - 1_000 };
-    const live = { workspaces: new Set(['ws-t']), idleWorkspaces: new Set(['ws-t']), now };
-    expect(rowHoldsAgentSlot(edited, { ...live, launchedAt: () => now - SLOT_ROW_GRACE_MS - 1 })).toBe(false);
-    expect(rowHoldsAgentSlot(edited, { ...live, launchedAt: () => now - 1_000 })).toBe(true);
   });
 
   it('a workspace recorded for one task is never reassigned to another; the refusal is logged once', () => {

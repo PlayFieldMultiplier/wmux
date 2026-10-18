@@ -20,6 +20,13 @@ import { TaskFolders } from '../taskFolderCleanup';
 import { botTaskViews } from '../botTasks';
 import { mergeFactorySettings } from '../factorySettings';
 
+/** The slots granted and held by `s`: live workers include them, as the
+ *  holder set's count does. */
+const ownSlots = (s: AgentSlots): number => {
+  const p = s.pendingSlots();
+  return p.grants.length + p.held.length;
+};
+
 const BOT = 'bot-0000000a';
 const TASK = 'wtask-abc-12345678';
 const UUID = '2eca904b-b4cc-4243-81d3-67a121351892';
@@ -45,7 +52,7 @@ describe('bot.resumeWorker', () => {
   function rig(inUse: number, enabled = true, refusal: string | null = null) {
     const handlers = new Map<string, (p: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>>();
     const p = ports();
-    const slots = new AgentSlots({ cap: () => 3, runningBots: () => inUse, liveWorkers: () => 0, pollMs: 60_000 });
+    const slots: AgentSlots = new AgentSlots({ cap: () => 3, runningBots: () => inUse, liveWorkers: () => ownSlots(slots), pollMs: 60_000 });
     registerWorkerResumeRpc({ register: (m: string, h: never) => handlers.set(m, h), onBotRefused: () => undefined } as never, {
       ports: () => p, slots: () => slots, factoryEnabled: () => enabled, launchRefusal: () => refusal,
     });
@@ -94,14 +101,14 @@ describe('FACTORY_WORKER_RESUME (IPC guard)', () => {
   it('the owner\'s Resume takes an agent slot: refused with the cap when none is free, started once when one is', async () => {
     const ok = { sender: webContents, senderFrame: mainFrame };
     const full = ports();
-    const busy = new AgentSlots({ cap: () => 3, runningBots: () => 3, liveWorkers: () => 0, pollMs: 60_000 });
+    const busy: AgentSlots = new AgentSlots({ cap: () => 3, runningBots: () => 3, liveWorkers: () => ownSlots(busy), pollMs: 60_000 });
     const refused = await factoryWorkerResumeHandler(() => win, () => full, () => busy)(ok, { taskId: TASK });
     expect(refused).toMatchObject({ ok: false, code: 'no_slot', cap: 3 });
     expect((refused as { message: string }).message).toContain('No free agent slot (the limit is 3)');
     expect(full.typeLine).not.toHaveBeenCalled();
     expect(store.get(TASK)?.state).toBe('stopped');
     const p = ports();
-    const free = new AgentSlots({ cap: () => 3, runningBots: () => 1, liveWorkers: () => 0, pollMs: 60_000 });
+    const free: AgentSlots = new AgentSlots({ cap: () => 3, runningBots: () => 1, liveWorkers: () => ownSlots(free), pollMs: 60_000 });
     const handler = factoryWorkerResumeHandler(() => win, () => p, () => free);
     expect(await handler(ok, { taskId: TASK })).toMatchObject({ ok: true, resumeSessionId: UUID });
     // The launch slot was handed over to the resumed-worker count.

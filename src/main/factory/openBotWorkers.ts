@@ -4,14 +4,13 @@
 // profile's Today block, BotRuntime.status) count a bot's running workers
 // the same way: its bot holders (workerHolders.ts), which every other cap
 // filters too. Until the worker lifecycle host installs the holder set: open
-// bot tasks whose worker still holds an agent slot, minus verify tasks whose
-// verdict is recorded, plus resumed workers.
+// bot tasks, minus verify tasks whose verdict is recorded, plus the bot
+// fan-outs booked and not started yet.
 
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getFactLog, type FactLog } from './factLog';
 import { getVerdictedTasks } from './verdictedTasks';
-import { getSlotLiveness, rowHoldsAgentSlot } from './agentSlots';
-import { resumedWorkersLive } from './workerReclaim';
+import { rowHoldsAgentSlot } from './agentSlots';
 import { holderCounts, liveHolders } from './workerHolders';
 import { getFanOutGuards } from '../worktask/fanoutGuards';
 import type { LedgerEntry } from '../../shared/ledger';
@@ -71,8 +70,7 @@ export function openBotWorkers(botId: string): { bot: number; factory: number; b
     const c = holderCounts(holders.holders, botId);
     return { bot: c.bot, factory: c.workers, botStarting: c.botStarting };
   }
-  const live = getSlotLiveness();
-  const rows = getTaskLedger().list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r, live));
+  const rows = getTaskLedger().list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r));
   const open = countOpenBotWorkers(rows, botId, (ids) => {
     const kept = getVerdictedTasks();
     const found = verdictedTaskIds(ids.filter((id) => !kept?.has(id)));
@@ -82,5 +80,5 @@ export function openBotWorkers(botId: string): { bot: number; factory: number; b
   // The bot fan-outs booked and not through their start (FanOutGuards).
   const booked = getFanOutGuards().reservedTasks().filter((u) => u.botId);
   const bookedBot = booked.filter((u) => u.botId === botId).length;
-  return { bot: open.bot + resumedWorkersLive(botId) + bookedBot, factory: open.factory + resumedWorkersLive() + booked.length, botStarting: bookedBot };
+  return { bot: open.bot + bookedBot, factory: open.factory + booked.length, botStarting: bookedBot };
 }

@@ -15,7 +15,6 @@ import {
   isWslWorkerPane,
   isTaskOwnWorkerPane,
   clearVerdict,
-  dormantTaskWorkspaceSet,
   endedTaskAgentRuns,
   lifecycleCardTask,
   paneTurnEnded,
@@ -25,11 +24,8 @@ import {
   reclaimedWorkerState,
   resumeLineFor,
   resumeWorker,
-  resumedWorkersLive,
-  setResumedLiveCount,
   stopResumedWorker,
   stopResumedWorkers,
-  unreclaimedEndedWorkers,
   RECLAIMED_WORKERS_MAX,
   STOPPING_SETTLE_MS,
   type ReclaimedWorker,
@@ -807,23 +803,6 @@ describe('resume safety (review fixes)', () => {
   });
 });
 
-describe('unreclaimedEndedWorkers', () => {
-  it('counts an ended bot task (failed included) until its worker is reclaimed', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    const rows = [row('failed', { id: 'wtask-f-00000001', updatedAt: 4_000 }), row('working', { id: 'wtask-w-00000001' }), row('completed', { id: 'wtask-c-00000001', updatedAt: 4_000 })];
-    expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(2);
-    await reclaimWorker(reclaimPorts(store, [session()]).ports, rows[0], 'failed');
-    expect(store.get('wtask-f-00000001')?.ended).toBe('failed');
-    expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(1);
-  });
-
-  it('an ended bot task whose agent is known gone holds no slot, reclaimed or not (#2393)', () => {
-    const store = ReclaimedWorkers.at(dir);
-    const rows = [row('failed', { id: 'wtask-f-00000001', updatedAt: 4_000 }), row('completed', { id: 'wtask-c-00000001', updatedAt: 4_000 })];
-    expect(unreclaimedEndedWorkers(rows, store, 5_000, new Set(['wtask-c-00000001']))).toBe(1);
-  });
-});
-
 describe('reclaim state and reopen (review fixes, PR #2164)', () => {
   const ID = 'wtask-abc-12345678';
   const dead = (over: Partial<WorkerSessionInfo> = {}) => session({ agentProcessAlive: false, ...over });
@@ -838,7 +817,6 @@ describe('reclaim state and reopen (review fixes, PR #2164)', () => {
     expect(rec?.state).toBe('stopping');
     expect(note).not.toHaveBeenCalled();
     expect(reclaimedWorkerState(store.get(ID))).toBeNull();
-    expect(unreclaimedEndedWorkers([row('completed', { updatedAt: 4_000 })], store, 5_000)).toBe(1);
     expect(await resumeWorker({ store, listSessions: async () => [dead()], typeLine: vi.fn(() => true) }, ID, { kind: 'owner' })).toMatchObject({ ok: false, code: 'busy' });
     // The second look: a stopped agent no longer shows its binding; the
     // recorded conversation is kept.
@@ -847,7 +825,6 @@ describe('reclaim state and reopen (review fixes, PR #2164)', () => {
     const done = await reclaimWorker(again.ports, row('completed'), 'completed');
     expect(done?.state).toBe('stopped');
     expect(done?.sessions.find((s) => s.sessionId === 'daemon-1')?.resumeSessionId).toBe(UUID);
-    expect(unreclaimedEndedWorkers([row('completed', { updatedAt: 4_000 })], store, 5_000)).toBe(0);
   });
 
   it('a task that reopened while the reclaim waited has nothing stopped and nothing recorded', async () => {
@@ -1137,7 +1114,7 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     expect(seen).toEqual(['resumed->stopping']);
   });
 
-  it('the budget hears a resumed worker start and end, and the fan-out reads its live count', async () => {
+  it('the budget hears a resumed worker start and end', async () => {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
     const seen: string[] = [];
@@ -1146,14 +1123,6 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
     expect(await resumeWorker(p, ID, { kind: 'owner' })).toMatchObject({ ok: true });
     expect(noteWorkerAgentExit(store, 'daemon-1')).toBe(true);
     expect(seen).toEqual([`${BOT}:${ID}:stopped->resumed`, `${BOT}:${ID}:resumed->stopped`]);
-    expect(resumedWorkersLive(BOT)).toBe(0);
-    setResumedLiveCount((botId) => (botId === BOT ? 2 : 5));
-    try {
-      expect(resumedWorkersLive(BOT)).toBe(2);
-      expect(resumedWorkersLive()).toBe(5);
-    } finally {
-      setResumedLiveCount(null);
-    }
   });
 });
 
@@ -1323,33 +1292,6 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     off();
     expect(stopAgent).not.toHaveBeenCalled();
     await settled(store);
-  });
-
-  it('dormantTaskWorkspaceSet: with the reclaim store unavailable, an ended task whose agent is gone still holds no slot', () => {
-    const rows: Record<string, Pick<LedgerEntry, 'id' | 'status'>> = {
-      'ws-stopped': { id: 't-stopped', status: 'cancelled' },
-      'ws-open': { id: 't-open', status: 'working' },
-      'ws-agent': { id: 't-agent', status: 'completed' },
-    };
-    const byTask = (taskId: string) => Object.values(rows).find((r) => r.id === taskId) ?? null;
-    // The reclaim store could not be read: no records.
-    const dormant = dormantTaskWorkspaceSet({
-      records: [],
-      row: byTask,
-      workspaceRow: (ws) => rows[ws] ?? null,
-      endedNoAgent: ['ws-stopped', 'ws-open'],
-      agentWorkspaces: new Set(['ws-agent']),
-    });
-    expect([...dormant]).toEqual(['ws-stopped']);
-    // With records: a stopped worker of an ended task is dormant, a resumed one is not, an agent seen wins.
-    const withRecords = dormantTaskWorkspaceSet({
-      records: [stopping({ taskId: 't-agent', taskWorkspaceId: 'ws-agent', state: 'stopped' }), stopping({ taskId: 't-stopped', taskWorkspaceId: 'ws-stopped', state: 'resumed' })],
-      row: byTask,
-      workspaceRow: (ws) => rows[ws] ?? null,
-      endedNoAgent: ['ws-stopped'],
-      agentWorkspaces: new Set(['ws-agent']),
-    });
-    expect([...withRecords]).toEqual([]);
   });
 
   it('a stop answered no_session (the pane went since the read) is no failed stop', async () => {

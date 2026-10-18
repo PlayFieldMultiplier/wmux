@@ -6,8 +6,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { endedTaskAgentRuns, type WorkerSessionInfo } from '../../factory/workerReclaim';
+import { setHolderSource, type HolderRecord, type HolderSnapshot } from '../../factory/workerHolders';
+import type { LedgerEntry } from '../../../shared/ledger';
 import {
   FANOUT_AUDIT_FILENAME,
   FANOUT_CAP_WINDOW_MS,
@@ -18,10 +20,36 @@ import {
   launchedAuditTask,
   liveCapMessage,
   promptDigest,
-  setDormantTaskWorkspaces,
+  setFanOutGuardsForTests,
   stampFanoutTaskPane,
   type FanOutAuditRecord,
 } from '../fanoutGuards';
+
+afterEach(() => {
+  setHolderSource(null);
+  setFanOutGuardsForTests(null);
+});
+
+/** What the worker lifecycle host installs: the holder set every live cap
+ *  reads (factory/workerHolders.ts), over `g` (the hosted guards) and the
+ *  records given; a good daemon read just now unless `over` says otherwise. */
+function hostHolders(g: FanOutGuards, open: string[], over: Partial<HolderSnapshot> = {}): void {
+  setFanOutGuardsForTests(g);
+  setHolderSource(() => ({
+    now: 1_000_000, rows: [], reclaimable: new Set(), catchupMs: 86_400_000,
+    workspaces: new Set(open), ptys: new Map(open.map((ws) => [ws, [`p-${ws}`]])),
+    stamps: new Map(Object.entries(g.lineageFor(open)).map(([ws, l]) => [ws, { owner: l.owner }])),
+    read: 'ok', readAt: 999_000, idle: new Set(), busy: new Set(), agentSeen: new Set(), gone: new Set(),
+    records: [], verdicted: new Set(), reservations: g.reservedTasks(), grants: [], heldWorkspaces: [],
+    taskOfWorkspace: () => null, taskOfPane: () => null, launchAt: () => undefined, launchOf: () => null,
+    ...over,
+  }));
+}
+
+const ledgerRow = (id: string, ws: string, status: LedgerEntry['status']): LedgerEntry => ({
+  schemaVersion: 1, id, taskWorkspaceId: ws, ownerWorkspaceId: 'ws-owner', title: id, status, rev: 1, updatedAt: 0,
+  updatedBy: { kind: 'worker', workspaceId: ws }, dispatch: { origin: { kind: 'pane' } },
+});
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fanout-guards-'));
@@ -187,21 +215,21 @@ describe('audit log', () => {
 describe('review follow-ups', () => {
   it('a dormant task workspace (worker reclaimed, kept open for Resume) holds no live slot', () => {
     const dir = tmpDir();
-    const g = new FanOutGuards({ dir, now: () => 1_000_000, openWorkspaceIds: () => ['ws-a', 'ws-b', 'ws-c'], ledgerTaskOwner: () => null });
-    g.markTask('ws-a', 'ws-owner');
-    g.markTask('ws-b', 'ws-owner');
-    g.markTask('ws-c', 'ws-owner');
-    try {
-      setDormantTaskWorkspaces(() => new Set(['ws-a', 'ws-b']));
-      expect(g.liveTaskCount()).toBe(1);
-      // A source that throws counts every open task workspace (fail closed).
-      setDormantTaskWorkspaces(() => {
-        throw new Error('store unreadable');
-      });
-      expect(g.liveTaskCount()).toBe(3);
-    } finally {
-      setDormantTaskWorkspaces(null);
-    }
+    const open = ['ws-a', 'ws-b', 'ws-c'];
+    const g = new FanOutGuards({ dir, now: () => 1_000_000, openWorkspaceIds: () => open, ledgerTaskOwner: () => null });
+    for (const ws of open) g.markTask(ws, 'ws-owner');
+    const rows = open.map((ws) => ledgerRow(`t-${ws}`, ws, 'completed'));
+    const stopped = (taskId: string, ws: string): HolderRecord => ({ taskId, botId: 'bot-0000000a', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: ws, title: taskId, state: 'stopped', ended: 'completed', at: 500_000 });
+    hostHolders(g, open, { rows, records: [stopped('t-ws-a', 'ws-a'), stopped('t-ws-b', 'ws-b')] });
+    expect(g.liveTaskCount()).toBe(1);
+    // A snapshot that cannot be read refuses the live cap (fail closed).
+    setHolderSource(() => {
+      throw new Error('store unreadable');
+    });
+    expect(() => g.liveTaskCount()).toThrow();
+    expect(g.reserve('k', 1).ok).toBe(false);
+    // With no holder set installed, every open task workspace counts.
+    setHolderSource(null);
     expect(g.liveTaskCount()).toBe(3);
   });
 
@@ -432,12 +460,12 @@ describe('FanOutGuards.refundStart', () => {
 describe('ended tasks hold no live slot (F25)', () => {
   type Row = { id: string; title: string; status: string; ptys: string[] };
   const ended = (status: string) => status === 'completed' || status === 'cancelled' || status === 'failed';
-  /** What the worker lifecycle host installs: open task workspaces whose task
-   *  ended and runs no agent (the daemon's sessions, the task's own panes). */
-  function dormantOf(rows: Map<string, Row>, sessions: WorkerSessionInfo[], own: (id: string) => { taskId?: string } | null): Set<string> {
+  /** What a read records (taskWorkspaceLiveness.ts): the ended tasks whose
+   *  workspace runs no agent (the daemon's sessions, the task's own panes). */
+  function goneOf(rows: Map<string, Row>, sessions: WorkerSessionInfo[], own: (id: string) => { taskId?: string } | null): Set<string> {
     const byId = new Map(sessions.map((x) => [x.id, x]));
     const out = new Set<string>();
-    for (const [ws, r] of rows) if (ended(r.status) && !endedTaskAgentRuns(r.ptys, r.id, [], byId, own)) out.add(ws);
+    for (const r of rows.values()) if (ended(r.status) && !endedTaskAgentRuns(r.ptys, r.id, [], byId, own)) out.add(r.id);
     return out;
   }
 
@@ -454,30 +482,29 @@ describe('ended tasks hold no live slot (F25)', () => {
     ];
     const g = new FanOutGuards({ dir: tmpDir(), now: () => 1_000_000, openWorkspaceIds: () => [...rows.keys()], ledgerTaskOwner: () => null, ledgerBotTask: () => null });
     for (const ws of rows.keys()) g.markTask(ws, 'ws-owner');
-    try {
-      expect(g.reserve('before', 1).ok).toBe(false);
-      setDormantTaskWorkspaces(() => dormantOf(rows, sessions, () => null));
-      expect(g.liveTaskCount()).toBe(1);
-      expect(g.reserve('after', 1)).toEqual({ ok: true });
-    } finally {
-      setDormantTaskWorkspaces(null);
-    }
+    const open = [...rows.keys()];
+    const ledger = [...rows].map(([ws, r]) => ledgerRow(r.id, ws, r.status as LedgerEntry['status']));
+    const ptys = new Map([...rows].map(([ws, r]) => [ws, r.ptys]));
+    // No read has seen the ended tasks' agents gone yet: every one may run.
+    hostHolders(g, open, { rows: ledger, ptys, busy: new Set(['ws-run']) });
+    expect(g.reserve('before', 1).ok).toBe(false);
+    // A read saw them gone (agentGoneFacts.ts records it).
+    hostHolders(g, open, { rows: ledger, ptys, busy: new Set(['ws-run']), gone: goneOf(rows, sessions, () => null) });
+    expect(g.liveTaskCount()).toBe(1);
+    expect(g.reserve('after', 1)).toEqual({ ok: true });
   });
 
   it('a task that ended with its agent still running holds its slot', () => {
     const rows = new Map<string, Row>([['ws-done', { id: 't-done', title: 'done', status: 'completed', ptys: ['p-done'] }]]);
     const g = new FanOutGuards({ dir: tmpDir(), now: () => 1_000_000, openWorkspaceIds: () => ['ws-done'], ledgerTaskOwner: () => null });
     g.markTask('ws-done', 'ws-owner');
-    try {
-      setDormantTaskWorkspaces(() => dormantOf(rows, [{ id: 'p-done', agentProcessAlive: true }], () => null));
-      expect(g.liveTaskCount()).toBe(1);
-      // A WSL worker's launch line in its own pane, too.
-      const wsl: WorkerSessionInfo = { id: 'p-done', commandRunning: true, wslTarget: { distribution: 'Ubuntu' } };
-      setDormantTaskWorkspaces(() => dormantOf(rows, [wsl], (id) => (id === 'p-done' ? { taskId: 't-done' } : null)));
-      expect(g.liveTaskCount()).toBe(1);
-    } finally {
-      setDormantTaskWorkspaces(null);
-    }
+    const base = { rows: [ledgerRow('t-done', 'ws-done', 'completed')], ptys: new Map([['ws-done', ['p-done']]]) };
+    hostHolders(g, ['ws-done'], { ...base, gone: goneOf(rows, [{ id: 'p-done', agentProcessAlive: true }], () => null) });
+    expect(g.liveTaskCount()).toBe(1);
+    // A WSL worker's launch line in its own pane, too.
+    const wsl: WorkerSessionInfo = { id: 'p-done', commandRunning: true, wslTarget: { distribution: 'Ubuntu' } };
+    hostHolders(g, ['ws-done'], { ...base, gone: goneOf(rows, [wsl], (id) => (id === 'p-done' ? { taskId: 't-done' } : null)) });
+    expect(g.liveTaskCount()).toBe(1);
   });
 
   it('the live-cap refusal names what holds the slots and how one frees', () => {
