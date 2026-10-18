@@ -98,7 +98,7 @@ import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } fr
 import { serializeTerminalBuffer } from '../../utils/scrollbackDump';
 import { pastePtyChunked } from '../../utils/clipboardChunk';
 import { isDaemonModeActive, setDaemonModeActive } from '../../daemon/daemonMode';
-import { hasPendingReattach, noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, notePaneWriteDropped, setDaemonLinkSurfaceResolver, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
+import { noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, notePaneWriteDropped, setDaemonLinkSurfaceResolver, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
 import { planAgentCandidateSeed, planLiveAgentSeed, asAgentSlug, markSeedAttempted } from '../../channels/agentCandidateSeed';
 import { agentSlugToDisplay } from '../../../shared/agentIdentity';
 import { RECONCILE_TIMEOUT_MS } from '../../../shared/timeouts';
@@ -1751,7 +1751,6 @@ export default function AppLayout() {
     const surfaceForPty = (ptyId: string): string | null => boundSurfaces().find((p) => p.ptyId === ptyId)?.surfaceId ?? null;
     setDaemonLinkSurfaceResolver(surfaceForPty);
     const offFlushComplete = window.electronAPI.pty.onFlushComplete((ptyId) => {
-      if (!hasPendingReattach()) return;
       notePaneReattached(ptyId, () => surfaceForPty(ptyId));
     });
     // Main dropped a write: whatever sent it, it never reached the shell.

@@ -13,6 +13,7 @@ import { IPC, ENV_KEYS, isBrainPty } from '../../../shared/constants';
 import { DAEMON_RESYNC_RPC_TIMEOUT_MS } from '../../../shared/timeouts';
 import { writePidMap, removePidMapByPtyId } from '../../pty/pidMap';
 import { DaemonDataBatcher } from '../../pty/DaemonDataBatcher';
+import { stripPassiveInput } from '../../../shared/terminal/passiveInput';
 import { sanitizePtyText } from '../../../shared/types';
 import { isShadowWorkspaceId } from '../../../shared/pcRail/shadowId';
 import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
@@ -982,10 +983,11 @@ export function registerPTYHandlers(
 
   ipcMain.removeAllListeners(IPC.PTY_WRITE);
   // Tell the writing renderer its bytes were dropped, so the pane can say
-  // that input may not have reached the shell (daemonLinkNotice.ts). A focus
-  // report is xterm's, not the user's, and is not reported.
+  // that input may not have reached the shell (daemonLinkNotice.ts). A write
+  // that is only passive input (a focus report, mouse motion, the terminal's
+  // own reply to a query) is not something the user typed, and is not reported.
   const reportWriteDropped = (event: Electron.IpcMainEvent, id: string, data: string): void => {
-    if (data === '\x1b[I' || data === '\x1b[O') return;
+    if (stripPassiveInput(data).length === 0) return;
     if (!event.sender.isDestroyed()) event.sender.send(IPC.PTY_WRITE_DROPPED, id);
   };
   if (useDaemon && daemonClient) {

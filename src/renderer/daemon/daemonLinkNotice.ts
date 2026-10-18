@@ -39,6 +39,10 @@ export const RECONNECTED_NOTICE_MS = 4000;
 const notices = new Map<string, PaneLinkNotice>();
 const surfaceByPty = new Map<string, string>();
 const clearTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Panes main dropped a write for while they had no notice yet, not attached
+ *  since: on a graceful daemon shutdown the session pipes close before the
+ *  control link does, so the first lost keys come before daemon:disconnected. */
+const droppedBeforeNotice = new Set<string>();
 let down = false;
 const listeners = new Set<() => void>();
 /** Store lookup for a ptyId the drop did not see (set once by AppLayout). */
@@ -70,9 +74,9 @@ export function getPaneLinkNotice(surfaceId: string | null | undefined): PaneLin
   return surfaceId ? notices.get(surfaceId) ?? null : null;
 }
 
-/** True while some pane still waits on its reattach — lets callers skip the
- *  surface lookup for the common flush-complete with nothing pending. */
-export function hasPendingReattach(): boolean {
+/** True while some pane still waits on its reattach — skips the surface
+ *  lookup for the common flush-complete with nothing pending. */
+function hasPendingReattach(): boolean {
   for (const n of notices.values()) if (n.state === 'reconnecting') return true;
   return false;
 }
@@ -89,8 +93,10 @@ export function noteDaemonDisconnected(panes: Iterable<DaemonPaneRef>): void {
   surfaceByPty.clear();
   for (const { surfaceId, ptyId } of panes) {
     surfaceByPty.set(ptyId, surfaceId);
-    notices.set(surfaceId, { state: 'reconnecting', attempt: 0, inputLost: prev.get(surfaceId)?.inputLost ?? false });
+    const lost = (prev.get(surfaceId)?.inputLost ?? false) || droppedBeforeNotice.has(ptyId);
+    notices.set(surfaceId, { state: 'reconnecting', attempt: 0, inputLost: lost });
   }
+  droppedBeforeNotice.clear();
   notify();
 }
 
@@ -115,7 +121,9 @@ export function noteDaemonConnected(): void {
  * it stays until the user types there again or dismisses it.
  */
 export function notePaneReattached(ptyId: string, resolveSurfaceId: () => string | null): void {
-  if (down) return;
+  // Its pipe is live again: an earlier drop no longer means it is cut off.
+  droppedBeforeNotice.delete(ptyId);
+  if (down || !hasPendingReattach()) return;
   const surfaceId = surfaceByPty.get(ptyId) ?? resolveSurfaceId();
   if (!surfaceId) return;
   const n = notices.get(surfaceId);
@@ -175,7 +183,11 @@ function surfaceWithNotice(ptyId: string): string | null {
 export function notePaneWriteDropped(ptyId: string): void {
   const surfaceId = surfaceWithNotice(ptyId);
   const n = surfaceId ? notices.get(surfaceId) : undefined;
-  if (!surfaceId || !n || n.inputLost) return;
+  if (!surfaceId || !n) {
+    droppedBeforeNotice.add(ptyId);
+    return;
+  }
+  if (n.inputLost) return;
   cancelClearTimer(surfaceId);
   notices.set(surfaceId, { ...n, inputLost: true });
   notify();
@@ -204,6 +216,7 @@ export function dismissPaneLinkNotice(surfaceId: string): void {
 export function resetDaemonLinkNoticeForTests(): void {
   for (const surfaceId of [...notices.keys()]) drop(surfaceId);
   surfaceByPty.clear();
+  droppedBeforeNotice.clear();
   resolveSurfaceForPty = () => null;
   down = false;
   notify();

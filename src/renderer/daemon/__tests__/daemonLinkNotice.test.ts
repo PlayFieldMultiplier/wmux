@@ -72,6 +72,22 @@ describe('daemon link notice', () => {
     expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnected', attempt: 0, inputLost: true });
   });
 
+  it('counts a drop that came before daemon:disconnected, until the pane reattaches', () => {
+    // Graceful shutdown: the session pipes close before the control link.
+    notePaneWriteDropped('a');
+    notePaneWriteDropped('b');
+    notePaneReattached('b', none); // b's pipe came back before the drop
+    noteDaemonDisconnected(PANES);
+    expect(getPaneLinkNotice('sA')?.inputLost).toBe(true);
+    expect(getPaneLinkNotice('sB')?.inputLost).toBe(false);
+    // Consumed by that drop: the next one starts clean.
+    noteDaemonConnected();
+    notePaneReattached('a', none);
+    notePaneUserInput('a');
+    noteDaemonDisconnected(PANES);
+    expect(getPaneLinkNotice('sA')?.inputLost).toBe(false);
+  });
+
   it('flags input sent to a rebound session before its replay finished', () => {
     noteDaemonDisconnected(PANES);
     noteDaemonConnected();
