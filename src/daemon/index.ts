@@ -2458,7 +2458,9 @@ function registerRpcHandlers(
     if (shuttingDown) {
       throw new Error('SHUTTING_DOWN: daemon is shutting down — retry after reconnect');
     }
-    if (watchdog.isBlocked) {
+    // #2375: re-sample before refusing, so a block set by one transient RSS
+    // spike lifts as soon as memory is back under the limit.
+    if (watchdog.recheckBlock()) {
       throw new Error('Cannot create session: memory pressure too high. Try again later.');
     }
     const p = params as unknown as DaemonCreateSessionParams;
