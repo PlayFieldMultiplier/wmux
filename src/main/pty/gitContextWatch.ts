@@ -41,6 +41,13 @@ interface ResolvedRepo {
   isWorktree: boolean;
 }
 
+/**
+ * Maps a `gitdir:` value that is an absolute POSIX path (`/home/me/repo/.git/
+ * worktrees/x`, what git inside WSL writes) to a path this process can open.
+ * Only the daemon passes one, for a WSL session (#2407).
+ */
+export type GitDirMapper = (gitdir: string) => string;
+
 /** Walk-up ceiling — a cwd nested deeper than this inside a repo is absurd. */
 const MAX_WALK_UP = 24;
 /** Re-read debounce after an fs.watch event (HEAD is rewritten via rename). */
@@ -64,17 +71,20 @@ export function resolveRepo(startDir: string): ResolvedRepo | null {
  * `gitdir:` line, a directory holding a `HEAD` (a bare repository), or a cwd
  * whose real path cannot be read is inconclusive — git may still find a repo.
  */
-export function resolveRepoState(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
-  const lexical = walkUp(startDir);
+export function resolveRepoState(
+  startDir: string,
+  mapGitDir?: GitDirMapper,
+): { repo: ResolvedRepo | null; conclusive: boolean } {
+  const lexical = walkUp(startDir, mapGitDir);
   if (lexical.repo || !lexical.conclusive) return lexical;
   // The shell reports its logical $PWD; git walks the physical one. Through
   // a symlink (`~/link` → `/repo/src`) only the latter passes `/repo/.git`.
   let real: string;
   try { real = fs.realpathSync.native(startDir); } catch { return { repo: null, conclusive: false }; }
-  return real === startDir ? lexical : walkUp(real);
+  return real === startDir ? lexical : walkUp(real, mapGitDir);
 }
 
-function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
+function walkUp(startDir: string, mapGitDir?: GitDirMapper): { repo: ResolvedRepo | null; conclusive: boolean } {
   let dir = startDir;
   let conclusive = true;
   for (let i = 0; i < MAX_WALK_UP; i++) {
@@ -89,7 +99,8 @@ function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: bool
         const content = fs.readFileSync(dotGit, 'utf8');
         const m = content.match(/^gitdir:\s*(.+)\s*$/m);
         if (m) {
-          const target = path.resolve(dir, m[1].trim());
+          const gitdir = m[1].trim();
+          const target = path.resolve(dir, mapGitDir && gitdir.startsWith('/') ? mapGitDir(gitdir) : gitdir);
           // A submodule also uses the gitdir file (…/.git/modules/…); only
           // `…/worktrees/<name>` is a linked worktree. Either way the HEAD
           // at the target describes this checkout.
@@ -174,6 +185,7 @@ const defaultWatchFactory: GitWatchFactory = (target, listener) => fs.watch(targ
 
 interface SessionWatch {
   cwd: string;
+  mapGitDir?: GitDirMapper;
   repo: ResolvedRepo | null;
   /** With `repo` null: the search reached the root (see resolveRepoState). */
   conclusive: boolean;
@@ -207,9 +219,10 @@ export class GitContextWatcher extends EventEmitter {
     this.watchFactory = watchFactory;
   }
 
-  update(sessionId: string, cwd: string): void {
+  /** @param mapGitDir See GitDirMapper; kept for every later re-resolve. */
+  update(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
     const existing = this.sessions.get(sessionId);
-    const { repo, conclusive } = resolveRepoState(cwd);
+    const { repo, conclusive } = resolveRepoState(cwd, mapGitDir);
 
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
       && existing.conclusive === conclusive) {
@@ -219,6 +232,7 @@ export class GitContextWatcher extends EventEmitter {
 
     const watch: SessionWatch = {
       cwd,
+      mapGitDir,
       repo,
       conclusive,
       watcher: null,
@@ -246,7 +260,7 @@ export class GitContextWatcher extends EventEmitter {
       const watch = this.sessions.get(sessionId);
       if (!watch) continue;
       watch.lastEmitted = null;
-      if (!watch.repo) this.update(sessionId, watch.cwd);
+      if (!watch.repo) this.update(sessionId, watch.cwd, watch.mapGitDir);
       // update() emitted already if it found a repo; otherwise emit here.
       const current = this.sessions.get(sessionId);
       if (current && current.lastEmitted === null) this.readAndEmit(sessionId, current);
@@ -302,7 +316,7 @@ export class GitContextWatcher extends EventEmitter {
           watch.debounce = null;
           if (!watch.repo) {
             // `.git` may have just appeared — re-resolve and re-arm.
-            this.update(sessionId, watch.cwd);
+            this.update(sessionId, watch.cwd, watch.mapGitDir);
             return;
           }
           this.readAndEmit(sessionId, watch);

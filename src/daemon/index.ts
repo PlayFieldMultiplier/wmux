@@ -43,7 +43,7 @@ import { coercePhoneDecisions } from './approvals/decisionConfig';
 import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
 import { SCROLLBACK_ROWS } from './web/hostSearch';
-import { recoveryCwd, isWslShell, isWslCwdMissingError } from '../shared/wsl';
+import { recoveryCwd, isWslShell, isWslCwdMissingError, type WslTarget } from '../shared/wsl';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -151,6 +151,7 @@ import { createSnapshotRunner } from './snapshotRunner';
 import { createBufferHibernation } from './BufferHibernation';
 import { RingBuffer } from './RingBuffer';
 import { GitContextWatcher } from '../main/pty/gitContextWatch';
+import { gitWatchArgs } from './gitWatchPath';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
 import { newerTimestamp } from './util/idleAnchor';
@@ -7288,11 +7289,14 @@ function wireContextWatchers(
     }
   });
 
-  const onCreated = (payload: { session: { id: string; cwd: string } }) => {
-    gitWatcher.update(payload.session.id, payload.session.cwd);
+  // #2407 — a WSL session's Linux cwd is mapped to a path this process can
+  // read (gitWatchArgs); every other session's cwd goes in unchanged.
+  const onCreated = (payload: { session: { id: string; cwd: string; wslTarget?: WslTarget } }) => {
+    gitWatcher.update(...gitWatchArgs(payload.session.id, payload.session));
   };
   const onCwd = (payload: { sessionId: string; cwd: string }) => {
-    gitWatcher.update(payload.sessionId, payload.cwd);
+    const wslTarget = sessionManager.getSession(payload.sessionId)?.meta.wslTarget;
+    gitWatcher.update(...gitWatchArgs(payload.sessionId, { cwd: payload.cwd, wslTarget }));
   };
   const onGone = (payload: { id: string }) => {
     gitWatcher.remove(payload.id);
@@ -7306,7 +7310,7 @@ function wireContextWatchers(
 
   // Seed git context for sessions recovered before this wiring ran.
   for (const s of sessionManager.listLiveSessions()) {
-    gitWatcher.update(s.id, s.cwd);
+    gitWatcher.update(...gitWatchArgs(s.id, s));
   }
 
   resyncContextWatchers = () => { portWatcher.resync(); gitWatcher.resync(); };

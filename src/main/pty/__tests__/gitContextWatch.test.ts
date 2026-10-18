@@ -119,6 +119,39 @@ describe('resolveRepo', () => {
     expect(readGitContext(repo!)).toEqual({ branch: 'feature-x', isWorktree: true });
   });
 
+  it('maps a POSIX gitdir (a worktree made by git inside WSL) through the mapper (#2407)', () => {
+    const main = tmp();
+    initFakeRepo(main);
+    const wtGitDir = path.join(main, '.git', 'worktrees', 'wt1');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/feature-x\n');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /home/me/repo/.git/worktrees/wt1\n');
+    const seen: string[] = [];
+    const map = (gitdir: string) => {
+      seen.push(gitdir);
+      return gitdir.replace('/home/me/repo', main);
+    };
+
+    const { repo } = resolveRepoState(wt, map);
+    expect(seen).toEqual(['/home/me/repo/.git/worktrees/wt1']);
+    expect(repo).toEqual({ gitDir: path.resolve(wtGitDir), isWorktree: true });
+    expect(readGitContext(repo!)).toEqual({ branch: 'feature-x', isWorktree: true });
+  });
+
+  it('never hands a relative gitdir to the mapper', () => {
+    const main = tmp();
+    initFakeRepo(main);
+    const wtGitDir = path.join(main, '.git', 'worktrees', 'wt1');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/rel\n');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.relative(wt, wtGitDir)}\n`);
+    const map = vi.fn((gitdir: string) => gitdir);
+    expect(resolveRepoState(wt, map).repo?.gitDir).toBe(path.resolve(wtGitDir));
+    expect(map).not.toHaveBeenCalled();
+  });
+
   it('returns null outside any repository', () => {
     // os.tmpdir() itself could theoretically sit in a repo on a dev box; a
     // fresh nested dir without .git anywhere within MAX_WALK_UP of the drive
@@ -451,6 +484,23 @@ describe('GitContextWatcher', () => {
     // Re-armed on the freshly resolved git dir; the old watch was closed.
     expect(nonRepoWatch.closed).toBe(true);
     expect(fake.last().target).toBe(watchTarget(path.join(root, '.git')));
+  });
+
+  it('a re-resolve after git worktree add keeps the session\'s gitdir mapper (#2407)', () => {
+    const main = tmp();
+    initFakeRepo(main);
+    const wtGitDir = path.join(main, '.git', 'worktrees', 'wt1');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/linked\n');
+    const wt = tmp();
+    const watcher = makeWatcher();
+    watcher.update('s1', wt, (gitdir) => gitdir.replace('/home/me/repo', main));
+    expect(events.at(-1)?.absent).toBe(true);
+
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /home/me/repo/.git/worktrees/wt1\n');
+    fake.last().listener('rename', '.git');
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'linked', isWorktree: true });
   });
 
   it('remove() closes the watch and clears a pending debounce', () => {
