@@ -3,11 +3,9 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { SessionPipe } from '../SessionPipe';
 import { RingBuffer } from '../RingBuffer';
-import { waitFor } from '../../test-utils/waitFor';
+import { waitFor, deliberateSleep } from '../../test-utils/waitFor';
 
 // ── helpers ─────────────────────────────────────────────────────────
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function uniqueSessionId(tag: string): string {
   return `clientgone-${tag}-${crypto.randomUUID().slice(0, 8)}`;
@@ -91,11 +89,11 @@ describe('SessionPipe — client presence + onClientGone (#557)', () => {
 
     // Connect but never send the token, then drop the socket.
     const socket = await connectRaw(pipe.getPipeName());
-    await sleep(20); // let the daemon accept + register the pre-auth client
+    await deliberateSleep(20, 'not yet converted (#2363): lets the daemon accept the pre-auth client; nothing to poll'); // let the daemon accept + register the pre-auth client
     socket.destroy();
 
     // Give the close event time to propagate; onClientGone must stay silent.
-    await sleep(150);
+    await deliberateSleep(150, 'negative: onClientGone stays silent for a pre-auth drop');
     expect(fired).toBe(0);
     expect(pipe.hasClient()).toBe(false);
   });

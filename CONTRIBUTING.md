@@ -56,12 +56,21 @@ tests that spawn real OS resources, such as ConPTY shells or Windows process
 probes. `npm test` runs these runtime tests serially after the regular parallel
 suite to avoid cross-test contention.
 
-CI (`.github/workflows/ci.yml`) runs parallel jobs: `validate` (type checks,
-builds, the unit lane split into two shards, `validate (1/2)` and
-`validate (2/2)`, on Linux), `integration` (the integration lane, two shards,
-on Windows) and `validate-runtime` (`npm run test:runtime` against a freshly
-built daemon bundle). A PR needs all five green; a branch-protection rule that
-requires status checks must list all five.
+On a pull request, CI (`.github/workflows/ci.yml`) runs parallel jobs:
+`checks` (type checks, builds with the daemon bundle included, lint and the
+lockfile guard, on Linux since none of it depends on the OS), `validate` (the
+unit lane split into two shards, `validate (1/2)` and `validate (2/2)`, on
+Linux) and `integration` (the integration lane, two shards, on Windows). A PR
+needs all five green; a branch-protection rule that requires status checks
+lists those five.
+
+The runtime suite (`npm run test:runtime` against a freshly built daemon
+bundle) is not on the PR path: its real-Chrome and ConPTY tests are timing
+sensitive and failed unrelated PRs. `.github/workflows/runtime.yml` runs it
+nightly and on every push to main, and on demand for a branch
+(`gh workflow run runtime.yml --ref <branch>`). Run it that way, or locally
+with `npm run test:runtime`, when your change touches what it covers: the
+daemon, PTY and shell integration, the browser session, the Playwright MCP.
 
 Draft PRs do not run CI: every job skips while the PR is a draft. Mark it
 ready (`gh pr ready`, or "Ready for review") to start CI, and push to a draft

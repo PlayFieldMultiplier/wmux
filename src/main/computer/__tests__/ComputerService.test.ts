@@ -14,6 +14,7 @@ import {
   type ConsentAnswer,
   type HelperLike,
 } from '../ComputerService';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const notepad: AppInfo = { id: 'c:\\windows\\notepad.exe', name: 'Notepad', pid: 10, path: 'C:\\Windows\\notepad.exe' };
 const keepass: AppInfo = { id: 'c:\\keepassxc.exe', name: 'KeePassXC', pid: 11, path: 'C:\\KeePassXC.exe' };
@@ -578,7 +579,7 @@ describe('ComputerService with the real approval queue', () => {
     const deadlineMs = 1_000;
     const { service, queue, opened, dedupeKeys, advance } = realQueueService(deadlineMs);
     const a = service.getAppState(AGENT_A, { app: 'Notepad' });
-    await sleep(deadlineMs * 0.7); // stop at t=700 ms, as in the review's repro2
+    await deliberateSleep(deadlineMs * 0.7, 'real timer: stop at t=700ms of a 1000ms deadline'); // stop at t=700 ms, as in the review's repro2
     service.abort();
     // Right after the stop (the agent retries at once): refused, no prompt.
     const b = service.getAppState(AGENT_A, { app: 'Notepad' });
@@ -592,7 +593,7 @@ describe('ComputerService with the real approval queue', () => {
     expect(opened).toHaveLength(2);
     expect(dedupeKeys[1]).not.toBe(dedupeKeys[0]);
     // A's old deadline (t=1000 ms) passes; C's own (about t=1700 ms) has not: C still waits.
-    await sleep(deadlineMs * 0.45);
+    await deliberateSleep(deadlineMs * 0.45, 'real timer: past A\'s deadline, before C\'s');
     expect(queue.inflightCount()).toBe(1);
     await queue.resolvePrompt(opened[1].promptId, true);
     expect(await codeOf(c)).toBe('resolved');

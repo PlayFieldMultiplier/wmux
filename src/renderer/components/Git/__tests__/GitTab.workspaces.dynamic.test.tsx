@@ -14,6 +14,7 @@ import { GitTab, ROW_STATS_DEBOUNCE_MS, type GitTabProps } from '../GitTab';
 import { clearGitCaches } from '../repoCache';
 import { useStore } from '../../../stores';
 import type { Workspace, Pane, Surface } from '../../../../shared/types';
+import { deliberateSleep } from '../../../../test-utils/waitFor';
 
 function surface(id: string, cwd: string): Surface {
   return { id, ptyId: `pty-${id}`, title: id, shell: 'pwsh', cwd, surfaceType: 'terminal' };
@@ -41,7 +42,7 @@ const flush = async () => {
 /** Past the row-stats debounce, then drain what it started. */
 const settle = async () => {
   await flush();
-  await act(async () => { await new Promise((r) => setTimeout(r, ROW_STATS_DEBOUNCE_MS + 20)); });
+  await act(async () => { await deliberateSleep(ROW_STATS_DEBOUNCE_MS + 20, 'real timer: the row-stats debounce must fire under act'); });
   await flush();
 };
 

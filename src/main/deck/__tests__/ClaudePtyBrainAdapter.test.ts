@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => '/repo', getPath: () => '/home' },
@@ -330,7 +331,7 @@ describe('ClaudePtyBrainAdapter — account choice (quota rotation)', () => {
     launchMock.mockImplementation(() => new Promise((r) => { resolveLaunch = r; }));
     const adapter = makeAdapter(host);
     const turn = collect(adapter.send('hello'));
-    await vi.waitFor(() => expect(launchMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(launchMock).toHaveBeenCalled(), { timeout: 5_000 });
     adapter.dispose();
     resolveLaunch({ kind: 'run', env: {}, accountId: null });
     await turn;
@@ -907,6 +908,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     // retry until the signal is actually claimed by this pty's lane.
     await vi.waitFor(() =>
       expect(deliverBrainPtyHookSignal(signal('agent.session_start', ptyId)).consumed).toBe(true),
+      { timeout: 5_000 },
     );
     await host.until(() => host.writes.length > 0);
     deliverBrainPtyHookSignal(signal('agent.stop', ptyId, { agentSessionId: 'sess-ok' }));
@@ -955,7 +957,7 @@ describe('ClaudePtyBrainAdapter — turn mapping', () => {
     const spawned: string[] = [];
     const adapter = makeAdapter(host, { onPtySpawned: (id: string) => spawned.push(id) });
     const turn = collect(adapter.send('hi'));
-    await vi.waitFor(() => expect(spawned.length).toBe(1));
+    await vi.waitFor(() => expect(spawned.length).toBe(1), { timeout: 5_000 });
     expect(spawned[0]).toBe(host.created[0].id);
     expect(adapter.brainPtyId).toBe(spawned[0]);
     adapter.dispose();
@@ -1526,7 +1528,7 @@ describe('the foreign-turn-START notification', () => {
     await turn;
 
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'do it' } }));
-    await new Promise((r) => setTimeout(r, 5));
+    await deliberateSleep(5, 'clock: two prompt submits at distinct times');
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'no, do it this way' } }));
     expect(onForeignTurnStart).toHaveBeenCalledTimes(2);
     expect(onForeignTurnStart).toHaveBeenNthCalledWith(2, 'no, do it this way');
@@ -1551,7 +1553,7 @@ describe('the foreign-turn-START notification', () => {
     await turn;
 
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'do it' } }));
-    await new Promise((r) => setTimeout(r, 5));
+    await deliberateSleep(5, 'clock: two prompt submits at distinct times');
     deliverBrainPtyHookSignal(signal('agent.user_prompt_submit', ptyId, { payload: { prompt: 'do it' } }));
     expect(onForeignTurnStart).toHaveBeenCalledTimes(1);
     adapter.dispose();
@@ -1992,7 +1994,7 @@ describe('a cold-start prompt that reaches the TUI incomplete (#1787)', () => {
     const events = await collect(adapter.send(LONG_PROMPT));
     // The turn ends on the first Stop; every Enter still in its hook reports
     // after that, and none of them may run anything either.
-    await vi.waitFor(() => expect(hooksRunning()).toBe(0));
+    await vi.waitFor(() => expect(hooksRunning()).toBe(0), { timeout: 5_000 });
     // Both submissions of the damaged box were refused (and, depending on the
     // hook's timing, the full prompt's own resubmission too): the full prompt
     // ran exactly once and nothing else ran.
@@ -2047,7 +2049,7 @@ describe('a cold-start prompt that reaches the TUI incomplete (#1787)', () => {
     });
     const adapter = makeAdapter(host, { turnTimeoutMs: 5_000, refusalConfirmMs: 5_000 });
     const turn = collect(adapter.send(LONG_PROMPT));
-    await vi.waitFor(() => expect(verdicts).toHaveLength(1));
+    await vi.waitFor(() => expect(verdicts).toHaveLength(1), { timeout: 5_000 });
     adapter.interrupt();
     expect(await turn).toEqual([{ type: 'error', message: expect.stringMatching(/interrupted/) }]);
     expect(pasteWrites()).toBe(1);

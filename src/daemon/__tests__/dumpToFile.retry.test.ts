@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { deliberateSleep } from '../../test-utils/waitFor';
 
 // Fix A (axis 2): the async `.buf` dump rename gets a bounded win32-only retry
 // for transient handle locks (AV scan / concurrent reader), and dumps to the
@@ -90,7 +91,7 @@ describe('RingBuffer.dumpToFile — per-destination serialization (codex #4)', (
     // would complete first → completed = [2,1]. Serialization forces [1,2].
     mocks.rename.mockImplementation(async () => {
       const id = ++n;
-      if (id === 1) await new Promise((r) => setTimeout(r, 30));
+      if (id === 1) await deliberateSleep(30, 'stub latency: the first rename finishes last unless writes are serialized');
       completed.push(id);
     });
 

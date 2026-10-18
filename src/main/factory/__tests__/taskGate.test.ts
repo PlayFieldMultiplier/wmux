@@ -17,6 +17,7 @@ import { RoomWriter } from '../roomWriter';
 import { verifyGateFactId } from '../verifyPreset';
 import type { NoChangesVerdict } from '../noChangesCheck';
 import { countOpenBotWorkers } from '../../pipe/handlers/fanout.rpc';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const BOT = 'bot-0000000a';
 const HEAD = 'c'.repeat(40);
@@ -808,12 +809,12 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
         expect(ledger.get('task-1')?.status).toBe('review_requested');
         // Backing off: the sweep reads nothing until its time is up.
         const reads = r.prsOfBranch.mock.calls.length;
-        await new Promise((res) => setTimeout(res, 60));
+        await deliberateSleep(60, 'negative: no PR read while backing off');
         expect(r.prsOfBranch).toHaveBeenCalledTimes(reads);
         fail = false;
         r.clock.now += mergeBackoffMs(1);
         await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
-        await new Promise((res) => setTimeout(res, 60));
+        await deliberateSleep(60, 'negative: woken once, not twice');
         expect(r.wake).toHaveBeenCalledTimes(1);
         const row = ledger.get('task-1') as LedgerEntry;
         if (merged) {
@@ -948,7 +949,7 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     await flush();
     expect(r.prsOfBranch).toHaveBeenCalledTimes(reads + 1);
     wait = false;
-    await new Promise((res) => setTimeout(res, 100));
+    await deliberateSleep(100, 'negative: no re-read before the answer TTL');
     expect(r.prsOfBranch).toHaveBeenCalledTimes(reads + 1);
     r.clock.now += MERGE_ANSWER_TTL_MS;
     await vi.waitFor(() => expect(r.prsOfBranch).toHaveBeenCalledTimes(reads + 2), { interval: 2, timeout: 15_000 });
@@ -1015,7 +1016,7 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     expect(r.wake).not.toHaveBeenCalled();
     worktree = '/wt/task-1';
     await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
-    await new Promise((res) => setTimeout(res, 60));
+    await deliberateSleep(60, 'negative: woken once, not twice');
     expect(r.wake).toHaveBeenCalledTimes(1);
     expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', g.entry.rev)]);
     r.off();
@@ -1054,7 +1055,7 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
       expect(r.wake).not.toHaveBeenCalled();
       worktree = '/wt/task-1';
       await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
-      await new Promise((res) => setTimeout(res, 80));
+      await deliberateSleep(80, 'negative: woken once, not twice');
       expect(r.wake).toHaveBeenCalledTimes(1);
       const row = ledger.get('task-1') as LedgerEntry;
       expect(row.status).toBe('completed');
@@ -1088,7 +1089,7 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     expect(r.wake).not.toHaveBeenCalled();
     worktree = '/wt/task-1';
     await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { interval: 2, timeout: 15_000 });
-    await new Promise((res) => setTimeout(res, 80));
+    await deliberateSleep(80, 'negative: woken once, not twice');
     expect(r.wake).toHaveBeenCalledTimes(1);
     expect(r.runGate).not.toHaveBeenCalled();
     const row = ledger.get('task-1') as LedgerEntry;
@@ -1108,13 +1109,13 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     const branchOf = vi.fn(() => new Promise<string>((resolve) => { answer = resolve; }));
     const r = mergeRig({ [B1]: [pr(2)] }, {}, { branchOf, noted: () => true, mergeSweepMs: 10 });
     await vi.waitFor(() => expect(answer).not.toBeNull(), { interval: 2, timeout: 15_000 });
-    await new Promise((res) => setTimeout(res, 30));
+    await deliberateSleep(30, 'ordering: let the in-flight branch lookup stand before off()');
     r.off();
     expect(r.subs.size).toBe(0);
     (answer as unknown as (b: string) => void)('wmux/task-1');
     const calls = branchOf.mock.calls.length;
     r.emit(fact('pr.merged', 3));
-    await new Promise((res) => setTimeout(res, 60));
+    await deliberateSleep(60, 'negative: nothing runs after off()');
     expect(branchOf.mock.calls.length).toBe(calls);
     expect(r.completeMerged).not.toHaveBeenCalled();
     expect(ledger.get('task-1')?.status).toBe('review_requested');

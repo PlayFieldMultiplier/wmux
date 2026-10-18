@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { exec } = vi.hoisted(() => ({ exec: vi.fn() }));
 vi.mock('node:child_process', () => ({ execFile: exec }));
 import { resolveWslCwd, WSL_CWD_MISSING_MARKER, WSL_CWD_PROBE, WSL_PROBE_TIMEOUT_MS, isWslCwdMissingError } from '../wsl';
+import { deliberateSleep } from '../../test-utils/waitFor';
 
 type Callback = (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void;
 /**
@@ -26,7 +27,7 @@ describe('asynchronous WSL probes', () => {
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec.mock.calls[0][2].timeout).toBe(WSL_PROBE_TIMEOUT_MS);
     let ticked = false;
-    await new Promise<void>((resolve) => setTimeout(() => { ticked = true; resolve(); }, 1));
+    await deliberateSleep(1, 'real timer: proves the probe does not block the event loop').then(() => { ticked = true; });
     expect(ticked).toBe(true);
     finish(0);
     expect(await first).toEqual(await second);

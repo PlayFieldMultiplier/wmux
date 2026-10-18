@@ -16,6 +16,7 @@ import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { FitAddon } from '@xterm/addon-fit';
 import { WEBGL_UPGRADE_HIDE_MAX_MS, webglUpgradeQueue } from '../../terminal/webglUpgradeQueue';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -84,7 +85,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const settle = (ms = 50) => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
+const settle = (ms = 50) => act(async () => { await deliberateSleep(ms, 'not yet converted (#2363): settle helper under act; callers assert after it'); });
 
 async function setup(ptyId: string) {
   const { useTerminal } = await import('../useTerminal');
@@ -186,7 +187,7 @@ describe('useTerminal WebGL upgrade keeps the DOM frame off screen', { timeout: 
   it('shows the pane after a bounded wait when the build never runs', async () => {
     await setup('p-upgrade-never-runs');
     expect(xtermEl().style.opacity).toBe('0');
-    await act(async () => { await new Promise((r) => setTimeout(r, WEBGL_UPGRADE_HIDE_MAX_MS + 50)); });
+    await act(async () => { await deliberateSleep(WEBGL_UPGRADE_HIDE_MAX_MS + 50, 'real timer: the bounded upgrade hide must expire'); });
     expect(xtermEl().style.opacity).toBe('');
   });
 

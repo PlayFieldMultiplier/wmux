@@ -29,6 +29,7 @@ import { __resetBotHooksForTesting, onBotHook, type BotHookEvent } from '../botH
 import { DEFAULT_BOT_BUDGETS, IDENTITY_SPREAD } from '../../../shared/bot';
 import { WAKE_LIMITS } from '../../../shared/wake';
 import { BOTS_PLAN_CONSENT_VERSION } from '../../../shared/factorySettings';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 let dir = '';
 let clock = 1_000_000;
@@ -139,7 +140,7 @@ describe('BotStore', () => {
     expect(s.get('bot-0a0a0a34')?.engine).toEqual({ kind: 'claude-sdk', model: 'opus; rm -rf ~' });
     // Loading wrote nothing (a write it scheduled would have landed by now;
     // flush() itself writes, so it cannot be the check).
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'negative: loading schedules no write');
     expect(fs.readFileSync(botsFilePath(dir), 'utf8')).toBe(text);
     expect(fs.statSync(botsFilePath(dir)).mtimeMs).toBe(mtime);
     // An unrelated write keeps every stored model, the unsafe one included.

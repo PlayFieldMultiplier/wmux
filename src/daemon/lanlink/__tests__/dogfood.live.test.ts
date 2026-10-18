@@ -5,7 +5,7 @@
 // and execute-impossibility over an actual TCP socket (not the in-memory fake).
 //
 //   LANLINK_DOGFOOD_IP=192.168.x.y npx vitest run src/daemon/lanlink/__tests__/dogfood.live.test.ts
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import net from 'node:net';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -19,12 +19,12 @@ import { ReconnectInitiator } from '../pairing';
 import { encodeFrame } from '../wire';
 import { AeadSealer } from '../aead';
 import type { PairResult } from '../pairing';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const LAN_IP = process.env['LANLINK_DOGFOOD_IP'];
 const suite = LAN_IP ? describe : describe.skip;
 const PORT = 45000 + Math.floor(Math.random() * 1000);
 const PIN = '314159';
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const seam = {
   reHarden: () => 'hardened' as const,
   secureWrite: (p: string, d: string) => fs.writeFileSync(p, d),
@@ -71,12 +71,12 @@ suite('LanLink LIVE real-net dogfood (1-machine, LAN IP)', () => {
       netCategory: () => 'Private',
       firewall: { apply: async () => undefined, remove: async () => undefined },
     });
-    await delay(80); // reconcile -> real listen on LAN_IP:PORT
+    await deliberateSleep(80, 'not yet converted (#2363): lets the reconcile chain listen on LAN_IP:PORT; nothing to poll'); // reconcile -> real listen on LAN_IP:PORT
   });
 
   afterAll(async () => {
     server?.dispose();
-    await delay(50);
+    await deliberateSleep(50, 'real timer: let dispose close the listener before the dir is removed');
     try {
       fs.rmSync(root, { recursive: true, force: true });
     } catch {
@@ -103,8 +103,7 @@ suite('LanLink LIVE real-net dogfood (1-machine, LAN IP)', () => {
   it('D2: a read-only message lands in the durable inbox (origin:remote, sanitized) + nudge', async () => {
     const before = hostInbox.size;
     await sendToPeer({ host: LAN_IP!, port: PORT, peerUuid: paired.peerUuid, peers: joinPeers, selfName: 'joiner-B', text: 'live hello\x1b[31m!' });
-    await delay(60);
-    expect(hostInbox.size).toBe(before + 1);
+    await vi.waitFor(() => expect(hostInbox.size).toBe(before + 1), { timeout: 10_000 });
     const items = hostInbox.poll(before).items;
     expect(items[0].origin).toBe('remote');
     expect(items[0].text).toBe('live hello[31m!'); // ESC stripped
@@ -129,7 +128,7 @@ suite('LanLink LIVE real-net dogfood (1-machine, LAN IP)', () => {
     const frames: Buffer[] = [];
     sock.on('data', (c: Buffer) => frames.push(c));
     sock.write(encodeFrame(0x04, recon.hello()));
-    await delay(80); // receive RECONNECT2
+    await deliberateSleep(80, 'not yet converted (#2363): waits for the RECONNECT2 frame; a partial frame would parse wrong'); // receive RECONNECT2
     // parse the single RECONNECT2 frame
     const buf = Buffer.concat(frames);
     const len = buf.readUInt32BE(0);
@@ -138,7 +137,7 @@ suite('LanLink LIVE real-net dogfood (1-machine, LAN IP)', () => {
     const sealer = new AeadSealer(keys.c2sKey, 1);
     const hostile = JSON.stringify({ kind: 'a2a.task.send', peerName: 'B', text: 'rm -rf /', senderSeq: 1, execute: true });
     sock.write(encodeFrame(0x10, sealer.seal(Buffer.from(hostile))));
-    await delay(80);
+    await deliberateSleep(80, 'negative: an execute kind never reaches the inbox');
     sock.destroy();
     expect(hostInbox.size).toBe(before); // execute kind never reached the inbox
   });
@@ -159,7 +158,7 @@ suite('LanLink LIVE real-net dogfood (1-machine, LAN IP)', () => {
       sock.once('error', rej);
     });
     sock.write(encodeFrame(0x10, Buffer.alloc(40)));
-    await delay(60);
+    await deliberateSleep(60, 'negative: an unauthenticated frame never reaches the inbox');
     sock.destroy();
     expect(hostInbox.size).toBe(before);
   });
