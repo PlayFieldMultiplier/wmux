@@ -157,10 +157,11 @@ describe('createWorkerClear', () => {
     expect(await r.clear.reconcile()).toBe(0);
     expect(store.get(TASK)?.seenAt).toBe(10_000);
     // Persisted: a restart still knows it was seen.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const reloaded = ReclaimedWorkers.at(dir);
-    reloaded.load();
-    expect(reloaded.get(TASK)?.seenAt).toBe(10_000);
+    await vi.waitFor(() => {
+      const reloaded = ReclaimedWorkers.at(dir);
+      reloaded.load();
+      expect(reloaded.get(TASK)?.seenAt).toBe(10_000);
+    }, { timeout: 10_000 });
     r.state.viewed = 'ws-owner';
     expect(await r.clear.reconcile()).toBe(1);
     expect(r.closeWorkspace).toHaveBeenCalledWith('ws-task');

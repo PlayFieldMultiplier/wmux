@@ -10,6 +10,7 @@ import {
 } from '../WebTerminalServer';
 import { formatPeerCredential } from '../../../shared/a2aRemote';
 import type { DaemonSessionManager } from '../../DaemonSessionManager';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 /**
  * The cross-host A2A peer gate: `/api/a2a/*` accepts a peer credential and
@@ -328,7 +329,7 @@ describe('A2A peer gate', () => {
         const s = await start(makeServer());
         const out = await call(s, '/api/a2a/hello', { headers: bearer(PEER) });
         expect(out.status).toBe(200);
-        await new Promise((r) => setTimeout(r, 20));
+        await deliberateSleep(20, 'negative: async bookkeeping leaves no unhandled rejection');
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
         process.off('unhandledRejection', unhandled);

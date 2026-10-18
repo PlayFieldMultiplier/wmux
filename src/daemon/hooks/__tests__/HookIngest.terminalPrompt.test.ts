@@ -12,6 +12,7 @@ import {
 import { DEFAULT_ALARM_WINDOW_MS } from '../../../shared/hooks/CompletionAlarm';
 import { ENV_KEYS } from '../../../shared/constants';
 import type { AgentSignal } from '../../../shared/hooks/signal-types';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 type TerminalPromptInput = { sessionId: string; agent: string; workspaceId?: string; toolName?: string; summary?: string };
 
@@ -160,7 +161,7 @@ describe('HookIngest — terminal_prompt records', () => {
         log: (_level, message) => { logs.push(message); },
       });
       ingest.handle(makeSignal({ payload: PERMISSION_REQUEST }));
-      await new Promise((r) => setTimeout(r, 10));
+      await deliberateSleep(10, 'negative: a failed record leaves no unhandled rejection');
       expect(unhandled).toEqual([]);
       expect(logs.some((l) => l.includes('terminal prompt record failed'))).toBe(true);
       ingest.dispose();

@@ -18,6 +18,7 @@ import {
   LaunchdUnavailableError,
   type LaunchdRuntime,
 } from '../launchdDaemonJob';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 describe('launchdBaseLabel', () => {
   it('derives the label from the data suffix so dev and prod never share jobs', () => {
@@ -230,8 +231,8 @@ describe('startDaemonViaLaunchd / pruneStaleDaemonJobs', () => {
       // A dead holder's lock would be reclaimed at once; a live one makes us wait.
       fs.writeFileSync(path.join(dir, 'start.lock'), `${process.pid}:other`);
       let waits = 0;
-      const sleep = rt.sleep;
-      rt.sleep = async (ms) => { if (++waits === 2) fs.unlinkSync(path.join(dir, 'start.lock')); await sleep(ms); };
+      const fakeSleep = rt.sleep;
+      rt.sleep = async (ms) => { if (++waits === 2) fs.unlinkSync(path.join(dir, 'start.lock')); await fakeSleep(ms); };
       const job = await startDaemonViaLaunchd(startOpts(), rt);
       job.dispose();
       expect(daemonJobCreatedAt(job.label)).toBe(1_020_000);
@@ -245,7 +246,7 @@ describe('startDaemonViaLaunchd / pruneStaleDaemonJobs', () => {
     rt.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const run = rt.runLaunchctl;
     // Yield inside every launchctl call so the two starts could interleave.
-    rt.runLaunchctl = async (args) => { await new Promise((r) => setTimeout(r, 5)); return run(args); };
+    rt.runLaunchctl = async (args) => { await deliberateSleep(5, 'stub latency: yield inside every launchctl call'); return run(args); };
     const [a, b] = await Promise.all([startDaemonViaLaunchd(startOpts(), rt), startDaemonViaLaunchd(startOpts(), rt)]);
     a.dispose();
     b.dispose();

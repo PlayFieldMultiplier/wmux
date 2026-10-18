@@ -29,8 +29,12 @@ describe('wslAgentProcessFromEnv (#1727)', () => {
 const BRIDGE = path.join(__dirname, '..', 'bin', 'wmux-codex-notify.mjs');
 /** These tests start real node processes and, on Windows, PowerShell to read
  *  the parent: a loaded CI runner took more than 20 s there, so Windows gets
- *  more room. The bridge's own lookup budget is set per run below. */
+ *  more room. The bridge's lookup budget (below) must fit inside this, or a
+ *  slow lookup ends as 'unknown' and the test gets a delivery instead of a
+ *  refusal: twice in a row on the Windows shard when the budget was 10 s. */
 const SPAWN_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
+/** Under the test timeout, with room for the bridge's own send and exit. */
+const ORIGIN_LOOKUP_BUDGET_MS = process.platform === 'win32' ? 45_000 : 10_000;
 const SERVER_FLAGS = ['--listen', 'unix://', '--managed-daemon'];
 const SERVER_ARGV = ['app-server', ...SERVER_FLAGS];
 const THREAD_ID = '11111111-2222-4333-8444-555555555555';
@@ -298,7 +302,7 @@ describe('wmux-codex-notify under a fake Codex parent', () => {
       // keeps pane delivery, so a refusal here would hinge on how fast a
       // loaded runner starts PowerShell (Windows). These tests are about the
       // classification, so give the real lookup room to finish.
-      WMUX_CODEX_ORIGIN_LOOKUP_BUDGET_MS: '10000',
+      WMUX_CODEX_ORIGIN_LOOKUP_BUDGET_MS: String(ORIGIN_LOOKUP_BUDGET_MS),
     });
     if (opts.identity !== false) {
       // The identity of the pane that happened to start the shared server.

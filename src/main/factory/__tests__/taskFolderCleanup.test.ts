@@ -33,6 +33,14 @@ import {
   type TaskMission,
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
+import { deliberateSleep } from '../../../test-utils/waitFor';
+
+// Every test here runs real git over real worktrees, several spawns in a
+// row; on a loaded CI runner (the Windows shard) one spawn can take a few
+// hundred ms, so the file's tests and its waits are bounded here, not by
+// vitest's 5s / 1s defaults. Seen as "expected undefined to be 'kept_dirty'"
+// on main four times in a day before the waits were widened.
+vi.setConfig({ testTimeout: 30_000 });
 
 const BOT = 'bot-0000000a';
 const UUID = '2eca904b-b4cc-4243-81d3-67a121351892';
@@ -372,7 +380,7 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
   });
 
-  it('runs on a bot task\'s end, over ended tasks of the last day; Clean up now counts what it did; usage sums the folders', { timeout: 15_000 }, async () => {
+  it('runs on a bot task\'s end, over ended tasks of the last day; Clean up now counts what it did; usage sums the folders', async () => {
     const mgr = new TaskWorktreeManager();
     const clean = await taskWorktree(mgr, 'clean-11111111');
     const dirty = await taskWorktree(mgr, 'dirty-22222222');
@@ -427,7 +435,7 @@ describe('the automatic pass and Settings › Bots', () => {
     ];
     const p = ports({}, missions);
     const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => rows });
-    await vi.waitFor(() => expect(fs.existsSync(otherWt)).toBe(false));
+    await vi.waitFor(() => expect(fs.existsSync(otherWt)).toBe(false), { timeout: 10_000 });
     installed.dispose();
     expect(fs.existsSync(path.join(stoppedWt, 'a.txt'))).toBe(true);
     expect(fs.readFileSync(path.join(scratch, 'notes.md'), 'utf8')).toBe('found it');
@@ -477,7 +485,7 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(usage.bytes).toBeGreaterThan(500);
     // The automatic pass still leaves them alone.
     const installed = installTaskFolderCleanup({ ...later, onTransition: () => () => undefined, allRows: () => [] });
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'negative: the automatic pass leaves kept folders alone');
     installed.dispose();
     expect(fs.existsSync(cleanWt) && fs.existsSync(scratch)).toBe(true);
 
@@ -634,7 +642,7 @@ describe('a folder a stop kept, after 7 days', () => {
   async function pass(p: TaskFolderPorts, rows: LedgerEntry[], settle?: () => void): Promise<void> {
     const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => rows });
     if (settle) await vi.waitFor(settle, { timeout: 10_000 });
-    else await new Promise((r) => setTimeout(r, 100));
+    else await deliberateSleep(100, 'negative: one automatic pass, for callers that assert nothing happened');
     installed.dispose();
   }
 
@@ -744,9 +752,8 @@ describe('a folder a stop kept, after 7 days', () => {
     // One install; a failed removal is tried again only on the retry timer,
     // never on a kick (a ledger change, a workspace closing).
     const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped], retryMs: 150 });
-    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } });
+    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    await vi.waitFor(() => expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } }), { timeout: 10_000 });
     // The ordinary pass over its row records nothing new.
     await cleanTaskFolders(p, [stopped]);
     expect(p.store.get(stopped.id)?.at).toBe(50_000);
@@ -756,12 +763,12 @@ describe('a folder a stop kept, after 7 days', () => {
       throw busy;
     });
     for (let i = 0; i < 5; i++) installed.kick();
-    await new Promise((r) => setTimeout(r, 50));
+    await deliberateSleep(50, 'negative: kicks do not retry a failed removal');
     expect(removeDir).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(3), { timeout: 5_000 });
     // Bounded: no fourth try from this install, kicked or timed.
     installed.kick();
-    await new Promise((r) => setTimeout(r, 400));
+    await deliberateSleep(400, 'negative: no fourth try, kicked or timed');
     expect(removeDir).toHaveBeenCalledTimes(3);
     installed.dispose();
     // The retries came a timer period apart.
