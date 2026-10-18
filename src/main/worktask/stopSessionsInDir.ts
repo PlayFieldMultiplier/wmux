@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { normalizeWorktreePath } from '../../shared/workTask';
 import type { DaemonDestroySessionTree } from '../../shared/rpc';
 import { wslPathToHost } from '../../mcp/wslPaths';
+import { survivorsStillRunning, type TreeKillSurvivor } from '../../daemon/automation/verifiedTreeKill';
 
 export interface SessionsInDirPort {
   listSessions(): Promise<Array<{ id: string; pid?: number; spawnCwd?: string; wslTarget?: { distribution?: unknown } }>>;
@@ -29,6 +30,22 @@ export interface SessionsInDirPort {
   realpath?(p: string): string;
   log?(message: string): void;
   platform?: NodeJS.Platform;
+  /** Which of an earlier stop's survivors still run (default:
+   *  survivorsStillRunning). */
+  stillRunning?(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]>;
+}
+
+/**
+ * Processes of a folder's panes that outlived an earlier stop, by folder.
+ * Their sessions are gone by then, so a later stop of the same folder finds
+ * no session to report them: it checks these instead, and keeps the folder
+ * while one still runs. Held for the life of the app.
+ */
+const lingering = new Map<string, TreeKillSurvivor[]>();
+
+/** Test seam: forget every earlier stop's survivors. */
+export function resetLingeringSurvivors(): void {
+  lingering.clear();
 }
 
 const EXIT_WAIT_MS = 5000;
@@ -99,6 +116,16 @@ export async function sessionsStartedIn(dirs: readonly string[], port: Pick<Sess
  */
 export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): Promise<string[]> {
   const platform = port.platform ?? process.platform;
+  const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
+  const earlier = lingering.get(key);
+  if (earlier) {
+    const still = await (port.stillRunning ?? survivorsStillRunning)(earlier);
+    if (still.length > 0) {
+      lingering.set(key, still);
+      throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: still running since an earlier stop`));
+    }
+    lingering.delete(key);
+  }
   const sessions = await port.listSessions();
   const inside = sessions.filter((s) => typeof s.spawnCwd === 'string' && s.spawnCwd.length > 0
     && isInside(sessionHostDir(s.spawnCwd, s, platform), dir, port, platform));
@@ -121,6 +148,7 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
     await port.sleep(EXIT_POLL_MS);
   }
   const survivors = [...treeSurvivors, ...unreported.filter((p) => port.isAlive(p)).map((pid) => ({ pid, reason: 'still running' }))];
+  if (treeSurvivors.length > 0) lingering.set(key, treeSurvivors);
   if (survivors.length > 0) throw new PanesStillRunningError(survivors.map((x) => x.pid), survivors.map((x) => `${x.pid}: ${x.reason}`));
   return inside.map((s) => s.id);
 }

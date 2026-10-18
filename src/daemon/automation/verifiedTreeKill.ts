@@ -36,12 +36,16 @@
 
 import { execFile } from 'node:child_process';
 import { collectDescendants } from './treeKill';
+import { dmtfToUtcMicros, sameProcessStartTime } from '../phantomExit';
 import { tryProcessHandleApi, type ProcessHandle, type ProcessHandleApi } from '../../main/pty/winSnapshotNative';
 
 /** A process of the tree that did not exit, and why. */
 export interface TreeKillSurvivor {
   pid: number;
   reason: string;
+  /** Its creation time (Windows: FILETIME; POSIX: `lstart`), when it was
+   *  identified: what survivorsStillRunning checks it by later. */
+  startTime?: string;
 }
 
 export type VerifiedTreeKillResult =
@@ -81,16 +85,55 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
 
 /**
  * A {@link CaptureOptions.rootIsOurs} from a start time recorded at spawn
- * (a session's `pidStartTime`): equal readings name the same process. Null
- * (unknown) when nothing was recorded or the recorded value is in another
- * format than the one read now (a Windows record in CIM's DMTF format, from
- * before start times were read natively as a FILETIME). POSIX `lstart` pads
- * a one-digit day with a second space, so runs of spaces compare as one.
+ * (a session's `pidStartTime`): equal readings name the same process.
+ * Windows records a FILETIME, or (before #2398) CIM's DMTF string, which is
+ * compared in UTC microseconds (sameProcessStartTime). POSIX `lstart` pads a
+ * one-digit day with a second space, so runs of spaces compare as one. Null
+ * (unknown) when nothing was recorded or the record is in neither format.
  */
 export function matchesRecordedStart(recorded: string | undefined, current: string): boolean | null {
   if (!recorded) return null;
-  if (process.platform === 'win32') return /^\d+$/.test(recorded) ? recorded === current : null;
+  if (process.platform === 'win32') {
+    if (!/^\d+$/.test(recorded) && dmtfToUtcMicros(recorded) === null) return null;
+    return sameProcessStartTime(recorded, current);
+  }
   return recorded.trim().replace(/\s+/g, ' ') === current.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * The survivors of an earlier kill that still run: the same process (its
+ * start time compared) and not exited. One that cannot be read counts as
+ * running, so a caller keeps what it guards. Never throws.
+ */
+export async function survivorsStillRunning(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]> {
+  if (survivors.length === 0) return [];
+  if (process.platform === 'win32') {
+    const api = tryProcessHandleApi();
+    if (!api) return [...survivors];
+    return survivors.filter((s) => {
+      const now = api.open(s.pid);
+      if ('gone' in now) return false;
+      if ('failure' in now) return true;
+      try {
+        if (s.startTime !== undefined && now.createdAt.toString() !== s.startTime) return false;
+        return api.hasExited(now.handle) !== true;
+      } finally {
+        api.close(now.handle);
+      }
+    });
+  }
+  let rows: PosixProcRow[];
+  try {
+    rows = await defaultPosixDeps.listProcesses();
+  } catch {
+    return [...survivors];
+  }
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  return survivors.filter((s) => {
+    const row = byPid.get(s.pid);
+    if (!row || row.stat.startsWith('Z')) return false;
+    return s.startTime === undefined || row.start === s.startTime;
+  });
 }
 
 /**
@@ -253,7 +296,7 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
         const survivors: TreeKillSurvivor[] = [];
         for (const t of tracked.values()) {
           if (exited(t)) continue;
-          survivors.push({ pid: t.pid, reason: refused.get(t.pid) ?? 'still running' });
+          survivors.push({ pid: t.pid, reason: refused.get(t.pid) ?? 'still running', startTime: t.createdAt.toString() });
         }
         // Still there and still not identified (one that exited meanwhile is
         // no longer a question).
@@ -390,7 +433,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
           const byPid = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
           alive = [...targets].flatMap(([pid, start]) => {
             const row = byPid.get(pid);
-            return row && row.start === start && !row.stat.startsWith('Z') ? [{ pid, reason: 'still running' }] : [];
+            return row && row.start === start && !row.stat.startsWith('Z') ? [{ pid, reason: 'still running', startTime: start }] : [];
           });
         } catch (err) {
           alive = [...targets.keys()].map((pid) => ({ pid, reason: `the process table could not be read: ${err instanceof Error ? err.message : String(err)}` }));

@@ -207,6 +207,31 @@ function strictlyInside(child: string, parent: string): boolean {
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+/**
+ * Why a leftover's `.git` makes it a checkout that is still alive, or null
+ * when it does not: none, or a gitfile naming a git dir that is gone (the
+ * marker of the worktree git just dropped). A `.git` folder is a repository
+ * of its own; a gitfile naming a git dir that exists is a live checkout (the
+ * path reused for another worktree); one that cannot be read is not known.
+ */
+function leftoverGitEntry(folder: string): string | null {
+  const marker = path.join(folder, '.git');
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(marker);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? null : (err as Error).message;
+  }
+  if (!st.isFile()) return 'it holds a repository of its own';
+  try {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(marker, 'utf8'));
+    if (!m) return 'its .git file cannot be read';
+    return fs.existsSync(path.resolve(folder, m[1])) ? 'its .git file names a git dir that exists (a live checkout)' : null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
 function sameCanonical(a: string, b: string): boolean {
   return process.platform === 'win32' || process.platform === 'darwin' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
@@ -868,11 +893,8 @@ export class TaskWorktreeManager {
     if (sameCanonical(real, repoReal) || strictlyInside(repoReal, real) || strictlyInside(real, repoReal)) {
       return { ok: false, error: 'the leftover folder was kept: it is, or holds, or sits in the repository' };
     }
-    try {
-      if (fs.lstatSync(path.join(real, '.git')).isDirectory()) return { ok: false, error: 'the leftover folder was kept: it is a repository of its own' };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, error: `the leftover folder was kept: ${(err as Error).message}` };
-    }
+    const gitEntry = leftoverGitEntry(real);
+    if (gitEntry !== null) return { ok: false, error: `the leftover folder was kept: ${gitEntry}` };
 
     const registered = await this.listsWorktree(rec.repoRoot, repoReal, real);
     if (registered === null) return { ok: false, error: 'the leftover folder was kept: git did not confirm it is no longer a worktree' };

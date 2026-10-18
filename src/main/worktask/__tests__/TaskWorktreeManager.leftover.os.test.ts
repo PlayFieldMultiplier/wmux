@@ -176,6 +176,26 @@ describe('second layer: a folder git left after dropping the worktree', () => {
     expect(removeTree).not.toHaveBeenCalled();
   });
 
+  it('never a folder whose .git file names a git dir that exists (the path reused for a live checkout)', async () => {
+    const dir = leftover();
+    const gitDir = path.join(tmp, 'other-repo', '.git', 'worktrees', 'x');
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir}\n`);
+    const g = fakeGit({ removeFails: true });
+    const { mgr, removeTree } = manager(g.git);
+    expect(await mgr.removeWorktree(repo, 'hash1', dir, async () => undefined)).toMatchObject({ ok: false, preserved: true });
+    expect(removeTree).not.toHaveBeenCalled();
+  });
+
+  it('a .git file naming the git dir git just deleted is the dropped worktree\'s marker', async () => {
+    const dir = leftover();
+    fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'task-a')}\n`);
+    const g = fakeGit({ removeFails: true });
+    const { mgr, removeTree } = manager(g.git);
+    expect(await mgr.removeWorktree(repo, 'hash1', dir, async () => undefined)).toEqual({ ok: true });
+    expect(removeTree).toHaveBeenCalled();
+  });
+
   it('never through a link or junction on the way that leads out of the root', async () => {
     const outside = path.join(tmp, 'outside');
     fs.mkdirSync(path.join(outside, 'task-a', 'src'), { recursive: true });

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { PanesStillRunningError, destroyedTreeOf, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
+import { PanesStillRunningError, destroyedTreeOf, resetLingeringSurvivors, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
 import type { DaemonDestroySessionTree } from '../../../shared/rpc';
 
 type Session = { id: string; pid?: number; cwd?: string; spawnCwd?: string; wslTarget?: { distribution: string } };
@@ -24,6 +24,8 @@ function port(sessions: Session[], platform: NodeJS.Platform, opts: { stubborn?:
   };
   return { p, alive, log };
 }
+
+beforeEach(() => resetLingeringSurvivors());
 
 describe('stopSessionsInDir', () => {
   it('stops only sessions STARTED in the worktree; cwd (OSC 7) never decides', async () => {
@@ -87,6 +89,26 @@ describe('stopSessionsInDir', () => {
     expect(err).toBeInstanceOf(PanesStillRunningError);
     expect((err as PanesStillRunningError).pids).toEqual([70]);
     expect((err as Error).message).toContain('70: still running');
+  });
+
+  it('keeps the folder on a later stop while a survivor of an earlier one still runs', async () => {
+    const survivor = { pid: 70, reason: 'access denied', startTime: '123' };
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: false, killed: [7], survivors: [survivor] } } });
+    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toBeInstanceOf(PanesStillRunningError);
+
+    // The session is gone now; only the survivor is left.
+    const later = port([], 'linux');
+    const stillRunning = vi.fn(async () => [survivor]);
+    later.p.stillRunning = stillRunning;
+    await expect(stopSessionsInDir('/w/t', later.p)).rejects.toThrow(/still running since an earlier stop/);
+    expect(stillRunning).toHaveBeenCalledWith([survivor]);
+
+    // Once it has exited the folder may go.
+    later.p.stillRunning = async () => [];
+    expect(await stopSessionsInDir('/w/t', later.p)).toEqual([]);
+    later.p.stillRunning = vi.fn(async () => [survivor]);
+    expect(await stopSessionsInDir('/w/t', later.p)).toEqual([]);
+    expect(later.p.stillRunning).not.toHaveBeenCalled();
   });
 
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {

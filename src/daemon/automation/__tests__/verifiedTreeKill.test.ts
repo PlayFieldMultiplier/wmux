@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureTreePosix, captureTreeWin32, parsePsIdentityRows, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
+import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
 import type { ProcessHandle, ProcessHandleApi, ProcessOpenResult } from '../../../main/pty/winSnapshotNative';
 
 const noWait = async (): Promise<void> => undefined;
@@ -143,7 +143,7 @@ describe('captureTreeWin32', () => {
     ]);
     const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 0 });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.survivors).toEqual([{ pid: 11, reason: 'TerminateProcess failed' }]);
+    if (!r.ok) expect(r.survivors).toEqual([{ pid: 11, reason: 'TerminateProcess failed', startTime: '110' }]);
     expect(f.openHandles()).toBe(0);
   });
 
@@ -233,7 +233,7 @@ describe('captureTreePosix', () => {
   it('fails closed when a process survives the kill', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { stuck: [101] });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
-    expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running' }] });
+    expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }] });
   });
 
   it('fails closed when the tree is still growing after every capture round', async () => {
@@ -275,6 +275,27 @@ describe('captureTreePosix', () => {
     (await captureTreePosix(100, f.deps))!.release();
     expect(f.signals.filter(([, s]) => s === 'SIGCONT').map(([p]) => p)).toEqual([100, 101]);
     expect(f.signals.some(([, s]) => s === 'SIGKILL')).toBe(false);
+  });
+});
+
+describe('matchesRecordedStart', () => {
+  it('has no answer when nothing was recorded', () => {
+    expect(matchesRecordedStart(undefined, '1')).toBeNull();
+  });
+
+  it.skipIf(process.platform !== 'win32')('Windows: a FILETIME exactly, a DMTF record from before #2398 in UTC microseconds', () => {
+    expect(matchesRecordedStart('133000000000000000', '133000000000000000')).toBe(true);
+    expect(matchesRecordedStart('133000000000000000', '133000000000000010')).toBe(false);
+    // 2022-06-15 12:00:00.123456 UTC as the FILETIME and as DMTF at +540.
+    const ft = (BigInt(Date.UTC(2022, 5, 15, 12, 0, 0)) * 1000n + 123456n) * 10n + 116444736000000000n;
+    expect(matchesRecordedStart('20220615210000.123456+540', ft.toString())).toBe(true);
+    expect(matchesRecordedStart('20220615210000.123457+540', ft.toString())).toBe(false);
+    expect(matchesRecordedStart('uptime-12', ft.toString())).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('POSIX: lstart, however many spaces pad the day', () => {
+    expect(matchesRecordedStart('Sat Oct  4 10:00:00 2026', 'Sat Oct 4 10:00:00 2026')).toBe(true);
+    expect(matchesRecordedStart('Sat Oct  4 10:00:00 2026', 'Sat Oct 4 10:00:01 2026')).toBe(false);
   });
 });
 
