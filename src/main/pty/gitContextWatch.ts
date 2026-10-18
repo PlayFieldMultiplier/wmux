@@ -120,6 +120,16 @@ function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: bool
   return { repo: null, conclusive: false };
 }
 
+/** Whether `dir` holds a `.git` or a `HEAD` entry; true when it cannot tell. */
+function hasGitEntry(dir: string): boolean {
+  try {
+    return !!fs.statSync(path.join(dir, '.git'), { throwIfNoEntry: false })
+      || !!fs.statSync(path.join(dir, 'HEAD'), { throwIfNoEntry: false });
+  } catch {
+    return true;
+  }
+}
+
 /** Parse a HEAD file's content into a branch label (short SHA when detached). */
 export function parseHead(content: string): string | null {
   const trimmed = content.trim();
@@ -217,6 +227,9 @@ export class GitContextWatcher extends EventEmitter {
     };
     this.sessions.set(sessionId, watch);
     this.arm(sessionId, watch);
+    // A `.git` (or bare `HEAD`) created between the walk and the watch going
+    // live raised no event: look once more before calling the cwd absent.
+    if (!repo && watch.watcher && watch.conclusive && hasGitEntry(cwd)) watch.conclusive = false;
     this.readAndEmit(sessionId, watch);
   }
 

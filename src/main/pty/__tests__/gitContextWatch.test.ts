@@ -394,6 +394,18 @@ describe('GitContextWatcher', () => {
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
   });
 
+  it('a .git created while the cwd watch is being armed is not missed as absent', () => {
+    const root = tmp();
+    const w = new GitContextWatcher((target, listener) => {
+      initFakeRepo(root, 'raced'); // appears before the watch is live
+      return fake.factory(target, listener);
+    });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
   it('a non-repo cwd that cannot be resolved to a real path is unknown', () => {
     const gone = path.join(tmp(), 'gone');
     expect(resolveRepoState(gone)).toEqual({ repo: null, conclusive: false });
