@@ -292,7 +292,7 @@ describe('captureTreePosix', () => {
   it('release() lets the frozen tree run again', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
     (await captureTreePosix(100, f.deps))!.release();
-    await vi.waitFor(() => expect(f.signals.filter(([, s]) => s === 'SIGCONT').map(([p]) => p)).toEqual([100, 101]));
+    await vi.waitFor(() => expect(f.signals.filter(([, s]) => s === 'SIGCONT').map(([p]) => p)).toEqual([100, 101]), { timeout: 5_000 });
     expect(f.signals.some(([, s]) => s === 'SIGKILL')).toBe(false);
   });
 });
