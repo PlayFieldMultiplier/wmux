@@ -100,4 +100,17 @@ describe('EmptyLeafFunnel — binding the created pty', () => {
     await act(async () => { settle[0]({ id: 'pty-retried' }); });
     expect(leaf()?.surfaces.map((s) => s.ptyId)).toEqual(['pty-retried']);
   });
+
+  it('Retry on a refused project pane repeats its seeded command and directory (Codex P2)', async () => {
+    act(() => useStore.setState({ projectPaneSeed: { [paneId]: { command: 'npm run dev', cwd: 'D:/proj' } as never } }));
+    create.mockImplementationOnce(() => Promise.reject(new Error('[RESOURCE_EXHAUSTED] session cap reached')));
+    act(() => root.render(createElement(EmptyLeafFunnel)));
+    await act(async () => { await Promise.resolve(); });
+    expect(useStore.getState().ptyCreateByKey[paneId]?.state).toBe('createFailed');
+    // The seed was used up by the first attempt.
+    expect(useStore.getState().projectPaneSeed[paneId]).toBeUndefined();
+    act(() => { ptyLifecycle.retry(paneId); });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1][0]).toMatchObject({ initialCommand: 'npm run dev', cwd: 'D:/proj' });
+  });
 });

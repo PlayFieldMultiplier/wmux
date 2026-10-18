@@ -170,4 +170,27 @@ describe('ptyLifecycle.ensure (#2398)', () => {
     await expect(b).resolves.toEqual({ status: 'stale' });
     expect(h.deps.dispose).toHaveBeenCalledTimes(2);
   });
+
+  it('retry runs the refused request again, same create and bind (Codex P2)', async () => {
+    const h = harness();
+    const bind = vi.fn(() => true);
+    const outcome = h.lifecycle.ensure('leaf', { create: h.create, bind });
+    h.settles[0](refused('cap'));
+    await outcome;
+    expect(h.lifecycle.retry('leaf')).toBe(true);
+    expect(h.create).toHaveBeenCalledTimes(2);
+    h.settles[1](ok('pty-r'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(bind).toHaveBeenCalledWith({ id: 'pty-r' });
+    // Nothing held any more: a second retry only clears.
+    expect(h.lifecycle.retry('leaf')).toBe(false);
+  });
+
+  it('retry with no refused request held only clears the refusal', () => {
+    const h = harness();
+    h.attempts.set('leaf', { state: 'createFailed', error: 'old' });
+    expect(h.lifecycle.retry('leaf')).toBe(false);
+    expect(h.attempts.has('leaf')).toBe(false);
+    expect(h.create).not.toHaveBeenCalled();
+  });
 });

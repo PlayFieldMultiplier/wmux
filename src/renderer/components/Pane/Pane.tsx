@@ -1625,12 +1625,13 @@ function SplitSurfaceView({
   if (pane.surfaces.length === 0) {
     if (leafCreate?.state === 'createFailed') {
       // A refused create never fires again by itself: the reason, and Retry,
-      // which clears the refusal so the funnel creates once more.
+      // which runs the same request again (its seeds were used up by the first
+      // attempt), or clears the refusal so the funnel creates once more.
       return (
         <div role="alert" className="flex-1 min-h-0 min-w-0 relative overflow-clip flex flex-col items-center justify-center gap-2 p-4 text-sm text-[var(--text-primary)]">
           <p className="text-center break-words">{t('terminal.createFailed')}</p>
           <p className="text-center break-words text-[var(--text-muted)]">{leafCreate.error}</p>
-          <button type="button" onClick={() => ptyLifecycle.clearRefusal(pane.id)}
+          <button type="button" onClick={() => { ptyLifecycle.retry(pane.id); }}
             className="rounded border border-[var(--border)] px-3 py-1">
             {t('terminal.retryCreate')}
           </button>

@@ -67,6 +67,13 @@ export interface PtyLifecycle {
   isRefused: (key: string) => boolean;
   /** Forget a refusal so the next ensure (the funnel's re-run) creates again. */
   clearRefusal: (key: string) => void;
+  /**
+   * The pane's Retry for a refused key: run the refused request again, with
+   * the same options (a project pane's seeded command and directory were
+   * consumed by the first attempt and exist nowhere else). False when no
+   * refused request is held; the refusal is then just cleared.
+   */
+  retry: (key: string) => boolean;
 }
 
 interface Attempt {
@@ -78,6 +85,8 @@ interface Attempt {
 export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
   const inFlight = new Map<string, Attempt>();
   const tokens = new Map<string, number>();
+  /** The request behind each key's current refusal, for an explicit retry. */
+  const refused = new Map<string, PtyEnsureRequest<PtyCreated>>();
   const log = deps.log ?? ((message: string, err?: unknown) => {
     // eslint-disable-next-line no-console
     if (err === undefined) console.warn(message); else console.warn(message, err);
@@ -99,6 +108,7 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
       return Promise.resolve({ status: 'createFailed', error: previous.error });
     }
     const token = bump(key);
+    refused.delete(key);
     const attempt = { token, bind: request.bind as (created: PtyCreated) => boolean } as Attempt;
     inFlight.set(key, attempt);
     deps.setAttempt(key, { state: 'creating' });
@@ -108,7 +118,10 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
       if (inFlight.get(key) === attempt) inFlight.delete(key);
       if (!result.ok) {
         // The refusal belongs to this key only while no newer attempt replaced it.
-        if (current) deps.setAttempt(key, { state: 'createFailed', error: result.error.message });
+        if (current) {
+          deps.setAttempt(key, { state: 'createFailed', error: result.error.message });
+          refused.set(key, { create: request.create, bind: attempt.bind } as PtyEnsureRequest<PtyCreated>);
+        }
         return { status: 'createFailed', error: result.error.message };
       }
       const created = result.data;
@@ -147,6 +160,7 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
   return {
     ensure,
     cancel: (key, surfaceId) => {
+      refused.delete(key);
       if (!inFlight.has(key)) return;
       inFlight.delete(key);
       bump(key);
@@ -163,7 +177,18 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
     isInFlight: (key) => inFlight.has(key),
     isRefused: (key) => deps.getAttempt(key)?.state === 'createFailed',
     clearRefusal: (key) => {
+      refused.delete(key);
       if (deps.getAttempt(key)?.state === 'createFailed') deps.setAttempt(key, null);
+    },
+    retry: (key) => {
+      const request = refused.get(key);
+      if (!request || deps.getAttempt(key)?.state !== 'createFailed') {
+        refused.delete(key);
+        if (deps.getAttempt(key)?.state === 'createFailed') deps.setAttempt(key, null);
+        return false;
+      }
+      void ensure(key, { ...request, retry: true });
+      return true;
     },
   };
 }
