@@ -293,7 +293,6 @@ export class DaemonRespawnController {
     this.deps.logger.info(
       `daemon ${info.spawned ? 'spawned' : 'found'} (pid=${info.pid})`,
     );
-    this.connectedDaemon = { pid: info.pid, spawned: info.spawned };
     const client = this.deps.createClient(info.pipeName, info.authToken);
     const connected = await client.connect();
     if (!connected) {
@@ -311,14 +310,16 @@ export class DaemonRespawnController {
       await client.disconnect().catch(() => { /* best-effort */ });
       return null;
     }
+    const answered = this.answeringDaemon(info, pong);
+    this.connectedDaemon = { pid: answered.pid, spawned: answered.spawned };
 
     // B′ staleness gate. Only a REUSED daemon can be stale (a daemon we just
     // spawned runs this app's own binary), and only once per app run.
     const rep = this.deps.replacement;
-    if (rep && !info.spawned && !this.replacedOnceThisRun) {
+    if (rep && !answered.spawned && !this.replacedOnceThisRun) {
       const verdict = isDaemonOlder(pong, rep.appVersion, rep.channelsEpoch);
       if (verdict.older) {
-        return await this.replaceStaleDaemon(client, info, rep, verdict.reason);
+        return await this.replaceStaleDaemon(client, answered, rep, verdict.reason);
       }
       if (verdict.warnOnKeep) {
         // The C1 banner is epoch-driven and cannot fire for these keep
@@ -430,8 +431,9 @@ export class DaemonRespawnController {
       this.lastError = 'replacement daemon spawned but control pipe connect failed';
       return null;
     }
+    let freshPong: DaemonPingResult | undefined;
     try {
-      await freshClient.rpc('daemon.ping', {});
+      freshPong = (await freshClient.rpc('daemon.ping', {})) as DaemonPingResult;
     } catch (err) {
       this.replacementDeadEnd = true;
       this.lastError = `replacement daemon auth/ping failed: ${this.stringifyError(err)}`;
@@ -457,8 +459,29 @@ export class DaemonRespawnController {
     this.deps.logger.info(
       `stale daemon replaced (old pid=${oldInfo.pid} → new pid=${freshInfo.pid})`,
     );
-    this.connectedDaemon = { pid: freshInfo.pid, spawned: freshInfo.spawned };
+    const answered = this.answeringDaemon(freshInfo, freshPong);
+    this.connectedDaemon = { pid: answered.pid, spawned: answered.spawned };
     return freshClient;
+  }
+
+  /**
+   * The daemon the client actually talks to. A reused daemon's pid comes from
+   * the pid file, which can be stale or name a reused pid while the canonical
+   * pipe still answers; the authenticated ping reports the pid of the daemon
+   * that answered. That one is what the exit watch and a stale-daemon
+   * replacement act on. When the two differ, the daemon is not the child just
+   * spawned, so an ended child-exit record under its pid is never taken for
+   * its exit. A daemon too old to report its pid leaves the launcher's answer.
+   */
+  private answeringDaemon(info: DaemonInfo, pong: DaemonPingResult | undefined): DaemonInfo {
+    const pid = pong?.pid;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === info.pid) return info;
+    if (info.pid === null) {
+      this.deps.logger.info(`daemon pid ${pid} taken from its ping (the launcher had none)`);
+    } else {
+      this.deps.logger.warn(`daemon pid file names ${info.pid} but pid ${pid} answered the ping — using ${pid}`);
+    }
+    return { ...info, pid, spawned: false };
   }
 
   private async install(

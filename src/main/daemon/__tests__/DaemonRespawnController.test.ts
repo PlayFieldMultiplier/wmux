@@ -685,7 +685,8 @@ describe('DaemonRespawnController stale-daemon replacement', () => {
       ensureDaemonImpl: async () => ({ pid: null, authToken: 'tok', pipeName: 'pipe', spawned: false }),
     });
     const oldClient = new FakeDaemonClient();
-    oldClient.rpcImpl = async () => OLD_PONG;
+    // The launcher has no pid only when the daemon's ping carried none either.
+    oldClient.rpcImpl = async () => ({ status: 'ok' });
     h.clientQueue.push(oldClient);
 
     const result = await h.controller.bootstrap();
@@ -703,7 +704,7 @@ describe('DaemonRespawnController stale-daemon replacement', () => {
       ensureDaemonImpl: async () => ({ pid: 1, authToken: 't', pipeName: 'p', spawned: true }),
     });
     const c1 = new FakeDaemonClient();
-    c1.rpcImpl = async () => OLD_PONG;
+    c1.rpcImpl = async () => ({ ...OLD_PONG, pid: 1 });
     h.clientQueue.push(c1);
 
     const result = await h.controller.bootstrap();
@@ -1042,5 +1043,116 @@ describe('DaemonRespawnController daemon exit watch', () => {
     await h.controller.bootstrap();
 
     expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[777, false]]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The pid the controller acts on is the one the authenticated ping reports.
+// A reused daemon's launcher pid comes from the pid file, which can be stale
+// or name a reused pid while the canonical pipe still answers.
+// ---------------------------------------------------------------------------
+
+describe('DaemonRespawnController trusts the pid that answered the ping', () => {
+  it('a pid-file pid the ping contradicts: the answering pid is watched, as not spawned here', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({ config: { healthIntervalMs: 0 }, watchDaemonExit: ew.factory });
+    const c1 = new FakeDaemonClient();
+    c1.rpcImpl = async () => ({ status: 'ok', pid: 9999 });
+    h.clientQueue.push(c1);
+
+    await h.controller.bootstrap();
+
+    expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[9999, false]]);
+    expect(h.logs).toContainEqual({ level: 'warn', msg: 'daemon pid file names 1234 but pid 9999 answered the ping — using 9999' });
+  });
+
+  it('a ping that agrees, or carries no pid (a pre-Step-③ daemon), keeps the launcher answer', async () => {
+    for (const pong of [{ status: 'ok', pid: 1234 }, { status: 'ok' }]) {
+      const ew = makeExitWatches();
+      const h = makeHarness({ config: { healthIntervalMs: 0 }, watchDaemonExit: ew.factory });
+      const c1 = new FakeDaemonClient();
+      c1.rpcImpl = async () => pong;
+      h.clientQueue.push(c1);
+
+      await h.controller.bootstrap();
+
+      expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[1234, true]]);
+      expect(h.logs.filter((l) => l.level === 'warn')).toEqual([]);
+    }
+  });
+
+  it('a launcher with no pid takes the ping pid without a warning', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({
+      config: { healthIntervalMs: 0 },
+      watchDaemonExit: ew.factory,
+      ensureDaemonImpl: async () => ({ pid: null, authToken: 'tok', pipeName: 'pipe', spawned: false }),
+    });
+    const c1 = new FakeDaemonClient();
+    c1.rpcImpl = async () => ({ status: 'ok', pid: 321 });
+    h.clientQueue.push(c1);
+
+    await h.controller.bootstrap();
+
+    expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[321, false]]);
+    expect(h.logs.filter((l) => l.level === 'warn')).toEqual([]);
+  });
+
+  it('a replacement daemon whose ping names another pid is watched by that pid', async () => {
+    let ensureCall = 0;
+    const ew = makeExitWatches();
+    const h = makeHarness({
+      replacement: makeReplacementHooks(),
+      config: { healthIntervalMs: 0 },
+      watchDaemonExit: ew.factory,
+      ensureDaemonImpl: async () => {
+        ensureCall++;
+        return ensureCall === 1
+          ? { pid: 4242, authToken: 'tok', pipeName: 'pipe', spawned: false }
+          : { pid: 5000, authToken: 'tok2', pipeName: 'pipe', spawned: true };
+      },
+    });
+    const oldClient = new FakeDaemonClient();
+    oldClient.rpcImpl = async () => OLD_PONG;
+    const freshClient = new FakeDaemonClient();
+    freshClient.rpcImpl = async () => ({ ...NEW_PONG, pid: 5001 });
+    h.clientQueue.push(oldClient, freshClient);
+
+    await h.controller.bootstrap();
+
+    expect(ew.watches.map((w) => [w.pid, w.spawned])).toEqual([[5001, false]]);
+  });
+
+  it('a stale daemon is confirmed dead and killed by the pid that answered, not the pid file', async () => {
+    let ensureCall = 0;
+    const livenessCalls: number[] = [];
+    const hooks = makeReplacementHooks({
+      // Alive until killed, so the replacement escalates to a verified kill.
+      checkLiveness: (pid: number) => {
+        livenessCalls.push(pid);
+        return hooks.killCalls.length === 0 ? 'alive' : 'dead';
+      },
+    });
+    const h = makeHarness({
+      replacement: hooks,
+      config: { healthIntervalMs: 0 },
+      ensureDaemonImpl: async () => {
+        ensureCall++;
+        return ensureCall === 1
+          ? { pid: 4242, authToken: 'tok', pipeName: 'pipe', spawned: false }
+          : { pid: 5000, authToken: 'tok2', pipeName: 'pipe', spawned: true };
+      },
+    });
+    const oldClient = new FakeDaemonClient();
+    oldClient.rpcImpl = async () => ({ ...OLD_PONG, pid: 4300 });
+    const freshClient = new FakeDaemonClient();
+    freshClient.rpcImpl = async () => NEW_PONG;
+    h.clientQueue.push(oldClient, freshClient);
+
+    await h.controller.bootstrap();
+
+    expect(new Set(livenessCalls)).toEqual(new Set([4300]));
+    expect(hooks.killCalls).toEqual([4300]);
+    expect(h.logs).toContainEqual({ level: 'info', msg: 'stale daemon replaced (old pid=4300 → new pid=5000)' });
   });
 });
