@@ -939,11 +939,13 @@ export class TaskWorktreeManager {
     };
   }
 
-  /** Close and keep folder, before the task closes: a pending removal of
-   *  `worktreePath` is marked kept on disk (nothing deletes it from then on,
-   *  across a restart too), once a finish under way is over (the repository
-   *  lock). Throws when that cannot be written, or the store could not be
-   *  read: a removal recorded there could still undo the keep. */
+  /** Close and keep folder, before the task closes: `worktreePath` is
+   *  recorded kept on disk (nothing deletes it from then on, across a
+   *  restart too, and every close of its task goes the keep way until one
+   *  is confirmed): a pending removal of it is marked, once a finish under
+   *  way is over (the repository lock), and a folder with none gets a kept
+   *  record of its own. Throws when that cannot be written, or the store
+   *  could not be read: a removal recorded there could still undo the keep. */
   async markPendingRemovalKept(worktreePath: string): Promise<void> {
     const safePath = validatePath(worktreePath, 'worktreePath');
     const release = this.holdFolder(safePath);
@@ -951,8 +953,15 @@ export class TaskWorktreeManager {
       const store = this.pendingRemovals;
       const unreadable = store?.unreadable?.() ?? null;
       if (unreadable !== null) throw new Error(`the pending removals could not be read (${unreadable}), so one of this folder may still be recorded`);
-      const queued = store?.get(safePath);
-      if (!store || !queued || queued.keep) return;
+      if (!store) return;
+      const queued = store.get(safePath);
+      if (queued?.keep) return;
+      if (!queued) {
+        // No removal of it was pending: the record only says it is kept (no
+        // repository is needed for that).
+        await store.put({ path: safePath, repoRoot: '', repoHash: '', keep: true, at: Date.now() });
+        return;
+      }
       await this.withRepoLock(queued.repoHash, async () => {
         const rec = store.get(safePath);
         if (rec && !rec.keep) await store.put({ ...rec, keep: true });

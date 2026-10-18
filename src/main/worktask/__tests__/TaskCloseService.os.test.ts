@@ -429,6 +429,26 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(noteFolderKept).toHaveBeenCalledWith('wtask-k13');
   });
 
+  it('a keep whose close failed is remembered with no removal pending: a later plain close keeps the folder', async () => {
+    const { worktreePath } = await makeWorktree('keep-r');
+    const store = storeIn(wtBase);
+    const mgr = new TaskWorktreeManager({ pendingRemovals: store });
+    const refusing = makeDaemon({ ok: false, error: { message: 'daemon busy' } });
+    const first = await new TaskCloseService({ daemon: refusing.port, worktrees: mgr }).closeTask({ taskId: 'wtask-kr', verifiedWorkspaceId: 'ws-owner', leftoverPath: worktreePath, keepFolder: true });
+    expect(first).toMatchObject({ ok: false });
+    expect(store.get(worktreePath)).toMatchObject({ keep: true });
+
+    // The worktree is clean: a plain close would remove it. It keeps it.
+    const remove = vi.spyOn(mgr, 'removeWorktree');
+    const { port, calls } = makeDaemon();
+    const res = await new TaskCloseService({ daemon: port, worktrees: mgr }).closeTask({ taskId: 'wtask-kr', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath });
+    expect(res).toMatchObject({ ok: true, keptFolder: worktreePath });
+    expect(calls[0].params).toMatchObject({ detach: true });
+    expect(remove).not.toHaveBeenCalled();
+    expect(store.get(worktreePath)).toBeNull();
+    expect(fs.existsSync(path.join(worktreePath, 'a.txt'))).toBe(true);
+  });
+
   it('a close queued behind Close and keep folder removes nothing', async () => {
     const { worktreePath } = await makeWorktree('keep-q');
     const { port } = makeDaemon();

@@ -31,7 +31,9 @@ export interface PendingWorktreeRemoval {
   head?: string;
   /** Close and keep folder was chosen: the folder is never deleted, the
    *  lock is off, and the record waits only for its task's detached close
-   *  to be confirmed (a close that failed is kept again by the next one). */
+   *  to be confirmed (a close that failed is kept again by the next one).
+   *  A folder with no removal pending gets such a record too, with no
+   *  repository (`repoRoot` and `repoHash` empty). */
   keep?: true;
   at: number;
 }
