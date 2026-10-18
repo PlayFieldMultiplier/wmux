@@ -467,7 +467,7 @@ describe('launch', () => {
       fs.writeFileSync(botWorkerSessionsPath(dir), typeof body === 'string' ? body : JSON.stringify(body));
     };
     // A WSL pane's record names the files main wrote for it: the worker
-    // settings and this build's wmux server (botWorkerConnectors.test.ts
+    // settings and this build's wmux server (botWorkerConnectors.os.test.ts
     // covers a native record's).
     const botWorker = (dir: string) => {
       const settings = path.join(dir, 'factory', 'worker-settings', '0123456789ab.json');

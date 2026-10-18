@@ -1,10 +1,12 @@
-// Test lanes (scripts/lib/test-lanes.mjs, vitest.lanes.json, vitest.config.ts).
+// Test lanes (scripts/lib/test-lanes.mjs, vitest.config.ts).
 //
-// The guard half: vitest.lanes.json must be what the rule computes today, and
-// a test file that imports child_process must run in the integration lane. A
-// new git-backed or process-spawning test therefore either lands in the lane
-// (`node scripts/test-lanes.mjs --write`) or carries an explicit
-// `// @wmux-lane unit`, and the failure message says which.
+// The guard half: every test file's name must put it in the lane the rule
+// computes today (`x.os.test.ts` is integration, `x.test.ts` unit), and a test
+// file that imports child_process or mentions win32 must run in the
+// integration lane. A new git-backed or process-spawning test therefore
+// either takes the `.os.test` name (the failure prints the `git mv`) or
+// carries an explicit `// @wmux-lane unit`, and the failure message says
+// which.
 //
 // The rule half: synthetic trees pin what each rule counts and what it skips.
 // Fixture sources spell module names through a variable, so this file's own
@@ -15,71 +17,71 @@ import os from 'node:os';
 import path from 'node:path';
 import config from '../../vitest.config.ts';
 import {
-  LANES_FILE,
   ROOT,
   classifyAll,
   classifyTestFile,
-  laneDrift,
+  laneMismatches,
+  laneOfName,
   listTestFiles,
-  readLanesFile,
-  renderLanesFile,
+  nameForLane,
 } from '../lib/test-lanes.mjs';
 
 const CP = 'node:' + 'child_process';
 const NET = 'net';
 const lanes = classifyAll();
-const listed = readLanesFile();
 const project = (name) => config.test.projects.find((p) => p.test.name === name).test;
+const globbed = (test) =>
+  fs
+    .globSync(test.include, { cwd: ROOT, exclude: test.exclude })
+    .map((f) => f.split(path.sep).join('/'))
+    .filter((f) => !/(?:^|\/)(?:node_modules|\.git)\//.test(f) && !/\.runtime\.test\.[^/]+$/.test(f))
+    .sort();
 
-describe('the checked-in lanes', () => {
-  it('vitest.lanes.json is what the rule computes', () => {
-    // Each line names the file, why, and the command or pragma that fixes it.
-    expect(laneDrift(listed, lanes).join('\n')).toBe('');
+describe('the named lanes', () => {
+  it('every test file is named for the lane the rule computes', () => {
+    // Each line names the file, why, the `git mv` and the pragma that fix it.
+    expect(laneMismatches(lanes).map((m) => m.message).join('\n')).toBe('');
   });
 
   it('every test file that imports child_process runs in the integration lane', () => {
-    const inLane = new Set(listed.integration);
     const offenders = listTestFiles()
       .filter((file) => lanes.byFile.get(file).reasons.includes(`imports node:child_process`))
-      .filter((file) => !inLane.has(file))
+      .filter((file) => laneOfName(file) !== 'integration')
       .map(
         (file) =>
-          `${file} spawns processes but is not in the integration lane: run \`node scripts/test-lanes.mjs --write\`, ` +
+          `${file} spawns processes but is not in the integration lane: \`git mv ${file} ${nameForLane(file, 'integration')}\`, ` +
           'or put `// @wmux-lane unit` in it with a line saying why it never reaches the OS.',
       );
     expect(offenders.join('\n')).toBe('');
     // A lane with nothing that spawns would mean the rule stopped seeing imports.
-    expect(listed.integration.length).toBeGreaterThan(60);
+    expect(lanes.integration.length).toBeGreaterThan(60);
   });
 
   it('every test file that mentions win32 runs in the integration lane, on Windows', () => {
-    const inLane = new Set(listed.integration);
     const offenders = listTestFiles()
       .filter((file) => /win32/.test(fs.readFileSync(path.join(ROOT, file), 'utf8')))
-      .filter((file) => !inLane.has(file))
+      .filter((file) => laneOfName(file) !== 'integration')
       .map(
         (file) =>
           `${file} mentions win32 but is not in the integration lane, so a PR would run it on Linux only: ` +
-          'run `node scripts/test-lanes.mjs --write`, or put `// @wmux-lane unit` in it with a line saying why Windows cannot change its result.',
+          `\`git mv ${file} ${nameForLane(file, 'integration')}\`, or put \`// @wmux-lane unit\` in it with a line saying why Windows cannot change its result.`,
       );
     expect(offenders.join('\n')).toBe('');
   });
 
-  it('walks exactly the files vitest.config.ts includes', () => {
-    const unit = project('unit');
-    const globbed = fs
-      .globSync(unit.include, { cwd: ROOT })
-      .map((f) => f.split(path.sep).join('/'))
-      .filter((f) => !/(?:^|\/)(?:node_modules|\.git)\//.test(f) && !/\.runtime\.test\.[^/]+$/.test(f))
-      .sort();
-    expect(listTestFiles()).toEqual(globbed);
+  it('the two projects select by name and together walk exactly the files listTestFiles finds', () => {
+    const unit = globbed(project('unit'));
+    const integration = globbed(project('integration'));
+    expect(unit.filter((f) => laneOfName(f) !== 'unit')).toEqual([]);
+    expect(integration.filter((f) => laneOfName(f) !== 'integration')).toEqual([]);
+    expect([...unit, ...integration].sort()).toEqual(listTestFiles());
   });
 
-  it('wires the list into the two projects', () => {
-    expect(project('integration').include).toEqual(listed.integration);
-    expect(project('unit').exclude).toEqual(expect.arrayContaining(listed.integration));
-    expect(project('unit').exclude).toEqual(expect.arrayContaining(['**/*.runtime.test.ts']));
-    expect(path.relative(ROOT, LANES_FILE)).toBe('vitest.lanes.json');
+  it('derives the integration globs from the unit globs', () => {
+    const unit = project('unit');
+    expect(project('integration').include).toEqual(unit.include.map((g) => g.replace('*.test.', '*.os.test.')));
+    expect(unit.exclude).toEqual(expect.arrayContaining(['**/*.os.test.*', '**/*.runtime.test.ts']));
+    expect(project('integration').exclude).toEqual(expect.arrayContaining(['**/*.runtime.test.ts']));
   });
 });
 
@@ -190,41 +192,40 @@ describe('the rule', () => {
   });
 });
 
-describe('laneDrift', () => {
+describe('lane names', () => {
+  it('reads the lane from the name and gives the name for a lane', () => {
+    expect(laneOfName('src/a/__tests__/x.os.test.ts')).toBe('integration');
+    expect(laneOfName('src/a/__tests__/x.test.tsx')).toBe('unit');
+    expect(laneOfName('src/a/__tests__/x.integration.test.ts')).toBe('unit');
+    expect(laneOfName('src/a/__tests__/os.test.ts')).toBe('unit');
+    expect(nameForLane('scripts/__tests__/x.test.mjs', 'integration')).toBe('scripts/__tests__/x.os.test.mjs');
+    expect(nameForLane('src/a/__tests__/x.dynamic.os.test.tsx', 'unit')).toBe('src/a/__tests__/x.dynamic.test.tsx');
+    expect(nameForLane('src/a/__tests__/x.os.test.ts', 'integration')).toBe('src/a/__tests__/x.os.test.ts');
+  });
+});
+
+describe('laneMismatches', () => {
   const root = tree({
     'src/a/__tests__/spawns.test.ts': `import { spawn } from '${CP}';\n`,
-    'src/a/__tests__/pure.test.ts': 'export {};\n',
+    'src/a/__tests__/pure.os.test.ts': 'export {};\n',
+    'src/a/__tests__/ok.os.test.ts': `import { spawn } from '${CP}';\n`,
+    'src/a/__tests__/ok.test.ts': 'export {};\n',
+    'src/a/__tests__/kept.os.test.ts': '// @wmux-lane integration\nexport {};\n',
+    'src/a/__tests__/mocked.test.ts': `// @wmux-lane unit\nimport { spawn } from '${CP}';\n`,
   });
-  const fresh = classifyAll({ root });
+  const found = laneMismatches(classifyAll({ root }));
 
-  it('is empty for the generated file', () => {
-    const text = renderLanesFile(fresh.integration);
-    expect(laneDrift({ integration: fresh.integration, text }, fresh)).toEqual([]);
-  });
-
-  it('is empty for the generated file checked out with CRLF (Windows, core.autocrlf)', () => {
-    const text = renderLanesFile(fresh.integration).replace(/\n/g, '\r\n');
-    expect(laneDrift({ integration: fresh.integration, text }, fresh)).toEqual([]);
-  });
-
-  it('names the file, the reason, the command and the pragma', () => {
-    const [line] = laneDrift({ integration: [], text: renderLanesFile([]) }, fresh);
-    expect(line).toContain('src/a/__tests__/spawns.test.ts touches the OS (imports node:child_process)');
-    expect(line).toContain('node scripts/test-lanes.mjs --write');
-    expect(line).toContain('// @wmux-lane unit');
-  });
-
-  it('reports stale, deleted and hand-edited entries', () => {
-    const stale = ['src/a/__tests__/pure.test.ts', 'src/a/__tests__/gone.test.ts', ...fresh.integration];
-    const drift = laneDrift({ integration: stale, text: renderLanesFile(stale) }, fresh);
-    expect(drift).toEqual([
-      expect.stringContaining('pure.test.ts is in the integration lane, but the rule now puts it in unit'),
-      expect.stringContaining('gone.test.ts is in the integration lane but is not a test file any more'),
+  it('names both directions with the reason, the git mv and the pragma', () => {
+    expect(found.map(({ file, lane, to }) => ({ file, lane, to }))).toEqual([
+      { file: 'src/a/__tests__/pure.os.test.ts', lane: 'unit', to: 'src/a/__tests__/pure.test.ts' },
+      { file: 'src/a/__tests__/spawns.test.ts', lane: 'integration', to: 'src/a/__tests__/spawns.os.test.ts' },
     ]);
-    const handEdited = `${JSON.stringify({ integration: fresh.integration })}\n`;
-    expect(laneDrift({ integration: fresh.integration, text: handEdited }, fresh)).toEqual([
-      expect.stringContaining('not in the generated form'),
-    ]);
-    expect(laneDrift({ integration: [], text: null }, fresh)).toEqual([expect.stringContaining('is missing')]);
+    const [toUnit, toIntegration] = found.map((m) => m.message);
+    expect(toIntegration).toContain('src/a/__tests__/spawns.test.ts touches the OS (imports node:child_process)');
+    expect(toIntegration).toContain('`git mv src/a/__tests__/spawns.test.ts src/a/__tests__/spawns.os.test.ts`');
+    expect(toIntegration).toContain('// @wmux-lane unit');
+    expect(toUnit).toContain('src/a/__tests__/pure.os.test.ts is named for the integration lane, but the rule puts it in unit');
+    expect(toUnit).toContain('`git mv src/a/__tests__/pure.os.test.ts src/a/__tests__/pure.test.ts`');
+    expect(toUnit).toContain('// @wmux-lane integration');
   });
 });

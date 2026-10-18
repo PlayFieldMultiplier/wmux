@@ -22,7 +22,7 @@ import { defaultBindings, resolveShortcut } from '../../../shared/keymap';
  * at a different pty. That surface does not opt in and keeps encoding 0x07.
  *
  * The chord predicate itself is unit-tested in
- * `terminal/__tests__/composeChord.test.ts`; jsdom cannot run xterm's custom
+ * `terminal/__tests__/composeChord.os.test.ts`; jsdom cannot run xterm's custom
  * key handler, so the wiring is pinned at the source like the neighbouring
  * `macCtrlPassthrough` / `ctrlLetterEncoding` locks — kept to the few lines
  * that matter so reformatting elsewhere cannot break it.

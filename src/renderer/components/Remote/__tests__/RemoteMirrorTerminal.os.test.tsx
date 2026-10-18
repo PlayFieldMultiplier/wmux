@@ -135,7 +135,7 @@ class FakeTerminal {
     csiHandlers: [] as { id: { prefix?: string; final: string } }[],
     registerCsiHandler(id: { prefix?: string; final: string }) {
       this.csiHandlers.push({ id });
-      return { dispose: () => {} };
+      return { dispose: () => { /* no-op */ } };
     },
   };
 
@@ -693,8 +693,8 @@ describe('RemoteMirrorTerminal', () => {
       const roCallbacks: Array<() => void> = [];
       vi.stubGlobal('ResizeObserver', class {
         constructor(cb: () => void) { roCallbacks.push(cb); }
-        observe() {}
-        disconnect() {}
+        observe() { /* no-op */ }
+        disconnect() { /* no-op */ }
       });
       try {
         const box = { w: 448, h: 726 };
@@ -1052,7 +1052,7 @@ describe('RemoteMirrorTerminal', () => {
   // were simply absent: a drag copied nothing, Ctrl+C interrupted the remote
   // instead of copying, Ctrl+V did nothing, Shift+Enter submitted.
   //
-  // The chord table is covered by mirrorInput.test.ts, which needs no DOM.
+  // The chord table is covered by mirrorInput.os.test.ts, which needs no DOM.
   // These are about the WIRING it hangs on: that a copy never reaches
   // `paneWrite`, that a direct write carries the live attach, and that a
   // read-only host still receives nothing.

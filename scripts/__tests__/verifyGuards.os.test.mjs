@@ -124,7 +124,7 @@ describe('this repository\'s guard list', () => {
       'src/shared/__tests__/phoneRoomNotices.test.ts',
       'src/shared/__tests__/agentSlugBranches.guard.test.ts',
       'src/renderer/i18n/__tests__/plLocaleCoverage.test.ts',
-      'scripts/__tests__/genApiReference.test.mjs',
+      'scripts/__tests__/genApiReference.os.test.mjs',
     ]));
   });
 

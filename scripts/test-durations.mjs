@@ -13,7 +13,7 @@
 //       Fill from vitest's local results cache
 //       (node_modules/.vite/vitest/<hash>/results.json), for when no CI
 //       artifact is at hand. A cache key without a project name is put in the
-//       lane vitest.lanes.json gives the path; a lane the cache has no file
+//       lane the path's name gives (`*.os.test.*` is integration); a lane the cache has no file
 //       for keeps its current entries. The cache records test time only (no
 //       import or environment time), so its numbers run below CI's full
 //       per-file cost: a stopgap, not a substitute for --write.
@@ -36,7 +36,7 @@ import {
   renderDurationsFile,
   updateDurations,
 } from './lib/test-durations.mjs';
-import { LANES, ROOT, listTestFiles, readLanesFile } from './lib/test-lanes.mjs';
+import { LANES, ROOT, listTestFiles } from './lib/test-lanes.mjs';
 
 const USAGE = 'usage: node scripts/test-durations.mjs (--write <dir> | --from-vitest-cache <results.json>)';
 const OUTPUT = path.join(ROOT, DURATIONS_FILE_NAME);
@@ -73,7 +73,7 @@ function main(argv) {
       console.error(`test-durations: cannot read ${arg}: ${error.message}`);
       return 1;
     }
-    fresh = durationsFromVitestCache(cache, { integration: readLanesFile().integration, testFiles });
+    fresh = durationsFromVitestCache(cache, { testFiles });
   }
 
   // A lane the input says nothing about keeps what it had: both readers

@@ -41,11 +41,14 @@ PowerShell), opens a socket or pipe, runs such code in a real temp dir, or
 mentions `win32` at all is in `integration`, which runs fewer files at once
 with 30-second timeouts, on Windows in CI; every other file is in `unit`,
 which CI runs on Linux (a nightly workflow, `windows.yml`, still runs both
-lanes on Windows, and on every push to main). `scripts/test-lanes.mjs` decides from each
-file's source and writes the integration list to `vitest.lanes.json`. After
-adding or renaming such a test, run `node scripts/test-lanes.mjs --write` (a
-guard test fails until you do). To override the rule for one file, put
-`// @wmux-lane unit` or `// @wmux-lane integration` in it. `npm run
+lanes on Windows, and on every push to main). The lane is in the file name:
+`x.os.test.ts` runs in `integration`, `x.test.ts` in `unit`.
+`scripts/test-lanes.mjs` decides from each file's source which lane it
+belongs in, and a guard test fails when a name disagrees, printing the
+`git mv` that fixes it (`node scripts/test-lanes.mjs --check` prints the
+same). To override the rule for one file, put `// @wmux-lane unit` or
+`// @wmux-lane integration` in it, with a line saying why, and name the file
+for that lane. `npm run
 test:parallel` runs both lanes, `npm run test:unit` and `npm run
 test:integration` one each. CI runs the unit lane in `validate (1/2)` and
 `validate (2/2)` (Linux) and the integration lane in jobs of its own,
