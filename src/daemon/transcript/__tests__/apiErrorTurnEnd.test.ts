@@ -131,6 +131,15 @@ describe('ApiErrorTurnEnds', () => {
     expect(g.sent.map((s) => s.ptyId)).toEqual(['pty-1']);
   });
 
+  it('a queued prompt Claude Code starts after the error means the turn went on', () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('server_error', 'overloaded'));
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', JSON.stringify({ type: 'attachment', isSidechain: false, attachment: { type: 'queued_command', prompt: 'next' }, timestamp: '2026-10-17T02:31:38.000Z' }));
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent).toEqual([]);
+  });
+
   it('still closes the turn when a background subagent writes after the lead turn died', () => {
     const g = gate();
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));

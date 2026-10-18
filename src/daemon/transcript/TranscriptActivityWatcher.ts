@@ -406,8 +406,12 @@ export class TranscriptActivityWatcher {
     } else if (stat.size > watch.offset) {
       const delta = readTranscriptDelta(watch.path, watch.offset, READ_CAP_BYTES, watch.parse);
       if (!delta) { this.watches.delete(id); return; }
-      if (delta.reset) watch.offset = stat.size;
-      else {
+      if (delta.reset) {
+        // Rewritten under the read: like a replacement, a gap then one replay.
+        watch.offset = stat.size;
+        watch.replay = watch.lines;
+        this.replayLines(id, watch);
+      } else {
         events = delta.events;
         watch.offset = delta.cursor.tailOffset;
       }

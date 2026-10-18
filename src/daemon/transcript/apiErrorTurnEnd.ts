@@ -83,10 +83,11 @@ export function apiErrorFromTranscriptLine(line: string): ApiErrorTurnEnd | null
 }
 
 /** A conversation entry of the pane's own turn that is not an API error: the
- *  turn is still going. A subagent's entry is not: a background subagent can
- *  write after the lead turn already died. */
+ *  turn is still going. So is a queued prompt Claude Code starts on its own
+ *  (its UserPromptSubmit fired when it was queued). A subagent's entry is not:
+ *  a background subagent can write after the lead turn already died. */
 function isTurnProgress(line: string): boolean {
-  return /"type":"(assistant|user)"/.test(line)
+  return /"type":"(assistant|user|queued_command)"/.test(line)
     && !line.includes('"isApiErrorMessage":true')
     && !line.includes('"isSidechain":true');
 }
