@@ -214,8 +214,9 @@ describe('recovery pill: a screen-tier sighting hides it and never consumes the 
 
   it('reads the captured Claude and Codex dialogs as live, and not once a shell row is under them', () => {
     const dir = resolve(__dirname, '../../../../daemon/approvals/__tests__/fixtures/terminal-prompts');
-    const dialogs = readdirSync(dir).filter((f) => /^(?:claude|codex)-.*\.json$/.test(f));
-    expect(dialogs.length).toBeGreaterThan(20);
+    const dialogs = (readdirSync(dir, { recursive: true }) as string[])
+      .filter((f) => /(?:^|[\\/])(?:claude|codex)-[^\\/]*\.json$/.test(f));
+    expect(dialogs.length).toBeGreaterThan(80);
     for (const file of dialogs) {
       const fixture = JSON.parse(readFileSync(resolve(dir, file), 'utf8')) as { tui: string; screen: string[] };
       const slug = fixture.tui.startsWith('codex') ? 'codex' : 'claude';

@@ -59,9 +59,10 @@ const CLAUDE_RULE_ROW = /^─{8,}/;
 /** Codex's footer under its composer: the model/cwd row or the shortcut hint. */
 const CODEX_FOOTER_ROW = /^\s+(?:\S.+ · (?:[A-Za-z]:[\\/]|\/|~)|(?:← for agents · )?\? for shortcuts?\b)/;
 
-/** A row an agent draws last on its screen: indented, or a dialog's key hints
+/** A row an agent draws last on its screen: indented, one of Claude's rules
+ *  (a session's name rule under a picker), or a dialog's key hints
  *  (`Enter to select · … · Esc to cancel`, drawn from column 0). */
-const AGENT_BOTTOM_ROW = /^\s|\b(?:esc|enter) to\b/i;
+const AGENT_BOTTOM_ROW = /^\s|^─{8,}|\b(?:esc|enter) to\b/i;
 
 /**
  * A dialog of the agent's owns the bottom of the screen: the last row is one
@@ -73,8 +74,13 @@ const AGENT_BOTTOM_ROW = /^\s|\b(?:esc|enter) to\b/i;
 function dialogAtBottom(rows: readonly string[]): boolean {
   let last = rows.length - 1;
   while (last >= 0 && rows[last].trim().length === 0) last--;
-  if (last < 0 || !AGENT_BOTTOM_ROW.test(rows[last])) return false;
-  return screenShowsActiveDialog(rows) || screenShowsAgentDialog(rows);
+  if (last < 0) return false;
+  // A narrow pane wraps the key hints and leaves their last word alone on the
+  // bottom row (`… · Esc to` / `cancel`, captured at 44 and 80 columns).
+  const wrapped = last > 0 && /^\S+$/.test(rows[last]) && /\b(?:esc|enter) to$/i.test(rows[last - 1].trimEnd());
+  const grid = wrapped ? [...rows.slice(0, last - 1), `${rows[last - 1].trimEnd()} ${rows[last]}`] : rows.slice(0, last + 1);
+  if (!AGENT_BOTTOM_ROW.test(grid[grid.length - 1])) return false;
+  return screenShowsActiveDialog(grid) || screenShowsAgentDialog(grid);
 }
 
 /**
