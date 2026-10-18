@@ -293,6 +293,13 @@ export interface HookIngestDeps {
    */
   dialogOnScreen?: (sessionId: string) => Promise<boolean | null>;
   /**
+   * A tentative Claude PermissionRequest ended without an alert (no
+   * Notification, no dialog on screen, or settled first). Its phone record was
+   * minted at once and has no other way out, since the pane was never marked
+   * awaiting: the daemon retires it if the screen shows no dialog. Optional.
+   */
+  onTentativeDialogLapsed?: (sessionId: string) => void;
+  /**
    * Transcript projection — tell the TranscriptProjector that this pane's
    * transcript may have grown. Fired for EVERY resolved signal, including the
    * non-emit kinds: `agent.activity` is the mid-turn liveness nudge,
@@ -1916,10 +1923,6 @@ export class HookIngest {
    * not postpone the check forever behind a dialog that is really up.
    */
   private holdTentativeDialog(sessionId: string, slug: string, fanOut: () => unknown): void {
-    if (this.permissionNotifyPanes.has(sessionId)) {
-      this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId} is tentative: waiting for its permission_prompt Notification`);
-      return;
-    }
     const epoch = this.dialogEpochOf(sessionId);
     const open = this.tentativeDialogs.get(sessionId);
     if (open && open.epoch === epoch) {
@@ -1936,8 +1939,29 @@ export class HookIngest {
     const timer = setTimeout(() => {
       if (this.tentativeDialogs.get(sessionId) !== entry) return;
       this.tentativeDialogs.delete(sessionId);
+      // A request that ends without an alert may still hold its phone record
+      // (noteAwaitingInput mints it at once), and nothing else retires it:
+      // with no awaiting broadcast, the awaiting verifier never looks.
+      const lapse = (): void => {
+        try {
+          this.deps.onTentativeDialogLapsed?.(sessionId);
+        } catch (err) {
+          this.deps.log?.('warn', `[hooks] tentative dialog lapse failed for ${sessionId}: ${String(err)}`);
+        }
+      };
+      if (this.permissionNotifyPanes.has(sessionId)) {
+        // The Notification hook is registered here and none came: no prompt
+        // waited (or someone is typing at it, which the lapse's screen read
+        // tells apart).
+        this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId} lapsed: no permission_prompt Notification`);
+        lapse();
+        return;
+      }
       const moved = this.dialogEpoch.get(sessionId) !== epoch;
-      if (moved && !behindRaised) return;
+      if (moved && !behindRaised) {
+        lapse();
+        return;
+      }
       const raise = (): void => {
         // Judged when the dialog would be raised, not when the request came:
         // a dialog this layer already raised that is still unsettled is the
@@ -1962,7 +1986,7 @@ export class HookIngest {
       // Behind a dialog that has since been settled, only a dialog actually
       // seen on screen counts: the settle may have been this one's too (a
       // turn end clears both), so an unreadable grid is not trusted here.
-      this.confirmAgainstScreen(sessionId, verifyOnScreen, raise, moved);
+      this.confirmAgainstScreen(sessionId, verifyOnScreen, raise, moved, lapse);
     }, PERMISSION_NOTIFY_GRACE_MS);
     timer.unref?.();
     entry.cancel = () => clearTimeout(timer);
@@ -2010,6 +2034,7 @@ export class HookIngest {
     verifyOnScreen: NonNullable<HookIngestDeps['dialogOnScreen']>,
     raise: () => void,
     seenOnly = false,
+    dropped: () => void = () => undefined,
   ): void {
     const epoch = this.dialogEpochOf(sessionId);
     // A pane dropped meanwhile has no entry: stale, never a broadcast.
@@ -2017,10 +2042,12 @@ export class HookIngest {
     const send = (seen: boolean): void => {
       if (seenOnly && !seen) {
         this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: queued behind a settled dialog and none seen on screen`);
+        dropped();
         return;
       }
       if (stale()) {
         this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} stood down: answered or superseded during the screen read`);
+        dropped();
         return;
       }
       try {
@@ -2030,7 +2057,7 @@ export class HookIngest {
       }
     };
     const read = (attempt: 1 | 2): void => {
-      if (stale()) return;
+      if (stale()) { dropped(); return; }
       let result: Promise<boolean | null>;
       try {
         result = verifyOnScreen(sessionId);
@@ -2041,13 +2068,14 @@ export class HookIngest {
       }
       result.then((up) => {
         if (up !== false) { send(up === true); return; }
-        if (stale()) return;
+        if (stale()) { dropped(); return; }
         if (attempt === 1) {
           const t = setTimeout(() => read(2), DIALOG_RECHECK_MS);
           t.unref?.();
           return;
         }
         this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no permission_prompt Notification and no dialog on screen`);
+        dropped();
       }, (err: unknown) => {
         this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
         send(false);

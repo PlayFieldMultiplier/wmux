@@ -163,7 +163,7 @@ import { toResumeCommand, resumeGrammarFor, resumeOfferForRecovered, mergeResume
 import type { ResumeBinding } from '../shared/agentResume';
 import { agentDisplayToSlug, AGENT_SLUG_SET, isAgentSlug } from '../shared/agentIdentity';
 import type { AgentEventStatus } from '../main/pty/AgentDetector';
-import { HookIngest, identifiedAgentPid, type HookArbitration } from './hooks/HookIngest';
+import { DIALOG_RECHECK_MS, HookIngest, identifiedAgentPid, type HookArbitration } from './hooks/HookIngest';
 import { DetectionAgreementLog } from './diagnostics/detectionAgreementLog';
 import { deriveAgentLiveness } from './hooks/agentLiveness';
 import { classifyClaudeStopFailure, classifyCodexTurnCompleted, type TurnFailure } from '../shared/phoneTurnFailure';
@@ -399,6 +399,8 @@ let reverifyAwaiting: ((sessionId: string) => void) | undefined;
  * PermissionRequest that got no permission_prompt Notification.
  */
 let dialogOnScreen: ((sessionId: string) => Promise<boolean | null>) | undefined;
+/** Retire a lapsed tentative PermissionRequest's phone record (set by wireEvents). */
+let tentativeDialogLapsed: ((sessionId: string) => void) | undefined;
 // Late-bound: the pipe server that carries notices exists only after boot.
 let notifyCodexIdentityRefused: ((id:string,reason:string)=>void) | undefined;
 const codexRefusalNoticedAt = new Map<string,number>();
@@ -4507,6 +4509,7 @@ function registerRpcHandlers(
         if (signal.ptyId === sessionId) usageLimits?.noteHookSignal(sessionId, signal);
       },
       dialogOnScreen: (sessionId) => dialogOnScreen?.(sessionId) ?? Promise.resolve(null),
+      onTentativeDialogLapsed: (sessionId) => { tentativeDialogLapsed?.(sessionId); },
       // Chat View P1 — the tail nudge rides the existing hook signals rather
       // than a new hook. Fired for every resolved kind; a no-op for panes with
       // no Chat surface open.
@@ -6411,6 +6414,22 @@ function wireEvents(
     if (!frame || frame.rows.every((row) => row.trim().length === 0)) return null;
     if (typeof frame.cols === 'number' && frame.cols < AWAITING_NARROW_DIALOG_COLS) return null;
     return screenShowsActiveDialog(frame.rows) || screenShowsPermissionDialog(frame.rows);
+  };
+  // A tentative PermissionRequest that raised no alert still holds the
+  // terminal_prompt record minted when it landed, and the awaiting verifier
+  // never looks at a pane that was not marked awaiting. Retired like a
+  // screen-cleared answer, once two reads a moment apart show no dialog (one
+  // read is one sample); a dialog still up (someone typing at it, which defers
+  // Claude's Notification) keeps it.
+  tentativeDialogLapsed = (sessionId) => {
+    const registry = approvalRegistry;
+    if (!registry) return;
+    void (async () => {
+      if (!(await registry.dialogGoneFromScreen(sessionId))) return;
+      await new Promise<void>((resolve) => { setTimeout(resolve, DIALOG_RECHECK_MS).unref?.(); });
+      if (!(await registry.dialogGoneFromScreen(sessionId))) return;
+      await registry.expireForSession(sessionId, 'screen-cleared', 'terminal_prompt');
+    })().catch((err: unknown) => log('warn', `[approvals] lapsed permission request sweep failed for ${sessionId}: ${String(err)}`));
   };
   const forgetAwaiting = (payload: { id: string }): void => awaitingVerifier.forget(payload.id);
   sessionManager.on('session:died', forgetAwaiting);

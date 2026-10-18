@@ -45,6 +45,7 @@ function makeIngest(dialogOnScreen?: HookIngestDeps['dialogOnScreen']) {
   const cards: string[] = [];
   const terminalPrompts: string[] = [];
   const logs: string[] = [];
+  const lapsed: string[] = [];
   let clock = 10_000;
   const deps: HookIngestDeps = {
     listLiveSessions: () => sessions,
@@ -59,6 +60,7 @@ function makeIngest(dialogOnScreen?: HookIngestDeps['dialogOnScreen']) {
     },
     log: (_level, message) => { logs.push(message); },
     now: () => clock,
+    onTentativeDialogLapsed: (id) => { lapsed.push(id); },
     ...(dialogOnScreen ? { dialogOnScreen } : {}),
   };
   const ingest = new HookIngest(deps);
@@ -67,7 +69,7 @@ function makeIngest(dialogOnScreen?: HookIngestDeps['dialogOnScreen']) {
   // either source.
   const toasts = () => awaiting().filter((e) => e.decision === 'emit').length
     + detectorEmitted.filter((e) => e.status === 'awaiting_input' && e.decision === 'emit').length;
-  return { ingest, emitted, detectorEmitted, cards, terminalPrompts, logs, awaiting, toasts, advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms); } };
+  return { ingest, emitted, detectorEmitted, cards, terminalPrompts, logs, lapsed, awaiting, toasts, advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms); } };
 }
 
 async function settle(): Promise<void> {
@@ -565,6 +567,56 @@ describe('HookIngest — second layer: no Notification from this pane', () => {
     f.ingest.handle(makeSignal());
     await runSecondLayer(f);
     expect(calls).toBe(1);
+  });
+});
+
+describe('HookIngest — a lapsed request hands its phone record back', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // Codex round 4: the record is minted at once and the pane is never marked
+  // awaiting, so without this the record outlived the push grace.
+  it('lapses when the second layer finds no dialog, when settled first, and on a pane that sends the Notification but sent none', async () => {
+    const a = makeIngest(async () => false);
+    a.ingest.handle(makeSignal());
+    await runSecondLayer(a);
+    expect(a.lapsed).toEqual(['pty-a']);
+
+    const b = makeIngest(async () => true);
+    b.ingest.handle(makeSignal());
+    b.ingest.handle(makeSignal({ kind: 'agent.stop', payload: {}, ts: 2_000 }));
+    await runSecondLayer(b);
+    expect(b.lapsed).toEqual(['pty-a']);
+
+    const c = makeIngest(async () => true);
+    await learnNotification(c);
+    c.ingest.handle(makeSignal({ ts: 20_000 }));
+    await runSecondLayer(c);
+    expect(c.lapsed).toEqual(['pty-a']);
+    expect(c.awaiting()).toEqual([]);
+  });
+
+  it('does not lapse a request that was raised, or one whose Notification came', async () => {
+    const a = makeIngest(async () => true);
+    a.ingest.handle(makeSignal());
+    await runSecondLayer(a);
+    expect(a.awaiting()).toHaveLength(1);
+    expect(a.lapsed).toEqual([]);
+
+    const b = makeIngest(async () => false);
+    b.ingest.handle(makeSignal());
+    b.advance(6_000);
+    b.ingest.handle(notification());
+    await runSecondLayer(b);
+    expect(b.lapsed).toEqual([]);
+  });
+
+  it('a throwing lapse handler is logged, never thrown from the timer', async () => {
+    const f = makeIngest(async () => false);
+    (f.ingest as unknown as { deps: HookIngestDeps }).deps.onTentativeDialogLapsed = () => { throw new Error('sweep exploded'); };
+    f.ingest.handle(makeSignal());
+    await runSecondLayer(f);
+    expect(f.logs.some((l) => l.includes('tentative dialog lapse failed'))).toBe(true);
   });
 });
 
