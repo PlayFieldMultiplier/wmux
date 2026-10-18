@@ -27,6 +27,7 @@ import { removeTaskRelay } from '../../worktask/taskPush';
 import { getWmuxDir } from '../../../daemon/config';
 import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
+import { PendingWorktreeRemovals, sweepPendingRemovals } from '../../worktask/pendingWorktreeRemovals';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
@@ -87,7 +88,7 @@ export function registerWorktaskHandlers(
   // 프로세스 수명 단일 인스턴스: TaskWorktreeManager는 repoHash 단위 뮤텍스 체인을
   // 유지해야 하므로(index.lock 경합 차단) 재사용한다. fan-out과는 별도 인스턴스지만
   // 크로스 인스턴스 worktree add/remove 경합은 git 자체의 index.lock이 backstop.
-  const worktrees = new TaskWorktreeManager({ onCreated: ensureSecretHook });
+  const worktrees = new TaskWorktreeManager({ onCreated: ensureSecretHook, pendingRemovals: loadPendingRemovals() });
   const closeService = new TaskCloseService({
     daemon: daemonPort,
     worktrees,
@@ -122,6 +123,33 @@ export function registerWorktaskHandlers(
   const scanService = new WorktaskScanService();
   onServices?.({ close: closeService, pr: prService });
 
+  // #2388: removals a close left part way (a folder git no longer has as a
+  // worktree) are finished once the daemon has recovered its sessions.
+  let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+  const sweep = (attempt: number): void => {
+    sweepTimer = setTimeout(() => {
+      sweepTimer = null;
+      void sweepPendingRemovals({
+        paths: () => worktrees.pendingRemovalPaths(),
+        sessions: async () => {
+          const dc = getDaemonClient();
+          if (!dc) return null;
+          const reply = (await dc.rpc('daemon.listSessions', { withRecovery: true })) as unknown;
+          if (Array.isArray(reply)) return { sessions: reply, recoveryDone: true };
+          const r = reply as { sessions?: unknown; recoveryDone?: unknown } | null;
+          return Array.isArray(r?.sessions) ? { sessions: r.sessions, recoveryDone: r.recoveryDone === true } : null;
+        },
+        startedIn: (folder, sessions) => sessionsStartedIn([folder], { listSessions: async () => sessions }),
+        finish: (folder) => worktrees.finishPendingRemoval(folder),
+        log: (message) => console.warn(message),
+      }).then((done) => {
+        if (!done && attempt < PENDING_SWEEP_ATTEMPTS) sweep(attempt + 1);
+      }, (err: unknown) => console.warn(`[worktask] pending removal sweep failed: ${String(err)}`));
+    }, PENDING_SWEEP_DELAY_MS);
+    sweepTimer.unref?.();
+  };
+  sweep(1);
+
   // ── task:close ──────────────────────────────────────────────────────
   ipcMain.removeHandler(IPC.TASK_CLOSE);
   ipcMain.handle(
@@ -138,13 +166,14 @@ export function registerWorktaskHandlers(
       // 건너뛰고 mission.close만. 이게 스캔의 disk-missing 정합화 버튼과
       // TaskCloseService 계약(remove 성공↔close 실패 크래시 재시도)을 살린다.
       if (!task.worktreePath || !fs.existsSync(task.worktreePath)) {
-        return closeService.closeTask({ taskId, verifiedWorkspaceId });
+        return closeService.closeTask({ taskId, verifiedWorkspaceId, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
       }
       const repo = await resolveRepoInfo(task.worktreePath);
       if (!repo) {
         // worktree 디렉토리는 있으나 본 repo 해석 불가 — remove가 어차피 실패하므로
         // close-only로 정합화(닫히지 않고 영영 붙잡히는 것 방지).
-        return closeService.closeTask({ taskId, verifiedWorkspaceId });
+        // #2388: unless an earlier close left it half removed: that is finished first.
+        return closeService.closeTask({ taskId, verifiedWorkspaceId, leftoverPath: task.worktreePath });
       }
       return closeService.closeTask({
         taskId,
@@ -350,6 +379,7 @@ export function registerWorktaskHandlers(
   );
 
   return () => {
+    if (sweepTimer) clearTimeout(sweepTimer);
     ipcMain.removeHandler(IPC.TASK_CLOSE);
     ipcMain.removeHandler(IPC.TASK_CREATE_PR);
     ipcMain.removeHandler(IPC.WORKTASK_SCAN);
@@ -358,6 +388,24 @@ export function registerWorktaskHandlers(
     ipcMain.removeHandler(IPC.WORKTASK_REMOVE_PHONE);
     ipcMain.removeHandler(IPC.WORKTASK_DELETE_PHONE_BRANCH);
   };
+}
+
+/** The sweep of pending removals waits this long after start, and tries this
+ *  many times while the daemon is not ready. */
+const PENDING_SWEEP_DELAY_MS = 30_000;
+const PENDING_SWEEP_ATTEMPTS = 10;
+
+/** The pending worktree removals (#2388), or none when the file cannot be
+ *  read (another version: never overwritten). */
+function loadPendingRemovals(): PendingWorktreeRemovals | undefined {
+  const store = PendingWorktreeRemovals.at(getWmuxDir());
+  try {
+    store.load();
+    return store;
+  } catch (err) {
+    console.warn(`[worktask] pending worktree removals not read: ${String(err)}`);
+    return undefined;
+  }
 }
 
 /** F7 — worktreePath 정규화 후 전용 루트({wmux home}/worktrees) 하위 여부.

@@ -246,3 +246,45 @@ describe('J3 §1 close 순서 계약', () => {
     expect(res.archivePending).toBe(true);
   });
 });
+
+// #2388: a folder an earlier close left half removed (git dropped the
+// worktree, part of the folder stayed) is finished before a close-only task
+// closes; the task stays open while it cannot be.
+describe('close-only with a leftover folder (#2388)', () => {
+  const fakeWorktrees = (result: Awaited<ReturnType<TaskWorktreeManager['finishPendingRemoval']>>) => {
+    const finishPendingRemoval = vi.fn(async (_p: string, stop?: (p: string) => Promise<void>) => {
+      await stop?.(_p);
+      return result;
+    });
+    return { worktrees: { finishPendingRemoval } as unknown as TaskWorktreeManager, finishPendingRemoval };
+  };
+
+  it('finishes the recorded removal, stopping the panes in the folder first, then closes', async () => {
+    const { port, calls } = makeDaemon();
+    const { worktrees, finishPendingRemoval } = fakeWorktrees({ ok: true });
+    const panesStopped = vi.fn();
+    const svc = new TaskCloseService({ daemon: port, worktrees, stopPanesIn: async () => ['p-1'], panesStopped });
+    const res = await svc.closeTask({ taskId: 'wtask-8', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' });
+    expect(res).toMatchObject({ ok: true, unmaterialized: true });
+    expect(finishPendingRemoval).toHaveBeenCalledWith('/wt/left', expect.any(Function));
+    expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    expect(panesStopped).toHaveBeenCalledWith('wtask-8', ['p-1']);
+  });
+
+  it('keeps the task open, and says where the folder is, when the leftover could not be removed', async () => {
+    const { port, calls } = makeDaemon();
+    const { worktrees } = fakeWorktrees({ ok: false, error: 'removeWorktree: the leftover folder was kept: 1 file(s) in it are not what git left', preserved: true, dirty: true });
+    const svc = new TaskCloseService({ daemon: port, worktrees });
+    const res = await svc.closeTask({ taskId: 'wtask-9', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' });
+    expect(res).toMatchObject({ ok: false, reason: 'dirty', preservedWorktree: '/wt/left' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('closes as before when no removal of the folder is recorded', async () => {
+    const { port, calls } = makeDaemon();
+    const { worktrees } = fakeWorktrees(null);
+    const svc = new TaskCloseService({ daemon: port, worktrees });
+    expect((await svc.closeTask({ taskId: 'wtask-10', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' })).ok).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+});

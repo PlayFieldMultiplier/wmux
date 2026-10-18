@@ -42,6 +42,10 @@ export interface CloseTaskInput {
   repoHash?: string;
   worktreePath?: string;
   metaDir?: string;
+  /** A close-only task's folder that is still on disk but no longer a
+   *  worktree (#2388): a removal recorded as pending there is finished
+   *  before the task closes, and the task stays open when it cannot be. */
+  leftoverPath?: string;
 }
 
 export type CloseTaskResult =
@@ -97,8 +101,32 @@ export class TaskCloseService {
 
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.
     if (!input.worktreePath) {
+      // #2388: a folder an earlier close left half removed is finished first.
+      const stopped: { ids: string[] | null } = { ids: null };
+      const stopPanesIn = this.stopPanesIn;
+      const finished = input.leftoverPath
+        ? await this.worktrees.finishPendingRemoval(
+          input.leftoverPath,
+          stopPanesIn
+            ? async (folder) => {
+              const ids = await stopPanesIn(folder);
+              stopped.ids = Array.isArray(ids) ? ids : null;
+            }
+            : undefined,
+        )
+        : null;
+      if (finished && !finished.ok) {
+        return { ok: false, taskId, reason: finished.dirty ? 'dirty' : 'error', error: finished.error, preservedWorktree: input.leftoverPath };
+      }
       const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+      if (stopped.ids) {
+        try {
+          this.panesStopped?.(taskId, stopped.ids);
+        } catch {
+          // Best effort: the next liveness read records it.
+        }
+      }
       return { ok: true, taskId, archivePending: closed.archivePending, unmaterialized: true };
     }
 

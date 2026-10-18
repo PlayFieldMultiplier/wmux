@@ -351,7 +351,8 @@ describe('task.close', () => {
   it('close-only when the worktree is gone from disk', async () => {
     const h = harness({ onDisk: false });
     await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1' });
-    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS });
+    // The folder is named, so a removal an earlier close left pending is forgotten.
+    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS, leftoverPath: TASK.worktreePath });
   });
 
   it('reports the dirty-worktree refusal from the close service', async () => {
