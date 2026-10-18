@@ -1314,8 +1314,9 @@ export class FanOutService {
       }
       const pinRefusal = dispatchOriginPinRefusal(ctx.originPin, pf.plan.originPin);
       if (pinRefusal) {
-        await this.compensate(taskId, ctx.verifiedWorkspaceId);
-        return { ...base, error: `worktree preflight failed: ${pinRefusal}` };
+        const error = `worktree preflight failed: ${pinRefusal}`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, undefined, { title: ctx.title, reason: error });
+        return { ...base, error };
       }
       plan = pf.plan;
       const created = ctx.checkout
