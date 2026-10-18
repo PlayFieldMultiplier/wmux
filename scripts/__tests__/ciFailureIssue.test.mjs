@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   failedJobNames,
   issueTitle,
+  newestReportedRun,
   othersAllGreen,
   renderFailureBody,
   report,
@@ -36,11 +37,12 @@ function job(name, status, conclusion, stepConclusions = []) {
 const SELF_RED = job('validate-runtime', 'in_progress', '', ['success', 'failure']);
 const SELF_GREEN = job('validate-runtime', 'in_progress', '', ['success', 'success']);
 
-function fakeGh({ issues = [], jobs = [] } = {}) {
+function fakeGh({ issues = [], jobs = [], issue = { body: '', comments: [] } } = {}) {
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
     if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify(issues);
+    if (args[0] === 'issue' && args[1] === 'view') return JSON.stringify(issue);
     if (args[0] === 'run' && args[1] === 'view') return JSON.stringify({ jobs });
     return '';
   };
@@ -166,6 +168,23 @@ describe('report --state success', () => {
     const fake = fakeGh({ issues: [], jobs: [SELF_GREEN] });
     expect(report({ state: 'success', env: ENV, gh: fake.gh })).toBe('none');
     expect(fake.writes()).toEqual([]);
+  });
+
+  it('leaves the issue open when a newer red run reported after this green one started', () => {
+    // This run is 42; the issue's newest red report is run 57 (a push run
+    // that started later and finished first).
+    const issue = {
+      body: 'Run: https://github.com/acme/app/actions/runs/40',
+      comments: [{ body: 'Run: https://github.com/acme/app/actions/runs/57' }],
+    };
+    const fake = fakeGh({ issues: [{ number: 12, title: 'Nightly red: Runtime suite' }], jobs: [SELF_GREEN], issue });
+    expect(report({ state: 'success', env: ENV, gh: fake.gh })).toBe('none');
+    expect(fake.writes()).toEqual([]);
+  });
+
+  it('reads the newest run id from the body and every comment', () => {
+    expect(newestReportedRun({ body: 'runs/7 and /actions/runs/31', comments: [{ body: '/actions/runs/12' }] })).toBe(31);
+    expect(newestReportedRun({})).toBe(0);
   });
 
   it('leaves the issue open while the other shard is still running or went red', () => {

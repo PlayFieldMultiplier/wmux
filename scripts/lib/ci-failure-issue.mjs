@@ -24,6 +24,10 @@
 //   already finished green. If the other shard is still running, the green
 //   one leaves the issue alone and the last shard to finish decides; if both
 //   finish the same second, neither may close it, and the next green run does.
+// - Runs of one workflow overlap: a push run and the nightly sit in separate
+//   concurrency groups. A green run closes the issue only when it started
+//   after the newest red run the issue records (run ids grow with creation
+//   time), so an older green run finishing late never hides a newer red one.
 
 export const LABEL = 'ci-nightly';
 export const LABEL_COLOR = 'B60205';
@@ -124,6 +128,20 @@ export function findOpenIssue(gh, { repo, title }) {
   return match ? match.number : null;
 }
 
+/** The newest run id the issue's body and comments link to, or 0. */
+export function newestReportedRun(issueJson) {
+  const texts = [issueJson.body ?? '', ...(issueJson.comments ?? []).map((c) => c.body ?? '')];
+  let newest = 0;
+  for (const text of texts) {
+    for (const m of text.matchAll(/\/actions\/runs\/(\d+)/g)) newest = Math.max(newest, Number(m[1]));
+  }
+  return newest;
+}
+
+function readIssue(gh, { repo, number }) {
+  return parseJson(gh(['issue', 'view', String(number), '-R', repo, '--json', 'body,comments']) || '{}', 'gh issue view');
+}
+
 function readJobs(gh, { repo, runId }) {
   return parseJson(gh(['run', 'view', String(runId), '-R', repo, '--json', 'jobs']) || '{}', 'gh run view');
 }
@@ -144,6 +162,11 @@ export function report({ state, env, gh, log = () => undefined }) {
   if (state === 'success') {
     if (existing === null) {
       log(`no open issue titled "${title}"; nothing to close`);
+      return 'none';
+    }
+    const newestRed = newestReportedRun(readIssue(gh, { repo, number: existing }));
+    if (Number(env.GITHUB_RUN_ID) <= newestRed) {
+      log(`run ${env.GITHUB_RUN_ID} is older than red run ${newestRed}; leaving #${existing} open`);
       return 'none';
     }
     if (!othersAllGreen(readJobs(gh, { repo, runId: env.GITHUB_RUN_ID }))) {
