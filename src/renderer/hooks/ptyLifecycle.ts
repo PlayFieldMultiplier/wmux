@@ -7,14 +7,18 @@
  * the latest caller's `bind` is the one used, so a Terminal that remounts
  * mid-create (a split, a moved tab) binds through its new instance.
  *
- * Only a close or a replace ends an attempt early: `cancel(key)` bumps the
- * key's attempt token and asks main to drop the pending create. A visibility
- * change, an effect re-run or a remount never does. A create that settles
- * under a stale token, or whose owner no longer takes it (`bind` returns
- * false), is disposed and never bound.
+ * Only a close or a replace ends an attempt early: `cancel(key)` drops the
+ * key's attempt (the attempt object is its token) and asks main to drop the
+ * pending create. A visibility change, an effect re-run or a remount never
+ * does. A create that settles once its attempt is no longer the key's, or
+ * whose owner no longer takes it (`bind` returns false), is disposed and
+ * never bound.
  *
  * A refused create leaves the key `createFailed` and never re-fires by
  * itself: only an `ensure` with `retry` (the pane's Retry) starts it again.
+ * A key whose owner is gone keeps nothing: `cancel` forgets it whether or not
+ * a create is in flight, and `releaseOrphans` forgets the refusal of a
+ * surface or leaf that closed without one.
  *
  * The state mirror lives in the store (ptyLifecycleSlice); the promises and
  * tokens live here, since neither belongs in a serializable store. Pure
@@ -25,6 +29,7 @@ import { useEffect } from 'react';
 import type { IpcResult } from './useIpc';
 import type { PtyCreateAttempt } from '../stores/slices/ptyLifecycleSlice';
 import { useStore } from '../stores';
+import { getWorkspaceLeafPanes } from '../../shared/paneUtils';
 
 export interface PtyCreated {
   id: string;
@@ -55,12 +60,20 @@ export interface PtyLifecycleDeps {
   dispose: (ptyId: string) => void;
   /** Ask main to drop a create that has not spawned yet (best effort). */
   cancelCreate: (surfaceId: string) => void;
+  /**
+   * Whether the key's owner (its surface or leaf) still exists. A refusal is
+   * kept only for an owner that can show it; absent = it always does.
+   */
+  ownerExists?: (key: string) => boolean;
   log?: (message: string, err?: unknown) => void;
 }
 
 export interface PtyLifecycle {
   ensure: <T extends PtyCreated>(key: string, request: PtyEnsureRequest<T>) => Promise<PtyEnsureOutcome>;
-  /** Close or replace: end the key's attempt (if any), so its create is never bound. */
+  /**
+   * Close or replace: end the key's attempt (if any), so its create is never
+   * bound, and forget the key's refusal.
+   */
   cancel: (key: string, surfaceId?: string) => void;
   /** A store-wide clear: every attempt in flight is stale. */
   invalidateAll: () => void;
@@ -75,28 +88,24 @@ export interface PtyLifecycle {
    * refused request is held; the refusal is then just cleared.
    */
   retry: (key: string) => boolean;
+  /** Forget the refusals whose owner is gone (see ownerExists). */
+  releaseOrphans: () => void;
 }
 
 interface Attempt {
-  token: number;
   bind: (created: PtyCreated) => boolean;
   promise: Promise<PtyEnsureOutcome>;
 }
 
 export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
   const inFlight = new Map<string, Attempt>();
-  const tokens = new Map<string, number>();
   /** The request behind each key's current refusal, for an explicit retry. */
   const refused = new Map<string, PtyEnsureRequest<PtyCreated>>();
   const log = deps.log ?? ((message: string, err?: unknown) => {
     // eslint-disable-next-line no-console
     if (err === undefined) console.warn(message); else console.warn(message, err);
   });
-  const bump = (key: string) => {
-    const next = (tokens.get(key) ?? 0) + 1;
-    tokens.set(key, next);
-    return next;
-  };
+  const ownerExists = deps.ownerExists ?? (() => true);
 
   const ensure = <T extends PtyCreated>(key: string, request: PtyEnsureRequest<T>): Promise<PtyEnsureOutcome> => {
     const live = inFlight.get(key);
@@ -108,20 +117,23 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
     if (previous?.state === 'createFailed' && !request.retry) {
       return Promise.resolve({ status: 'createFailed', error: previous.error });
     }
-    const token = bump(key);
     refused.delete(key);
-    const attempt = { token, bind: request.bind as (created: PtyCreated) => boolean } as Attempt;
+    const attempt = { bind: request.bind as (created: PtyCreated) => boolean } as Attempt;
     inFlight.set(key, attempt);
     deps.setAttempt(key, { state: 'creating' });
 
     const settle = (result: IpcResult<T>): PtyEnsureOutcome => {
-      const current = tokens.get(key) === token;
-      if (inFlight.get(key) === attempt) inFlight.delete(key);
+      // Current while no close, replace or newer attempt has taken the key.
+      const current = inFlight.get(key) === attempt;
+      if (current) inFlight.delete(key);
       if (!result.ok) {
-        // The refusal belongs to this key only while no newer attempt replaced it.
-        if (current) {
+        // The refusal belongs to this key only while no newer attempt replaced
+        // it, and is kept only while its owner is there to show it.
+        if (current && ownerExists(key)) {
           deps.setAttempt(key, { state: 'createFailed', error: result.error.message });
           refused.set(key, { create: request.create, bind: attempt.bind } as PtyEnsureRequest<PtyCreated>);
+        } else if (current) {
+          deps.setAttempt(key, null);
         }
         return { status: 'createFailed', error: result.error.message };
       }
@@ -162,16 +174,13 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
     ensure,
     cancel: (key, surfaceId) => {
       refused.delete(key);
-      if (!inFlight.has(key)) return;
-      inFlight.delete(key);
-      bump(key);
       deps.setAttempt(key, null);
+      if (!inFlight.delete(key)) return;
       if (surfaceId) deps.cancelCreate(surfaceId);
     },
     invalidateAll: () => {
       for (const key of [...inFlight.keys()]) {
         inFlight.delete(key);
-        bump(key);
         deps.setAttempt(key, null);
       }
     },
@@ -191,7 +200,30 @@ export function createPtyLifecycle(deps: PtyLifecycleDeps): PtyLifecycle {
       void ensure(key, { ...request, retry: true });
       return true;
     },
+    releaseOrphans: () => {
+      for (const key of [...refused.keys()]) {
+        if (inFlight.has(key) || ownerExists(key)) continue;
+        refused.delete(key);
+        if (deps.getAttempt(key)?.state === 'createFailed') deps.setAttempt(key, null);
+      }
+    },
   };
+}
+
+/**
+ * The key a Terminal with no surface creates under (Terminal.tsx). Its owner
+ * is that component instance, which cancels the key when it unmounts.
+ */
+export const TERMINAL_INSTANCE_KEY_PREFIX = 'terminal-instance:';
+
+/** Whether a workspace still holds a surface or a leaf (a stashed one too) with this id. */
+function workspacesHoldKey(key: string): boolean {
+  for (const ws of useStore.getState().workspaces) {
+    for (const leaf of getWorkspaceLeafPanes(ws)) {
+      if (leaf.id === key || leaf.surfaces.some((s) => s.id === key)) return true;
+    }
+  }
+  return false;
 }
 
 /** The app's lifecycle, bound to the store and the preload pty API. */
@@ -204,7 +236,20 @@ export const ptyLifecycle: PtyLifecycle = createPtyLifecycle({
   cancelCreate: (surfaceId) => {
     if (typeof window.electronAPI.pty.cancelCreate === 'function') void window.electronAPI.pty.cancelCreate(surfaceId);
   },
+  ownerExists: (key) => key.startsWith(TERMINAL_INSTANCE_KEY_PREFIX) || workspacesHoldKey(key),
 });
+
+/**
+ * A closed leaf has no Terminal whose unmount could forget its refusal, and a
+ * surface can close while its pane is not drawn: while mounted (the empty-leaf
+ * funnel, for the app's life), forget the refusals whose owner has left the
+ * workspaces.
+ */
+export function useReleaseOrphanedRefusals(): void {
+  useEffect(() => useStore.subscribe((state, prev) => {
+    if (state.workspaces !== prev.workspaces) ptyLifecycle.releaseOrphans();
+  }), []);
+}
 
 /**
  * A key refused before, whose owner another path has since filled (a leaf

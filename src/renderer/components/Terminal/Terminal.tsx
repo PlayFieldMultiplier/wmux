@@ -12,7 +12,7 @@ import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { isFileDrag } from '../../../shared/dragDrop';
 import type { FixedGeometry } from '../../terminal/fixedGeometryFit';
 import { findLeafBySurfaceId, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
-import { ptyLifecycle } from '../../hooks/ptyLifecycle';
+import { ptyLifecycle, TERMINAL_INSTANCE_KEY_PREFIX } from '../../hooks/ptyLifecycle';
 import type { DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import ViCopyMode from './ViCopyMode';
 import SearchBar from './SearchBar';
@@ -86,7 +86,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
   // A Terminal with no surface (never self-creating in practice) gets a key of
   // its own instance.
   const instanceKeyRef = useRef<string | null>(null);
-  if (instanceKeyRef.current === null) instanceKeyRef.current = `terminal-instance:${Math.random().toString(36).slice(2)}`;
+  if (instanceKeyRef.current === null) instanceKeyRef.current = `${TERMINAL_INSTANCE_KEY_PREFIX}${Math.random().toString(36).slice(2)}`;
   const lifecycleKey = ownerSurfaceId ?? instanceKeyRef.current;
   const createAttempt = useStore((s) => s.ptyCreateByKey?.[lifecycleKey]);
   // Starts (or, with retry, restarts) this surface's create; null while bound.
@@ -149,9 +149,9 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       selfCreateRef.current = null;
       // Another path bound this surface while its own create was in flight:
       // that create is replaced and must never bind (a no-op otherwise). A
-      // refusal from before is over too: once bound, a later clear creates.
+      // refusal from before is over too (cancel forgets it): once bound, a
+      // later clear creates.
       ptyLifecycle.cancel(lifecycleKey, ownerSurfaceId);
-      ptyLifecycle.clearRefusal(lifecycleKey);
       return;
     }
 

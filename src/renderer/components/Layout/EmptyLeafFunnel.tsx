@@ -33,7 +33,7 @@ import {
 import type { Pane, PaneLeaf } from '../../../shared/types';
 import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import { isLeafReserved, useReservedLeavesVersion } from '../../utils/reservedLeaves';
-import { ptyLifecycle } from '../../hooks/ptyLifecycle';
+import { ptyLifecycle, useReleaseOrphanedRefusals } from '../../hooks/ptyLifecycle';
 
 type LeafPane = PaneLeaf;
 
@@ -65,6 +65,9 @@ export function EmptyLeafFunnel() {
   // #2398 — the leaves whose create was refused. A refusal never re-fires by
   // itself; the pane's Retry clears it, and that change re-runs the effect.
   const refusedKey = useStore(selectRefusedCreateKeys);
+  // A leaf's refusal is keyed by its id; nothing else forgets it when the
+  // leaf closes.
+  useReleaseOrphanedRefusals();
 
   useEffect(() => {
     // Read the FULL active workspace fresh (getState) — this component

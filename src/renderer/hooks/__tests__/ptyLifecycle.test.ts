@@ -99,10 +99,54 @@ describe('ptyLifecycle.ensure (#2398)', () => {
     expect(h.attempts.get('surf')).toEqual({ state: 'creating' });
   });
 
-  it('cancel with nothing in flight does nothing (no IPC)', () => {
+  it('cancel with nothing in flight sends no IPC', () => {
     const h = harness();
     h.lifecycle.cancel('surf', 'surf');
     expect(h.deps.cancelCreate).not.toHaveBeenCalled();
+  });
+
+  it('cancel forgets a refusal too, so a closed surface leaves nothing behind (review P3)', async () => {
+    const h = harness();
+    const outcome = h.lifecycle.ensure('surf', { create: h.create, bind: () => true });
+    h.settles[0](refused('cap'));
+    await outcome;
+    h.lifecycle.cancel('surf', 'surf');
+    expect(h.attempts.has('surf')).toBe(false);
+    expect(h.lifecycle.isRefused('surf')).toBe(false);
+    // No refused request is held any more either.
+    expect(h.lifecycle.retry('surf')).toBe(false);
+    expect(h.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refusal for an owner already gone is not kept (review P3)', async () => {
+    const h = harness();
+    let exists = true;
+    h.deps.ownerExists = () => exists;
+    const lifecycle = createPtyLifecycle(h.deps);
+    const outcome = lifecycle.ensure('leaf', { create: h.create, bind: () => true });
+    exists = false;
+    h.settles[0](refused('cap'));
+    await expect(outcome).resolves.toEqual({ status: 'createFailed', error: 'cap' });
+    expect(h.attempts.has('leaf')).toBe(false);
+    expect(lifecycle.retry('leaf')).toBe(false);
+  });
+
+  it('releaseOrphans forgets the refusals whose owner is gone, and only those (review P3)', async () => {
+    const h = harness();
+    const gone = new Set<string>();
+    h.deps.ownerExists = (key) => !gone.has(key);
+    const lifecycle = createPtyLifecycle(h.deps);
+    const a = lifecycle.ensure('closed-leaf', { create: h.create, bind: () => true });
+    const b = lifecycle.ensure('open-leaf', { create: h.create, bind: () => true });
+    h.settles[0](refused('cap'));
+    h.settles[1](refused('cap'));
+    await Promise.all([a, b]);
+    gone.add('closed-leaf');
+    lifecycle.releaseOrphans();
+    expect(h.attempts.has('closed-leaf')).toBe(false);
+    expect(lifecycle.retry('closed-leaf')).toBe(false);
+    expect(h.attempts.get('open-leaf')).toEqual({ state: 'createFailed', error: 'cap' });
+    expect(lifecycle.retry('open-leaf')).toBe(true);
   });
 
   it('an owner that no longer takes the pty has it disposed', async () => {
