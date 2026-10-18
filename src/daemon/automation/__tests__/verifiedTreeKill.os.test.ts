@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, recordedStartOf, survivorsStillRunning, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
 import type { ProcessHandle, ProcessHandleApi, ProcessOpenResult } from '../../../main/pty/winSnapshotNative';
 
@@ -270,10 +270,29 @@ describe('captureTreePosix', () => {
     expect(f.signals).toEqual([]);
   });
 
+  it('never signals a captured pid another process took meanwhile', async () => {
+    const rows = [row(1, 0), row(100, 1), row(101, 100)];
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => rows.map((r) => ({ ...r })),
+      signal: (pid, sig) => {
+        signals.push([pid, sig]);
+        const r = rows.find((x) => x.pid === pid);
+        if (sig === 'SIGKILL' && r) r.stat = 'Z';
+      },
+    };
+    const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+    // 101 was killed by someone else and its pid went to an unrelated process.
+    rows[2] = { pid: 101, ppid: 1, stat: 'S', start: 'unrelated' };
+    const r = await tree.kill({ timeoutMs: 0 });
+    expect(signals.filter(([p, s]) => p === 101 && s === 'SIGKILL')).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
   it('release() lets the frozen tree run again', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
     (await captureTreePosix(100, f.deps))!.release();
-    expect(f.signals.filter(([, s]) => s === 'SIGCONT').map(([p]) => p)).toEqual([100, 101]);
+    await vi.waitFor(() => expect(f.signals.filter(([, s]) => s === 'SIGCONT').map(([p]) => p)).toEqual([100, 101]));
     expect(f.signals.some(([, s]) => s === 'SIGKILL')).toBe(false);
   });
 });

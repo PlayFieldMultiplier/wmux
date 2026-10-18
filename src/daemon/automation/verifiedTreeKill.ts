@@ -435,22 +435,41 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   // forked before it was frozen, into a process group the kill misses.
   if (!complete && scanError === null) scanError = `the tree was still growing after ${CAPTURE_ROUNDS} scans`;
   let released = false;
+  /** The captured pids still held by the processes captured (their start
+   *  time unchanged), in capture order. A frozen process cannot exit, but
+   *  another process can kill it and its pid go to an unrelated one; that
+   *  one is never signalled. When the table cannot be read, all of them:
+   *  frozen, they keep their pids. */
+  const stillCaptured = async (): Promise<number[]> => {
+    try {
+      const byPid = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
+      return [...targets].filter(([pid, start]) => byPid.get(pid)?.start === start).map(([pid]) => pid);
+    } catch {
+      return [...targets.keys()];
+    }
+  };
   return {
     rootPid,
     pids: () => [...targets.keys()],
     release: () => {
       if (released) return;
       released = true;
-      for (const pid of targets.keys()) send(pid, 'SIGCONT');
+      void stillCaptured().then((pids) => {
+        for (const pid of pids) send(pid, 'SIGCONT');
+      });
     },
     kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
       if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }] };
       released = true;
+      const ours = await stillCaptured();
       // Leaves first (discovery order is parent-before-child), then the PTY's
-      // process group (the root is a session leader) and the root.
-      for (const pid of [...targets.keys()].reverse()) send(pid, 'SIGKILL');
-      send(-rootPid, 'SIGKILL');
-      send(rootPid, 'SIGKILL');
+      // process group (the root is a session leader) and the root, while the
+      // root is still the one captured (its group is then still its own).
+      for (const pid of [...ours].reverse()) send(pid, 'SIGKILL');
+      if (ours.includes(rootPid)) {
+        send(-rootPid, 'SIGKILL');
+        send(rootPid, 'SIGKILL');
+      }
       const deadline = Date.now() + timeoutMs;
       let alive: TreeKillSurvivor[] = [];
       for (;;) {
