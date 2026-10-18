@@ -40,10 +40,12 @@ tests that spawn real OS resources, such as ConPTY shells or Windows process
 probes. `npm test` runs these runtime tests serially after the regular parallel
 suite to avoid cross-test contention.
 
-On a pull request, CI (`.github/workflows/ci.yml`) runs `validate`: type
-checks, builds (the daemon bundle included) and `npm run test:parallel`, split
-into two shards, `validate (1/2)` and `validate (2/2)`. A PR needs both green;
-a branch-protection rule that requires status checks lists those two.
+On a pull request, CI (`.github/workflows/ci.yml`) runs parallel jobs:
+`checks` (type checks, builds with the daemon bundle included, lint and the
+lockfile guard, on Linux since none of it depends on the OS) and `validate`
+(`npm run test:parallel` split into two shards, `validate (1/2)` and
+`validate (2/2)`). A PR needs all three green; a branch-protection rule that
+requires status checks lists those three.
 
 The runtime suite (`npm run test:runtime` against a freshly built daemon
 bundle) is not on the PR path: its real-Chrome and ConPTY tests are timing

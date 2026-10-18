@@ -247,6 +247,7 @@ export const IPC = {
   ACCOUNT_ONBOARD_PREPARE: 'account:onboard:prepare',
   ACCOUNT_ADD: 'account:add',
   ACCOUNT_RENAME: 'account:rename',
+  ACCOUNT_SET_GROUP: 'account:set-group',
   ACCOUNT_REMOVE: 'account:remove',
   ACCOUNT_SET_BINDING: 'account:set-binding',
   ACCOUNT_CREDENTIAL_STATUS: 'account:credential-status',

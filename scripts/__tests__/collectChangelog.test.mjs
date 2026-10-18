@@ -10,6 +10,8 @@ import { parseFragment, collect, applyToChangelog, fragmentFiles } from '../lib/
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 describe('parseFragment', () => {
   it('keeps a multi-line entry as one entry', () => {
@@ -125,5 +127,40 @@ describe('applyToChangelog', () => {
     const out = applyToChangelog('## [4.1.0] — 2026-10-08\r\n\r\n- shipped\r\n', {});
     expect(out.startsWith('## [Unreleased]\r\n\r\n## [4.1.0]')).toBe(true);
     expect(out).not.toMatch(/[^\r]\n/);
+  });
+});
+
+describe('collect-changelog.mjs', () => {
+  // The CLI deletes fragments, so it runs on a copy of the scripts whose
+  // ROOT (derived from the lib file's location) is a temp folder.
+  const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+  it('refuses to fold fragments the checker finds errors in, and writes nothing', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collect-'));
+    fs.mkdirSync(path.join(root, 'scripts', 'lib'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'changelog.d'));
+    for (const f of ['collect-changelog.mjs', 'check-changelog-fragments.mjs', 'lib/changelog-fragments.mjs']) {
+      fs.copyFileSync(path.join(scripts, f), path.join(root, 'scripts', f));
+    }
+    const changelog = '# Changelog\n\n## [Unreleased]\n';
+    fs.writeFileSync(path.join(root, 'CHANGELOG.md'), changelog);
+    const fragment = path.join(root, 'changelog.d', '7.md');
+    fs.writeFileSync(fragment, '### Fixed\n\n- **A fix.** It works. (#7)\n###Added\n- **Glued.** On. (#7)\n');
+
+    const run = () => spawnSync(process.execPath, [path.join(root, 'scripts', 'collect-changelog.mjs')], { cwd: root, encoding: 'utf8' });
+    const refused = run();
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/changelog\.d[\\/]7\.md:4: error:/);
+    expect(refused.stderr).toContain('refusing to fold');
+    // The checker's own command line must not run when it is imported.
+    expect(refused.stdout).not.toContain('check-changelog-fragments:');
+    expect(fs.existsSync(fragment)).toBe(true);
+    expect(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8')).toBe(changelog);
+
+    fs.writeFileSync(fragment, '### Fixed\n\n- **A fix.** It works. (#7)\n');
+    const folded = run();
+    expect(folded.status).toBe(0);
+    expect(fs.existsSync(fragment)).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8')).toContain('- **A fix.** It works. (#7)');
   });
 });
