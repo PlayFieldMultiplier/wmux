@@ -3024,28 +3024,31 @@ function registerRpcHandlers(
     return { ok: true, mode: 'rows', rows: capped.rows, bufferType: outcome.bufferType, rowsBelowCursor: outcome.rowsBelowCursor, truncated: capped.truncated };
   });
 
+  // #2408: how long a session list waits for a recovered pane's screen read.
+  const RECOVERED_SIGHTING_LIST_WAIT_MS = 300;
   // #2408: per recovered pane, the ring position its screen was last read at
   // and whether that screen showed a live agent the screen tier sighted.
   const recoveredSighting = new Map<string, { at: number; onScreen: boolean }>();
-  const sightingReads = new Set<string>();
+  const sightingReads = new Map<string, Promise<void>>();
   /**
-   * #2408: read a recovered pane's screen again, off the RPC path, when its
-   * fresh detector sighted Claude or Codex since the restart and output has
-   * arrived since the last read. The verdict (its composer, running row or
-   * dialog on the visible grid) only hides the pill; the offer stays until a
-   * hook or a live process consumes it. Panes with no sighting are never
-   * rendered, and an unreadable frame leaves the last verdict standing.
+   * #2408: read a recovered pane's screen again when its fresh detector
+   * sighted Claude or Codex since the restart and output has arrived since the
+   * last read. The verdict (the agent's composer at the bottom of the grid, or
+   * its dialog) only hides the pill; the offer stays until a hook or a live
+   * process consumes it. Panes with no sighting are never rendered, and an
+   * unreadable frame leaves the last verdict standing. Returns the read in
+   * flight, if any.
    */
-  const readRecoveredSighting = (id: string): void => {
+  const readRecoveredSighting = (id: string): Promise<void> | undefined => {
     const managed = sessionManager.getSession(id);
     const slug = managed && recoveredAgentShellIds.has(id) ? sightedRecoveredAgent(managed.bridge.getLastAgent()) : undefined;
     if (!managed || !slug) {
       recoveredSighting.delete(id);
-      return;
+      return undefined;
     }
-    if (sightingReads.has(id) || recoveredSighting.get(id)?.at === managed.ringBuffer.totalBytesWritten) return;
-    sightingReads.add(id);
-    void renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot)
+    const inFlight = sightingReads.get(id);
+    if (inFlight || recoveredSighting.get(id)?.at === managed.ringBuffer.totalBytesWritten) return inFlight;
+    const read = renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot)
       .then((frame) => {
         if (frame && sessionManager.getSession(id) === managed && recoveredAgentShellIds.has(id)) {
           recoveredSighting.set(id, { at: frame.mark, onScreen: screenShowsLiveAgent(frame.rows, slug) });
@@ -3053,6 +3056,8 @@ function registerRpcHandlers(
       })
       .catch(() => undefined)
       .finally(() => sightingReads.delete(id));
+    sightingReads.set(id, read);
+    return read;
   };
   // A burst of output has settled, so the screen is drawn: read it then, and
   // a list finds the verdict ready instead of waiting on a render.
@@ -3068,7 +3073,23 @@ function registerRpcHandlers(
     // client that gets a bare list back (an older daemon) takes it as
     // recovered, as every read was taken before.
     const withRecovery = params['withRecovery'] === true;
-    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone: startupRecovery.done() } : sessions);
+    // Taken before the sighting wait below, so `recoveryDone` never describes
+    // a later state than the sessions listed after it.
+    const recoveryDone = startupRecovery.done();
+    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone } : sessions);
+    // #2408: a sighted recovered pane whose screen changed since its last
+    // read is read now, waited on only briefly: the snapshot queue is shared,
+    // and a read that takes longer lands on a later list.
+    for (const id of recoveredSighting.keys()) {
+      if (!recoveredAgentShellIds.has(id)) recoveredSighting.delete(id);
+    }
+    const sightingReadsNow = [...recoveredAgentShellIds.keys()].flatMap((id) => readRecoveredSighting(id) ?? []);
+    if (sightingReadsNow.length > 0) {
+      await Promise.race([
+        Promise.all(sightingReadsNow),
+        new Promise<void>((resolve) => { setTimeout(resolve, RECOVERED_SIGHTING_LIST_WAIT_MS).unref?.(); }),
+      ]);
+    }
     // X8: join the supervisor's volatile runtime (restart counts, pending
     // backoff) onto supervised sessions — additive field consumed by
     // `wmux list --json` and the sidebar badge.
@@ -3103,9 +3124,7 @@ function registerRpcHandlers(
         ? { ...base, supervisionRuntime: paneSupervisor.getRuntime(s.id) }
         : base;
       // #2408: additive; an older daemon sends no `resumeAgentOnScreen` and the
-      // renderer then gates the pill as before. The last verdict is reported
-      // and a stale one is read again in the background, never awaited here.
-      if (resumeAgent) readRecoveredSighting(s.id);
+      // renderer then gates the pill as before.
       const withAgent = resumeAgent
         ? { ...withRuntime, resumeAgent, ...(recoveredSighting.get(s.id)?.onScreen === true ? { resumeAgentOnScreen: true as const } : {}) }
         : withRuntime;

@@ -170,6 +170,30 @@ describe('recovery pill: a screen-tier sighting hides it and never consumes the 
     expect(await pane.onScreen()).toBe(false);
   });
 
+  it('a Claude killed from outside goes stale once the shell prints under its composer', async () => {
+    const pane = recoveredPane();
+    pane.feed(CLAUDE_SPLASH + '\r\n' + CLAUDE_COMPOSER);
+    expect(await pane.onScreen()).toBe(true);
+    // No exit frame: the composer stays drawn and the remote shell writes below it.
+    pane.feed('Killed\r\nme@devbox:~/repo$ ');
+    expect(await pane.onScreen()).toBe(false);
+  });
+
+  it('an answer that mentions a dialog shortcut does not hide a live composer', async () => {
+    const pane = recoveredPane();
+    pane.feed(CLAUDE_SPLASH + '\r\n');
+    pane.feed('⏺ Press Esc to cancel the picker, then Enter.\r\n\r\n' + CLAUDE_COMPOSER);
+    expect(await pane.onScreen()).toBe(true);
+  });
+
+  it('reads a live Codex composer, and not its rows left above a shell prompt', () => {
+    const codex = ['• ok', '', '› Ask Codex to do anything', '', '  gpt-5 high · ~/repo', '  ? for shortcuts'];
+    expect(screenShowsLiveAgent(codex, 'codex')).toBe(true);
+    expect(screenShowsLiveAgent(['› fix the', '  flaky test', '', '  gpt-5 high · ~/repo'], 'codex')).toBe(true);
+    expect(screenShowsLiveAgent([...codex, 'me@devbox:~/repo$'], 'codex')).toBe(false);
+    expect(screenShowsLiveAgent(['me@devbox:~/repo$ codex'], 'codex')).toBe(false);
+  });
+
   it('quoted agent text in a different, still-recovering pane keeps that pill', async () => {
     const a = recoveredPane();
     a.feed(CLAUDE_SPLASH + '\r\n' + CLAUDE_COMPOSER);
