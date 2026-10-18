@@ -708,7 +708,7 @@ describe('IntegrationSetupSection — account folder hook update', () => {
     expect(action(container, 'hooks-account-a')!.textContent).toBe('Update');
   });
 
-  it('lets a row be clicked again when the probe after its Update fails', async () => {
+  it('shows a successful account Update as done when the probe after it fails', async () => {
     const { api } = accountsApi();
     const status = api.hooks!.status;
     let failProbe = false;
@@ -719,8 +719,23 @@ describe('IntegrationSetupSection — account folder hook update', () => {
     await flush();
     await act(async () => { action(container, 'hooks-account-a')!.click(); await Promise.resolve(); });
     await flush();
-    expect(state(container, 'hooks-account-a')).toBe('outdated');
-    expect((action(container, 'hooks-account-a') as HTMLButtonElement).disabled).toBe(false);
+    expect(state(container, 'hooks-account-a')).toBe('installed');
+    expect(state(container, 'hooks-account-b')).toBe('outdated');
+  });
+
+  it('settles a successful account Update even when its probe is discarded', async () => {
+    const { api } = accountsApi();
+    let holdProbe = false;
+    const status = api.hooks!.status;
+    api.hooks!.status = () => (holdProbe ? new Promise(() => undefined) : status());
+    api.hooks!.updateAccount = async () => { holdProbe = true; return { ok: true, error: null }; };
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    await act(async () => { action(container, 'hooks-account-a')!.click(); await Promise.resolve(); });
+    await flush();
+    expect(state(container, 'hooks-account-a')).toBe('installed');
+    expect(action(container, 'hooks-account-a')).toBeNull();
   });
 
   it('shows no account rows on a preload without the account Update', async () => {

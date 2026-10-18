@@ -321,14 +321,7 @@ export function IntegrationSetupSection({
               error: null,
             }, gen),
       )
-      .catch(() => {
-        commit(setHooks, INITIAL, gen);
-        // The probe that follows an Update failed: let its rows be clicked again
-        // (the Update writes only what is missing, so a repeat is harmless).
-        if (mountedRef.current && gen === genRef.current) {
-          setAccountHooks((rows) => rows.map((r) => (r.model.state === 'working' ? { ...r, model: { ...r.model, state: 'outdated' } } : r)));
-        }
-      });
+      .catch(() => commit(setHooks, INITIAL, gen));
     // Probed with the rows but kept OUT of RowModel: it is not an install
     // state, and folding it into the hooks row would make a suppressed prompt
     // read as a broken install.
@@ -472,7 +465,7 @@ export function IntegrationSetupSection({
 
   // One account folder's Update. Not runInstall: its single generation would
   // let a second account's Update swallow the first one's result. Each row
-  // settles on its own; a success re-probes, which replaces the rows.
+  // settles on its own; a success also re-probes, which replaces the rows.
   const runAccountUpdate = useCallback(async (accountId: string) => {
     const update = api.hooks?.updateAccount;
     if (!update) return;
@@ -483,7 +476,13 @@ export function IntegrationSetupSection({
     setRow((prev) => ({ ...prev, state: 'working', error: null }));
     try {
       const outcome = await update(accountId);
-      if (outcome.ok) { probeAll(); return; }
+      if (outcome.ok) {
+        // Settled here, not by the probe: another row's install can discard
+        // that probe. The probe then drops the row once the file agrees.
+        setRow((prev) => ({ ...prev, state: 'installed', error: null, stale: [] }));
+        probeAll();
+        return;
+      }
       setRow((prev) => ({ ...prev, state: 'error', error: outcome.error }));
     } catch (err) {
       setRow((prev) => ({ ...prev, state: 'error', error: err instanceof Error ? err.message : null }));
