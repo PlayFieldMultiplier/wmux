@@ -417,14 +417,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           unidentified.delete(pid);
           survivors.push({ pid, reason: 'it exited before its children could be identified; they may still run', unverified: true });
         }
-        // Still there and still not identified (one that exited meanwhile is
-        // no longer a question).
-        for (const [pid, reason] of unidentified) {
-          const now = api.open(pid);
-          if ('gone' in now) continue;
-          if ('handle' in now) api.close(now.handle);
-          survivors.push({ pid, reason });
-        }
+        // Never identified, so never walked: whatever it started (even after
+        // it exited, its children keep its pid as their parent only until
+        // that pid is reused) cannot be ruled out.
+        for (const [pid, reason] of unidentified) survivors.push({ pid, reason, unverified: true });
         // The tree was still growing at the deadline: a child started last may
         // not have been seen.
         if (!settled && survivors.length === 0) survivors.push({ pid: rootPid, reason: 'the tree kept starting processes until the deadline', unverified: true });

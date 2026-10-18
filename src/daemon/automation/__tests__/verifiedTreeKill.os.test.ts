@@ -213,6 +213,19 @@ describe('captureTreeWin32', () => {
     if (!r.ok) expect(r.survivors.map((s) => s.pid)).toEqual([11]);
   });
 
+  it('keeps a child it could not identify unverified even once it is gone', async () => {
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, unopenable: true },
+    ]);
+    const tree = captureTreeWin32(10, f.api, { sleep: noWait })!;
+    // 11 exits after the capture (a grandchild it started would be out of reach).
+    f.api.processTable = () => [{ pid: 10, ppid: 1 }];
+    const r = await tree.kill({ timeoutMs: 100 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toEqual([expect.objectContaining({ pid: 11, unverified: true })]);
+  });
+
   it('fails closed when the process table cannot be read', async () => {
     const f = fakeWin([{ pid: 10, ppid: 1, createdAt: 100n }], { tableFails: true });
     const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 0 });
