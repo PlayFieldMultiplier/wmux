@@ -513,6 +513,25 @@ describe('AgentDetector', () => {
       expect(det.getLastAgent()).toBeNull();
     });
 
+    it('does NOT open the gate on a model name followed by a percentage inside other output', () => {
+      for (const row of [
+        '\u23fa Claude ran with gemini-2.5-pro 95% of the time.\n',
+        '~/code/gemini-cli 45% | Opus\n',
+        '\u2502 gemini-2.5-pro \u2502 63% \u2502 fast \u2502\n',
+        'added @google/gemini-cli 100% done\n',
+      ]) {
+        const det = new AgentDetector();
+        det.feed(row);
+        expect(det.getLastAgent(), row).toBeNull();
+      }
+    });
+
+    it('opens the gate on a composer row drawn with cursor moves (no literal spaces)', () => {
+      const det = new AgentDetector();
+      det.feed('>\u001b[3CType\u001b[1Cyour\u001b[1Cmessage\u001b[1Cor\u001b[1C@path/to/file\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
+    });
+
     it('does NOT open the gate on a Claude reply, a shell command or a package name that names Gemini', () => {
       // Reddit report: a Claude-only pane came back after a reboot offering
       // "Resume Gemini" — the substring gate had taken the pane over on text

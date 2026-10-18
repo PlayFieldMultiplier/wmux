@@ -402,10 +402,11 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // exited) that made Gemini the pane's lastAgent. The daemon persists that
     // slug as lastDetectedAgent, so after a restart a Claude-only pane lost
     // its resume pill (Gemini has no resume grammar) or offered another
-    // agent's picker. The hint names the composer and the footer, not the
-    // word: a cwd like `~/gemini-cli` sits in Claude's statusline on every
-    // repaint and must not pay for candidateLines on each chunk.
-    gate: /Type your message or |gemini-|Gemini CLI update/,
+    // agent's picker. The hint names the composer and a model name
+    // (`gemini-2.5…`), not the word: a cwd like `~/gemini-cli` sits in
+    // Claude's statusline on every repaint and must not pay for
+    // candidateLines on each chunk.
+    gate: /Type\s*your\s*message\s*or|gemini-\d|Gemini CLI update/,
     chrome: (line) => isGeminiChrome(line),
     patterns: [
       { regex: /^gemini>\s*$/,                   status: 'waiting',   message: 'Waiting for input' },
@@ -783,8 +784,16 @@ function isGeminiChrome(line: string): boolean {
   const stripped = stripAnsi(line);
   if (SOURCE_LINE_RE.test(stripped)) return false;
   const v = visibleChrome(stripped);
-  return /^[>!*]?\s*Type your message or (?:@path\/to\/file|(?:hold )?space to talk)/.test(v)
-    || /\bgemini-[\w.-]+\s+(?:\d+%(?:\s+used)?(?:\s|$)|\(\d+%\s*context\s*left\))/i.test(v)
+  // `\s*` between the words: a cursor-drawn row loses its spaces after the
+  // strip (the same reason CLAUDE_PROMPT_RE and the Kiro check allow it).
+  return /^[>!*]?\s*Type\s*your\s*message\s*or\s*(?:@path\/to\/file|(?:hold\s*)?space\s*to\s*talk)/.test(v)
+    // The footer's model column is a real model name (`gemini-2.5-pro`,
+    // `gemini-3-flash-preview`) and the context display ENDS the row:
+    // `… gemini-2.5-pro 12% used`, `… gemini-2.5-pro 12%`, or the older
+    // `… gemini-2.5-pro (88% context left)`. Anchored at the end so a Claude
+    // reply (`ran with gemini-2.5-pro 95% of the time`), a statusline
+    // (`~/gemini-cli 45% | Opus`) or a table cell cannot pass.
+    || /(?:^|\s)gemini-\d[\w.-]*\s+(?:\d+%(?:\s+used)?|\(\d+%\s*context\s*left\))$/i.test(v)
     || /^Gemini CLI update available/.test(v);
 }
 
