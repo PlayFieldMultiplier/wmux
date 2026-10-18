@@ -141,7 +141,7 @@ export class ApiErrorTurnEnds {
     if (promptId && !line.includes('"isSidechain":true')) this.lastPromptId.set(sessionId, promptId);
     const end = apiErrorFromTranscriptLine(line);
     if (end && end.at < (this.promptAt.get(sessionId) ?? -Infinity)) return;
-    const turnPrompt = this.lastPromptId.get(sessionId) ?? this.hookPromptId.get(sessionId);
+    const turnPrompt = this.lastPromptId.get(sessionId);
     if (end) this.pending.set(sessionId, { end: turnPrompt ? { ...end, promptId: turnPrompt } : end, path, seenAt: this.now() });
     else if (this.pending.has(sessionId) && isTurnProgress(line)) this.pending.delete(sessionId);
   }
@@ -203,7 +203,14 @@ export class ApiErrorTurnEnds {
       if (hookEnd !== undefined && hookEnd >= p.end.at) continue;
       if (!this.deps.isReader(id, p.path)) continue;
       if (!this.deps.isCurrentOpenTurn(id, p.end.at)) continue;
-      const signal = this.deps.signalFor(id, p.path, p.end);
+      // With the turn's user entry unread (before a replay window), the latest
+      // prompt hook that fired before the entry names the turn: same id. Read
+      // here, so a prompt hook that arrives after the entry still counts.
+      const hookPrompt = this.hookPromptId.get(id);
+      const end = !p.end.promptId && hookPrompt && (this.promptAt.get(id) ?? Infinity) <= p.end.at
+        ? { ...p.end, promptId: hookPrompt }
+        : p.end;
+      const signal = this.deps.signalFor(id, p.path, end);
       if (signal) this.deps.emit(signal);
     }
   }

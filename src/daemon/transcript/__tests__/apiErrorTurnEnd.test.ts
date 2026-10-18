@@ -161,6 +161,16 @@ describe('ApiErrorTurnEnds', () => {
     expect(g.sent.map((s) => s.payload.prompt_id)).toEqual(['p-hook']);
   });
 
+  it('takes the id of a prompt hook that arrives after the error was read', () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
+    g.advance(1000);
+    g.turnEnds.noteHookSignal('pty-1', 'agent.user_prompt_submit', TURN_OPENED_AT, 'p-late');
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent.map((s) => s.payload.prompt_id)).toEqual(['p-late']);
+  });
+
   it('still closes the turn when a background subagent writes after the lead turn died', () => {
     const g = gate();
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
