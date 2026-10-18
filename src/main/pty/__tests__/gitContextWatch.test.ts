@@ -6,6 +6,7 @@ import {
   GitContextWatcher,
   parseHead,
   resolveRepo,
+  resolveRepoState,
   readGitContext,
   type GitWatchFactory,
   type GitWatchListener,
@@ -340,6 +341,37 @@ describe('GitContextWatcher', () => {
       { sessionId: 's1', branch: 'main', isWorktree: false },
       { sessionId: 's2', branch: null, isWorktree: false, absent: true },
     ]);
+  });
+
+  it('a walk that gives up before the root is unknown, not absent', () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    // 30 levels below the repo: past the 24-level walk limit.
+    const deep = path.join(root, ...Array.from({ length: 30 }, (_, i) => `d${i}`));
+    fs.mkdirSync(deep, { recursive: true });
+    expect(resolveRepoState(deep)).toEqual({ repo: null, conclusive: false });
+    makeWatcher().update('s1', deep);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('a .git file without a gitdir line is unknown, not absent', () => {
+    const root = tmp();
+    fs.writeFileSync(path.join(root, '.git'), 'garbage\n');
+    makeWatcher().update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('resync() resolves a non-repo session again (an ancestor git init)', () => {
+    const parent = tmp();
+    const sub = path.join(parent, 'sub');
+    fs.mkdirSync(sub);
+    const watcher = makeWatcher();
+    watcher.update('s1', sub);
+    expect(events.at(-1)?.absent).toBe(true);
+    initFakeRepo(parent, 'late');
+    watcher.resync();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'late', isWorktree: false });
+    expect(events).toHaveLength(2);
   });
 
   it('picks up a git init in a previously non-repo cwd without polling', () => {
