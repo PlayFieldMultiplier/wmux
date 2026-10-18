@@ -81,9 +81,9 @@ import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, cap
 import { readSessionTextReplay } from './sessionTextReplay';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
-import { AwaitingScreenVerifier, questionInFlight, renderPaneScreen } from './AwaitingScreenVerifier';
+import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen } from './AwaitingScreenVerifier';
 import { snapshotRingTextUnqueued } from './nativeRingSnapshot';
-import { screenShowsAgentDialog } from './transcript/chatScreenGate';
+import { screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
 import { isClaudeFamilyAgent } from './approvals/terminalPrompt';
@@ -393,6 +393,12 @@ let noteCodexTurnFailed: ((id:string, threadId:string, turn:unknown)=>void) | un
 let pushTurnFailed: ((sessionId:string, failure:TurnFailure)=>void) | undefined;
 /** Re-run a pane's awaiting verification (#1901), set by wireEvents. */
 let reverifyAwaiting: ((sessionId: string) => void) | undefined;
+/**
+ * Is a dialog on the pane's screen now (null: grid unreadable or too narrow to
+ * judge)? Set by wireEvents; HookIngest asks before confirming a Claude
+ * PermissionRequest alarm.
+ */
+let dialogOnScreen: ((sessionId: string) => Promise<boolean | null>) | undefined;
 // Late-bound: the pipe server that carries notices exists only after boot.
 let notifyCodexIdentityRefused: ((id:string,reason:string)=>void) | undefined;
 const codexRefusalNoticedAt = new Map<string,number>();
@@ -4500,6 +4506,7 @@ function registerRpcHandlers(
       onResolvedSignal: (sessionId, signal) => {
         if (signal.ptyId === sessionId) usageLimits?.noteHookSignal(sessionId, signal);
       },
+      dialogOnScreen: (sessionId) => dialogOnScreen?.(sessionId) ?? Promise.resolve(null),
       // Chat View P1 — the tail nudge rides the existing hook signals rather
       // than a new hook. Fired for every resolved kind; a no-op for panes with
       // no Chat surface open.
@@ -6392,6 +6399,18 @@ function wireEvents(
     }
   });
   reverifyAwaiting = (sessionId) => awaitingVerifier.trigger(sessionId, 'signal');
+  // One render on the shared snapshot queue, only when a PermissionRequest
+  // alarm is about to confirm (at most one per hook, ~1.5 s after it). The
+  // same two predicates the verifier releases a pane on: the dialog owns the
+  // bottom of the screen, or its cursor row sits there with no agent output
+  // after it. A grid narrower than the dialog's footer wraps it beyond what
+  // either test can see (#1901), so it is not judged.
+  dialogOnScreen = async (sessionId) => {
+    const frame = await renderPaneScreen(() => sessionManager.getSession(sessionId), generateTextSnapshot);
+    if (!frame || frame.rows.every((row) => row.trim().length === 0)) return null;
+    if (typeof frame.cols === 'number' && frame.cols < AWAITING_NARROW_DIALOG_COLS) return null;
+    return screenShowsActiveDialog(frame.rows) || screenShowsPermissionDialog(frame.rows);
+  };
   const forgetAwaiting = (payload: { id: string }): void => awaitingVerifier.forget(payload.id);
   sessionManager.on('session:died', forgetAwaiting);
   sessionManager.on('session:destroyed', forgetAwaiting);

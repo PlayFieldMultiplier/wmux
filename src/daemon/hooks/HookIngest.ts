@@ -247,6 +247,14 @@ export interface HookIngestDeps {
    */
   onResolvedSignal?: (sessionId: string, signal: AgentSignal) => void;
   /**
+   * Is a dialog on the pane's screen right now? Consulted when a Claude
+   * PermissionRequest's attention window confirms: `false` drops the alarm
+   * (the dialog was never shown, or was answered inside the window), `null`
+   * means the grid could not be read and the hook is trusted as before.
+   * Optional: only the daemon supplies it.
+   */
+  dialogOnScreen?: (sessionId: string) => Promise<boolean | null>;
+  /**
    * Transcript projection — tell the TranscriptProjector that this pane's
    * transcript may have grown. Fired for EVERY resolved signal, including the
    * non-emit kinds: `agent.activity` is the mid-turn liveness nudge,
@@ -1384,7 +1392,7 @@ export class HookIngest {
     }
 
     const { status, message } = eventShapeFor(signal.kind);
-    const resume = () => {
+    const fanOut = (): HookSignalResponse => {
       const decision = this.router.recordHook(signal, sessionId, this.now());
       if (signal.kind === 'agent.stop') {
         this.deps.approvals?.expireForSession(sessionId, 'turn-ended');
@@ -1403,6 +1411,36 @@ export class HookIngest {
         signal,
       });
     };
+    // Claude's PermissionRequest hook fires for every dialog it is ABOUT to
+    // show — including ones nobody ever sees: a permission auto-resolved by
+    // the session's mode, an in-process background agent whose prompt cannot
+    // be shown, a dialog the human answered inside the window. The alarm
+    // treats the hook as firm (working cues do not rebut it, by design: a
+    // subagent painting behind a real dialog is not an answer), so each such
+    // hook used to confirm a "needs you" toast ~1.5 s later while the agent
+    // visibly kept working — reported as "notified every 2 seconds that input
+    // is required; when I click, the AI is still working". The screen is the
+    // tie-breaker: at confirmation, a readable grid with no dialog on it means
+    // there is nothing to answer, and the alarm is dropped. An unreadable grid
+    // (null) keeps trusting the hook, as before.
+    const verifyOnScreen = this.deps.dialogOnScreen;
+    const resume = verifyOnScreen
+      && signal.kind === 'agent.awaiting_input'
+      && signal.payload?.['hook_event_name'] === 'PermissionRequest'
+      && isClaudeFamilyAgent(signal.agent)
+      ? () => {
+        void verifyOnScreen(sessionId).then((up) => {
+          if (up === false) {
+            this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no dialog on screen at confirmation`);
+            return;
+          }
+          fanOut();
+        }).catch((err) => {
+          this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
+          fanOut();
+        });
+      }
+      : fanOut;
     const outcome = this.alarm.observe(sessionId, signal.agent, cue, resume);
     if (outcome === 'hold') {
       // The bridge is answered NOW; the broadcast fires at confirmation (or
