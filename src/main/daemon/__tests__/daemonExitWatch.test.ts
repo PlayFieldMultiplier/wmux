@@ -10,7 +10,11 @@ import {
   type DaemonExitWatchDeps,
 } from '../daemonExitWatch';
 import type { ProcessExitRead } from '../../pty/winSnapshotNative';
-import type { SpawnedDaemonExit } from '../../../shared/daemon/daemonLauncherCore';
+import {
+  onSpawnedDaemonExit,
+  spawnedDaemonRegistryForTest,
+  type SpawnedDaemonExit,
+} from '../../../shared/daemon/daemonLauncherCore';
 
 describe('describeExitCode', () => {
   it('prints Windows exit codes as unsigned hex with what they mean', () => {
@@ -157,12 +161,25 @@ describe('createDaemonExitWatch (spawned child)', () => {
   });
 
   it('a found daemon ignores a launcher record left by an earlier daemon with the same pid (Codex P2)', async () => {
-    // The pid was reused: the record says an older process exited 1.
-    const stale = (_pid: number, cb: (exit: SpawnedDaemonExit) => void) => { cb({ code: 1, signal: null }); return () => { /* delivered */ }; };
+    // The pid was reused: the record says an older process exited 1. The
+    // launcher withholds an ended record when asked for live ones only.
+    const stale = (_pid: number, cb: (exit: SpawnedDaemonExit) => void, liveOnly: boolean) => {
+      if (liveOnly) return null;
+      cb({ code: 1, signal: null });
+      return () => { /* delivered */ };
+    };
     const h = scriptedHandle([{ state: 'running' }, { state: 'exited', code: 0xc0000005 }]);
     const { lines, deps } = harness({ onChildExit: stale, openHandle: () => h.handle });
     await createDaemonExitWatch(66, false, deps).report('socket close');
     expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 66 exited 0xC0000005 (access violation) — at socket close' }]);
+  });
+
+  it('a reconnect to a daemon this process spawned earlier still gets its child exit (Codex P2)', () => {
+    const src = childExitSource();
+    const { lines, deps } = harness({ platform: 'linux', onChildExit: src.onChildExit });
+    createDaemonExitWatch(404, false, deps);
+    src.exit({ code: 1, signal: null });
+    expect(lines).toEqual([{ level: 'warn', msg: 'daemon pid 404 exited 0x00000001 (exit(1)) — child exit' }]);
   });
 
   it('on POSIX, a daemon this process did not spawn has no exit code to read', async () => {
@@ -171,6 +188,29 @@ describe('createDaemonExitWatch (spawned child)', () => {
     expect(lines[0].msg).toBe(
       'daemon pid 55 socket close, exit code unavailable: this process did not spawn the daemon, so it gets no exit event',
     );
+  });
+});
+
+describe('launcher child-exit record', () => {
+  it('hands an ended record only to a caller that just spawned the daemon', () => {
+    spawnedDaemonRegistryForTest.clear();
+    spawnedDaemonRegistryForTest.track(900);
+    spawnedDaemonRegistryForTest.settle(900, 3, null);
+    const got: SpawnedDaemonExit[] = [];
+    expect(onSpawnedDaemonExit(900, (e) => got.push(e), true)).toBeNull();
+    expect(got).toEqual([]);
+    expect(onSpawnedDaemonExit(900, (e) => got.push(e), false)).not.toBeNull();
+    expect(got).toEqual([{ code: 3, signal: null }]);
+  });
+
+  it('a live record is followed either way, and an unknown pid is not', () => {
+    spawnedDaemonRegistryForTest.clear();
+    spawnedDaemonRegistryForTest.track(901);
+    const got: SpawnedDaemonExit[] = [];
+    expect(onSpawnedDaemonExit(901, (e) => got.push(e), true)).not.toBeNull();
+    spawnedDaemonRegistryForTest.settle(901, null, 'SIGKILL');
+    expect(got).toEqual([{ code: null, signal: 'SIGKILL' }]);
+    expect(onSpawnedDaemonExit(999, () => { /* none */ }, false)).toBeNull();
   });
 });
 

@@ -1054,10 +1054,19 @@ function settleSpawnedDaemon(pid: number, code: number | null, signal: NodeJS.Si
  * directly (at once when it already has). Returns null for a daemon this
  * process did not spawn — one it found running, or one launchd started — and
  * otherwise a function that drops `cb`.
+ *
+ * `liveOnly` is for a daemon found running rather than just spawned: only a
+ * child still running can be the process behind that pid. A record that
+ * already ended belongs to an earlier process whose pid was reused.
  */
-export function onSpawnedDaemonExit(pid: number, cb: (exit: SpawnedDaemonExit) => void): (() => void) | null {
+export function onSpawnedDaemonExit(
+  pid: number,
+  cb: (exit: SpawnedDaemonExit) => void,
+  liveOnly = false,
+): (() => void) | null {
   const record = spawnedDaemons.get(pid);
   if (!record) return null;
+  if (record.exit && liveOnly) return null;
   if (record.exit) {
     cb(record.exit);
     return () => { /* already delivered */ };

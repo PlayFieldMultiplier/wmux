@@ -78,7 +78,7 @@ export interface DaemonExitWatchDeps {
   /** Windows: open a handle now for reading the exit code later. */
   openHandle?: (pid: number) => ProcessExitHandle | { failure: string };
   /** The exit of a daemon this process spawned; null when it did not spawn `pid`. */
-  onChildExit?: (pid: number, cb: (exit: SpawnedDaemonExit) => void) => (() => void) | null;
+  onChildExit?: (pid: number, cb: (exit: SpawnedDaemonExit) => void, liveOnly: boolean) => (() => void) | null;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   /** How long a report waits for the process to exit. */
@@ -94,9 +94,9 @@ const DEFAULT_BUDGET_MS = 15_000;
 /**
  * Start watching daemon `pid` (null when the launcher could not tell it).
  * Call when the daemon is installed, so the handle is open while it lives.
- * `spawned` says this process just spawned it: only then is the launcher's
- * child-exit record about this process and not an earlier one that had the
- * same pid.
+ * `spawned` says this process just spawned it: only then can a launcher
+ * child-exit record that has already ended be about this process rather than
+ * an earlier one that had the same pid.
  */
 export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps: DaemonExitWatchDeps): DaemonExitWatch {
   const platform = deps.platform ?? process.platform;
@@ -140,14 +140,14 @@ export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps
     handleFailure = 'the launcher did not report the daemon pid';
   } else {
     // The child 'exit' event arrives without any socket close to wait for:
-    // log it as soon as it comes.
-    stopChildWatch = spawned
-      ? onChildExit(pid, (exit) => {
-        childExit = exit;
-        logExit(exit, 'child exit');
-        if (!reporting) release();
-      })
-      : null;
+    // log it as soon as it comes. A daemon found running may still be one
+    // this process spawned earlier (a reconnect); then only a record of a
+    // child still running is about it.
+    stopChildWatch = onChildExit(pid, (exit) => {
+      childExit = exit;
+      logExit(exit, 'child exit');
+      if (!reporting) release();
+    }, !spawned);
     if (platform === 'win32' && !logged) {
       const opened = openHandle(pid);
       if ('failure' in opened) handleFailure = opened.failure;
