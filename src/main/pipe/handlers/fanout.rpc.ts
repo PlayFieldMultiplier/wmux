@@ -98,7 +98,7 @@ import type { DaemonClient } from '../../DaemonClient';
 import { hostCwdForPane, type DaemonRpc } from '../../pty/wslCallerCwd';
 import { loadWorkspaceDecision } from '../../deck/deckDecisionStore';
 import type { FanOutRequest, FanOutService, FanOutTaskResult } from '../../worktask/FanOutService';
-import { getFanOutGuards, launchedAuditTask, promptDigest, type FanOutGuards } from '../../worktask/fanoutGuards';
+import { getFanOutGuards, launchedAuditTask, promptDigest, refreshDormantTaskWorkspaces, type FanOutGuards } from '../../worktask/fanoutGuards';
 import { loadFanoutRequireApproval, loadFanoutWorkerPermissionMode } from '../../worktask/fanoutWorkerPolicy';
 import { workerLaunchFlags, type FanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
 import { loadFanoutPresets } from '../../worktask/fanoutPresets';
@@ -1085,17 +1085,23 @@ export function registerFanOutRpc(
         : `${callerWorkspaceId}::${callerKey}`;
 
     // A bot's caps below count its live workers: read their panes as they are
-    // now, not as the previous check saw them (#2255). Here, ahead of the
-    // synchronous stretch from the poll branch to the booking. A key already
-    // known is answered from bookkeeping and never waits, and a new one waits
-    // at most LIVENESS_WAIT_MS, well inside the caller's own deadline.
+    // now, not as the previous check saw them (#2255). The live cap counts
+    // open task workspaces less the dormant ones: read those fresh too, so an
+    // empty or stale snapshot never counts long-ended tasks as live (#2387).
+    // Here, ahead of the synchronous stretch from the poll branch to the
+    // booking. A key already known is answered from bookkeeping and never
+    // waits, and a new one waits at most LIVENESS_WAIT_MS (both reads at
+    // once), well inside the caller's own deadline.
     const keyKnown = params['cancelPending'] === true
       || service.statusOf(key).state !== 'unknown'
       || pending.has(key)
       || terminal.has(key);
-    if (bot && !keyKnown) {
+    if (!keyKnown) {
       try {
-        await withinMs((deps.bot ?? defaultBotPort)()?.refreshLiveness?.(), LIVENESS_WAIT_MS);
+        await Promise.all([
+          bot ? withinMs((deps.bot ?? defaultBotPort)()?.refreshLiveness?.(), LIVENESS_WAIT_MS) : undefined,
+          refreshDormantTaskWorkspaces(LIVENESS_WAIT_MS),
+        ]);
       } catch {
         /* the caps count what is known */
       }

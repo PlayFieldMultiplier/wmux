@@ -784,6 +784,35 @@ export function setDormantTaskWorkspaces(source: (() => ReadonlySet<string>) | n
   dormantSource = source ?? (() => new Set());
 }
 
+/** How long a live-cap check waits for a fresh dormant read (#2387). */
+export const DORMANT_REFRESH_WAIT_MS = 2_000;
+
+let dormantRefresh: (() => Promise<void>) | null = null;
+
+/** Install (or clear, with null) how to bring the dormant source up to date. */
+export function setDormantRefresh(refresh: (() => Promise<void>) | null): void {
+  dormantRefresh = refresh;
+}
+
+/** Brings the dormant set up to date before a live-cap check: resolves once
+ *  the fresh read settles or after `timeoutMs`, whichever is first (the
+ *  check then decides on what is known). Never rejects. */
+export async function refreshDormantTaskWorkspaces(timeoutMs = DORMANT_REFRESH_WAIT_MS): Promise<void> {
+  let work: Promise<void> | undefined;
+  try {
+    work = dormantRefresh?.();
+  } catch {
+    return;
+  }
+  if (!work) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([work.catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 let hosted: FanOutGuards | null = null;
 
 export function getFanOutGuards(): FanOutGuards {

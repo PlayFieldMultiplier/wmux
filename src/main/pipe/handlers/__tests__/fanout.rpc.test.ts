@@ -41,7 +41,7 @@ import { loadWorkspaceDecision } from '../../../deck/deckDecisionStore';
 import { registerFanOutRpc, FANOUT_WIRE_AGENT_CMD, FANOUT_IDEMPOTENCY_KEY_MAX_BYTES } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
-import { FanOutGuards } from '../../../worktask/fanoutGuards';
+import { FanOutGuards, setDormantRefresh, setDormantTaskWorkspaces } from '../../../worktask/fanoutGuards';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
@@ -1472,6 +1472,34 @@ describe('task.fanout.start — global caps', () => {
     expect((await next.call(goodParams({ idempotencyKey: 'b', titles: ['1', '2', '3', '4', '5', '6', '7', '8'] }))).status).toBe(
       'accepted',
     );
+  });
+
+  it('counts the live tasks on a fresh dormant read, not the stale one (#2387)', async () => {
+    // 8 open task workspaces, all ended. The snapshot the guard last saw says
+    // none is dormant (a read before the workspace list was up); the fresh
+    // read finds all of them dormant.
+    const ended = ['1', '2', '3', '4', '5', '6', '7', '8'].map((n) => `ws-ended-${n}`);
+    const g = new FanOutGuards({ dir: tmp(), openWorkspaceIds: () => ended, ledgerTaskOwner: () => null });
+    for (const ws of ended) g.markTask(ws, 'ws-owner');
+    let dormant: ReadonlySet<string> = new Set();
+    const refresh = vi.fn(async () => {
+      dormant = new Set(ended);
+    });
+    try {
+      setDormantTaskWorkspaces(() => dormant);
+      setDormantRefresh(refresh);
+      expect(g.liveTaskCount()).toBe(8);
+      const h = setup({ guards: g });
+      expect((await h.call(goodParams({ idempotencyKey: 'fresh', titles: ['1', '2'] }))).status).toBe('accepted');
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(g.liveTaskCount()).toBe(0);
+      // A poll of a known key answers from bookkeeping and never waits.
+      await h.call(goodParams({ idempotencyKey: 'fresh', titles: ['1', '2'] }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      setDormantTaskWorkspaces(null);
+      setDormantRefresh(null);
+    }
   });
 });
 
