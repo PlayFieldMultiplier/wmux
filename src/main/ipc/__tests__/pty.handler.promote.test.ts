@@ -220,7 +220,9 @@ describe('daemon.promoteSession — guards', () => {
     expect(region).toMatch(/if \(includeSuspended\) \{/);
     // No duplicates: an id already in the active list must not be re-added.
     expect(region).toMatch(/!activeIdSet\.has\(s\.id\)/);
-    // And the default (unscoped) reply must stay exactly the active list.
-    expect(region).toMatch(/return activeSessions;/);
+    // And the default (unscoped) reply must stay exactly the active list
+    // (`reply` only wraps it when the caller asks `withRecovery`, #2393).
+    expect(region).toMatch(/return reply\(activeSessions\);/);
+    expect(region).toMatch(/withRecovery \? \{ sessions, recoveryDone: [^}]+\} : sessions/);
   });
 });
