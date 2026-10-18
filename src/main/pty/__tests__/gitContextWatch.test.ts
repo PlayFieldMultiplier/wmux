@@ -778,6 +778,31 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)?.branch).toBe('moved');
   });
 
+  it('a move to the share cancelled by a cd back re-arms the local watch', async () => {
+    const local = tmp();
+    const share = tmp();
+    initFakeRepo(local, 'main');
+    const io = holdableIo();
+    const w = new GitContextWatcher(fake.factory, { isRemote: (p) => p.startsWith(share), io: io.io });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', local);
+    expect(fake.arms).toHaveLength(1);
+
+    io.hold();
+    w.update('s1', share); // `cd ~` …
+    w.update('s1', local); // … and straight back before it resolved
+    io.release();
+    await settle();
+    expect(fake.arms).toHaveLength(2);
+    expect(fake.last().closed).toBe(false);
+
+    fs.writeFileSync(path.join(local, '.git', 'HEAD'), 'ref: refs/heads/after\n');
+    fake.last().listener('change', 'HEAD');
+    await vi.advanceTimersByTimeAsync(50);
+    expect(events.at(-1)?.branch).toBe('after');
+  });
+
   it('resync() while moving to another cwd keeps the move', async () => {
     const a = tmp();
     const b = tmp();

@@ -387,7 +387,7 @@ export class GitContextWatcher extends EventEmitter {
   ): void {
     const existing = this.sessions.get(sessionId);
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
-      && existing.conclusive === conclusive && (!existing.remote || existing.watcher)) {
+      && existing.conclusive === conclusive && existing.watcher) {
       return; // same checkout — keep the live watcher.
     }
     if (existing) this.teardown(existing);
