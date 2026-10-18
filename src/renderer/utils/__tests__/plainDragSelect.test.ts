@@ -4,6 +4,7 @@ import {
   agentSelectsOnDrag,
   installPlainDragSelect,
   installWheelClearsSelectionHint,
+  __resetWheelHintedPanesForTests,
   isDrag,
   mouseOwnedHintApplies,
   shouldHoldHoverMove,
@@ -286,48 +287,63 @@ describe('installPlainDragSelect', () => {
 });
 
 describe('installWheelClearsSelectionHint (#2293)', () => {
-  // A fake xterm: the wheel handler below stands in for xterm's, which sends
-  // the wheel to a tracking app as user input and so clears the selection.
-  function setup(opts: { tracking?: string; buffer?: string; exempt?: boolean } = {}) {
+  // A fake xterm whose wheel handler does what xterm's does under tracking:
+  // a wheel it acts on is user input and clears the selection (firing the
+  // selection event synchronously); `ignores` stands for a wheel it drops
+  // (Shift+wheel, a sub-line delta).
+  let pane = 0;
+  function setup(opts: { tracking?: string; buffer?: string; exempt?: boolean; id?: string } = {}) {
     const container = document.createElement('div');
     const screen = document.createElement('div');
     container.appendChild(screen);
     document.body.appendChild(container);
+    const listeners = new Set<() => void>();
     const term = {
       modes: { mouseTrackingMode: opts.tracking ?? 'any' },
       buffer: { active: { type: opts.buffer ?? 'alternate' } },
       selection: true,
+      ignores: false,
       hasSelection(): boolean { return this.selection; },
+      onSelectionChange(fn: () => void) { listeners.add(fn); return { dispose: () => listeners.delete(fn) }; },
+      clearSelection(): void { this.selection = false; listeners.forEach((fn) => fn()); },
     };
     screen.addEventListener('wheel', (e) => {
-      if (term.modes.mouseTrackingMode !== 'none') term.selection = false;
+      if (term.modes.mouseTrackingMode === 'none' || term.ignores) return;
+      term.clearSelection();
       e.preventDefault();
       e.stopPropagation();
     });
-    const deferred: Array<() => void> = [];
+    const ends: Array<() => void> = [];
     const show = vi.fn();
-    const detach = installWheelClearsSelectionHint(container, term, {
+    const id = opts.id ?? `pty-${++pane}`;
+    const install = () => installWheelClearsSelectionHint(container, term, {
       show,
+      paneId: () => id,
       isExempt: () => opts.exempt === true,
-      defer: (fn) => { deferred.push(fn); },
+      afterDispatch: (fn) => { ends.push(fn); },
     });
+    let detach = install();
     const wheel = (): void => {
       screen.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100 }));
-      deferred.splice(0).forEach((fn) => fn());
+      ends.splice(0).forEach((fn) => fn());
     };
-    return { term, show, wheel, detach, container };
+    return { term, show, wheel, detach: () => detach(), reinstall: () => { detach(); detach = install(); } };
   }
 
+  beforeEach(() => __resetWheelHintedPanesForTests());
   afterEach(() => { document.body.innerHTML = ''; });
 
-  it('says why once, when a wheel in a tracking alternate-screen app clears the selection', () => {
-    const { term, show, wheel } = setup();
-    wheel();
-    expect(show).toHaveBeenCalledTimes(1);
-    // Once per pane: a later selection cleared the same way stays quiet.
-    term.selection = true;
-    wheel();
-    expect(show).toHaveBeenCalledTimes(1);
+  it('says why once per pane, when a wheel in a tracking alternate-screen app clears the selection', () => {
+    const s = setup();
+    s.wheel();
+    expect(s.show).toHaveBeenCalledTimes(1);
+    s.term.selection = true;
+    s.wheel();
+    // A re-mount or adoption of the same pane stays quiet too.
+    s.reinstall();
+    s.term.selection = true;
+    s.wheel();
+    expect(s.show).toHaveBeenCalledTimes(1);
   });
 
   it('stays quiet without a selection, off the alternate screen, without tracking, or for Claude Code', () => {
@@ -342,12 +358,13 @@ describe('installWheelClearsSelectionHint (#2293)', () => {
     }
   });
 
-  it('stays quiet when the selection survived the wheel, and after teardown', () => {
-    const kept = setup();
-    kept.term.selection = true;
-    kept.container.firstChild?.addEventListener('wheel', () => { kept.term.selection = true; });
-    kept.wheel();
-    expect(kept.show).not.toHaveBeenCalled();
+  it('counts only a clear made by the wheel itself, and nothing after teardown', () => {
+    const ignored = setup();
+    ignored.term.ignores = true;
+    ignored.wheel();
+    // A clear from something else, after the wheel's dispatch, is not the wheel's.
+    ignored.term.clearSelection();
+    expect(ignored.show).not.toHaveBeenCalled();
     const gone = setup();
     gone.detach();
     gone.wheel();

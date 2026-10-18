@@ -249,17 +249,25 @@ export interface WheelSelectionTerminal {
   buffer?: { active?: { type?: string } };
   modes?: { mouseTrackingMode?: string };
   hasSelection?(): boolean;
+  /** xterm's selection event: fired synchronously when the selection clears. */
+  onSelectionChange(listener: () => void): { dispose(): void };
 }
 
 export interface WheelClearsSelectionHintDeps {
-  /** Surface the hint. Called at most once per install (one pane). */
+  /** Surface the hint. Called at most once per pane. */
   show: () => void;
+  /** The pane's pty id: the hint is said once per pane, so a terminal
+   *  re-mounted or adopted into another layout stays quiet. */
+  paneId: () => string | null;
   /** True for an agent that keeps its own selection while it scrolls
    *  (Claude Code, agentSelectsOnDrag): no xterm selection to lose there. */
   isExempt: () => boolean;
-  /** Runs `fn` once xterm has handled the wheel. Default: a 0 ms timeout. */
-  defer?: (fn: () => void) => void;
+  /** Ends the wheel's window once its dispatch is over. Default: a 0 ms timeout. */
+  afterDispatch?: (fn: () => void) => void;
 }
+
+/** Panes that were told already (by pty id), across mounts. */
+const wheelHintedPanes = new Set<string>();
 
 /**
  * #2293: say why a selection vanished when the wheel scrolled a mouse-tracking
@@ -267,39 +275,53 @@ export interface WheelClearsSelectionHintDeps {
  *
  * The alternate screen has no scrollback: the app keeps its transcript and
  * redraws other text into the same cells when it scrolls. With mouse tracking
- * on, xterm sends the wheel to the app as a mouse report, which is user input,
- * so the SelectionService clears the selection. That is kept on purpose (a
- * selection kept across the scroll would copy text that is no longer there);
- * this only tells the user once per pane that the app scrolls its own
- * transcript and that Shift+drag (Option+drag on macOS) selects what is on
- * screen.
+ * on, xterm sends the wheel to the app (as a mouse report, or as arrow keys
+ * under X10), which is user input, so the SelectionService clears the
+ * selection. That is kept on purpose (a selection kept across the scroll
+ * would copy text that is no longer there); this only tells the user once per
+ * pane that the app scrolls its own transcript and that Shift+drag
+ * (Option+drag on macOS) selects what is on screen.
  *
- * Nothing is swallowed: the listener only reads state before the wheel and
- * looks again once xterm has handled it.
+ * Only a clear that happens while the wheel event is being dispatched counts:
+ * the capture listener opens a window that closes when the dispatch is over,
+ * and xterm fires its selection event synchronously inside its own wheel
+ * handler. A wheel xterm ignores (Shift+wheel, a delta too small for a line)
+ * clears nothing, and a clear from anything else lands outside the window.
+ * Nothing is swallowed: the listener only reads state.
  */
 export function installWheelClearsSelectionHint(
   container: HTMLElement,
   term: WheelSelectionTerminal,
   deps: WheelClearsSelectionHintDeps,
 ): () => void {
-  const defer = deps.defer ?? ((fn: () => void) => { setTimeout(fn, 0); });
-  let shown = false;
-  let disposed = false;
+  const afterDispatch = deps.afterDispatch ?? ((fn: () => void) => { setTimeout(fn, 0); });
+  let wheelPane: string | null = null;
   const onWheel = (): void => {
-    if (shown) return;
+    if (wheelPane !== null) return;
+    const pane = deps.paneId();
+    if (!pane || wheelHintedPanes.has(pane)) return;
     if ((term.modes?.mouseTrackingMode ?? 'none') === 'none' || !isAltScreen(term)) return;
     if (!term.hasSelection?.() || deps.isExempt()) return;
-    defer(() => {
-      if (shown || disposed || term.hasSelection?.()) return;
-      shown = true;
-      deps.show();
-    });
+    wheelPane = pane;
+    afterDispatch(() => { wheelPane = null; });
   };
+  const selection = term.onSelectionChange(() => {
+    if (wheelPane === null || term.hasSelection?.()) return;
+    wheelHintedPanes.add(wheelPane);
+    wheelPane = null;
+    deps.show();
+  });
   // Capture: xterm's own wheel handler cancels the event under tracking, so a
   // bubbling listener here would never run.
   container.addEventListener('wheel', onWheel, { capture: true, passive: true });
   return () => {
-    disposed = true;
+    wheelPane = null;
+    selection.dispose();
     container.removeEventListener('wheel', onWheel, true);
   };
+}
+
+/** Test-only: forget which panes were told. */
+export function __resetWheelHintedPanesForTests(): void {
+  wheelHintedPanes.clear();
 }

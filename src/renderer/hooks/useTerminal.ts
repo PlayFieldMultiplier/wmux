@@ -1567,6 +1567,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // which clears the selection; say why once per pane. Claude Code keeps its
     // own selection while it scrolls, so it is left out.
     const detachWheelSelectionHint = installWheelClearsSelectionHint(container, terminal, {
+      paneId: () => ptyIdRef.current ?? null,
       isExempt: paneAgentSelectsOnDrag,
       show: () => showMouseOwnedHintToast(ALT_WHEEL_SELECTION_HINT_KEYS, 6000),
     });
