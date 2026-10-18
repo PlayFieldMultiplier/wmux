@@ -134,11 +134,13 @@ export class ApiErrorTurnEnds {
 
   /** Every resolved hook signal for the session; `ts` is when the hook fired. */
   noteHookSignal(sessionId: string, kind: string, ts?: number): void {
-    if (kind === 'agent.stop' || kind === 'agent.stop_failure') this.turnEndHookAt.set(sessionId, this.now());
+    // Compared with the entry's own time, so the hook's firing time, not its
+    // arrival: a Stop delayed past a later error does not speak for it.
+    const at = typeof ts === 'number' && Number.isFinite(ts) ? ts : this.now();
+    if (kind === 'agent.stop' || kind === 'agent.stop_failure') this.turnEndHookAt.set(sessionId, at);
     // A new turn (a retry too): the last turn's end hook and its error speak
     // for nothing in it.
     else if (kind === 'agent.user_prompt_submit') {
-      const at = typeof ts === 'number' && Number.isFinite(ts) ? ts : this.now();
       this.turnEndHookAt.delete(sessionId);
       // A hook ingested late (a stalled daemon) keeps its own turn's error.
       const p = this.pending.get(sessionId);

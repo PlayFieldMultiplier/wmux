@@ -357,18 +357,22 @@ export class TranscriptActivityWatcher {
     this.watches.set(id, { path, parse, ino: stat.ino, offset: stat.size, sentAt: 0, lines: !!onLine, linesOnly: this.hookFed.has(id), replay: !!onLine });
   }
 
+  /** The one-time `onClaudeLine` replay a watch owes, if it owes one. */
+  private replayLines(id: string, watch: Watch): void {
+    const onLine = this.deps.onClaudeLine;
+    if (!watch.replay || !onLine) return;
+    watch.replay = false;
+    const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, watch.path, line); return []; } });
+    // Go on from the last complete line the replay handed over: a line still
+    // being written when the watch began is read whole once it ends, rather
+    // than its tail failing the line-boundary check and being skipped.
+    if (page && page.cursor.fileSize >= watch.offset) watch.offset = page.cursor.tailOffset;
+  }
+
   private read(id: string, watch: Watch): void {
     // Here, after dropSharedTranscripts: a pane that lost a shared file is
     // recreated by every reconcile, and must not replay it every tick.
-    const onLine = this.deps.onClaudeLine;
-    if (watch.replay && onLine) {
-      watch.replay = false;
-      const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: (line) => { onLine(id, watch.path, line); return []; } });
-      // Go on from the last complete line the replay handed over: a line still
-      // being written when the watch began is read whole once it ends, rather
-      // than its tail failing the line-boundary check and being skipped.
-      if (page && page.cursor.fileSize >= watch.offset) watch.offset = page.cursor.tailOffset;
-    }
+    this.replayLines(id, watch);
     const stat = statTranscript(watch.path);
     if (!stat) {
       this.watches.delete(id);
@@ -383,7 +387,10 @@ export class TranscriptActivityWatcher {
       watch.ino = stat.ino;
       watch.offset = stat.size;
       watch.pending = undefined;
+      // In this tick, before afterTick settles a pending error the new file
+      // may already have moved past.
       watch.replay = watch.lines;
+      this.replayLines(id, watch);
     } else if (stat.size - watch.offset > READ_CAP_BYTES) {
       const page = readTranscriptPage(watch.path, { maxBytes: JUMP_WINDOW_BYTES, parseLine: watch.parse });
       if (!page) { this.watches.delete(id); return; }

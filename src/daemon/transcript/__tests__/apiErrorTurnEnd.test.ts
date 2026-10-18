@@ -120,6 +120,17 @@ describe('ApiErrorTurnEnds', () => {
     expect(g.sent.map((s) => s.ptyId)).toEqual(['pty-1']);
   });
 
+  it('a Stop that fired before the error does not speak for it, however late it arrives', () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('rate_limit', 'limit'));
+    g.advance(1000);
+    // Fired at the turn's start (background work left), ingested after the error.
+    g.turnEnds.noteHookSignal('pty-1', 'agent.stop', TURN_OPENED_AT);
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent.map((s) => s.ptyId)).toEqual(['pty-1']);
+  });
+
   it('still closes the turn when a background subagent writes after the lead turn died', () => {
     const g = gate();
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
@@ -204,7 +215,7 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     const next = `${file}.next`;
     fs.writeFileSync(next, `${error}\n`);
     fs.renameSync(next, file);
-    watcher.tick();
+    // In the same tick, so afterTick never settles on a file it has not read.
     watcher.tick();
     expect(lines).toEqual([turnDuration, error]);
   });
