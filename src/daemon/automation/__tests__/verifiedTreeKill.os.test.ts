@@ -423,28 +423,22 @@ describe('recordedStartOf', () => {
 });
 
 describe('survivorsStillRunning', () => {
-  it('drops a process that is gone, and always keeps a tree that could not be checked whole', async () => {
+  it('drops a process that is gone, and an entry that is not a process (an unverified tree)', async () => {
     // A pid far above any this machine hands out: gone.
     const gone = { pid: 0x7ffffff0, reason: 'still running', startTime: '1' };
     const unchecked = { pid: 0x7ffffff0, reason: 'the process table could not be read', unverified: true as const };
-    const still = await survivorsStillRunning([gone, unchecked]);
-    expect(still[0]).toEqual(unchecked);
-    // POSIX cannot find what an exited survivor started (its children go to
-    // init), so there it stays, unverified.
-    if (process.platform === 'win32') expect(still).toEqual([unchecked]);
-    else expect(still).toEqual([unchecked, expect.objectContaining({ pid: gone.pid, unverified: true })]);
+    expect(await survivorsStillRunning([gone, unchecked])).toEqual([]);
   });
 });
 
 describe('survivorsStillRunningWin32', () => {
-  it('stays unverified when a child of an exited survivor vanished before its own children were identified', () => {
+  it('does not follow a child of an exited survivor that is gone or cannot be identified', () => {
     const f = fakeWin([
       { pid: 11, ppid: 1, createdAt: 110n, exited: true },
       { pid: 21, ppid: 11, createdAt: 150n, goneOnOpen: true },
       { pid: 22, ppid: 21, createdAt: 160n },
     ]);
-    const r = survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api);
-    expect(r).toEqual([expect.objectContaining({ pid: 21, unverified: true })]);
+    expect(survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api)).toEqual([]);
   });
 
   it('stays unverified when a child that vanished shows a child of its own in a later table', async () => {

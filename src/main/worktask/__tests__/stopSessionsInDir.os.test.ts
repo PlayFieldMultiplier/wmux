@@ -128,41 +128,24 @@ describe('stopSessionsInDir', () => {
     await expect(stopSessionsInDir('/w/t', later.p)).rejects.toBeInstanceOf(PanesStillRunningError);
   });
 
-  it('a pane whose destroy did not answer counts until a later stop finds it again', async () => {
-    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
-    first.p.destroySession = async () => { throw new Error('RPC timeout: daemon.destroySession (60000ms)'); };
-    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('RPC timeout');
+  // Each stop stands on its own: one that could not verify its tree keeps the
+  // folder and says why, and the next one decides from scratch.
+  it('an inconclusive stop keeps the folder and says why; a conclusive clean one after it proceeds', async () => {
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', {
+      trees: { s: { ok: false, killed: [7], survivors: [{ pid: 7, reason: 'the process table could not be read', unverified: true }] } },
+    });
+    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('could not verify all processes exited: the process table could not be read');
 
-    // Gone from the daemon: what became of its tree is not known.
-    await expect(stopSessionsInDir('/w/t', port([], 'linux').p)).rejects.toThrow(/did not finish/);
-
-    // Still listed: destroyed again, and this time it answers.
-    const again = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7] } } });
-    expect(await stopSessionsInDir('/w/t', again.p)).toEqual(['s']);
+    const second = port([{ id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux', { trees: { u: { ok: true, killed: [8, 80] } } });
+    expect(await stopSessionsInDir('/w/t', second.p)).toEqual(['u']);
     expect(await stopSessionsInDir('/w/t', port([], 'linux').p)).toEqual([]);
   });
 
-  it('keeps an unanswered destroy recorded when another survivor blocks the stop first', async () => {
-    const survivor = { pid: 70, reason: 'access denied', startTime: '1' };
-    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }, { id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux', {
-      trees: { s: { ok: false, killed: [7], survivors: [survivor] } },
-    });
-    const destroy = first.p.destroySession;
-    first.p.destroySession = async (id) => {
-      if (id === 'u') throw new Error('RPC timeout');
-      return destroy(id);
-    };
+  it('a stop whose destroy did not answer fails, and leaves nothing behind for the next one', async () => {
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
+    first.p.destroySession = async () => { throw new Error('RPC timeout: daemon.destroySession (60000ms)'); };
     await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('RPC timeout');
-
-    // 'u' is listed again, but the survivor blocks before it is destroyed.
-    const second = port([{ id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux');
-    second.p.stillRunning = async (list) => list.filter((x) => x.pid === 70);
-    await expect(stopSessionsInDir('/w/t', second.p)).rejects.toBeInstanceOf(PanesStillRunningError);
-
-    // The survivor exits and 'u' vanished without an answer: still kept.
-    const third = port([], 'linux');
-    third.p.stillRunning = async (list) => list.filter((x) => x.unverified);
-    await expect(stopSessionsInDir('/w/t', third.p)).rejects.toThrow(/did not finish/);
+    expect(await stopSessionsInDir('/w/t', port([], 'linux').p)).toEqual([]);
   });
 
   it('the sweep\'s check stops nothing: a pane opened in the folder, or an earlier survivor, keeps it', async () => {

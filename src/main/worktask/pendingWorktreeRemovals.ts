@@ -109,9 +109,10 @@ export interface PendingSweepPorts {
   paths(): string[];
   /** The daemon's sessions, and whether its start-up recovery is done; null
    *  when the daemon cannot be asked. */
-  sessions(): Promise<{ sessions: Array<{ id: string; spawnCwd?: string; wslTarget?: { distribution?: unknown } }>; recoveryDone: boolean } | null>;
-  /** The ids of `sessions` started in `folder` or below it. */
-  startedIn(folder: string, sessions: Array<{ id: string; spawnCwd?: string; wslTarget?: { distribution?: unknown } }>): Promise<string[]>;
+  sessions(): Promise<{ sessions: Array<{ id: string; spawnCwd?: string; cwd?: string; wslTarget?: { distribution?: unknown } }>; recoveryDone: boolean } | null>;
+  /** The ids of `sessions` started in `folder` or below it, or working
+   *  there now (their current directory). */
+  startedIn(folder: string, sessions: Array<{ id: string; spawnCwd?: string; cwd?: string; wslTarget?: { distribution?: unknown } }>): Promise<string[]>;
   /** TaskWorktreeManager.finishPendingRemoval, with nothing to stop. */
   finish(folder: string): Promise<{ ok: boolean; error?: string } | null>;
   log?(message: string): void;
@@ -119,20 +120,32 @@ export interface PendingSweepPorts {
 
 /**
  * The sweep at start (#2388): finish each removal a close left part way.
- * Only once the daemon has recovered its sessions, and never for a folder a
- * session was started in (the task's next close stops it first). Returns
- * false when it should run again later (the daemon is not ready).
+ * Only once the daemon has recovered its sessions, never for a folder a
+ * session was started in or works in now (the task's next close stops it
+ * first), and only through finishPendingRemoval's checks (the second layer);
+ * a folder any check cannot prove keeps its record. One log line per
+ * decision. Returns false when it should run again later (the daemon is not
+ * ready).
  */
 export async function sweepPendingRemovals(ports: PendingSweepPorts): Promise<boolean> {
+  const log = (m: string): void => ports.log?.(`[worktask] pending removal sweep: ${m}`);
   const paths = ports.paths();
   if (paths.length === 0) return true;
   const listed = await ports.sessions().catch(() => null);
-  if (!listed || !listed.recoveryDone) return false;
+  if (!listed || !listed.recoveryDone) {
+    log(`${paths.length} folder(s) wait: ${listed ? 'the daemon is still recovering its sessions' : 'the daemon cannot be asked'}`);
+    return false;
+  }
   for (const folder of paths) {
-    if ((await ports.startedIn(folder, listed.sessions)).length > 0) continue;
+    const inUse = await ports.startedIn(folder, listed.sessions);
+    if (inUse.length > 0) {
+      log(`kept ${folder}: ${inUse.length} session(s) were started or work in it`);
+      continue;
+    }
     const r = await ports.finish(folder).catch((err: unknown) => ({ ok: false, error: String(err) }));
-    if (r && !r.ok) ports.log?.(`[worktask] the leftover of ${folder} was not removed: ${r.error ?? 'unknown'}`);
-    else if (r) ports.log?.(`[worktask] finished the removal of ${folder}`);
+    if (r === null) log(`${folder}: no pending removal is recorded any more`);
+    else if (r.ok) log(`removed ${folder}`);
+    else log(`kept ${folder}: ${r.error ?? 'unknown'}`);
   }
   return true;
 }

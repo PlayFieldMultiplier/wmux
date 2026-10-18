@@ -140,7 +140,10 @@ export function registerWorktaskHandlers(
           const r = reply as { sessions?: unknown; recoveryDone?: unknown } | null;
           return Array.isArray(r?.sessions) ? { sessions: r.sessions, recoveryDone: r.recoveryDone === true } : null;
         },
-        startedIn: (folder, sessions) => sessionsStartedIn([folder], { listSessions: async () => sessions }),
+        // Started there, or working there now (OSC 7): either keeps it.
+        startedIn: (folder, sessions) => sessionsStartedIn([folder], {
+          listSessions: async () => sessions.flatMap((s) => (typeof s.cwd === 'string' && s.cwd ? [s, { ...s, spawnCwd: s.cwd }] : [s])),
+        }),
         // Checked again under the repository lock, right before the removal,
         // and without stopping anything: a pane opened in the folder since,
         // or a process an earlier stop left, keeps it.
@@ -149,8 +152,10 @@ export function registerWorktaskHandlers(
           if (!dc) throw new Error('Daemon not connected');
           await assertNothingRunsIn(f, {
             listSessions: async () => {
-              const sessions = await dc.rpc('daemon.listSessions', {});
-              return Array.isArray(sessions) ? sessions : [];
+              const reply = await dc.rpc('daemon.listSessions', {});
+              const sessions = (Array.isArray(reply) ? reply : []) as Array<{ id: string; spawnCwd?: string; cwd?: string }>;
+              // Started there, or working there now (OSC 7).
+              return sessions.flatMap((s) => (typeof s.cwd === 'string' && s.cwd ? [s, { ...s, spawnCwd: s.cwd }] : [s]));
             },
           });
         }),

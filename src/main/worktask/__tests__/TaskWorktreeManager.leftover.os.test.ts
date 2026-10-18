@@ -348,6 +348,68 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(store.all()).toEqual([]);
   });
 
+  // Every reason the sweep at start keeps a folder: the folder and its
+  // record stay, and one line says why.
+  describe('the sweep at start keeps the folder and its record when a check cannot be proven', () => {
+    type Case = {
+      why: string;
+      log: RegExp;
+      git?: FakeGitOpts;
+      sessions?: Array<{ id: string; spawnCwd?: string; cwd?: string }>;
+      recoveryDone?: boolean;
+      setup?: (dir: string) => { path?: string };
+      removeTree?: (d: string) => Promise<void>;
+    };
+    const cases: Case[] = [
+      { why: 'the daemon is still recovering', recoveryDone: false, log: /still recovering/ },
+      { why: 'a session was started in it', sessions: [{ id: 's', spawnCwd: 'DIR' }], log: /were started or work in it/ },
+      { why: 'a session works in it now (its cwd)', sessions: [{ id: 's', spawnCwd: '/elsewhere', cwd: 'DIR' }], log: /were started or work in it/ },
+      { why: 'it is outside the worktrees root', setup: () => {
+        const out = path.join(tmp, 'elsewhere', 'task-a');
+        fs.mkdirSync(out, { recursive: true });
+        return { path: out };
+      }, log: /not inside the wmux worktrees folder/ },
+      { why: 'git does not name the repository', git: { namesRepo: false }, log: /git did not confirm/ },
+      { why: 'git still lists it', setup: () => ({}), git: { listed: ['DIR'] }, log: /worktree of its repository again/ },
+      { why: 'its contents differ from the recorded commit', git: { leftoverDiff: 'M\tsrc/a.ts\n' }, log: /not what git left/ },
+      { why: 'a file git does not track is in it', git: { leftoverUntracked: 'notes.md\n' }, log: /not what git left/ },
+      { why: 'its .git file names a live git dir', setup: (dir) => {
+        const gitDir = path.join(tmp, 'other', '.git');
+        fs.mkdirSync(gitDir, { recursive: true });
+        fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir}\n`);
+        return {};
+      }, log: /live checkout/ },
+      { why: 'the folder cannot be deleted', removeTree: async () => { throw new Error('EBUSY: resource busy or locked'); }, log: /could not be deleted: EBUSY/ },
+    ];
+    for (const c of cases) {
+      it(c.why, async () => {
+        const made = leftover();
+        const dir = c.setup?.(made).path ?? made;
+        const sub = (v: string): string => (v === 'DIR' ? dir : v);
+        const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+        await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+        const git = fakeGit({ ...c.git, ...(c.git?.listed ? { listed: c.git.listed.map(sub) } : {}) }).git;
+        const { mgr, removeTree } = manager(git, { pendingRemovals: store, ...(c.removeTree ? { removeTree: c.removeTree } : {}) });
+        const lines: string[] = [];
+        const sessions = (c.sessions ?? []).map((x) => ({ ...x, ...(x.spawnCwd ? { spawnCwd: sub(x.spawnCwd) } : {}), ...(x.cwd ? { cwd: sub(x.cwd) } : {}) }));
+        await sweepPendingRemovals({
+          paths: () => mgr.pendingRemovalPaths(),
+          sessions: async () => ({ sessions, recoveryDone: c.recoveryDone ?? true }),
+          startedIn: async (folder, list) => list.filter((x) => [x.spawnCwd, x.cwd].some((d) => d?.startsWith(folder))).map((x) => x.id),
+          finish: (folder) => mgr.finishPendingRemoval(folder),
+          log: (m) => lines.push(m),
+        });
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(c.log);
+        expect(fs.existsSync(dir)).toBe(true);
+        if (!c.removeTree) expect(removeTree).not.toHaveBeenCalled();
+        // A folder git still lists is a worktree again: its pending record ends.
+        if (c.git?.listed) expect(store.get(dir)).toBeNull();
+        else expect(store.get(dir)).not.toBeNull();
+      });
+    }
+  });
+
   it('a removal that finished forgets its record', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));

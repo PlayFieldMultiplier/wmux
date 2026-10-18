@@ -122,16 +122,14 @@ export function recordedStartOf(
 }
 
 /**
- * The survivors of an earlier kill that still run: the same process (its
- * start time compared) and not exited. One that cannot be read counts as
- * running, and so does an unverified tree, so a caller keeps what it guards.
- * Never throws.
+ * The identified survivors of an earlier kill that still run: the same
+ * process (its start time compared) and not exited, and on Windows any
+ * process one of them started before it exited. One that cannot be read
+ * counts as running. An unverified entry is not a process and is not kept:
+ * each stop decides on its own tree. Never throws.
  */
 export async function survivorsStillRunning(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]> {
-  if (survivors.length === 0) return [];
-  const unverified = survivors.filter((s) => s.unverified);
-  const seen = await processesStillRunning(survivors.filter((s) => !s.unverified));
-  return [...unverified, ...seen];
+  return processesStillRunning(survivors.filter((s) => !s.unverified));
 }
 
 async function processesStillRunning(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]> {
@@ -149,10 +147,8 @@ async function processesStillRunning(survivors: readonly TreeKillSurvivor[]): Pr
   const byPid = new Map(rows.map((r) => [r.pid, r]));
   return survivors.flatMap((s): TreeKillSurvivor[] => {
     const row = byPid.get(s.pid);
-    if (row && !row.stat.startsWith('Z') && (s.startTime === undefined || row.start === s.startTime)) return [s];
-    // It outlived the kill, so it may have started processes since; POSIX
-    // hands an exited process's children to init, so none can be found.
-    return [{ ...s, unverified: true, reason: `${s.reason}; it has exited, and what it started meanwhile cannot be found` }];
+    // Gone: POSIX hands what it started to init, where no tree leads.
+    return row && !row.stat.startsWith('Z') && (s.startTime === undefined || row.start === s.startTime) ? [s] : [];
   });
 }
 
@@ -214,15 +210,8 @@ export function survivorsStillRunningWin32(survivors: readonly TreeKillSurvivor[
           if (seen.has(pid)) continue;
           seen.add(pid);
           const child = api.open(pid);
-          if ('gone' in child) {
-            // Its children in the table can no longer be told from strangers.
-            if (children(pid).length > 0) out.push({ pid, reason: `started by ${s.pid}, which outlived the kill; it exited before its children could be identified`, unverified: true });
-            continue;
-          }
-          if ('failure' in child) {
-            out.push({ pid, reason: `started by ${s.pid}, which outlived the kill; could not be identified`, unverified: true });
-            continue;
-          }
+          // One that is gone or cannot be identified is not followed.
+          if (!('handle' in child)) continue;
           try {
             const ours = child.createdAt >= item.created && (item.until === null || child.createdAt < item.until);
             if (!ours) continue;
@@ -236,7 +225,8 @@ export function survivorsStillRunningWin32(survivors: readonly TreeKillSurvivor[
         }
       }
     } catch {
-      out.push({ ...s, unverified: true, reason: `${s.reason}; the process table could not be read` });
+      // The table cannot be read: the survivor is counted as still running.
+      out.push(s);
     }
   }
   return out;

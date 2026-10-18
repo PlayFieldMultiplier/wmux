@@ -35,19 +35,21 @@ export interface SessionsInDirPort {
   stillRunning?(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]>;
 }
 
-/** A survivor of an earlier stop, or (`sessionId`) a pane whose destroy
- *  failed or timed out: what became of its tree is not known. */
-type Lingering = TreeKillSurvivor & { sessionId?: string };
-
 /**
- * Processes of a folder's panes that outlived an earlier stop, by folder.
- * Their sessions are gone by then, so a later stop of the same folder finds
- * no session to report them: it checks these instead, and keeps the folder
- * while one still runs. A pane whose destroy did not answer counts until a
- * later stop finds its session still there to destroy again. Held for the
- * life of the app.
+ * Identified processes of a folder's panes that outlived an earlier stop
+ * (each with its start time), by folder. The stop destroyed their sessions,
+ * so a later stop finds no session to capture them from: it checks these
+ * processes instead, and keeps the folder only while one of them still
+ * runs. An entry ends when its process exits. Nothing else is kept: an
+ * attempt that could not verify a tree fails on its own, and the next
+ * attempt starts from scratch.
  */
-const lingering = new Map<string, Lingering[]>();
+const lingering = new Map<string, TreeKillSurvivor[]>();
+
+/** The survivors worth checking again later: identified processes only. */
+function identified(survivors: readonly TreeKillSurvivor[]): TreeKillSurvivor[] {
+  return survivors.filter((x) => !x.unverified && x.startTime !== undefined);
+}
 
 /** Test seam: forget every earlier stop's survivors. */
 export function resetLingeringSurvivors(): void {
@@ -62,10 +64,21 @@ const EXIT_WAIT_MS = 5000;
 const EXIT_POLL_MS = 100;
 
 export class PanesStillRunningError extends Error {
-  constructor(readonly pids: number[], reasons: string[] = []) {
-    super(`${pids.length} process(es) started in the worktree are still running${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`);
+  constructor(readonly pids: number[], reasons: string[] = [], unverified: string[] = []) {
+    const parts = [
+      ...(pids.length > 0 ? [`${pids.length} process(es) started in the worktree are still running${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`] : []),
+      ...(unverified.length > 0 ? [`could not verify all processes exited: ${unverified.join('; ')}`] : []),
+    ];
+    super(parts.join('; '));
     this.name = 'PanesStillRunningError';
   }
+}
+
+/** The error for survivors of a stop: processes still running, and trees
+ *  that could not be checked whole. */
+function survivorsError(survivors: readonly TreeKillSurvivor[]): PanesStillRunningError {
+  const running = survivors.filter((x) => !x.unverified);
+  return new PanesStillRunningError(running.map((x) => x.pid), running.map((x) => `${x.pid}: ${x.reason}`), survivors.filter((x) => x.unverified).map((x) => x.reason));
 }
 
 /** The tree in a `daemon.destroySession` reply, when the daemon sent one. */
@@ -129,8 +142,10 @@ export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirP
   const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
   const earlier = lingering.get(key);
   if (!earlier) return;
-  const still = await (port.stillRunning ?? survivorsStillRunning)(earlier);
-  if (still.length > 0) throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: ${x.reason}`));
+  const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));
+  if (still.length === 0) lingering.delete(key);
+  else lingering.set(key, still);
+  if (still.length > 0) throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: still running since an earlier stop`));
 }
 
 /**
@@ -147,17 +162,10 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
   const sessions = await port.listSessions();
   const earlier = lingering.get(key);
   if (earlier) {
-    // A pane whose destroy did not answer and that is still there is
-    // destroyed again below, and answers then.
-    const listed = new Set(sessions.map((s) => s.id));
-    const open = earlier.filter((x) => !(x.sessionId && listed.has(x.sessionId)));
-    // Both checks hand back entries of the list they were given.
-    const still = (await (port.stillRunning ?? survivorsStillRunning)(open)) as Lingering[];
+    const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));
     if (still.length > 0) {
-      // A pane whose destroy did not answer and is listed again stays
-      // recorded until it is destroyed with an answer.
-      lingering.set(key, [...still, ...earlier.filter((x) => !open.includes(x))]);
-      throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: ${x.sessionId ? x.reason : 'still running since an earlier stop'}`));
+      lingering.set(key, still);
+      throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: still running since an earlier stop`));
     }
     lingering.delete(key);
   }
@@ -166,24 +174,17 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
   const unknown = sessions.filter((s) => !s.spawnCwd).length;
   if (unknown > 0) port.log?.(`[worktask] ${unknown} session(s) have no spawn directory recorded; left running`);
 
-  const treeSurvivors: Lingering[] = [];
+  const treeSurvivors: TreeKillSurvivor[] = [];
   const unreported: number[] = [];
   for (const s of inside) {
-    let tree: DaemonDestroySessionTree | void;
-    try {
-      tree = await port.destroySession(s.id);
-    } catch (err) {
-      // The daemon may have destroyed the pane and still be killing its
-      // tree: until a later stop sees the session again, it counts.
-      lingering.set(key, [...treeSurvivors, { pid: s.pid ?? 0, sessionId: s.id, unverified: true, reason: `the stop of pane ${s.id} did not finish (${(err as Error).message})` }]);
-      throw err;
-    }
+    const tree = await port.destroySession(s.id);
     if (tree) {
       if (!tree.ok) {
         treeSurvivors.push(...tree.survivors);
         // Kept before the next destroy: if that one throws, this pane is
         // already gone and only this record still names its survivors.
-        lingering.set(key, [...treeSurvivors]);
+        const known = identified(treeSurvivors);
+        if (known.length > 0) lingering.set(key, known);
       }
     } else if (typeof s.pid === 'number' && s.pid > 0) {
       unreported.push(s.pid);
@@ -195,7 +196,7 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
     await port.sleep(EXIT_POLL_MS);
   }
   const survivors = [...treeSurvivors, ...unreported.filter((p) => port.isAlive(p)).map((pid) => ({ pid, reason: 'still running' }))];
-  if (survivors.length > 0) throw new PanesStillRunningError(survivors.map((x) => x.pid), survivors.map((x) => `${x.pid}: ${x.reason}`));
+  if (survivors.length > 0) throw survivorsError(survivors);
   return inside.map((s) => s.id);
 }
 
