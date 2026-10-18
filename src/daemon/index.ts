@@ -6419,26 +6419,52 @@ function wireEvents(
   // terminal_prompt record minted when it landed, and the awaiting verifier
   // never looks at a pane that was not marked awaiting. Retired like a
   // screen-cleared answer, once two reads a moment apart show no dialog (one
-  // read is one sample); a dialog still up (someone typing at it, which defers
-  // Claude's Notification) keeps it.
+  // read is one sample). A dialog still up (someone typing at it, which
+  // defers Claude's Notification) is looked at again every few seconds,
+  // since its answer may come with no hook and no awaiting state to report
+  // it; bounded, and the Notification takes over once the typing stops.
   // A record minted meanwhile belongs to a newer request, whose own lapse or
   // alert decides it: the sweep stands down if the pane's pending
-  // terminal_prompt records changed during the reads.
+  // terminal_prompt records changed.
+  const LAPSE_SWEEP_GAP_MS = 3_000;
+  const LAPSE_SWEEP_LOOKS = 40;
+  const sweepDelay = (ms: number): Promise<void> => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); });
+  // One sweep per pane at a time. A later lapse while it runs asks it to
+  // take the pane's current records as its own (they are that request's).
+  const lapseSweeps = new Map<string, { rebase: boolean }>();
   tentativeDialogLapsed = (sessionId) => {
     const registry = approvalRegistry;
     if (!registry) return;
+    const running = lapseSweeps.get(sessionId);
+    if (running) {
+      running.rebase = true;
+      return;
+    }
     const pendingPrompts = (): string => registry.list().pending
       .filter((r) => r.sessionId === sessionId && r.kind === 'terminal_prompt')
       .map((r) => r.id).join(',');
-    const before = pendingPrompts();
+    let before = pendingPrompts();
     if (before === '') return;
+    const sweep = { rebase: false };
+    lapseSweeps.set(sessionId, sweep);
     void (async () => {
-      if (!(await registry.dialogGoneFromScreen(sessionId))) return;
-      await new Promise<void>((resolve) => { setTimeout(resolve, DIALOG_RECHECK_MS).unref?.(); });
-      if (!(await registry.dialogGoneFromScreen(sessionId))) return;
-      if (pendingPrompts() !== before) return;
-      await registry.expireForSession(sessionId, 'screen-cleared', 'terminal_prompt');
-    })().catch((err: unknown) => log('warn', `[approvals] lapsed permission request sweep failed for ${sessionId}: ${String(err)}`));
+      for (let look = 0; look < LAPSE_SWEEP_LOOKS; look++) {
+        if (look > 0) await sweepDelay(LAPSE_SWEEP_GAP_MS);
+        if (sweep.rebase) {
+          sweep.rebase = false;
+          before = pendingPrompts();
+          look = 0;
+        }
+        if (before === '' || pendingPrompts() !== before || !sessionManager.getSession(sessionId)) return;
+        if (!(await registry.dialogGoneFromScreen(sessionId))) continue;
+        await sweepDelay(DIALOG_RECHECK_MS);
+        if (!(await registry.dialogGoneFromScreen(sessionId))) continue;
+        if (sweep.rebase || pendingPrompts() !== before) continue;
+        await registry.expireForSession(sessionId, 'screen-cleared', 'terminal_prompt');
+        return;
+      }
+    })().catch((err: unknown) => log('warn', `[approvals] lapsed permission request sweep failed for ${sessionId}: ${String(err)}`))
+      .finally(() => { lapseSweeps.delete(sessionId); });
   };
   const forgetAwaiting = (payload: { id: string }): void => awaitingVerifier.forget(payload.id);
   sessionManager.on('session:died', forgetAwaiting);

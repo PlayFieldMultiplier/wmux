@@ -1977,8 +1977,12 @@ export class HookIngest {
           this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId}: the screen check already raised the open dialog`);
           return;
         }
-        this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
-        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => entry.fanOut()));
+        // Recorded when the alert is actually sent: a window something else
+        // cancelled raised nothing, and must not hold the next check back.
+        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, this.unlessSettled(sessionId, () => {
+          this.secondLayerRaised.set(sessionId, { epoch: this.dialogEpochOf(sessionId), at: this.now() });
+          entry.fanOut();
+        }));
       };
       const verifyOnScreen = this.deps.dialogOnScreen;
       if (!verifyOnScreen) {
