@@ -123,6 +123,30 @@ export function detectorSuppressedBy(
   return canonical !== undefined && canonical.source !== 'screen' && canonical.slug !== screenSlug;
 }
 
+/**
+ * May this identity be written to the pane's persisted `lastDetectedAgent`?
+ *
+ * `lastDetectedAgent` is the sole basis of the post-restart resume pill, and
+ * a screen-tier identity is the weakest evidence there is: a banner row the
+ * detector matched with no process or hook behind it. That is enough to
+ * NAME a pane that has no agent yet (the first banner on an unarmed pane,
+ * before the probe lands), but not to FLIP a pane that already names one.
+ * The flip is how a Claude pane became "codex" for the pill: a Claude reply
+ * quoting Codex's banner row, a shell echo after Claude exited — persisted
+ * with saveImmediate, surviving the restart, and contradicting the Claude
+ * resume binding the hook had written. A hook or a live process may still
+ * change the name; the user switching agents in a pane is seen by the
+ * tracker as a launch, which is process-tier.
+ */
+export function mayPersistIdentity(
+  current: AgentSlug | undefined,
+  canonical: CanonicalAgentIdentity,
+): boolean {
+  if (current === canonical.slug) return false;
+  if (!current) return true;
+  return canonical.source !== 'screen';
+}
+
 /** #1307 — true only when the tracked process is alive and of the
  *  expected slug, the one tier with a death edge; hook and screen
  *  carry none, so neither can stand in for this check. */

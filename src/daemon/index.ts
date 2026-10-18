@@ -128,7 +128,7 @@ import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
 import { CommandStartAgentProbe } from './commandStartAgentProbe';
-import { resolveCanonicalAgentIdentity, detectorSuppressedBy, reportedAgentName, provesLiveAgent, type CanonicalAgentIdentity } from './canonicalAgent';
+import { resolveCanonicalAgentIdentity, detectorSuppressedBy, reportedAgentName, provesLiveAgent, type CanonicalAgentIdentity, mayPersistIdentity } from './canonicalAgent';
 import { decideLaunchPresence, launchPresenceNeedsProcessRead, type IdleShellRead } from './launchPresence';
 import { promptLineState } from '../shared/promptLineState';
 import { parseWriteExpectation, writeIfUnchanged } from './writeIfUnchanged';
@@ -6849,7 +6849,10 @@ function wireEvents(
     // unarmed pane still resolves screen-tier — corrected on the tracker's
     // attribution callback or the next event once the probe lands.
     const canonical = canonicalIdentityFor(agentProcessTracker, payload.sessionId, slug);
-    if (canonical && managed && managed.meta.lastDetectedAgent !== canonical.slug) {
+    // A screen-tier identity may name an unnamed pane, never rename one
+    // (mayPersistIdentity): the flip is what made a Claude pane "codex" for
+    // the resume pill after a quoted banner row or a post-exit shell echo.
+    if (canonical && managed && mayPersistIdentity(managed.meta.lastDetectedAgent, canonical)) {
       managed.meta.lastDetectedAgent = canonical.slug;
       // X6 ②: persist IMMEDIATELY, not debounced. lastDetectedAgent is the
       // SOLE basis for the post-reboot resume offer (resumeOfferForRecovered
@@ -8532,7 +8535,10 @@ async function main(): Promise<void> {
       sessionId,
       screenSlug ? agentDisplayToSlug(screenSlug) : undefined,
     );
-    if (canonical && managed.meta.lastDetectedAgent !== canonical.slug) {
+    // Same rule as the live banner site: on the exit edge the dead process
+    // no longer counts, so the screen's last guess would otherwise rename the
+    // pane to whatever row scrolled by last.
+    if (canonical && mayPersistIdentity(managed.meta.lastDetectedAgent, canonical)) {
       managed.meta.lastDetectedAgent = canonical.slug;
       stateWriter.saveImmediate(buildState(sessionManager));
     }
