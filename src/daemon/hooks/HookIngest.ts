@@ -183,11 +183,41 @@ export interface HookAgentEventData extends HookArbitration {
 }
 
 /**
- * Second look at the grid after a PermissionRequest confirmation found no
+ * How long a Claude PermissionRequest waits for its `Notification`
+ * (`permission_prompt`) before the second layer looks at the screen. Claude
+ * Code sends that notification once its permission prompt has waited about
+ * six seconds (hooks reference); the rest is margin for the hook's own spawn.
+ */
+export const PERMISSION_NOTIFY_GRACE_MS = 8_000;
+
+/**
+ * Second look at the grid after the second layer's first read found no
  * dialog. Claude shows the dialog only once every PermissionRequest hook has
  * returned, so a slow third-party hook can leave the first read empty.
  */
 export const DIALOG_RECHECK_MS = 1_500;
+
+/**
+ * Claude Code's PermissionRequest hook: a permission dialog it is ABOUT to
+ * show. Not proof a human is blocked (see `holdTentativeDialog`).
+ */
+function isClaudePermissionRequest(signal: AgentSignal): boolean {
+  return signal.kind === 'agent.awaiting_input'
+    && signal.payload?.['hook_event_name'] === 'PermissionRequest'
+    && isClaudeFamilyAgent(signal.agent);
+}
+
+/**
+ * Claude Code's `Notification` hook of type `permission_prompt`: a permission
+ * prompt that has been on screen, unanswered, for about six seconds. The
+ * provider's own word that a human is blocked.
+ */
+function isClaudePermissionNotification(signal: AgentSignal): boolean {
+  return signal.kind === 'agent.awaiting_input'
+    && signal.payload?.['hook_event_name'] === 'Notification'
+    && signal.payload?.['notification_type'] === 'permission_prompt'
+    && isClaudeFamilyAgent(signal.agent);
+}
 
 export interface HookIngestDeps {
   /** Live daemon sessions, re-read per signal (topology changes constantly). */
@@ -254,11 +284,12 @@ export interface HookIngestDeps {
    */
   onResolvedSignal?: (sessionId: string, signal: AgentSignal) => void;
   /**
-   * Is a dialog on the pane's screen right now? Consulted when a Claude
-   * PermissionRequest's attention window confirms: `false` drops the alarm
-   * (the dialog was never shown, or was answered inside the window), `null`
-   * means the grid could not be read and the hook is trusted as before.
-   * Optional: only the daemon supplies it.
+   * Is a dialog on the pane's screen right now? The second layer only: asked
+   * when a Claude PermissionRequest got no `permission_prompt` Notification
+   * within PERMISSION_NOTIFY_GRACE_MS on a pane that has never sent one (the
+   * hook is not registered there). `false` drops the alarm, `null` means the
+   * grid could not be read and the hook is trusted. Optional: only the daemon
+   * supplies it; without it the hook is trusted after the grace.
    */
   dialogOnScreen?: (sessionId: string) => Promise<boolean | null>;
   /**
@@ -729,16 +760,27 @@ export class HookIngest {
   private readonly answeredRequests = new Set<string>();
   /**
    * Per pane, bumped ONLY by cues that settle or supersede a dialog: the
-   * answered kinds, a lead Stop / StopFailure, SessionStart and a new
-   * prompt. Never by working evidence — a subagent's PostToolUse behind a
-   * real dialog is not an answer (the same asymmetry CompletionAlarm keeps
-   * for firm attention). A deferred
-   * PermissionRequest confirmation compares the value it captured before its
-   * screen read with the current one and stands down if they differ: the
-   * read can outlast an answer or a turn end, and the alarm's own `pending`
-   * is already gone by then, so this is the only cancel left.
+   * answered kinds, an answer keystroke (noteAnswered), a lead Stop /
+   * StopFailure, SessionStart and a new prompt. Never by working evidence —
+   * a subagent's PostToolUse behind a real dialog is not an answer (the same
+   * asymmetry CompletionAlarm keeps for firm attention). A tentative
+   * PermissionRequest and its second-layer screen read compare the value
+   * they captured with the current one and stand down if they differ: both
+   * outlast the alarm's own window, so this is their only cancel.
    */
   private readonly dialogEpoch = new Map<string, number>();
+  /**
+   * Per pane, the open tentative PermissionRequest (see holdTentativeDialog):
+   * its grace timer, and the fan-out of the latest request it stands for.
+   */
+  private readonly tentativeDialogs = new Map<string, { epoch: number; cancel: () => void; fanOut: () => unknown }>();
+  /**
+   * Panes whose Claude has sent a `permission_prompt` Notification this
+   * session: the hook is registered there, so a PermissionRequest that gets
+   * no Notification had no prompt left waiting, and no second layer runs.
+   * Cleared on SessionStart (the settings may differ) and pane disposal.
+   */
+  private readonly permissionNotifyPanes = new Set<string>();
   /** #1823: panes already logged for a provider mismatch (log once per pane). */
   private readonly mismatchLogged = new Set<string>();
   /** Foreign-process senders already logged (`pane|reason`), bounded like the rest. */
@@ -1312,6 +1354,7 @@ export class HookIngest {
       // boundary (resets the gate so a fresh session must work before any
       // stop can announce).
       if (signal.kind === 'agent.session_start' || signal.kind === 'agent.user_prompt_submit') this.bumpDialogEpoch(sessionId);
+      if (signal.kind === 'agent.session_start') this.permissionNotifyPanes.delete(sessionId);
       this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
       // M2: a fresh session on this pane means the question the PREVIOUS
       // session asked will never be answered — the same reasoning that makes
@@ -1410,7 +1453,17 @@ export class HookIngest {
 
     // Awaiting input keeps its phone card IMMEDIATELY (R5): a remote device
     // must see the question while the provisional window runs, not 1.5s later.
-    if (signal.kind === 'agent.awaiting_input') {
+    // Not for the permission Notification: it names no tool, and the dialog
+    // it reports already got its record from the PermissionRequest (or, with
+    // no hook before it, from the detector's screen read).
+    const permissionNotification = isClaudePermissionNotification(signal);
+    // The bridge forwards no other notification type; one from an older or
+    // foreign sender (idle, auth, elicitation) says nothing about a dialog.
+    if (signal.kind === 'agent.awaiting_input' && !permissionNotification
+        && signal.payload?.['hook_event_name'] === 'Notification' && isClaudeFamilyAgent(signal.agent)) {
+      return { ok: true };
+    }
+    if (signal.kind === 'agent.awaiting_input' && !permissionNotification) {
       this.noteAwaitingInput(signal, sessionId, sessions);
     }
 
@@ -1434,26 +1487,28 @@ export class HookIngest {
         signal,
       });
     };
-    // Claude's PermissionRequest hook fires for every dialog it is ABOUT to
-    // show — including ones nobody ever sees: a permission auto-resolved by
-    // the session's mode, an in-process background agent whose prompt cannot
-    // be shown, a dialog the human answered inside the window. The alarm
-    // treats the hook as firm (working cues do not rebut it, by design: a
-    // subagent painting behind a real dialog is not an answer), so each such
-    // hook used to confirm a "needs you" toast ~1.5 s later while the agent
-    // visibly kept working — reported as "notified every 2 seconds that input
-    // is required; when I click, the AI is still working". The screen is the
-    // tie-breaker: at confirmation, a readable grid with no dialog on it means
-    // there is nothing to answer, and the alarm is dropped. An unreadable grid
-    // (null) keeps trusting the hook, as before.
-    const verifyOnScreen = this.deps.dialogOnScreen;
-    const resume = verifyOnScreen
-      && signal.kind === 'agent.awaiting_input'
-      && signal.payload?.['hook_event_name'] === 'PermissionRequest'
-      && isClaudeFamilyAgent(signal.agent)
-      ? () => { this.confirmAgainstScreen(sessionId, verifyOnScreen, fanOut); }
-      : fanOut;
-    const outcome = this.alarm.observe(sessionId, signal.agent, cue, resume);
+    // Claude's PermissionRequest is a dialog it is ABOUT to show, and it fires
+    // for ones nobody ever sees: a request another hook or the SDK host
+    // decides, one auto-denied because the session cannot prompt, one
+    // answered at once. Taken as firm attention, each such hook confirmed a
+    // "needs you" toast ~1.5 s later while the agent visibly kept working —
+    // reported as "notified every 2 seconds that input is required; when I
+    // click, the AI is still working". It is tentative now: no window, no
+    // broadcast, no pane status. The firm signal is Claude's own Notification
+    // of type `permission_prompt`, sent once the prompt has really waited.
+    if (isClaudePermissionRequest(signal)) {
+      this.holdTentativeDialog(sessionId, signal.agent, fanOut);
+      return { ok: true };
+    }
+    if (permissionNotification) {
+      // The root signal took over: no second layer for this dialog, and none
+      // on this pane while its session lasts. The bump stands down a
+      // second-layer screen read already in flight.
+      this.permissionNotifyPanes.add(sessionId);
+      this.clearTentativeDialog(sessionId);
+      this.bumpDialogEpoch(sessionId);
+    }
+    const outcome = this.alarm.observe(sessionId, signal.agent, cue, fanOut);
     if (outcome === 'hold') {
       // The bridge is answered NOW; the broadcast fires at confirmation (or
       // never, if a rebuttal cue lands inside the window).
@@ -1792,16 +1847,13 @@ export class HookIngest {
    * bridge's awaiting state with nothing left on screen to answer.
    */
   noteAnswered(sessionId: string, slug?: string): void {
+    // The dialog is settled whatever the slug: a tentative PermissionRequest
+    // or a second-layer screen read still in flight must not raise it now.
+    this.bumpDialogEpoch(sessionId);
     if (!slug) return;
     this.alarm.observe(sessionId, slug, { class: 'answered' });
   }
 
-  /**
-   * Drop every ledger + authority entry for a disposed pane. Wired to
-   * session:died / session:destroyed so a long daemon lifetime does not
-   * accumulate dead-id entries, and so a reused id starts from the detector
-   * backstop rather than an inherited hook veto.
-   */
   /** Monotonic across panes, so a disposed pane's id can never read as current again. */
   private dialogEpochClock = 0;
 
@@ -1818,26 +1870,77 @@ export class HookIngest {
   }
 
   /**
-   * A PermissionRequest attention window has confirmed; fan it out only if
-   * the dialog is really on the screen.
+   * A Claude PermissionRequest: a dialog that MAY be coming. It raises
+   * nothing by itself; the `permission_prompt` Notification Claude sends once
+   * the prompt has waited is the firm signal (handled in `handle`).
    *
-   *   - The read is asynchronous and the alarm has already closed its window,
-   *     so an answer, a turn end or a new prompt that lands meanwhile is
-   *     honoured here: the epoch captured first must still be current when
-   *     the read returns, else nothing is sent (the reviewer's race: a
-   *     "needs you" landing after the Stop that ended the turn).
+   * Second layer, for a pane that has never sent that Notification (wmux's
+   * Notification hook is not registered there yet: an install from before
+   * it, a hand-written settings file): after PERMISSION_NOTIFY_GRACE_MS with
+   * no answer, turn end or new prompt, the screen decides (confirmAgainstScreen)
+   * and a dialog still up opens the firm attention window. A pane that has
+   * sent one gets no second layer: no Notification means no prompt waited.
+   *
+   * One timer per pane. A later request while it runs only replaces the
+   * fan-out: a stream of requests (the reported storm, one every 2 s) must
+   * not postpone the check forever behind a dialog that is really up.
+   */
+  private holdTentativeDialog(sessionId: string, slug: string, fanOut: () => unknown): void {
+    if (this.permissionNotifyPanes.has(sessionId)) {
+      this.deps.log?.('debug', `[hooks] PermissionRequest on ${sessionId} is tentative: waiting for its permission_prompt Notification`);
+      return;
+    }
+    const epoch = this.dialogEpochOf(sessionId);
+    const open = this.tentativeDialogs.get(sessionId);
+    if (open && open.epoch === epoch) {
+      open.fanOut = fanOut;
+      return;
+    }
+    this.clearTentativeDialog(sessionId);
+    const entry: { epoch: number; cancel: () => void; fanOut: () => unknown } = { epoch, cancel: () => undefined, fanOut };
+    const timer = setTimeout(() => {
+      if (this.tentativeDialogs.get(sessionId) !== entry) return;
+      this.tentativeDialogs.delete(sessionId);
+      if (this.dialogEpoch.get(sessionId) !== epoch) return;
+      const raise = (): void => {
+        this.alarm.observe(sessionId, slug, { class: 'attention', firm: true }, () => { entry.fanOut(); });
+      };
+      const verifyOnScreen = this.deps.dialogOnScreen;
+      if (!verifyOnScreen) {
+        raise();
+        return;
+      }
+      this.confirmAgainstScreen(sessionId, verifyOnScreen, raise);
+    }, PERMISSION_NOTIFY_GRACE_MS);
+    timer.unref?.();
+    entry.cancel = () => clearTimeout(timer);
+    this.tentativeDialogs.set(sessionId, entry);
+  }
+
+  private clearTentativeDialog(sessionId: string): void {
+    this.tentativeDialogs.get(sessionId)?.cancel();
+    this.tentativeDialogs.delete(sessionId);
+  }
+
+  /**
+   * The second layer's screen check: `raise` runs only if the dialog is
+   * really on the screen.
+   *
+   *   - The read is asynchronous, so an answer (a hook or the answer
+   *     keystroke), a turn end, a new prompt or the root Notification that
+   *     lands meanwhile is honoured here: the epoch captured first must still
+   *     be current when the read returns, else nothing is raised.
    *   - One miss is not proof. Claude draws the dialog only after every
    *     PermissionRequest hook has returned, so a slow third-party hook can
-   *     leave the grid dialog-free at confirmation. A miss is re-read once
-   *     after DIALOG_RECHECK_MS; only a second miss drops the alarm. The
-   *     module's rule stands: missed beats early, but never silently lost
-   *     on one frame.
-   *   - `null` (unreadable grid) and a thrown check trust the hook.
+   *     leave the grid dialog-free. A miss is re-read once after
+   *     DIALOG_RECHECK_MS; only a second miss drops the alarm.
+   *   - `null` (unreadable or narrow grid, #1901) and a thrown check trust
+   *     the hook.
    */
   private confirmAgainstScreen(
     sessionId: string,
     verifyOnScreen: NonNullable<HookIngestDeps['dialogOnScreen']>,
-    fanOut: () => unknown,
+    raise: () => void,
   ): void {
     const epoch = this.dialogEpochOf(sessionId);
     // A pane dropped meanwhile has no entry: stale, never a broadcast.
@@ -1848,7 +1951,7 @@ export class HookIngest {
         return;
       }
       try {
-        fanOut();
+        raise();
       } catch (err) {
         this.deps.log?.('warn', `[hooks] awaiting_input fan-out for ${sessionId} threw: ${String(err)}`);
       }
@@ -1871,7 +1974,7 @@ export class HookIngest {
           t.unref?.();
           return;
         }
-        this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no dialog on screen at confirmation or ${DIALOG_RECHECK_MS}ms later`);
+        this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} dropped: no permission_prompt Notification and no dialog on screen`);
       }, (err: unknown) => {
         this.deps.log?.('warn', `[hooks] dialog screen check failed for ${sessionId}: ${String(err)}`);
         send();
@@ -1880,8 +1983,16 @@ export class HookIngest {
     read(1);
   }
 
+  /**
+   * Drop every ledger + authority entry for a disposed pane. Wired to
+   * session:died / session:destroyed so a long daemon lifetime does not
+   * accumulate dead-id entries, and so a reused id starts from the detector
+   * backstop rather than an inherited hook veto.
+   */
   dropPty(sessionId: string): void {
     this.dialogEpoch.delete(sessionId);
+    this.clearTentativeDialog(sessionId);
+    this.permissionNotifyPanes.delete(sessionId);
     this.router.dropPty(sessionId);
     this.leadTurnEnded.delete(sessionId);
     this.lastPromptAt.delete(sessionId);
@@ -1896,6 +2007,8 @@ export class HookIngest {
 
   dispose(): void {
     clearInterval(this.floodTimer);
+    for (const entry of this.tentativeDialogs.values()) entry.cancel();
+    this.tentativeDialogs.clear();
     this.alarm.dispose();
   }
 }

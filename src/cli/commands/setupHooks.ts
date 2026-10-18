@@ -108,7 +108,8 @@ type HookEvent =
   | (typeof HOOK_EVENTS)[number]
   | (typeof ASK_QUESTION_HOOKS)[number]['event']
   | 'PreToolUse' // #783 — permission gate adds a wide PreToolUse
-  | 'PermissionRequest';
+  | 'PermissionRequest'
+  | 'Notification';
 
 /**
  * #783 — the permission-gate hook. A WIDE PreToolUse matcher (every tool) that
@@ -139,6 +140,21 @@ const PERMISSION_GATE_SPEC = {
 const PERMISSION_REQUEST_SPEC = {
   event: 'PermissionRequest' as const,
   matcher: '',
+};
+
+/**
+ * Claude Code's `permission_prompt` notification: a permission prompt that has
+ * waited, unanswered, for about six seconds. PermissionRequest only says a
+ * dialog is ABOUT to show (another hook, the SDK host or a non-interactive
+ * session can settle it unseen), so this is what the daemon raises "needs you"
+ * on. Matcher-scoped: no other notification type spawns the bridge.
+ *
+ * Outside SIGNAL_SPECS for the same `detectProfile` reason as
+ * PERMISSION_REQUEST_SPEC: an install made before it must keep its profile.
+ */
+const PERMISSION_NOTIFICATION_SPEC = {
+  event: 'Notification' as const,
+  matcher: 'permission_prompt',
 };
 
 /** One wmux-owned hook entry in settings.json. */
@@ -184,7 +200,7 @@ export type HookProfile = 'full' | 'signals-only';
 
 /** Every wmux-owned hook in settings.json as (event, matcher) specs — the
  *  single source `installHooks` writes and `statusHooks` checks against. */
-export const HOOK_SPECS: readonly HookSpec[] = [...SIGNAL_SPECS, PERMISSION_REQUEST_SPEC, PERMISSION_GATE_SPEC];
+export const HOOK_SPECS: readonly HookSpec[] = [...SIGNAL_SPECS, PERMISSION_REQUEST_SPEC, PERMISSION_NOTIFICATION_SPEC, PERMISSION_GATE_SPEC];
 
 /**
  * #2231 — the wmux hook groups for a claude launch configured by its own
@@ -202,7 +218,7 @@ export function bridgeHookGroups(bridgePath: string): Record<string, Array<{ mat
 
 /** The specs a given profile installs. */
 function specsFor(profile: HookProfile): readonly HookSpec[] {
-  return profile === 'signals-only' ? [...SIGNAL_SPECS, PERMISSION_REQUEST_SPEC] : HOOK_SPECS;
+  return profile === 'signals-only' ? [...SIGNAL_SPECS, PERMISSION_REQUEST_SPEC, PERMISSION_NOTIFICATION_SPEC] : HOOK_SPECS;
 }
 
 /** Stable identity of a spec — event plus argv tail, since the approval pair

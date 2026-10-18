@@ -395,8 +395,8 @@ let pushTurnFailed: ((sessionId:string, failure:TurnFailure)=>void) | undefined;
 let reverifyAwaiting: ((sessionId: string) => void) | undefined;
 /**
  * Is a dialog on the pane's screen now (null: grid unreadable or too narrow to
- * judge)? Set by wireEvents; HookIngest asks before confirming a Claude
- * PermissionRequest alarm.
+ * judge)? Set by wireEvents; HookIngest's second layer asks it for a Claude
+ * PermissionRequest that got no permission_prompt Notification.
  */
 let dialogOnScreen: ((sessionId: string) => Promise<boolean | null>) | undefined;
 // Late-bound: the pipe server that carries notices exists only after boot.
@@ -6399,8 +6399,9 @@ function wireEvents(
     }
   });
   reverifyAwaiting = (sessionId) => awaitingVerifier.trigger(sessionId, 'signal');
-  // One render on the shared snapshot queue, only when a PermissionRequest
-  // alarm is about to confirm (at most one per hook, ~1.5 s after it). The
+  // One render on the shared snapshot queue (two on a miss), only for a
+  // PermissionRequest on a pane that has never sent the permission_prompt
+  // Notification, PERMISSION_NOTIFY_GRACE_MS after the first one. The
   // same two predicates the verifier releases a pane on: the dialog owns the
   // bottom of the screen, or its cursor row sits there with no agent output
   // after it. A grid narrower than the dialog's footer wraps it beyond what

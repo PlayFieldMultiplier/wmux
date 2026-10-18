@@ -1,10 +1,22 @@
-// A Claude PermissionRequest's attention alarm asks the screen before it
-// confirms: no dialog on a readable grid, twice, means nothing to answer, and
-// the "needs you" broadcast is dropped. Reported as a toast every ~2 s while
-// the agent visibly kept working (background-agent permissions, auto-resolved
-// prompts, dialogs answered inside the window).
+// A Claude PermissionRequest is tentative: it raises no "needs you" by itself.
+// The firm signal is Claude's own Notification of type `permission_prompt`,
+// sent once the prompt has waited ~6 s. Reported as a toast every ~2 s while
+// the agent visibly kept working (requests decided by another hook or the SDK
+// host, auto-denied background agents, dialogs answered at once).
+//
+// Second layer: a pane that has never sent that Notification (the hook is not
+// registered there) gets a screen check PERMISSION_NOTIFY_GRACE_MS after the
+// request; a dialog still up raises the alarm.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { HookIngest, DIALOG_RECHECK_MS, type HookAgentEventData, type HookIngestDeps, type HookIngestSession } from '../HookIngest';
+import {
+  HookIngest,
+  DIALOG_RECHECK_MS,
+  PERMISSION_NOTIFY_GRACE_MS,
+  type DetectorHeldEventData,
+  type HookAgentEventData,
+  type HookIngestDeps,
+  type HookIngestSession,
+} from '../HookIngest';
 import { DEFAULT_ALARM_WINDOW_MS } from '../../../shared/hooks/CompletionAlarm';
 import type { AgentSignal } from '../../../shared/hooks/signal-types';
 
@@ -14,201 +26,401 @@ const PERMISSION_REQUEST = {
   tool_input: { command: 'npm test' },
 };
 
+const PERMISSION_NOTIFICATION = {
+  hook_event_name: 'Notification',
+  notification_type: 'permission_prompt',
+  message: 'Claude needs your permission to use Bash',
+};
+
 function makeSignal(overrides: Partial<AgentSignal> = {}): AgentSignal {
   return { kind: 'agent.awaiting_input', agent: 'claude', cwd: '/repo', payload: PERMISSION_REQUEST, ts: 1_000, ptyId: 'pty-a', ...overrides };
 }
 
+const notification = (ts = 7_000): AgentSignal => makeSignal({ payload: PERMISSION_NOTIFICATION, ts });
+
 function makeIngest(dialogOnScreen?: HookIngestDeps['dialogOnScreen']) {
   const sessions: HookIngestSession[] = [{ id: 'pty-a', cwd: '/repo', env: {} }];
   const emitted: HookAgentEventData[] = [];
+  const detectorEmitted: DetectorHeldEventData[] = [];
+  const cards: string[] = [];
+  const terminalPrompts: string[] = [];
   const logs: string[] = [];
   let clock = 10_000;
   const deps: HookIngestDeps = {
     listLiveSessions: () => sessions,
     emitAgentEvent: (_id, data) => { emitted.push(data); },
+    emitDetectorEvent: (_id, data) => { detectorEmitted.push(data); },
     applyResumeBinding: () => undefined,
+    approvals: {
+      noteHookAwaitingInput: (input) => { cards.push(input.sessionId); },
+      noteGateAwaiting: () => 'gate-id',
+      expireForSession: () => undefined,
+      noteTerminalPrompt: async (note) => { terminalPrompts.push(note.sessionId); },
+    },
     log: (_level, message) => { logs.push(message); },
     now: () => clock,
     ...(dialogOnScreen ? { dialogOnScreen } : {}),
   };
   const ingest = new HookIngest(deps);
   const awaiting = () => emitted.filter((e) => e.status === 'awaiting_input');
-  return { ingest, emitted, logs, awaiting, advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms); } };
+  // What becomes a toast: an emitted (not deduped) awaiting broadcast, from
+  // either source.
+  const toasts = () => awaiting().filter((e) => e.decision === 'emit').length
+    + detectorEmitted.filter((e) => e.status === 'awaiting_input' && e.decision === 'emit').length;
+  return { ingest, emitted, detectorEmitted, cards, terminalPrompts, logs, awaiting, toasts, advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms); } };
 }
 
 async function settle(): Promise<void> {
-  // The screen check resolves on the microtask queue after the window timer.
+  // The screen check resolves on the microtask queue after the grace timer.
   for (let i = 0; i < 6; i++) await Promise.resolve();
 }
 
-/** Confirm the window, then let the first read and the re-read both run. */
-async function confirmAndRecheck(f: ReturnType<typeof makeIngest>): Promise<void> {
-  f.advance(DEFAULT_ALARM_WINDOW_MS);
+/** Run the second layer to its end: grace, first read, re-read, alarm window. */
+async function runSecondLayer(f: ReturnType<typeof makeIngest>): Promise<void> {
+  f.advance(PERMISSION_NOTIFY_GRACE_MS);
   await settle();
   f.advance(DIALOG_RECHECK_MS);
   await settle();
+  f.advance(DEFAULT_ALARM_WINDOW_MS);
+  await settle();
 }
 
-describe('HookIngest — PermissionRequest alarm checks the screen', () => {
+/** Teach the pane that its Claude sends the permission Notification. */
+async function learnNotification(f: ReturnType<typeof makeIngest>): Promise<void> {
+  f.ingest.handle(makeSignal());
+  f.ingest.handle(notification());
+  f.advance(DEFAULT_ALARM_WINDOW_MS);
+  await settle();
+  f.ingest.noteAnswered('pty-a', 'claude');
+  f.emitted.length = 0;
+}
+
+describe('HookIngest — a Claude PermissionRequest is tentative', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('drops the awaiting_input broadcast when no dialog is on screen at confirmation AND on the re-read', async () => {
-    const screen = vi.fn(async () => false);
-    const f = makeIngest(screen);
+  it('raises nothing by itself: no broadcast, no pane status, inside the old 1.5 s window or after it', async () => {
+    const f = makeIngest(async () => false);
     f.ingest.handle(makeSignal());
+    f.advance(DEFAULT_ALARM_WINDOW_MS * 2);
+    await settle();
     expect(f.emitted).toEqual([]);
-    f.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    // One miss is not enough: nothing sent, nothing dropped yet.
-    expect(screen).toHaveBeenCalledTimes(1);
-    expect(f.awaiting()).toEqual([]);
-    expect(f.logs.some((l) => l.includes('dropped'))).toBe(false);
-    f.advance(DIALOG_RECHECK_MS);
-    await settle();
-    expect(screen).toHaveBeenCalledTimes(2);
-    expect(f.awaiting()).toEqual([]);
-    expect(f.logs.some((l) => l.includes('dropped: no dialog on screen'))).toBe(true);
   });
 
-  it('five hooks in a row with no dialog produce zero toasts, not five', async () => {
-    const f = makeIngest(async () => false);
+  it('keeps the phone record: the request reaches the registry at once, as a terminal_prompt', () => {
+    const f = makeIngest();
+    f.ingest.handle(makeSignal());
+    expect(f.terminalPrompts).toEqual(['pty-a']);
+    expect(f.cards).toEqual([]);
+  });
+
+  it('the reported storm: five requests 2 s apart, auto-resolved, no Notification → zero alarms', async () => {
+    const screen = vi.fn(async () => false);
+    const f = makeIngest(screen);
     for (let i = 0; i < 5; i++) {
       f.ingest.handle(makeSignal({ ts: 1_000 + i * 2_000 }));
-      // tool output keeps arriving between them
       f.advance(500);
       f.ingest.handle(makeSignal({ kind: 'agent.activity', payload: {}, ts: 1_500 + i * 2_000 }));
       f.advance(1_500);
       await settle();
     }
-    await confirmAndRecheck(f);
+    await runSecondLayer(f);
+    await runSecondLayer(f);
     expect(f.awaiting()).toEqual([]);
+    expect(f.toasts()).toBe(0);
+    // One timer per pane, not one screen read per hook.
+    expect(screen.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
-  it('broadcasts when the dialog IS on screen', async () => {
-    const f = makeIngest(async () => true);
+  it('the storm on a pane that sends the Notification: zero alarms and no screen read at all', async () => {
+    const screen = vi.fn(async () => false);
+    const f = makeIngest(screen);
+    await learnNotification(f);
+    for (let i = 0; i < 5; i++) {
+      f.ingest.handle(makeSignal({ ts: 20_000 + i * 2_000 }));
+      f.advance(2_000);
+      await settle();
+    }
+    await runSecondLayer(f);
+    expect(f.awaiting()).toEqual([]);
+    expect(screen).not.toHaveBeenCalled();
+  });
+});
+
+describe('HookIngest — the permission_prompt Notification is the firm signal', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('a real dialog: PermissionRequest, then the Notification ~6 s later → exactly one alarm', async () => {
+    const screen = vi.fn(async () => true);
+    const f = makeIngest(screen);
     f.ingest.handle(makeSignal());
+    f.advance(6_000);
+    f.ingest.handle(notification());
+    expect(f.awaiting()).toEqual([]);
     f.advance(DEFAULT_ALARM_WINDOW_MS);
     await settle();
     expect(f.awaiting()).toHaveLength(1);
+    expect(f.awaiting()[0]).toMatchObject({ source: 'hook', decision: 'emit', hookKind: 'agent.awaiting_input' });
+    // The root signal took over: no second layer behind it.
+    await runSecondLayer(f);
+    expect(f.awaiting()).toHaveLength(1);
+    expect(screen).not.toHaveBeenCalled();
+  });
+
+  it('a Notification with no request before it (a sandboxed network prompt) alarms too', async () => {
+    const f = makeIngest(async () => false);
+    f.ingest.handle(notification());
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('a Notification raises no AskUserQuestion card (it names no tool)', () => {
+    const f = makeIngest();
+    f.ingest.handle(notification());
+    expect(f.cards).toEqual([]);
+  });
+
+  it('subagent work behind the dialog does not rebut it', async () => {
+    const f = makeIngest();
+    f.ingest.handle(notification());
+    f.ingest.handle(makeSignal({ kind: 'agent.activity', payload: { tool_name: 'Grep' }, ts: 7_100 }));
+    f.ingest.notePaneWorking('pty-a', 'claude');
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('the detector saw the dialog first: the Notification after it is a dedup, so one toast', async () => {
+    const f = makeIngest(async () => true);
+    f.ingest.handle(makeSignal());
+    f.advance(200);
+    expect(f.ingest.arbitrateDetector('pty-a', { agent: 'Claude Code', status: 'awaiting_input', message: 'Approval requested' }).decision).toBe('pending');
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    f.advance(4_300);
+    f.ingest.handle(notification());
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.toasts()).toBe(1);
+  });
+
+  it('ignores every other notification type (the bridge forwards none; an older sender might)', async () => {
+    const f = makeIngest();
+    for (const type of ['idle_prompt', 'auth_success', 'elicitation_dialog', undefined]) {
+      f.ingest.handle(makeSignal({ payload: { hook_event_name: 'Notification', ...(type ? { notification_type: type } : {}) } }));
+    }
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.emitted).toEqual([]);
+    expect(f.cards).toEqual([]);
+    // And it does not mark the pane as one that sends the permission prompt.
+    const screen = vi.fn(async () => true);
+    const g = makeIngest(screen);
+    g.ingest.handle(makeSignal({ payload: { hook_event_name: 'Notification', notification_type: 'idle_prompt' } }));
+    g.ingest.handle(makeSignal());
+    await runSecondLayer(g);
+    expect(screen).toHaveBeenCalled();
+  });
+});
+
+describe('HookIngest — second layer: no Notification from this pane', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('a dialog still on screen after the grace raises one alarm', async () => {
+    const screen = vi.fn(async () => true);
+    const f = makeIngest(screen);
+    f.ingest.handle(makeSignal());
+    f.advance(PERMISSION_NOTIFY_GRACE_MS - 1);
+    await settle();
+    expect(screen).not.toHaveBeenCalled();
+    f.advance(1);
+    await settle();
+    expect(screen).toHaveBeenCalledTimes(1);
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('no dialog on two reads → dropped and logged', async () => {
+    const screen = vi.fn(async () => false);
+    const f = makeIngest(screen);
+    f.ingest.handle(makeSignal());
+    await runSecondLayer(f);
+    expect(screen).toHaveBeenCalledTimes(2);
+    expect(f.awaiting()).toEqual([]);
+    expect(f.logs.some((l) => l.includes('dropped: no permission_prompt Notification and no dialog on screen'))).toBe(true);
   });
 
   it('a dialog drawn late (slow third-party hook) is caught by the re-read', async () => {
     let drawn = false;
-    const screen = vi.fn(async () => drawn);
-    const f = makeIngest(screen);
+    const f = makeIngest(async () => drawn);
     f.ingest.handle(makeSignal());
-    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    f.advance(PERMISSION_NOTIFY_GRACE_MS);
     await settle();
-    expect(f.awaiting()).toEqual([]);
     drawn = true;
     f.advance(DIALOG_RECHECK_MS);
     await settle();
-    expect(screen).toHaveBeenCalledTimes(2);
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
     expect(f.awaiting()).toHaveLength(1);
   });
 
-  it('stands down when the dialog was answered or the turn ended while the screen read was in flight', async () => {
-    for (const settleWith of [
-      makeSignal({ kind: 'agent.permission_answered', payload: {}, ts: 2_000 }),
-      makeSignal({ kind: 'agent.stop', payload: {}, ts: 2_000 }),
-      makeSignal({ kind: 'agent.user_prompt_submit', payload: {}, ts: 2_000 }),
-    ]) {
-      let resolve: (up: boolean | null) => void = () => undefined;
-      const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
+  it('trusts the hook when the grid is unreadable or narrow (null), the check rejects, or it throws (#1901)', async () => {
+    for (const check of [
+      async () => null,
+      async () => { throw new Error('render failed'); },
+      () => { throw new Error('sync'); },
+    ] as Array<NonNullable<HookIngestDeps['dialogOnScreen']>>) {
+      const f = makeIngest(check);
       f.ingest.handle(makeSignal());
-      f.advance(DEFAULT_ALARM_WINDOW_MS);
-      await settle();
-      // The read is pending; the dialog gets settled meanwhile.
-      f.ingest.handle(settleWith);
-      resolve(true);
-      await settle();
-      expect(f.awaiting(), settleWith.kind).toEqual([]);
-      expect(f.logs.some((l) => l.includes('stood down')), settleWith.kind).toBe(true);
+      await runSecondLayer(f);
+      expect(f.awaiting()).toHaveLength(1);
     }
   });
 
-  it('working evidence (a subagent\'s PostToolUse, SubagentStop, another PermissionRequest) does NOT stand the alert down', async () => {
-    for (const other of [
-      makeSignal({ kind: 'agent.activity', payload: {}, ts: 2_000 }),
-      makeSignal({ kind: 'agent.subagent_stop', payload: {}, ts: 2_000 }),
-      makeSignal({ kind: 'agent.tool_started', payload: {}, ts: 2_000 }),
+  it('without a screen reader the hook is trusted after the grace', async () => {
+    const f = makeIngest();
+    f.ingest.handle(makeSignal());
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    expect(f.awaiting()).toEqual([]);
+    await runSecondLayer(f);
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('a stream of requests does not postpone the check behind a dialog that is really up', async () => {
+    const f = makeIngest(async () => true);
+    for (let i = 0; i < 4; i++) {
+      f.ingest.handle(makeSignal({ ts: 1_000 + i * 2_000 }));
+      f.advance(2_000);
+      await settle();
+    }
+    f.advance(PERMISSION_NOTIFY_GRACE_MS - 8_000 + DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('SessionStart forgets that the pane sends the Notification', async () => {
+    const screen = vi.fn(async () => true);
+    const f = makeIngest(screen);
+    await learnNotification(f);
+    f.ingest.handle(makeSignal({ kind: 'agent.session_start', payload: { source: 'startup' }, ts: 30_000 }));
+    f.ingest.handle(makeSignal({ ts: 31_000 }));
+    await runSecondLayer(f);
+    expect(screen).toHaveBeenCalled();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('an answer before the grace ends cancels it (hook or the answer keystroke)', async () => {
+    for (const answer of [
+      (f: ReturnType<typeof makeIngest>) => { f.ingest.handle(makeSignal({ kind: 'agent.permission_answered', payload: {}, ts: 2_000 })); },
+      (f: ReturnType<typeof makeIngest>) => { f.ingest.noteAnswered('pty-a', 'claude'); },
+      (f: ReturnType<typeof makeIngest>) => { f.ingest.noteAnswered('pty-a'); },
+    ]) {
+      const screen = vi.fn(async () => true);
+      const f = makeIngest(screen);
+      f.ingest.handle(makeSignal());
+      f.advance(1_000);
+      answer(f);
+      await runSecondLayer(f);
+      expect(screen).not.toHaveBeenCalled();
+      expect(f.awaiting()).toEqual([]);
+    }
+  });
+
+  it('stands down when the dialog was answered, the turn ended, a prompt or the Notification arrived during the read', async () => {
+    for (const settleWith of [
+      (f: ReturnType<typeof makeIngest>) => f.ingest.handle(makeSignal({ kind: 'agent.permission_answered', payload: {}, ts: 9_000 })),
+      (f: ReturnType<typeof makeIngest>) => f.ingest.handle(makeSignal({ kind: 'agent.stop', payload: {}, ts: 9_000 })),
+      (f: ReturnType<typeof makeIngest>) => f.ingest.handle(makeSignal({ kind: 'agent.user_prompt_submit', payload: {}, ts: 9_000 })),
+      // Race 1 (verification P2): the answer keystroke reaches noteAnswered,
+      // which must move the epoch too.
+      (f: ReturnType<typeof makeIngest>) => f.ingest.noteAnswered('pty-a', 'claude'),
     ]) {
       let resolve: (up: boolean | null) => void = () => undefined;
       const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
       f.ingest.handle(makeSignal());
+      f.advance(PERMISSION_NOTIFY_GRACE_MS);
+      await settle();
+      settleWith(f);
+      resolve(true);
+      await settle();
       f.advance(DEFAULT_ALARM_WINDOW_MS);
+      await settle();
+      expect(f.awaiting()).toEqual([]);
+      expect(f.logs.some((l) => l.includes('stood down'))).toBe(true);
+    }
+  });
+
+  it('the Notification landing during the read leaves exactly one alarm', async () => {
+    let resolve: (up: boolean | null) => void = () => undefined;
+    const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
+    f.ingest.handle(makeSignal());
+    f.advance(PERMISSION_NOTIFY_GRACE_MS);
+    await settle();
+    f.ingest.handle(notification(9_000));
+    resolve(true);
+    await settle();
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(f.awaiting()).toHaveLength(1);
+  });
+
+  it('working evidence (a subagent\'s PostToolUse, SubagentStop, tool start) does NOT stand it down', async () => {
+    for (const other of [
+      makeSignal({ kind: 'agent.activity', payload: {}, ts: 9_000 }),
+      makeSignal({ kind: 'agent.subagent_stop', payload: {}, ts: 9_000 }),
+      makeSignal({ kind: 'agent.tool_started', payload: {}, ts: 9_000 }),
+    ]) {
+      let resolve: (up: boolean | null) => void = () => undefined;
+      const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
+      f.ingest.handle(makeSignal());
+      f.advance(PERMISSION_NOTIFY_GRACE_MS);
       await settle();
       f.ingest.handle(other);
       resolve(true);
+      await settle();
+      f.advance(DEFAULT_ALARM_WINDOW_MS);
       await settle();
       expect(f.awaiting(), other.kind).toHaveLength(1);
     }
   });
 
-  it('a pane dropped during the read never gets a broadcast (fresh pane, first ever hook)', async () => {
+  it('race 2 (verification P2): a detector attention report does not skip the screen check', async () => {
+    const screen = vi.fn(async () => false);
+    const f = makeIngest(screen);
+    f.ingest.handle(makeSignal());
+    f.advance(100);
+    f.ingest.arbitrateDetector('pty-a', { agent: 'Claude Code', status: 'awaiting_input', message: 'Approval requested' });
+    await runSecondLayer(f);
+    // The hook's own alarm still asked the screen, and found nothing.
+    expect(screen).toHaveBeenCalled();
+    expect(f.awaiting()).toEqual([]);
+  });
+
+  it('a pane dropped during the read never gets a broadcast', async () => {
     let resolve: (up: boolean | null) => void = () => undefined;
     const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
     f.ingest.handle(makeSignal());
-    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    f.advance(PERMISSION_NOTIFY_GRACE_MS);
     await settle();
     f.ingest.dropPty('pty-a');
     resolve(true);
     await settle();
-    expect(f.awaiting()).toEqual([]);
-  });
-
-  it('a reader that resolves on a timer (the snapshot queue) still honours an answer that arrived first', async () => {
-    const f = makeIngest(() => new Promise<boolean | null>((r) => { setTimeout(() => r(true), 400); }));
-    f.ingest.handle(makeSignal());
     f.advance(DEFAULT_ALARM_WINDOW_MS);
     await settle();
-    f.ingest.handle(makeSignal({ kind: 'agent.permission_answered', payload: {}, ts: 2_000 }));
-    f.advance(400);
-    await settle();
     expect(f.awaiting()).toEqual([]);
-
-    const g = makeIngest(() => new Promise<boolean | null>((r) => { setTimeout(() => r(true), 400); }));
-    g.ingest.handle(makeSignal());
-    g.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    g.advance(400);
-    await settle();
-    expect(g.awaiting()).toHaveLength(1);
   });
 
-  it('a stale re-read never fires after the dialog was settled', async () => {
+  it('a pane dropped before the grace ends never reads its screen', async () => {
     const screen = vi.fn(async () => true);
-    let first = true;
-    const f = makeIngest(async () => { if (first) { first = false; return false; } return screen(); });
+    const f = makeIngest(screen);
     f.ingest.handle(makeSignal());
-    f.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    f.ingest.handle(makeSignal({ kind: 'agent.permission_answered', payload: {}, ts: 2_000 }));
-    f.advance(DIALOG_RECHECK_MS);
-    await settle();
+    f.ingest.dropPty('pty-a');
+    await runSecondLayer(f);
     expect(screen).not.toHaveBeenCalled();
-    expect(f.awaiting()).toEqual([]);
-  });
-
-  it('trusts the hook when the grid is unreadable (null), the check rejects, or the check throws synchronously', async () => {
-    const a = makeIngest(async () => null);
-    a.ingest.handle(makeSignal());
-    a.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    expect(a.awaiting()).toHaveLength(1);
-
-    const b = makeIngest(async () => { throw new Error('render failed'); });
-    b.ingest.handle(makeSignal());
-    b.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    expect(b.awaiting()).toHaveLength(1);
-
-    const c = makeIngest(() => { throw new Error('sync'); });
-    c.ingest.handle(makeSignal());
-    c.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    expect(c.awaiting()).toHaveLength(1);
   });
 
   it('a throwing fan-out is logged once, not retried through the error path', async () => {
@@ -216,26 +428,28 @@ describe('HookIngest — PermissionRequest alarm checks the screen', () => {
     let calls = 0;
     (f.ingest as unknown as { deps: HookIngestDeps }).deps.emitAgentEvent = () => { calls++; throw new Error('consumer threw'); };
     f.ingest.handle(makeSignal());
-    f.advance(DEFAULT_ALARM_WINDOW_MS);
-    await settle();
-    // Exactly one delivery attempt: the error path must not run fanOut again.
+    await runSecondLayer(f);
     expect(calls).toBe(1);
   });
+});
 
-  it('does not consult the screen for AskUserQuestion or non-Claude agents', async () => {
+describe('HookIngest — other awaiting paths are unchanged', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('AskUserQuestion and a Codex PermissionRequest alarm after the usual window, with no screen read', async () => {
     const screen = vi.fn(async () => false);
-    const f = makeIngest(screen);
-    f.ingest.handle(makeSignal({ payload: { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' } }));
-    f.ingest.handle(makeSignal({ agent: 'codex', ptyId: 'pty-a' }));
-    await confirmAndRecheck(f);
-    expect(screen).not.toHaveBeenCalled();
-  });
-
-  it('behaves as before when no screen reader is supplied', async () => {
-    const f = makeIngest();
-    f.ingest.handle(makeSignal());
-    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    const a = makeIngest(screen);
+    a.ingest.handle(makeSignal({ payload: { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' } }));
+    a.advance(DEFAULT_ALARM_WINDOW_MS);
     await settle();
-    expect(f.awaiting()).toHaveLength(1);
+    expect(a.awaiting()).toHaveLength(1);
+
+    const b = makeIngest(screen);
+    b.ingest.handle(makeSignal({ agent: 'codex' }));
+    b.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    expect(b.awaiting()).toHaveLength(1);
+    expect(screen).not.toHaveBeenCalled();
   });
 });
