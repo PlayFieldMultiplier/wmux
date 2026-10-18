@@ -539,6 +539,14 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       }
     }
     const byPid = new Map(rows.map((r) => [r.pid, r]));
+    // Parent links lead to our processes only through the ones captured: a
+    // frozen one someone else killed hands its children to init, and its pid
+    // can go to another process whose children are not ours.
+    const replaced = [...targets].filter(([pid, start]) => byPid.get(pid)?.start !== start).map(([pid]) => pid);
+    if (replaced.length > 0) {
+      scanError = `process(es) ${replaced.join(', ')} of the tree ended or were replaced while frozen`;
+      break;
+    }
     let added = 0;
     for (const pid of collectDescendants(rows.map((r) => [r.pid, r.ppid] as const), rootPid)) {
       if (targets.has(pid)) continue;

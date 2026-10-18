@@ -307,6 +307,28 @@ describe('captureTreePosix', () => {
     if (!r.ok) expect(r.survivors.map((x) => x.reason).join()).toMatch(/could not be frozen/);
   });
 
+  it('never follows a captured pid another process took while the tree was frozen', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1: 100 -> 101. Read 2: 101 was killed by someone else and
+        // another process got its pid, with a child of its own (102), and
+        // 100 also started 103 before it was frozen.
+        if (reads === 1) return [row(1, 0), row(100, 1), row(101, 100)];
+        return [row(1, 0), row(100, 1), { pid: 101, ppid: 100, stat: 'S', start: 'other' }, row(102, 101), row(103, 100)];
+      },
+      signal: (pid, sig) => { signals.push([pid, sig]); },
+    };
+    const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+    expect(signals.some(([p]) => p === 102)).toBe(false);
+    const r = await tree.kill({ timeoutMs: 0 });
+    expect(signals.some(([p]) => p === 102)).toBe(false);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors.map((x) => x.reason).join()).toMatch(/replaced while frozen/);
+  });
+
   it('fails closed when the tree is still growing after every capture round', async () => {
     let next = 101;
     const rows = [row(1, 0), row(100, 1)];
