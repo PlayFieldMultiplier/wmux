@@ -15,9 +15,16 @@
 // missing file means the run did not finish, never "no flakes". The format and
 // the reader are in scripts/lib/test-retries.mjs; scripts/flaky-report.mjs
 // prints it.
+//
+// It also writes test-results/durations-<name>.json per project: each test
+// file's duration, which `node scripts/test-durations.mjs --write` turns into
+// the checked-in vitest.durations.json the shard sequencer reads
+// (scripts/lib/test-durations.mjs has the format). These always go under
+// test-results/, an explicit `outputFile` included.
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildDurationsReport, collectDurations } from './lib/test-durations.mjs';
 import { buildReport, collectRetriedTests, sortTests } from './lib/test-retries.mjs';
 
 export default class RetryReporter {
@@ -35,8 +42,7 @@ export default class RetryReporter {
   onTestRunEnd(testModules) {
     const config = this.ctx.config;
     const retry = typeof config.retry === 'number' ? config.retry : (config.retry?.count ?? 0);
-    const write = (suite, tests, outputFile) => {
-      const report = buildReport({ suite, shard: config.shard, platform: process.platform, retry, tests });
+    const writeJson = (outputFile, report) => {
       const file = path.resolve(config.root, outputFile);
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -46,6 +52,16 @@ export default class RetryReporter {
         this.ctx.logger.warn(`retry reporter: could not write ${file}: ${error.message}`);
       }
     };
+    const write = (suite, tests, outputFile) =>
+      writeJson(outputFile, buildReport({ suite, shard: config.shard, platform: process.platform, retry, tests }));
+
+    for (const [name, files] of collectDurations(testModules)) {
+      const project = name || this.suite;
+      writeJson(
+        `test-results/durations-${fileSafe(project)}.json`,
+        buildDurationsReport({ project, shard: config.shard, platform: process.platform, files }),
+      );
+    }
 
     const byProject = collectRetriedTests(testModules);
     if (this.outputFile) {
