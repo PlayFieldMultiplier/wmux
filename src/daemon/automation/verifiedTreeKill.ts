@@ -210,7 +210,11 @@ export function survivorsStillRunningWin32(survivors: readonly TreeKillSurvivor[
           if (seen.has(pid)) continue;
           seen.add(pid);
           const child = api.open(pid);
-          if ('gone' in child) continue;
+          if ('gone' in child) {
+            // Its children in the table can no longer be told from strangers.
+            if (children(pid).length > 0) out.push({ pid, reason: `started by ${s.pid}, which outlived the kill; it exited before its children could be identified`, unverified: true });
+            continue;
+          }
           if ('failure' in child) {
             out.push({ pid, reason: `started by ${s.pid}, which outlived the kill; could not be identified`, unverified: true });
             continue;

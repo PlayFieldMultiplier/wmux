@@ -402,6 +402,16 @@ describe('survivorsStillRunning', () => {
 });
 
 describe('survivorsStillRunningWin32', () => {
+  it('stays unverified when a child of an exited survivor vanished before its own children were identified', () => {
+    const f = fakeWin([
+      { pid: 11, ppid: 1, createdAt: 110n, exited: true },
+      { pid: 21, ppid: 11, createdAt: 150n, goneOnOpen: true },
+      { pid: 22, ppid: 21, createdAt: 160n },
+    ]);
+    const r = survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api);
+    expect(r).toEqual([expect.objectContaining({ pid: 21, unverified: true })]);
+  });
+
   it('a survivor still running is still running; one that exited is not', () => {
     const f = fakeWin([{ pid: 11, ppid: 1, createdAt: 110n }, { pid: 12, ppid: 1, createdAt: 120n, exited: true }]);
     const s11 = { pid: 11, reason: 'access denied', startTime: '110' };
