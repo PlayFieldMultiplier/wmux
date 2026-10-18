@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, recordedStartOf, survivorsStillRunning, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
+import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, recordedStartOf, survivorsStillRunning, survivorsStillRunningWin32, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
 import type { ProcessHandle, ProcessHandleApi, ProcessOpenResult } from '../../../main/pty/winSnapshotNative';
 
 const noWait = async (): Promise<void> => undefined;
@@ -378,6 +378,38 @@ describe('survivorsStillRunning', () => {
     const gone = { pid: 0x7ffffff0, reason: 'still running', startTime: '1' };
     const unchecked = { pid: 0x7ffffff0, reason: 'the process table could not be read', unverified: true as const };
     expect(await survivorsStillRunning([gone, unchecked])).toEqual([unchecked]);
+  });
+});
+
+describe('survivorsStillRunningWin32', () => {
+  it('a survivor still running is still running; one that exited is not', () => {
+    const f = fakeWin([{ pid: 11, ppid: 1, createdAt: 110n }, { pid: 12, ppid: 1, createdAt: 120n, exited: true }]);
+    const s11 = { pid: 11, reason: 'access denied', startTime: '110' };
+    const s12 = { pid: 12, reason: 'access denied', startTime: '120' };
+    expect(survivorsStillRunningWin32([s11, s12], f.api)).toEqual([s11]);
+  });
+
+  it('once a survivor exited, what it started meanwhile still counts, grandchildren too', () => {
+    const f = fakeWin([
+      { pid: 11, ppid: 1, createdAt: 110n, exited: true },
+      { pid: 21, ppid: 11, createdAt: 150n },
+      { pid: 22, ppid: 21, createdAt: 160n },
+      // An orphan older than the survivor, on a pid it reused: not its.
+      { pid: 23, ppid: 11, createdAt: 50n },
+    ]);
+    const r = survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api);
+    expect(r.map((x) => x.pid).sort()).toEqual([21, 22]);
+  });
+
+  it('the children of a later owner of the survivor\'s pid are not its', () => {
+    const f = fakeWin([
+      // pid 11 now belongs to a process created at 300.
+      { pid: 11, ppid: 1, createdAt: 300n },
+      { pid: 21, ppid: 11, createdAt: 150n },
+      { pid: 24, ppid: 11, createdAt: 350n },
+    ]);
+    const r = survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api);
+    expect(r.map((x) => x.pid)).toEqual([21]);
   });
 });
 

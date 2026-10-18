@@ -134,18 +134,7 @@ async function processesStillRunning(survivors: readonly TreeKillSurvivor[]): Pr
   if (survivors.length === 0) return [];
   if (process.platform === 'win32') {
     const api = tryProcessHandleApi();
-    if (!api) return [...survivors];
-    return survivors.filter((s) => {
-      const now = api.open(s.pid);
-      if ('gone' in now) return false;
-      if ('failure' in now) return true;
-      try {
-        if (s.startTime !== undefined && now.createdAt.toString() !== s.startTime) return false;
-        return api.hasExited(now.handle) !== true;
-      } finally {
-        api.close(now.handle);
-      }
-    });
+    return api ? survivorsStillRunningWin32(survivors, api) : [...survivors];
   }
   let rows: PosixProcRow[];
   try {
@@ -154,11 +143,95 @@ async function processesStillRunning(survivors: readonly TreeKillSurvivor[]): Pr
     return [...survivors];
   }
   const byPid = new Map(rows.map((r) => [r.pid, r]));
-  return survivors.filter((s) => {
+  return survivors.flatMap((s): TreeKillSurvivor[] => {
     const row = byPid.get(s.pid);
-    if (!row || row.stat.startsWith('Z')) return false;
-    return s.startTime === undefined || row.start === s.startTime;
+    if (row && !row.stat.startsWith('Z') && (s.startTime === undefined || row.start === s.startTime)) return [s];
+    // It outlived the kill, so it may have started processes since; POSIX
+    // hands an exited process's children to init, so none can be found.
+    return [{ ...s, unverified: true, reason: `${s.reason}; it has exited, and what it started meanwhile cannot be found` }];
   });
+}
+
+/**
+ * Windows {@link survivorsStillRunning}: a survivor still running, or, once
+ * it exited, every process it started meanwhile that still runs (it
+ * outlived the kill, so it could start more). Those are found through the
+ * table under the survivor's pid, each no older than its parent and, when
+ * the pid has gone to another process since, older than that one. Exported
+ * for tests.
+ */
+export function survivorsStillRunningWin32(survivors: readonly TreeKillSurvivor[], api: ProcessHandleApi): TreeKillSurvivor[] {
+  let table: Array<{ pid: number; ppid: number }> | null = null;
+  const children = (pid: number): number[] => {
+    if (table === null) table = api.processTable();
+    return table.filter((p) => p.ppid === pid && p.pid !== pid).map((p) => p.pid);
+  };
+  const out: TreeKillSurvivor[] = [];
+  for (const s of survivors) {
+    if (s.startTime === undefined || !/^\d+$/.test(s.startTime)) {
+      // Not identified: only whether its pid is still in use can be read.
+      const now = api.open(s.pid);
+      if ('handle' in now) {
+        const exited = api.hasExited(now.handle) === true;
+        api.close(now.handle);
+        if (!exited) out.push(s);
+      } else if ('failure' in now) {
+        out.push(s);
+      }
+      continue;
+    }
+    const started = BigInt(s.startTime);
+    const now = api.open(s.pid);
+    if ('failure' in now) {
+      out.push(s);
+      continue;
+    }
+    /** Children of the survivor are older than this: a later owner of its pid. */
+    let before: bigint | null = null;
+    if ('handle' in now) {
+      try {
+        if (now.createdAt === started) {
+          if (api.hasExited(now.handle) !== true) {
+            out.push(s);
+            continue;
+          }
+        } else {
+          before = now.createdAt;
+        }
+      } finally {
+        api.close(now.handle);
+      }
+    }
+    try {
+      const queue: Array<{ pid: number; created: bigint; until: bigint | null }> = [{ pid: s.pid, created: started, until: before }];
+      const seen = new Set<number>([s.pid]);
+      for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+        for (const pid of children(item.pid)) {
+          if (seen.has(pid)) continue;
+          seen.add(pid);
+          const child = api.open(pid);
+          if ('gone' in child) continue;
+          if ('failure' in child) {
+            out.push({ pid, reason: `started by ${s.pid}, which outlived the kill; could not be identified`, unverified: true });
+            continue;
+          }
+          try {
+            const ours = child.createdAt >= item.created && (item.until === null || child.createdAt < item.until);
+            if (!ours) continue;
+            if (api.hasExited(child.handle) !== true) {
+              out.push({ pid, reason: `started by ${s.pid}, which outlived the kill`, startTime: child.createdAt.toString() });
+            }
+            queue.push({ pid, created: child.createdAt, until: null });
+          } finally {
+            api.close(child.handle);
+          }
+        }
+      }
+    } catch {
+      out.push({ ...s, unverified: true, reason: `${s.reason}; the process table could not be read` });
+    }
+  }
+  return out;
 }
 
 /**

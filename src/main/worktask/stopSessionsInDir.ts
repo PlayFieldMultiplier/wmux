@@ -137,7 +137,9 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
     // Both checks hand back entries of the list they were given.
     const still = (await (port.stillRunning ?? survivorsStillRunning)(open)) as Lingering[];
     if (still.length > 0) {
-      lingering.set(key, still);
+      // A pane whose destroy did not answer and is listed again stays
+      // recorded until it is destroyed with an answer.
+      lingering.set(key, [...still, ...earlier.filter((x) => !open.includes(x))]);
       throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: ${x.sessionId ? x.reason : 'still running since an earlier stop'}`));
     }
     lingering.delete(key);

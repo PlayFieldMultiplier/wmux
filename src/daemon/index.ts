@@ -2595,8 +2595,19 @@ function registerRpcHandlers(
   // killed after; the reply's `tree` says whether every process exited. A
   // caller about to delete the folder the pane ran in keeps it when one did
   // not.
+  /** A pane's tree kill under way: a second `killTree` destroy of the same
+   *  pane waits for its answer instead of finding no session (#2388). */
+  const treeKillsInFlight = new Map<string, Promise<unknown>>();
   const destroySessionRpc = async (params: Record<string, unknown>): Promise<unknown> => {
     const p = params as unknown as DaemonDestroySessionParams;
+    const inFlight = p.killTree === true ? treeKillsInFlight.get(p.id) : undefined;
+    if (inFlight) return inFlight;
+    if (p.killTree !== true) return destroySessionNow(p);
+    const run = destroySessionNow(p).finally(() => treeKillsInFlight.delete(p.id));
+    treeKillsInFlight.set(p.id, run);
+    return run;
+  };
+  const destroySessionNow = async (p: DaemonDestroySessionParams): Promise<unknown> => {
     // OBSERVABILITY: log wmux-initiated kills (pane/workspace close, reset) so
     // they can be told apart from a process self-exit in the session:died log.
     log('info', `[lifecycle] destroySession id=${p.id} reason=rpc${p.killTree === true ? ' killTree' : ''}`);

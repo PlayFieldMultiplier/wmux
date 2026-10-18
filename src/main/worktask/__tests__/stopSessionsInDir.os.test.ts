@@ -142,6 +142,29 @@ describe('stopSessionsInDir', () => {
     expect(await stopSessionsInDir('/w/t', port([], 'linux').p)).toEqual([]);
   });
 
+  it('keeps an unanswered destroy recorded when another survivor blocks the stop first', async () => {
+    const survivor = { pid: 70, reason: 'access denied', startTime: '1' };
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }, { id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux', {
+      trees: { s: { ok: false, killed: [7], survivors: [survivor] } },
+    });
+    const destroy = first.p.destroySession;
+    first.p.destroySession = async (id) => {
+      if (id === 'u') throw new Error('RPC timeout');
+      return destroy(id);
+    };
+    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('RPC timeout');
+
+    // 'u' is listed again, but the survivor blocks before it is destroyed.
+    const second = port([{ id: 'u', pid: 8, spawnCwd: '/w/t' }], 'linux');
+    second.p.stillRunning = async (list) => list.filter((x) => x.pid === 70);
+    await expect(stopSessionsInDir('/w/t', second.p)).rejects.toBeInstanceOf(PanesStillRunningError);
+
+    // The survivor exits and 'u' vanished without an answer: still kept.
+    const third = port([], 'linux');
+    third.p.stillRunning = async (list) => list.filter((x) => x.unverified);
+    await expect(stopSessionsInDir('/w/t', third.p)).rejects.toThrow(/did not finish/);
+  });
+
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {
     const isAlive = vi.fn(() => true);
     const { p } = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7, 70] } } });
