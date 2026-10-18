@@ -38,7 +38,7 @@ import { getWindowsDefaultShell, resolveBareShellName, resolveLaunchableWindowsE
 import { ENV_KEYS } from '../shared/constants';
 import { containsControlChars } from '../shared/cwdShape';
 import { createDefaultConfig } from './config';
-import { getProcessStartTime, isPhantomExit, isPidAlive } from './phantomExit';
+import { getProcessCreatedAtFt, getProcessStartTime, isPhantomExit, isPidAlive } from './phantomExit';
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -222,8 +222,8 @@ const clampRows = (rows: number): number => Math.max(MIN_SAFE_ROWS, rows);
  *      A PTY exit classified as involuntary (OS shutdown killing children —
  *      see shutdownKill.ts). The session is SUSPENDED, not dead: daemon/index
  *      dumps the buffer + persists so post-reboot recovery replays the same id.
- *  - 'session:phantomExit'  → { id, pid, pidStartTime, exitCode, signal, cmd,
- *                               lastActivityMsAgo, raw }
+ *  - 'session:phantomExit'  → { id, pid, pidCreatedAtFt, pidStartTime, exitCode,
+ *                               signal, cmd, lastActivityMsAgo, raw }
  *      A PTY exit that reported no exit code and no signal while the shell pid
  *      is STILL ALIVE (node-pty's ConPTY socket-close path — see
  *      phantomExit.ts / issue #646). Mechanism only: no state is set and no
@@ -964,6 +964,7 @@ export class DaemonSessionManager extends EventEmitter {
           cmd: meta.cmd,
           lastActivityMsAgo,
           // Identity of the pid we are about to ask the policy layer to kill.
+          pidCreatedAtFt: meta.pidCreatedAtFt,
           pidStartTime: meta.pidStartTime,
           // Carried, not logged here: this class has no access to the daemon's
           // file logger, and a console.log would never reach the daemon log
@@ -1018,15 +1019,24 @@ export class DaemonSessionManager extends EventEmitter {
     bridge.setupDataForwarding(ptyProcess, ringBuffer, params.id, promptLog);
 
     // #646: stamp the pid's OS creation time so later reaping paths can tell
-    // OUR shell from whatever process inherits the pid after recycling.
-    // Deliberately not awaited — createSession is synchronous and the probe
-    // shells out. The value lands on the live meta well before any tombstone
-    // could be written, and every sessions.json write reads meta at write
-    // time, so persistence picks it up. If the probe fails the field stays
-    // absent and the reaping paths fall back to their weaker check.
-    void getProcessStartTime(meta.pid).then((startTime) => {
-      if (startTime) meta.pidStartTime = startTime;
-    });
+    // OUR shell from whatever process inherits the pid after recycling. If the
+    // read fails the field stays absent and the reaping paths fall back to
+    // their weaker check.
+    // #2398: on Windows a native read (null elsewhere), so it is taken here,
+    // before the session is announced or persisted. It used to be a
+    // PowerShell probe per create, and in a recovery burst those timed out
+    // and left the field empty.
+    const createdAtFt = getProcessCreatedAtFt(meta.pid);
+    if (createdAtFt !== null) meta.pidCreatedAtFt = createdAtFt.toString();
+    if (process.platform !== 'win32') {
+      // Not awaited — createSession is synchronous and `ps` is a subprocess.
+      // The value lands on the live meta well before any tombstone could be
+      // written, and every sessions.json write reads meta at write time, so
+      // persistence picks it up.
+      void getProcessStartTime(meta.pid).then((startTime) => {
+        if (startTime) meta.pidStartTime = startTime;
+      });
+    }
 
     this.emit('session:created', { session: { ...meta } });
     return { ...meta };

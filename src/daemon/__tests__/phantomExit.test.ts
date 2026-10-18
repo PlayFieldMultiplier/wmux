@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyReapIdentity,
+  dmtfToUtcMicros,
+  fileTimeToUtcMicros,
   isPhantomExit,
   isPidAlive,
   isSameBootProven,
@@ -121,6 +123,97 @@ describe('classifyReapIdentity', () => {
     expect(mayReap('start-time')).toBe(true);
     expect(mayReap('heuristic')).toBe(true);
     expect(mayReap('unconfirmed')).toBe(false);
+  });
+});
+
+// #2398: Windows records the FILETIME read natively. Records written before
+// that hold a DMTF string, which must keep authorizing against a FILETIME.
+describe('classifyReapIdentity with a native FILETIME', () => {
+  // 2026-07-27T05:28:00.1234567Z
+  const FT = 134296036801234567n;
+  const OTHER_FT = FT + 10_000_000n;
+
+  it('a stored FILETIME equal to the current one is proof', () => {
+    expect(
+      classifyReapIdentity({ storedCreatedAtFt: FT.toString(), currentCreatedAtFt: FT, looksLikeOurShell: false }),
+    ).toBe('start-time');
+  });
+
+  it('a stored FILETIME that differs refuses, even when the executable looks like our shell', () => {
+    expect(
+      classifyReapIdentity({ storedCreatedAtFt: FT.toString(), currentCreatedAtFt: OTHER_FT, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+    // Exact: 100 ns apart is another process.
+    expect(
+      classifyReapIdentity({ storedCreatedAtFt: FT.toString(), currentCreatedAtFt: FT + 1n, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+  });
+
+  it('a stored FILETIME wins over a legacy DMTF on the same record', () => {
+    expect(
+      classifyReapIdentity({
+        storedCreatedAtFt: OTHER_FT.toString(),
+        storedStartTime: '20260727142800.123456+540',
+        currentCreatedAtFt: FT,
+        looksLikeOurShell: true,
+      }),
+    ).toBe('unconfirmed');
+  });
+
+  it('a legacy DMTF in the same offset matches the FILETIME truncated to microseconds', () => {
+    expect(
+      classifyReapIdentity({ storedStartTime: '20260727142800.123456+540', currentCreatedAtFt: FT, looksLikeOurShell: false }),
+    ).toBe('start-time');
+    expect(
+      classifyReapIdentity({ storedStartTime: '20260727142800.123457+540', currentCreatedAtFt: FT, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+  });
+
+  it('a legacy DMTF written under another (DST) offset still matches the same instant', () => {
+    // Pacific daylight time: 22:28 the day before, seven hours behind UTC.
+    expect(
+      classifyReapIdentity({ storedStartTime: '20260726222800.123456-420', currentCreatedAtFt: FT, looksLikeOurShell: false }),
+    ).toBe('start-time');
+    // The same wall-clock time under standard time is an hour later in UTC.
+    expect(
+      classifyReapIdentity({ storedStartTime: '20260726222800.123456-480', currentCreatedAtFt: FT, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+  });
+
+  it('a stored value that is not DMTF never matches a FILETIME', () => {
+    expect(
+      classifyReapIdentity({ storedStartTime: 'Mon Jul 27 14:28:00 2026', currentCreatedAtFt: FT, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+  });
+
+  it('nothing stored falls back to the executable-name heuristic', () => {
+    expect(classifyReapIdentity({ currentCreatedAtFt: FT, looksLikeOurShell: true })).toBe('heuristic');
+    expect(classifyReapIdentity({ currentCreatedAtFt: FT, looksLikeOurShell: false })).toBe('unconfirmed');
+  });
+
+  it('an unreadable current FILETIME never counts as a match', () => {
+    expect(
+      classifyReapIdentity({ storedCreatedAtFt: FT.toString(), currentCreatedAtFt: null, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+    expect(
+      classifyReapIdentity({ storedStartTime: '20260727142800.123456+540', currentCreatedAtFt: null, looksLikeOurShell: true }),
+    ).toBe('unconfirmed');
+  });
+});
+
+describe('DMTF and FILETIME normalization', () => {
+  it('reduces both to UTC microseconds', () => {
+    const us = BigInt(Date.UTC(2026, 6, 27, 5, 28, 0)) * 1000n + 123456n;
+    expect(fileTimeToUtcMicros(134296036801234567n)).toBe(us);
+    expect(dmtfToUtcMicros('20260727142800.123456+540')).toBe(us);
+    expect(dmtfToUtcMicros('20260727052800.123456+000')).toBe(us);
+    expect(dmtfToUtcMicros('20260726222800.123456-420')).toBe(us);
+  });
+
+  it('is null for anything that is not DMTF', () => {
+    expect(dmtfToUtcMicros('')).toBeNull();
+    expect(dmtfToUtcMicros('134296036801234567')).toBeNull();
+    expect(dmtfToUtcMicros('20260727142800+540')).toBeNull();
   });
 });
 

@@ -35,6 +35,7 @@
 
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { tryProcessIdentity } from '../main/pty/winSnapshotNative';
 
 /**
  * Is this pid still present? `signal 0` performs the permission/existence
@@ -103,6 +104,9 @@ export function isPhantomExit(
  * instant. Recording it at spawn and comparing it before a kill is what stops
  * reconciliation from taskkill-ing an innocent shell that inherited the pid.
  *
+ * Windows reports the FILETIME as a decimal string (see
+ * {@link getProcessCreatedAtFt}); posix reports `ps -o lstart=`.
+ *
  * Null on ANY failure — probe error, timeout, unparseable output, process
  * already gone. Callers must treat null as "identity unknown", never as a
  * match, since the whole point is to withhold the kill when unsure.
@@ -110,7 +114,7 @@ export function isPhantomExit(
 export async function getProcessStartTime(pid: number): Promise<string | null> {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (process.platform === 'win32') {
-    return (await probeWin32Process(pid))?.creationDate ?? null;
+    return getProcessCreatedAtFt(pid)?.toString() ?? null;
   }
   try {
     const { stdout } = await promisify(execFile)('ps', ['-o', 'lstart=', '-p', String(pid)], {
@@ -124,20 +128,26 @@ export async function getProcessStartTime(pid: number): Promise<string | null> {
   }
 }
 
-// === Windows probes (#1493) ===
+// === Windows probes (#1493, #2398) ===
 //
 // These used to shell out to wmic.exe, which is disabled on Windows 11 24H2
 // and absent on later builds. Every probe then threw, so the boot ID fell back
 // to `uptime-<sec>` (a "reboot" on every daemon start) and every start-time /
 // executable read came back empty — all reaping was withheld. CIM through
-// Windows PowerShell 5.1 replaces it, the route daemonLauncherCore's
+// Windows PowerShell 5.1 replaced it, the route daemonLauncherCore's
 // getProcessArgv already takes.
 //
-// Dates are printed with ManagementDateTimeConverter.ToDmtfDateTime, which
-// yields exactly wmic's `/value` format (`20260915084549.500977+540`), so the
-// boot IDs and pidStartTime values persisted by wmic-era builds still compare
-// equal against new reads. Only a state file holding the old `uptime-N`
-// fallback reads as "rebooted" once after upgrading, which fails closed.
+// The boot ID still takes that route: it is read once and memoized. The
+// per-process reads (start time, executable) are native since #2398 — one
+// PowerShell per create and per reap meant dozens of them during a cold-start
+// burst, and the ones that timed out left the reaper unable to confirm a pid.
+//
+// Boot dates are printed with ManagementDateTimeConverter.ToDmtfDateTime,
+// which yields exactly wmic's `/value` format (`20260915084549.500977+540`),
+// so the boot IDs persisted by wmic-era builds still compare equal against new
+// reads. Only a state file holding the old `uptime-N` fallback reads as
+// "rebooted" once after upgrading, which fails closed. pidStartTime values in
+// that format are compared through {@link dmtfToUtcMicros}.
 
 /** Windows PowerShell 5.1 ships with every supported Windows; pwsh may not. */
 function windowsPowerShellPath(): string {
@@ -215,81 +225,54 @@ export function resetWin32BootIdCache(): void {
   win32BootIdCache = null;
 }
 
-export interface Win32ProcessInfo {
-  /** Null when CIM withholds it (e.g. a protected process). */
-  executablePath: string | null;
-  /** DMTF creation time — the same string wmic printed. */
-  creationDate: string | null;
+/**
+ * A failed native read on a live pid is logged at most once a minute, with a
+ * count of the failures in between: during a burst every reap can fail the
+ * same way, and one line says that as well as a hundred. index.ts routes this
+ * to the daemon log, which this module cannot reach on its own.
+ */
+const NATIVE_READ_WARN_INTERVAL_MS = 60_000;
+let nativeReadWarn: (message: string) => void = (message) => console.warn(message);
+let nativeReadWarnedAt = -Infinity;
+let nativeReadFailuresSinceWarn = 0;
+
+export function setNativeProcessReadWarn(warn: (message: string) => void): void {
+  nativeReadWarn = warn;
 }
 
-function win32ProcessScript(pid: number): string {
-  return (
-    `${WIN32_UTF8_OUTPUT} $p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop;` +
-    " if ($p) { 'ExecutablePath=' + $p.ExecutablePath;" +
-    " if ($p.CreationDate) { 'CreationDate=' + " +
-    '[System.Management.ManagementDateTimeConverter]::ToDmtfDateTime($p.CreationDate) } }'
-  );
+/** Test seam: forget when the last warning was written. */
+export function resetNativeProcessReadWarn(): void {
+  nativeReadWarnedAt = -Infinity;
+  nativeReadFailuresSinceWarn = 0;
 }
 
-/** Parse the process probe output; null when the process was not found. */
-export function parseWin32ProcessInfo(stdout: string): Win32ProcessInfo | null {
-  const text = String(stdout);
-  const exe = text.match(/^ExecutablePath=(.*)$/m);
-  if (!exe) return null;
-  const date = text.match(/^CreationDate=(\S+)/m)?.[1];
-  return {
-    executablePath: exe[1].trim() || null,
-    creationDate: date && DMTF_DATETIME_RE.test(date) ? date : null,
-  };
+function readWin32Process(pid: number): { createdAt: bigint; imagePath: string | null } | null {
+  const read = tryProcessIdentity(pid);
+  if (!('failure' in read)) return read;
+  // A pid that is gone is an answer, not a failed read.
+  if (read.gone) return null;
+  nativeReadFailuresSinceWarn++;
+  const now = Date.now();
+  if (now - nativeReadWarnedAt >= NATIVE_READ_WARN_INTERVAL_MS) {
+    const others = nativeReadFailuresSinceWarn - 1;
+    nativeReadWarn(
+      `[phantomExit] native process read failed for pid ${pid}: ${read.failure}` +
+        (others > 0 ? ` (${others} more since the last warning)` : ''),
+    );
+    nativeReadWarnedAt = now;
+    nativeReadFailuresSinceWarn = 0;
+  }
+  return null;
 }
 
 /**
- * Recovery can create dozens of panes at once and each stamps its start time.
- * A PowerShell per pane, all at once, is a real memory spike, so probes queue
- * behind a small cap. Concurrent asks for the same pid share one spawn —
- * reapIfIdentityConfirmed reads the start time and the executable in parallel.
+ * The creation time of a Windows pid as a FILETIME (100 ns units since 1601),
+ * or null when it cannot be read or this is not Windows. Synchronous and
+ * cheap (one OpenProcess), so the spawn path stamps it inline.
  */
-const WIN32_PROBE_CONCURRENCY = 4;
-let win32ProbesRunning = 0;
-const win32ProbeWaiters: Array<() => void> = [];
-const win32ProbesInFlight = new Map<number, Promise<Win32ProcessInfo | null>>();
-
-async function withWin32ProbeSlot<T>(run: () => Promise<T>): Promise<T> {
-  while (win32ProbesRunning >= WIN32_PROBE_CONCURRENCY) {
-    await new Promise<void>((resolve) => win32ProbeWaiters.push(resolve));
-  }
-  win32ProbesRunning++;
-  try {
-    return await run();
-  } finally {
-    win32ProbesRunning--;
-    win32ProbeWaiters.shift()?.();
-  }
-}
-
-/**
- * Executable path and creation time of a Windows pid, or null on ANY failure
- * (probe error, timeout, process gone). Callers treat null as "identity
- * unknown" and withhold the kill.
- */
-export function probeWin32Process(pid: number): Promise<Win32ProcessInfo | null> {
-  if (!Number.isInteger(pid) || pid <= 0) return Promise.resolve(null);
-  const inFlight = win32ProbesInFlight.get(pid);
-  if (inFlight) return inFlight;
-  const probe = withWin32ProbeSlot(async () => {
-    try {
-      const { stdout } = await promisify(execFile)(
-        windowsPowerShellPath(),
-        win32PowerShellArgs(win32ProcessScript(pid)),
-        { encoding: 'utf-8', timeout: WIN32_PROBE_TIMEOUT_MS, windowsHide: true },
-      );
-      return parseWin32ProcessInfo(String(stdout));
-    } catch {
-      return null;
-    }
-  }).finally(() => win32ProbesInFlight.delete(pid));
-  win32ProbesInFlight.set(pid, probe);
-  return probe;
+export function getProcessCreatedAtFt(pid: number): bigint | null {
+  if (process.platform !== 'win32') return null;
+  return readWin32Process(pid)?.createdAt ?? null;
 }
 
 /**
@@ -297,7 +280,7 @@ export function probeWin32Process(pid: number): Promise<Win32ProcessInfo | null>
  * basename or the full path, as the wmic-era check did. False when unsure.
  */
 export async function isWin32ShellProcess(pid: number, expectedCmd: string): Promise<boolean> {
-  const actualExe = (await probeWin32Process(pid))?.executablePath?.toLowerCase();
+  const actualExe = readWin32Process(pid)?.imagePath?.toLowerCase();
   if (!actualExe) return false;
   const expectedExe = expectedCmd.toLowerCase();
   const expectedBase = expectedExe.split(/[\\/]/).pop() ?? expectedExe;
@@ -320,20 +303,66 @@ export async function isWin32ShellProcess(pid: number, expectedCmd: string): Pro
  * A recorded start time is authoritative when present: if it disagrees, the
  * executable-name heuristic must not be allowed to override it — that is
  * exactly the recycled-pid case (`powershell.exe` reborn under the same pid).
+ *
+ * What may have been recorded, strongest first:
+ *  - `storedCreatedAtFt`: the Windows FILETIME (#2398), compared exactly
+ *    with `currentCreatedAtFt`.
+ *  - `storedStartTime` on Windows: a DMTF string written before #2398. It
+ *    holds only microseconds and a local-time offset, so both sides are
+ *    reduced to UTC microseconds first; a time-zone or DST change since the
+ *    record was written does not matter.
+ *  - `storedStartTime` on posix: `ps -o lstart=`, compared as a string with
+ *    `currentStartTime`.
  */
 export type ReapIdentity = 'start-time' | 'heuristic' | 'unconfirmed';
 
 export function classifyReapIdentity(opts: {
+  storedCreatedAtFt?: string | null;
   storedStartTime?: string | null;
-  currentStartTime: string | null;
+  /** Windows: the FILETIME read now. */
+  currentCreatedAtFt?: bigint | null;
+  /** Posix: `ps -o lstart=` read now. */
+  currentStartTime?: string | null;
   looksLikeOurShell: boolean;
 }): ReapIdentity {
+  const currentFt = opts.currentCreatedAtFt ?? null;
+  if (opts.storedCreatedAtFt) {
+    return currentFt !== null && currentFt.toString() === opts.storedCreatedAtFt ? 'start-time' : 'unconfirmed';
+  }
   if (opts.storedStartTime) {
-    return opts.currentStartTime !== null && opts.currentStartTime === opts.storedStartTime
-      ? 'start-time'
-      : 'unconfirmed';
+    if (currentFt !== null) {
+      const stored = dmtfToUtcMicros(opts.storedStartTime);
+      return stored !== null && stored === fileTimeToUtcMicros(currentFt) ? 'start-time' : 'unconfirmed';
+    }
+    const current = opts.currentStartTime ?? null;
+    return current !== null && current === opts.storedStartTime ? 'start-time' : 'unconfirmed';
   }
   return opts.looksLikeOurShell ? 'heuristic' : 'unconfirmed';
+}
+
+/** The Unix epoch as a FILETIME: 100 ns intervals from 1601-01-01 to 1970-01-01. */
+const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
+
+/** A FILETIME as whole microseconds since the Unix epoch (UTC), truncated. */
+export function fileTimeToUtcMicros(fileTime: bigint): bigint {
+  return (fileTime - FILETIME_UNIX_EPOCH) / 10n;
+}
+
+const DMTF_PARTS_RE = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/;
+
+/**
+ * A DMTF datetime (`yyyymmddHHMMSS.ffffff±UUU`: local time, then its offset
+ * from UTC in minutes) as microseconds since the Unix epoch (UTC), or null
+ * when it is not one. ToDmtfDateTime truncates to microseconds, which is why
+ * the FILETIME it is compared with is truncated too.
+ */
+export function dmtfToUtcMicros(value: string): bigint | null {
+  const m = DMTF_PARTS_RE.exec(value);
+  if (!m) return null;
+  const [, year, month, day, hour, minute, second, micros, sign, offset] = m;
+  const localMs = Date.UTC(+year, +month - 1, +day, +hour, +minute, +second);
+  const offsetMicros = BigInt(offset) * 60_000_000n;
+  return BigInt(localMs) * 1000n + BigInt(micros) - (sign === '+' ? offsetMicros : -offsetMicros);
 }
 
 /** Is this identity level strong enough to authorize killing the tree? */

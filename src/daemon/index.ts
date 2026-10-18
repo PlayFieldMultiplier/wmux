@@ -137,6 +137,7 @@ import { selectRecoverableSessions, startLeftoverShellReaps } from './recoverySe
 import { isShutdownKillExit, SHUTDOWN_KILL_RECLASSIFY_MS } from './shutdownKill';
 import {
   classifyReapIdentity,
+  getProcessCreatedAtFt,
   getProcessStartTime,
   getWin32BootId,
   getWin32BootIdSync,
@@ -144,6 +145,7 @@ import {
   isWin32ShellProcess,
   isSameBootProven,
   mayReap,
+  setNativeProcessReadWarn,
   shouldReconcileTombstone,
 } from './phantomExit';
 import { createSnapshotRunner } from './snapshotRunner';
@@ -1630,25 +1632,33 @@ async function reapProcessTree(pid: number, reason: string): Promise<void> {
 async function reapIfIdentityConfirmed(opts: {
   pid: number;
   cmd: string;
+  storedCreatedAtFt?: string;
   storedStartTime?: string;
   reason: string;
 }): Promise<boolean> {
+  // Windows reads the FILETIME natively (#2398); posix keeps `ps -o lstart=`.
+  const win32 = process.platform === 'win32';
+  const currentCreatedAtFt = win32 ? getProcessCreatedAtFt(opts.pid) : null;
   const [currentStartTime, looksLikeOurShell] = await Promise.all([
-    getProcessStartTime(opts.pid),
+    win32 ? null : getProcessStartTime(opts.pid),
     // Only consulted when no creation time was recorded, but probing both in
     // parallel keeps the slow path off the critical path of the common case.
     isOurShellProcess(opts.pid, opts.cmd),
   ]);
   const identity = classifyReapIdentity({
+    storedCreatedAtFt: opts.storedCreatedAtFt,
     storedStartTime: opts.storedStartTime,
+    currentCreatedAtFt,
     currentStartTime,
     looksLikeOurShell,
   });
   if (!mayReap(identity)) {
+    const current = win32 ? currentCreatedAtFt?.toString() : currentStartTime;
     log(
       'warn',
       `[reap] refusing to kill pid ${opts.pid} (${opts.reason}): identity unconfirmed ` +
-        `(storedStartTime=${opts.storedStartTime ?? 'none'} currentStartTime=${currentStartTime ?? 'unknown'} ` +
+        `(storedCreatedAtFt=${opts.storedCreatedAtFt ?? 'none'} storedStartTime=${opts.storedStartTime ?? 'none'} ` +
+        `currentStartTime=${current ?? 'unknown'} ` +
         `looksLikeOurShell=${looksLikeOurShell} cmd=${opts.cmd}) — the pid may belong to another process now`,
     );
     return false;
@@ -1903,6 +1913,7 @@ async function recoverSessions(
         reap: (s) => reapIfIdentityConfirmed({
           pid: s.pid,
           cmd: s.cmd,
+          storedCreatedAtFt: s.pidCreatedAtFt,
           storedStartTime: s.pidStartTime,
           reason: `recovery of ${s.id}`,
         }),
@@ -1923,6 +1934,7 @@ async function recoverSessions(
         const reaped = await reapIfIdentityConfirmed({
           pid,
           cmd: session.cmd,
+          storedCreatedAtFt: session.pidCreatedAtFt,
           storedStartTime: session.pidStartTime,
           reason: `tombstone reconciliation of session ${session.id}`,
         });
@@ -1943,6 +1955,7 @@ async function recoverSessions(
         await reapIfIdentityConfirmed({
           pid: session.pid,
           cmd: session.cmd,
+          storedCreatedAtFt: session.pidCreatedAtFt,
           storedStartTime: session.pidStartTime,
           reason: `scheduled-run session ${session.id} left by a previous daemon`,
         });
@@ -1962,7 +1975,8 @@ async function recoverSessions(
     if (isWslShell(session.cmd)) {
       if (!rebooted && session.state !== 'suspended' && recoverableIds.has(session.id)) {
         await reapIfIdentityConfirmed({ pid: session.pid, cmd: session.cmd,
-          storedStartTime: session.pidStartTime, reason: `WSL recovery of ${session.id}` });
+          storedCreatedAtFt: session.pidCreatedAtFt, storedStartTime: session.pidStartTime,
+          reason: `WSL recovery of ${session.id}` });
       }
       session.state = 'suspended';
       session.bufferDumpPath ??= stateWriter.getBufferDumpPath(session.id);
@@ -6667,7 +6681,7 @@ function wireEvents(
   // and would leave the still-live shell behind — exactly the orphan this fix
   // exists to prevent. Reattaching to the live ConPTY instead of killing it is
   // a separate piece of work (likely an upstream node-pty fix).
-  sessionManager.on('session:phantomExit', (payload: { id: string; pid?: number; pidStartTime?: string; exitCode: number | null; signal?: number; cmd?: string; lastActivityMsAgo?: number; raw?: string }) => {
+  sessionManager.on('session:phantomExit', (payload: { id: string; pid?: number; pidCreatedAtFt?: string; pidStartTime?: string; exitCode: number | null; signal?: number; cmd?: string; lastActivityMsAgo?: number; raw?: string }) => {
     // `raw` is the verbatim node-pty payload — printed as-is because the
     // native-layer investigation needs the exact shape node-pty produced, not
     // our reading of it.
@@ -6700,6 +6714,7 @@ function wireEvents(
     void reapIfIdentityConfirmed({
       pid: payload.pid,
       cmd: payload.cmd ?? '',
+      storedCreatedAtFt: payload.pidCreatedAtFt,
       storedStartTime: payload.pidStartTime,
       reason: `phantom exit of session ${payload.id}`,
     });
@@ -7524,6 +7539,7 @@ async function main(): Promise<void> {
   const startTime = Date.now();
   markDaemonBoot('main-start');
   log('info', `wmux-daemon starting (PID ${process.pid})`);
+  setNativeProcessReadWarn((message) => log('warn', message));
 
   // 1. Single-instance check
   if (!(await acquireLock())) {

@@ -2,6 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import {
+  classifyReapIdentity,
+  dmtfToUtcMicros,
+  fileTimeToUtcMicros,
+  getProcessCreatedAtFt,
   getProcessStartTime,
   getWin32BootId,
   getWin32BootIdSync,
@@ -11,7 +15,9 @@ import {
 
 // #1493: the real probes on a real Windows box. wmic.exe is absent on current
 // Windows 11, so before the fix every one of these came back empty.
+// #2398: the per-process reads are native now; the boot ID is still CIM.
 const DMTF = /^\d{14}\.\d{6}[+-]\d{3}$/;
+const FILETIME = /^\d{17,}$/;
 const onWindows = process.platform === 'win32';
 
 let child: ChildProcess | undefined;
@@ -60,8 +66,31 @@ describe.skipIf(!onWindows)('win32 probes (live)', () => {
     const elapsed = Date.now() - t0;
     const second = await getProcessStartTime(pid);
     console.log(`[win32Probe] start-time probe took ${elapsed} ms`);
-    expect(first).toMatch(DMTF);
+    expect(first).toMatch(FILETIME);
     expect(second).toBe(first);
+  }, 20_000);
+
+  it('the native FILETIME matches the DMTF value CIM reports, so pre-#2398 records keep authorizing', () => {
+    // The exact query pre-#2398 builds stored as pidStartTime.
+    const ping = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'PING.EXE');
+    child = spawn(ping, ['-n', '30', '127.0.0.1'], { stdio: 'ignore', windowsHide: true });
+    const pid = child.pid ?? 0;
+    const ft = getProcessCreatedAtFt(pid);
+    if (ft === null) throw new Error(`no native creation time for pid ${pid}`);
+    const script =
+      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop;` +
+      ' [System.Management.ManagementDateTimeConverter]::ToDmtfDateTime($p.CreationDate)';
+    const dmtf = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf-8',
+      windowsHide: true,
+    }).trim();
+    console.log(`[win32Probe] pid ${pid}: FILETIME ${ft} vs CIM ${dmtf}`);
+    expect(dmtf).toMatch(DMTF);
+    expect(dmtfToUtcMicros(dmtf)).toBe(fileTimeToUtcMicros(ft));
+    expect(classifyReapIdentity({ storedStartTime: dmtf, currentCreatedAtFt: ft, looksLikeOurShell: false }))
+      .toBe('start-time');
+    expect(classifyReapIdentity({ storedCreatedAtFt: ft.toString(), currentCreatedAtFt: getProcessCreatedAtFt(pid), looksLikeOurShell: false }))
+      .toBe('start-time');
   }, 20_000);
 
   it('identity check recognizes the spawned cmd.exe and nothing else', async () => {

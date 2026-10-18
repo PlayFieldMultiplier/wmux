@@ -1,26 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // #1493: the Windows probes moved from wmic.exe to CIM through PowerShell.
-// These pin the parsing and the fail-closed contract with a mocked execFile;
-// win32Probe.runtime.test.ts proves the real probes on a Windows box.
-const { execFileMock, execFileSyncMock } = vi.hoisted(() => ({
+// #2398: the per-process reads then moved to native calls; only the boot ID
+// still runs PowerShell. These pin the parsing and the fail-closed contract
+// with a mocked execFile and native read; win32Probe.runtime.test.ts proves
+// the real probes on a Windows box.
+const { execFileMock, execFileSyncMock, tryProcessIdentityMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
   execFileSyncMock: vi.fn(),
+  tryProcessIdentityMock: vi.fn(),
 }));
 vi.mock('node:child_process', () => ({
   execFile: execFileMock,
   execFileSync: execFileSyncMock,
 }));
+vi.mock('../../main/pty/winSnapshotNative', () => ({ tryProcessIdentity: tryProcessIdentityMock }));
 
 import {
   classifyReapIdentity,
+  getProcessCreatedAtFt,
+  getProcessStartTime,
   getWin32BootId,
   getWin32BootIdSync,
   isWin32ShellProcess,
   parseWin32BootId,
-  parseWin32ProcessInfo,
-  probeWin32Process,
+  resetNativeProcessReadWarn,
   resetWin32BootIdCache,
+  setNativeProcessReadWarn,
 } from '../phantomExit';
 
 type Callback = (err: Error | null, result?: { stdout: string; stderr: string }) => void;
@@ -40,7 +46,10 @@ function execFileFails(message: string): void {
 beforeEach(() => {
   execFileMock.mockReset();
   execFileSyncMock.mockReset();
+  tryProcessIdentityMock.mockReset();
   resetWin32BootIdCache();
+  resetNativeProcessReadWarn();
+  setNativeProcessReadWarn(() => undefined);
 });
 
 describe('parseWin32BootId', () => {
@@ -100,119 +109,110 @@ describe('getWin32BootId', () => {
   });
 });
 
-describe('parseWin32ProcessInfo', () => {
-  it('reads executable path and DMTF creation date', () => {
-    expect(
-      parseWin32ProcessInfo(
-        'ExecutablePath=C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\r\n' +
-          'CreationDate=20260924205809.260729+540\r\n',
-      ),
-    ).toEqual({
-      executablePath: 'C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-      creationDate: '20260924205809.260729+540',
-    });
+// #2398: process start time and executable are read natively now.
+const FT = 134296036801234567n; // 2026-07-27T05:28:00.1234567Z
+
+function identityReturns(imagePath: string | null, createdAt = FT): void {
+  tryProcessIdentityMock.mockReturnValue({ createdAt, imagePath });
+}
+
+const withPlatform = <T>(platform: NodeJS.Platform, body: () => T): T => {
+  const orig = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    return body();
+  } finally {
+    if (orig) Object.defineProperty(process, 'platform', orig);
+  }
+};
+
+describe('process start time', () => {
+  it('is the native FILETIME, with no subprocess', async () => {
+    identityReturns('C:\\x\\cmd.exe');
+    expect(withPlatform('win32', () => getProcessCreatedAtFt(4321))).toBe(FT);
+    await expect(withPlatform('win32', () => getProcessStartTime(4321))).resolves.toBe('134296036801234567');
+    expect(tryProcessIdentityMock).toHaveBeenCalledWith(4321);
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it('keeps the creation date when CIM withholds the executable path', () => {
-    expect(parseWin32ProcessInfo('ExecutablePath=\r\nCreationDate=20260924205809.260729+540')).toEqual({
-      executablePath: null,
-      creationDate: '20260924205809.260729+540',
-    });
+  it('is null when the read fails (fail closed)', () => {
+    tryProcessIdentityMock.mockReturnValue({ failure: 'OpenProcess failed (error 5)', gone: false });
+    expect(withPlatform('win32', () => getProcessCreatedAtFt(4321))).toBeNull();
   });
 
-  it('is null when the process was not found (no output)', () => {
-    expect(parseWin32ProcessInfo('')).toBeNull();
-  });
-
-  it('drops a creation date that is not DMTF', () => {
-    expect(parseWin32ProcessInfo('ExecutablePath=C:\\x\\cmd.exe\r\nCreationDate=garbage')).toEqual({
-      executablePath: 'C:\\x\\cmd.exe',
-      creationDate: null,
-    });
+  it('is never read natively off Windows', () => {
+    identityReturns('/bin/bash');
+    expect(withPlatform('linux', () => getProcessCreatedAtFt(4321))).toBeNull();
+    expect(tryProcessIdentityMock).not.toHaveBeenCalled();
   });
 });
 
-describe('probeWin32Process', () => {
-  it('null on probe failure or timeout (fail closed)', async () => {
-    execFileFails('Command failed: timeout');
-    await expect(probeWin32Process(1234)).resolves.toBeNull();
-  });
-
-  it('null for an invalid pid without spawning', async () => {
-    await expect(probeWin32Process(0)).resolves.toBeNull();
-    await expect(probeWin32Process(-1)).resolves.toBeNull();
-    expect(execFileMock).not.toHaveBeenCalled();
-  });
-
-  it('filters CIM on the exact pid', async () => {
-    execFileReturns('ExecutablePath=C:\\x\\cmd.exe\r\nCreationDate=20260924205809.260729+540');
-    await probeWin32Process(4321);
-    expect(execFileMock.mock.calls[0][1].join(' ')).toContain('"ProcessId=4321"');
-  });
-
-  it('concurrent asks for the same pid share one spawn', async () => {
-    execFileReturns('ExecutablePath=C:\\x\\cmd.exe\r\nCreationDate=20260924205809.260729+540');
-    const [a, b] = await Promise.all([probeWin32Process(77), probeWin32Process(77)]);
-    expect(a).toEqual(b);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('caps concurrent PowerShell spawns', async () => {
-    const pending: Callback[] = [];
-    execFileMock.mockImplementation((_f: string, _a: string[], _o: unknown, cb: Callback) => {
-      pending.push(cb);
-    });
-    const probes = [101, 102, 103, 104, 105, 106].map((pid) => probeWin32Process(pid));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(execFileMock).toHaveBeenCalledTimes(4);
-    while (pending.length > 0) {
-      pending.shift()!(null, { stdout: 'ExecutablePath=C:\\x\\cmd.exe', stderr: '' });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+describe('failed native reads', () => {
+  it('log one line a minute, counting the failures in between', () => {
+    const warn = vi.fn();
+    setNativeProcessReadWarn(warn);
+    vi.useFakeTimers();
+    try {
+      tryProcessIdentityMock.mockReturnValue({ failure: 'OpenProcess failed (error 5)', gone: false });
+      for (let pid = 1; pid <= 5; pid++) withPlatform('win32', () => getProcessCreatedAtFt(pid));
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('pid 1: OpenProcess failed (error 5)');
+      vi.advanceTimersByTime(60_000);
+      withPlatform('win32', () => getProcessCreatedAtFt(6));
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls[1][0]).toContain('pid 6: OpenProcess failed (error 5) (4 more since the last warning)');
+    } finally {
+      vi.useRealTimers();
     }
-    await Promise.all(probes);
-    expect(execFileMock).toHaveBeenCalledTimes(6);
+  });
+
+  it('do not count a pid that is gone', () => {
+    const warn = vi.fn();
+    setNativeProcessReadWarn(warn);
+    tryProcessIdentityMock.mockReturnValue({ failure: 'OpenProcess failed (error 87)', gone: true });
+    expect(withPlatform('win32', () => getProcessCreatedAtFt(99))).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
 describe('isWin32ShellProcess', () => {
   it('matches the executable basename case-insensitively', async () => {
-    execFileReturns('ExecutablePath=C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    identityReturns('C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
     await expect(isWin32ShellProcess(10, 'PowerShell.exe')).resolves.toBe(true);
   });
 
   it('matches a full expected path', async () => {
-    execFileReturns('ExecutablePath=C:\\Program Files\\Git\\bin\\bash.exe');
+    identityReturns('C:\\Program Files\\Git\\bin\\bash.exe');
     await expect(isWin32ShellProcess(11, 'C:\\Program Files\\Git\\bin\\bash.exe')).resolves.toBe(true);
   });
 
   it('rejects a different executable', async () => {
-    execFileReturns('ExecutablePath=C:\\Windows\\System32\\notepad.exe');
+    identityReturns('C:\\Windows\\System32\\notepad.exe');
     await expect(isWin32ShellProcess(12, 'powershell.exe')).resolves.toBe(false);
   });
 
-  it('false when the path is withheld or the probe fails', async () => {
-    execFileReturns('ExecutablePath=\r\n');
+  it('false when the path is withheld or the read fails', async () => {
+    identityReturns(null);
     await expect(isWin32ShellProcess(13, 'cmd.exe')).resolves.toBe(false);
-    execFileFails('boom');
+    tryProcessIdentityMock.mockReturnValue({ failure: 'boom', gone: false });
     await expect(isWin32ShellProcess(14, 'cmd.exe')).resolves.toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });
 
-describe('start-time compatibility with wmic-era records', () => {
-  it('a pidStartTime stored by wmic matches the same CIM reading', () => {
-    // wmic printed `CreationDate=20260924205809.260729+540`; ToDmtfDateTime
-    // prints the identical string, so the stored value keeps authorizing.
-    const stored = '20260924205809.260729+540';
-    const current = parseWin32ProcessInfo(
-      'ExecutablePath=C:\\x\\powershell.exe\r\nCreationDate=20260924205809.260729+540',
-    )!.creationDate;
-    expect(classifyReapIdentity({ storedStartTime: stored, currentStartTime: current, looksLikeOurShell: false }))
-      .toBe('start-time');
+describe('start-time compatibility with pre-#2398 records', () => {
+  it('a DMTF pidStartTime from the CIM/wmic era authorizes against the native FILETIME', () => {
+    // CIM printed `20260727142800.123456+540` for this process: the same
+    // instant in UTC+9, truncated to microseconds.
+    expect(
+      classifyReapIdentity({ storedStartTime: '20260727142800.123456+540', currentCreatedAtFt: FT, looksLikeOurShell: false }),
+    ).toBe('start-time');
   });
 
   it('an unreadable start time still refuses the kill', () => {
     expect(
-      classifyReapIdentity({ storedStartTime: '20260924205809.260729+540', currentStartTime: null, looksLikeOurShell: true }),
+      classifyReapIdentity({ storedStartTime: '20260727142800.123456+540', currentCreatedAtFt: null, looksLikeOurShell: true }),
     ).toBe('unconfirmed');
   });
 });
