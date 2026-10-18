@@ -149,6 +149,22 @@ describe('trigger cursor', () => {
     expect(isTaskLifecycleFact(refused as Fact)).toBe(false);
     expect(isBotOwnedTaskFact({ ...(human as Fact), kind: 'verdict.recorded', ref: { botId: 'bot-0000000a' } })).toBe(false);
   });
+
+  it('a restart replays no task fact either: only the other kinds appended while down reach the engine', () => {
+    const file = path.join(dir, 'factory', 'trigger-cursor.json');
+    const cursor = new TriggerCursor(file, 60_000);
+    routedFactLog(log, cursor).subscribe(() => undefined)();
+    cursor.flush();
+    // Appended while nothing routed (the app was down).
+    log.append(taskDone('t-human'));
+    log.append({ ...taskDone('t-bot'), ref: { taskId: 't-bot', botId: 'bot-0000000a' } });
+    const refused = log.append({ kind: 'merge.refused', at: Date.now(), workspaceId: 'ws-1', repoKey: 'github.com/o/r', ref: { pr: 4, headSha: 'b'.repeat(40) }, payload: {} });
+    const marks: number[] = [];
+    const seen: Fact[] = [];
+    routedFactLog(log, { load: () => new TriggerCursor(file).load(), mark: (s) => marks.push(s) }).subscribe((f) => seen.push(f));
+    expect(seen.map((f) => f.id)).toEqual([refused?.id]);
+    expect(marks.at(-1)).toBe(refused?.seq);
+  });
 });
 
 describe('gap 4: one wake per bot task transition', () => {
