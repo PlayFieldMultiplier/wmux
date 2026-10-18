@@ -140,6 +140,17 @@ describe('ApiErrorTurnEnds', () => {
     expect(g.sent).toEqual([]);
   });
 
+  it("carries the turn's prompt id, the one Claude Code puts on its hooks", () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', JSON.stringify({ type: 'user', promptId: 'b49e8ee5-dc46-478d-ae45-cdbb94cb3d42', message: { role: 'user', content: 'hi' }, timestamp: '2026-10-17T02:31:37.200Z' }));
+    // A subagent's prompt is not the lead turn's.
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', JSON.stringify({ type: 'attachment', isSidechain: true, promptId: '00000000-0000-0000-0000-000000000000', timestamp: '2026-10-17T02:31:37.300Z' }));
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent.map((s) => s.payload.prompt_id)).toEqual(['b49e8ee5-dc46-478d-ae45-cdbb94cb3d42']);
+  });
+
   it('still closes the turn when a background subagent writes after the lead turn died', () => {
     const g = gate();
     g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));

@@ -33,6 +33,8 @@
 
 import type { AgentSignal, AgentSlug } from '../../shared/hooks/signal-types';
 
+const PROMPT_ID = /"promptId":"([0-9a-f-]{8,64})"/;
+
 /** How long the real hook gets to arrive before the transcript speaks. A hook
  *  fires right after Claude Code writes the entry and runs on a 2s budget. */
 export const GRACE_MS = 5000;
@@ -46,6 +48,9 @@ export interface ApiErrorTurnEnd {
   message: string;
   /** The entry's own timestamp (ms). */
   at: number;
+  /** The `promptId` of the turn's user entry, read before it in the same
+   *  file: the `prompt_id` Claude Code puts on every hook of that turn. */
+  promptId?: string;
 }
 
 const record = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
@@ -119,6 +124,8 @@ export class ApiErrorTurnEnds {
    *  it sends the prompt, so an error of that turn is written after this; an
    *  older one belongs to a turn the prompt moved past. */
   private readonly promptAt = new Map<string, number>();
+  /** The `promptId` of the latest lead entry that carried one, per pane. */
+  private readonly lastPromptId = new Map<string, string>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ApiErrorTurnEndDeps) {
@@ -127,9 +134,12 @@ export class ApiErrorTurnEnds {
 
   /** One complete line of the pane's Claude transcript, in file order. */
   noteLine(sessionId: string, path: string, line: string): void {
+    const promptId = PROMPT_ID.exec(line)?.[1];
+    if (promptId && !line.includes('"isSidechain":true')) this.lastPromptId.set(sessionId, promptId);
     const end = apiErrorFromTranscriptLine(line);
     if (end && end.at < (this.promptAt.get(sessionId) ?? -Infinity)) return;
-    if (end) this.pending.set(sessionId, { end, path, seenAt: this.now() });
+    const turnPrompt = this.lastPromptId.get(sessionId);
+    if (end) this.pending.set(sessionId, { end: turnPrompt ? { ...end, promptId: turnPrompt } : end, path, seenAt: this.now() });
     else if (this.pending.has(sessionId) && isTurnProgress(line)) this.pending.delete(sessionId);
   }
 
@@ -138,6 +148,8 @@ export class ApiErrorTurnEnds {
    *  turn end; an error in what was read after the gap arrives as a line. */
   noteGap(sessionId: string): void {
     this.pending.delete(sessionId);
+    // The turn's user entry may have been in what was skipped.
+    this.lastPromptId.delete(sessionId);
   }
 
   /** Every resolved hook signal for the session; `ts` is when the hook fired. */
@@ -159,6 +171,7 @@ export class ApiErrorTurnEnds {
     else if (kind === 'agent.session_start') {
       this.pending.delete(sessionId);
       this.turnEndHookAt.delete(sessionId);
+      this.lastPromptId.delete(sessionId);
     }
   }
 
@@ -167,6 +180,7 @@ export class ApiErrorTurnEnds {
     this.pending.delete(sessionId);
     this.turnEndHookAt.delete(sessionId);
     this.promptAt.delete(sessionId);
+    this.lastPromptId.delete(sessionId);
   }
 
   /** Decide every entry whose grace ran out. */
@@ -202,6 +216,6 @@ export function stopFailureSignal(
     ptyId,
     // Sent now: the turn it ends was already matched on the entry's own time.
     ts,
-    payload: { error: end.error, last_assistant_message: end.message },
+    payload: { error: end.error, last_assistant_message: end.message, ...(end.promptId ? { prompt_id: end.promptId } : {}) },
   };
 }

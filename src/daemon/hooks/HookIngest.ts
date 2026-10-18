@@ -735,14 +735,16 @@ function eventShapeFor(
 }
 
 /**
- * What a lead turn end says: its kind, Claude's error code and its last
- * message (trimmed and bounded as the transcript stand-in bounds it, see
- * daemon/transcript/apiErrorTurnEnd). Two ends of one turn say the same.
+ * What a lead turn end says: its kind, the prompt it belongs to (Claude
+ * Code's `prompt_id`, on every hook until the next user prompt; the
+ * transcript stand-in reads the same id from the turn's user entry), Claude's
+ * error code and its last message (trimmed and bounded as the stand-in
+ * bounds it, see daemon/transcript/apiErrorTurnEnd). Two ends of one turn
+ * say the same.
  */
 function turnEndSignature(signal: AgentSignal): string {
-  const error = typeof signal.payload?.['error'] === 'string' ? signal.payload['error'] : '';
-  const message = typeof signal.payload?.['last_assistant_message'] === 'string' ? signal.payload['last_assistant_message'] : '';
-  return `${signal.kind}|${error}|${message.trim().slice(0, 2000)}`;
+  const field = (key: string): string => (typeof signal.payload?.[key] === 'string' ? signal.payload[key] as string : '');
+  return `${signal.kind}|${field('prompt_id')}|${field('error')}|${field('last_assistant_message').trim().slice(0, 2000)}`;
 }
 /** OpenCode's request id on a bridge 0.3.0 signal (`payload.permId`), when well-formed. */
 function openCodeRequestId(signal: AgentSignal): string | undefined {

@@ -122,6 +122,18 @@ describe('HookIngest — one turn, one end', () => {
     expect(ends()).toHaveLength(2);
   });
 
+  it('a new prompt whose opening hook is late still ends, even with the same error', () => {
+    const p1 = { error: 'rate_limit', last_assistant_message: 'limit', prompt_id: 'p-1' };
+    ingest.handle(signal('agent.user_prompt_submit', Date.now(), { prompt_id: 'p-1' }));
+    vi.advanceTimersByTime(500);
+    ingest.handle(signal('agent.stop_failure', Date.now(), p1));
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    // The next prompt fails at once; its own end arrives before its prompt hook.
+    ingest.handle(signal('agent.stop_failure', Date.now(), { ...p1, prompt_id: 'p-2' }));
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(ends()).toHaveLength(2);
+  });
+
   it('lets the next turn end through: the key is the turn, not a time window', () => {
     ingest.handle(signal('agent.user_prompt_submit'));
     vi.advanceTimersByTime(500);
