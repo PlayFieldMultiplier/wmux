@@ -340,6 +340,19 @@ export function classifyReapIdentity(opts: {
   return opts.looksLikeOurShell ? 'heuristic' : 'unconfirmed';
 }
 
+/**
+ * Do two {@link getProcessStartTime} readings name the same process? Equal
+ * strings do. So does a DMTF string stored before #2398 against the FILETIME
+ * Windows reports now, compared in UTC microseconds. Anything else does not.
+ */
+export function sameProcessStartTime(stored: string, current: string | null): boolean {
+  if (current === null) return false;
+  if (current === stored) return true;
+  const storedMicros = dmtfToUtcMicros(stored);
+  if (storedMicros === null || !/^\d+$/.test(current)) return false;
+  return storedMicros === fileTimeToUtcMicros(BigInt(current));
+}
+
 /** The Unix epoch as a FILETIME: 100 ns intervals from 1601-01-01 to 1970-01-01. */
 const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
 

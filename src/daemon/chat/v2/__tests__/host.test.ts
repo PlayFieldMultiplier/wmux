@@ -336,6 +336,26 @@ describe('chat v2 host', () => {
     await matching.host.dispose();
   });
 
+  // #2398: a daemon from before the native read stored the DMTF start time.
+  it('still sweeps a driver whose record holds a pre-#2398 DMTF start time', async () => {
+    const first = rig();
+    await created(first);
+    await sent(first);
+    const pid = first.fake().pid!;
+    const providerSessionId = first.host.bindingForPane(PANE)!.providerSessionId!;
+    const file = path.join(dir, 'chat-sessions', 'v2', `${first.host.bindingForPane(PANE)!.chatSessionId}.json`);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    stored.process = { pid, startTime: '20260727142800.123456+540', marker: providerSessionId };
+    fs.writeFileSync(file, JSON.stringify(stored));
+    // The same instant as a FILETIME, which is what the daemon reads now.
+    const matching = rig();
+    matching.identity.value = { startTime: '134296036801234567', commandLine: `claude -p --session-id ${providerSessionId}` };
+    await matching.host.start();
+    expect(matching.killed).toEqual([pid]);
+    await first.fake().exit(0, null);
+    await matching.host.dispose();
+  });
+
   it('drops a socket that cannot take a push', async () => {
     const r = rig();
     await r.host.call('subscribe', { paneId: PANE }, 'gone');

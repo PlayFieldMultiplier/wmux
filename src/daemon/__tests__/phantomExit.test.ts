@@ -4,6 +4,7 @@ import {
   dmtfToUtcMicros,
   fileTimeToUtcMicros,
   isPhantomExit,
+  sameProcessStartTime,
   isPidAlive,
   isSameBootProven,
   mayReap,
@@ -198,6 +199,26 @@ describe('classifyReapIdentity with a native FILETIME', () => {
     expect(
       classifyReapIdentity({ storedStartTime: '20260727142800.123456+540', currentCreatedAtFt: null, looksLikeOurShell: true }),
     ).toBe('unconfirmed');
+  });
+});
+
+describe('sameProcessStartTime', () => {
+  it('equal readings match, whatever their format', () => {
+    expect(sameProcessStartTime('134296036801234567', '134296036801234567')).toBe(true);
+    expect(sameProcessStartTime('Mon Jul 27 14:28:00 2026', 'Mon Jul 27 14:28:00 2026')).toBe(true);
+  });
+
+  it('a stored DMTF matches the FILETIME of the same instant, and only that one', () => {
+    expect(sameProcessStartTime('20260727142800.123456+540', '134296036801234567')).toBe(true);
+    expect(sameProcessStartTime('20260726222800.123456-420', '134296036801234567')).toBe(true);
+    expect(sameProcessStartTime('20260727142800.123457+540', '134296036801234567')).toBe(false);
+  });
+
+  it('nothing else matches', () => {
+    expect(sameProcessStartTime('134296036801234567', '134296036801234568')).toBe(false);
+    expect(sameProcessStartTime('20260727142800.123456+540', null)).toBe(false);
+    expect(sameProcessStartTime('20260727142800.123456+540', 'Mon Jul 27 14:28:00 2026')).toBe(false);
+    expect(sameProcessStartTime('Mon Jul 27 14:28:00 2026', '134296036801234567')).toBe(false);
   });
 });
 
