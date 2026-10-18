@@ -26,7 +26,7 @@ import { getMcpTarget } from '../../../shared/mcpTargets';
 import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
 import { noteSessionAgentLaunched, noteSessionInput, noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
-import { beginPaneRelaunch } from '../../factory/workerSlots';
+import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -151,6 +151,8 @@ type PtyCreateOptions = {
   wmuxTools?: unknown;
   /** A bot worker's single-use secret grant (main/factory/secretGrants). */
   secretGrant?: string;
+  /** Fan-out task pane: the task launch it is for (main/factory/workerSlots). */
+  fanoutLaunch?: unknown;
 };
 
 
@@ -1056,7 +1058,7 @@ export function registerPTYHandlers(
     // typed (factory/workerSlots.ts); not recorded, not typed.
     let settleRelaunch: ((typed: boolean) => void) | null;
     try {
-      settleRelaunch = beginPaneRelaunch(id);
+      settleRelaunch = startsAgent(text) ? beginPaneRelaunch(id) : null;
     } catch (err) {
       throw new Error(`PTY_WRITE_LAUNCH: ${(err as Error).message}`);
     }

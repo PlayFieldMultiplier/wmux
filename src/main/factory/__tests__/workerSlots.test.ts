@@ -4,9 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { rowHoldsAgentSlot, SLOT_ROW_GRACE_MS } from '../agentSlots';
+import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 
 const BOT = 'bot-0000000a';
@@ -26,15 +27,16 @@ const row = (id: string, over: Partial<LedgerEntry> = {}): LedgerEntry => ({
 afterEach(() => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
+  __resetWorkspaceMirrorForTest();
 });
 
 describe('WorkerSlots', () => {
   it('a restart keeps each task\'s generation and each pane\'s task', () => {
     const dir = tmp();
     const s = store(dir);
-    const { gen } = s.beginLaunch({ taskId: 't1', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t1' });
+    const { gen } = s.beginLaunch({ taskId: 't1', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
     expect(gen).toBe(1);
-    expect(s.launched('t1', gen, 'ws-t1', 'pty-1', '/w/t1')).toBe(true);
+    expect(s.launched('t1', gen, 'ws-t1', 'pty-1')).toBe(true);
     const again = store(dir);
     expect(again.launchOf('t1')).toMatchObject({ taskId: 't1', gen: 1, origin: 'owner', state: 'launched' });
     expect(again.paneOf('pty-1')).toEqual({ taskId: 't1', gen: 1, workspaceId: 'ws-t1' });
@@ -53,18 +55,16 @@ describe('WorkerSlots', () => {
     expect(s.launchOf('t')?.state).toBe('launched');
   });
 
-  it('a pane keeps its task wherever it moves; the pane create reads its launch from the folder', () => {
+  it('a pane keeps its task wherever it moves; the pane create reads its launch from the token its spawn carried', () => {
     const dir = tmp();
     const s = store(dir);
     setWorkerSlotsForTests(s);
-    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
-    expect(s.inflightFor('ws-owner', '/w/t')).toEqual({ taskId: 't', gen });
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
     // The pane's create stamps its workspace with the task.
     const guards = new FanOutGuards({ dir, ledgerTaskOwner: () => null, ledgerBotTask: () => null });
-    stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, guards, () => s);
+    stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', fanoutLaunch: { taskId: 't', gen } }, guards, () => s);
     expect(guards.taskOfWorkspace('ws-t')).toEqual({ taskId: 't', gen });
-    s.launched('t', gen, 'ws-t', 'pty-t', '/w/t');
-    expect(s.inflightFor('ws-owner', '/w/t')).toBeNull();
+    s.launched('t', gen, 'ws-t', 'pty-t');
     // Adopted into another workspace: the pane's own record still names it,
     // and the stamp survives a restart.
     expect(taskOfPane('pty-t')).toEqual({ taskId: 't', gen });
@@ -86,9 +86,8 @@ describe('WorkerSlots', () => {
     fs.writeFileSync(path.join(dir, 'factory'), 'not a folder');
     const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
     s.load();
-    expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' })).toThrow(/could not be recorded/);
+    expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
     expect(s.launchOf('t')).toBeNull();
-    expect(s.inflightFor('ws-owner', '/w/t')).toBeNull();
   });
 
   it('with no file, the entries are rebuilt from the ledger rows and written', () => {
@@ -146,17 +145,17 @@ describe('round 1 review (#2393 identity)', () => {
   it('a pane\'s create records the pane and its workspace before any renderer reply; a write that fails fails the create', () => {
     const dir = tmp();
     const s = store(dir);
-    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
-    recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, 'pty-t', () => s);
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+    recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', fanoutLaunch: { taskId: 't', gen } }, 'pty-t', () => s);
     // A crash here: the records are on disk.
     const after = store(dir);
     expect(after.paneOf('pty-t')).toEqual({ taskId: 't', gen, workspaceId: 'ws-t' });
     expect(after.workspaceOf('ws-t')).toEqual({ taskId: 't', gen });
-    // A pane no launch is under way for is not recorded.
-    recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-x', cwd: '/w/other' }, 'pty-x', () => s);
+    // A pane whose spawn carried no launch is not recorded.
+    recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-x' }, 'pty-x', () => s);
     expect(s.paneOf('pty-x')).toBeNull();
     const failing = { recordCreate: () => { throw new Error('PTY_CREATE: the task pane could not be recorded: disk full'); } };
-    expect(() => recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, 'pty-2', () => failing)).toThrow(/could not be recorded/);
+    expect(() => recordFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', fanoutLaunch: { taskId: 't', gen } }, 'pty-2', () => failing)).toThrow(/could not be recorded/);
   });
 
   it('a resume in the pane moves its workspace to the new generation too', () => {
@@ -175,9 +174,9 @@ describe('round 1 review (#2393 identity)', () => {
     setWorkerSlotsForTests(s);
     const guards = new FanOutGuards({ dir, ledgerTaskOwner: () => null });
     setFanOutGuardsForTests(guards);
-    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
-    stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', cwd: '/w/t' }, guards, () => s);
-    s.launched('t', gen, 'ws-t', 'pty-t', '/w/t');
+    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+    stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-t', fanoutLaunch: { taskId: 't', gen } }, guards, () => s);
+    s.launched('t', gen, 'ws-t', 'pty-t');
     // An older build rewrites the stamps without the task fields.
     fs.writeFileSync(path.join(dir, 'fanout-lineage.json'), JSON.stringify({ version: 1, tasks: { 'ws-t': { owner: 'ws-owner', at: 1 } } }));
     setFanOutGuardsForTests(new FanOutGuards({ dir, ledgerTaskOwner: () => null }));
@@ -212,17 +211,43 @@ describe('round 2 review (#2393 identity)', () => {
     expect(beginPaneRelaunch('pty-plain')).toBeNull();
   });
 
-  it('a pane created late for a launch that was abandoned is refused', () => {
+  it('a pane created late for a launch that was abandoned or replaced is refused, never taken as the newer one\'s', () => {
     const s = store(tmp());
-    const { gen } = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner', cwd: '/w/t' });
-    s.released('t', gen, '/w/t');
-    expect(s.inflightFor('ws-owner', '/w/t')).toBeNull();
-    expect(() => s.recordCreate('ws-owner', '/w/t', 'ws-late', 'pty-late')).toThrow(/abandoned/);
+    const first = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen;
+    s.released('t', first);
+    expect(() => s.recordCreate({ taskId: 't', gen: first }, 'ws-late', 'pty-late')).toThrow(/abandoned/);
+    // A retry is generation 2: generation 1's late create is still refused.
+    const second = s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen;
+    expect(() => s.recordCreate({ taskId: 't', gen: first }, 'ws-late', 'pty-late')).toThrow(/abandoned/);
+    expect(() => stampFanoutTaskPane({ fanoutTaskOf: 'ws-owner', workspaceId: 'ws-late', fanoutLaunch: { taskId: 't', gen: first } }, { markTask: () => undefined }, () => s)).toThrow(/abandoned/);
+    expect(s.recordCreate({ taskId: 't', gen: second }, 'ws-t', 'pty-t')).toEqual({ taskId: 't', gen: second });
+    expect(s.paneOf('pty-late')).toBeNull();
+  });
+
+  it('a pane from before panes were recorded is its workspace\'s task\'s: a launch typed into it is recorded', () => {
+    const s = store(tmp(), { rows: [row('old')] });
+    setWorkerSlotsForTests(s);
+    getWorkspaceMirror().setSnapshot({ ts: 0, entries: [{ id: 'ws-old', name: 'ws-old', ptyIds: ['pty-old'] }], fleets: [] });
+    const settle = beginPaneRelaunch('pty-old');
+    expect(settle).not.toBeNull();
+    settle?.(true);
+    expect(s.launchOf('old')).toMatchObject({ gen: 2, state: 'launched' });
+    expect(s.paneOf('pty-old')).toEqual({ taskId: 'old', gen: 2, workspaceId: 'ws-old' });
   });
 
   it('the rebuild from the ledger names each task\'s workspace', () => {
     const s = store(tmp(), { rows: [row('a')] });
     expect(s.workspaceOf('ws-a')).toEqual({ taskId: 'a', gen: 1 });
+  });
+});
+
+describe('round 3 review (#2393 identity)', () => {
+  it('only a line that starts an agent is a launch of the pane\'s task', () => {
+    expect(startsAgent('claude --resume 1234')).toBe(true);
+    expect(startsAgent('ANTHROPIC_MODEL= env FOO=1 codex resume')).toBe(true);
+    expect(startsAgent('"C:\\tools\\claude.cmd" --continue')).toBe(true);
+    expect(startsAgent('Please review the diff below')).toBe(false);
+    expect(startsAgent(' --dangerously-skip-permissions')).toBe(false);
   });
 });
 

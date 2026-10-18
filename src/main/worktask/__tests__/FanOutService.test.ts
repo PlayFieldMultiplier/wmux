@@ -485,6 +485,8 @@ describe('each task\'s launch generation (#2393)', () => {
       expect(slots.paneOf(t.ptyId as string)).toEqual({ taskId: t.taskId, gen: 1, workspaceId: t.workspaceId });
       expect(lineage.taskOfWorkspace(t.workspaceId as string)).toEqual({ taskId: t.taskId, gen: 1 });
     }
+    // Each spawn carries its launch to the pane's create.
+    expect(renderer.spawned.map((p) => (p as { fanoutLaunch?: unknown }).fanoutLaunch)).toEqual(res.tasks.map((t) => ({ taskId: t.taskId, gen: 1 })));
   });
 
   it('a launch that cannot be recorded is not spawned', async () => {

@@ -35,6 +35,9 @@ import { getWmuxDir } from '../../daemon/config';
 import type { LedgerEntry } from '../../shared/ledger';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { botWorkerSessionRecord } from '../agents/botWorkerMergeGuard';
+import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
+import { AGENT_ROWS, agentLauncherStem } from '../../shared/agentIdentity';
+import { launcherStem, tokenize } from '../../shared/agentResume';
 
 export const WORKER_SLOTS_FILENAME = 'worker-slots.json';
 export const WORKER_SLOTS_VERSION = 1 as const;
@@ -92,9 +95,6 @@ export interface LaunchRequest {
   origin: 'bot' | 'owner';
   botId?: string;
   ownerWorkspaceId: string;
-  /** The folder its pane is created in: the pane's create reads the task
-   *  and generation back from it (inflight). */
-  cwd?: string;
   /** A relaunch in an existing pane: the pane and its workspace name the
    *  new generation in the same write, before the line is typed. */
   pane?: { sessionId: string; workspaceId: string };
@@ -110,9 +110,6 @@ export class WorkerSlots {
   private readonly tasks = new Map<string, TaskLaunch>();
   private readonly panes = new Map<string, TaskPane>();
   private readonly workspaces = new Map<string, TaskRef>();
-  /** Launches under way, and abandoned ones (a pane created late for one
-   *  is refused): owner and folder → task and generation. Bounded. */
-  private readonly inflight = new Map<string, TaskRef & { released?: true }>();
   /** `memory`: a newer version's file is on disk, entries live in memory and
    *  launches go on; `broken`: the file could not be read nor moved aside,
    *  so nothing can be recorded and every launch is refused. */
@@ -227,10 +224,15 @@ export class WorkerSlots {
     return w ? { ...w } : null;
   }
 
-  /** The launch under way for an owner's pane in `cwd`, or null. */
-  inflightFor(ownerWorkspaceId: string, cwd: string): { taskId: string; gen: number } | null {
-    const hit = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
-    return hit && !hit.released ? { taskId: hit.taskId, gen: hit.gen } : null;
+  /** The launch a task pane's create names (its spawn carried it), checked:
+   *  THROWS when that launch was abandoned (its spawn timed out or failed)
+   *  or a newer one replaced it, so its pane is not started. */
+  claimLaunch(token: TaskRef): TaskRef {
+    const t = this.tasks.get(token.taskId);
+    if (!t || t.gen !== token.gen || t.state === 'released') {
+      throw new Error(`PTY_CREATE: the launch this task pane is for was abandoned (${token.taskId}, generation ${token.gen})`);
+    }
+    return { taskId: token.taskId, gen: token.gen };
   }
 
   /** A launch (a first spawn, a respawn or a resume) is about to start: its
@@ -275,20 +277,13 @@ export class WorkerSlots {
       }
       throw new Error(`the task's launch could not be recorded: ${String(err)}`);
     }
-    if (req.cwd) {
-      const key = inflightKey(req.ownerWorkspaceId, req.cwd);
-      this.inflight.delete(key);
-      this.inflight.set(key, { taskId: req.taskId, gen: next.gen });
-      trim(this.inflight, WORKER_PANES_MAX);
-    }
     return { gen: next.gen, launchedAt: next.launchedAt };
   }
 
   /** The launch of `gen` brought its pane up in `workspaceId`. Ignored (false)
    *  when a newer launch of the task began since. */
-  launched(taskId: string, gen: number, workspaceId: string, sessionId?: string, cwd?: string): boolean {
+  launched(taskId: string, gen: number, workspaceId: string, sessionId?: string): boolean {
     const t = this.tasks.get(taskId);
-    if (cwd) this.dropInflight(t?.ownerWorkspaceId, cwd, taskId, gen);
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'launched' });
     if (sessionId) this.setPane(sessionId, { taskId, gen, workspaceId });
@@ -298,18 +293,11 @@ export class WorkerSlots {
   }
 
   /** A task pane's create (pty:create): the pane and its workspace are the
-   *  launch under way's for that owner and folder, recorded before the
-   *  session exists. THROWS when it cannot be written (the create fails).
-   *  Returns the task, or null when no launch is under way there. */
-  recordCreate(ownerWorkspaceId: string, cwd: string, workspaceId: string, sessionId: string): TaskRef | null {
-    const hit = this.inflight.get(inflightKey(ownerWorkspaceId, cwd));
-    if (!hit) return null;
-    // A launch abandoned (its spawn timed out or failed) or replaced by a
-    // newer one: its pane is not started.
-    if (hit.released || this.tasks.get(hit.taskId)?.gen !== hit.gen) {
-      throw new Error(`PTY_CREATE: the launch this task pane is for was abandoned (${hit.taskId}, generation ${hit.gen})`);
-    }
-    const ref: TaskRef = { taskId: hit.taskId, gen: hit.gen };
+   *  launch's its spawn named, recorded before the session exists. THROWS
+   *  when that launch was abandoned or replaced (claimLaunch) or the record
+   *  cannot be written: the create fails. */
+  recordCreate(token: TaskRef, workspaceId: string, sessionId: string): TaskRef {
+    const ref = this.claimLaunch(token);
     const prevPane = this.panes.get(sessionId);
     const prevSpace = this.workspaces.get(workspaceId);
     this.setPane(sessionId, { taskId: ref.taskId, gen: ref.gen, workspaceId });
@@ -328,14 +316,8 @@ export class WorkerSlots {
 
   /** The launch of `gen` did not happen. Ignored (false) when a newer launch
    *  began since. */
-  released(taskId: string, gen: number, cwd?: string): boolean {
+  released(taskId: string, gen: number): boolean {
     const t = this.tasks.get(taskId);
-    // Kept, marked: a pane its create brings up late is refused.
-    if (cwd && t) {
-      const key = inflightKey(t.ownerWorkspaceId, cwd);
-      const hit = this.inflight.get(key);
-      if (hit && hit.taskId === taskId && hit.gen === gen) this.inflight.set(key, { ...hit, released: true });
-    }
     if (!t || t.gen !== gen) return false;
     this.tasks.set(taskId, { ...t, state: 'released' });
     this.persist();
@@ -354,12 +336,6 @@ export class WorkerSlots {
     trim(this.workspaces, WORKER_PANES_MAX);
   }
 
-  private dropInflight(owner: string | undefined, cwd: string, taskId: string, gen: number): void {
-    if (!owner) return;
-    const key = inflightKey(owner, cwd);
-    const hit = this.inflight.get(key);
-    if (hit && hit.taskId === taskId && hit.gen === gen) this.inflight.delete(key);
-  }
 
   /** Past the bound, released entries go first, then the oldest; a task
    *  whose pane or workspace is still recorded keeps its generation through
@@ -395,8 +371,6 @@ export class WorkerSlots {
   }
 }
 
-const inflightKey = (owner: string, cwd: string): string => `${owner}\u0000${path.resolve(cwd)}`;
-
 /** Drop the oldest entries past `max`. */
 function trim<K, V>(map: Map<K, V>, max: number): void {
   while (map.size > max) {
@@ -404,6 +378,11 @@ function trim<K, V>(map: Map<K, V>, max: number): void {
     if (oldest.done) break;
     map.delete(oldest.value);
   }
+}
+
+/** A launch token a spawn carries to its pane's create, or null. */
+export function parseLaunchToken(v: unknown): TaskRef | null {
+  return isRef(v) ? { taskId: v.taskId, gen: v.gen } : null;
 }
 
 function isRef(v: unknown): v is TaskRef {
@@ -429,6 +408,19 @@ export function setWorkerSlotsForTests(next: WorkerSlots | null): void {
   hosted = next;
 }
 
+const AGENT_STEMS: ReadonlySet<string> = new Set(AGENT_ROWS.map(agentLauncherStem));
+
+/** Whether a typed line starts an agent CLI (after any `VAR=value` and
+ *  `env` words): text pasted into a running agent, or the arguments a
+ *  second stage appends, is no launch. Pure. */
+export function startsAgent(line: string): boolean {
+  for (const t of tokenize(line.trim())) {
+    if (t.value === 'env' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t.value)) continue;
+    return AGENT_STEMS.has(launcherStem(t.value));
+  }
+  return false;
+}
+
 /** A launch line is about to be typed into an existing pane (pty:write-launch,
  *  worktask:refire): when the pane is a task's, that is a new launch of the
  *  task, recorded now with the pane and its workspace. THROWS when it cannot
@@ -438,10 +430,13 @@ export function beginPaneRelaunch(sessionId: string): ((typed: boolean) => void)
   const slots = getWorkerSlots();
   const pane = slots.paneOf(sessionId);
   const bot = pane ? null : botWorkerSessionRecord(sessionId);
-  const taskId = pane?.taskId ?? bot?.taskId;
+  // A pane created before panes were recorded: the task of the workspace
+  // that holds it (its record, written at the upgrade from the ledger).
+  const holder = pane || bot?.taskId ? null : getWorkspaceMirror().getEntries()?.find((e) => Array.isArray(e.ptyIds) && e.ptyIds.includes(sessionId))?.id;
+  const taskId = pane?.taskId ?? bot?.taskId ?? (holder ? slots.workspaceOf(holder)?.taskId : undefined);
   if (!taskId) return null;
   const prior = slots.launchOf(taskId);
-  const workspaceId = pane?.workspaceId ?? bot?.workspaceId ?? '';
+  const workspaceId = pane?.workspaceId ?? bot?.workspaceId ?? holder ?? '';
   const { gen } = slots.beginLaunch({
     taskId,
     origin: prior?.origin ?? (bot ? 'bot' : 'owner'),

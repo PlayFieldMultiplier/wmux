@@ -200,6 +200,10 @@ export interface FanOutRendererPort {
     /** A bot worker's single-use secret grant: an opaque id the renderer
      *  hands to pty.create unchanged (it carries no name and no value). */
     secretGrant?: string;
+    /** The task and launch generation this pane is for (factory/
+     *  workerSlots.ts): the renderer hands it to pty.create unchanged, which
+     *  records the pane as that launch's or refuses an abandoned one. */
+    fanoutLaunch?: { taskId: string; gen: number };
   }): Promise<
     | {
         workspaceId: string;
@@ -1526,7 +1530,6 @@ export class FanOutService {
         origin: ctx.requester?.kind === 'bot' ? 'bot' : 'owner',
         ...(ctx.requester?.kind === 'bot' && ctx.requester.botId ? { botId: ctx.requester.botId } : {}),
         ownerWorkspaceId: ctx.verifiedWorkspaceId,
-        cwd,
       }).gen;
     } catch (err) {
       releaseSlot();
@@ -1562,7 +1565,7 @@ export class FanOutService {
         ? mintSecretGrant({ botId, taskId, ownerWorkspaceId: ctx.verifiedWorkspaceId, cwd, names: ctx.secretNames ?? [], connectionNames: connectorKeys })
         : null;
       if (!secretGrant) {
-        launches.released(taskId, gen, cwd);
+        launches.released(taskId, gen);
         releaseSlot();
         discardTempDir();
         const error = 'not launched: a secret it names is not stored any more';
@@ -1614,6 +1617,7 @@ export class FanOutService {
         fanoutTaskOf: ctx.verifiedWorkspaceId,
         ...(ctx.requester ? { fanoutOrigin: ctx.requester } : {}),
         ...(secretGrant ? { secretGrant } : {}),
+        fanoutLaunch: { taskId, gen },
         workerPermissionMode: ctx.workerMode,
       });
       if ('error' in spawned) {
@@ -1622,7 +1626,7 @@ export class FanOutService {
         // failure can outlive its dispose), so the folder is kept, with its
         // row, for the kept-folder cleanup, which checks what uses it. The
         // temp dir goes to the sweep for the same reason.
-        launches.released(taskId, gen, cwd);
+        launches.released(taskId, gen);
         releaseSlot();
         handOverTempDir(`task:${taskId}`);
         const error = `renderer spawn failed: ${spawned.error}`;
@@ -1639,7 +1643,7 @@ export class FanOutService {
       // A timeout does not prove the pane never spawned either: a late pane
       // is closed when it lands (spawnTaskWorkspace), but the worktree stays,
       // recorded on the task's ledger row.
-      launches.released(taskId, gen, cwd);
+      launches.released(taskId, gen);
       releaseSlot();
       handOverTempDir(`task:${taskId}`);
       const error = `renderer spawn threw: ${(err as Error).message}`;
@@ -1655,7 +1659,7 @@ export class FanOutService {
     handOverTempDir(workspaceId);
     // Its pane names the task and generation from here on (a late answer of
     // an older generation's spawn changes nothing).
-    const current = launches.launched(taskId, gen, workspaceId, base.ptyId, cwd);
+    const current = launches.launched(taskId, gen, workspaceId, base.ptyId);
     // The renderer already stamped the lineage before the agent launched; this
     // second write is idempotent and covers a renderer that did not. It carries
     // the same origin and task the spawn did (not a generation a newer launch
@@ -2059,7 +2063,7 @@ export class FanOutService {
     const launches = this.launches ?? getWorkerSlots();
     let gen: number;
     try {
-      gen = launches.beginLaunch({ taskId: input.taskId, origin: 'bot', botId: input.botId, ownerWorkspaceId: input.ownerWorkspaceId, cwd: input.cwd }).gen;
+      gen = launches.beginLaunch({ taskId: input.taskId, origin: 'bot', botId: input.botId, ownerWorkspaceId: input.ownerWorkspaceId }).gen;
     } catch (err) {
       revokeSecretGrant(secretGrant);
       return { error: (err as Error).message };
@@ -2078,24 +2082,25 @@ export class FanOutService {
         fanoutTaskOf: input.ownerWorkspaceId,
         fanoutOrigin: origin,
         ...(secretGrant ? { secretGrant } : {}),
+        fanoutLaunch: { taskId: input.taskId, gen },
         workerPermissionMode: input.workerPermissionMode,
       });
     } catch (err) {
-      launches.released(input.taskId, gen, input.cwd);
+      launches.released(input.taskId, gen);
       return { error: `renderer spawn threw: ${(err as Error).message}` };
     } finally {
       releaseBotSpawn();
       revokeSecretGrant(secretGrant);
     }
     if ('error' in spawned) {
-      launches.released(input.taskId, gen, input.cwd);
+      launches.released(input.taskId, gen);
       return { error: spawned.error };
     }
     if (!spawned.ptyId) {
-      launches.released(input.taskId, gen, input.cwd);
+      launches.released(input.taskId, gen);
       return { error: 'the renderer returned no pane' };
     }
-    const current = launches.launched(input.taskId, gen, spawned.workspaceId, spawned.ptyId, input.cwd);
+    const current = launches.launched(input.taskId, gen, spawned.workspaceId, spawned.ptyId);
     // The same idempotent second stamp the fan-out writes after its spawn.
     try {
       (this.lineage ?? getFanOutGuards()).markTask(spawned.workspaceId, input.ownerWorkspaceId, origin, current ? { taskId: input.taskId, gen } : undefined);

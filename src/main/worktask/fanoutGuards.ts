@@ -35,7 +35,7 @@ import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { sanitizeFanoutOrigin, type FanoutLineageEntry, type FanoutOrigin } from '../../shared/fanoutOrigin';
 import { BOT_ID_RE } from '../../shared/bot';
-import { getWorkerSlots, type WorkerSlots } from '../factory/workerSlots';
+import { getWorkerSlots, parseLaunchToken, type WorkerSlots } from '../factory/workerSlots';
 
 export const FANOUT_LIVE_TASK_CAP = 8;
 export const FANOUT_HOURLY_TASK_CAP = 24;
@@ -786,45 +786,40 @@ export class FanOutGuards {
  * stamped with the owner. It is sanitized here; a malformed one is dropped.
  */
 export function stampFanoutTaskPane(
-  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; fanoutOrigin?: unknown; cwd?: unknown } | undefined,
+  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; fanoutOrigin?: unknown; fanoutLaunch?: unknown } | undefined,
   guards: Pick<FanOutGuards, 'markTask'> = getFanOutGuards(),
-  launches: () => Pick<WorkerSlots, 'inflightFor'> = getWorkerSlots,
+  launches: () => Pick<WorkerSlots, 'claimLaunch'> = getWorkerSlots,
 ): void {
   const owner = typeof options?.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
   if (!owner) return;
   const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
   if (!ws) throw new Error('PTY_CREATE: a fan-out task pane needs its workspaceId for the lineage stamp');
   const origin = sanitizeFanoutOrigin(options?.fanoutOrigin);
-  // The task whose launch is creating this pane (main wrote it before the
-  // spawn, factory/workerSlots.ts): the stamp names it from the start.
-  let task: StampTask | null = null;
-  if (typeof options?.cwd === 'string' && options.cwd) {
-    try {
-      task = launches().inflightFor(owner, options.cwd);
-    } catch {
-      task = null;
-    }
-  }
+  // The launch its spawn carried (main recorded it before the spawn,
+  // factory/workerSlots.ts): the stamp names it from the start, and one that
+  // was abandoned or replaced fails the create (claimLaunch throws).
+  const token = parseLaunchToken(options?.fanoutLaunch);
+  const task: StampTask | null = token ? launches().claimLaunch(token) : null;
   if (task) guards.markTask(ws, owner, origin ?? undefined, task);
   else if (origin) guards.markTask(ws, owner, origin);
   else guards.markTask(ws, owner);
 }
 
 /** A task pane's create, once its session id is known and before the
- *  session exists: the pane and its workspace are recorded as the task's
- *  whose launch is under way for that owner and folder
- *  (factory/workerSlots.ts). Throws (failing the create) when that record
- *  cannot be written. A pane no launch is under way for is not recorded. */
+ *  session exists: the pane and its workspace are recorded as the launch's
+ *  its spawn carried (factory/workerSlots.ts). Throws (failing the create)
+ *  when that launch was abandoned or the record cannot be written. A pane
+ *  whose spawn carried no launch is not recorded. */
 export function recordFanoutTaskPane(
-  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; cwd?: unknown } | undefined,
+  options: { fanoutTaskOf?: unknown; workspaceId?: unknown; fanoutLaunch?: unknown } | undefined,
   sessionId: string,
   launches: () => Pick<WorkerSlots, 'recordCreate'> = getWorkerSlots,
 ): void {
   const owner = typeof options?.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
   const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
-  const cwd = typeof options?.cwd === 'string' ? options.cwd : '';
-  if (!owner || !ws || !cwd || !sessionId) return;
-  launches().recordCreate(owner, cwd, ws, sessionId);
+  const token = parseLaunchToken(options?.fanoutLaunch);
+  if (!owner || !ws || !token || !sessionId) return;
+  launches().recordCreate(token, ws, sessionId);
 }
 
 /** The task and generation a workspace was created (or relaunched) for:
