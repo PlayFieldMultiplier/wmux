@@ -358,6 +358,9 @@ function cloneStashedPanes(
             // title on the next OSC 0 — a small loss, but a silent one.
             titleLocked: s.titleLocked,
             autoTitle: s.autoTitle,
+            // #2398 — a dead pane's staged recovery (its source session, cwd
+            // candidates, WSL target and resume binding) exists nowhere else.
+            pendingRecovery: s.pendingRecovery,
           })),
         },
         ...(entry.origin ? { origin: entry.origin } : {}),

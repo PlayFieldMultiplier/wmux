@@ -100,3 +100,44 @@ describe('surface.pendingRecovery across save and load (#2398)', () => {
     expect(loaded && 'pendingRecovery' in loaded).toBe(false);
   });
 });
+
+/**
+ * Review P3 — when a stashed pane fails to serialize, the save falls back to a
+ * minimal entry built from an allowlist. That list left `pendingRecovery`
+ * out, so a stashed dead pane's staged recovery was lost on that path.
+ */
+describe('the stashed-pane salvage keeps pendingRecovery (#2398)', () => {
+  function salvage(): (ws: Workspace, dumped: Map<string, boolean>) => Array<{ pane: PaneLeaf }> {
+    const tree = ts.createSourceFile('AppLayout.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const fn = tree.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'cloneStashedPanes',
+    );
+    expect(fn, 'cloneStashedPanes declaration not found').toBeDefined();
+    const code = ts.transpileModule(fn!.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    // The normal serializer throws, which is what takes the salvage path.
+    return new Function('stashedPanesWithoutPrivate', 'cloneWithScrollback', `${code}; return cloneStashedPanes;`)(
+      (entries: unknown) => entries,
+      () => { throw new Error('serializer failed'); },
+    );
+  }
+
+  it('a salvaged stash entry still carries the surface’s staged recovery', () => {
+    const recovery = { sourceSessionId: 'pty-dead', spawnCwd: '/home/me/repo', wslTarget: { distribution: 'Ubuntu', user: 'me' } };
+    const ws = createWorkspace('stash');
+    const pane: PaneLeaf = {
+      id: 'stashed-leaf',
+      type: 'leaf',
+      activeSurfaceId: 'surf-s',
+      surfaces: [{ id: 'surf-s', ptyId: '', title: 'wsl', shell: 'wsl.exe', cwd: '', pendingRecovery: recovery }],
+    };
+    ws.stashedPanes = [{ pane, stashedAt: 1 }];
+    const warn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const saved = salvage()(ws, new Map());
+      expect(saved[0].pane.surfaces[0].pendingRecovery).toEqual(recovery);
+    } finally {
+      console.warn = warn;
+    }
+  });
+});
