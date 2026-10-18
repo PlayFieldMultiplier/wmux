@@ -3025,29 +3025,38 @@ function registerRpcHandlers(
   });
 
   // #2408: per recovered pane, the ring position its screen was last read at
-  // and what it showed, so a quiet pane is not rendered again on every list.
-  const recoveredSightingAt = new Map<string, { at: number; onScreen: boolean }>();
+  // and whether that screen showed a live agent the screen tier sighted.
+  const recoveredSighting = new Map<string, { at: number; onScreen: boolean }>();
+  const sightingReads = new Set<string>();
   /**
-   * #2408: a recovered pane whose screen tier sighted a live agent since the
-   * restart, still on screen: an alternate screen (a fullscreen agent has not
-   * exited), or its composer, running row or dialog on the visible grid. Only
-   * hides the pill; the offer stays until a hook or a live process consumes
-   * it. Panes with no sighting are never rendered.
+   * #2408: read a recovered pane's screen again, off the RPC path, when its
+   * fresh detector sighted Claude or Codex since the restart and output has
+   * arrived since the last read. The verdict (its composer, running row or
+   * dialog on the visible grid) only hides the pill; the offer stays until a
+   * hook or a live process consumes it. Panes with no sighting are never
+   * rendered, and an unreadable frame leaves the last verdict standing.
    */
-  const recoveredAgentOnScreen = async (id: string): Promise<boolean> => {
+  const readRecoveredSighting = (id: string): void => {
     const managed = sessionManager.getSession(id);
-    const slug = managed ? sightedRecoveredAgent(managed.bridge.getLastAgent()) : undefined;
-    if (!managed || !slug) return false;
-    if (managed.bridge.outputModes?.altScreen === true) return true;
-    const at = managed.ringBuffer.totalBytesWritten;
-    const cached = recoveredSightingAt.get(id);
-    if (cached && cached.at === at) return cached.onScreen;
-    const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
-    const onScreen = !!frame && screenShowsLiveAgent(frame.rows, slug);
-    // An unreadable frame says nothing: read it again on the next list.
-    if (frame) recoveredSightingAt.set(id, { at, onScreen });
-    return onScreen;
+    const slug = managed && recoveredAgentShellIds.has(id) ? sightedRecoveredAgent(managed.bridge.getLastAgent()) : undefined;
+    if (!managed || !slug) {
+      recoveredSighting.delete(id);
+      return;
+    }
+    if (sightingReads.has(id) || recoveredSighting.get(id)?.at === managed.ringBuffer.totalBytesWritten) return;
+    sightingReads.add(id);
+    void renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot)
+      .then((frame) => {
+        if (frame && sessionManager.getSession(id) === managed && recoveredAgentShellIds.has(id)) {
+          recoveredSighting.set(id, { at: frame.mark, onScreen: screenShowsLiveAgent(frame.rows, slug) });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => sightingReads.delete(id));
   };
+  // A burst of output has settled, so the screen is drawn: read it then, and
+  // a list finds the verdict ready instead of waiting on a render.
+  sessionManager.on('session:idle', (payload: { sessionId: string }) => readRecoveredSighting(payload.sessionId));
 
   // daemon.listSessions
   pipeServer.onRpc('daemon.listSessions', async (rawParams) => {
@@ -3065,15 +3074,7 @@ function registerRpcHandlers(
     // `wmux list --json` and the sidebar badge.
     // X6 ②: attach resumeAgent ONLY for sessions recovered-this-boot that were
     // interactive agents (recoveredAgentShellIds) — drives the resume pill.
-    const listed = sessionManager.listSessions();
-    for (const id of recoveredSightingAt.keys()) {
-      if (!recoveredAgentShellIds.has(id)) recoveredSightingAt.delete(id);
-    }
-    const onScreen = new Set<string>();
-    await Promise.all(listed.filter((s) => recoveredAgentShellIds.has(s.id)).map(async (s) => {
-      if (await recoveredAgentOnScreen(s.id)) onScreen.add(s.id);
-    }));
-    const activeSessions = listed.map((s) => {
+    const activeSessions = sessionManager.listSessions().map((s) => {
       // The slug is held in the map (captured from the persisted session at
       // recovery) — NOT read off the live meta, which is a fresh shell here.
       const resumeAgent = liveRecoveryHint(s.id, (id) => namedAgentAlive(agentProcessTracker.identityFor(id)), recoveredAgentShellIds, recoveredResumeBindings);
@@ -3102,9 +3103,11 @@ function registerRpcHandlers(
         ? { ...base, supervisionRuntime: paneSupervisor.getRuntime(s.id) }
         : base;
       // #2408: additive; an older daemon sends no `resumeAgentOnScreen` and the
-      // renderer then gates the pill as before.
+      // renderer then gates the pill as before. The last verdict is reported
+      // and a stale one is read again in the background, never awaited here.
+      if (resumeAgent) readRecoveredSighting(s.id);
       const withAgent = resumeAgent
-        ? { ...withRuntime, resumeAgent, ...(onScreen.has(s.id) ? { resumeAgentOnScreen: true as const } : {}) }
+        ? { ...withRuntime, resumeAgent, ...(recoveredSighting.get(s.id)?.onScreen === true ? { resumeAgentOnScreen: true as const } : {}) }
         : withRuntime;
       // Binding to SURFACE: the recovery-transient one (recovered-this-boot,
       // cwd+transcript guarded) OR the durable meta binding re-probed for

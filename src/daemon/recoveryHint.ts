@@ -1,6 +1,6 @@
 import { agentDisplayToSlug } from '../shared/agentIdentity';
 import { screenShowsActiveDialog, screenShowsRunningTurn } from './transcript/chatScreenGate';
-import { claudeComposerVisible, codexComposerVisible } from './transcript/deliverChatPrompt';
+import { claudeComposerRows, claudeComposerVisible, codexComposerVisible } from './transcript/deliverChatPrompt';
 
 /**
  * The recovery hint for a pane, or undefined once process truth shows the
@@ -56,12 +56,16 @@ export function sightedRecoveredAgent(screenAgent: string | null | undefined): '
 }
 
 /**
- * Is the sighted agent still on the visible screen? Its composer, its running
- * turn row, or a dialog it owns. Once the agent exits, its composer is gone
- * from the grid (captured on Claude Code's classic and fullscreen renderers),
- * so the sighting goes stale and the pill shows again.
+ * Is the sighted agent still on the visible screen? Its composer (empty or
+ * holding a draft), its running turn row, or a dialog it owns. Once the agent
+ * exits, its composer is gone from the grid (captured on Claude Code's classic
+ * and fullscreen renderers), so the sighting goes stale and the pill shows
+ * again. Read off the grid even in an alternate screen: an agent killed
+ * without leaving it would otherwise read as live for good.
  */
 export function screenShowsLiveAgent(rows: readonly string[], slug: 'claude' | 'codex'): boolean {
-  const composer = slug === 'claude' ? claudeComposerVisible(rows) : codexComposerVisible(rows);
+  const composer = slug === 'claude'
+    ? claudeComposerVisible(rows) || claudeComposerRows(rows) !== null
+    : codexComposerVisible(rows);
   return composer || screenShowsRunningTurn(rows, slug) || screenShowsActiveDialog(rows);
 }

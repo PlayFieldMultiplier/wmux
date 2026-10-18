@@ -49,8 +49,6 @@ function recoveredPane() {
       if (!slug) return false;
       const outcome = await generateTextSnapshot({ cols: COLS, rows: ROWS, scrollback: 0, initial: Buffer.from(bytes, 'utf8') });
       if (!outcome.ok) throw new Error(`snapshot failed: ${outcome.reason}`);
-      // The daemon skips the render while an alternate screen is up; the grid
-      // shows the same agent then.
       return screenShowsLiveAgent(outcome.rows.map((r) => r.text), slug);
     },
     screenTier() {
@@ -153,6 +151,22 @@ describe('recovery pill: a screen-tier sighting hides it and never consumes the 
     pane.feed('\u001b[?1049h' + CLAUDE_SPLASH + '\r\n' + CLAUDE_COMPOSER);
     expect(await pane.onScreen()).toBe(true);
     pane.feed('\u001b[?1049l' + CLAUDE_EXIT_MESSAGE);
+    expect(await pane.onScreen()).toBe(false);
+  });
+
+  it('a draft in the composer still reads as the live agent', async () => {
+    const pane = recoveredPane();
+    pane.feed(CLAUDE_SPLASH + '\r\n');
+    pane.feed(`${RULE}\r\n❯ fix the flaky test in\r\n  src/daemon first\r\n${RULE}\r\n  ⏵⏵ auto mode on (shift+tab to cycle)\r\n`);
+    expect(await pane.onScreen()).toBe(true);
+  });
+
+  it('a fullscreen agent killed without leaving the alternate screen goes stale once its prompt is gone', async () => {
+    const pane = recoveredPane();
+    pane.feed('\u001b[?1049h' + CLAUDE_SPLASH + '\r\n' + CLAUDE_COMPOSER);
+    expect(await pane.onScreen()).toBe(true);
+    // The remote end dropped: no `?1049l`, the shell clears and draws its prompt.
+    pane.feed('\u001b[2J\u001b[HConnection to devbox closed.\r\n$ ');
     expect(await pane.onScreen()).toBe(false);
   });
 
